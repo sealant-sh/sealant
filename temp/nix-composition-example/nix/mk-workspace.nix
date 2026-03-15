@@ -13,7 +13,7 @@ let
     curl = pkgs.curl;
     git = pkgs.git;
     jq = pkgs.jq;
-    nodejs = pkgs.nodejs_latest;
+    nodejs = pkgs.nodejs_24;
     pnpm = pkgs.nodePackages.pnpm;
     ripgrep = pkgs.ripgrep;
   };

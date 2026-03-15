@@ -23,7 +23,7 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             bat
-            nodejs_latest
+            nodejs_24
             nodePackages.pnpm
           ];
         };

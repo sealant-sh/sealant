@@ -30,11 +30,11 @@
           overlays = [
             (final: _prev: {
               oxfmt = final.writeShellScriptBin "oxfmt" ''
-                exec ${final.nodejs_latest}/bin/npx -y oxfmt "$@"
+                exec ${final.nodejs_24}/bin/npx -y oxfmt "$@"
               '';
 
               tsgo = final.writeShellScriptBin "tsgo" ''
-                exec ${final.nodejs_latest}/bin/npx -y @typescript/native-preview "$@"
+                exec ${final.nodejs_24}/bin/npx -y @typescript/native-preview "$@"
               '';
             })
           ];
