@@ -8,3 +8,4 @@ Examples that may land in this workspace:
 - domain models and schemas
 - runtime adapters and orchestration helpers
 - SDKs and common utilities
+- `workspace-composition` for the reusable Nix workspace/image builder
