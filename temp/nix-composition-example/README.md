@@ -18,9 +18,11 @@ This folder shows the basic flow you asked about:
 
 - Selects a harness (`opencode`, `codex`, or `claude-code`)
 - Maps `extraPackages` to Nix packages
+- Pulls the real OpenCode binary from the upstream flake when `harness = "opencode"`
+- Optionally starts `sshd` for pubkey-only access when `ZWEIT_ENABLE_SSH=1`
 - Writes the normalized request to `/etc/zweit/spec.json` in the image
 - Builds a runtime environment with `bash`, `git`, and the selected tools
-- Creates a Docker image whose entrypoint clones the target repo at startup
+- Creates a Docker image whose entrypoint clones the target repo at startup and then launches the selected harness
 
 The important split is:
 
@@ -42,6 +44,36 @@ nix build ./temp/nix-composition-example#workspace-image
 docker load < result
 docker run --rm -it zweit-workspace-demo:opencode
 ```
+
+If OpenCode needs provider credentials, pass them at runtime:
+
+```bash
+docker run --rm -it \
+  -e OPENAI_API_KEY=... \
+  zweit-workspace-demo:opencode
+```
+
+## SSH into the container
+
+Start the container with SSH enabled, publish port `2222`, and mount a public key file:
+
+```bash
+docker run --rm -d \
+  --name zweit-ssh-demo \
+  -p 2222:2222 \
+  -v "$HOME/.ssh/id_ed25519.pub:/run/keys/authorized_keys:ro" \
+  -e ZWEIT_ENABLE_SSH=1 \
+  -e ZWEIT_FOREGROUND_COMMAND='sleep infinity' \
+  zweit-workspace-demo:opencode
+```
+
+Then connect from the host:
+
+```bash
+ssh -p 2222 root@127.0.0.1
+```
+
+The default mounted public key path is `/run/keys/authorized_keys`. You can override it with `ZWEIT_SSH_AUTHORIZED_KEYS_FILE`, and you can override the internal container port with `ZWEIT_SSH_PORT`.
 
 ## How to adapt this pattern
 

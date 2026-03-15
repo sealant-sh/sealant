@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    opencode = {
+      url = "github:anomalyco/opencode";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -11,6 +15,7 @@
       self,
       nixpkgs,
       flake-utils,
+      opencode,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -19,9 +24,12 @@
           inherit system;
         };
 
+        opencodePkg = opencode.packages.${system}.opencode;
+
         demoSpec = import ./nix/demo-spec.nix;
         workspace = import ./nix/mk-workspace.nix {
           inherit pkgs;
+          inherit opencodePkg;
           spec = demoSpec;
         };
       in
