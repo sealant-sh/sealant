@@ -1,0 +1,26 @@
+{
+  "name": "zweit",
+  "private": true,
+  "scripts": {
+    "build": "turbo build",
+    "clean": "turbo clean",
+    "dev": "turbo dev",
+    "format": "oxfmt .",
+    "format:check": "oxfmt . --check",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "lint:types": "oxlint . --type-aware --type-check",
+    "test": "turbo test",
+    "typecheck": "tsgo -p tsconfig.json --noEmit",
+    "typecheck:tsc": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "7.0.0-dev.20260315.1",
+    "oxfmt": "^0.40.0",
+    "oxlint": "^1.55.0",
+    "oxlint-tsgolint": "^0.17.0",
+    "turbo": "^2.5.0",
+    "typescript": "^5.9.3"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

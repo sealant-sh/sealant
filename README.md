@@ -2,40 +2,46 @@
 
 Zweit is a product for spinning up isolated, ready-to-code microVM environments from a polished web UI.
 
-The idea is simple: a user picks a Git repository, an AI coding harness, and optional personalization inputs like a dotfiles repo or Nix flake repo. Zweit turns those choices into a composed Nix flake, applies it to an isolated runtime, and gives the user a coding environment that feels personal, reproducible, and disposable.
+The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional personalization inputs like dotfiles or Nix flakes. Zweit turns those inputs into a composed environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
 
 ## Status
 
-This repository is at the very beginning. The README is the first pass at the product and engineering blueprint.
+This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix flake for a reproducible `direnv`-powered development shell.
 
-## What Zweit aims to do
+Today the repo contains the workspace layout and shared build orchestration. Application code will grow into the workspaces below instead of living in top-level product folders.
 
-- Let a user launch a coding microVM with minimal setup.
-- Start from a clean Nix-based environment.
-- Compose user-selected inputs into a final flake for that environment.
-- Support multiple AI harnesses such as Claude Code, Codex, OpenCode, T3, and other future options.
-- Allow optional inputs like:
-  - a dotfiles repository
-  - a Nix flakes repository
-  - editor and tool preferences
-  - bootstrap scripts or templates
-- Keep environments isolated, reproducible, and easy to destroy.
+## Monorepo layout
 
-## User flow
+```text
+.
+├── apps/                 # deployable apps and services
+│   └── README.md
+├── packages/             # shared libraries, domain modules, and reusable code
+│   └── README.md
+├── tooling/              # shared config packages and developer tooling
+│   └── README.md
+├── .envrc                # direnv entrypoint for the Nix dev shell
+├── .gitignore
+├── .oxfmtrc.json         # repo-wide formatter config
+├── .oxlintrc.json        # repo-wide linter config
+├── flake.nix             # Nix development shell definition
+├── flake.lock            # pinned flake inputs
+├── package.json          # root scripts and Turbo dependency
+├── pnpm-workspace.yaml   # workspace discovery
+├── tsconfig.json         # root TypeScript and tsgo config
+├── turbo.json            # task graph and caching config
+└── README.md
+```
 
-The intended website flow for the MVP is:
+### Workspace roles
 
-1. User selects a Git repository.
-2. User selects an AI harness.
-3. User optionally provides dotfiles, Nix flakes, and other customization sources.
-4. Zweit generates or assembles a final flake from those inputs.
-5. The backend provisions an isolated runtime.
-6. The runtime boots with the composed environment applied.
-7. The user lands in a ready-to-code session.
+- `apps/`: user-facing and deployable surfaces such as the website, API, workers, or control-plane services
+- `packages/`: shared code such as UI primitives, environment models, adapters, SDKs, and reusable utilities
+- `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest, Tailwind, or internal scripts
 
-## Product shape
+## Planned product shape
 
-Zweit has three major parts.
+Zweit still has three major product areas, but they will be implemented through the monorepo workspaces:
 
 ### 1. Website
 
@@ -61,79 +67,69 @@ Core responsibilities:
 - talk to runtime adapters
 - track environment state, logs, and failures
 
-The initial runtime direction is a containerd-backed flow that launches a Kata-based isolated environment built from a Nix base image and then layered with user-selected flakes.
+### 3. Runtime / infra layer
 
-### 3. Infra block
+The infrastructure side contains the deployment and execution model for isolated environments:
 
-The infra block contains the deployment and execution side of the system:
-
-- Kubernetes manifests and related platform configuration
+- Kubernetes manifests and platform configuration
 - runtime and scheduling integration
 - networking, storage, and secrets wiring
 - adapter implementations for different deployment targets
 
-The architecture should be adapter-oriented so Zweit can target different execution backends over time instead of baking every assumption into one platform.
+The architecture should stay adapter-oriented so Zweit can target different execution backends over time.
 
-## Architecture direction
+## Why the monorepo uses Turbo + pnpm
 
-The current intended default path is:
+- `pnpm` workspaces keep dependency management fast, strict, and centralized
+- `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and shared packages
+- shared tooling in `tooling/` keeps config consistent without copy-pasting setup across apps
 
-- primary execution model: `Kata on Kubernetes`
-- control mechanism: `containerd`-style runtime orchestration
-- base environment: `Nix` image or flake-defined base
-- user customization: composed flakes built from selected inputs
+## Tooling baseline
 
-Over time, the adapter model should support targets such as:
+- `direnv` + Nix provide a reproducible shell with `nodejs_latest` and `pnpm`
+- `oxlint` handles repo-wide linting
+- `oxlint-tsgolint` enables type-aware Oxlint rules backed by TypeScript Go
+- `oxfmt` handles repo-wide formatting
+- `@typescript/native-preview` provides the `tsgo` CLI at the root alongside regular `typescript`
 
-- Kubernetes + Kata
-- plain Docker + Kata where appropriate
-- AWS-backed adapters such as EC2 or Fargate-facing integrations
-- Railway or other managed platform adapters
+## Getting started
 
-## Isolation and security
+Allow direnv to load the flake shell:
 
-Strong isolation is a core product goal.
-
-Zweit is meant to give users a safer default than dropping arbitrary code into a long-lived shared environment. The current direction is to use Kata-style isolation and disposable environments so untrusted repositories and AI-assisted coding sessions can run with tighter boundaries.
-
-That said, this repository is still in the design phase. Security claims should eventually be backed by explicit threat models, hardening work, and documented guarantees.
-
-## How flake composition should work
-
-At a high level, Zweit should assemble a final environment from several possible inputs:
-
-- base Zweit runtime flake
-- selected AI harness package and configuration
-- target code repository
-- user dotfiles repository
-- user Nix flakes repository
-- optional templates or org presets
-
-This composition layer is one of the core product differentiators. It should produce environments that are:
-
-- reproducible
-- inspectable
-- portable across supported adapters
-- easy to regenerate from the same inputs
-
-## Proposed repository shape
-
-As the codebase grows, a structure like this likely makes sense:
-
-```text
-.
-├── README.md
-├── infra/        # k8s, deployment, adapters, platform config
-├── backend/      # API, control plane, flake composition, lifecycle
-├── web/          # website / product UI
-├── runtime/      # base images, nix modules, bootstrap logic
-├── docs/         # architecture notes, ADRs, threat model, flows
-└── examples/     # sample configs, sample flakes, launch definitions
+```bash
+direnv allow
 ```
 
-## Contributor notes
+If you are not using direnv, you can enter the same shell manually:
 
-This section is here so the README works both as a product README and an engineering README.
+```bash
+nix develop
+```
+
+Then install dependencies:
+
+```bash
+pnpm install
+```
+
+Run common workspace tasks from the repo root:
+
+```bash
+pnpm dev
+pnpm build
+pnpm format
+pnpm format:check
+pnpm lint
+pnpm lint:fix
+pnpm lint:types
+pnpm typecheck
+pnpm typecheck:tsc
+pnpm test
+```
+
+`pnpm build`, `pnpm dev`, and `pnpm test` are wired through Turbo. The lint, format, and typecheck commands run from the repo root so the baseline tooling works before app packages exist.
+
+## Contributor notes
 
 ### Design principles
 
@@ -146,47 +142,12 @@ This section is here so the README works both as a product README and an enginee
 
 ### Early engineering priorities
 
+- stand up the first app workspaces under `apps/`
+- define shared domain packages under `packages/`
+- centralize config and standards under `tooling/`
 - define the flake composition model
 - define the runtime adapter interface
-- stand up the first `Kata on Kubernetes` path
-- define the backend environment lifecycle state machine
-- build the first website flow for repo + harness + flake inputs
 - document the security model and trust boundaries
-
-### Likely core abstractions
-
-- `EnvironmentRequest`: what the user asked for
-- `EnvironmentSpec`: normalized launch definition
-- `FlakeBuilder`: turns inputs into a final flake
-- `RuntimeAdapter`: launches and manages environments on a target
-- `Session`: the running coding environment and its lifecycle metadata
-
-## MVP scope
-
-The first meaningful version should likely support:
-
-- one polished web flow
-- one primary runtime adapter
-- one Nix-based environment composition path
-- a small set of AI harness choices
-- basic environment lifecycle operations: create, view, stop, destroy
-
-If that works well, Zweit can expand into richer adapters, org templates, saved profiles, and more advanced workspace features.
-
-## Roadmap ideas
-
-- reusable environment templates
-- org-level defaults and policies
-- persistent volumes and optional resume behavior
-- audit trails and security controls
-- richer editor integrations
-- cost-aware placement across adapters
-
-## Non-goals for the first phase
-
-- supporting every cloud target on day one
-- building a giant general-purpose PaaS
-- overcomplicating the website before the launch flow works well
 
 ## Why this repo exists
 

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "include": [
+    "*.d.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "apps/**/*.mts",
+    "apps/**/*.cts",
+    "apps/**/*.d.ts",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "packages/**/*.mts",
+    "packages/**/*.cts",
+    "packages/**/*.d.ts",
+    "tooling/**/*.ts",
+    "tooling/**/*.tsx",
+    "tooling/**/*.mts",
+    "tooling/**/*.cts",
+    "tooling/**/*.d.ts"
+  ],
+  "exclude": ["**/node_modules", "**/dist", "**/build", "**/coverage", ".turbo", ".direnv"]
+}
