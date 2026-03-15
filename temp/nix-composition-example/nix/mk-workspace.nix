@@ -126,12 +126,19 @@ let
     export LOCALE_ARCHIVE=${localeArchive}
 
     ${lib.optionalString (homeActivationPackage != null) ''
-      cp -a ${homeActivationPackage}/home-files/. "$HOME/"
-      export PATH=${homeActivationPackage}/home-path/bin:$PATH
+            cp -a ${homeActivationPackage}/home-files/. "$HOME/"
+            export PATH=${homeActivationPackage}/home-path/bin:$PATH
 
-      if [ -f ${homeActivationPackage}/hm-session-vars.sh ]; then
-        . ${homeActivationPackage}/hm-session-vars.sh
-      fi
+            if [ -f ${homeActivationPackage}/hm-session-vars.sh ]; then
+              . ${homeActivationPackage}/hm-session-vars.sh
+            fi
+
+            if [ -f "$HOME/.local/share/nvim/site/pack/hm/start/nvim-treesitter/lua/nvim-treesitter/config.lua" ] && [ ! -f "$HOME/.config/nvim/lua/nvim-treesitter/configs.lua" ]; then
+              mkdir -p "$HOME/.config/nvim/lua/nvim-treesitter"
+              cat > "$HOME/.config/nvim/lua/nvim-treesitter/configs.lua" <<'EOF'
+      return require("nvim-treesitter.config")
+      EOF
+            fi
     ''}
 
     if [ -f "$HOME/.zshenv" ]; then
@@ -219,6 +226,7 @@ let
       pkgs.bat
       pkgs.bashInteractive
       pkgs.coreutils
+      pkgs.curl
       pkgs.git
       pkgs.glibcLocales
       pkgs.zsh
