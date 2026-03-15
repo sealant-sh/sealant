@@ -18,15 +18,17 @@ This folder shows the basic flow you asked about:
 
 - Selects a harness (`opencode`, `codex`, or `claude-code`)
 - Maps `extraPackages` to Nix packages
+- Fetches a pinned external Nix config repo from the demo spec
+- Imports your Home Manager module bundle from `modules/clis/default.nix` and Neovim from `modules/ides/nvim-config/neovim.nix`
 - Pulls the real OpenCode binary from the upstream flake when `harness = "opencode"`
 - Optionally starts `sshd` for pubkey-only access when `ZWEIT_ENABLE_SSH=1`
 - Writes the normalized request to `/etc/zweit/spec.json` in the image
-- Builds a runtime environment with `bash`, `git`, and the selected tools
+- Builds a runtime environment with `bash`, `git`, and the selected tools, then activates the imported Home Manager config at container startup
 - Creates a Docker image whose entrypoint clones the target repo at startup and then launches the selected harness
 
 The important split is:
 
-- build time: tools, harness selection, entrypoint, metadata file
+- build time: tools, harness selection, pinned config repo fetch, Home Manager activation package, metadata file
 - runtime: cloning the target repository
 
 That keeps the image reusable while still letting each launch target a different repo.
@@ -85,3 +87,5 @@ In the real backend, `nix/demo-spec.nix` would not be handwritten. Your API woul
 4. build the selected output (`env`, `image`, or both)
 
 That lets you keep all Nix logic in one place and only generate data per request.
+
+The demo spec now pins the external config repo revision and lists the imported module paths, so the config source is data in the spec rather than hardcoded into the image builder.

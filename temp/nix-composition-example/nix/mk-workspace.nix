@@ -1,10 +1,13 @@
 {
+  homeManagerLib,
   pkgs,
   opencodePkg,
   spec,
 }:
 let
   lib = pkgs.lib;
+  nixConfig = spec.nixConfig or null;
+  localeArchive = "${pkgs.glibcLocales}/lib/locale/locale-archive";
 
   packageMap = {
     curl = pkgs.curl;
@@ -39,11 +42,48 @@ let
 
   envVars = lib.mapAttrsToList (name: value: "${name}=${value}") (spec.env or { });
 
+  configRepo =
+    if nixConfig == null then
+      null
+    else
+      builtins.fetchGit {
+        url = nixConfig.repoUrl;
+        ref = nixConfig.repoRef or "main";
+        rev = nixConfig.repoRev;
+      };
+
+  homeManagerModules =
+    if nixConfig == null then
+      [ ]
+    else
+      map (modulePath: configRepo + "/${modulePath}") nixConfig.homeManagerModules;
+
+  homeConfiguration =
+    if nixConfig == null then
+      null
+    else
+      homeManagerLib.homeManagerConfiguration {
+        inherit pkgs;
+
+        modules = [
+          {
+            home.username = "root";
+            home.homeDirectory = "/root";
+            home.stateVersion = "25.11";
+            programs.home-manager.enable = false;
+          }
+        ]
+        ++ homeManagerModules;
+      };
+
+  homeActivationPackage =
+    if homeConfiguration == null then null else homeConfiguration.activationPackage;
+
   nssFiles = pkgs.buildEnv {
     name = "zweit-nss-files";
     paths = [
       (pkgs.writeTextDir "etc/passwd" ''
-        root:x:0:0:root:/root:/bin/bash
+        root:x:0:0:root:/root:/bin/zsh
         sshd:x:74:74:sshd privilege separation user:/var/empty:/bin/nologin
       '')
       (pkgs.writeTextDir "etc/group" ''
@@ -71,16 +111,46 @@ let
         set -euo pipefail
 
     mkdir -p /workspace
-    mkdir -p /workspace/.home
     mkdir -p /workspace/.ssh-runtime
     mkdir -p /root
+    mkdir -p /tmp
     mkdir -p /var/empty
     mkdir -p /run/sshd
-        cd /workspace
+    cd /workspace
 
-        export HOME=/workspace/.home
+    export HOME=/root
+    export USER=root
+    export LOGNAME=root
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+    export LOCALE_ARCHIVE=${localeArchive}
 
-        if [ "''${ZWEIT_ENABLE_SSH:-0}" = "1" ] || [ "''${ZWEIT_ENABLE_SSH:-}" = "true" ]; then
+    ${lib.optionalString (homeActivationPackage != null) ''
+      cp -a ${homeActivationPackage}/home-files/. "$HOME/"
+      export PATH=${homeActivationPackage}/home-path/bin:$PATH
+
+      if [ -f ${homeActivationPackage}/hm-session-vars.sh ]; then
+        . ${homeActivationPackage}/hm-session-vars.sh
+      fi
+    ''}
+
+    if [ -f "$HOME/.zshenv" ]; then
+      printf '%s\n' \
+        'export LANG=en_US.UTF-8' \
+        'export LC_ALL=en_US.UTF-8' \
+        'export LOCALE_ARCHIVE=${localeArchive}' \
+        > "$HOME/.zshenv.zweit"
+      cat "$HOME/.zshenv" >> "$HOME/.zshenv.zweit"
+      mv "$HOME/.zshenv.zweit" "$HOME/.zshenv"
+    else
+      printf '%s\n' \
+        'export LANG=en_US.UTF-8' \
+        'export LC_ALL=en_US.UTF-8' \
+        'export LOCALE_ARCHIVE=${localeArchive}' \
+        > "$HOME/.zshenv"
+    fi
+
+    if [ "''${ZWEIT_ENABLE_SSH:-0}" = "1" ] || [ "''${ZWEIT_ENABLE_SSH:-}" = "true" ]; then
           SSH_RUNTIME_DIR=/workspace/.ssh-runtime
           SSH_PORT="''${ZWEIT_SSH_PORT:-2222}"
           SSH_AUTHORIZED_KEYS_FILE="''${ZWEIT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"
@@ -97,23 +167,27 @@ let
             ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N "" -f "$SSH_RUNTIME_DIR/ssh_host_ed25519_key"
           fi
 
-          cat > "$SSH_RUNTIME_DIR/sshd_config" <<EOF
-    Port $SSH_PORT
-    ListenAddress 0.0.0.0
-    HostKey $SSH_RUNTIME_DIR/ssh_host_ed25519_key
-    AuthorizedKeysFile $SSH_RUNTIME_DIR/authorized_keys
-    PasswordAuthentication no
-    KbdInteractiveAuthentication no
-    ChallengeResponseAuthentication no
-    PubkeyAuthentication yes
-    PermitRootLogin yes
-    PermitEmptyPasswords no
-    UsePAM no
-    PidFile $SSH_RUNTIME_DIR/sshd.pid
-    PrintMotd no
-    StrictModes yes
-    Subsystem sftp internal-sftp
-    EOF
+      {
+        printf '%s\n' "Port $SSH_PORT"
+        printf '%s\n' 'ListenAddress 0.0.0.0'
+        printf '%s\n' "HostKey $SSH_RUNTIME_DIR/ssh_host_ed25519_key"
+        printf '%s\n' "AuthorizedKeysFile $SSH_RUNTIME_DIR/authorized_keys"
+        printf '%s\n' 'PasswordAuthentication no'
+        printf '%s\n' 'KbdInteractiveAuthentication no'
+        printf '%s\n' 'ChallengeResponseAuthentication no'
+        printf '%s\n' 'PubkeyAuthentication yes'
+        printf '%s\n' 'PermitRootLogin yes'
+        printf '%s\n' 'PermitEmptyPasswords no'
+        printf '%s\n' 'UsePAM no'
+        printf '%s\n' "PidFile $SSH_RUNTIME_DIR/sshd.pid"
+        printf '%s\n' 'PrintMotd no'
+        printf '%s\n' 'StrictModes yes'
+        ${lib.optionalString (homeActivationPackage != null) ''
+          printf '%s\n' 'SetEnv PATH=${homeActivationPackage}/home-path/bin:/bin'
+        ''}
+        printf '%s\n' 'SetEnv LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LOCALE_ARCHIVE=${localeArchive}'
+        printf '%s\n' 'Subsystem sftp internal-sftp'
+      } > "$SSH_RUNTIME_DIR/sshd_config"
 
           ${pkgs.openssh}/bin/sshd -f "$SSH_RUNTIME_DIR/sshd_config" -E "$SSH_RUNTIME_DIR/sshd.log"
           printf '%s\n' "SSH server listening on port $SSH_PORT"
@@ -146,12 +220,15 @@ let
       pkgs.bashInteractive
       pkgs.coreutils
       pkgs.git
+      pkgs.glibcLocales
+      pkgs.zsh
       pkgs.openssh
       nssFiles
       opencodePkg
       entrypoint
       specJson
     ]
+    ++ lib.optionals (homeActivationPackage != null) [ homeActivationPackage ]
     ++ selectedPackages;
 
     pathsToLink = [
@@ -174,6 +251,9 @@ let
       WorkingDir = "/workspace";
       Env = [
         "PATH=/bin"
+        "LANG=en_US.UTF-8"
+        "LC_ALL=en_US.UTF-8"
+        "LOCALE_ARCHIVE=${localeArchive}"
         "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
         "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
         "GIT_SSL_CAINFO=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -186,6 +266,7 @@ in
   inherit
     entrypoint
     env
+    homeActivationPackage
     image
     specJson
     ;
