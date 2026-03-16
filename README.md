@@ -14,10 +14,12 @@ Today the repo contains the workspace layout and shared build orchestration. App
 
 ```text
 .
-├── apps/                 # deployable apps and services
-│   └── README.md
+├── apps/                 # deployable apps and runnable demos
+│   ├── README.md
+│   └── workspace-composition-demo/
 ├── packages/             # shared libraries, domain modules, and reusable code
-│   └── README.md
+│   ├── README.md
+│   └── workspace-composition/
 ├── tooling/              # shared config packages and developer tooling
 │   └── README.md
 ├── .envrc                # direnv entrypoint for the Nix dev shell
@@ -35,9 +37,14 @@ Today the repo contains the workspace layout and shared build orchestration. App
 
 ### Workspace roles
 
-- `apps/`: user-facing and deployable surfaces such as the website, API, workers, or control-plane services
-- `packages/`: shared code such as UI primitives, environment models, adapters, SDKs, and reusable utilities
+- `apps/`: user-facing and deployable surfaces such as the website, API, workers, or runnable demo entrypoints
+- `packages/`: shared code such as UI primitives, environment models, adapters, SDKs, reusable utilities, and image-builder libraries
 - `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest, Tailwind, or internal scripts
+
+### Current permanent packages
+
+- `packages/workspace-composition/`: reusable Nix library for turning a normalized workspace spec into an environment derivation and Docker/OCI image
+- `apps/workspace-composition-demo/`: thin runnable demo workspace that points at the shared package examples and demo spec
 
 ## Planned product shape
 
@@ -86,11 +93,24 @@ The architecture should stay adapter-oriented so Zweit can target different exec
 
 ## Tooling baseline
 
-- `direnv` + Nix provide a reproducible shell with `nodejs_latest` and `pnpm`
+- `direnv` + Nix provide a reproducible shell with `nodejs_24` and `pnpm`
 - `oxlint` handles repo-wide linting
 - `oxlint-tsgolint` enables type-aware Oxlint rules backed by TypeScript Go
 - `oxfmt` handles repo-wide formatting
 - `@typescript/native-preview` provides the `tsgo` CLI at the root alongside regular `typescript`
+
+## Workspace composition
+
+The image builder and request-spec logic now live in `packages/workspace-composition/` instead of the temporary sandbox under `temp/`.
+
+That package contains:
+
+- spec normalization helpers
+- harness selection
+- locale, SSH, and Home Manager runtime modules
+- builders for the entrypoint, environment closure, and OCI image
+
+The runnable demo documentation lives in `apps/workspace-composition-demo/`.
 
 ## Getting started
 
