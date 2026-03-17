@@ -27,6 +27,44 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/api: {}
+
+  apps/docs: {}
+
+  apps/electron: {}
+
+  apps/marketing: {}
+
+  apps/web: {}
+
+  apps/workspace-composition-demo: {}
+
+  packages/ai-harness-integrations: {}
+
+  packages/os-integration-arch: {}
+
+  packages/os-integration-fedora: {}
+
+  packages/os-integration-nix: {}
+
+  packages/registry-integration: {}
+
+  packages/runtime-adapter-docker: {}
+
+  packages/runtime-adapter-k3s: {}
+
+  packages/runtime-adapter-k8s: {}
+
+  packages/runtime-adapters-api: {}
+
+  packages/source-integrations: {}
+
+  packages/workspace-composition:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
 packages:
 
   '@oxfmt/binding-android-arm-eabi@0.40.0':
@@ -388,6 +426,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  zod@3.25.76:
+    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+
 snapshots:
 
   '@oxfmt/binding-android-arm-eabi@0.40.0':
@@ -639,3 +680,5 @@ snapshots:
       turbo-windows-arm64: 2.8.17
 
   typescript@5.9.3: {}
+
+  zod@3.25.76: {}
