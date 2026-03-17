@@ -1,6 +1,14 @@
 {
   "name": "@zweit/workspace-composition",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
-  "description": "Core workspace composition contracts and normalization logic"
+  "description": "Core workspace composition contracts and normalization logic",
+  "exports": {
+    ".": "./src/index.ts",
+    "./blueprint": "./src/blueprint.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
 }
