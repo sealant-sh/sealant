@@ -1,0 +1,12 @@
+{
+  "name": "@zweit/distro-composition",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Multi-distro composition utilities",
+  "scripts": {
+    "build:image": "node --experimental-strip-types ./src/cli.ts",
+    "build:image:arch": "node --experimental-strip-types ./src/cli.ts --distro arch",
+    "build:image:fedora": "node --experimental-strip-types ./src/cli.ts --distro fedora"
+  }
+}
