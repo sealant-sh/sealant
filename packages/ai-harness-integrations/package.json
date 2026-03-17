@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/ai-harness-integrations",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Shared contracts and orchestration for AI coding harness integrations"
+}

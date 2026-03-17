@@ -8,7 +8,7 @@ The core idea stays the same: a user picks a Git repository, an AI coding harnes
 
 This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix flake for a reproducible `direnv`-powered development shell.
 
-Today the repo contains the workspace layout and shared build orchestration. Application code will grow into the workspaces below instead of living in top-level product folders.
+Today the repo contains the initial workspace layout, the first workspace composition implementation, and the target architecture for splitting composition, OS integrations, runtime adapters, and app surfaces into separate workspaces. Several of the workspaces below are intentionally lightweight placeholders so the intended boundaries are visible in the repo before every implementation lands.
 
 ## Monorepo layout
 
@@ -16,9 +16,24 @@ Today the repo contains the workspace layout and shared build orchestration. App
 .
 ├── apps/                 # deployable apps and runnable demos
 │   ├── README.md
+│   ├── api/
+│   ├── docs/
+│   ├── electron/
+│   ├── marketing/
+│   ├── web/
 │   └── workspace-composition-demo/
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
+│   ├── ai-harness-integrations/
+│   ├── os-integration-arch/
+│   ├── os-integration-fedora/
+│   ├── os-integration-nix/
+│   ├── registry-integration/
+│   ├── runtime-adapter-docker/
+│   ├── runtime-adapter-k3s/
+│   ├── runtime-adapter-k8s/
+│   ├── runtime-adapters-api/
+│   ├── source-integrations/
 │   └── workspace-composition/
 ├── tooling/              # shared config packages and developer tooling
 │   └── README.md
@@ -37,14 +52,32 @@ Today the repo contains the workspace layout and shared build orchestration. App
 
 ### Workspace roles
 
-- `apps/`: user-facing and deployable surfaces such as the website, API, workers, or runnable demo entrypoints
-- `packages/`: shared code such as UI primitives, environment models, adapters, SDKs, reusable utilities, and image-builder libraries
+- `apps/`: user-facing and deployable surfaces such as the website, API, docs, desktop clients, or runnable demo entrypoints
+- `packages/`: shared code such as composition models, OS integrations, runtime adapters, source integrations, harness orchestration, SDKs, and reusable utilities
 - `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest, Tailwind, or internal scripts
 
-### Current permanent packages
+## Architecture flow
 
-- `packages/workspace-composition/`: reusable Nix library for turning a normalized workspace spec into an environment derivation and Docker/OCI image
-- `apps/workspace-composition-demo/`: thin runnable demo workspace that points at the shared package examples and demo spec
+The long-term architecture is built around a small set of explicit contracts:
+
+1. The product surfaces submit a `UserWorkspaceSpec`.
+2. The control plane normalizes that into a `WorkspaceBlueprint`.
+3. Workspace composition selects an OS integration and produces a concrete build plan.
+4. The selected OS integration produces one or more build artifacts.
+5. Runtime adapters launch those artifacts on Docker, Kubernetes, K3s, or future targets.
+
+Supporting integrations feed into that flow without owning it:
+
+- source integrations resolve repositories, refs, and provider-specific access details
+- AI harness integrations describe harness requirements and launch behavior
+- registry integrations publish, tag, and retrieve produced artifacts
+
+### Current implementation status
+
+- `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
+- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
+- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build outputs
+- the other package and app workspaces are scaffolded so the intended architecture is explicit before each implementation is filled in
 
 ## Planned product shape
 
@@ -68,8 +101,10 @@ The backend turns user intent into a running environment.
 Core responsibilities:
 
 - validate and normalize user inputs
+- produce `WorkspaceBlueprint` values from validated requests
 - resolve repos and configuration sources
-- compose the final Nix flake
+- select OS integrations and runtime adapters
+- compose the final build request
 - coordinate provisioning and lifecycle
 - talk to runtime adapters
 - track environment state, logs, and failures
@@ -84,6 +119,29 @@ The infrastructure side contains the deployment and execution model for isolated
 - adapter implementations for different deployment targets
 
 The architecture should stay adapter-oriented so Zweit can target different execution backends over time.
+
+## Defined package architecture
+
+- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
+- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into a concrete Nix build path
+- `packages/os-integration-fedora/`: Fedora-specific OS integration placeholder
+- `packages/os-integration-arch/`: Arch-specific OS integration placeholder
+- `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter implementations
+- `packages/runtime-adapter-docker/`: Docker runtime adapter placeholder
+- `packages/runtime-adapter-k8s/`: Kubernetes runtime adapter placeholder
+- `packages/runtime-adapter-k3s/`: K3s runtime adapter placeholder
+- `packages/source-integrations/`: source-provider integration package for repository selection, ref resolution, and provider-specific access flows; GitHub will be the first provider here
+- `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
+- `packages/registry-integration/`: artifact and registry publishing, tagging, lookup, and retrieval
+
+## Defined app architecture
+
+- `apps/web/`: main product web app for creating and managing workspaces
+- `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
+- `apps/docs/`: user and contributor documentation site
+- `apps/marketing/`: public website and launch surfaces
+- `apps/electron/`: desktop client surface if desktop becomes a first-class client
+- `apps/workspace-composition-demo/`: runnable demo for composition flows and blueprint examples
 
 ## Why the monorepo uses Turbo + pnpm
 
@@ -101,14 +159,14 @@ The architecture should stay adapter-oriented so Zweit can target different exec
 
 ## Workspace composition
 
-The image builder and request-spec logic now live in `packages/workspace-composition/` instead of the temporary sandbox under `temp/`.
+The composition contracts now live in `packages/workspace-composition/`, and the concrete Nix build path now lives in `packages/os-integration-nix/` instead of the temporary sandbox under `temp/`.
 
 That package contains:
 
-- spec normalization helpers
-- harness selection
-- locale, SSH, and Home Manager runtime modules
-- builders for the entrypoint, environment closure, and OCI image
+- `UserWorkspaceSpec` and `WorkspaceBlueprint` documentation
+- normalization and defaulting helpers
+- executor and artifact contract definitions
+- shared composition contracts that feed concrete OS integrations such as `packages/os-integration-nix/`
 
 The runnable demo documentation lives in `apps/workspace-composition-demo/`.
 
@@ -165,8 +223,9 @@ pnpm test
 - stand up the first app workspaces under `apps/`
 - define shared domain packages under `packages/`
 - centralize config and standards under `tooling/`
-- define the flake composition model
+- extract the first OS integration boundary from the current Nix implementation
 - define the runtime adapter interface
+- define source and harness integration contracts
 - document the security model and trust boundaries
 
 ## Why this repo exists

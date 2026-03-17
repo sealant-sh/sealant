@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/source-integrations",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Source-provider integrations for repository selection, ref resolution, and access flows"
+}

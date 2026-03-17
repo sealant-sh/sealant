@@ -2,5 +2,5 @@
   "name": "@zweit/workspace-composition",
   "private": true,
   "version": "0.0.0",
-  "description": "Reusable Nix workspace composition and image builder logic"
+  "description": "Core workspace composition contracts and normalization logic"
 }

@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/os-integration-nix",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Nix-specific OS integration for compiling a workspace blueprint into build artifacts"
+}

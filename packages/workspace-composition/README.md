@@ -1,34 +1,21 @@
 # Workspace Composition
 
-`@zweit/workspace-composition` is the reusable Nix library that turns a normalized workspace spec into:
+`@zweit/workspace-composition` owns the core workspace composition system.
 
-- a runnable environment derivation
-- a Docker/OCI image
-- a runtime entrypoint that handles repo checkout, locale setup, SSH, and optional Home Manager activation
-
-The library is intentionally split into small Nix files so the control-plane layer can treat the request spec as data while reusing the same image builder logic everywhere.
+It defines the shared composition contracts and the OS-agnostic workspace model used before a concrete OS integration is selected.
 
 ## Layout
 
-- `flake.nix`: library flake and example outputs
-- `examples/`: example specs that exercise the library
-- `docs/architecture.md`: high-level builder architecture
-- `docs/request-spec.md`: the request/spec contract
-- `nix/lib/`: normalization and fetch helpers
-- `nix/harnesses/`: per-harness package and command selection
-- `nix/modules/`: reusable runtime concerns such as locale, Home Manager, and SSH
-- `nix/builders/`: final environment, entrypoint, image, and top-level workspace builders
+- `docs/contracts.md`: target composition contracts and package boundaries
+- normalization, selection, and contract code as it lands in this package
+- integration-specific build logic now lives in sibling packages such as `packages/os-integration-nix/`
 
-## Build The Example Image
+## Target Boundary
 
-```bash
-nix build "path:$PWD/packages/workspace-composition#example-opencode-home-manager-image"
-docker load < result
-docker run --rm -it zweit-workspace-demo:opencode
-```
+The intended layering is:
 
-## Build The Minimal Example
-
-```bash
-nix build "path:$PWD/packages/workspace-composition#example-minimal-image"
-```
+1. The API or another control-plane surface accepts a `UserWorkspaceSpec`.
+2. This package normalizes it into a `WorkspaceBlueprint`.
+3. This package selects an OS integration using shared executor contracts.
+4. The selected OS integration produces one or more build artifacts.
+5. Runtime adapters launch those artifacts on the chosen backend.

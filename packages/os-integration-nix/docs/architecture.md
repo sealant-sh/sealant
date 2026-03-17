@@ -1,10 +1,12 @@
-# Architecture
+# Current Nix Architecture
 
-The workspace composition library is built around one core rule: keep request-specific data separate from reusable builder logic.
+This document describes the current Nix-backed implementation that now lives inside `@zweit/os-integration-nix`.
+
+The core rule stays the same: keep request-specific data separate from reusable builder logic.
 
 ## Flow
 
-1. A control-plane layer normalizes user input into a spec.
+1. A control-plane layer validates user input and produces the current Nix-facing request data.
 2. `normalize-spec.nix` fills in defaults and validates the shape.
 3. The builder resolves packages, harness selection, and optional external config repositories.
 4. Reusable runtime modules contribute pieces of behavior such as:
@@ -30,3 +32,5 @@ The workspace composition library is built around one core rule: keep request-sp
   - first-run editor/plugin shims
 
 This split keeps image generation reproducible while still allowing each launched workspace to target a different repository.
+
+The OS-agnostic composition contracts stay in `@zweit/workspace-composition` while this package owns the concrete Nix build path.
