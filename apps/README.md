@@ -2,9 +2,11 @@
 
 Deployable applications, services, and runnable demo entrypoints live here.
 
-Examples that may land in this workspace:
+The current app architecture is:
 
-- `web` for the product UI
-- `api` for the control-plane API
-- `worker` for async environment lifecycle jobs
-- `workspace-composition-demo` for exercising the shared image-builder package
+- `web`: main product web app for creating and managing workspaces
+- `api`: control-plane API surface for validation, orchestration, lifecycle, and state
+- `docs`: documentation site for users, contributors, and developers
+- `marketing`: public-facing website and launch surfaces
+- `electron`: desktop application surface if desktop becomes a first-class client
+- `workspace-composition-demo`: runnable demo for exercising composition flows and blueprint examples

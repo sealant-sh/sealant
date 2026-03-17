@@ -1,6 +1,10 @@
-# Request Spec
+# Current Nix Executor Spec
 
-The workspace builder accepts a normalized Nix attribute set with this shape:
+This document describes the current Nix-facing input shape used by `@zweit/os-integration-nix`.
+
+Longer term, the control plane should accept a higher-level `UserWorkspaceSpec`, normalize that into a `WorkspaceBlueprint`, and then derive a Nix-specific executor spec from it.
+
+For now, the workspace builder accepts a normalized Nix attribute set with this shape:
 
 ```nix
 {

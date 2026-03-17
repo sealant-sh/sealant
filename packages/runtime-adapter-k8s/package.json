@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/runtime-adapter-k8s",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Kubernetes runtime adapter placeholder"
+}

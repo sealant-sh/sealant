@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/runtime-adapter-docker",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Docker runtime adapter placeholder"
+}

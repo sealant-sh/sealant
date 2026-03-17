@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/os-integration-fedora",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Fedora-specific OS integration placeholder"
+}

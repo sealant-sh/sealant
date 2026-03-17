@@ -1,0 +1,6 @@
+{
+  "name": "@zweit/electron",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Desktop application surface for Zweit"
+}

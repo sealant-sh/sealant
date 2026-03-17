@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "description": "Runnable demo for the Zweit workspace composition builder",
   "scripts": {
-    "build:image": "nix build path:../../packages/workspace-composition#example-opencode-home-manager-image",
-    "build:minimal": "nix build path:../../packages/workspace-composition#example-minimal-image"
+    "build:image": "nix build path:../../packages/os-integration-nix#example-opencode-home-manager-image",
+    "build:minimal": "nix build path:../../packages/os-integration-nix#example-minimal-image"
   }
 }
