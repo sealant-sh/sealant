@@ -10,7 +10,7 @@ import {
   type OsExecutorCompileInput,
   type OsExecutorCompileResult,
   type OsExecutorSupport,
-} from "@zweit/workspace-composition";
+} from "@sealant/workspace-composition";
 
 import { getNixExecutorSupport, mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
 import { parseNixExecutorSpec, type NixExecutorSpec } from "./nix-executor-spec.js";
@@ -105,7 +105,7 @@ export class NixOsExecutor implements OsExecutor {
         {
           kind: "metadata",
           name: `${spec.imageName}-spec`,
-          path: `${specJsonDirectoryPath}/etc/zweit/spec.json`,
+          path: `${specJsonDirectoryPath}/etc/sealant/spec.json`,
           format: "json",
         },
       ],

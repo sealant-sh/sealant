@@ -1,5 +1,5 @@
 {
-  description = "Nix OS integration for Zweit workspace composition";
+  description = "Nix OS integration for Sealant workspace composition";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

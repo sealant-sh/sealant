@@ -12,10 +12,10 @@ in
   packages = [ pkgs.openssh ];
 
   script = ''
-    if [ "''${ZWEIT_ENABLE_SSH:-0}" = "1" ] || [ "''${ZWEIT_ENABLE_SSH:-}" = "true" ]; then
+    if [ "''${SEALANT_ENABLE_SSH:-0}" = "1" ] || [ "''${SEALANT_ENABLE_SSH:-}" = "true" ]; then
       SSH_RUNTIME_DIR=/workspace/.ssh-runtime
-      SSH_PORT="''${ZWEIT_SSH_PORT:-2222}"
-      SSH_AUTHORIZED_KEYS_FILE="''${ZWEIT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"
+      SSH_PORT="''${SEALANT_SSH_PORT:-2222}"
+      SSH_AUTHORIZED_KEYS_FILE="''${SEALANT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"
 
       if [ ! -f "$SSH_AUTHORIZED_KEYS_FILE" ]; then
         printf '%s\n' "SSH enabled but no authorized keys file found at $SSH_AUTHORIZED_KEYS_FILE" >&2

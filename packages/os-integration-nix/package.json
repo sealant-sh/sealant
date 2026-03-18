@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/os-integration-nix",
+  "name": "@sealant/os-integration-nix",
   "private": true,
   "type": "module",
   "version": "0.0.0",
@@ -12,7 +12,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@zweit/workspace-composition": "workspace:*",
+    "@sealant/workspace-composition": "workspace:*",
     "zod": "^3.24.1"
   }
 }

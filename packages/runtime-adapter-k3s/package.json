@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/runtime-adapter-k3s",
+  "name": "@sealant/runtime-adapter-k3s",
   "private": true,
   "version": "0.0.0",
   "description": "K3s runtime adapter placeholder"

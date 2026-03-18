@@ -60,7 +60,7 @@ describe("parseOsExecutorCompileResult", () => {
         {
           kind: "oci-image",
           name: "workspace-image",
-          reference: "zweit/workspace:nix",
+          reference: "sealant/workspace:nix",
           loader: "docker-load",
         },
         {
@@ -85,7 +85,7 @@ describe("parseOsExecutorCompileResult", () => {
         {
           kind: "oci-image",
           name: "workspace-image",
-          reference: "zweit/workspace:nix",
+          reference: "sealant/workspace:nix",
           loader: "docker-load",
         },
         {

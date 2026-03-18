@@ -9,27 +9,27 @@ It keeps the demo spec close to the commands you use locally, while the concrete
 ```bash
 nix build "path:$PWD/packages/os-integration-nix#example-opencode-home-manager-image"
 docker load < result
-docker run --rm -it zweit-workspace-demo:opencode
+docker run --rm -it sealant-workspace-demo:opencode
 ```
 
 Or from this workspace with pnpm:
 
 ```bash
-pnpm --filter @zweit/workspace-composition-demo run build:image
+pnpm --filter @sealant/workspace-composition-demo run build:image
 docker load < result
-docker run --rm -it zweit-workspace-demo:opencode
+docker run --rm -it sealant-workspace-demo:opencode
 ```
 
 ## Run The SSH Demo
 
 ```bash
 docker run --rm -d \
-  --name zweit-ssh-demo \
+  --name sealant-ssh-demo \
   -p 2222:2222 \
   -v "$HOME/.ssh/id_ed25519.pub:/run/keys/authorized_keys:ro" \
-  -e ZWEIT_ENABLE_SSH=1 \
-  -e ZWEIT_FOREGROUND_COMMAND='sleep infinity' \
-  zweit-workspace-demo:opencode
+  -e SEALANT_ENABLE_SSH=1 \
+  -e SEALANT_FOREGROUND_COMMAND='sleep infinity' \
+  sealant-workspace-demo:opencode
 
 ssh-keygen -R '[127.0.0.1]:2222'
 ssh -p 2222 root@127.0.0.1

@@ -36,8 +36,8 @@ pkgs.writeShellScriptBin "workspace-entrypoint" ''
 
   # Foreground overrides make local debugging and smoke tests much easier than
   # always jumping straight into the selected harness.
-  if [ -n "''${ZWEIT_FOREGROUND_COMMAND:-}" ]; then
-    exec ${pkgs.bashInteractive}/bin/bash -lc "$ZWEIT_FOREGROUND_COMMAND"
+  if [ -n "''${SEALANT_FOREGROUND_COMMAND:-}" ]; then
+    exec ${pkgs.bashInteractive}/bin/bash -lc "$SEALANT_FOREGROUND_COMMAND"
   fi
 
   ${harness.command}

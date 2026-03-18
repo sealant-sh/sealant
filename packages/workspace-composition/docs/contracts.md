@@ -1,6 +1,6 @@
 # Composition Contracts
 
-`@zweit/workspace-composition` owns the OS-agnostic composition layer for workspace creation.
+`@sealant/workspace-composition` owns the OS-agnostic composition layer for workspace creation.
 
 ## Core Contracts
 
@@ -58,4 +58,4 @@
 
 ## Current Implementation Note
 
-The first concrete Nix-backed build path now lives in `@zweit/os-integration-nix`. This package stays focused on the shared composition contracts, normalization, and executor-selection boundary that feed concrete OS integrations.
+The first concrete Nix-backed build path now lives in `@sealant/os-integration-nix`. This package stays focused on the shared composition contracts, normalization, and executor-selection boundary that feed concrete OS integrations.

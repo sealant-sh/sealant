@@ -1,5 +1,5 @@
-import type { WorkspaceBlueprint } from "@zweit/workspace-composition";
-import { parseOsExecutorSupport, type OsExecutorSupport } from "@zweit/workspace-composition";
+import type { WorkspaceBlueprint } from "@sealant/workspace-composition";
+import { parseOsExecutorSupport, type OsExecutorSupport } from "@sealant/workspace-composition";
 
 import { parseNixExecutorSpec, type NixExecutorSpec } from "./nix-executor-spec.js";
 
@@ -11,7 +11,7 @@ const supportedPackageIds = new Set(["curl", "git", "jq", "nodejs", "pnpm", "rip
 // Image naming is executor-owned because the shared blueprint intentionally does
 // not include backend-specific artifact naming concerns.
 const defaultImageNameForBlueprint = (blueprint: WorkspaceBlueprint): string =>
-  `zweit-workspace-${blueprint.harness.id}`;
+  `sealant-workspace-${blueprint.harness.id}`;
 
 // The minimal wrapper path only supports the subset of the shared blueprint that
 // the current Nix implementation can honestly honor today.
@@ -135,7 +135,7 @@ export const mapBlueprintToNixExecutorSpec = (blueprint: WorkspaceBlueprint): Ni
   const env = { ...blueprint.runtime.env };
 
   if (blueprint.lifecycle.startup.foreground.kind === "command") {
-    env.ZWEIT_FOREGROUND_COMMAND = blueprint.lifecycle.startup.foreground.run;
+    env.SEALANT_FOREGROUND_COMMAND = blueprint.lifecycle.startup.foreground.run;
   }
 
   return parseNixExecutorSpec({

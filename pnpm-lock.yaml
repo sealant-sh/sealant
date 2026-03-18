@@ -58,7 +58,7 @@ importers:
 
   packages/os-integration-nix:
     dependencies:
-      '@zweit/workspace-composition':
+      '@sealant/workspace-composition':
         specifier: workspace:*
         version: link:../workspace-composition
       zod:

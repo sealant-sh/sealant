@@ -1,7 +1,7 @@
 {
   # Root flake only provides the repository development shell. The heavier
   # image-building logic lives in packages/workspace-composition.
-  description = "Zweit development shell";
+  description = "Sealant development shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

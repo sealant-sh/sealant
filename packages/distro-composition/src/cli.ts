@@ -198,7 +198,7 @@ function printHelp(): void {
       "  --dep <name>            Repeated dependency flag",
       "  --extra-packages <a,b>  Comma-separated distro package list",
       "  --extra-package <name>  Repeated distro package flag",
-      "  --image <name>          Docker image name (default: zweit-distro-composition)",
+      "  --image <name>          Docker image name (default: sealant-distro-composition)",
       "  --tag <tag>             Docker image tag (default: distro)",
       "  --smoke-test            Run dependency checks after build",
       "  --no-smoke-test         Disable smoke test",

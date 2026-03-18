@@ -14,7 +14,7 @@
       - neovim
       - postgresql
     target_distro_normalized: "{{ target_distro | default('') | lower }}"
-    image_name: "{{ image_name | default('zweit-distro-composition') }}"
+    image_name: "{{ image_name | default('sealant-distro-composition') }}"
     image_tag: "{{ image_tag | default(target_distro_normalized) }}"
     run_smoke_test: "{{ run_smoke_test | default(false) | bool }}"
 

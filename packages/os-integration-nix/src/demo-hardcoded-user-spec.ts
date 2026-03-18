@@ -1,4 +1,4 @@
-import { normalizeUserWorkspaceSpec } from "@zweit/workspace-composition";
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
 import { NixOsExecutor } from "./nix-executor.js";
 import { mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
@@ -11,7 +11,7 @@ const hardcodedUserSpec = {
   harness: "opencode",
   packages: ["nodejs", "pnpm", "ripgrep"],
   env: {
-    ZWEIT_PROFILE: "demo",
+    SEALANT_PROFILE: "demo",
   },
   os: "nix",
 };

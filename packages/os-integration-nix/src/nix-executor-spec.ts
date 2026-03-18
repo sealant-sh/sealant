@@ -25,7 +25,7 @@ export const nixExecutorConfigSchema = z.strictObject({
 // This is the concrete spec that the current Nix builder consumes.
 export const nixExecutorSpecSchema = z.strictObject({
   harness: nixExecutorHarnessSchema,
-  imageName: nonEmptyStringSchema.default("zweit-workspace-demo"),
+  imageName: nonEmptyStringSchema.default("sealant-workspace-demo"),
   repoUrl: z.string().url(),
   repoRef: nonEmptyStringSchema.default("main"),
   extraPackages: z.array(nonEmptyStringSchema).default([]),

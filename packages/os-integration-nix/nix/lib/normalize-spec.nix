@@ -22,7 +22,7 @@ let
 
   normalizedSpec = spec // {
     # These defaults keep specs concise while still producing stable images.
-    imageName = spec.imageName or "zweit-workspace-demo";
+    imageName = spec.imageName or "sealant-workspace-demo";
     repoRef = spec.repoRef or "main";
     extraPackages = spec.extraPackages or [ ];
     env = spec.env or { };

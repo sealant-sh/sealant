@@ -2,7 +2,7 @@
 # Minimal NSS/passwd/group data for scratch-like container images. This keeps
 # root shells, sshd, and tools that inspect users/groups working correctly.
 pkgs.buildEnv {
-  name = "zweit-nss-files";
+  name = "sealant-nss-files";
 
   paths = [
     (pkgs.writeTextDir "etc/passwd" ''
