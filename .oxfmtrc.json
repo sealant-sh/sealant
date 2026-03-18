@@ -1,25 +1,25 @@
 {
-    "arrowParens": "always",
-    "printWidth": 100,
-    "semi": true,
-    "tabWidth": 2,
-    "singleQuote": false,
-    "trailingComma": "all",
-    "ignorePatterns": [
-        "**/node_modules/**",
-        "**/dist/**",
-        "**/build/**",
-        "**/coverage/**",
-        ".turbo/**",
-        ".direnv/**"
-    ],
-    "sortImports": {
-        "ignoreCase": true,
-        "newlinesBetween": true,
-        "order": "asc"
-    },
-    "sortPackageJson": {
-        "sortScripts": true
-    },
-    "proseWrap": "always" // printWidth line breaks in MD/MDX
+  "arrowParens": "always",
+  "printWidth": 100,
+  "semi": true,
+  "tabWidth": 2,
+  "singleQuote": false,
+  "trailingComma": "all",
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+    ".turbo/**",
+    ".direnv/**"
+  ],
+  "sortImports": {
+    "ignoreCase": true,
+    "newlinesBetween": true,
+    "order": "asc"
+  },
+  "sortPackageJson": {
+    "sortScripts": true
+  },
+  "proseWrap": "always" // printWidth line breaks in MD/MDX
 }
