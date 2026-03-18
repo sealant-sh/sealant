@@ -9,7 +9,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./blueprint": "./src/blueprint.ts"
+    "./blueprint": "./src/blueprint.ts",
+    "./executor": "./src/executor.ts"
   },
   "dependencies": {
     "zod": "^3.24.1"

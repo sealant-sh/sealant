@@ -1,6 +1,18 @@
 {
   "name": "@zweit/os-integration-nix",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
-  "description": "Nix-specific OS integration for compiling a workspace blueprint into build artifacts"
+  "description": "Nix-specific OS integration for compiling a workspace blueprint into build artifacts",
+  "scripts": {
+    "demo:user-spec": "tsx ./src/demo-hardcoded-user-spec.ts",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@zweit/workspace-composition": "workspace:*",
+    "zod": "^3.24.1"
+  }
 }
