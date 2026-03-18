@@ -1,6 +1,6 @@
 {
   "name": "@zweit/api",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Control-plane API for validation, orchestration, lifecycle, and state"
 }

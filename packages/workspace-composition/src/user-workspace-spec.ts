@@ -114,7 +114,7 @@ const userWorkspaceStartupSchema = z.union([
   z.strictObject({
     steps: z.array(userWorkspaceCommandStepSchema).optional(),
     foreground: userWorkspaceStartupForegroundSchema.optional(),
-    }),
+  }),
 ]);
 
 // Runtime stays as a nested object even in the user spec because env, working
@@ -217,43 +217,44 @@ export const userWorkspaceSpecSchema = z
       });
     }
 
-    const conflictGroups: Array<{ message: string; values: Array<unknown>; path: Array<string> }> = [
-      {
-        message: "Use only one of inputs or sources.inputs.",
-        values: [value.inputs, value.sources?.inputs],
-        path: ["inputs"],
-      },
-      {
-        message: "Use only one of ssh or access.ssh.",
-        values: [value.ssh, value.access?.ssh],
-        path: ["ssh"],
-      },
-      {
-        message: "Use only one of packages or tooling.packages.",
-        values: [value.packages, value.tooling?.packages],
-        path: ["packages"],
-      },
-      {
-        message: "Use only one of setup or lifecycle.setup.",
-        values: [value.setup, value.lifecycle?.setup],
-        path: ["setup"],
-      },
-      {
-        message: "Use only one of startup or lifecycle.startup.",
-        values: [value.startup, value.lifecycle?.startup],
-        path: ["startup"],
-      },
-      {
-        message: "Use only one of env or runtime.env.",
-        values: [value.env, value.runtime?.env],
-        path: ["env"],
-      },
-      {
-        message: "Use only one of os or target.os.",
-        values: [value.os, value.target?.os],
-        path: ["os"],
-      },
-    ];
+    const conflictGroups: Array<{ message: string; values: Array<unknown>; path: Array<string> }> =
+      [
+        {
+          message: "Use only one of inputs or sources.inputs.",
+          values: [value.inputs, value.sources?.inputs],
+          path: ["inputs"],
+        },
+        {
+          message: "Use only one of ssh or access.ssh.",
+          values: [value.ssh, value.access?.ssh],
+          path: ["ssh"],
+        },
+        {
+          message: "Use only one of packages or tooling.packages.",
+          values: [value.packages, value.tooling?.packages],
+          path: ["packages"],
+        },
+        {
+          message: "Use only one of setup or lifecycle.setup.",
+          values: [value.setup, value.lifecycle?.setup],
+          path: ["setup"],
+        },
+        {
+          message: "Use only one of startup or lifecycle.startup.",
+          values: [value.startup, value.lifecycle?.startup],
+          path: ["startup"],
+        },
+        {
+          message: "Use only one of env or runtime.env.",
+          values: [value.env, value.runtime?.env],
+          path: ["env"],
+        },
+        {
+          message: "Use only one of os or target.os.",
+          values: [value.os, value.target?.os],
+          path: ["os"],
+        },
+      ];
 
     for (const group of conflictGroups) {
       if (group.values.filter((candidate) => candidate !== undefined).length > 1) {
@@ -348,9 +349,7 @@ const normalizeInputSource = (
 
 // Harness normalization converts shorthand into the small explicit object the
 // blueprint uses everywhere else.
-const normalizeHarness = (
-  harness: UserWorkspaceSpec["harness"],
-): WorkspaceBlueprint["harness"] => {
+const normalizeHarness = (harness: UserWorkspaceSpec["harness"]): WorkspaceBlueprint["harness"] => {
   if (typeof harness === "string") {
     return { id: harness };
   }
@@ -498,7 +497,7 @@ const normalizeStartup = (
 
   return {
     steps: normalizeCommandSteps(startup.steps),
-      foreground: normalizeStartupForeground(startup.foreground),
+    foreground: normalizeStartupForeground(startup.foreground),
   };
 };
 
@@ -543,7 +542,7 @@ const normalizeTargetOs = (
 
   return {
     family: os.family ?? "auto",
-      mode: os.mode ?? "prefer",
+    mode: os.mode ?? "prefer",
   };
 };
 

@@ -1,8 +1,10 @@
 # Distro Composition
 
-This package contains an Ansible playbook that builds distro-targeted Docker images with a selected set of preinstalled development dependencies.
+This package contains an Ansible playbook that builds distro-targeted Docker images with a selected
+set of preinstalled development dependencies.
 
-Alongside the curated dependency list, you can also pass arbitrary distro package names via `extra_packages`.
+Alongside the curated dependency list, you can also pass arbitrary distro package names via
+`extra_packages`.
 
 ## Supported distros
 
@@ -32,7 +34,8 @@ ansible-playbook packages/distro-composition/playbooks/site.yml \
   -e '{"target_distro":"arch","selected_dependencies":["nodejs"],"extra_packages":["tmux","ripgrep"],"image_name":"zweit-dev","image_tag":"arch"}'
 ```
 
-The playbook renders a Dockerfile under `packages/distro-composition/playbooks/.build/` and then runs `docker build`.
+The playbook renders a Dockerfile under `packages/distro-composition/playbooks/.build/` and then
+runs `docker build`.
 
 ## TypeScript wrapper API and CLI
 
@@ -74,7 +77,7 @@ await buildDistroImage({
   extraPackages: ["tmux", "ripgrep"],
   imageName: "zweit-dev",
   imageTag: "fedora",
-  runSmokeTest: true
+  runSmokeTest: true,
 });
 ```
 

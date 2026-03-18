@@ -2,7 +2,8 @@
 
 `@zweit/workspace-composition` owns the core workspace composition system.
 
-It defines the shared composition contracts and the OS-agnostic workspace model used before a concrete OS integration is selected.
+It defines the shared composition contracts and the OS-agnostic workspace model used before a
+concrete OS integration is selected.
 
 ## Layout
 
@@ -11,7 +12,8 @@ It defines the shared composition contracts and the OS-agnostic workspace model 
 - `docs/user-workspace-spec.md`: user-facing input contract and normalization rules
 - `docs/workspace-blueprint.md`: normalized workspace blueprint contract and defaults
 - normalization, selection, and contract code as it lands in this package
-- integration-specific build logic now lives in sibling packages such as `packages/os-integration-nix/`
+- integration-specific build logic now lives in sibling packages such as
+  `packages/os-integration-nix/`
 
 ## Target Boundary
 

@@ -12,7 +12,10 @@ import {
   type OsExecutorSupport,
 } from "@zweit/workspace-composition";
 
-import { getNixExecutorSupport, mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
+import {
+  getNixExecutorSupport,
+  mapBlueprintToNixExecutorSpec,
+} from "./map-blueprint-to-nix-executor-spec.js";
 import { parseNixExecutorSpec, type NixExecutorSpec } from "./nix-executor-spec.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,7 +31,10 @@ type NixBuildJson = Array<{
 // This helper renders the mapped Nix spec as JSON and lets Nix reconstruct the
 // attrset through builtins.fromJSON so the TS wrapper can call the current code
 // path without inventing a second Nix entrypoint first.
-const createNixWorkspaceExpression = (spec: NixExecutorSpec, attribute: "image" | "env" | "specJson") => {
+const createNixWorkspaceExpression = (
+  spec: NixExecutorSpec,
+  attribute: "image" | "env" | "specJson",
+) => {
   const specJson = JSON.stringify(spec);
 
   return `let flake = builtins.getFlake ${JSON.stringify(`path:${packageDir}`)}; spec = builtins.fromJSON ${JSON.stringify(specJson)}; workspace = flake.legacyPackages.\${builtins.currentSystem}.mkWorkspace spec; in workspace.${attribute}`;

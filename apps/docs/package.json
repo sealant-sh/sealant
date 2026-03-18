@@ -6,8 +6,8 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev --port 3000",
     "build": "vite build",
+    "dev": "vite dev --port 3000",
     "preview": "vite preview",
     "test": "vitest run"
   },
@@ -46,4 +46,3 @@
     ]
   }
 }
-

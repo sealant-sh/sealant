@@ -10,7 +10,9 @@ export const osExecutorIdSchema = z.enum(["nix", "fedora", "arch"]);
 // Once an executor is selected it must represent a concrete OS family. `auto`
 // is valid user intent in the blueprint, but it is not a valid identity for a
 // backend that is actually compiling artifacts.
-export const concreteWorkspaceTargetOsFamilySchema = workspaceTargetOsFamilySchema.exclude(["auto"]);
+export const concreteWorkspaceTargetOsFamilySchema = workspaceTargetOsFamilySchema.exclude([
+  "auto",
+]);
 
 // Support failures are normalized because the composition layer needs a uniform
 // way to explain why a backend cannot handle a blueprint. That lets selection,
@@ -117,7 +119,8 @@ export const osExecutorCompileResultSchema = z.strictObject({
 
 // Parse helpers exist so callers can validate unknown data at the boundaries of
 // the system instead of manually invoking `.parse(...)` throughout the codebase.
-export const parseBuildArtifact = (input: unknown): BuildArtifact => buildArtifactSchema.parse(input);
+export const parseBuildArtifact = (input: unknown): BuildArtifact =>
+  buildArtifactSchema.parse(input);
 
 export const parseOsExecutorSupport = (input: unknown): OsExecutorSupport =>
   osExecutorSupportSchema.parse(input);
@@ -132,9 +135,7 @@ export type OsExecutorId = z.infer<typeof osExecutorIdSchema>;
 
 export type ConcreteWorkspaceTargetOsFamily = z.infer<typeof concreteWorkspaceTargetOsFamilySchema>;
 
-export type OsExecutorSupportFailureReason = z.infer<
-  typeof osExecutorSupportFailureReasonSchema
->;
+export type OsExecutorSupportFailureReason = z.infer<typeof osExecutorSupportFailureReasonSchema>;
 
 export type OciImageBuildArtifact = z.infer<typeof ociImageBuildArtifactSchema>;
 

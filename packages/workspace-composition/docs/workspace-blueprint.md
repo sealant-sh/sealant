@@ -1,6 +1,7 @@
 # Workspace Blueprint
 
-`WorkspaceBlueprint` is the normalized, OS-agnostic internal contract owned by `@zweit/workspace-composition`.
+`WorkspaceBlueprint` is the normalized, OS-agnostic internal contract owned by
+`@zweit/workspace-composition`.
 
 It captures the parts of a workspace request that should survive across OS integrations:
 
@@ -56,4 +57,5 @@ This blueprint intentionally does not include:
 - distro-specific package names or package-manager details
 - image naming, registry publishing, or runtime-adapter deployment settings
 
-Those belong in concrete OS integrations or runtime adapters, not in the shared composition contract.
+Those belong in concrete OS integrations or runtime adapters, not in the shared composition
+contract.

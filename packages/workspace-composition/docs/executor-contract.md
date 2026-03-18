@@ -1,8 +1,10 @@
 # Executor Contract
 
-`OsExecutor` is the shared interface that OS-specific backends implement so the composition layer can call them uniformly.
+`OsExecutor` is the shared interface that OS-specific backends implement so the composition layer
+can call them uniformly.
 
-The first concrete backends will live in packages such as `@zweit/os-integration-nix`, `@zweit/os-integration-fedora`, and `@zweit/os-integration-arch`.
+The first concrete backends will live in packages such as `@zweit/os-integration-nix`,
+`@zweit/os-integration-fedora`, and `@zweit/os-integration-arch`.
 
 ## Responsibilities
 
@@ -21,7 +23,8 @@ The runtime contract is defined in `src/executor.ts` as the `OsExecutor` TypeScr
 
 ## Zod-backed schemas
 
-`@zweit/workspace-composition` also exports Zod schemas for the data that flows through the interface:
+`@zweit/workspace-composition` also exports Zod schemas for the data that flows through the
+interface:
 
 - `osExecutorIdSchema`
 - `osExecutorSupportSchema`
@@ -40,4 +43,5 @@ Executor compile results currently support these artifact kinds:
 - `manifest`
 - `metadata`
 
-That gives runtime adapters a stable handoff point without baking in Nix-specific or distro-specific result formats.
+That gives runtime adapters a stable handoff point without baking in Nix-specific or distro-specific
+result formats.

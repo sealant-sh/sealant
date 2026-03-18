@@ -1,14 +1,22 @@
 # Zweit
 
-Zweit is a product for spinning up isolated, ready-to-code microVM environments from a polished web UI.
+Zweit is a product for spinning up isolated, ready-to-code microVM environments from a polished web
+UI.
 
-The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional personalization inputs like dotfiles or Nix flakes. Zweit turns those inputs into a composed environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
+The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional
+personalization inputs like dotfiles or Nix flakes. Zweit turns those inputs into a composed
+environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
 
 ## Status
 
-This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix flake for a reproducible `direnv`-powered development shell.
+This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix
+flake for a reproducible `direnv`-powered development shell.
 
-Today the repo contains the initial workspace layout, the first workspace composition implementation, and the target architecture for splitting composition, OS integrations, runtime adapters, and app surfaces into separate workspaces. Several of the workspaces below are intentionally lightweight placeholders so the intended boundaries are visible in the repo before every implementation lands.
+Today the repo contains the initial workspace layout, the first workspace composition
+implementation, and the target architecture for splitting composition, OS integrations, runtime
+adapters, and app surfaces into separate workspaces. Several of the workspaces below are
+intentionally lightweight placeholders so the intended boundaries are visible in the repo before
+every implementation lands.
 
 ## Monorepo layout
 
@@ -52,9 +60,12 @@ Today the repo contains the initial workspace layout, the first workspace compos
 
 ### Workspace roles
 
-- `apps/`: user-facing and deployable surfaces such as the website, API, docs, desktop clients, or runnable demo entrypoints
-- `packages/`: shared code such as composition models, OS integrations, runtime adapters, source integrations, harness orchestration, SDKs, and reusable utilities
-- `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest, Tailwind, or internal scripts
+- `apps/`: user-facing and deployable surfaces such as the website, API, docs, desktop clients, or
+  runnable demo entrypoints
+- `packages/`: shared code such as composition models, OS integrations, runtime adapters, source
+  integrations, harness orchestration, SDKs, and reusable utilities
+- `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest,
+  Tailwind, or internal scripts
 
 ## Architecture flow
 
@@ -74,18 +85,24 @@ Supporting integrations feed into that flow without owning it:
 
 ### Current implementation status
 
-- `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
-- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
-- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build outputs
-- the other package and app workspaces are scaffolded so the intended architecture is explicit before each implementation is filled in
+- `packages/workspace-composition/`: core composition package that owns the shared workspace
+  contracts and OS-agnostic composition model
+- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current
+  composition flow and example specs
+- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build
+  outputs
+- the other package and app workspaces are scaffolded so the intended architecture is explicit
+  before each implementation is filled in
 
 ## Planned product shape
 
-Zweit still has three major product areas, but they will be implemented through the monorepo workspaces:
+Zweit still has three major product areas, but they will be implemented through the monorepo
+workspaces:
 
 ### 1. Website
 
-The website is the user-facing product surface. It should make environment creation feel fast, obvious, and trustworthy.
+The website is the user-facing product surface. It should make environment creation feel fast,
+obvious, and trustworthy.
 
 Core responsibilities:
 
@@ -118,19 +135,25 @@ The infrastructure side contains the deployment and execution model for isolated
 - networking, storage, and secrets wiring
 - adapter implementations for different deployment targets
 
-The architecture should stay adapter-oriented so Zweit can target different execution backends over time.
+The architecture should stay adapter-oriented so Zweit can target different execution backends over
+time.
 
 ## Defined package architecture
 
-- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
-- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into a concrete Nix build path
+- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
+  `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
+  artifact definitions
+- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into
+  a concrete Nix build path
 - `packages/os-integration-fedora/`: Fedora-specific OS integration placeholder
 - `packages/os-integration-arch/`: Arch-specific OS integration placeholder
-- `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter implementations
+- `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter
+  implementations
 - `packages/runtime-adapter-docker/`: Docker runtime adapter placeholder
 - `packages/runtime-adapter-k8s/`: Kubernetes runtime adapter placeholder
 - `packages/runtime-adapter-k3s/`: K3s runtime adapter placeholder
-- `packages/source-integrations/`: source-provider integration package for repository selection, ref resolution, and provider-specific access flows; GitHub will be the first provider here
+- `packages/source-integrations/`: source-provider integration package for repository selection, ref
+  resolution, and provider-specific access flows; GitHub will be the first provider here
 - `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
 - `packages/registry-integration/`: artifact and registry publishing, tagging, lookup, and retrieval
 
@@ -146,7 +169,8 @@ The architecture should stay adapter-oriented so Zweit can target different exec
 ## Why the monorepo uses Turbo + pnpm
 
 - `pnpm` workspaces keep dependency management fast, strict, and centralized
-- `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and shared packages
+- `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and
+  shared packages
 - shared tooling in `tooling/` keeps config consistent without copy-pasting setup across apps
 
 ## Tooling baseline
@@ -159,14 +183,16 @@ The architecture should stay adapter-oriented so Zweit can target different exec
 
 ## Workspace composition
 
-The composition contracts now live in `packages/workspace-composition/`, and the concrete Nix build path now lives in `packages/os-integration-nix/` instead of the temporary sandbox under `temp/`.
+The composition contracts now live in `packages/workspace-composition/`, and the concrete Nix build
+path now lives in `packages/os-integration-nix/` instead of the temporary sandbox under `temp/`.
 
 That package contains:
 
 - `UserWorkspaceSpec` and `WorkspaceBlueprint` documentation
 - normalization and defaulting helpers
 - executor and artifact contract definitions
-- shared composition contracts that feed concrete OS integrations such as `packages/os-integration-nix/`
+- shared composition contracts that feed concrete OS integrations such as
+  `packages/os-integration-nix/`
 
 The runnable demo documentation lives in `apps/workspace-composition-demo/`.
 
@@ -205,7 +231,8 @@ pnpm typecheck:tsc
 pnpm test
 ```
 
-`pnpm build`, `pnpm dev`, and `pnpm test` are wired through Turbo. The lint, format, and typecheck commands run from the repo root so the baseline tooling works before app packages exist.
+`pnpm build`, `pnpm dev`, and `pnpm test` are wired through Turbo. The lint, format, and typecheck
+commands run from the repo root so the baseline tooling works before app packages exist.
 
 ## Contributor notes
 
@@ -230,6 +257,8 @@ pnpm test
 
 ## Why this repo exists
 
-Zweit is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean without giving up reproducibility or isolation.
+Zweit is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean
+without giving up reproducibility or isolation.
 
-The goal is a product experience that feels simple on the surface while staying disciplined underneath.
+The goal is a product experience that feels simple on the surface while staying disciplined
+underneath.

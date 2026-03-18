@@ -1,6 +1,6 @@
 {
   "name": "@zweit/registry-integration",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Artifact registry publishing, tagging, lookup, and retrieval"
 }

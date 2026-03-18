@@ -1,6 +1,6 @@
 {
   "name": "@zweit/marketing",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Public-facing website and launch surfaces"
 }

@@ -1,7 +1,7 @@
 {
   "name": "@zweit/workspace-composition-demo",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Runnable demo for the Zweit workspace composition builder",
   "scripts": {
     "build:image": "nix build path:../../packages/os-integration-nix#example-opencode-home-manager-image",
