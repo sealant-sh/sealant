@@ -4,7 +4,7 @@
 
 ## Core Contracts
 
-- `UserWorkspaceSpec`: validated user intent coming from a product surface such as `apps/web` or another API client
+- `UserWorkspaceSpec`: validated, user-facing request shape coming from a product surface such as `apps/web` or another API client; its first concrete schema now lives in `src/user-workspace-spec.ts`
 - `WorkspaceBlueprint`: normalized, defaulted, OS-agnostic internal model used for executor selection; its first concrete schema now lives in `src/blueprint.ts`
 - `OsIntegration`: contract implemented by packages such as `os-integration-nix` that can turn a `WorkspaceBlueprint` into concrete build outputs
 - `BuildArtifact`: the concrete result produced by an OS integration, such as an image, closure, manifest, metadata bundle, or another launchable artifact

@@ -4,6 +4,9 @@
   "type": "module",
   "version": "0.0.0",
   "description": "Core workspace composition contracts and normalization logic",
+  "scripts": {
+    "test": "vitest run"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./blueprint": "./src/blueprint.ts"
