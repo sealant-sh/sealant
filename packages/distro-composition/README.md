@@ -2,6 +2,8 @@
 
 This package contains an Ansible playbook that builds distro-targeted Docker images with a selected set of preinstalled development dependencies.
 
+Alongside the curated dependency list, you can also pass arbitrary distro package names via `extra_packages`.
+
 ## Supported distros
 
 - `arch`
@@ -23,6 +25,13 @@ ansible-playbook packages/distro-composition/playbooks/site.yml \
   -e '{"target_distro":"arch","selected_dependencies":["nodejs","pnpm","neovim","postgresql"],"image_name":"zweit-dev","image_tag":"arch"}'
 ```
 
+With extra distro packages:
+
+```bash
+ansible-playbook packages/distro-composition/playbooks/site.yml \
+  -e '{"target_distro":"arch","selected_dependencies":["nodejs"],"extra_packages":["tmux","ripgrep"],"image_name":"zweit-dev","image_tag":"arch"}'
+```
+
 The playbook renders a Dockerfile under `packages/distro-composition/playbooks/.build/` and then runs `docker build`.
 
 ## TypeScript wrapper API and CLI
@@ -36,6 +45,15 @@ Run the CLI from the workspace:
 
 ```bash
 pnpm --filter @zweit/distro-composition run build:image -- --distro arch --deps nodejs,pnpm,neovim --image zweit-dev --tag arch
+```
+
+With extra distro packages:
+
+```bash
+pnpm --filter @zweit/distro-composition run build:image -- \
+  --distro arch \
+  --deps nodejs,pnpm \
+  --extra-packages tmux,ripgrep
 ```
 
 Or use the convenience scripts:
@@ -53,6 +71,7 @@ import { buildDistroImage } from "./packages/distro-composition/src/build-image.
 await buildDistroImage({
   targetDistro: "fedora",
   dependencies: ["nodejs", "pnpm", "postgresql"],
+  extraPackages: ["tmux", "ripgrep"],
   imageName: "zweit-dev",
   imageTag: "fedora",
   runSmokeTest: true

@@ -58,10 +58,40 @@
       ansible.builtin.set_fact:
         effective_dependencies: "{{ (selected_dependencies_list + (['nodejs'] if 'pnpm' in selected_dependencies_list else [])) | unique }}"
 
+    - name: Normalize extra packages input
+      ansible.builtin.set_fact:
+        extra_packages_list: >-
+          {{
+            (
+              extra_packages
+              if (extra_packages is defined and extra_packages is sequence and extra_packages is not string)
+              else ((extra_packages | default('')) | string | split(','))
+            )
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: Validate extra package names are safe
+      ansible.builtin.assert:
+        that:
+          - invalid_extra_packages | length == 0
+        fail_msg: "Invalid extra package names: {{ invalid_extra_packages | join(', ') }}. Allowed pattern: ^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+      vars:
+        invalid_extra_packages: "{{ extra_packages_list | reject('match', '^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$') | list }}"
+
     - name: Compute distro config and package list
       ansible.builtin.set_fact:
         distro_config: "{{ distro_definitions[target_distro_normalized] }}"
-        distro_packages: "{{ effective_dependencies | map('extract', distro_definitions[target_distro_normalized].dependency_packages) | list | flatten | unique }}"
+        distro_packages: >-
+          {{
+            (
+              (effective_dependencies | map('extract', distro_definitions[target_distro_normalized].dependency_packages) | list | flatten)
+              + extra_packages_list
+            )
+            | unique
+          }}
 
     - name: Define build context directory
       ansible.builtin.set_fact:
@@ -123,4 +153,6 @@
           - "Target distro: {{ target_distro_normalized }}"
           - "Selected dependencies: {{ selected_dependencies_list | join(', ') if selected_dependencies_list | length > 0 else '(none)' }}"
           - "Effective dependencies: {{ effective_dependencies | join(', ') if effective_dependencies | length > 0 else '(none)' }}"
+          - "Extra packages: {{ extra_packages_list | join(', ') if extra_packages_list | length > 0 else '(none)' }}"
+          - "Distro package install list: {{ distro_packages | join(', ') if distro_packages | length > 0 else '(none)' }}"
           - "Build context: {{ build_context_dir }}"

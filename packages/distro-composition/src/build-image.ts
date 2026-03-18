@@ -11,6 +11,7 @@ export type SupportedDependency = (typeof SUPPORTED_DEPENDENCIES)[number];
 export interface BuildDistroImageOptions {
   targetDistro: TargetDistro;
   dependencies?: readonly SupportedDependency[];
+  extraPackages?: readonly string[];
   imageName?: string;
   imageTag?: string;
   runSmokeTest?: boolean;
@@ -22,6 +23,7 @@ export interface BuildDistroImageResult {
   imageRef: string;
   playbookPath: string;
   effectiveDependencies: SupportedDependency[];
+  extraPackages: string[];
 }
 
 export async function buildDistroImage(options: BuildDistroImageOptions): Promise<BuildDistroImageResult> {
@@ -32,6 +34,7 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
 
   const selectedDependencies = normalizeDependencies(options.dependencies ?? []);
   const effectiveDependencies = withImpliedDependencies(selectedDependencies);
+  const extraPackages = normalizeExtraPackages(options.extraPackages ?? []);
 
   const imageName = options.imageName ?? "zweit-distro-composition";
   const imageTag = options.imageTag ?? targetDistro;
@@ -40,6 +43,7 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
   const extraVars = {
     target_distro: targetDistro,
     selected_dependencies: selectedDependencies,
+    extra_packages: extraPackages,
     image_name: imageName,
     image_tag: imageTag,
     run_smoke_test: options.runSmokeTest ?? false
@@ -52,7 +56,8 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
   return {
     imageRef: `${imageName}:${imageTag}`,
     playbookPath,
-    effectiveDependencies
+    effectiveDependencies,
+    extraPackages
   };
 }
 
@@ -80,6 +85,22 @@ function withImpliedDependencies(dependencies: SupportedDependency[]): Supported
   }
 
   return [...dependencies, "nodejs"];
+}
+
+function normalizeExtraPackages(input: readonly string[]): string[] {
+  const normalized = input.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const deduped = normalized.filter((value, index, allValues) => allValues.indexOf(value) === index);
+
+  const packageNamePattern = /^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
+  const invalidPackages = deduped.filter((packageName) => !packageNamePattern.test(packageName));
+
+  if (invalidPackages.length > 0) {
+    throw new Error(
+      `Invalid extra package names: ${invalidPackages.join(", ")}. Allowed pattern: ${packageNamePattern.source}`
+    );
+  }
+
+  return deduped;
 }
 
 function defaultPlaybookPath(): string {

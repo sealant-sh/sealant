@@ -11,6 +11,7 @@ interface CliArgs {
   help: boolean;
   distro?: TargetDistro;
   dependencies: SupportedDependency[];
+  extraPackages: string[];
   imageName?: string;
   imageTag?: string;
   runSmokeTest: boolean;
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
     targetDistro: args.distro,
     dependencies: args.dependencies,
     runSmokeTest: args.runSmokeTest,
+    ...(args.extraPackages.length > 0 ? { extraPackages: args.extraPackages } : {}),
     ...(args.imageName ? { imageName: args.imageName } : {}),
     ...(args.imageTag ? { imageTag: args.imageTag } : {}),
     ...(args.playbookPath ? { playbookPath: args.playbookPath } : {}),
@@ -44,12 +46,14 @@ async function main(): Promise<void> {
 
   process.stdout.write(`Built image ${result.imageRef}\n`);
   process.stdout.write(`Dependencies: ${result.effectiveDependencies.join(", ") || "(none)"}\n`);
+  process.stdout.write(`Extra packages: ${result.extraPackages.join(", ") || "(none)"}\n`);
 }
 
 function parseCliArgs(argv: string[]): CliArgs {
   const parsed: CliArgs = {
     help: false,
     dependencies: [],
+    extraPackages: [],
     runSmokeTest: false
   };
 
@@ -74,7 +78,7 @@ function parseCliArgs(argv: string[]): CliArgs {
 
     if (argument === "--deps") {
       const value = requiredValue(argv, index, argument);
-      const dependencies = splitDependencyList(value).map(parseDependency);
+      const dependencies = splitCsvList(value).map(parseDependency);
       parsed.dependencies = unique([...parsed.dependencies, ...dependencies]);
       index += 1;
       continue;
@@ -83,6 +87,21 @@ function parseCliArgs(argv: string[]): CliArgs {
     if (argument === "--dep") {
       const value = requiredValue(argv, index, argument);
       parsed.dependencies = unique([...parsed.dependencies, parseDependency(value)]);
+      index += 1;
+      continue;
+    }
+
+    if (argument === "--extra-packages") {
+      const value = requiredValue(argv, index, argument);
+      const extraPackages = splitCsvList(value);
+      parsed.extraPackages = unique([...parsed.extraPackages, ...extraPackages]);
+      index += 1;
+      continue;
+    }
+
+    if (argument === "--extra-package") {
+      const value = requiredValue(argv, index, argument);
+      parsed.extraPackages = unique([...parsed.extraPackages, value]);
       index += 1;
       continue;
     }
@@ -147,7 +166,7 @@ function parseDependency(value: string): SupportedDependency {
   return normalized as SupportedDependency;
 }
 
-function splitDependencyList(value: string): string[] {
+function splitCsvList(value: string): string[] {
   return value
     .split(",")
     .map((entry) => entry.trim())
@@ -177,6 +196,8 @@ function printHelp(): void {
       "  --distro <name>         Target distro (required)",
       "  --deps <a,b,c>          Comma-separated dependency list",
       "  --dep <name>            Repeated dependency flag",
+      "  --extra-packages <a,b>  Comma-separated distro package list",
+      "  --extra-package <name>  Repeated distro package flag",
       "  --image <name>          Docker image name (default: zweit-distro-composition)",
       "  --tag <tag>             Docker image tag (default: distro)",
       "  --smoke-test            Run dependency checks after build",
