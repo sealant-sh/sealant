@@ -1,0 +1,158 @@
+---
+- name: Build distro-specific Docker image
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/distros.yml
+
+  vars:
+    allowed_dependencies:
+      - nodejs
+      - pnpm
+      - neovim
+      - postgresql
+    target_distro_normalized: "{{ target_distro | default('') | lower }}"
+    image_name: "{{ image_name | default('zweit-distro-composition') }}"
+    image_tag: "{{ image_tag | default(target_distro_normalized) }}"
+    run_smoke_test: "{{ run_smoke_test | default(false) | bool }}"
+
+  tasks:
+    - name: Validate target distro was provided
+      ansible.builtin.assert:
+        that:
+          - target_distro_normalized | length > 0
+        fail_msg: "Provide target_distro (supported: {{ distro_definitions.keys() | join(', ') }})"
+
+    - name: Validate target distro is supported
+      ansible.builtin.assert:
+        that:
+          - target_distro_normalized in distro_definitions
+        fail_msg: "Unsupported distro '{{ target_distro }}'. Supported: {{ distro_definitions.keys() | join(', ') }}"
+
+    - name: Normalize selected dependencies input
+      ansible.builtin.set_fact:
+        selected_dependencies_list: >-
+          {{
+            (
+              selected_dependencies
+              if (selected_dependencies is defined and selected_dependencies is sequence and selected_dependencies is not string)
+              else ((selected_dependencies | default('')) | string | split(','))
+            )
+            | map('trim')
+            | map('lower')
+            | reject('equalto', '')
+            | list
+          }}
+
+    - name: Validate selected dependencies are supported
+      ansible.builtin.assert:
+        that:
+          - invalid_dependencies | length == 0
+        fail_msg: "Unsupported dependencies: {{ invalid_dependencies | join(', ') }}. Supported: {{ allowed_dependencies | join(', ') }}"
+      vars:
+        invalid_dependencies: "{{ selected_dependencies_list | difference(allowed_dependencies) }}"
+
+    - name: Compute effective dependencies (pnpm implies nodejs)
+      ansible.builtin.set_fact:
+        effective_dependencies: "{{ (selected_dependencies_list + (['nodejs'] if 'pnpm' in selected_dependencies_list else [])) | unique }}"
+
+    - name: Normalize extra packages input
+      ansible.builtin.set_fact:
+        extra_packages_list: >-
+          {{
+            (
+              extra_packages
+              if (extra_packages is defined and extra_packages is sequence and extra_packages is not string)
+              else ((extra_packages | default('')) | string | split(','))
+            )
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: Validate extra package names are safe
+      ansible.builtin.assert:
+        that:
+          - invalid_extra_packages | length == 0
+        fail_msg: "Invalid extra package names: {{ invalid_extra_packages | join(', ') }}. Allowed pattern: ^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+      vars:
+        invalid_extra_packages: "{{ extra_packages_list | reject('match', '^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$') | list }}"
+
+    - name: Compute distro config and package list
+      ansible.builtin.set_fact:
+        distro_config: "{{ distro_definitions[target_distro_normalized] }}"
+        distro_packages: >-
+          {{
+            (
+              (effective_dependencies | map('extract', distro_definitions[target_distro_normalized].dependency_packages) | list | flatten)
+              + extra_packages_list
+            )
+            | unique
+          }}
+
+    - name: Define build context directory
+      ansible.builtin.set_fact:
+        build_context_dir: "{{ playbook_dir }}/.build/{{ target_distro_normalized }}-{{ image_tag | regex_replace('[^A-Za-z0-9_.-]', '-') }}"
+
+    - name: Ensure build context directory exists
+      ansible.builtin.file:
+        path: "{{ build_context_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render Dockerfile for selected distro and dependencies
+      ansible.builtin.template:
+        src: templates/Dockerfile.j2
+        dest: "{{ build_context_dir }}/Dockerfile"
+        mode: "0644"
+
+    - name: Build Docker image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - build
+          - --tag
+          - "{{ image_name }}:{{ image_tag }}"
+          - "{{ build_context_dir }}"
+      changed_when: true
+
+    - name: Compose smoke test command
+      ansible.builtin.set_fact:
+        smoke_test_command: >-
+          {{
+            [
+              ('node --version' if 'nodejs' in effective_dependencies else ''),
+              ('pnpm --version' if 'pnpm' in effective_dependencies else ''),
+              ('nvim --version | sed -n "1p"' if 'neovim' in effective_dependencies else ''),
+              ('psql --version && postgres --version' if 'postgresql' in effective_dependencies else '')
+            ]
+            | reject('equalto', '')
+            | join(' && ')
+          }}
+
+    - name: Smoke test selected dependencies inside image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - "{{ image_name }}:{{ image_tag }}"
+          - sh
+          - -lc
+          - "{{ smoke_test_command }}"
+      when: run_smoke_test and (smoke_test_command | length > 0)
+      changed_when: true
+
+    - name: Print build result
+      ansible.builtin.debug:
+        msg:
+          - "Built image {{ image_name }}:{{ image_tag }}"
+          - "Target distro: {{ target_distro_normalized }}"
+          - "Selected dependencies: {{ selected_dependencies_list | join(', ') if selected_dependencies_list | length > 0 else '(none)' }}"
+          - "Effective dependencies: {{ effective_dependencies | join(', ') if effective_dependencies | length > 0 else '(none)' }}"
+          - "Extra packages: {{ extra_packages_list | join(', ') if extra_packages_list | length > 0 else '(none)' }}"
+          - "Distro package install list: {{ distro_packages | join(', ') if distro_packages | length > 0 else '(none)' }}"
+          - "Build context: {{ build_context_dir }}"

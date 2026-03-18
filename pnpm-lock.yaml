@@ -50,6 +50,8 @@ importers:
 
   packages/ai-harness-integrations: {}
 
+  packages/distro-composition: {}
+
   packages/os-integration-arch: {}
 
   packages/os-integration-fedora: {}
