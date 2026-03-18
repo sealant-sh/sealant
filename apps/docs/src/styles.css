@@ -10,7 +10,7 @@
 @theme {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
 }
-
+/* 
 :root {
   --sea-ink: #173a40;
   --sea-ink-soft: #416166;
@@ -274,3 +274,4 @@ a {
     transform: translateY(0);
   }
 }
+ */
