@@ -6,8 +6,4 @@ RUN {{ distro_config.update_command }} \
     && {{ distro_config.cleanup_command }}
 {% endif %}
 
-{% if 'pnpm' in effective_dependencies %}
-RUN corepack enable && corepack prepare pnpm@latest --activate
-{% endif %}
-
 CMD ["sh"]

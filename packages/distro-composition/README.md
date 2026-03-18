@@ -10,7 +10,7 @@ This package contains an Ansible playbook that builds distro-targeted Docker ima
 ## Supported dependencies
 
 - `nodejs`
-- `pnpm` (installed through Corepack; `nodejs` is auto-included)
+- `pnpm` (installed from distro packages; `nodejs` is auto-included)
 - `neovim`
 - `postgresql` (binaries only)
 
