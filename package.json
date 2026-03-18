@@ -11,6 +11,7 @@
     "lint:fix": "oxlint . --fix",
     "lint:types": "oxlint . --type-aware --type-check",
     "test": "turbo test",
+    "test:watch": "vitest",
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "typecheck:tsc": "tsc -p tsconfig.json --noEmit"
   },
@@ -20,7 +21,8 @@
     "oxlint": "^1.55.0",
     "oxlint-tsgolint": "^0.17.0",
     "turbo": "^2.5.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "packageManager": "pnpm@10.28.0"
 }
