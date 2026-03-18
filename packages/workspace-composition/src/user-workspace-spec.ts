@@ -15,6 +15,9 @@ import {
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
+// The user-facing source reference is intentionally ergonomic. Product surfaces
+// should be able to pass either a plain repo URL or a small object without
+// having to construct the fully normalized blueprint shape up front.
 const userWorkspaceSourceReferenceSchema = z.union([
   z.string().url(),
   z.strictObject({
@@ -25,6 +28,9 @@ const userWorkspaceSourceReferenceSchema = z.union([
   }),
 ]);
 
+// Extra input sources stay separate from the main workspace source because they
+// represent supporting material such as dotfiles or bootstrap repos. The raw
+// user contract keeps them lightweight while still preserving purpose.
 const userWorkspaceInputSourceSchema = z.strictObject({
   id: nonEmptyStringSchema.optional(),
   kind: z.literal("git").default("git"),
@@ -35,6 +41,9 @@ const userWorkspaceInputSourceSchema = z.strictObject({
   mountPath: nonEmptyStringSchema.optional(),
 });
 
+// Harness selection accepts either a shorthand string or a richer object so the
+// API can stay easy to use while still leaving room for optional profile-level
+// tuning.
 const userWorkspaceHarnessSchema = z.union([
   workspaceHarnessIdSchema,
   z.strictObject({
@@ -43,6 +52,9 @@ const userWorkspaceHarnessSchema = z.union([
   }),
 ]);
 
+// SSH is modeled as a shorthand-friendly union because this is one of the most
+// common toggles a user will flip. A simple boolean should work, but we also
+// need an object form for port and authorized-key references.
 const userWorkspaceSshSchema = z.union([
   z.boolean(),
   z.strictObject({
@@ -52,6 +64,9 @@ const userWorkspaceSshSchema = z.union([
   }),
 ]);
 
+// Package requests mirror the design of other user-facing fields: accept the
+// simple form most callers want, but preserve an object form for future version
+// pinning or other package-level hints.
 const userWorkspacePackageSchema = z.union([
   nonEmptyStringSchema,
   z.strictObject({
@@ -60,6 +75,9 @@ const userWorkspacePackageSchema = z.union([
   }),
 ]);
 
+// Setup and startup commands are allowed as raw strings because that is the most
+// natural way for users to express shell work. We still support a structured
+// form so shell and working-directory intent can be carried through when needed.
 const userWorkspaceCommandStepSchema = z.union([
   nonEmptyStringSchema,
   z.strictObject({
@@ -70,6 +88,9 @@ const userWorkspaceCommandStepSchema = z.union([
   }),
 ]);
 
+// Foreground startup behavior needs its own shorthand-friendly shape because a
+// user may either want to launch directly into the chosen harness or override it
+// with one explicit command.
 const userWorkspaceStartupForegroundSchema = z.union([
   z.literal("harness"),
   nonEmptyStringSchema,
@@ -84,15 +105,21 @@ const userWorkspaceStartupForegroundSchema = z.union([
   }),
 ]);
 
+// Startup is flexible on purpose: some callers only want a foreground command,
+// some want a list of preflight steps, and some want both. The normalizer turns
+// these forms into one consistent lifecycle shape.
 const userWorkspaceStartupSchema = z.union([
   nonEmptyStringSchema,
   z.array(userWorkspaceCommandStepSchema),
   z.strictObject({
     steps: z.array(userWorkspaceCommandStepSchema).optional(),
     foreground: userWorkspaceStartupForegroundSchema.optional(),
-  }),
+    }),
 ]);
 
+// Runtime stays as a nested object even in the user spec because env, working
+// directories, persistence, and network are conceptually one class of request:
+// baseline execution requirements for the workspace once it is launched.
 const userWorkspaceRuntimeSchema = z.strictObject({
   env: z.record(z.string()).optional(),
   workspaceRoot: nonEmptyStringSchema.optional(),
@@ -105,6 +132,9 @@ const userWorkspaceRuntimeSchema = z.strictObject({
     .optional(),
 });
 
+// OS intent also supports shorthand because users usually think in terms like
+// "use Fedora" rather than a structured executor-selection object. The richer
+// object form still lets us carry preference vs requirement semantics.
 const userWorkspaceTargetOsSchema = z.union([
   workspaceTargetOsFamilySchema,
   z.strictObject({
@@ -113,6 +143,14 @@ const userWorkspaceTargetOsSchema = z.union([
   }),
 ]);
 
+// This is the raw, user-facing contract that product surfaces submit before the
+// composition layer produces a normalized blueprint. It deliberately supports
+// aliases and ergonomic forms such as:
+// - `source` or `repo` as shortcuts for the main workspace repo
+// - `ssh: true` instead of a nested access object
+// - `packages: ["pnpm"]` instead of structured package objects
+// - `os: "fedora"` instead of a nested target object
+// The normalizer resolves those into one canonical shape.
 export const userWorkspaceSpecSchema = z
   .strictObject({
     version: z.literal(workspaceBlueprintVersion).optional(),
@@ -156,6 +194,9 @@ export const userWorkspaceSpecSchema = z
       .optional(),
   })
   .superRefine((value, context) => {
+    // The user spec is intentionally ergonomic, which means it has aliases.
+    // These checks keep that ergonomics from becoming ambiguity by enforcing
+    // that callers pick exactly one spelling for each concern.
     const workspaceSourceCount = [value.source, value.repo, value.sources?.workspace].filter(
       (candidate) => candidate !== undefined,
     ).length;
@@ -238,6 +279,9 @@ type UserWorkspaceTargetOs = z.infer<typeof userWorkspaceTargetOsSchema>;
 export const parseUserWorkspaceSpec = (input: unknown): UserWorkspaceSpec =>
   userWorkspaceSpecSchema.parse(input);
 
+// Provider inference exists because users should not need to say "github" when
+// they already gave us a GitHub URL. This keeps raw input terse while still
+// giving the normalized blueprint a provider-aware shape.
 const inferSourceProvider = (
   url: string,
   provider?: z.infer<typeof workspaceSourceProviderSchema>,
@@ -259,6 +303,9 @@ const inferSourceProvider = (
   return "generic";
 };
 
+// The main workspace source is normalized separately because it is the anchor of
+// the whole environment. Every executor expects one consistent object here even
+// if the raw input came in as a plain string.
 const normalizeWorkspaceSource = (
   source: UserWorkspaceSourceReference,
 ): WorkspaceBlueprint["sources"]["workspace"] => {
@@ -279,6 +326,9 @@ const normalizeWorkspaceSource = (
   };
 };
 
+// Supporting input sources are normalized with generated ids when needed so the
+// blueprint always has stable references for config, dotfiles, or bootstrap
+// material even if the user omitted a custom identifier.
 const normalizeInputSource = (
   input: UserWorkspaceInputSource,
   index: number,
@@ -296,6 +346,8 @@ const normalizeInputSource = (
   };
 };
 
+// Harness normalization converts shorthand into the small explicit object the
+// blueprint uses everywhere else.
 const normalizeHarness = (
   harness: UserWorkspaceSpec["harness"],
 ): WorkspaceBlueprint["harness"] => {
@@ -309,6 +361,8 @@ const normalizeHarness = (
   };
 };
 
+// SSH normalization centralizes the rule that the presence of SSH-related config
+// implies the user wants SSH enabled unless they explicitly disable it.
 const normalizeSsh = (ssh: UserWorkspaceSsh | undefined): WorkspaceBlueprint["access"]["ssh"] => {
   if (typeof ssh === "boolean") {
     return {
@@ -327,6 +381,8 @@ const normalizeSsh = (ssh: UserWorkspaceSsh | undefined): WorkspaceBlueprint["ac
   };
 };
 
+// Package normalization keeps symbolic package intent intact while converting the
+// raw shorthand forms into one consistent package-request object shape.
 const normalizePackage = (
   pkg: UserWorkspacePackage,
 ): WorkspaceBlueprint["tooling"]["packages"][number] => {
@@ -340,6 +396,8 @@ const normalizePackage = (
   };
 };
 
+// Dedupe happens here because user-facing input should be forgiving; callers can
+// repeat packages accidentally and still get a stable normalized blueprint.
 const dedupePackages = (
   packages: Array<WorkspaceBlueprint["tooling"]["packages"][number]>,
 ): Array<WorkspaceBlueprint["tooling"]["packages"][number]> => {
@@ -355,6 +413,8 @@ const dedupePackages = (
   });
 };
 
+// Command-step normalization is shared by both setup and startup so the same raw
+// shorthand expands consistently no matter where command steps appear.
 const normalizeCommandStep = (
   step: UserWorkspaceCommandStep,
 ): WorkspaceBlueprint["lifecycle"]["setup"][number] => {
@@ -373,10 +433,14 @@ const normalizeCommandStep = (
   };
 };
 
+// This helper keeps the lifecycle normalization code readable by turning a maybe
+// array into a guaranteed list of normalized step objects.
 const normalizeCommandSteps = (
   steps: Array<UserWorkspaceCommandStep> | undefined,
 ): WorkspaceBlueprint["lifecycle"]["setup"] => (steps ?? []).map(normalizeCommandStep);
 
+// Foreground normalization is separated because startup has two conceptual paths:
+// enter the selected harness, or replace it with one explicit foreground command.
 const normalizeStartupForeground = (
   foreground: z.infer<typeof userWorkspaceStartupForegroundSchema> | undefined,
 ): WorkspaceBlueprint["lifecycle"]["startup"]["foreground"] => {
@@ -406,6 +470,8 @@ const normalizeStartupForeground = (
   };
 };
 
+// Startup normalization collects all the shorthand forms into one consistent
+// object so executors never have to understand the user-facing aliases directly.
 const normalizeStartup = (
   startup: UserWorkspaceStartup | undefined,
 ): WorkspaceBlueprint["lifecycle"]["startup"] => {
@@ -432,10 +498,13 @@ const normalizeStartup = (
 
   return {
     steps: normalizeCommandSteps(startup.steps),
-    foreground: normalizeStartupForeground(startup.foreground),
+      foreground: normalizeStartupForeground(startup.foreground),
   };
 };
 
+// Runtime normalization is where implicit defaults such as workspace paths are
+// finalized. This ensures every executor sees the same resolved execution
+// expectations even when the user provided only a partial runtime object.
 const normalizeRuntime = (
   runtime: UserWorkspaceSpec["runtime"] | undefined,
   env: UserWorkspaceSpec["env"] | undefined,
@@ -453,6 +522,8 @@ const normalizeRuntime = (
   };
 };
 
+// Target OS normalization converts shorthand user intent into the explicit form
+// executor selection logic expects.
 const normalizeTargetOs = (
   os: UserWorkspaceTargetOs | undefined,
 ): WorkspaceBlueprint["target"]["os"] => {
@@ -472,10 +543,13 @@ const normalizeTargetOs = (
 
   return {
     family: os.family ?? "auto",
-    mode: os.mode ?? "prefer",
+      mode: os.mode ?? "prefer",
   };
 };
 
+// This is the full user-input to blueprint boundary. It exists so the rest of
+// the system can rely on one strict internal contract while product surfaces
+// keep a friendlier request shape.
 export const normalizeUserWorkspaceSpec = (input: unknown): WorkspaceBlueprint => {
   const spec = parseUserWorkspaceSpec(input);
 

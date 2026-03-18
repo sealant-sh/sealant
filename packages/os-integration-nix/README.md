@@ -12,6 +12,7 @@ It turns a workspace definition into:
 
 - `flake.nix`: library flake and example outputs for the Nix integration
 - `default.nix`: plain Nix entrypoint for the integration
+- `src/`: TypeScript wrapper that maps shared workspace contracts into the current Nix executor spec
 - `examples/`: example Nix executor specs
 - `docs/architecture.md`: high-level Nix build and runtime architecture
 - `docs/request-spec.md`: current Nix executor input shape
@@ -32,4 +33,24 @@ docker run --rm -it zweit-workspace-demo:opencode
 
 ```bash
 nix build "path:$PWD/packages/os-integration-nix#example-minimal-image"
+```
+
+## Run The Contract Wrapper Demo
+
+This package also contains a minimal end-to-end wrapper that starts from a
+hardcoded user-facing spec, normalizes it through `@zweit/workspace-composition`,
+maps it into the current Nix executor spec, and can optionally build through the
+existing Nix backend.
+
+Print the hardcoded user spec, normalized blueprint, support result, and mapped
+Nix executor spec:
+
+```bash
+pnpm --filter @zweit/os-integration-nix run demo:user-spec
+```
+
+Run the same flow and build the resulting artifacts:
+
+```bash
+pnpm --filter @zweit/os-integration-nix run demo:user-spec -- --build
 ```
