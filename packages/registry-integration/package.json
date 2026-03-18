@@ -1,6 +1,13 @@
 {
   "name": "@sealant/registry-integration",
-  "private": true,
   "version": "0.0.0",
-  "description": "Artifact registry publishing, tagging, lookup, and retrieval"
+  "private": true,
+  "description": "Artifact registry publishing, tagging, lookup, and retrieval",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
 }
