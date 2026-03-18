@@ -1,6 +1,6 @@
 # Current Nix Executor Spec
 
-This document describes the current Nix-facing input shape used by `@zweit/os-integration-nix`.
+This document describes the current Nix-facing input shape used by `@sealant/os-integration-nix`.
 
 Longer term, the control plane should accept a higher-level `UserWorkspaceSpec`, normalize that into a `WorkspaceBlueprint`, and then derive a Nix-specific executor spec from it.
 
@@ -9,7 +9,7 @@ For now, the workspace builder accepts a normalized Nix attribute set with this 
 ```nix
 {
   harness = "opencode";
-  imageName = "zweit-workspace-demo";
+  imageName = "sealant-workspace-demo";
   repoUrl = "https://github.com/example/project.git";
   repoRef = "main";
 
@@ -20,7 +20,7 @@ For now, the workspace builder accepts a normalized Nix attribute set with this 
   ];
 
   env = {
-    ZWEIT_PROFILE = "demo";
+    SEALANT_PROFILE = "demo";
   };
 
   nixConfig = {

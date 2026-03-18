@@ -36,7 +36,7 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
   const effectiveDependencies = withImpliedDependencies(selectedDependencies);
   const extraPackages = normalizeExtraPackages(options.extraPackages ?? []);
 
-  const imageName = options.imageName ?? "zweit-distro-composition";
+  const imageName = options.imageName ?? "sealant-distro-composition";
   const imageTag = options.imageTag ?? targetDistro;
   const playbookPath = options.playbookPath ?? defaultPlaybookPath();
 

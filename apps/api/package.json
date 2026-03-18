@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/api",
+  "name": "@sealant/api",
   "private": true,
   "version": "0.0.0",
   "description": "Control-plane API for validation, orchestration, lifecycle, and state"

@@ -1,8 +1,8 @@
 {
-  "name": "@zweit/workspace-composition-demo",
+  "name": "@sealant/workspace-composition-demo",
   "private": true,
   "version": "0.0.0",
-  "description": "Runnable demo for the Zweit workspace composition builder",
+  "description": "Runnable demo for the Sealant workspace composition builder",
   "scripts": {
     "build:image": "nix build path:../../packages/os-integration-nix#example-opencode-home-manager-image",
     "build:minimal": "nix build path:../../packages/os-integration-nix#example-minimal-image"

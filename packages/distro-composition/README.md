@@ -22,14 +22,14 @@ From the repo root:
 
 ```bash
 ansible-playbook packages/distro-composition/playbooks/site.yml \
-  -e '{"target_distro":"arch","selected_dependencies":["nodejs","pnpm","neovim","postgresql"],"image_name":"zweit-dev","image_tag":"arch"}'
+  -e '{"target_distro":"arch","selected_dependencies":["nodejs","pnpm","neovim","postgresql"],"image_name":"sealant-dev","image_tag":"arch"}'
 ```
 
 With extra distro packages:
 
 ```bash
 ansible-playbook packages/distro-composition/playbooks/site.yml \
-  -e '{"target_distro":"arch","selected_dependencies":["nodejs"],"extra_packages":["tmux","ripgrep"],"image_name":"zweit-dev","image_tag":"arch"}'
+  -e '{"target_distro":"arch","selected_dependencies":["nodejs"],"extra_packages":["tmux","ripgrep"],"image_name":"sealant-dev","image_tag":"arch"}'
 ```
 
 The playbook renders a Dockerfile under `packages/distro-composition/playbooks/.build/` and then runs `docker build`.
@@ -44,13 +44,13 @@ This package also includes a TypeScript wrapper around the playbook:
 Run the CLI from the workspace:
 
 ```bash
-pnpm --filter @zweit/distro-composition run build:image -- --distro arch --deps nodejs,pnpm,neovim --image zweit-dev --tag arch
+pnpm --filter @sealant/distro-composition run build:image -- --distro arch --deps nodejs,pnpm,neovim --image sealant-dev --tag arch
 ```
 
 With extra distro packages:
 
 ```bash
-pnpm --filter @zweit/distro-composition run build:image -- \
+pnpm --filter @sealant/distro-composition run build:image -- \
   --distro arch \
   --deps nodejs,pnpm \
   --extra-packages tmux,ripgrep
@@ -59,8 +59,8 @@ pnpm --filter @zweit/distro-composition run build:image -- \
 Or use the convenience scripts:
 
 ```bash
-pnpm --filter @zweit/distro-composition run build:image:arch -- --deps nodejs,pnpm
-pnpm --filter @zweit/distro-composition run build:image:fedora -- --deps nodejs,postgresql --smoke-test
+pnpm --filter @sealant/distro-composition run build:image:arch -- --deps nodejs,pnpm
+pnpm --filter @sealant/distro-composition run build:image:fedora -- --deps nodejs,postgresql --smoke-test
 ```
 
 Minimal API example:
@@ -72,7 +72,7 @@ await buildDistroImage({
   targetDistro: "fedora",
   dependencies: ["nodejs", "pnpm", "postgresql"],
   extraPackages: ["tmux", "ripgrep"],
-  imageName: "zweit-dev",
+  imageName: "sealant-dev",
   imageTag: "fedora",
   runSmokeTest: true
 });
@@ -84,5 +84,5 @@ Set `run_smoke_test=true` to run dependency version checks after the image is bu
 
 ```bash
 ansible-playbook packages/distro-composition/playbooks/site.yml \
-  -e '{"target_distro":"fedora","selected_dependencies":["nodejs","pnpm"],"image_name":"zweit-dev","image_tag":"fedora","run_smoke_test":true}'
+  -e '{"target_distro":"fedora","selected_dependencies":["nodejs","pnpm"],"image_name":"sealant-dev","image_tag":"fedora","run_smoke_test":true}'
 ```

@@ -1,6 +1,6 @@
 # Nix OS Integration
 
-`@zweit/os-integration-nix` is the concrete Nix-backed OS integration for Zweit workspace composition.
+`@sealant/os-integration-nix` is the concrete Nix-backed OS integration for Sealant workspace composition.
 
 It turns a workspace definition into:
 
@@ -26,7 +26,7 @@ It turns a workspace definition into:
 ```bash
 nix build "path:$PWD/packages/os-integration-nix#example-opencode-home-manager-image"
 docker load < result
-docker run --rm -it zweit-workspace-demo:opencode
+docker run --rm -it sealant-workspace-demo:opencode
 ```
 
 ## Build The Minimal Example
@@ -38,7 +38,7 @@ nix build "path:$PWD/packages/os-integration-nix#example-minimal-image"
 ## Run The Contract Wrapper Demo
 
 This package also contains a minimal end-to-end wrapper that starts from a
-hardcoded user-facing spec, normalizes it through `@zweit/workspace-composition`,
+hardcoded user-facing spec, normalizes it through `@sealant/workspace-composition`,
 maps it into the current Nix executor spec, and can optionally build through the
 existing Nix backend.
 
@@ -46,11 +46,11 @@ Print the hardcoded user spec, normalized blueprint, support result, and mapped
 Nix executor spec:
 
 ```bash
-pnpm --filter @zweit/os-integration-nix run demo:user-spec
+pnpm --filter @sealant/os-integration-nix run demo:user-spec
 ```
 
 Run the same flow and build the resulting artifacts:
 
 ```bash
-pnpm --filter @zweit/os-integration-nix run demo:user-spec -- --build
+pnpm --filter @sealant/os-integration-nix run demo:user-spec -- --build
 ```

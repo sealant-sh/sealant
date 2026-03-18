@@ -30,9 +30,9 @@ in
         'export LANG=en_US.UTF-8' \
         'export LC_ALL=en_US.UTF-8' \
         'export LOCALE_ARCHIVE=${localeArchive}' \
-        > "$HOME/.zshenv.zweit"
-      cat "$HOME/.zshenv" >> "$HOME/.zshenv.zweit"
-      mv "$HOME/.zshenv.zweit" "$HOME/.zshenv"
+        > "$HOME/.zshenv.sealant"
+      cat "$HOME/.zshenv" >> "$HOME/.zshenv.sealant"
+      mv "$HOME/.zshenv.sealant" "$HOME/.zshenv"
     else
       printf '%s\n' \
         'export LANG=en_US.UTF-8' \

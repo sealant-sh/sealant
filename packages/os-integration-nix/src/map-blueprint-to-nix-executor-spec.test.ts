@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeUserWorkspaceSpec } from "@zweit/workspace-composition";
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
 import { getNixExecutorSupport, mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
 
@@ -66,13 +66,13 @@ describe("mapBlueprintToNixExecutorSpec", () => {
 
     expect(mapBlueprintToNixExecutorSpec(blueprint)).toEqual({
       harness: "opencode",
-      imageName: "zweit-workspace-opencode",
+      imageName: "sealant-workspace-opencode",
       repoUrl: "https://github.com/example/project.git",
       repoRef: "main",
       extraPackages: ["nodejs", "pnpm"],
       env: {
         NODE_ENV: "development",
-        ZWEIT_FOREGROUND_COMMAND: "pnpm dev",
+        SEALANT_FOREGROUND_COMMAND: "pnpm dev",
       },
     });
   });

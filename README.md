@@ -1,8 +1,8 @@
-# Zweit
+# Sealant
 
-Zweit is a product for spinning up isolated, ready-to-code microVM environments from a polished web UI.
+Sealant is a product for spinning up isolated, ready-to-code microVM environments from a polished web UI.
 
-The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional personalization inputs like dotfiles or Nix flakes. Zweit turns those inputs into a composed environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
+The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional personalization inputs like dotfiles or Nix flakes. Sealant turns those inputs into a composed environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
 
 ## Status
 
@@ -81,7 +81,7 @@ Supporting integrations feed into that flow without owning it:
 
 ## Planned product shape
 
-Zweit still has three major product areas, but they will be implemented through the monorepo workspaces:
+Sealant still has three major product areas, but they will be implemented through the monorepo workspaces:
 
 ### 1. Website
 
@@ -118,7 +118,7 @@ The infrastructure side contains the deployment and execution model for isolated
 - networking, storage, and secrets wiring
 - adapter implementations for different deployment targets
 
-The architecture should stay adapter-oriented so Zweit can target different execution backends over time.
+The architecture should stay adapter-oriented so Sealant can target different execution backends over time.
 
 ## Defined package architecture
 
@@ -230,6 +230,6 @@ pnpm test
 
 ## Why this repo exists
 
-Zweit is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean without giving up reproducibility or isolation.
+Sealant is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean without giving up reproducibility or isolation.
 
 The goal is a product experience that feels simple on the surface while staying disciplined underneath.

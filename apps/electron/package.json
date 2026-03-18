@@ -1,6 +1,6 @@
 {
-  "name": "@zweit/electron",
+  "name": "@sealant/electron",
   "private": true,
   "version": "0.0.0",
-  "description": "Desktop application surface for Zweit"
+  "description": "Desktop application surface for Sealant"
 }

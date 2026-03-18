@@ -1,6 +1,6 @@
 # Workspace Composition
 
-`@zweit/workspace-composition` owns the core workspace composition system.
+`@sealant/workspace-composition` owns the core workspace composition system.
 
 It defines the shared composition contracts and the OS-agnostic workspace model used before a concrete OS integration is selected.
 

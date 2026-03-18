@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/runtime-adapters-api",
+  "name": "@sealant/runtime-adapters-api",
   "private": true,
   "version": "0.0.0",
   "description": "Shared contracts between the control plane and runtime adapter implementations"

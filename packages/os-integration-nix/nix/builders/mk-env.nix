@@ -12,7 +12,7 @@
 # Assemble the immutable runtime closure. This is the set of store paths that
 # will end up reachable from the final image layers.
 pkgs.buildEnv {
-  name = "zweit-workspace-env";
+  name = "sealant-workspace-env";
 
   paths = [
     # Baseline tools every workspace gets even without extraPackages.

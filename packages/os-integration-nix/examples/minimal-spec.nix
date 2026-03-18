@@ -1,7 +1,7 @@
 {
   # Minimal example: just enough to show repo checkout plus a small tool set.
   harness = "opencode";
-  imageName = "zweit-workspace-minimal";
+  imageName = "sealant-workspace-minimal";
   repoUrl = "https://github.com/ypanagidis/nixcfg.git";
   repoRef = "main";
 
@@ -11,7 +11,7 @@
   ];
 
   env = {
-    ZWEIT_PROFILE = "minimal";
-    ZWEIT_SESSION_KIND = "docker-local";
+    SEALANT_PROFILE = "minimal";
+    SEALANT_SESSION_KIND = "docker-local";
   };
 }

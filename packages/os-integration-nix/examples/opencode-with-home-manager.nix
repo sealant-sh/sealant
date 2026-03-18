@@ -2,7 +2,7 @@
   # Full demo example: OpenCode, JS tooling, and imported Home Manager modules
   # from the pinned nixcfg repository.
   harness = "opencode";
-  imageName = "zweit-workspace-demo";
+  imageName = "sealant-workspace-demo";
   repoUrl = "https://github.com/ypanagidis/nixcfg.git";
   repoRef = "main";
 
@@ -26,7 +26,7 @@
   ];
 
   env = {
-    ZWEIT_PROFILE = "demo";
-    ZWEIT_SESSION_KIND = "docker-local";
+    SEALANT_PROFILE = "demo";
+    SEALANT_SESSION_KIND = "docker-local";
   };
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/os-integration-arch",
+  "name": "@sealant/os-integration-arch",
   "private": true,
   "version": "0.0.0",
   "description": "Arch-specific OS integration placeholder"

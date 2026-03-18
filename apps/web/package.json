@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/web",
+  "name": "@sealant/web",
   "private": true,
   "version": "0.0.0",
   "description": "Main product web app for creating and managing workspaces"
