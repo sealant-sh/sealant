@@ -15,5 +15,3 @@ export const runMigrations = async () => {
     closeDatabaseClient(client);
   }
 };
-
-await runMigrations();

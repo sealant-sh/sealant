@@ -9,6 +9,7 @@ export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./env.js";
 
 export {
   createWorkspaceBuildJobRepository,
+  type ClaimWorkspaceBuildJobByIdInput,
   type ClaimNextWorkspaceBuildJobInput,
   type EnqueueWorkspaceBuildJobInput,
   type MarkWorkspaceBuildJobFailedInput,
@@ -16,6 +17,13 @@ export {
   type MarkWorkspaceBuildJobSucceededInput,
   type WorkspaceBuildJobRepository,
 } from "./repositories/workspace-build-jobs.js";
+
+export {
+  workspaceBuildJobRequestPayloadSchema,
+  workspaceBuildJobResultPayloadSchema,
+  type WorkspaceBuildJobRequestPayload,
+  type WorkspaceBuildJobResultPayload,
+} from "./payloads.js";
 
 export {
   workspaceBuildJobs,
@@ -26,6 +34,12 @@ export {
 } from "./schema.js";
 
 export { runMigrations } from "./migrate.js";
+
+export {
+  workspaceBuildJobInsertSchema,
+  workspaceBuildJobSelectSchema,
+  workspaceBuildJobStatusSchema,
+} from "./validation.js";
 
 export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";
 

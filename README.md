@@ -78,7 +78,9 @@ Supporting integrations feed into that flow without owning it:
 - `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
 - `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar reference UI, and the first registry-backed route group
+- `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs, running the Nix executor, and publishing images to the registry
 - `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build outputs
+- `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image build requests and dead-letter handling
 - `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry compose/config; today it publishes the current Nix-produced OCI image archive through a Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image for later runtime adapters
 - the other package and app workspaces are scaffolded so the intended architecture is explicit before each implementation is filled in
 
@@ -126,6 +128,7 @@ The architecture should stay adapter-oriented so Sealant can target different ex
 ## Defined package architecture
 
 - `packages/db/`: shared SQLite database package for durable control-plane state, Drizzle schema, migrations, and job repositories
+- `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts, publishers, consumers, and dev broker setup
 - `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
 - `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into a concrete Nix build path
 - `packages/os-integration-fedora/`: Fedora-specific OS integration placeholder
@@ -142,6 +145,7 @@ The architecture should stay adapter-oriented so Sealant can target different ex
 
 - `apps/web/`: main product web app for creating and managing workspaces
 - `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
+- `apps/worker/`: background worker for consuming queued workspace image build jobs and driving compile/publish work
 - `apps/docs/`: user and contributor documentation site
 - `apps/marketing/`: public website and launch surfaces
 - `apps/electron/`: desktop client surface if desktop becomes a first-class client

@@ -1,0 +1,17 @@
+{
+  "name": "@sealant/workspace-build-queue",
+  "version": "0.0.0",
+  "private": true,
+  "description": "RabbitMQ transport for workspace image build jobs",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.7"
+  }
+}
