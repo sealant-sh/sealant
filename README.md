@@ -76,6 +76,7 @@ Supporting integrations feed into that flow without owning it:
 
 - `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
 - `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
+- `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar reference UI, and the first registry-backed route group
 - `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build outputs
 - `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry compose/config; today it publishes the current Nix-produced OCI image archive through a Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image for later runtime adapters
 - the other package and app workspaces are scaffolded so the intended architecture is explicit before each implementation is filled in
