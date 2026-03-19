@@ -134,6 +134,9 @@ importers:
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.2
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@tailwindcss/typography':
         specifier: ^0.5.16
