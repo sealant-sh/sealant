@@ -3,13 +3,15 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
+  "private": true,
   "description": "Nix-specific OS integration for compiling a workspace blueprint into build artifacts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "demo:user-spec": "tsx ./src/demo-hardcoded-user-spec.ts",
     "test": "vitest run"
-  },
-  "exports": {
-    ".": "./src/index.ts"
   },
   "dependencies": {
     "@sealant/workspace-composition": "workspace:*",

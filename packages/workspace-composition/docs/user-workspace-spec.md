@@ -1,8 +1,10 @@
 # User Workspace Spec
 
-`UserWorkspaceSpec` is the validated, user-facing input contract accepted before workspace composition produces a normalized `WorkspaceBlueprint`.
+`UserWorkspaceSpec` is the validated, user-facing input contract accepted before workspace
+composition produces a normalized `WorkspaceBlueprint`.
 
-It is intentionally more ergonomic than the blueprint and supports small shorthands that are expanded during normalization.
+It is intentionally more ergonomic than the blueprint and supports small shorthands that are
+expanded during normalization.
 
 ## Supported shorthand
 
@@ -27,4 +29,5 @@ It is intentionally more ergonomic than the blueprint and supports small shortha
 ## Entry points
 
 - `parseUserWorkspaceSpec(input)`: validates the raw user-facing input shape
-- `normalizeUserWorkspaceSpec(input)`: validates raw input and returns a normalized `WorkspaceBlueprint`
+- `normalizeUserWorkspaceSpec(input)`: validates raw input and returns a normalized
+  `WorkspaceBlueprint`

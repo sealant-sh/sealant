@@ -9,7 +9,11 @@ declare module "node:child_process" {
     on(event: "close", listener: (code: number | null, signal: string | null) => void): void;
   }
 
-  export function spawn(command: string, args?: readonly string[], options?: SpawnOptions): ChildProcessLike;
+  export function spawn(
+    command: string,
+    args?: readonly string[],
+    options?: SpawnOptions,
+  ): ChildProcessLike;
 }
 
 declare module "node:path" {

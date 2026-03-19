@@ -3,14 +3,16 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
+  "private": true,
   "description": "Core workspace composition contracts and normalization logic",
-  "scripts": {
-    "test": "vitest run"
-  },
+  "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./blueprint": "./src/blueprint.ts",
     "./executor": "./src/executor.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^3.24.1"

@@ -4,7 +4,7 @@ import {
   buildDistroImage,
   type BuildDistroImageOptions,
   type SupportedDependency,
-  type TargetDistro
+  type TargetDistro,
 } from "./build-image.ts";
 
 interface CliArgs {
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
     ...(args.imageName ? { imageName: args.imageName } : {}),
     ...(args.imageTag ? { imageTag: args.imageTag } : {}),
     ...(args.playbookPath ? { playbookPath: args.playbookPath } : {}),
-    ...(args.cwd ? { cwd: args.cwd } : {})
+    ...(args.cwd ? { cwd: args.cwd } : {}),
   };
 
   const result = await buildDistroImage(options);
@@ -54,7 +54,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     help: false,
     dependencies: [],
     extraPackages: [],
-    runSmokeTest: false
+    runSmokeTest: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -159,7 +159,7 @@ function parseDependency(value: string): SupportedDependency {
   const normalized = value.toLowerCase();
   if (!SUPPORTED_DEPENDENCIES.includes(normalized as SupportedDependency)) {
     throw new Error(
-      `Unsupported dependency '${value}'. Supported: ${SUPPORTED_DEPENDENCIES.join(", ")}`
+      `Unsupported dependency '${value}'. Supported: ${SUPPORTED_DEPENDENCIES.join(", ")}`,
     );
   }
 
@@ -207,8 +207,8 @@ function printHelp(): void {
       "  -h, --help              Show help",
       "",
       `Supported distros: ${SUPPORTED_DISTROS.join(", ")}`,
-      `Supported dependencies: ${SUPPORTED_DEPENDENCIES.join(", ")}`
-    ].join("\n") + "\n"
+      `Supported dependencies: ${SUPPORTED_DEPENDENCIES.join(", ")}`,
+    ].join("\n") + "\n",
   );
 }
 

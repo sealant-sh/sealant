@@ -1,3 +1,4 @@
+import { normalizeUserWorkspaceSpec } from "@zweit/workspace-composition";
 import { describe, expect, it } from "vitest";
 
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";

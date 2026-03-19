@@ -1,7 +1,7 @@
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
-import { NixOsExecutor } from "./nix-executor.js";
 import { mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
+import { NixOsExecutor } from "./nix-executor.js";
 
 // This is the minimal end-to-end demo path for the new contracts: start from a
 // user-facing JSON-like spec, normalize it, map it into the current Nix spec,

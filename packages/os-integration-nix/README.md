@@ -6,7 +6,8 @@ It turns a workspace definition into:
 
 - a runnable environment derivation
 - a Docker/OCI image
-- a runtime entrypoint that handles repo checkout, locale setup, SSH, and optional Home Manager activation
+- a runtime entrypoint that handles repo checkout, locale setup, SSH, and optional Home Manager
+  activation
 
 ## Layout
 
@@ -42,8 +43,7 @@ hardcoded user-facing spec, normalizes it through `@sealant/workspace-compositio
 maps it into the current Nix executor spec, and can optionally build through the
 existing Nix backend.
 
-Print the hardcoded user spec, normalized blueprint, support result, and mapped
-Nix executor spec:
+Print the hardcoded user spec, normalized blueprint, support result, and mapped Nix executor spec:
 
 ```bash
 pnpm --filter @sealant/os-integration-nix run demo:user-spec

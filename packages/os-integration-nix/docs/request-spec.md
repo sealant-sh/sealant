@@ -2,7 +2,8 @@
 
 This document describes the current Nix-facing input shape used by `@sealant/os-integration-nix`.
 
-Longer term, the control plane should accept a higher-level `UserWorkspaceSpec`, normalize that into a `WorkspaceBlueprint`, and then derive a Nix-specific executor spec from it.
+Longer term, the control plane should accept a higher-level `UserWorkspaceSpec`, normalize that into
+a `WorkspaceBlueprint`, and then derive a Nix-specific executor spec from it.
 
 For now, the workspace builder accepts a normalized Nix attribute set with this shape:
 
@@ -43,4 +44,5 @@ For now, the workspace builder accepts a normalized Nix attribute set with this 
 - `nixConfig` is optional; when present it must include a pinned `repoRev`
 - `env` is passed through to the container image config
 
-The backend should generate this spec from validated user input rather than constructing Nix logic directly.
+The backend should generate this spec from validated user input rather than constructing Nix logic
+directly.

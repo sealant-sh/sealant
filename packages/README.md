@@ -14,6 +14,7 @@ The current package architecture is:
 - `runtime-adapter-docker`: Docker runtime adapter placeholder
 - `runtime-adapter-k8s`: Kubernetes runtime adapter placeholder
 - `runtime-adapter-k3s`: K3s runtime adapter placeholder
-- `source-integrations`: source-provider integration logic such as GitHub repository selection, ref resolution, and access-related flows
+- `source-integrations`: source-provider integration logic such as GitHub repository selection, ref
+  resolution, and access-related flows
 - `ai-harness-integrations`: shared AI harness contracts and orchestration
 - `registry-integration`: artifact registry publishing, tagging, and retrieval

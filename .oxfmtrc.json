@@ -1,6 +1,8 @@
 {
+  "arrowParens": "always",
   "printWidth": 100,
   "semi": true,
+  "tabWidth": 2,
   "singleQuote": false,
   "trailingComma": "all",
   "ignorePatterns": [
@@ -18,5 +20,6 @@
   },
   "sortPackageJson": {
     "sortScripts": true
-  }
+  },
+  "proseWrap": "always" // printWidth line breaks in MD/MDX
 }

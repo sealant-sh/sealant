@@ -1,6 +1,7 @@
 # Executor Contract
 
-`OsExecutor` is the shared interface that OS-specific backends implement so the composition layer can call them uniformly.
+`OsExecutor` is the shared interface that OS-specific backends implement so the composition layer
+can call them uniformly.
 
 The first concrete backends will live in packages such as `@sealant/os-integration-nix`, `@sealant/os-integration-fedora`, and `@sealant/os-integration-arch`.
 
@@ -40,4 +41,5 @@ Executor compile results currently support these artifact kinds:
 - `manifest`
 - `metadata`
 
-That gives runtime adapters a stable handoff point without baking in Nix-specific or distro-specific result formats.
+That gives runtime adapters a stable handoff point without baking in Nix-specific or distro-specific
+result formats.
