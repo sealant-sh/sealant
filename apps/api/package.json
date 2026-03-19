@@ -1,6 +1,25 @@
 {
   "name": "@sealant/api",
-  "private": true,
   "version": "0.0.0",
-  "description": "Control-plane API for validation, orchestration, lifecycle, and state"
+  "private": true,
+  "description": "Control-plane API for validation, orchestration, lifecycle, and state",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.18.1",
+    "@hono/standard-validator": "^0.2.0",
+    "@scalar/hono-api-reference": "^0.9.13",
+    "@sealant/registry-integration": "workspace:*",
+    "@standard-community/standard-json": "^0.3.5",
+    "@standard-community/standard-openapi": "^0.2.9",
+    "@types/json-schema": "^7.0.15",
+    "hono": "^4.8.3",
+    "hono-openapi": "^1.3.0",
+    "openapi-types": "^12.1.3",
+    "zod": "^3.24.1",
+    "zod-openapi": "^4.2.4"
+  }
 }
