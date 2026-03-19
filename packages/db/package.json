@@ -1,0 +1,22 @@
+{
+  "name": "@sealant/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared SQLite database package for control-plane state",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.15",
+    "drizzle-orm": "^0.44.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.5"
+  }
+}

@@ -4,6 +4,7 @@ Shared libraries and reusable code live here.
 
 The current package architecture is:
 
+- `db`: shared SQLite database package for control-plane state, Drizzle schema, migrations, and repositories
 - `workspace-composition`: core composition system with `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
 - `os-integration-nix`: Nix-specific OS integration implementation for building concrete Nix-backed workspace artifacts
 - `os-integration-fedora`: Fedora OS integration placeholder
