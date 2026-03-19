@@ -7,6 +7,8 @@ dist/
 build/
 coverage/
 
+packages/db/.data/
+
 .DS_Store
 pnpm-debug.log*
 npm-debug.log*
