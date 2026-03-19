@@ -5,6 +5,7 @@ Shared libraries and reusable code live here.
 The current package architecture is:
 
 - `db`: shared SQLite database package for control-plane state, Drizzle schema, migrations, and repositories
+- `auth`: shared Better Auth package for product-facing apps, backed by the shared database package
 - `workspace-build-queue`: RabbitMQ transport package for queueing workspace image build jobs
 - `workspace-composition`: core composition system with `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
 - `os-integration-nix`: Nix-specific OS integration implementation for building concrete Nix-backed workspace artifacts
