@@ -67,8 +67,8 @@
   --radius-3xl: 0px;
   --radius-4xl: 0px;
 
-  /* Typography */
-  --font-mono: "Space Grotesk", ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+  /* Typography — overridden by consumer app (apps/web sets Plus Jakarta Sans + JetBrains Mono) */
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 }
 
 /*

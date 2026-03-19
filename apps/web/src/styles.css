@@ -1,5 +1,8 @@
-/* Load Inter (headlines) + Space Grotesk (monospace/terminal) */
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@800;900&family=Space+Grotesk:wght@400;500;600&display=swap");
+/* Plus Jakarta Sans — primary UI font (variable, weight axis) */
+@import "@fontsource-variable/plus-jakarta-sans";
+
+/* JetBrains Mono — monospace / terminal font (variable, weight axis) */
+@import "@fontsource-variable/jetbrains-mono";
 
 /* Tailwind v4 base — must come BEFORE @sealant/ui which imports tw-animate-css/shadcn */
 @import "tailwindcss";
@@ -7,9 +10,10 @@
 /* Swiss-Tech Neon design tokens + tw-animate-css + shadcn base styles */
 @import "@sealant/ui/styles/globals.css";
 
-/* Web app: font override */
+/* Font family tokens */
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
 }
 
 * {
