@@ -4,6 +4,7 @@
 
 It currently provides:
 
+- Better Auth core tables for `user`, `session`, `account`, and `verification`
 - a Drizzle schema for workspace image build jobs
 - a local SQLite client with `WAL` and `busy_timeout` enabled
 - a small repository for enqueueing, claiming, and updating workspace build jobs
@@ -24,9 +25,12 @@ pnpm --filter @sealant/db db:migrate
 
 ## Current schema
 
-The first table is `workspace_build_jobs`, which is intended to back the future API + worker flow for queued image builds.
+The package now includes:
 
-It stores:
+- Better Auth core tables: `user`, `session`, `account`, and `verification`
+- `workspace_build_jobs`, which is intended to back the future API + worker flow for queued image builds
+
+`workspace_build_jobs` stores:
 
 - durable job status (`queued`, `running`, `succeeded`, `failed`)
 - requested registry target metadata
