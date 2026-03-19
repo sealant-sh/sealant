@@ -5,5 +5,5 @@ export {
   type BuildDistroImageOptions,
   type BuildDistroImageResult,
   type SupportedDependency,
-  type TargetDistro
+  type TargetDistro,
 } from "./build-image.ts";

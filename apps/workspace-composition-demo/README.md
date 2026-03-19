@@ -2,7 +2,8 @@
 
 This app is the thin runnable layer on top of `packages/os-integration-nix`.
 
-It keeps the demo spec close to the commands you use locally, while the concrete Nix build logic stays in the shared OS integration package.
+It keeps the demo spec close to the commands you use locally, while the concrete Nix build logic
+stays in the shared OS integration package.
 
 ## Build The Demo Image
 

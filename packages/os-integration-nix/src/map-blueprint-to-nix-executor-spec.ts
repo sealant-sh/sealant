@@ -38,7 +38,8 @@ export const getNixExecutorSupport = (blueprint: WorkspaceBlueprint): OsExecutor
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-access-mode",
-      message: "The minimal Nix executor path does not support SSH wiring from the shared blueprint yet.",
+      message:
+        "The minimal Nix executor path does not support SSH wiring from the shared blueprint yet.",
     });
   }
 
@@ -84,7 +85,8 @@ export const getNixExecutorSupport = (blueprint: WorkspaceBlueprint): OsExecutor
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: "The minimal Nix executor path only supports foreground commands in the normalized runtime working directory.",
+      message:
+        "The minimal Nix executor path only supports foreground commands in the normalized runtime working directory.",
     });
   }
 
@@ -92,7 +94,8 @@ export const getNixExecutorSupport = (blueprint: WorkspaceBlueprint): OsExecutor
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: "The minimal Nix executor path requires runtime.workspaceRoot to stay at /workspace.",
+      message:
+        "The minimal Nix executor path requires runtime.workspaceRoot to stay at /workspace.",
     });
   }
 
@@ -100,7 +103,8 @@ export const getNixExecutorSupport = (blueprint: WorkspaceBlueprint): OsExecutor
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: "The minimal Nix executor path requires runtime.workingDirectory to stay at /workspace/repo.",
+      message:
+        "The minimal Nix executor path requires runtime.workingDirectory to stay at /workspace/repo.",
     });
   }
 

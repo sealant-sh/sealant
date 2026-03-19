@@ -26,10 +26,14 @@ export interface BuildDistroImageResult {
   extraPackages: string[];
 }
 
-export async function buildDistroImage(options: BuildDistroImageOptions): Promise<BuildDistroImageResult> {
+export async function buildDistroImage(
+  options: BuildDistroImageOptions,
+): Promise<BuildDistroImageResult> {
   const targetDistro = options.targetDistro.toLowerCase() as TargetDistro;
   if (!SUPPORTED_DISTROS.includes(targetDistro)) {
-    throw new Error(`Unsupported distro '${options.targetDistro}'. Supported: ${SUPPORTED_DISTROS.join(", ")}`);
+    throw new Error(
+      `Unsupported distro '${options.targetDistro}'. Supported: ${SUPPORTED_DISTROS.join(", ")}`,
+    );
   }
 
   const selectedDependencies = normalizeDependencies(options.dependencies ?? []);
@@ -46,7 +50,7 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
     extra_packages: extraPackages,
     image_name: imageName,
     image_tag: imageTag,
-    run_smoke_test: options.runSmokeTest ?? false
+    run_smoke_test: options.runSmokeTest ?? false,
   };
 
   const args = [playbookPath, "-e", JSON.stringify(extraVars)];
@@ -57,14 +61,16 @@ export async function buildDistroImage(options: BuildDistroImageOptions): Promis
     imageRef: `${imageName}:${imageTag}`,
     playbookPath,
     effectiveDependencies,
-    extraPackages
+    extraPackages,
   };
 }
 
 function normalizeDependencies(input: readonly SupportedDependency[]): SupportedDependency[] {
-  const normalized = input.map((dependency) => dependency.toLowerCase()).filter((value, index, allValues) => {
-    return allValues.indexOf(value) === index;
-  });
+  const normalized = input
+    .map((dependency) => dependency.toLowerCase())
+    .filter((value, index, allValues) => {
+      return allValues.indexOf(value) === index;
+    });
 
   const invalidDependencies = normalized.filter((dependency) => {
     return !SUPPORTED_DEPENDENCIES.includes(dependency as SupportedDependency);
@@ -72,7 +78,7 @@ function normalizeDependencies(input: readonly SupportedDependency[]): Supported
 
   if (invalidDependencies.length > 0) {
     throw new Error(
-      `Unsupported dependencies: ${invalidDependencies.join(", ")}. Supported: ${SUPPORTED_DEPENDENCIES.join(", ")}`
+      `Unsupported dependencies: ${invalidDependencies.join(", ")}. Supported: ${SUPPORTED_DEPENDENCIES.join(", ")}`,
     );
   }
 
@@ -89,14 +95,16 @@ function withImpliedDependencies(dependencies: SupportedDependency[]): Supported
 
 function normalizeExtraPackages(input: readonly string[]): string[] {
   const normalized = input.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  const deduped = normalized.filter((value, index, allValues) => allValues.indexOf(value) === index);
+  const deduped = normalized.filter(
+    (value, index, allValues) => allValues.indexOf(value) === index,
+  );
 
   const packageNamePattern = /^@?[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
   const invalidPackages = deduped.filter((packageName) => !packageNamePattern.test(packageName));
 
   if (invalidPackages.length > 0) {
     throw new Error(
-      `Invalid extra package names: ${invalidPackages.join(", ")}. Allowed pattern: ${packageNamePattern.source}`
+      `Invalid extra package names: ${invalidPackages.join(", ")}. Allowed pattern: ${packageNamePattern.source}`,
     );
   }
 
@@ -112,7 +120,7 @@ function runCommand(command: string, args: string[], cwd?: string): Promise<void
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       stdio: "inherit",
-      ...(cwd ? { cwd } : {})
+      ...(cwd ? { cwd } : {}),
     });
 
     child.on("error", (error: unknown) => {

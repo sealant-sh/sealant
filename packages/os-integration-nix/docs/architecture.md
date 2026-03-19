@@ -31,6 +31,7 @@ The core rule stays the same: keep request-specific data separate from reusable 
   - foreground command overrides
   - first-run editor/plugin shims
 
-This split keeps image generation reproducible while still allowing each launched workspace to target a different repository.
+This split keeps image generation reproducible while still allowing each launched workspace to
+target a different repository.
 
 The OS-agnostic composition contracts stay in `@sealant/workspace-composition` while this package owns the concrete Nix build path.

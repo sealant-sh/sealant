@@ -2,8 +2,9 @@
   "name": "@sealant/distro-composition",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
+  "private": true,
   "description": "Multi-distro composition utilities",
+  "type": "module",
   "scripts": {
     "build:image": "node --experimental-strip-types ./src/cli.ts",
     "build:image:arch": "node --experimental-strip-types ./src/cli.ts --distro arch",

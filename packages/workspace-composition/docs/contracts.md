@@ -4,11 +4,18 @@
 
 ## Core Contracts
 
-- `UserWorkspaceSpec`: validated, user-facing request shape coming from a product surface such as `apps/web` or another API client; its first concrete schema now lives in `src/user-workspace-spec.ts`
-- `WorkspaceBlueprint`: normalized, defaulted, OS-agnostic internal model used for executor selection; its first concrete schema now lives in `src/blueprint.ts`
-- `OsIntegration`: package-level category for OS backends such as `os-integration-nix`; the concrete runtime contract they implement is `OsExecutor` from `src/executor.ts`
-- `BuildArtifact`: the concrete result produced by an OS integration, such as an image, closure, manifest, metadata bundle, or another launchable artifact; its first standardized schema now lives in `src/executor.ts`
-- `RuntimeAdapter`: contract implemented by packages such as `runtime-adapter-docker` or `runtime-adapter-k8s` that can launch a build artifact on a specific runtime target
+- `UserWorkspaceSpec`: validated, user-facing request shape coming from a product surface such as
+  `apps/web` or another API client; its first concrete schema now lives in
+  `src/user-workspace-spec.ts`
+- `WorkspaceBlueprint`: normalized, defaulted, OS-agnostic internal model used for executor
+  selection; its first concrete schema now lives in `src/blueprint.ts`
+- `OsIntegration`: package-level category for OS backends such as `os-integration-nix`; the concrete
+  runtime contract they implement is `OsExecutor` from `src/executor.ts`
+- `BuildArtifact`: the concrete result produced by an OS integration, such as an image, closure,
+  manifest, metadata bundle, or another launchable artifact; its first standardized schema now lives
+  in `src/executor.ts`
+- `RuntimeAdapter`: contract implemented by packages such as `runtime-adapter-docker` or
+  `runtime-adapter-k8s` that can launch a build artifact on a specific runtime target
 
 ## Ownership Boundaries
 
@@ -54,7 +61,8 @@
 2. Workspace composition normalizes that into a `WorkspaceBlueprint`.
 3. Workspace composition selects an `OsIntegration`.
 4. The selected OS integration produces one or more `BuildArtifact` values.
-5. A runtime adapter launches those artifacts on Docker, Kubernetes, K3s, or another supported backend.
+5. A runtime adapter launches those artifacts on Docker, Kubernetes, K3s, or another supported
+   backend.
 
 ## Current Implementation Note
 

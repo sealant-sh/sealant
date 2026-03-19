@@ -56,4 +56,5 @@ This blueprint intentionally does not include:
 - distro-specific package names or package-manager details
 - image naming, registry publishing, or runtime-adapter deployment settings
 
-Those belong in concrete OS integrations or runtime adapters, not in the shared composition contract.
+Those belong in concrete OS integrations or runtime adapters, not in the shared composition
+contract.
