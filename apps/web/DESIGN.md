@@ -1,8 +1,8 @@
-# Design System Specification: Kinetic Architect (Swiss-Tech Neon)
+# Design System Specification: Sealant App (Swiss-Tech Neon)
 
 ## 1. Overview & Creative North Star
 
-**The Kinetic Architect** is a high-performance design system for sandboxed development environments. It rejects standard SaaS "softness" in favor of aggressive Swiss grid structures, high-contrast typography, and a "neon-on-black" aesthetic that mirrors terminal environments and precision engineering.
+**The Sealant App** is a high-performance design system for sandboxed development environments. It rejects standard SaaS "softness" in favor of aggressive Swiss grid structures, high-contrast typography, and a "neon-on-black" aesthetic that mirrors terminal environments and precision engineering.
 
 ### Design Principles:
 
@@ -33,7 +33,7 @@
 
 ## 3. Core Components
 
-### TopAppBar (KINETIC_ARCHITECT)
+### TopAppBar (SEALANT_APP)
 
 - **Structure:** Fixed top, height 80px.
 - **Elements:** Branding logo (uppercase, wide tracking), System Status indicator (right-aligned), and a grid toggle icon.
