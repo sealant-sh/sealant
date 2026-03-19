@@ -83,6 +83,7 @@ Supporting integrations feed into that flow without owning it:
 ### Current implementation status
 
 - `packages/db/`: shared Drizzle + SQLite package for durable control-plane job state, migrations, and future API/worker coordination
+- `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the shared SQLite database package
 - `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
 - `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar reference UI, and the first registry-backed route group
@@ -137,6 +138,7 @@ The architecture should stay adapter-oriented so Sealant can target different ex
 ## Defined package architecture
 
 - `packages/db/`: shared SQLite database package for durable control-plane state, Drizzle schema, migrations, and job repositories
+- `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session helpers across product apps
 - `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts, publishers, consumers, and dev broker setup
 - `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
 - `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into a concrete Nix build path

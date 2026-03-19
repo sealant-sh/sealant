@@ -28,10 +28,24 @@ export {
 export {
   workspaceBuildJobs,
   workspaceBuildJobStatusValues,
+  account,
+  session,
+  user,
+  verification,
+  type AuthAccount,
+  type AuthSession,
+  type AuthUser,
+  type AuthVerification,
+  type NewAuthAccount,
+  type NewAuthSession,
+  type NewAuthUser,
+  type NewAuthVerification,
   type NewWorkspaceBuildJob,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobStatus,
 } from "./schema.js";
+
+export * as schema from "./schema/index.js";
 
 export { runMigrations } from "./migrate.js";
 
