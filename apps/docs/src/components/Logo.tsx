@@ -1,12 +1,5 @@
 export const LogoText = (props: React.ComponentPropsWithoutRef<"svg">) => (
-  <svg
-    width={1200}
-    height={500}
-    viewBox="0 0 317.5 132.29167"
-    id="svg1"
-    xmlns="http://www.w3.org/2000/svg"
-    {...props}
-  >
+  <svg viewBox="0 0 317.5 132.29167" id="svg1" xmlns="http://www.w3.org/2000/svg" {...props}>
     <defs id="defs1" />
     <g id="layer1">
       <path
@@ -27,24 +20,18 @@ export const LogoText = (props: React.ComponentPropsWithoutRef<"svg">) => (
 );
 
 export const LogoBlob = (props: React.ComponentPropsWithoutRef<"svg"> | { dark: boolean }) => (
-  <svg
-    width={500}
-    height={500}
-    viewBox="0 0 132.29167 132.29167"
-    id="svg1"
-    xmlns="http://www.w3.org/2000/svg"
-    {...props}
-  >
+  <svg viewBox="0 0 132.29167 132.29167" id="svg1" xmlns="http://www.w3.org/2000/svg" {...props}>
     <defs id="defs1" />
     <g id="layer1">
       <circle
         style={{
-          fill: "#ffffff",
+          //fill: "#ffffff",
           fillOpacity: 1,
           stroke: "#000000",
           strokeWidth: 0,
           strokeDasharray: "none",
         }}
+        className="fill-black dark:fill-white"
         id="path1"
         cx={66.145836}
         cy={66.145836}
@@ -53,23 +40,25 @@ export const LogoBlob = (props: React.ComponentPropsWithoutRef<"svg"> | { dark: 
       <path
         id="path3"
         style={{
-          fill: "#ffffff",
+          //fill: "#ffffff",
           fillOpacity: 1,
           stroke: "#000000",
           strokeWidth: 0,
           strokeDasharray: "none",
         }}
+        className="fill-black dark:fill-white"
         d="M 66.145833,9.8479777 A 52.916664,52.916668 0 0 0 16.420186,44.666007 H 27.968835 A 42.333332,42.333332 0 0 1 66.145833,20.431311 42.333332,42.333332 0 0 1 104.32283,44.666007 h 11.54865 A 52.916664,52.916668 0 0 0 66.145833,9.8479777 Z"
       />
       <path
         id="path3-1"
         style={{
-          fill: "#ffffff",
+          //fill: "#ffffff",
           fillOpacity: 1,
           stroke: "#000000",
           strokeWidth: 0,
           strokeDasharray: "none",
         }}
+        className="fill-black dark:fill-white"
         d="M 66.145831,122.44369 A 52.916664,52.916668 0 0 0 115.87148,87.625663 H 104.32283 A 42.333332,42.333332 0 0 1 66.145831,111.86036 42.333332,42.333332 0 0 1 27.968841,87.625663 h -11.54865 a 52.916664,52.916668 0 0 0 49.72564,34.818027 z"
       />
       <path
