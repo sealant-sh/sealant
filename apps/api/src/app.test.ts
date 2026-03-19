@@ -1,15 +1,21 @@
+import type { WorkspaceBuildJob, WorkspaceBuildJobRepository } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
 import type { AppEnv } from "./env.js";
+import type { WorkspaceBuildJobPublisher } from "./lib/types.js";
 
 const testEnv: AppEnv = {
+  DATABASE_BUSY_TIMEOUT_MS: 5000,
+  DATABASE_FILE_PATH: ":memory:",
   NODE_ENV: "test",
   PORT: 3000,
+  RABBITMQ_URL: "amqp://sealant:sealant@127.0.0.1:5673",
   REGISTRY_NAME: "default",
   REGISTRY_BASE_URL: "http://127.0.0.1:5000",
   REGISTRY_PUSH_REGISTRY: "127.0.0.1:5000",
+  WORKSPACE_BUILD_QUEUE_PREFETCH: 1,
 };
 
 const createRegistryClientStub = (): RegistryClient => {
@@ -41,11 +47,135 @@ const createRegistryClientStub = (): RegistryClient => {
   };
 };
 
+const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository => {
+  const jobs = new Map<string, WorkspaceBuildJob>();
+
+  const touchUpdatedAt = (job: WorkspaceBuildJob): WorkspaceBuildJob => {
+    return {
+      ...job,
+      updatedAt: new Date(),
+    };
+  };
+
+  return {
+    claimJobById: async () => null,
+    claimNextQueuedJob: async () => null,
+    getJobById: async (id) => jobs.get(id),
+    insertQueuedJob: async (input) => {
+      const now = new Date();
+      const job: WorkspaceBuildJob = {
+        id: input.id,
+        status: "queued",
+        registryId: input.registryId,
+        repository: input.repository,
+        tag: input.tag,
+        requestPayload: input.requestPayload,
+        idempotencyKey: input.idempotencyKey ?? null,
+        attemptCount: 0,
+        maxAttempts: input.maxAttempts ?? 3,
+        availableAt: input.availableAt ?? now,
+        claimedAt: null,
+        leaseExpiresAt: null,
+        workerId: null,
+        startedAt: null,
+        finishedAt: null,
+        executorId: null,
+        resultPayload: null,
+        publishedReference: null,
+        publishedDigestReference: null,
+        publishedDigest: null,
+        errorCode: null,
+        errorMessage: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      jobs.set(job.id, job);
+
+      return job;
+    },
+    listJobsByStatus: async (status) => {
+      return [...jobs.values()].filter((job) => job.status === status);
+    },
+    markJobFailed: async (input) => {
+      const existing = jobs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = touchUpdatedAt({
+        ...existing,
+        status: "failed",
+        errorCode: input.errorCode ?? null,
+        errorMessage: input.errorMessage,
+        finishedAt: input.finishedAt ?? new Date(),
+        leaseExpiresAt: null,
+      });
+
+      jobs.set(next.id, next);
+      return next;
+    },
+    markJobRunning: async (input) => {
+      const existing = jobs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const now = input.now ?? new Date();
+      const next = touchUpdatedAt({
+        ...existing,
+        status: "running",
+        workerId: input.workerId,
+        claimedAt: now,
+        startedAt: now,
+        leaseExpiresAt: new Date(now.getTime() + input.leaseDurationMs),
+      });
+
+      jobs.set(next.id, next);
+      return next;
+    },
+    markJobSucceeded: async (input) => {
+      const existing = jobs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = touchUpdatedAt({
+        ...existing,
+        status: "succeeded",
+        executorId: input.executorId,
+        resultPayload: input.resultPayload ?? null,
+        publishedReference: input.publishedReference,
+        publishedDigestReference: input.publishedDigestReference,
+        publishedDigest: input.publishedDigest,
+        finishedAt: input.finishedAt ?? new Date(),
+        leaseExpiresAt: null,
+        errorCode: null,
+        errorMessage: null,
+      });
+
+      jobs.set(next.id, next);
+      return next;
+    },
+  } satisfies WorkspaceBuildJobRepository;
+};
+
+const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
+  return {
+    publishRequested: async () => undefined,
+  };
+};
+
 describe("createApiApp", () => {
   it("serves the system health endpoint", async () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
     });
 
     const response = await app.request("/healthz");
@@ -60,6 +190,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
     });
 
     const response = await app.request(
@@ -77,6 +209,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
     });
 
     const response = await app.request("/openapi.json");
@@ -93,5 +227,111 @@ describe("createApiApp", () => {
     expect(body.info.title).toBe("Sealant Control Plane API");
     expect(body.paths["/v1/registries/{registryId}/ping"]).toBeDefined();
     expect(body.paths["/healthz"]).toBeDefined();
+    expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
+  });
+
+  it("creates and queues a workspace build job", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const publisher = createWorkspaceBuildJobPublisherStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: publisher,
+      workspaceBuildJobRepository: repository,
+    });
+
+    const response = await app.request("/v1/workspace-build-jobs", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        registryId: "default",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        spec: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+
+    const body = (await response.json()) as {
+      jobId: string;
+      status: string;
+      repository: string;
+    };
+
+    expect(body.status).toBe("queued");
+    expect(body.repository).toBe("sealant/workspaces/demo");
+
+    const savedJob = await repository.getJobById(body.jobId);
+    expect(savedJob?.status).toBe("queued");
+  });
+
+  it("returns durable workspace build job details", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const queuedJob = await repository.insertQueuedJob({
+      id: "job_test",
+      registryId: "default",
+      repository: "sealant/workspaces/demo",
+      tag: "opencode",
+      requestPayload: {
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      },
+    });
+
+    await repository.markJobSucceeded({
+      id: queuedJob.id,
+      executorId: "nix",
+      resultPayload: {
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      },
+      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      publishedDigest: "sha256:test",
+    });
+
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+    });
+
+    const response = await app.request("/v1/workspace-build-jobs/job_test");
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      jobId: string;
+      status: string;
+      publishedImage?: {
+        digest: string;
+      };
+      executorId?: string;
+    };
+
+    expect(body.jobId).toBe("job_test");
+    expect(body.status).toBe("succeeded");
+    expect(body.executorId).toBe("nix");
+    expect(body.publishedImage?.digest).toBe("sha256:test");
   });
 });

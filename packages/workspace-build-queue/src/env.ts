@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const rabbitMqEnvSchema = z.object({
-  RABBITMQ_URL: z.string().trim().min(1).default("amqp://sealant:sealant@127.0.0.1:5672"),
+  RABBITMQ_URL: z.string().trim().min(1).default("amqp://sealant:sealant@127.0.0.1:5673"),
   WORKSPACE_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
 });
 

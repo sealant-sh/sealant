@@ -47,9 +47,15 @@ importers:
       '@scalar/hono-api-reference':
         specifier: ^0.9.13
         version: 0.9.48(hono@4.12.8)
+      '@sealant/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@sealant/registry-integration':
         specifier: workspace:*
         version: link:../../packages/registry-integration
+      '@sealant/workspace-build-queue':
+        specifier: workspace:*
+        version: link:../../packages/workspace-build-queue
       '@standard-community/standard-json':
         specifier: ^0.3.5
         version: 0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod@3.25.76)

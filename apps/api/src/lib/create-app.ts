@@ -12,6 +12,8 @@ export const createApp = (config: AppRuntimeConfig) => {
   app.use("*", async (c, next) => {
     c.set("env", config.env);
     c.set("registryClient", config.registryClient);
+    c.set("workspaceBuildJobPublisher", config.workspaceBuildJobPublisher);
+    c.set("workspaceBuildJobRepository", config.workspaceBuildJobRepository);
     await next();
   });
 
