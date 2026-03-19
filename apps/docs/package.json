@@ -1,5 +1,5 @@
 {
-  "name": "@zweit/docs",
+  "name": "@sealant/docs",
   "private": true,
   "type": "module",
   "imports": {
