@@ -12,7 +12,7 @@ It currently provides:
 
 ## Environment
 
-- `RABBITMQ_URL`: defaults to `amqp://sealant:sealant@127.0.0.1:5672`
+- `RABBITMQ_URL`: defaults to `amqp://sealant:sealant@127.0.0.1:5673`
 - `WORKSPACE_BUILD_QUEUE_PREFETCH`: defaults to `1`
 
 ## Development
@@ -23,4 +23,4 @@ Start RabbitMQ locally:
 docker compose -f packages/workspace-build-queue/dev/rabbitmq/compose.yaml up -d
 ```
 
-The broker listens on `amqp://sealant:sealant@127.0.0.1:5672` and the management UI is available at `http://127.0.0.1:15672`.
+The broker listens on `amqp://sealant:sealant@127.0.0.1:5673` and the management UI is available at `http://127.0.0.1:15673`.

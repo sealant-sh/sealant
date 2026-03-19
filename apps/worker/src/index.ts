@@ -1,6 +1,8 @@
 import { env } from "./env.js";
 import { startWorker } from "./worker.js";
 
+const retryDelayMs = 2000;
+
 console.log("Sealant worker starting", {
   workerId: env.WORKER_ID,
   rabbitMqUrl: env.RABBITMQ_URL,
@@ -8,7 +10,23 @@ console.log("Sealant worker starting", {
   databaseFilePath: env.DATABASE_FILE_PATH,
 });
 
-const worker = await startWorker(env);
+const wait = async (ms: number) => {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+let worker = await (async () => {
+  while (true) {
+    try {
+      return await startWorker(env);
+    } catch (error) {
+      console.error("Sealant worker failed to start; retrying", {
+        error,
+        retryDelayMs,
+      });
+      await wait(retryDelayMs);
+    }
+  }
+})();
 
 const shutdown = async () => {
   await worker.stop();
