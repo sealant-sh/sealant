@@ -1,5 +1,10 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+import type {
+  WorkspaceBuildJobRequestPayload,
+  WorkspaceBuildJobResultPayload,
+} from "./payloads.js";
+
 export const workspaceBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;
 
 export type WorkspaceBuildJobStatus = (typeof workspaceBuildJobStatusValues)[number];
@@ -12,7 +17,9 @@ export const workspaceBuildJobs = sqliteTable(
     registryId: text().notNull(),
     repository: text().notNull(),
     tag: text().notNull(),
-    requestPayload: text("request_payload", { mode: "json" }).$type<unknown>().notNull(),
+    requestPayload: text("request_payload", { mode: "json" })
+      .$type<WorkspaceBuildJobRequestPayload>()
+      .notNull(),
     idempotencyKey: text(),
     attemptCount: integer({ mode: "number" }).notNull().default(0),
     maxAttempts: integer({ mode: "number" }).notNull().default(3),
@@ -25,7 +32,7 @@ export const workspaceBuildJobs = sqliteTable(
     startedAt: integer({ mode: "timestamp_ms" }),
     finishedAt: integer({ mode: "timestamp_ms" }),
     executorId: text(),
-    resultPayload: text("result_payload", { mode: "json" }).$type<unknown>(),
+    resultPayload: text("result_payload", { mode: "json" }).$type<WorkspaceBuildJobResultPayload>(),
     publishedReference: text(),
     publishedDigestReference: text(),
     publishedDigest: text(),

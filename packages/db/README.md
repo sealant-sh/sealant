@@ -7,6 +7,7 @@ It currently provides:
 - a Drizzle schema for workspace image build jobs
 - a local SQLite client with `WAL` and `busy_timeout` enabled
 - a small repository for enqueueing, claiming, and updating workspace build jobs
+- generated Zod schemas from the Drizzle table plus typed payload schemas for request and result JSON
 - a Drizzle config and migration entrypoint for committed SQL migrations
 
 ## Environment

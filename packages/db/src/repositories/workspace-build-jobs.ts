@@ -1,6 +1,10 @@
 import { and, asc, eq, lte, or } from "drizzle-orm";
 
 import type { DatabaseClient } from "../client.js";
+import type {
+  WorkspaceBuildJobRequestPayload,
+  WorkspaceBuildJobResultPayload,
+} from "../payloads.js";
 import {
   workspaceBuildJobs,
   type NewWorkspaceBuildJob,
@@ -13,7 +17,7 @@ export interface EnqueueWorkspaceBuildJobInput {
   readonly registryId: string;
   readonly repository: string;
   readonly tag: string;
-  readonly requestPayload: unknown;
+  readonly requestPayload: WorkspaceBuildJobRequestPayload;
   readonly idempotencyKey?: string;
   readonly availableAt?: Date;
   readonly maxAttempts?: number;
@@ -32,10 +36,17 @@ export interface MarkWorkspaceBuildJobRunningInput {
   readonly now?: Date;
 }
 
+export interface ClaimWorkspaceBuildJobByIdInput {
+  readonly id: string;
+  readonly workerId: string;
+  readonly leaseDurationMs: number;
+  readonly now?: Date;
+}
+
 export interface MarkWorkspaceBuildJobSucceededInput {
   readonly id: string;
   readonly executorId: string;
-  readonly resultPayload?: unknown;
+  readonly resultPayload?: WorkspaceBuildJobResultPayload;
   readonly publishedReference: string;
   readonly publishedDigestReference: string;
   readonly publishedDigest: string;
@@ -151,6 +162,51 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
     });
   };
 
+  const claimJobById = async (
+    input: ClaimWorkspaceBuildJobByIdInput,
+  ): Promise<WorkspaceBuildJob | null> => {
+    const now = requiredDate(input.now);
+    const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
+
+    return db.transaction(async (tx) => {
+      const [candidate] = await tx
+        .select()
+        .from(workspaceBuildJobs)
+        .where(
+          and(
+            eq(workspaceBuildJobs.id, input.id),
+            or(
+              eq(workspaceBuildJobs.status, "queued"),
+              and(
+                eq(workspaceBuildJobs.status, "running"),
+                lte(workspaceBuildJobs.leaseExpiresAt, now),
+              ),
+            ),
+          ),
+        )
+        .limit(1);
+
+      if (candidate === undefined) {
+        return null;
+      }
+
+      const [claimed] = await tx
+        .update(workspaceBuildJobs)
+        .set({
+          status: "running",
+          workerId: input.workerId,
+          claimedAt: now,
+          leaseExpiresAt,
+          startedAt: candidate.startedAt ?? now,
+          attemptCount: candidate.attemptCount + 1,
+        })
+        .where(eq(workspaceBuildJobs.id, candidate.id))
+        .returning();
+
+      return claimed ?? null;
+    });
+  };
+
   const markJobRunning = async (
     input: MarkWorkspaceBuildJobRunningInput,
   ): Promise<WorkspaceBuildJob | null> => {
@@ -213,6 +269,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
   };
 
   return {
+    claimJobById,
     claimNextQueuedJob,
     getJobById,
     insertQueuedJob,

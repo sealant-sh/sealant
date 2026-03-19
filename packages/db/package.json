@@ -9,11 +9,13 @@
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/migrate.ts"
+    "db:migrate": "tsx src/run-migrations.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
+    "@sealant/workspace-composition": "workspace:*",
     "drizzle-orm": "^0.44.7",
+    "drizzle-zod": "^0.8.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
