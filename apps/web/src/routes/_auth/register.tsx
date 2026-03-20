@@ -1,11 +1,14 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 
-import { Button, Input, Label } from "@sealant/ui";
+import { Button, useAppForm } from "@sealant/ui";
+import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AuthShell } from "@/components/auth/auth-shell";
+import { registerFormDefaults, registerFormSchema } from "@/features/auth/forms/register-form";
 import { authClient } from "@/lib/auth/auth-client";
 import { resolveRedirectTarget } from "@/lib/auth/redirect";
+import { normalizeRequiredString } from "@/lib/forms/zod";
 
 export const Route = createFileRoute("/_auth/register")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -16,39 +19,30 @@ export const Route = createFileRoute("/_auth/register")({
 
 function RegisterPage() {
   const search = Route.useSearch();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const form = useAppForm({
+    defaultValues: registerFormDefaults,
+    validationLogic: revalidateLogic(),
+    onSubmit: async ({ value }) => {
+      setErrorMessage(null);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setErrorMessage(null);
+      const result = await authClient.signUp.email({
+        email: normalizeRequiredString(value.email),
+        name: normalizeRequiredString(value.name),
+        password: value.password,
+      });
 
-    if (password !== confirmPassword) {
-      setErrorMessage("Passwords must match before the account can be created.");
-      return;
-    }
+      if (result.error !== null) {
+        setErrorMessage(result.error.message ?? "Unable to create your account right now.");
+        return;
+      }
 
-    setIsSubmitting(true);
-
-    const result = await authClient.signUp.email({
-      name,
-      email,
-      password,
-    });
-
-    setIsSubmitting(false);
-
-    if (result.error !== null) {
-      setErrorMessage(result.error.message ?? "Unable to create your account right now.");
-      return;
-    }
-
-    window.location.assign(resolveRedirectTarget(search.redirect));
-  };
+      window.location.assign(resolveRedirectTarget(search.redirect));
+    },
+    validators: {
+      onDynamic: registerFormSchema,
+    },
+  });
 
   return (
     <AuthShell
@@ -65,88 +59,95 @@ function RegisterPage() {
           <p className="text-sm leading-7 text-white/62">Use the details for the primary account.</p>
         </div>
 
-        <form className="space-y-5" onSubmit={(event) => void handleSubmit(event)}>
-          <div className="space-y-2">
-            <Label htmlFor="name" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-              Name
-            </Label>
-            <Input
-              id="name"
-              name="name"
-              autoComplete="name"
-              required
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-              placeholder="Full name…"
-            />
-          </div>
+        <form
+          className="space-y-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void form.handleSubmit();
+          }}
+        >
+          <form.AppField name="name">
+            {(field) => (
+              <field.TextField
+                autoComplete="name"
+                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                fieldClassName="space-y-2"
+                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                label="Name"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                placeholder="Full name..."
+                required
+              />
+            )}
+          </form.AppField>
 
-          <div className="space-y-2">
-            <Label htmlFor="register-email" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-              Email
-            </Label>
-            <Input
-              id="register-email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              spellCheck={false}
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-              placeholder="operator@company.com…"
-            />
-          </div>
+          <form.AppField name="email">
+            {(field) => (
+              <field.TextField
+                autoComplete="email"
+                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                fieldClassName="space-y-2"
+                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                label="Email"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                placeholder="operator@company.com..."
+                required
+                spellCheck={false}
+                type="email"
+              />
+            )}
+          </form.AppField>
 
           <div className="grid gap-5 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="register-password" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-                Password
-              </Label>
-              <Input
-                id="register-password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-                placeholder="Create a password…"
-              />
-            </div>
+            <form.AppField name="password">
+              {(field) => (
+                <field.PasswordField
+                  autoComplete="new-password"
+                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  fieldClassName="space-y-2"
+                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  label="Password"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  placeholder="Create a password..."
+                  required
+                />
+              )}
+            </form.AppField>
 
-            <div className="space-y-2">
-              <Label htmlFor="confirm-password" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-                Confirm
-              </Label>
-              <Input
-                id="confirm-password"
-                name="confirmPassword"
-                type="password"
-                autoComplete="new-password"
-                required
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-                placeholder="Repeat the password…"
-              />
-            </div>
+            <form.AppField name="confirmPassword">
+              {(field) => (
+                <field.PasswordField
+                  autoComplete="new-password"
+                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  fieldClassName="space-y-2"
+                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  label="Confirm"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  placeholder="Repeat the password..."
+                  required
+                />
+              )}
+            </form.AppField>
           </div>
 
           {errorMessage !== null ? (
-            <div aria-live="polite" className="border border-neon-magenta/30 bg-neon-magenta/10 px-4 py-3 text-sm text-white">{errorMessage}</div>
+            <div className="border border-neon-magenta/30 bg-neon-magenta/10 px-4 py-3 text-sm text-white">
+              {errorMessage}
+            </div>
           ) : null}
 
-          <Button
-            type="submit"
-            className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Creating Account…" : "Create Account"}
-          </Button>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <Button
+                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                disabled={isSubmitting}
+                type="submit"
+              >
+                {isSubmitting ? "Creating Account..." : "Create Account"}
+              </Button>
+            )}
+          </form.Subscribe>
         </form>
 
         <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
