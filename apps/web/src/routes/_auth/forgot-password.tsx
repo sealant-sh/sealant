@@ -39,9 +39,9 @@ function ForgotPasswordPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.38em] text-white/50">Forgot Password</p>
-          <h2 className="text-3xl font-black uppercase tracking-[-0.05em] text-white">Reset Request</h2>
-          <p className="text-sm leading-7 text-white/62">Enter the account email.</p>
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Forgot Password</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">Reset Request</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Enter the account email.</p>
         </div>
 
         <form
@@ -56,11 +56,11 @@ function ForgotPasswordPage() {
             {(field) => (
               <field.TextField
                 autoComplete="email"
-                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                errorClassName="text-[0.72rem] leading-6 text-destructive"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                inputClassName="h-12 px-4"
                 label="Email"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                 placeholder="operator@company.com..."
                 required
                 spellCheck={false}
@@ -70,11 +70,11 @@ function ForgotPasswordPage() {
           </form.AppField>
 
           {notice !== null ? (
-            <div className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">
+            <div className="border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
               {notice}
             </div>
           ) : (
-            <div className="border border-steel bg-[#161616] px-4 py-3 text-sm text-white/62">
+            <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
               Email delivery is disabled.
             </div>
           )}
@@ -82,7 +82,7 @@ function ForgotPasswordPage() {
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
               <Button
-                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                className="h-12 w-full"
                 disabled={isSubmitting}
                 type="submit"
               >
@@ -92,9 +92,9 @@ function ForgotPasswordPage() {
           </form.Subscribe>
         </form>
 
-        <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Remembered the password?</p>
-          <a href="/login" className="font-semibold uppercase tracking-[0.22em] text-white no-underline hover:text-neon-magenta">
+          <a href="/login" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
             Sign In
           </a>
         </div>

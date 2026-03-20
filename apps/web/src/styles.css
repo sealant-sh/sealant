@@ -7,16 +7,13 @@
 @import "@fontsource/space-grotesk/500.css";
 @import "@fontsource/space-grotesk/700.css";
 
-/* Tailwind v4 base — must come BEFORE @sealant/ui which imports tw-animate-css/shadcn */
 @import "tailwindcss";
-
-/* Swiss-Tech Neon design tokens + tw-animate-css + shadcn base styles */
 @import "@sealant/ui/styles/globals.css";
 
-/* Font family tokens */
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Space Grotesk", ui-monospace, monospace;
+  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Space Grotesk", ui-monospace, monospace;
+  --font-display: "Bebas Neue", "Oswald", "Impact", sans-serif;
 }
 
 * {
@@ -24,12 +21,12 @@
 }
 
 html {
-  background: #0e0e0e;
+  background: var(--sw-bg);
 }
 
 body {
   min-height: 100svh;
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / calc(100% / 12) 100%,
-    linear-gradient(180deg, #131313 0%, #0e0e0e 100%);
+    linear-gradient(90deg, color-mix(in oklab, var(--sw-rule) 6%, transparent) 1px, transparent 1px) 0 0 / calc(100% / 12) 100%,
+    linear-gradient(180deg, #ffffff 0%, var(--sw-bg) 100%);
 }

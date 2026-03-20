@@ -32,19 +32,19 @@ export function RegistryCard({
       {/* Header */}
       <div className="flex items-start justify-between gap-4 border-b border-border p-4">
         <div className="min-w-0">
-          <p className="font-black text-xs tracking-widest uppercase text-muted-foreground">
+          <p className="font-semibold text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground">
             REGISTRY
           </p>
-          <h3 className="mt-1 font-black text-base tracking-widest uppercase text-foreground truncate">
+          <h3 className="mt-1 font-display text-3xl tracking-[0.02em] uppercase leading-[0.88] text-foreground truncate">
             {name.toUpperCase()}
           </h3>
         </div>
         <Badge
-          className={cn(
-            "shrink-0 rounded-none font-mono text-[10px] tracking-widest uppercase",
+            className={cn(
+            "shrink-0 rounded-none border font-mono text-[10px] tracking-[0.12em] uppercase",
             hasBasicAuth
               ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground"
+              : "border-border bg-muted text-muted-foreground"
           )}
         >
           {hasBasicAuth ? (
@@ -68,11 +68,11 @@ export function RegistryCard({
       </div>
 
       {/* Footer */}
-      <div className="mt-auto border-t border-border bg-muted/20 p-4">
+      <div className="mt-auto border-t border-border bg-muted/30 p-4">
         <Button
           variant="outline"
           size="sm"
-          className="w-full rounded-none border-border font-black tracking-widest uppercase hover:bg-primary hover:text-primary-foreground hover:border-primary"
+          className="w-full border-border"
           render={
             <Link to="/registry/$registryId" params={{ registryId: id }} />
           }
@@ -94,12 +94,12 @@ interface DataRowProps {
 function DataRow({ label, value, mono }: DataRowProps) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] font-black tracking-widest uppercase text-muted-foreground/60">
+      <span className="text-[10px] font-semibold tracking-[0.12em] uppercase text-muted-foreground/60">
         {label}
       </span>
       <span
         className={cn(
-          "text-xs text-secondary truncate",
+          "text-xs text-foreground truncate",
           mono && "font-mono"
         )}
         title={value}

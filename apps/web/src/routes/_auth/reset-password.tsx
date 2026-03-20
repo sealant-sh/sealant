@@ -41,9 +41,9 @@ function ResetPasswordPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.38em] text-white/50">Reset Password</p>
-          <h2 className="text-3xl font-black uppercase tracking-[-0.05em] text-white">New Password</h2>
-          <p className="text-sm leading-7 text-white/62">
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Reset Password</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">New Password</h2>
+          <p className="text-sm leading-7 text-muted-foreground">
             {search.token !== undefined
               ? `Recovery token detected: ${search.token.slice(0, 8)}…`
               : "This route will accept a recovery token once the email flow is live."}
@@ -63,11 +63,11 @@ function ResetPasswordPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="New password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="Create a password..."
                   required
                 />
@@ -78,11 +78,11 @@ function ResetPasswordPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="Confirm password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="Repeat the password..."
                   required
                 />
@@ -90,12 +90,12 @@ function ResetPasswordPage() {
             </form.AppField>
           </div>
 
-          <div className="border border-steel bg-[#161616] px-4 py-3 text-sm text-white/62">
+          <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
             Token verification is not enabled yet.
           </div>
 
           {notice !== null ? (
-            <div className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">
+            <div className="border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
               {notice}
             </div>
           ) : null}
@@ -103,7 +103,7 @@ function ResetPasswordPage() {
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
               <Button
-                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                className="h-12 w-full"
                 disabled={isSubmitting}
                 type="submit"
               >
@@ -113,9 +113,9 @@ function ResetPasswordPage() {
           </form.Subscribe>
         </form>
 
-        <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Need a new link?</p>
-          <a href="/forgot-password" className="font-semibold uppercase tracking-[0.22em] text-white no-underline hover:text-neon-magenta">
+          <a href="/forgot-password" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
             Request Reset
           </a>
         </div>
