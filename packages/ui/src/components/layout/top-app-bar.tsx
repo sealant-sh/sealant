@@ -10,8 +10,8 @@ interface TopAppBarProps {
 }
 
 const statusConfig: Record<SystemStatus, { label: string; color: string }> = {
-  online: { label: "ONLINE", color: "bg-emerald-400" },
-  degraded: { label: "DEGRADED", color: "bg-amber-400" },
+  online: { label: "ONLINE", color: "bg-foreground" },
+  degraded: { label: "DEGRADED", color: "bg-muted-foreground" },
   offline: { label: "OFFLINE", color: "bg-red-500" },
 }
 
@@ -21,7 +21,7 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
   return (
     <header
       className={cn(
-        "fixed top-0 left-0 right-0 z-50 flex h-20 items-center border-b border-border bg-card px-6",
+        "fixed top-0 left-0 right-0 z-50 flex h-16 items-center border-b-2 border-foreground bg-card px-6",
         className
       )}
     >
@@ -31,7 +31,7 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
         className="flex shrink-0 items-center gap-3 no-underline"
         aria-label="Sealant home"
       >
-        <span className="font-black text-xl tracking-[0.22em] uppercase text-foreground">
+        <span className="font-display text-3xl tracking-[0.04em] uppercase text-foreground">
           SEALANT
         </span>
       </Link>
@@ -47,7 +47,7 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
           className={cn("h-2 w-2 rounded-full", color)}
           aria-hidden="true"
         />
-        <span className="font-mono text-xs tracking-widest text-muted-foreground">
+        <span className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
           {label}
         </span>
       </div>
@@ -64,10 +64,10 @@ function TopNavLink({ to, children }: TopNavLinkProps) {
   return (
     <Link
       to={to}
-      className="px-3 py-1.5 font-black text-xs tracking-widest uppercase text-muted-foreground no-underline transition-colors hover:text-foreground"
+      className="px-3 py-1.5 font-semibold text-[0.68rem] tracking-[0.12em] uppercase text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
       activeProps={{
         className:
-          "px-3 py-1.5 font-black text-xs tracking-widest uppercase text-primary no-underline transition-colors",
+          "px-3 py-1.5 font-semibold text-[0.68rem] tracking-[0.12em] uppercase text-primary no-underline transition-colors",
       }}
     >
       {children}

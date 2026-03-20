@@ -55,16 +55,16 @@ export function ManifestDetail({
     <div className={cn("flex flex-col gap-6", className)}>
       {/* Image identity */}
       <div className="border border-border bg-card p-6">
-        <p className="font-mono text-xs tracking-widest uppercase text-muted-foreground/60 mb-2">
+        <p className="mb-2 font-mono text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground/60">
           IMAGE
         </p>
-        <h2 className="font-mono font-bold text-2xl text-foreground break-all">
+        <h2 className="font-display text-4xl leading-[0.88] uppercase tracking-[0.02em] text-foreground break-all">
           {repository}
           <span className="text-primary">:{reference}</span>
         </h2>
         {digest && (
           <div className="mt-3 flex items-center gap-2">
-            <span className="font-mono text-xs text-secondary truncate">
+            <span className="font-mono text-xs text-foreground truncate">
               {truncateDigest(digest)}
             </span>
             <Button
@@ -72,8 +72,8 @@ export function ManifestDetail({
               size="icon-xs"
               onClick={handleCopyDigest}
               aria-label="Copy full digest"
-              className="shrink-0 rounded-none text-muted-foreground hover:text-foreground"
-            >
+                className="shrink-0 rounded-none border border-border text-muted-foreground hover:text-foreground"
+              >
               {copied ? (
                 <Check className="size-3 text-secondary" />
               ) : (
@@ -94,19 +94,19 @@ export function ManifestDetail({
       {/* Layers table */}
       {layers.length > 0 && (
         <div>
-          <p className="mb-3 font-black text-xs tracking-widest uppercase text-muted-foreground">
+          <p className="mb-3 font-semibold text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground">
             LAYERS
           </p>
           <div className="border border-border">
             {/* Header */}
             <div className="grid grid-cols-[1fr_auto_auto] gap-4 border-b border-border bg-muted/30 px-4 py-2">
-              <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60">
+              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60">
                 DIGEST
               </span>
-              <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60 text-right">
+              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60 text-right">
                 SIZE
               </span>
-              <span className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60 text-right w-24">
+              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60 text-right w-24">
                 MEDIA TYPE
               </span>
             </div>
@@ -118,13 +118,13 @@ export function ManifestDetail({
                   i < layers.length - 1 && "border-b border-border"
                 )}
               >
-                <span className="font-mono text-xs text-secondary truncate">
+                <span className="font-mono text-xs text-foreground truncate">
                   {truncateDigest(layer.digest)}
                 </span>
                 <span className="font-mono text-xs text-muted-foreground text-right tabular-nums">
                   {formatBytes(layer.size)}
                 </span>
-                <Badge className="w-24 justify-center rounded-none bg-muted text-muted-foreground font-mono text-[9px] tracking-wider truncate">
+                <Badge className="w-24 justify-center rounded-none border border-border bg-muted text-muted-foreground font-mono text-[9px] tracking-[0.11em] truncate">
                   {layer.mediaType.split("/").pop()?.replace("vnd.oci.image.layer.v1.", "") ?? layer.mediaType}
                 </Badge>
               </div>
@@ -135,10 +135,10 @@ export function ManifestDetail({
 
       {/* Raw manifest JSON */}
       <div>
-        <p className="mb-3 font-black text-xs tracking-widest uppercase text-muted-foreground">
+        <p className="mb-3 font-semibold text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground">
           RAW MANIFEST
         </p>
-        <pre className="overflow-auto max-h-80 border border-border bg-card p-4 font-mono text-xs text-secondary leading-relaxed">
+        <pre className="overflow-auto max-h-80 border border-border bg-card p-4 font-mono text-xs text-foreground leading-relaxed">
           {JSON.stringify(manifest, null, 2)}
         </pre>
       </div>
@@ -155,13 +155,13 @@ interface MetaCellProps {
 function MetaCell({ label, value, mono }: MetaCellProps) {
   return (
     <div className="bg-card p-4">
-      <p className="font-mono text-[10px] tracking-widest uppercase text-muted-foreground/60 mb-1">
+      <p className="mb-1 font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60">
         {label}
       </p>
       <p
         className={cn(
           "text-sm text-foreground break-all",
-          mono && "font-mono text-secondary"
+          mono && "font-mono"
         )}
       >
         {value}

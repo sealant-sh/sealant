@@ -23,27 +23,27 @@ function ManifestPage() {
   const { registryId } = Route.useParams();
 
   return (
-    <div className="overflow-hidden border border-white/10 bg-slate-950/60 p-6 sm:p-8">
-      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs tracking-[0.28em] uppercase text-slate-400">
-        <Link to="/registry" className="text-slate-400 no-underline transition-colors hover:text-white">
+    <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
+      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground">
+        <Link to="/registry" className="text-muted-foreground no-underline transition-colors hover:text-foreground">
           Registry
         </Link>
-        <span className="text-slate-600">/</span>
-        <Link to="/registry/$registryId" params={{ registryId }} className="text-slate-400 no-underline transition-colors hover:text-white">
+        <span className="text-muted-foreground/60">/</span>
+        <Link to="/registry/$registryId" params={{ registryId }} className="text-muted-foreground no-underline transition-colors hover:text-foreground">
           {registry.name.toUpperCase()}
         </Link>
-        <span className="text-slate-600">/</span>
-        <Link to="/registry/$registryId" params={{ registryId }} className="text-slate-400 no-underline transition-colors hover:text-white">
+        <span className="text-muted-foreground/60">/</span>
+        <Link to="/registry/$registryId" params={{ registryId }} className="text-muted-foreground no-underline transition-colors hover:text-foreground">
           {repository}
         </Link>
-        <span className="text-slate-600">/</span>
-        <span className="text-white">{manifest.reference}</span>
+        <span className="text-muted-foreground/60">/</span>
+        <span className="text-foreground">{manifest.reference}</span>
       </nav>
 
       <Link
         to="/registry/$registryId"
         params={{ registryId }}
-        className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs tracking-[0.28em] uppercase text-slate-400 no-underline transition-colors hover:text-white"
+        className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground no-underline transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-3" />
         Back to registry
@@ -63,29 +63,29 @@ function ManifestPage() {
 
 function ManifestSkeleton() {
   return (
-    <div className="overflow-hidden border border-white/10 bg-slate-950/60 p-6 sm:p-8">
-      <Skeleton className="mb-6 h-3 w-64 rounded-none bg-white/10" />
-      <Skeleton className="mb-6 h-3 w-32 rounded-none bg-white/10" />
-      <div className="mb-6 border border-white/10 bg-white/5 p-6">
-        <Skeleton className="mb-2 h-2 w-16 rounded-none bg-white/10" />
-        <Skeleton className="mb-3 h-8 w-3/4 rounded-none bg-white/10" />
-        <Skeleton className="h-3 w-48 rounded-none bg-white/10" />
+    <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
+      <Skeleton className="mb-6 h-3 w-64 rounded-none bg-muted" />
+      <Skeleton className="mb-6 h-3 w-32 rounded-none bg-muted" />
+      <div className="mb-6 border border-border bg-muted/20 p-6">
+        <Skeleton className="mb-2 h-2 w-16 rounded-none bg-muted" />
+        <Skeleton className="mb-3 h-8 w-3/4 rounded-none bg-muted" />
+        <Skeleton className="h-3 w-48 rounded-none bg-muted" />
       </div>
-      <div className="mb-6 grid grid-cols-3 gap-px border border-white/10 bg-white/10">
+      <div className="mb-6 grid grid-cols-3 gap-px border border-border bg-border">
         {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="bg-slate-950/80 p-4">
-            <Skeleton className="mb-2 h-2 w-20 rounded-none bg-white/10" />
-            <Skeleton className="h-4 w-24 rounded-none bg-white/10" />
+          <div key={index} className="bg-card p-4">
+            <Skeleton className="mb-2 h-2 w-20 rounded-none bg-muted" />
+            <Skeleton className="h-4 w-24 rounded-none bg-muted" />
           </div>
         ))}
       </div>
-      <Skeleton className="mb-3 h-3 w-16 rounded-none bg-white/10" />
-      <div className="border border-white/10">
+      <Skeleton className="mb-3 h-3 w-16 rounded-none bg-muted" />
+      <div className="border border-border">
         {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="flex items-center gap-4 border-b border-white/10 px-4 py-2.5 last:border-b-0">
-            <Skeleton className="h-3 flex-1 rounded-none bg-white/10" />
-            <Skeleton className="h-3 w-16 rounded-none bg-white/10" />
-            <Skeleton className="h-5 w-24 rounded-none bg-white/10" />
+          <div key={index} className="flex items-center gap-4 border-b border-border px-4 py-2.5 last:border-b-0">
+            <Skeleton className="h-3 flex-1 rounded-none bg-muted" />
+            <Skeleton className="h-3 w-16 rounded-none bg-muted" />
+            <Skeleton className="h-5 w-24 rounded-none bg-muted" />
           </div>
         ))}
       </div>

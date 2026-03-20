@@ -53,15 +53,15 @@ function LoginPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.38em] text-white/50">Sign In</p>
-          <h2 className="text-3xl font-black uppercase tracking-[-0.05em] text-white text-balance">Operator Login</h2>
-          <p className="text-sm leading-7 text-white/62">Use the account for this deployment.</p>
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Sign In</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Operator Login</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Use the account for this deployment.</p>
         </div>
 
         <div className="space-y-5">
           <div className="flex items-center justify-between gap-4">
-            <span className="font-mono text-[0.68rem] uppercase tracking-[0.26em] text-white/38">Password Access</span>
-            <a href="/forgot-password" className="font-mono text-[0.68rem] uppercase tracking-[0.26em] text-white/55 no-underline hover:text-white">
+            <span className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground">Password Access</span>
+            <a href="/forgot-password" className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground no-underline hover:text-foreground">
               Reset Password
             </a>
           </div>
@@ -78,11 +78,11 @@ function LoginPage() {
               {(field) => (
                 <field.TextField
                   autoComplete="email"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="Email"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="operator@company.com..."
                   required
                   spellCheck={false}
@@ -95,11 +95,11 @@ function LoginPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="current-password"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="Password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="Enter your password..."
                   required
                 />
@@ -107,7 +107,7 @@ function LoginPage() {
             </form.AppField>
 
             {errorMessage !== null ? (
-              <div className="border border-neon-magenta/30 bg-neon-magenta/10 px-4 py-3 text-sm text-white">
+              <div className="border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 {errorMessage}
               </div>
             ) : null}
@@ -115,7 +115,7 @@ function LoginPage() {
             <form.Subscribe selector={(state) => state.isSubmitting}>
               {(isSubmitting) => (
                 <Button
-                  className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                  className="h-12 w-full"
                   disabled={isSubmitting}
                   type="submit"
                 >
@@ -126,9 +126,9 @@ function LoginPage() {
           </form>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Need access?</p>
-          <a href="/register" className="font-semibold uppercase tracking-[0.22em] text-white no-underline hover:text-neon-magenta">
+          <a href="/register" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
             Register
           </a>
         </div>

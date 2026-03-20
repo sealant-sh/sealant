@@ -45,7 +45,7 @@ export function RepositoryRow({
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:bg-muted/30"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-[background-color,transform] duration-200 hover:bg-muted/30 hover:translate-x-1 focus-visible:outline-none focus-visible:bg-muted/30"
         aria-expanded={expanded}
       >
         <ChevronRight
@@ -58,7 +58,7 @@ export function RepositoryRow({
           {repository}
         </span>
         {tags !== null && (
-          <Badge className="shrink-0 rounded-none bg-muted text-muted-foreground font-mono text-[10px] tracking-widest">
+          <Badge className="shrink-0 rounded-none border border-border bg-muted text-muted-foreground font-mono text-[10px] tracking-[0.12em]">
             <Tag className="size-2.5 mr-1" />
             {tags.length}
           </Badge>
@@ -83,7 +83,7 @@ export function RepositoryRow({
                   params={{ registryId, repo: encodedRepo, tag }}
                   className="no-underline"
                 >
-                  <span className="inline-flex items-center gap-1 border border-border bg-muted/20 px-2.5 py-1 font-mono text-xs text-muted-foreground transition-colors hover:bg-primary hover:text-primary-foreground hover:border-primary cursor-pointer">
+                  <span className="inline-flex items-center gap-1 border border-border bg-muted/20 px-2.5 py-1 font-mono text-xs uppercase tracking-[0.08em] text-muted-foreground transition-colors duration-200 hover:bg-primary hover:text-primary-foreground hover:border-primary cursor-pointer">
                     {tag}
                   </span>
                 </Link>

@@ -8,6 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, ShieldCheck } from "lucide-react";
 
 import { authClient } from "@/lib/auth/auth-client";
+import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 
 interface AppShellProps {
   readonly session: AuthSession;
@@ -39,22 +40,22 @@ export function AppShell({ session, children }: AppShellProps) {
   };
 
   return (
-    <div className="min-h-svh bg-abyss text-white">
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:calc(100%/12)_100%,100%_4rem] opacity-40" />
-      <div className="pointer-events-none fixed left-[8.333%] top-0 h-full w-px bg-white/8" />
-      <div className="pointer-events-none fixed right-[16.666%] top-0 h-full w-px bg-white/5" />
+    <div className="min-h-svh bg-background text-foreground">
+      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(90deg,color-mix(in_oklab,var(--sw-rule)_6%,transparent)_1px,transparent_1px),linear-gradient(180deg,color-mix(in_oklab,var(--sw-rule)_5%,transparent)_1px,transparent_1px)] [background-size:calc(100%/12)_100%,100%_4rem] opacity-35" />
+      <div className="pointer-events-none fixed left-[8.333%] top-0 h-full w-px bg-border" />
+      <div className="pointer-events-none fixed right-[16.666%] top-0 h-full w-px bg-border/70" />
 
       <div className="relative mx-auto flex min-h-svh w-full max-w-[1440px] flex-col px-4 pb-16 pt-4 sm:px-8 lg:px-12">
-        <header className="sticky top-0 z-40 border border-steel bg-card md:h-20">
-          <div className="h-1 w-full bg-neon-magenta" />
+        <header className="sticky top-0 z-40 border border-border bg-card md:h-20">
+          <div className="h-1 w-full bg-primary" />
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
             <div className="flex items-center gap-4 px-4 py-4 md:px-6 md:py-5">
-              <div className="flex h-12 w-12 items-center justify-center border border-steel bg-[#191919] text-neon-cyan">
+              <div className="flex h-12 w-12 items-center justify-center border border-border bg-muted text-foreground">
                 <ShieldCheck className="size-5" />
               </div>
               <div>
-                <p className="font-mono text-[0.65rem] uppercase tracking-[0.42em] text-white/45">Sealant</p>
-                <Link to="/" className="text-lg font-black uppercase tracking-[0.26em] text-white no-underline md:text-xl">
+                <p className="font-mono text-[0.65rem] uppercase tracking-[0.22em] text-muted-foreground">Sealant</p>
+                <Link to="/" className="font-display text-3xl uppercase tracking-[0.02em] text-foreground no-underline md:text-4xl">
                   Private Control
                 </Link>
               </div>
@@ -65,10 +66,10 @@ export function AppShell({ session, children }: AppShellProps) {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className="border border-steel bg-transparent px-3 py-2 text-xs font-black uppercase tracking-[0.32em] text-white/60 no-underline transition hover:border-neon-magenta hover:text-white"
+                  className="border border-border bg-transparent px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground no-underline transition duration-200 hover:border-foreground hover:text-foreground"
                   activeProps={{
                     className:
-                      "border border-neon-magenta bg-neon-magenta px-3 py-2 text-xs font-black uppercase tracking-[0.32em] text-abyss no-underline",
+                      "border border-primary bg-primary px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-primary-foreground no-underline",
                   }}
                 >
                   {item.label}
@@ -77,13 +78,15 @@ export function AppShell({ session, children }: AppShellProps) {
             </nav>
 
             <div className="lg:ml-auto flex flex-col gap-3 px-4 pb-4 sm:flex-row sm:items-center sm:gap-4 md:px-6 md:pb-5 lg:px-6 lg:pb-0">
-              <div className="flex items-center gap-3 border border-steel bg-[#171717] px-3 py-2">
-                <div className="flex h-10 w-10 items-center justify-center border border-steel bg-abyss text-sm font-black uppercase text-neon-cyan">
+              <ThemeSwitcher />
+
+              <div className="flex items-center gap-3 border border-border bg-muted/40 px-3 py-2">
+                <div className="flex h-10 w-10 items-center justify-center border border-border bg-background text-sm font-semibold uppercase text-foreground">
                   {(session.user.name || session.user.email).slice(0, 1)}
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-white">{session.user.name}</p>
-                  <p className="font-mono text-[0.7rem] uppercase tracking-[0.28em] text-white/45">
+                  <p className="text-sm font-semibold text-foreground">{session.user.name}</p>
+                  <p className="font-mono text-[0.66rem] uppercase tracking-[0.11em] text-muted-foreground">
                     {session.user.email}
                   </p>
                 </div>
@@ -93,7 +96,7 @@ export function AppShell({ session, children }: AppShellProps) {
                 type="button"
                 variant="outline"
                 className={cn(
-                  "h-11 rounded-none border-steel bg-transparent px-4 text-xs font-black uppercase tracking-[0.32em] text-white/72 hover:border-neon-magenta hover:bg-neon-magenta hover:text-abyss",
+                  "h-11 border-border bg-transparent px-4 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground",
                   isSigningOut && "opacity-70",
                 )}
                 disabled={isSigningOut}

@@ -54,9 +54,9 @@ function RegisterPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.38em] text-white/50">Register</p>
-          <h2 className="text-3xl font-black uppercase tracking-[-0.05em] text-white text-balance">New Operator</h2>
-          <p className="text-sm leading-7 text-white/62">Use the details for the primary account.</p>
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Register</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">New Operator</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Use the details for the primary account.</p>
         </div>
 
         <form
@@ -71,11 +71,11 @@ function RegisterPage() {
             {(field) => (
               <field.TextField
                 autoComplete="name"
-                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                errorClassName="text-[0.72rem] leading-6 text-destructive"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                inputClassName="h-12 px-4"
                 label="Name"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                 placeholder="Full name..."
                 required
               />
@@ -86,11 +86,11 @@ function RegisterPage() {
             {(field) => (
               <field.TextField
                 autoComplete="email"
-                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                errorClassName="text-[0.72rem] leading-6 text-destructive"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                inputClassName="h-12 px-4"
                 label="Email"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                 placeholder="operator@company.com..."
                 required
                 spellCheck={false}
@@ -104,11 +104,11 @@ function RegisterPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="Password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="Create a password..."
                   required
                 />
@@ -119,11 +119,11 @@ function RegisterPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  errorClassName="text-[0.72rem] leading-6 text-destructive"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  inputClassName="h-12 px-4"
                   label="Confirm"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
                   placeholder="Repeat the password..."
                   required
                 />
@@ -132,7 +132,7 @@ function RegisterPage() {
           </div>
 
           {errorMessage !== null ? (
-            <div className="border border-neon-magenta/30 bg-neon-magenta/10 px-4 py-3 text-sm text-white">
+            <div className="border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {errorMessage}
             </div>
           ) : null}
@@ -140,7 +140,7 @@ function RegisterPage() {
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
               <Button
-                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                className="h-12 w-full"
                 disabled={isSubmitting}
                 type="submit"
               >
@@ -150,9 +150,9 @@ function RegisterPage() {
           </form.Subscribe>
         </form>
 
-        <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Already registered?</p>
-          <a href="/login" className="font-semibold uppercase tracking-[0.22em] text-white no-underline hover:text-neon-magenta">
+          <a href="/login" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
             Sign In
           </a>
         </div>
