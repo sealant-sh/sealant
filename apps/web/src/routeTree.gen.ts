@@ -9,139 +9,298 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as AboutRouteImport } from './routes/about'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as RegistryIndexRouteImport } from './routes/registry/index'
-import { Route as RegistryRegistryIdIndexRouteImport } from './routes/registry/$registryId/index'
-import { Route as RegistryRegistryIdRepoTagRouteImport } from './routes/registry/$registryId/$repo/$tag'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as AuthRouteImport } from './routes/_auth'
+import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedAboutRouteImport } from './routes/_authenticated/about'
+import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
+import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
+import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
+import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
+import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
 
-const AboutRoute = AboutRouteImport.update({
-  id: '/about',
-  path: '/about',
+const AuthenticatedRoute = AuthenticatedRouteImport.update({
+  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
+const AuthRoute = AuthRouteImport.update({
+  id: '/_auth',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedAboutRoute = AuthenticatedAboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthRegisterRoute = AuthRegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthLoginRoute = AuthLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthenticatedRegistryIndexRoute =
+  AuthenticatedRegistryIndexRouteImport.update({
+    id: '/registry/',
+    path: '/registry/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RegistryIndexRoute = RegistryIndexRouteImport.update({
-  id: '/registry/',
-  path: '/registry/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RegistryRegistryIdIndexRoute = RegistryRegistryIdIndexRouteImport.update({
-  id: '/registry/$registryId/',
-  path: '/registry/$registryId/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RegistryRegistryIdRepoTagRoute =
-  RegistryRegistryIdRepoTagRouteImport.update({
+const AuthenticatedRegistryRegistryIdIndexRoute =
+  AuthenticatedRegistryRegistryIdIndexRouteImport.update({
+    id: '/registry/$registryId/',
+    path: '/registry/$registryId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRegistryRegistryIdRepoTagRoute =
+  AuthenticatedRegistryRegistryIdRepoTagRouteImport.update({
     id: '/registry/$registryId/$repo/$tag',
     path: '/registry/$registryId/$repo/$tag',
-    getParentRoute: () => rootRouteImport,
+    getParentRoute: () => AuthenticatedRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/registry/': typeof RegistryIndexRoute
-  '/registry/$registryId/': typeof RegistryRegistryIdIndexRoute
-  '/registry/$registryId/$repo/$tag': typeof RegistryRegistryIdRepoTagRoute
+  '/': typeof AuthenticatedIndexRoute
+  '/forgot-password': typeof AuthForgotPasswordRoute
+  '/login': typeof AuthLoginRoute
+  '/register': typeof AuthRegisterRoute
+  '/reset-password': typeof AuthResetPasswordRoute
+  '/about': typeof AuthenticatedAboutRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/registry/': typeof AuthenticatedRegistryIndexRoute
+  '/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/registry': typeof RegistryIndexRoute
-  '/registry/$registryId': typeof RegistryRegistryIdIndexRoute
-  '/registry/$registryId/$repo/$tag': typeof RegistryRegistryIdRepoTagRoute
+  '/': typeof AuthenticatedIndexRoute
+  '/forgot-password': typeof AuthForgotPasswordRoute
+  '/login': typeof AuthLoginRoute
+  '/register': typeof AuthRegisterRoute
+  '/reset-password': typeof AuthResetPasswordRoute
+  '/about': typeof AuthenticatedAboutRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/registry': typeof AuthenticatedRegistryIndexRoute
+  '/registry/$registryId': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/about': typeof AboutRoute
-  '/registry/': typeof RegistryIndexRoute
-  '/registry/$registryId/': typeof RegistryRegistryIdIndexRoute
-  '/registry/$registryId/$repo/$tag': typeof RegistryRegistryIdRepoTagRoute
+  '/_auth': typeof AuthRouteWithChildren
+  '/_authenticated': typeof AuthenticatedRouteWithChildren
+  '/_auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/_auth/login': typeof AuthLoginRoute
+  '/_auth/register': typeof AuthRegisterRoute
+  '/_auth/reset-password': typeof AuthResetPasswordRoute
+  '/_authenticated/about': typeof AuthenticatedAboutRoute
+  '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
+  '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
+  '/_authenticated/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/_authenticated/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/forgot-password'
+    | '/login'
+    | '/register'
+    | '/reset-password'
     | '/about'
+    | '/api/auth/$'
     | '/registry/'
     | '/registry/$registryId/'
     | '/registry/$registryId/$repo/$tag'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/forgot-password'
+    | '/login'
+    | '/register'
+    | '/reset-password'
     | '/about'
+    | '/api/auth/$'
     | '/registry'
     | '/registry/$registryId'
     | '/registry/$registryId/$repo/$tag'
   id:
     | '__root__'
-    | '/'
-    | '/about'
-    | '/registry/'
-    | '/registry/$registryId/'
-    | '/registry/$registryId/$repo/$tag'
+    | '/_auth'
+    | '/_authenticated'
+    | '/_auth/forgot-password'
+    | '/_auth/login'
+    | '/_auth/register'
+    | '/_auth/reset-password'
+    | '/_authenticated/about'
+    | '/_authenticated/'
+    | '/api/auth/$'
+    | '/_authenticated/registry/'
+    | '/_authenticated/registry/$registryId/'
+    | '/_authenticated/registry/$registryId/$repo/$tag'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  AboutRoute: typeof AboutRoute
-  RegistryIndexRoute: typeof RegistryIndexRoute
-  RegistryRegistryIdIndexRoute: typeof RegistryRegistryIdIndexRoute
-  RegistryRegistryIdRepoTagRoute: typeof RegistryRegistryIdRepoTagRoute
+  AuthRoute: typeof AuthRouteWithChildren
+  AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/about': {
-      id: '/about'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof AboutRouteImport
+    '/_authenticated': {
+      id: '/_authenticated'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
+    '/_auth': {
+      id: '/_auth'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/': {
+      id: '/_authenticated/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthenticatedIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
-    '/registry/': {
-      id: '/registry/'
+    '/_authenticated/about': {
+      id: '/_authenticated/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AuthenticatedAboutRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_auth/reset-password': {
+      id: '/_auth/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/register': {
+      id: '/_auth/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof AuthRegisterRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/login': {
+      id: '/_auth/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof AuthLoginRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/forgot-password': {
+      id: '/_auth/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof AuthForgotPasswordRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_authenticated/registry/': {
+      id: '/_authenticated/registry/'
       path: '/registry'
       fullPath: '/registry/'
-      preLoaderRoute: typeof RegistryIndexRouteImport
+      preLoaderRoute: typeof AuthenticatedRegistryIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/registry/$registryId/': {
-      id: '/registry/$registryId/'
+    '/_authenticated/registry/$registryId/': {
+      id: '/_authenticated/registry/$registryId/'
       path: '/registry/$registryId'
       fullPath: '/registry/$registryId/'
-      preLoaderRoute: typeof RegistryRegistryIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthenticatedRegistryRegistryIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
-    '/registry/$registryId/$repo/$tag': {
-      id: '/registry/$registryId/$repo/$tag'
+    '/_authenticated/registry/$registryId/$repo/$tag': {
+      id: '/_authenticated/registry/$registryId/$repo/$tag'
       path: '/registry/$registryId/$repo/$tag'
       fullPath: '/registry/$registryId/$repo/$tag'
-      preLoaderRoute: typeof RegistryRegistryIdRepoTagRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
   }
 }
 
+interface AuthRouteChildren {
+  AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
+  AuthLoginRoute: typeof AuthLoginRoute
+  AuthRegisterRoute: typeof AuthRegisterRoute
+  AuthResetPasswordRoute: typeof AuthResetPasswordRoute
+}
+
+const AuthRouteChildren: AuthRouteChildren = {
+  AuthForgotPasswordRoute: AuthForgotPasswordRoute,
+  AuthLoginRoute: AuthLoginRoute,
+  AuthRegisterRoute: AuthRegisterRoute,
+  AuthResetPasswordRoute: AuthResetPasswordRoute,
+}
+
+const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
+
+interface AuthenticatedRouteChildren {
+  AuthenticatedAboutRoute: typeof AuthenticatedAboutRoute
+  AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
+  AuthenticatedRegistryRegistryIdIndexRoute: typeof AuthenticatedRegistryRegistryIdIndexRoute
+  AuthenticatedRegistryRegistryIdRepoTagRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRoute
+}
+
+const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedAboutRoute: AuthenticatedAboutRoute,
+  AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
+  AuthenticatedRegistryRegistryIdIndexRoute:
+    AuthenticatedRegistryRegistryIdIndexRoute,
+  AuthenticatedRegistryRegistryIdRepoTagRoute:
+    AuthenticatedRegistryRegistryIdRepoTagRoute,
+}
+
+const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
+  AuthenticatedRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  AboutRoute: AboutRoute,
-  RegistryIndexRoute: RegistryIndexRoute,
-  RegistryRegistryIdIndexRoute: RegistryRegistryIdIndexRoute,
-  RegistryRegistryIdRepoTagRoute: RegistryRegistryIdRepoTagRoute,
+  AuthRoute: AuthRouteWithChildren,
+  AuthenticatedRoute: AuthenticatedRouteWithChildren,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

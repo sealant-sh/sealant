@@ -21,7 +21,20 @@ export const authEnvSchema = z.object({
 export type AuthEnv = z.infer<typeof authEnvSchema>;
 
 export const parseAuthEnv = (input: Record<string, string | undefined>): AuthEnv => {
-  return authEnvSchema.parse(input);
+  const env = authEnvSchema.parse(input);
+
+  if (env.BETTER_AUTH_URL !== undefined) {
+    return env;
+  }
+
+  if (env.NODE_ENV === "production") {
+    return env;
+  }
+
+  return {
+    ...env,
+    BETTER_AUTH_URL: input.PORT === undefined ? "http://localhost:3000" : `http://localhost:${input.PORT}`,
+  };
 };
 
 const runtimeProcess = globalThis as typeof globalThis & {

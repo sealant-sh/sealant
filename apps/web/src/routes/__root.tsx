@@ -1,12 +1,16 @@
-import { TopAppBar } from "@sealant/ui";
-import { BottomNavBar } from "@sealant/ui";
+import type { ReactNode } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { TanStackDevtools } from "@tanstack/react-devtools";
-import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Outlet, Scripts, createRootRouteWithContext } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 
 import appCss from "../styles.css?url";
 
-export const Route = createRootRoute({
+interface RouterContext {
+  readonly queryClient: QueryClient;
+}
+
+export const Route = createRootRouteWithContext<RouterContext>()({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -15,19 +19,25 @@ export const Route = createRootRoute({
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
-  shellComponent: RootDocument,
+  component: RootComponent,
 });
 
-function RootDocument({ children }: { children: React.ReactNode }) {
+function RootComponent() {
+  return (
+    <RootDocument>
+      <Outlet />
+    </RootDocument>
+  );
+}
+
+function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
         <HeadContent />
       </head>
-      <body className="bg-background text-foreground font-sans antialiased [overflow-wrap:anywhere]">
-        <TopAppBar />
-        <BottomNavBar />
-        <main className="pt-20 pb-16 min-h-svh">{children}</main>
+      <body className="min-h-svh bg-slate-950 text-slate-50 font-sans antialiased [overflow-wrap:anywhere]">
+        {children}
         <TanStackDevtools
           config={{ position: "bottom-right" }}
           plugins={[{ name: "Tanstack Router", render: <TanStackRouterDevtoolsPanel /> }]}
