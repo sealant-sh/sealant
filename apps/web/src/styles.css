@@ -16,6 +16,76 @@
   --font-display: "Bebas Neue", "Oswald", "Impact", sans-serif;
 }
 
+:root {
+  --sw-bg: #fbfbfa;
+  --sw-panel: #ffffff;
+  --sw-ink: #111111;
+  --sw-muted: #767676;
+  --sw-rule: #141414;
+  --sw-soft-rule: #e4e4e4;
+  --sw-accent: #d92f24;
+  --secondary: #f1f1f0;
+  --secondary-foreground: var(--sw-ink);
+  --muted: #f3f3f2;
+  --muted-foreground: var(--sw-muted);
+  --accent: #f3f3f2;
+  --accent-foreground: var(--sw-ink);
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --border: var(--sw-soft-rule);
+  --input: var(--sw-soft-rule);
+  --ring: var(--sw-rule);
+  --chart-1: var(--sw-accent);
+  --chart-2: #222222;
+  --chart-3: #555555;
+  --chart-4: #848484;
+  --chart-5: #b0b0b0;
+  --sidebar: var(--sw-panel);
+  --sidebar-foreground: var(--sw-ink);
+  --sidebar-primary: var(--sw-accent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f3f3f2;
+  --sidebar-accent-foreground: var(--sw-ink);
+  --sidebar-border: var(--sw-soft-rule);
+  --sidebar-ring: var(--sw-rule);
+  color-scheme: light;
+}
+
+.dark {
+  --sw-bg: #121211;
+  --sw-panel: #191917;
+  --sw-ink: #f1f1ef;
+  --sw-muted: #afaea9;
+  --sw-rule: #f1f1ee;
+  --sw-soft-rule: #383835;
+  --sw-accent: #d92f24;
+  --secondary: #222220;
+  --secondary-foreground: var(--sw-ink);
+  --muted: #20201e;
+  --muted-foreground: var(--sw-muted);
+  --accent: #232321;
+  --accent-foreground: var(--sw-ink);
+  --destructive: #dc4f43;
+  --destructive-foreground: #ffffff;
+  --border: var(--sw-soft-rule);
+  --input: var(--sw-soft-rule);
+  --ring: #e5e5e1;
+  --chart-1: var(--sw-accent);
+  --chart-2: #f1f1ee;
+  --chart-3: #d0d0ca;
+  --chart-4: #a9a9a2;
+  --chart-5: #7d7d77;
+  --sidebar: #161615;
+  --sidebar-foreground: var(--sw-ink);
+  --sidebar-primary: var(--sw-accent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #21211f;
+  --sidebar-accent-foreground: var(--sw-ink);
+  --sidebar-border: var(--sw-soft-rule);
+  --sidebar-ring: #e5e5e1;
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -28,5 +98,5 @@ body {
   min-height: 100svh;
   background:
     linear-gradient(90deg, color-mix(in oklab, var(--sw-rule) 6%, transparent) 1px, transparent 1px) 0 0 / calc(100% / 12) 100%,
-    linear-gradient(180deg, #ffffff 0%, var(--sw-bg) 100%);
+    linear-gradient(180deg, color-mix(in oklab, var(--sw-panel) 70%, var(--sw-bg)) 0%, var(--sw-bg) 100%);
 }

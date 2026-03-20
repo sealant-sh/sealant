@@ -8,6 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, ShieldCheck } from "lucide-react";
 
 import { authClient } from "@/lib/auth/auth-client";
+import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 
 interface AppShellProps {
   readonly session: AuthSession;
@@ -77,6 +78,8 @@ export function AppShell({ session, children }: AppShellProps) {
             </nav>
 
             <div className="lg:ml-auto flex flex-col gap-3 px-4 pb-4 sm:flex-row sm:items-center sm:gap-4 md:px-6 md:pb-5 lg:px-6 lg:pb-0">
+              <ThemeSwitcher />
+
               <div className="flex items-center gap-3 border border-border bg-muted/40 px-3 py-2">
                 <div className="flex h-10 w-10 items-center justify-center border border-border bg-background text-sm font-semibold uppercase text-foreground">
                   {(session.user.name || session.user.email).slice(0, 1)}

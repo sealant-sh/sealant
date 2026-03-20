@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 
 import { cn } from "@sealant/ui";
 
+import { ThemeSwitcher } from "@/components/theme/theme-switcher";
+
 interface AuthShellProps {
   readonly badge: string;
   readonly title: string;
@@ -48,10 +50,17 @@ export function AuthShell({
             <p className="font-mono text-[0.65rem] uppercase tracking-[0.24em] text-muted-foreground">Sealant</p>
             <p className="mt-2 text-sm font-semibold uppercase tracking-[0.12em] text-foreground">Operator Access</p>
           </div>
-          <span className={cn("inline-flex items-center border px-3 py-1 font-mono text-[0.65rem] uppercase tracking-[0.34em]", styles.badge)}>
-            {badge}
-          </span>
+          <div className="flex items-center gap-3">
+            <ThemeSwitcher className="hidden sm:inline-flex" />
+            <span className={cn("inline-flex items-center border px-3 py-1 font-mono text-[0.65rem] uppercase tracking-[0.34em]", styles.badge)}>
+              {badge}
+            </span>
+          </div>
         </header>
+
+        <div className="pt-4 sm:hidden">
+          <ThemeSwitcher />
+        </div>
 
         <div className="flex flex-1 items-center py-12 lg:grid lg:grid-cols-12 lg:gap-8 lg:py-0">
           <section className="lg:col-span-7 xl:col-span-8">
