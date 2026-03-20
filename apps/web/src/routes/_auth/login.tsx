@@ -45,22 +45,19 @@ function LoginPage() {
 
   return (
     <AuthShell
-      badge="Private"
-      title="Sign in to Sealant."
-      description="Access the private control plane for registries, builds, and environment management."
-      asideTitle="Session"
-      asideCopy="Email & password. Verified on the server before protected routes render."
+      title="Sign in to your account."
+      description="Use your email and password to continue."
     >
       <div className="space-y-8">
         <div className="space-y-3">
           <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Sign In</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Operator Login</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Use the account for this deployment.</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Welcome Back</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Sign in with your account details.</p>
         </div>
 
         <div className="space-y-5">
           <div className="flex items-center justify-between gap-4">
-            <span className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground">Password Access</span>
+            <span className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground">Password</span>
             <a href="/forgot-password" className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground no-underline hover:text-foreground">
               Reset Password
             </a>
@@ -83,7 +80,7 @@ function LoginPage() {
                   inputClassName="h-12 px-4"
                   label="Email"
                   labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
-                  placeholder="operator@company.com..."
+                  placeholder="you@company.com"
                   required
                   spellCheck={false}
                   type="email"

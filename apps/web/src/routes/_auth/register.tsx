@@ -46,17 +46,14 @@ function RegisterPage() {
 
   return (
     <AuthShell
-      badge="Public"
-      title="Create the first account."
-      description="Register an operator account for this deployment."
-      asideTitle="Access"
-      asideCopy="The account signs in immediately after registration."
+      title="Create your account."
+      description="Set up your account to get started."
     >
       <div className="space-y-8">
         <div className="space-y-3">
           <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Register</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">New Operator</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Use the details for the primary account.</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Create Account</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Use your details to create an account.</p>
         </div>
 
         <form
@@ -91,7 +88,7 @@ function RegisterPage() {
                 inputClassName="h-12 px-4"
                 label="Email"
                 labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
-                placeholder="operator@company.com..."
+                placeholder="you@company.com"
                 required
                 spellCheck={false}
                 type="email"
