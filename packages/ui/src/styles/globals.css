@@ -1,0 +1,188 @@
+/*
+ * packages/ui/src/styles/globals.css
+ *
+ * Resolved in the context of packages/ui — imports resolved from packages/ui/node_modules.
+ * DO NOT add `@import "tailwindcss"` here — tailwindcss is in apps/web, not here.
+ * Consumer app (apps/web) must import tailwindcss BEFORE this file.
+ */
+
+/* Animation utilities and shadcn base styles (available in packages/ui/node_modules) */
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* Dark mode: class-based (.dark parent) */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Core semantic colors */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Chart colors */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Sidebar */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Swiss-Tech Neon brand tokens — available as bg-neon-magenta, text-neon-cyan, etc. */
+  --color-neon-magenta: #fa68ff;
+  --color-neon-cyan: #00effa;
+  --color-abyss: #0e0e0e;
+  --color-steel: #353534;
+
+  /* Radius — all 0 for hard Swiss-grid edges */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+
+  /* Typography — overridden by consumer app (apps/web sets Plus Jakarta Sans + JetBrains Mono) */
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+}
+
+/*
+  Swiss-Tech Neon — single dark theme.
+  The design is dark-only: deep abyss blacks, electric magenta (#fa68ff), cyan pulse (#00effa).
+  No light mode variant — :root is the dark palette.
+*/
+:root {
+  /* 0px radius: hard Swiss-grid edges everywhere */
+  --radius: 0px;
+
+  /* Backgrounds */
+  --background: oklch(0.09 0 0);        /* #0e0e0e — Abyss */
+  --foreground: oklch(1 0 0);           /* #ffffff */
+
+  /* Card / surface */
+  --card: oklch(0.11 0 0);              /* #131313 — slightly lighter than abyss */
+  --card-foreground: oklch(1 0 0);
+
+  /* Popover */
+  --popover: oklch(0.13 0 0);
+  --popover-foreground: oklch(1 0 0);
+
+  /* Primary — Electric Magenta #fa68ff */
+  --primary: oklch(0.73 0.23 320);
+  --primary-foreground: oklch(0.09 0 0);
+
+  /* Secondary — Cyan Pulse #00effa */
+  --secondary: oklch(0.88 0.14 195);
+  --secondary-foreground: oklch(0.09 0 0);
+
+  /* Muted — Steel #353534 */
+  --muted: oklch(0.27 0 0);
+  --muted-foreground: oklch(1 0 0 / 60%);
+
+  /* Accent */
+  --accent: oklch(0.27 0 0);
+  --accent-foreground: oklch(1 0 0);
+
+  /* Destructive — bright magenta-red */
+  --destructive: oklch(0.65 0.28 15);
+  --destructive-foreground: oklch(1 0 0);
+
+  /* Borders / inputs — Steel */
+  --border: oklch(0.27 0 0);            /* #353534 */
+  --input: oklch(0.27 0 0);
+
+  /* Focus ring — magenta */
+  --ring: oklch(0.73 0.23 320);
+
+  /* Charts — neon palette */
+  --chart-1: oklch(0.73 0.23 320);     /* magenta */
+  --chart-2: oklch(0.88 0.14 195);     /* cyan */
+  --chart-3: oklch(0.75 0.18 270);     /* violet */
+  --chart-4: oklch(0.82 0.19 85);      /* amber */
+  --chart-5: oklch(0.68 0.22 145);     /* green */
+
+  /* Sidebar */
+  --sidebar: oklch(0.11 0 0);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-primary: oklch(0.73 0.23 320);
+  --sidebar-primary-foreground: oklch(0.09 0 0);
+  --sidebar-accent: oklch(0.27 0 0);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.27 0 0);
+  --sidebar-ring: oklch(0.73 0.23 320);
+}
+
+/* .dark mirrors :root — the app is always dark, but preserve the class for conditional utilities */
+.dark {
+  --background: oklch(0.09 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0.11 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0.13 0 0);
+  --popover-foreground: oklch(1 0 0);
+  --primary: oklch(0.73 0.23 320);
+  --primary-foreground: oklch(0.09 0 0);
+  --secondary: oklch(0.88 0.14 195);
+  --secondary-foreground: oklch(0.09 0 0);
+  --muted: oklch(0.27 0 0);
+  --muted-foreground: oklch(1 0 0 / 60%);
+  --accent: oklch(0.27 0 0);
+  --accent-foreground: oklch(1 0 0);
+  --destructive: oklch(0.65 0.28 15);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.27 0 0);
+  --input: oklch(0.27 0 0);
+  --ring: oklch(0.73 0.23 320);
+  --chart-1: oklch(0.73 0.23 320);
+  --chart-2: oklch(0.88 0.14 195);
+  --chart-3: oklch(0.75 0.18 270);
+  --chart-4: oklch(0.82 0.19 85);
+  --chart-5: oklch(0.68 0.22 145);
+  --sidebar: oklch(0.11 0 0);
+  --sidebar-foreground: oklch(1 0 0);
+  --sidebar-primary: oklch(0.73 0.23 320);
+  --sidebar-primary-foreground: oklch(0.09 0 0);
+  --sidebar-accent: oklch(0.27 0 0);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.27 0 0);
+  --sidebar-ring: oklch(0.73 0.23 320);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  /* Enforce pointer cursor on interactive elements (Tailwind v4 regression) */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}

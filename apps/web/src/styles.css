@@ -1,0 +1,35 @@
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/inter/800.css";
+@import "@fontsource/inter/900.css";
+
+@import "@fontsource/space-grotesk/400.css";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/700.css";
+
+/* Tailwind v4 base — must come BEFORE @sealant/ui which imports tw-animate-css/shadcn */
+@import "tailwindcss";
+
+/* Swiss-Tech Neon design tokens + tw-animate-css + shadcn base styles */
+@import "@sealant/ui/styles/globals.css";
+
+/* Font family tokens */
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Grotesk", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: #0e0e0e;
+}
+
+body {
+  min-height: 100svh;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / calc(100% / 12) 100%,
+    linear-gradient(180deg, #131313 0%, #0e0e0e 100%);
+}
