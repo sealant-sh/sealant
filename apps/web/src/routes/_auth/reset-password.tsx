@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 
-import { Button, Input, Label } from "@sealant/ui";
+import { Button, useAppForm } from "@sealant/ui";
+import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AuthShell } from "@/components/auth/auth-shell";
+import { resetPasswordFormDefaults, resetPasswordFormSchema } from "@/features/auth/forms/reset-password-form";
 
 export const Route = createFileRoute("/_auth/reset-password")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -14,22 +16,19 @@ export const Route = createFileRoute("/_auth/reset-password")({
 
 function ResetPasswordPage() {
   const search = Route.useSearch();
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (password !== confirmPassword) {
-      setNotice("The new password and confirmation must match.");
-      return;
-    }
-
-    setNotice(
-      "Password reset completion is not active yet. Keep this route in place so future email links have a stable destination.",
-    );
-  };
+  const form = useAppForm({
+    defaultValues: resetPasswordFormDefaults,
+    validationLogic: revalidateLogic(),
+    onSubmit: () => {
+      setNotice(
+        "Password reset completion is not active yet. Keep this route in place so future email links have a stable destination.",
+      );
+    },
+    validators: {
+      onDynamic: resetPasswordFormSchema,
+    },
+  });
 
   return (
     <AuthShell
@@ -51,39 +50,44 @@ function ResetPasswordPage() {
           </p>
         </div>
 
-        <form className="space-y-5" onSubmit={handleSubmit}>
-          <div className="space-y-2">
-            <Label htmlFor="new-password" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-              New password
-            </Label>
-            <Input
-              id="new-password"
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-              placeholder="Create a password…"
-            />
-          </div>
+        <form
+          className="space-y-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void form.handleSubmit();
+          }}
+        >
+          <div className="grid gap-5 sm:grid-cols-2">
+            <form.AppField name="password">
+              {(field) => (
+                <field.PasswordField
+                  autoComplete="new-password"
+                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  fieldClassName="space-y-2"
+                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  label="New password"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  placeholder="Create a password..."
+                  required
+                />
+              )}
+            </form.AppField>
 
-          <div className="space-y-2">
-            <Label htmlFor="confirm-new-password" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-              Confirm password
-            </Label>
-            <Input
-              id="confirm-new-password"
-              name="confirmPassword"
-              type="password"
-              autoComplete="new-password"
-              required
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-              placeholder="Repeat the password…"
-            />
+            <form.AppField name="confirmPassword">
+              {(field) => (
+                <field.PasswordField
+                  autoComplete="new-password"
+                  errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                  fieldClassName="space-y-2"
+                  inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                  label="Confirm password"
+                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                  placeholder="Repeat the password..."
+                  required
+                />
+              )}
+            </form.AppField>
           </div>
 
           <div className="border border-steel bg-[#161616] px-4 py-3 text-sm text-white/62">
@@ -91,12 +95,22 @@ function ResetPasswordPage() {
           </div>
 
           {notice !== null ? (
-            <div aria-live="polite" className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">{notice}</div>
+            <div className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">
+              {notice}
+            </div>
           ) : null}
 
-          <Button type="submit" className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]">
-            Set Password
-          </Button>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <Button
+                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                disabled={isSubmitting}
+                type="submit"
+              >
+                {isSubmitting ? "Setting Password..." : "Set Password"}
+              </Button>
+            )}
+          </form.Subscribe>
         </form>
 
         <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">

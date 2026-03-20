@@ -1,3 +1,8 @@
 {
-  "typescript.tsdk": "node_modules/typescript/lib"
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "tailwindCSS.experimental.configFile": {
+    "apps/docs/src/styles.css": "apps/docs/src/**",
+    "apps/web/src/styles.css": "apps/web/src/**",
+    "packages/ui/src/styles/tailwind-intellisense.css": "packages/ui/src/**"
+  }
 }

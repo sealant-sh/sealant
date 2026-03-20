@@ -1,24 +1,33 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 
-import { Button, Input, Label } from "@sealant/ui";
+import { Button, useAppForm } from "@sealant/ui";
+import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { AuthShell } from "@/components/auth/auth-shell";
+import { forgotPasswordFormDefaults, forgotPasswordFormSchema } from "@/features/auth/forms/forgot-password-form";
+import { normalizeRequiredString } from "@/lib/forms/zod";
 
 export const Route = createFileRoute("/_auth/forgot-password")({
   component: ForgotPasswordPage,
 });
 
 function ForgotPasswordPage() {
-  const [email, setEmail] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const form = useAppForm({
+    defaultValues: forgotPasswordFormDefaults,
+    validationLogic: revalidateLogic(),
+    onSubmit: ({ value }) => {
+      const email = normalizeRequiredString(value.email);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setNotice(
-      `Reset email delivery is not configured yet for this deployment. Capture the request for ${email || "this account"} and wire outbound email before enabling the flow.`,
-    );
-  };
+      setNotice(
+        `Reset email delivery is not configured yet for this deployment. Capture the request for ${email || "this account"} and wire outbound email before enabling the flow.`,
+      );
+    },
+    validators: {
+      onDynamic: forgotPasswordFormSchema,
+    },
+  });
 
   return (
     <AuthShell
@@ -35,36 +44,52 @@ function ForgotPasswordPage() {
           <p className="text-sm leading-7 text-white/62">Enter the account email.</p>
         </div>
 
-        <form className="space-y-5" onSubmit={handleSubmit}>
-          <div className="space-y-2">
-            <Label htmlFor="forgot-email" className="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55">
-              Email
-            </Label>
-            <Input
-              id="forgot-email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              spellCheck={false}
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
-              placeholder="operator@company.com…"
-            />
-          </div>
+        <form
+          className="space-y-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void form.handleSubmit();
+          }}
+        >
+          <form.AppField name="email">
+            {(field) => (
+              <field.TextField
+                autoComplete="email"
+                errorClassName="text-[0.72rem] leading-6 text-neon-magenta"
+                fieldClassName="space-y-2"
+                inputClassName="h-12 rounded-none border-steel bg-[#161616] px-4 text-white placeholder:text-white/30"
+                label="Email"
+                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.28em] text-white/55"
+                placeholder="operator@company.com..."
+                required
+                spellCheck={false}
+                type="email"
+              />
+            )}
+          </form.AppField>
 
           {notice !== null ? (
-            <div aria-live="polite" className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">{notice}</div>
+            <div className="border border-neon-cyan/20 bg-neon-cyan/8 px-4 py-3 text-sm text-white/86">
+              {notice}
+            </div>
           ) : (
             <div className="border border-steel bg-[#161616] px-4 py-3 text-sm text-white/62">
               Email delivery is disabled.
             </div>
           )}
 
-          <Button type="submit" className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]">
-            Request Reset
-          </Button>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <Button
+                className="h-12 w-full rounded-none bg-neon-magenta px-4 text-[0.72rem] font-black uppercase tracking-[0.32em] text-abyss hover:bg-[#ff88ff]"
+                disabled={isSubmitting}
+                type="submit"
+              >
+                {isSubmitting ? "Requesting..." : "Request Reset"}
+              </Button>
+            )}
+          </form.Subscribe>
         </form>
 
         <div className="flex flex-col gap-3 border-t border-steel pt-6 text-sm text-white/62 sm:flex-row sm:items-center sm:justify-between">
