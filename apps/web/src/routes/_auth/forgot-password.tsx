@@ -21,7 +21,7 @@ function ForgotPasswordPage() {
       const email = normalizeRequiredString(value.email);
 
       setNotice(
-        `Reset email delivery is not configured yet for this deployment. Capture the request for ${email || "this account"} and wire outbound email before enabling the flow.`,
+        `Password reset email is not available yet for this deployment. Please contact support and include ${email || "your account email"}.`,
       );
     },
     validators: {
@@ -31,17 +31,14 @@ function ForgotPasswordPage() {
 
   return (
     <AuthShell
-      badge="Public"
-      title="Request a password reset."
-      description="The route is in place. Email delivery is not enabled yet."
-      asideTitle="Status"
-      asideCopy="Requests stop here until outbound email is configured."
+      title="Forgot your password?"
+      description="Enter your account email to request a reset."
     >
       <div className="space-y-8">
         <div className="space-y-3">
           <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Forgot Password</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">Reset Request</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Enter the account email.</p>
+          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">Reset Your Password</h2>
+          <p className="text-sm leading-7 text-muted-foreground">Enter the email for your account.</p>
         </div>
 
         <form
@@ -61,7 +58,7 @@ function ForgotPasswordPage() {
                 inputClassName="h-12 px-4"
                 label="Email"
                 labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
-                placeholder="operator@company.com..."
+                placeholder="you@company.com"
                 required
                 spellCheck={false}
                 type="email"
@@ -75,7 +72,7 @@ function ForgotPasswordPage() {
             </div>
           ) : (
             <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-              Email delivery is disabled.
+              Password reset email is not available yet.
             </div>
           )}
 

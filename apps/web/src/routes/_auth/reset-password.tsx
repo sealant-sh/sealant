@@ -22,7 +22,7 @@ function ResetPasswordPage() {
     validationLogic: revalidateLogic(),
     onSubmit: () => {
       setNotice(
-        "Password reset completion is not active yet. Keep this route in place so future email links have a stable destination.",
+        "Password reset is not available yet for this deployment. Please try again later.",
       );
     },
     validators: {
@@ -32,11 +32,8 @@ function ResetPasswordPage() {
 
   return (
     <AuthShell
-      badge="Public"
       title="Set a new password."
-      description="This route is ready for the future email handoff."
-      asideTitle="Status"
-      asideCopy="Token verification and email delivery are not active yet."
+      description="Create a new password for your account."
       accent="cyan"
     >
       <div className="space-y-8">
@@ -45,8 +42,8 @@ function ResetPasswordPage() {
           <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">New Password</h2>
           <p className="text-sm leading-7 text-muted-foreground">
             {search.token !== undefined
-              ? `Recovery token detected: ${search.token.slice(0, 8)}…`
-              : "This route will accept a recovery token once the email flow is live."}
+              ? `A reset token was detected: ${search.token.slice(0, 8)}…`
+              : "Use the reset link from your email to continue."}
           </p>
         </div>
 
@@ -91,7 +88,7 @@ function ResetPasswordPage() {
           </div>
 
           <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-            Token verification is not enabled yet.
+            Reset token verification is not available yet.
           </div>
 
           {notice !== null ? (
