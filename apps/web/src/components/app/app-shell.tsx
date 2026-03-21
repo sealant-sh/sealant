@@ -146,13 +146,6 @@ export function AppShell({ session, children }: AppShellProps) {
               {isSidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
             </button>
 
-            <Link to={"/runs" as never} className="mb-[2px] pr-2">
-              <div className="flex items-center gap-3">
-                <LogoBlob className="size-8" />
-                <LogoText className="hidden h-8 transition lg:block" />
-              </div>
-            </Link>
-
             <div className="hidden border-l border-border pl-4 lg:block">
               <p className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
                 {capitalizeFirstLetter(activeArea)} workspace
@@ -269,14 +262,13 @@ function SidebarContent({
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="border-b border-border px-2 py-3">
-          <div className="flex justify-center">
-            <p
-              className="font-display text-2xl leading-none tracking-[0.02em] text-foreground"
-              aria-hidden="true"
-            >
-              {capitalizeFirstLetter(activeArea).slice(0, 1)}
-            </p>
-          </div>
+          <Link
+            to={"/runs" as never}
+            className="flex justify-center text-foreground no-underline"
+            aria-label="Sealant home"
+          >
+            <LogoBlob className="size-8" />
+          </Link>
         </div>
 
         <nav aria-label="Global navigation" className="flex-1 px-2 py-3">
@@ -306,6 +298,9 @@ function SidebarContent({
         </nav>
 
         <div className="border-t border-border px-2 py-4">
+          <p className="mb-3 text-center font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+            {`v${packageJson.version}`}
+          </p>
           <Link
             to={"/runs" as never}
             className="flex h-[4.75rem] items-center justify-center border border-primary bg-primary text-primary-foreground no-underline transition-colors duration-200 hover:bg-transparent hover:text-foreground"
@@ -332,7 +327,7 @@ function SidebarContent({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-border px-3 py-4">
-        <div className="flex items-start">
+        <div className="flex items-start justify-between gap-3">
           <div
             className={cn(
               "min-w-0 overflow-hidden transition-all duration-200",
@@ -341,11 +336,12 @@ function SidebarContent({
                 : "pointer-events-none w-0 -translate-x-2 opacity-0",
             )}
           >
-            <p className="font-display text-3xl leading-none tracking-[0.02em] text-foreground">
+            <Link to={"/runs" as never} className="inline-flex items-center gap-3 text-foreground no-underline">
+              <LogoBlob className="size-8 shrink-0" />
+              <LogoText className="h-8" />
+            </Link>
+            <p className="mt-4 font-display text-3xl leading-none tracking-[0.02em] text-foreground">
               {capitalizeFirstLetter(activeArea)}
-            </p>
-            <p className="mt-3 font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-              {`v${packageJson.version}`}
             </p>
           </div>
         </div>
@@ -434,6 +430,9 @@ function SidebarContent({
       </div>
 
       <div className="border-t border-border px-3 py-4">
+        <p className="mb-3 font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+          {`v${packageJson.version}`}
+        </p>
         <Link
           to={"/runs" as never}
           className={cn(
