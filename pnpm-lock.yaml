@@ -56,6 +56,9 @@ importers:
       '@sealant/workspace-build-queue':
         specifier: workspace:*
         version: link:../../packages/workspace-build-queue
+      '@sealant/workspace-composition':
+        specifier: workspace:*
+        version: link:../../packages/workspace-composition
       '@standard-community/standard-json':
         specifier: ^0.3.5
         version: 0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76)
