@@ -14,7 +14,7 @@ It currently provides:
 Start Zot locally:
 
 ```bash
-docker compose -f packages/registry-integration/dev/zot/compose.yaml up -d
+docker compose up -d zot
 ```
 
 The registry listens on `http://127.0.0.1:5000` from the host.

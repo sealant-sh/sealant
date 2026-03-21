@@ -1,0 +1,93 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    ports:
+      - "127.0.0.1:5673:5672"
+      - "127.0.0.1:15673:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: sealant
+      RABBITMQ_DEFAULT_PASS: sealant
+    restart: unless-stopped
+
+  zot:
+    image: ghcr.io/project-zot/zot-minimal:v2.1.15
+    command: ["serve", "/etc/zot/config.json"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    restart: unless-stopped
+    volumes:
+      - ./packages/registry-integration/dev/zot/config.json:/etc/zot/config.json:ro
+      - zot-data:/var/lib/registry
+
+  ansible-builder:
+    image: cytopia/ansible:latest-tools
+    profiles:
+      - builders
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+
+  nix-builder:
+    image: nixos/nix:2.24.11
+    profiles:
+      - builders
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nix-store:/nix
+      - nix-cache:/root/.cache/nix
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        accept-flake-config = true
+        sandbox = false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+
+  worker:
+    image: nixos/nix:2.24.11
+    profiles:
+      - apps
+    working_dir: /workspace
+    depends_on:
+      - rabbitmq
+      - zot
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nix-store:/nix
+      - nix-cache:/root/.cache/nix
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        accept-flake-config = true
+        sandbox = false
+      RABBITMQ_URL: amqp://sealant:sealant@rabbitmq:5672
+      REGISTRY_BASE_URL: http://zot:5000
+      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      [
+        "sh",
+        "-lc",
+        "nix shell nixpkgs#nodejs_24 nixpkgs#nodePackages.pnpm nixpkgs#docker -c sh -lc 'pnpm install --frozen-lockfile && pnpm --filter @sealant/worker dev'",
+      ]
+    restart: unless-stopped
+
+volumes:
+  zot-data:
+  nix-store:
+  nix-cache:
