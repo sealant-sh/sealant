@@ -245,6 +245,7 @@ function SidebarContent({
   readonly isSigningOut: boolean;
   readonly onSignOut: () => Promise<void>;
 }) {
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { userTheme, setTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
   const currentTheme = getThemeMenuState(userTheme);
@@ -391,7 +392,7 @@ function SidebarContent({
           </span>
         </Link>
 
-        <DropdownMenu>
+        <DropdownMenu open={isProfileMenuOpen} onOpenChange={setIsProfileMenuOpen}>
           <DropdownMenuTrigger
             className={cn(
               "mt-3 flex w-full items-center border border-border bg-background text-left text-foreground transition-all duration-200 ease-out hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
@@ -433,6 +434,9 @@ function SidebarContent({
             <DropdownMenuItem
               onClick={() => {
                 setTheme(getNextTheme(userTheme));
+                requestAnimationFrame(() => {
+                  setIsProfileMenuOpen(true);
+                });
               }}
               className="flex items-center gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal"
             >
