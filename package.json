@@ -12,12 +12,16 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint . --fix",
     "lint:types": "oxlint . --type-aware --type-check",
+    "playwright:open-google": "node tooling/playwright/open-google.mjs",
     "test": "turbo test",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "test:watch": "vitest",
     "typecheck": "tsgo -p tsconfig.json --noEmit",
     "typecheck:tsc": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/node": "^24.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260315.1",
     "oxfmt": "^0.40.0",
