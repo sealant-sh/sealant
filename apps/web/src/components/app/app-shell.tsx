@@ -3,8 +3,20 @@ import { Button } from "@sealant/ui";
 import { cn } from "@sealant/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
-import { LogOut, Search } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import {
+  Activity,
+  CircleAlert,
+  FolderGit2,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  UserRound,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { capitalizeFirstLetter } from "#/lib/utils/text";
 import packageJson from "@/../package.json";
@@ -23,6 +35,7 @@ type GlobalArea = "runs" | "issues" | "repositories" | "profiles";
 interface GlobalNavItem {
   readonly href: string;
   readonly label: string;
+  readonly icon: LucideIcon;
 }
 
 interface SidebarLink {
@@ -37,10 +50,10 @@ interface SidebarGroup {
 }
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
-  { href: "/runs", label: "Runs" },
-  { href: "/issues", label: "Issues" },
-  { href: "/repositories", label: "Repositories" },
-  { href: "/profiles", label: "Profiles" },
+  { href: "/runs", label: "Runs", icon: Activity },
+  { href: "/issues", label: "Issues", icon: CircleAlert },
+  { href: "/repositories", label: "Repositories", icon: FolderGit2 },
+  { href: "/profiles", label: "Profiles", icon: UserRound },
 ] as const;
 
 const RUN_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
@@ -66,6 +79,8 @@ const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
 ];
 
 export function AppShell({ session, children }: AppShellProps) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -82,6 +97,10 @@ export function AppShell({ session, children }: AppShellProps) {
     selectedRepository,
     selectedProfile,
   });
+
+  useEffect(() => {
+    setIsMobileSidebarOpen(false);
+  }, [pathname]);
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
@@ -102,38 +121,51 @@ export function AppShell({ session, children }: AppShellProps) {
 
       <div className="relative flex min-h-svh w-full flex-col border-x border-border">
         <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
-          <div className="flex min-h-16 flex-wrap items-center gap-4 px-4 py-3 sm:px-6">
-            <Link to={"/runs" as never} className="pr-2 mb-[2px]">
+          <div className="flex min-h-16 items-center gap-3 px-4 py-3 sm:px-6">
+            <button
+              type="button"
+              aria-label={isMobileSidebarOpen ? "Close navigation" : "Open navigation"}
+              aria-expanded={isMobileSidebarOpen}
+              onClick={() => {
+                setIsMobileSidebarOpen((current) => !current);
+              }}
+              className="inline-flex h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:hidden"
+            >
+              {isMobileSidebarOpen ? <X className="size-4" /> : <PanelLeftOpen className="size-4" />}
+            </button>
+
+            <button
+              type="button"
+              aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+              aria-expanded={isSidebarOpen}
+              onClick={() => {
+                setIsSidebarOpen((current) => !current);
+              }}
+              className="hidden h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:inline-flex"
+            >
+              {isSidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+            </button>
+
+            <Link to={"/runs" as never} className="mb-[2px] pr-2">
               <div className="flex items-center gap-3">
-                <LogoBlob className="size-8 transition" />
-                <LogoText className="h-8 transition" />
+                <LogoBlob className="size-8" />
+                <LogoText className="hidden h-8 transition lg:block" />
               </div>
             </Link>
-            <nav
-              className="flex flex-wrap items-center gap-4 sm:gap-5"
-              aria-label="Global navigation"
-            >
-              {GLOBAL_NAV_ITEMS.map((item) => (
-                <Link
-                  key={item.href}
-                  to={item.href as never}
-                  className="border-b-2 border-transparent text-md font-semibold no-underline transition duration-200 hover:text-foreground"
-                  activeProps={{
-                    className: "border-primary text-primary no-underline",
-                  }}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
+
+            <div className="hidden border-l border-border pl-4 lg:block">
+              <p className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
+                {capitalizeFirstLetter(activeArea)} workspace
+              </p>
+            </div>
 
             <div className="ml-auto flex items-center gap-3">
-              <label className="relative hidden min-w-56 items-center lg:flex">
+              <label className="relative hidden min-w-52 items-center xl:flex">
                 <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
                 <input
                   type="search"
-                  placeholder="Search"
-                  className="h-9 w-full border border-border bg-background pl-9 pr-3 text-md text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
+                  placeholder="Search runs, repos, profiles"
+                  className="h-9 w-full border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
                 />
               </label>
 
@@ -143,11 +175,9 @@ export function AppShell({ session, children }: AppShellProps) {
                 <div className="flex h-7 w-7 items-center justify-center border border-border bg-background text-xs font-semibold text-foreground">
                   {(session.user.name || session.user.email).slice(0, 1)}
                 </div>
-                <div>
-                  <p className="fonts-sans text-[0.58rem] tracking-[0.11em] text-muted-foreground">
-                    {session.user.email}
-                  </p>
-                </div>
+                <p className="font-mono text-[0.58rem] tracking-[0.11em] text-muted-foreground">
+                  {session.user.email}
+                </p>
               </div>
 
               <Button
@@ -163,63 +193,288 @@ export function AppShell({ session, children }: AppShellProps) {
                 }}
               >
                 <LogOut className="size-4" />
-                {isSigningOut ? "Signing out" : "Sign out"}
+                <span className="hidden sm:inline">{isSigningOut ? "Signing out" : "Sign out"}</span>
               </Button>
             </div>
           </div>
         </header>
 
-        <div className="grid min-h-[calc(100svh-4.25rem)] min-w-0 lg:grid-cols-[17rem_minmax(0,1fr)]">
-          <aside className="flex min-h-full flex-col border-r border-border bg-card/80">
-            <div className="border-b border-border px-4 py-4">
-              <p className="fonts-sans text-md  text-muted-foreground">
-                {capitalizeFirstLetter(activeArea)}
-              </p>
-              <p className="mt-1 fonts-sans text-[12px] text-muted-foreground">{`v${packageJson.version}`}</p>
-            </div>
+        <div className="relative flex min-h-[calc(100svh-4.25rem)] min-w-0">
+          <div
+            aria-hidden={!isMobileSidebarOpen}
+            className={cn(
+              "fixed inset-0 z-30 bg-background/70 transition-opacity duration-200 lg:hidden",
+              isMobileSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
+            onClick={() => {
+              setIsMobileSidebarOpen(false);
+            }}
+          />
 
-            <div className="flex-1 overflow-auto px-4 py-5">
-              <div className="space-y-5">
-                {sidebarGroups.map((group) => (
-                  <section key={group.label}>
-                    <p className="border-b border-border pb-2 fonts-sans text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                      {group.label}
-                    </p>
-                    <nav className="mt-2" aria-label={group.label}>
-                      {group.links.map((item) => {
-                        const isActive = isPathActive(pathname, item.href, item.exact ?? false);
-                        return (
-                          <Link
-                            key={item.href}
-                            to={item.href as never}
-                            className={cn(
-                              "mb-1.5 block border border-transparent px-3 py-2 fonts-sans text-sm no-underline transition-colors duration-200",
-                              isActive
-                                ? "border-l-primary border-l-2 bg-muted text-foreground"
-                                : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                            )}
-                          >
-                            {item.label}
-                          </Link>
-                        );
-                      })}
-                    </nav>
-                  </section>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t border-border p-4">
-              <Link
-                to={"/runs" as never}
-                className="block border border-primary bg-primary px-3 py-3 text-center fonts-sans text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-colors hover:bg-transparent hover:text-foreground"
-              >
-                New Run
-              </Link>
-            </div>
+          <aside
+            className={cn(
+              "fixed inset-y-[4.25rem] left-0 z-40 flex w-[18rem] flex-col border-r border-border bg-card transition-transform duration-200 ease-out lg:hidden",
+              isMobileSidebarOpen
+                ? "translate-x-0"
+                : "-translate-x-full",
+            )}
+          >
+            <SidebarContent
+              activeArea={activeArea}
+              pathname={pathname}
+              sidebarGroups={sidebarGroups}
+              isExpanded={true}
+              session={session}
+            />
           </aside>
 
-          <main className="min-h-0 min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
+          <aside
+            className={cn(
+              "hidden shrink-0 border-r border-border bg-card transition-[width] duration-200 ease-out lg:flex",
+              isSidebarOpen ? "w-[18rem]" : "w-[5.25rem]",
+            )}
+          >
+            <SidebarContent
+              activeArea={activeArea}
+              pathname={pathname}
+              sidebarGroups={sidebarGroups}
+              isExpanded={isSidebarOpen}
+              session={session}
+            />
+          </aside>
+
+          <main className="min-h-0 min-w-0 flex-1 overflow-auto p-4 sm:p-6">{children}</main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SidebarContent({
+  activeArea,
+  pathname,
+  sidebarGroups,
+  isExpanded,
+  session,
+}: {
+  readonly activeArea: GlobalArea;
+  readonly pathname: string;
+  readonly sidebarGroups: readonly SidebarGroup[];
+  readonly isExpanded: boolean;
+  readonly session: AuthSession;
+}) {
+  const userLabel = session.user.name || session.user.email;
+
+  if (!isExpanded) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="border-b border-border px-2 py-3">
+          <div className="flex justify-center">
+            <p
+              className="font-display text-2xl leading-none tracking-[0.02em] text-foreground"
+              aria-hidden="true"
+            >
+              {capitalizeFirstLetter(activeArea).slice(0, 1)}
+            </p>
+          </div>
+        </div>
+
+        <nav aria-label="Global navigation" className="flex-1 px-2 py-3">
+          <div className="space-y-1.5">
+            {GLOBAL_NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeArea === getGlobalArea(item.href);
+
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href as never}
+                  className={cn(
+                    "flex h-11 items-center justify-center border border-transparent text-sm no-underline transition-all duration-200",
+                    isActive
+                      ? "border-l-2 border-l-primary bg-muted text-foreground"
+                      : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+                  )}
+                  title={item.label}
+                  aria-label={item.label}
+                >
+                  <Icon className="size-4 shrink-0" />
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
+
+        <div className="border-t border-border px-2 py-4">
+          <Link
+            to={"/runs" as never}
+            className="flex h-[4.75rem] items-center justify-center border border-primary bg-primary text-primary-foreground no-underline transition-colors duration-200 hover:bg-transparent hover:text-foreground"
+            title="New Run"
+            aria-label="New Run"
+          >
+            <Plus className="size-4 shrink-0" />
+          </Link>
+
+          <div className="mt-3 flex justify-center border border-border bg-background px-2 py-3">
+            <div
+              className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground"
+              title={userLabel}
+              aria-label={userLabel}
+            >
+              {userLabel.slice(0, 1)}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="border-b border-border px-3 py-4">
+        <div className="flex items-start">
+          <div
+            className={cn(
+              "min-w-0 overflow-hidden transition-all duration-200",
+              isExpanded
+                ? "translate-x-0 opacity-100"
+                : "pointer-events-none w-0 -translate-x-2 opacity-0",
+            )}
+          >
+            <p className="font-display text-3xl leading-none tracking-[0.02em] text-foreground">
+              {capitalizeFirstLetter(activeArea)}
+            </p>
+            <p className="mt-3 font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
+              {`v${packageJson.version}`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-b border-border px-3 py-3">
+        <p
+          className={cn(
+            "pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground transition-all duration-200",
+            isExpanded ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Global navigation
+        </p>
+        <nav aria-label="Global navigation" className="space-y-1.5">
+          {GLOBAL_NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeArea === getGlobalArea(item.href);
+
+            return (
+              <Link
+                key={item.href}
+                to={item.href as never}
+                className={cn(
+                  "group flex items-center gap-3 border border-transparent px-3 py-2.5 text-sm no-underline transition-all duration-200",
+                  isActive
+                    ? "border-l-2 border-l-primary bg-muted text-foreground"
+                    : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+                  !isExpanded && "justify-center px-2",
+                )}
+                title={!isExpanded ? item.label : undefined}
+              >
+                <Icon className="size-4 shrink-0" />
+                <span
+                  className={cn(
+                    "truncate transition-all duration-200",
+                    isExpanded ? "translate-x-0 opacity-100" : "pointer-events-none w-0 -translate-x-2 opacity-0",
+                  )}
+                >
+                  {item.label}
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
+
+      <div className="flex-1 overflow-auto px-3 py-4">
+        <div
+          className={cn(
+            "space-y-5 transition-all duration-200",
+            isExpanded ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          {sidebarGroups.map((group) => (
+            <section key={group.label}>
+              <p
+                className={cn(
+                  "border-b border-border pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground",
+                )}
+              >
+                {group.label}
+              </p>
+              <nav className="mt-2 space-y-1" aria-label={group.label}>
+                {group.links.map((item) => {
+                  const isActive = isPathActive(pathname, item.href, item.exact ?? false);
+                  return (
+                    <Link
+                      key={item.href}
+                      to={item.href as never}
+                      className={cn(
+                        "block border border-transparent px-3 py-2 text-sm no-underline transition-all duration-200",
+                        isActive
+                          ? "border-l-2 border-l-primary bg-muted text-foreground"
+                          : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+                      )}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </nav>
+            </section>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border px-3 py-4">
+        <Link
+          to={"/runs" as never}
+          className={cn(
+            "flex items-center justify-center gap-2 border border-primary bg-primary px-3 py-3 text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-colors duration-200 hover:bg-transparent hover:text-foreground",
+            !isExpanded && "gap-0 px-2",
+          )}
+          title={!isExpanded ? "New Run" : undefined}
+        >
+          <Plus className="size-4 shrink-0" />
+          <span
+            className={cn(
+              "transition-all duration-200",
+              isExpanded ? "translate-x-0 opacity-100" : "pointer-events-none w-0 -translate-x-2 opacity-0",
+            )}
+          >
+            New Run
+          </span>
+        </Link>
+
+        <div
+          className={cn(
+            "mt-4 flex items-center gap-3 border border-border bg-background px-3 py-3 transition-all duration-200",
+            !isExpanded && "justify-center px-2",
+          )}
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
+            {userLabel.slice(0, 1)}
+          </div>
+          <div
+            className={cn(
+              "min-w-0 overflow-hidden transition-all duration-200",
+              isExpanded
+                ? "translate-x-0 opacity-100"
+                : "pointer-events-none w-0 -translate-x-2 opacity-0",
+            )}
+          >
+            <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+              Operator
+            </p>
+            <p className="truncate text-sm text-foreground">{userLabel}</p>
+          </div>
         </div>
       </div>
     </div>
