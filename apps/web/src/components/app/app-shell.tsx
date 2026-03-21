@@ -71,7 +71,7 @@ export function AppShell({ session, children }: AppShellProps) {
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (state) => normalizePath(state.location.pathname) });
 
-  const activeArea = capitalizeFirstLetter(getGlobalArea(pathname));
+  const activeArea = getGlobalArea(pathname);
   const runDetail = getRunDetail(pathname);
   const selectedRepository = getSelectedEntity(pathname, "repositories");
   const selectedProfile = getSelectedEntity(pathname, "profiles");
@@ -173,7 +173,9 @@ export function AppShell({ session, children }: AppShellProps) {
         <div className="grid min-h-[calc(100svh-4.25rem)] min-w-0 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <aside className="flex min-h-full flex-col border-r border-border bg-card/80">
             <div className="border-b border-border px-4 py-4">
-              <p className="fonts-sans text-md  text-muted-foreground">{activeArea}</p>
+              <p className="fonts-sans text-md  text-muted-foreground">
+                {capitalizeFirstLetter(activeArea)}
+              </p>
               <p className="mt-1 fonts-sans text-[12px] text-muted-foreground">{`v${packageJson.version}`}</p>
             </div>
 
@@ -293,7 +295,7 @@ function getSidebarGroups({
   selectedRepository,
   selectedProfile,
 }: {
-  readonly activeArea: string;
+  readonly activeArea: GlobalArea;
   readonly runDetail: { runId: string } | null;
   readonly selectedRepository: string | null;
   readonly selectedProfile: string | null;
