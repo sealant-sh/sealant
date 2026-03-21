@@ -1,17 +1,27 @@
 import type { AuthSession } from "@sealant/auth/session";
-import { Button } from "@sealant/ui";
 import { cn } from "@sealant/ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@sealant/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
+  ChevronsUpDown,
   CircleAlert,
   FolderGit2,
   LogOut,
+  Monitor,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Search,
+  Sun,
   UserRound,
   X,
   type LucideIcon,
@@ -20,9 +30,9 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
-import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 import { authClient } from "@/lib/auth/auth-client";
 import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
+import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
   readonly session: AuthSession;
@@ -161,35 +171,6 @@ export function AppShell({ session, children }: AppShellProps) {
                   className="h-9 w-full border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
                 />
               </label>
-
-              <ThemeSwitcher className="h-9" />
-
-              <div className="hidden items-center gap-2 border border-border px-2.5 py-1.5 sm:flex">
-                <div className="flex h-7 w-7 items-center justify-center border border-border bg-background text-xs font-semibold text-foreground">
-                  {(session.user.name || session.user.email).slice(0, 1)}
-                </div>
-                <p className="font-mono text-[0.58rem] tracking-[0.11em] text-muted-foreground">
-                  {session.user.email}
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                className={cn(
-                  "h-9 border-border bg-transparent px-3 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground",
-                  isSigningOut && "opacity-70",
-                )}
-                disabled={isSigningOut}
-                onClick={() => {
-                  void handleSignOut();
-                }}
-              >
-                <LogOut className="size-4" />
-                <span className="hidden sm:inline">
-                  {isSigningOut ? "Signing out" : "Sign out"}
-                </span>
-              </Button>
             </div>
           </div>
         </header>
@@ -218,6 +199,8 @@ export function AppShell({ session, children }: AppShellProps) {
               sidebarGroups={sidebarGroups}
               isExpanded={true}
               session={session}
+              isSigningOut={isSigningOut}
+              onSignOut={handleSignOut}
             />
           </aside>
 
@@ -233,6 +216,8 @@ export function AppShell({ session, children }: AppShellProps) {
               sidebarGroups={sidebarGroups}
               isExpanded={isSidebarOpen}
               session={session}
+              isSigningOut={isSigningOut}
+              onSignOut={handleSignOut}
             />
           </aside>
 
@@ -249,14 +234,21 @@ function SidebarContent({
   sidebarGroups,
   isExpanded,
   session,
+  isSigningOut,
+  onSignOut,
 }: {
   readonly activeArea: GlobalArea;
   readonly pathname: string;
   readonly sidebarGroups: readonly SidebarGroup[];
   readonly isExpanded: boolean;
   readonly session: AuthSession;
+  readonly isSigningOut: boolean;
+  readonly onSignOut: () => Promise<void>;
 }) {
+  const { userTheme, setTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
+  const currentTheme = getThemeMenuState(userTheme);
+  const ThemeIcon = currentTheme.icon;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -399,33 +391,97 @@ function SidebarContent({
           </span>
         </Link>
 
-        <div
-          className={cn(
-            "mt-3 flex items-center border border-border bg-background transition-all duration-200 ease-out",
-            isExpanded ? "gap-3 px-3 py-3" : "justify-center gap-0 px-2 py-3",
-          )}
-        >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
-            {userLabel.slice(0, 1)}
-          </div>
-          <div
+        <DropdownMenu>
+          <DropdownMenuTrigger
             className={cn(
-              "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
-              isExpanded
-                ? "max-w-[10rem] translate-x-0 opacity-100"
-                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+              "mt-3 flex w-full items-center border border-border bg-background text-left text-foreground transition-all duration-200 ease-out hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              isExpanded ? "gap-3 px-3 py-3" : "justify-center gap-0 px-2 py-3",
             )}
-            aria-hidden={!isExpanded}
+            aria-label="Open profile menu"
           >
-            <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
-              Operator
-            </p>
-            <p className="truncate text-sm text-foreground">{userLabel}</p>
-          </div>
-        </div>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
+              {userLabel.slice(0, 1)}
+            </div>
+            <div
+              className={cn(
+                "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+                isExpanded
+                  ? "max-w-[10rem] translate-x-0 opacity-100"
+                  : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+              )}
+              aria-hidden={!isExpanded}
+            >
+              <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+                Operator
+              </p>
+              <p className="truncate text-sm text-foreground">{userLabel}</p>
+            </div>
+            <ChevronsUpDown
+              className={cn(
+                "ml-auto size-4 shrink-0 text-muted-foreground transition-[opacity,transform,max-width] duration-200 ease-out",
+                isExpanded ? "max-w-4 translate-x-0 opacity-100" : "pointer-events-none max-w-0 translate-x-2 opacity-0",
+              )}
+              aria-hidden={!isExpanded}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align={isExpanded ? "start" : "end"}
+            sideOffset={8}
+            className="w-56 min-w-56 border-border bg-card p-0"
+          >
+            <DropdownMenuItem
+              onClick={() => {
+                setTheme(getNextTheme(userTheme));
+              }}
+              className="flex items-center gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+            >
+              <ThemeIcon className="size-4" />
+              <span>{`Theme: ${currentTheme.menuLabel}`}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-0 -mx-0 bg-border" />
+            <DropdownMenuItem
+              disabled={isSigningOut}
+              onClick={() => {
+                void onSignOut();
+              }}
+              className="flex items-center gap-3 px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+            >
+              <LogOut className="size-4" />
+              <span>{isSigningOut ? "Signing out" : "Sign out"}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
+}
+
+function getNextTheme(theme: UserTheme): UserTheme {
+  if (theme === "light") {
+    return "dark";
+  }
+
+  if (theme === "dark") {
+    return "system";
+  }
+
+  return "light";
+}
+
+function getThemeMenuState(theme: UserTheme): {
+  readonly icon: LucideIcon;
+  readonly menuLabel: string;
+} {
+  if (theme === "light") {
+    return { icon: Sun, menuLabel: "Light" };
+  }
+
+  if (theme === "dark") {
+    return { icon: Moon, menuLabel: "Dark" };
+  }
+
+  return { icon: Monitor, menuLabel: "System" };
 }
 
 function normalizePath(pathname: string): string {
