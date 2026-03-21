@@ -131,7 +131,11 @@ export function AppShell({ session, children }: AppShellProps) {
               }}
               className="inline-flex h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:hidden"
             >
-              {isMobileSidebarOpen ? <X className="size-4" /> : <PanelLeftOpen className="size-4" />}
+              {isMobileSidebarOpen ? (
+                <X className="size-4" />
+              ) : (
+                <PanelLeftOpen className="size-4" />
+              )}
             </button>
 
             <button
@@ -143,15 +147,12 @@ export function AppShell({ session, children }: AppShellProps) {
               }}
               className="hidden h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:inline-flex"
             >
-              {isSidebarOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+              {isSidebarOpen ? (
+                <PanelLeftClose className="size-4" />
+              ) : (
+                <PanelLeftOpen className="size-4" />
+              )}
             </button>
-
-            <div className="hidden border-l border-border pl-4 lg:block">
-              <p className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
-                {capitalizeFirstLetter(activeArea)} workspace
-              </p>
-            </div>
-
             <div className="ml-auto flex items-center gap-3">
               <label className="relative hidden min-w-52 items-center xl:flex">
                 <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
@@ -186,7 +187,9 @@ export function AppShell({ session, children }: AppShellProps) {
                 }}
               >
                 <LogOut className="size-4" />
-                <span className="hidden sm:inline">{isSigningOut ? "Signing out" : "Sign out"}</span>
+                <span className="hidden sm:inline">
+                  {isSigningOut ? "Signing out" : "Sign out"}
+                </span>
               </Button>
             </div>
           </div>
@@ -207,9 +210,7 @@ export function AppShell({ session, children }: AppShellProps) {
           <aside
             className={cn(
               "fixed inset-y-[4.25rem] left-0 z-40 flex w-[18rem] flex-col border-r border-border bg-card transition-transform duration-200 ease-out lg:hidden",
-              isMobileSidebarOpen
-                ? "translate-x-0"
-                : "-translate-x-full",
+              isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
             )}
           >
             <SidebarContent
@@ -336,26 +337,29 @@ function SidebarContent({
                 : "pointer-events-none w-0 -translate-x-2 opacity-0",
             )}
           >
-            <Link to={"/runs" as never} className="inline-flex items-center gap-3 text-foreground no-underline">
+            <Link
+              to={"/runs" as never}
+              className="inline-flex items-center gap-3 text-foreground no-underline"
+            >
               <LogoBlob className="size-8 shrink-0" />
               <LogoText className="h-8" />
             </Link>
-            <p className="mt-4 font-display text-3xl leading-none tracking-[0.02em] text-foreground">
+            {/* <p className="mt-4 font-display text-3xl leading-none tracking-[0.02em] text-foreground">
               {capitalizeFirstLetter(activeArea)}
-            </p>
+            </p> */}
           </div>
         </div>
       </div>
 
       <div className="border-b border-border px-3 py-3">
-        <p
+        {/* <p
           className={cn(
             "pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground transition-all duration-200",
             isExpanded ? "opacity-100" : "pointer-events-none opacity-0",
           )}
         >
           Global navigation
-        </p>
+        </p> */}
         <nav aria-label="Global navigation" className="space-y-1.5">
           {GLOBAL_NAV_ITEMS.map((item) => {
             const Icon = item.icon;
@@ -378,7 +382,9 @@ function SidebarContent({
                 <span
                   className={cn(
                     "truncate transition-all duration-200",
-                    isExpanded ? "translate-x-0 opacity-100" : "pointer-events-none w-0 -translate-x-2 opacity-0",
+                    isExpanded
+                      ? "translate-x-0 opacity-100"
+                      : "pointer-events-none w-0 -translate-x-2 opacity-0",
                   )}
                 >
                   {item.label}
@@ -445,7 +451,9 @@ function SidebarContent({
           <span
             className={cn(
               "transition-all duration-200",
-              isExpanded ? "translate-x-0 opacity-100" : "pointer-events-none w-0 -translate-x-2 opacity-0",
+              isExpanded
+                ? "translate-x-0 opacity-100"
+                : "pointer-events-none w-0 -translate-x-2 opacity-0",
             )}
           >
             New Run
