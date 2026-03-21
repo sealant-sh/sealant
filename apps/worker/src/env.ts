@@ -11,6 +11,9 @@ export const workerEnvSchema = databaseEnvSchema.merge(rabbitMqEnvSchema).extend
   REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),
   REGISTRY_USERNAME: z.string().trim().min(1).optional(),
   REGISTRY_PASSWORD: z.string().min(1).optional(),
+  DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
+  COMPOSE_PROJECT_NAME: z.string().trim().min(1).default("sealant"),
+  NIX_BUILDER_SERVICE: z.string().trim().min(1).default("nix-builder"),
   WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
   WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
 });

@@ -10,6 +10,13 @@ export {
   parseNixExecutorCompileInput,
 } from "./nix-executor.js";
 
+export type {
+  NixExecutorCommandOptions,
+  NixExecutorCommandResult,
+  NixExecutorCommandRunner,
+  NixOsExecutorOptions,
+} from "./nix-executor.js";
+
 export {
   nixExecutorConfigSchema,
   nixExecutorHarnessSchema,

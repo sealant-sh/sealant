@@ -1,6 +1,6 @@
 import type { DatabaseClient } from "@sealant/db";
-import type { NixOsExecutor } from "@sealant/os-integration-nix";
 import type { RegistryClient } from "@sealant/registry-integration";
+import type { OsExecutor } from "@sealant/workspace-composition";
 import { describe, expect, it, vi } from "vitest";
 
 import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
@@ -36,6 +36,9 @@ describe("processWorkspaceBuildJob", () => {
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
 
     const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
       compile: vi.fn(async () => ({
         executor: {
           id: "nix",
@@ -51,7 +54,7 @@ describe("processWorkspaceBuildJob", () => {
           },
         ],
       })),
-    } as unknown as NixOsExecutor;
+    } as unknown as OsExecutor;
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -68,7 +71,7 @@ describe("processWorkspaceBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executor,
+      executors: [executor],
       registryClient,
     });
 
@@ -101,10 +104,13 @@ describe("processWorkspaceBuildJob", () => {
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
 
     const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
       compile: vi.fn(async () => {
         throw new Error("compile exploded");
       }),
-    } as unknown as NixOsExecutor;
+    } as unknown as OsExecutor;
 
     await expect(
       processWorkspaceBuildJob({
@@ -112,7 +118,7 @@ describe("processWorkspaceBuildJob", () => {
         workerId: "worker-test",
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
-        executor,
+        executors: [executor],
         registryClient: {} as RegistryClient,
       }),
     ).rejects.toThrow("compile exploded");
@@ -121,5 +127,51 @@ describe("processWorkspaceBuildJob", () => {
       id: "job_123",
       errorMessage: "compile exploded",
     });
+  });
+
+  it("marks a job as failed when no executor is registered for the requested OS", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_123",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "fedora",
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+
+    const nixExecutor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => {
+        throw new Error("should not run");
+      }),
+    } as unknown as OsExecutor;
+
+    await expect(
+      processWorkspaceBuildJob({
+        jobId: "job_123",
+        workerId: "worker-test",
+        leaseDurationMs: 60000,
+        dbClient: {} as DatabaseClient,
+        executors: [nixExecutor],
+        registryClient: {} as RegistryClient,
+      }),
+    ).rejects.toThrow("No executor is registered for target.os.family 'fedora'.");
+
+    expect(repository.markJobFailed).toHaveBeenCalledWith({
+      id: "job_123",
+      errorCode: "unsupported-os",
+      errorMessage: "No executor is registered for target.os.family 'fedora'.",
+    });
+    expect(repository.markJobSucceeded).not.toHaveBeenCalled();
   });
 });

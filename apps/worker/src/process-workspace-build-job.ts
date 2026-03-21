@@ -3,11 +3,13 @@ import {
   workspaceBuildJobRequestPayloadSchema,
   type DatabaseClient,
 } from "@sealant/db";
-import type { NixOsExecutor } from "@sealant/os-integration-nix";
 import type { RegistryClient } from "@sealant/registry-integration";
 import type {
+  ConcreteWorkspaceTargetOsFamily,
   OciImageBuildArtifact,
+  OsExecutor,
   OsExecutorCompileResult,
+  WorkspaceBlueprint,
 } from "@sealant/workspace-composition";
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
@@ -16,9 +18,45 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly dbClient: DatabaseClient;
-  readonly executor: NixOsExecutor;
+  readonly executors: readonly OsExecutor[];
   readonly registryClient: RegistryClient;
 }
+
+const autoTargetFallbackOsFamily = "nix" satisfies ConcreteWorkspaceTargetOsFamily;
+
+const createWorkerError = (code: string, message: string) => {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  return error;
+};
+
+const resolveRequestedOsFamily = (
+  blueprint: WorkspaceBlueprint,
+): ConcreteWorkspaceTargetOsFamily => {
+  return blueprint.target.os.family === "auto" ? autoTargetFallbackOsFamily : blueprint.target.os.family;
+};
+
+const selectExecutorForBlueprint = (
+  blueprint: WorkspaceBlueprint,
+  executors: readonly OsExecutor[],
+): OsExecutor => {
+  const requestedOsFamily = resolveRequestedOsFamily(blueprint);
+  const executor = executors.find((candidate) => candidate.osFamily === requestedOsFamily);
+
+  if (executor === undefined) {
+    throw createWorkerError(
+      "unsupported-os",
+      `No executor is registered for target.os.family '${requestedOsFamily}'.`,
+    );
+  }
+
+  const support = executor.supports({ blueprint });
+  if (!support.supported) {
+    throw createWorkerError(support.reason, support.message);
+  }
+
+  return executor;
+};
 
 const isPublishableOciImageArtifact = (
   artifact: OsExecutorCompileResult["artifacts"][number],
@@ -72,7 +110,8 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
   try {
     const requestPayload = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
     const blueprint = normalizeUserWorkspaceSpec(requestPayload);
-    const compileResult = await options.executor.compile({ blueprint });
+    const executor = selectExecutorForBlueprint(blueprint, options.executors);
+    const compileResult = await executor.compile({ blueprint });
     const imageArtifact = selectPublishableImageArtifact(compileResult);
     const publishedImage = await options.registryClient.publishOciImage({
       artifactPath: imageArtifact.path,
