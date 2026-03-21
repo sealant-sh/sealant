@@ -14,6 +14,7 @@ import {
 
 export interface EnqueueWorkspaceBuildJobInput {
   readonly id: string;
+  readonly runId?: string;
   readonly registryId: string;
   readonly repository: string;
   readonly tag: string;
@@ -77,6 +78,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
       .insert(workspaceBuildJobs)
       .values({
         id: input.id,
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
         status: "queued",
         registryId: input.registryId,
         repository: input.repository,

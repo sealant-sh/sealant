@@ -50,9 +50,16 @@ export * as schema from "./schema/index.js";
 export { runMigrations } from "./migrate.js";
 
 export {
+  issueStateSchema,
+  profileStatusSchema,
+  pullRequestStateSchema,
   workspaceBuildJobInsertSchema,
   workspaceBuildJobSelectSchema,
   workspaceBuildJobStatusSchema,
+  workspaceRunInsertSchema,
+  workspaceRunSelectSchema,
+  workspaceRunStatusSchema,
+  workspaceRunTriggerTypeSchema,
 } from "./validation.js";
 
 export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";

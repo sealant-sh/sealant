@@ -4,6 +4,7 @@ import type {
   WorkspaceBuildJobRequestPayload,
   WorkspaceBuildJobResultPayload,
 } from "../payloads.js";
+import { workspaceRuns } from "./control-plane.js";
 
 export const workspaceBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;
 
@@ -13,6 +14,7 @@ export const workspaceBuildJobs = sqliteTable(
   "workspace_build_jobs",
   {
     id: text().primaryKey(),
+    runId: text("run_id").references(() => workspaceRuns.id, { onDelete: "set null" }),
     status: text({ enum: workspaceBuildJobStatusValues }).notNull().default("queued"),
     registryId: text().notNull(),
     repository: text().notNull(),
@@ -50,6 +52,7 @@ export const workspaceBuildJobs = sqliteTable(
     index("workspace_build_jobs_status_available_at_idx").on(table.status, table.availableAt),
     index("workspace_build_jobs_status_claimed_at_idx").on(table.status, table.claimedAt),
     index("workspace_build_jobs_created_at_idx").on(table.createdAt),
+    index("workspace_build_jobs_run_id_idx").on(table.runId),
     uniqueIndex("workspace_build_jobs_idempotency_key_idx").on(table.idempotencyKey),
   ],
 );

@@ -65,6 +65,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       const now = new Date();
       const job: WorkspaceBuildJob = {
         id: input.id,
+        runId: input.runId ?? null,
         status: "queued",
         registryId: input.registryId,
         repository: input.repository,
