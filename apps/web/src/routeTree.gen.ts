@@ -17,9 +17,33 @@ import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-pass
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
+import { Route as AuthenticatedRunsIndexRouteImport } from './routes/_authenticated/runs/index'
+import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
 import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
+import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
+import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthenticatedRunsFailedRouteImport } from './routes/_authenticated/runs/failed'
+import { Route as AuthenticatedRunsActiveRouteImport } from './routes/_authenticated/runs/active'
+import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
+import { Route as AuthenticatedIssuesReadyRouteImport } from './routes/_authenticated/issues/ready'
+import { Route as AuthenticatedIssuesAssignedRouteImport } from './routes/_authenticated/issues/assigned'
+import { Route as AuthenticatedRunsRunIdIndexRouteImport } from './routes/_authenticated/runs/$runId/index'
+import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
 import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
+import { Route as AuthenticatedProfilesProfileIdIndexRouteImport } from './routes/_authenticated/profiles/$profileId/index'
+import { Route as AuthenticatedRunsRunIdValidationRouteImport } from './routes/_authenticated/runs/$runId/validation'
+import { Route as AuthenticatedRunsRunIdTraceRouteImport } from './routes/_authenticated/runs/$runId/trace'
+import { Route as AuthenticatedRunsRunIdSpecRouteImport } from './routes/_authenticated/runs/$runId/spec'
+import { Route as AuthenticatedRunsRunIdDiffRouteImport } from './routes/_authenticated/runs/$runId/diff'
+import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
+import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
+import { Route as AuthenticatedRepositoriesRepoIdRunsRouteImport } from './routes/_authenticated/repositories/$repoId/runs'
+import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
+import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
+import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
+import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
+import { Route as AuthenticatedProfilesProfileIdAccessRouteImport } from './routes/_authenticated/profiles/$profileId/access'
 import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -60,10 +84,33 @@ const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => AuthRoute,
 } as any)
+const AuthenticatedRunsIndexRoute = AuthenticatedRunsIndexRouteImport.update({
+  id: '/runs/',
+  path: '/runs/',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedRepositoriesIndexRoute =
+  AuthenticatedRepositoriesIndexRouteImport.update({
+    id: '/repositories/',
+    path: '/repositories/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedRegistryIndexRoute =
   AuthenticatedRegistryIndexRouteImport.update({
     id: '/registry/',
     path: '/registry/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesIndexRoute =
+  AuthenticatedProfilesIndexRouteImport.update({
+    id: '/profiles/',
+    path: '/profiles/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedIssuesIndexRoute =
+  AuthenticatedIssuesIndexRouteImport.update({
+    id: '/issues/',
+    path: '/issues/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -71,10 +118,128 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedRunsFailedRoute = AuthenticatedRunsFailedRouteImport.update({
+  id: '/runs/failed',
+  path: '/runs/failed',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedRunsActiveRoute = AuthenticatedRunsActiveRouteImport.update({
+  id: '/runs/active',
+  path: '/runs/active',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedProfilesCreateRoute =
+  AuthenticatedProfilesCreateRouteImport.update({
+    id: '/profiles/create',
+    path: '/profiles/create',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedIssuesReadyRoute =
+  AuthenticatedIssuesReadyRouteImport.update({
+    id: '/issues/ready',
+    path: '/issues/ready',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedIssuesAssignedRoute =
+  AuthenticatedIssuesAssignedRouteImport.update({
+    id: '/issues/assigned',
+    path: '/issues/assigned',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRunsRunIdIndexRoute =
+  AuthenticatedRunsRunIdIndexRouteImport.update({
+    id: '/runs/$runId/',
+    path: '/runs/$runId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdIndexRoute =
+  AuthenticatedRepositoriesRepoIdIndexRouteImport.update({
+    id: '/repositories/$repoId/',
+    path: '/repositories/$repoId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedRegistryRegistryIdIndexRoute =
   AuthenticatedRegistryRegistryIdIndexRouteImport.update({
     id: '/registry/$registryId/',
     path: '/registry/$registryId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdIndexRoute =
+  AuthenticatedProfilesProfileIdIndexRouteImport.update({
+    id: '/profiles/$profileId/',
+    path: '/profiles/$profileId/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRunsRunIdValidationRoute =
+  AuthenticatedRunsRunIdValidationRouteImport.update({
+    id: '/runs/$runId/validation',
+    path: '/runs/$runId/validation',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRunsRunIdTraceRoute =
+  AuthenticatedRunsRunIdTraceRouteImport.update({
+    id: '/runs/$runId/trace',
+    path: '/runs/$runId/trace',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRunsRunIdSpecRoute =
+  AuthenticatedRunsRunIdSpecRouteImport.update({
+    id: '/runs/$runId/spec',
+    path: '/runs/$runId/spec',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRunsRunIdDiffRoute =
+  AuthenticatedRunsRunIdDiffRouteImport.update({
+    id: '/runs/$runId/diff',
+    path: '/runs/$runId/diff',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdSetupRoute =
+  AuthenticatedRepositoriesRepoIdSetupRouteImport.update({
+    id: '/repositories/$repoId/setup',
+    path: '/repositories/$repoId/setup',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdSettingsRoute =
+  AuthenticatedRepositoriesRepoIdSettingsRouteImport.update({
+    id: '/repositories/$repoId/settings',
+    path: '/repositories/$repoId/settings',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedRepositoriesRepoIdRunsRoute =
+  AuthenticatedRepositoriesRepoIdRunsRouteImport.update({
+    id: '/repositories/$repoId/runs',
+    path: '/repositories/$repoId/runs',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdSetupRoute =
+  AuthenticatedProfilesProfileIdSetupRouteImport.update({
+    id: '/profiles/$profileId/setup',
+    path: '/profiles/$profileId/setup',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdSecretsRoute =
+  AuthenticatedProfilesProfileIdSecretsRouteImport.update({
+    id: '/profiles/$profileId/secrets',
+    path: '/profiles/$profileId/secrets',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdPackagesRoute =
+  AuthenticatedProfilesProfileIdPackagesRouteImport.update({
+    id: '/profiles/$profileId/packages',
+    path: '/profiles/$profileId/packages',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdEnvVariablesRoute =
+  AuthenticatedProfilesProfileIdEnvVariablesRouteImport.update({
+    id: '/profiles/$profileId/env-variables',
+    path: '/profiles/$profileId/env-variables',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedProfilesProfileIdAccessRoute =
+  AuthenticatedProfilesProfileIdAccessRouteImport.update({
+    id: '/profiles/$profileId/access',
+    path: '/profiles/$profileId/access',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRegistryRegistryIdRepoTagRoute =
@@ -91,9 +256,33 @@ export interface FileRoutesByFullPath {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
+  '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
+  '/issues/ready': typeof AuthenticatedIssuesReadyRoute
+  '/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/runs/active': typeof AuthenticatedRunsActiveRoute
+  '/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/issues/': typeof AuthenticatedIssuesIndexRoute
+  '/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/registry/': typeof AuthenticatedRegistryIndexRoute
+  '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
+  '/runs/': typeof AuthenticatedRunsIndexRoute
+  '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
+  '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
+  '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
+  '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
+  '/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
+  '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
+  '/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
+  '/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
+  '/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
+  '/runs/$runId/': typeof AuthenticatedRunsRunIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesByTo {
@@ -103,9 +292,33 @@ export interface FileRoutesByTo {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
+  '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
+  '/issues/ready': typeof AuthenticatedIssuesReadyRoute
+  '/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/runs/active': typeof AuthenticatedRunsActiveRoute
+  '/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/issues': typeof AuthenticatedIssuesIndexRoute
+  '/profiles': typeof AuthenticatedProfilesIndexRoute
   '/registry': typeof AuthenticatedRegistryIndexRoute
+  '/repositories': typeof AuthenticatedRepositoriesIndexRoute
+  '/runs': typeof AuthenticatedRunsIndexRoute
+  '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
+  '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
+  '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
+  '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
+  '/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
+  '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
+  '/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
+  '/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
+  '/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/profiles/$profileId': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/repositories/$repoId': typeof AuthenticatedRepositoriesRepoIdIndexRoute
+  '/runs/$runId': typeof AuthenticatedRunsRunIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesById {
@@ -118,9 +331,33 @@ export interface FileRoutesById {
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_authenticated/about': typeof AuthenticatedAboutRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
+  '/_authenticated/issues/ready': typeof AuthenticatedIssuesReadyRoute
+  '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/_authenticated/runs/active': typeof AuthenticatedRunsActiveRoute
+  '/_authenticated/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
+  '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
+  '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
+  '/_authenticated/runs/': typeof AuthenticatedRunsIndexRoute
+  '/_authenticated/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/_authenticated/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
+  '/_authenticated/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
+  '/_authenticated/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
+  '/_authenticated/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
+  '/_authenticated/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/_authenticated/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
+  '/_authenticated/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/_authenticated/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
+  '/_authenticated/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
+  '/_authenticated/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
+  '/_authenticated/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/_authenticated/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/_authenticated/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
+  '/_authenticated/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
+  '/_authenticated/runs/$runId/': typeof AuthenticatedRunsRunIdIndexRoute
   '/_authenticated/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRouteTypes {
@@ -132,9 +369,33 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/about'
+    | '/issues/assigned'
+    | '/issues/ready'
+    | '/profiles/create'
+    | '/runs/active'
+    | '/runs/failed'
     | '/api/auth/$'
+    | '/issues/'
+    | '/profiles/'
     | '/registry/'
+    | '/repositories/'
+    | '/runs/'
+    | '/profiles/$profileId/access'
+    | '/profiles/$profileId/env-variables'
+    | '/profiles/$profileId/packages'
+    | '/profiles/$profileId/secrets'
+    | '/profiles/$profileId/setup'
+    | '/repositories/$repoId/runs'
+    | '/repositories/$repoId/settings'
+    | '/repositories/$repoId/setup'
+    | '/runs/$runId/diff'
+    | '/runs/$runId/spec'
+    | '/runs/$runId/trace'
+    | '/runs/$runId/validation'
+    | '/profiles/$profileId/'
     | '/registry/$registryId/'
+    | '/repositories/$repoId/'
+    | '/runs/$runId/'
     | '/registry/$registryId/$repo/$tag'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -144,9 +405,33 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/about'
+    | '/issues/assigned'
+    | '/issues/ready'
+    | '/profiles/create'
+    | '/runs/active'
+    | '/runs/failed'
     | '/api/auth/$'
+    | '/issues'
+    | '/profiles'
     | '/registry'
+    | '/repositories'
+    | '/runs'
+    | '/profiles/$profileId/access'
+    | '/profiles/$profileId/env-variables'
+    | '/profiles/$profileId/packages'
+    | '/profiles/$profileId/secrets'
+    | '/profiles/$profileId/setup'
+    | '/repositories/$repoId/runs'
+    | '/repositories/$repoId/settings'
+    | '/repositories/$repoId/setup'
+    | '/runs/$runId/diff'
+    | '/runs/$runId/spec'
+    | '/runs/$runId/trace'
+    | '/runs/$runId/validation'
+    | '/profiles/$profileId'
     | '/registry/$registryId'
+    | '/repositories/$repoId'
+    | '/runs/$runId'
     | '/registry/$registryId/$repo/$tag'
   id:
     | '__root__'
@@ -158,9 +443,33 @@ export interface FileRouteTypes {
     | '/_auth/reset-password'
     | '/_authenticated/about'
     | '/_authenticated/'
+    | '/_authenticated/issues/assigned'
+    | '/_authenticated/issues/ready'
+    | '/_authenticated/profiles/create'
+    | '/_authenticated/runs/active'
+    | '/_authenticated/runs/failed'
     | '/api/auth/$'
+    | '/_authenticated/issues/'
+    | '/_authenticated/profiles/'
     | '/_authenticated/registry/'
+    | '/_authenticated/repositories/'
+    | '/_authenticated/runs/'
+    | '/_authenticated/profiles/$profileId/access'
+    | '/_authenticated/profiles/$profileId/env-variables'
+    | '/_authenticated/profiles/$profileId/packages'
+    | '/_authenticated/profiles/$profileId/secrets'
+    | '/_authenticated/profiles/$profileId/setup'
+    | '/_authenticated/repositories/$repoId/runs'
+    | '/_authenticated/repositories/$repoId/settings'
+    | '/_authenticated/repositories/$repoId/setup'
+    | '/_authenticated/runs/$runId/diff'
+    | '/_authenticated/runs/$runId/spec'
+    | '/_authenticated/runs/$runId/trace'
+    | '/_authenticated/runs/$runId/validation'
+    | '/_authenticated/profiles/$profileId/'
     | '/_authenticated/registry/$registryId/'
+    | '/_authenticated/repositories/$repoId/'
+    | '/_authenticated/runs/$runId/'
     | '/_authenticated/registry/$registryId/$repo/$tag'
   fileRoutesById: FileRoutesById
 }
@@ -228,11 +537,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/_authenticated/runs/': {
+      id: '/_authenticated/runs/'
+      path: '/runs'
+      fullPath: '/runs/'
+      preLoaderRoute: typeof AuthenticatedRunsIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/': {
+      id: '/_authenticated/repositories/'
+      path: '/repositories'
+      fullPath: '/repositories/'
+      preLoaderRoute: typeof AuthenticatedRepositoriesIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/registry/': {
       id: '/_authenticated/registry/'
       path: '/registry'
       fullPath: '/registry/'
       preLoaderRoute: typeof AuthenticatedRegistryIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/': {
+      id: '/_authenticated/profiles/'
+      path: '/profiles'
+      fullPath: '/profiles/'
+      preLoaderRoute: typeof AuthenticatedProfilesIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/issues/': {
+      id: '/_authenticated/issues/'
+      path: '/issues'
+      fullPath: '/issues/'
+      preLoaderRoute: typeof AuthenticatedIssuesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/api/auth/$': {
@@ -242,11 +579,151 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/runs/failed': {
+      id: '/_authenticated/runs/failed'
+      path: '/runs/failed'
+      fullPath: '/runs/failed'
+      preLoaderRoute: typeof AuthenticatedRunsFailedRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/active': {
+      id: '/_authenticated/runs/active'
+      path: '/runs/active'
+      fullPath: '/runs/active'
+      preLoaderRoute: typeof AuthenticatedRunsActiveRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/create': {
+      id: '/_authenticated/profiles/create'
+      path: '/profiles/create'
+      fullPath: '/profiles/create'
+      preLoaderRoute: typeof AuthenticatedProfilesCreateRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/issues/ready': {
+      id: '/_authenticated/issues/ready'
+      path: '/issues/ready'
+      fullPath: '/issues/ready'
+      preLoaderRoute: typeof AuthenticatedIssuesReadyRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/issues/assigned': {
+      id: '/_authenticated/issues/assigned'
+      path: '/issues/assigned'
+      fullPath: '/issues/assigned'
+      preLoaderRoute: typeof AuthenticatedIssuesAssignedRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/$runId/': {
+      id: '/_authenticated/runs/$runId/'
+      path: '/runs/$runId'
+      fullPath: '/runs/$runId/'
+      preLoaderRoute: typeof AuthenticatedRunsRunIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/': {
+      id: '/_authenticated/repositories/$repoId/'
+      path: '/repositories/$repoId'
+      fullPath: '/repositories/$repoId/'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/registry/$registryId/': {
       id: '/_authenticated/registry/$registryId/'
       path: '/registry/$registryId'
       fullPath: '/registry/$registryId/'
       preLoaderRoute: typeof AuthenticatedRegistryRegistryIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/': {
+      id: '/_authenticated/profiles/$profileId/'
+      path: '/profiles/$profileId'
+      fullPath: '/profiles/$profileId/'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/$runId/validation': {
+      id: '/_authenticated/runs/$runId/validation'
+      path: '/runs/$runId/validation'
+      fullPath: '/runs/$runId/validation'
+      preLoaderRoute: typeof AuthenticatedRunsRunIdValidationRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/$runId/trace': {
+      id: '/_authenticated/runs/$runId/trace'
+      path: '/runs/$runId/trace'
+      fullPath: '/runs/$runId/trace'
+      preLoaderRoute: typeof AuthenticatedRunsRunIdTraceRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/$runId/spec': {
+      id: '/_authenticated/runs/$runId/spec'
+      path: '/runs/$runId/spec'
+      fullPath: '/runs/$runId/spec'
+      preLoaderRoute: typeof AuthenticatedRunsRunIdSpecRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/runs/$runId/diff': {
+      id: '/_authenticated/runs/$runId/diff'
+      path: '/runs/$runId/diff'
+      fullPath: '/runs/$runId/diff'
+      preLoaderRoute: typeof AuthenticatedRunsRunIdDiffRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/setup': {
+      id: '/_authenticated/repositories/$repoId/setup'
+      path: '/repositories/$repoId/setup'
+      fullPath: '/repositories/$repoId/setup'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSetupRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/settings': {
+      id: '/_authenticated/repositories/$repoId/settings'
+      path: '/repositories/$repoId/settings'
+      fullPath: '/repositories/$repoId/settings'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/repositories/$repoId/runs': {
+      id: '/_authenticated/repositories/$repoId/runs'
+      path: '/repositories/$repoId/runs'
+      fullPath: '/repositories/$repoId/runs'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdRunsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/setup': {
+      id: '/_authenticated/profiles/$profileId/setup'
+      path: '/profiles/$profileId/setup'
+      fullPath: '/profiles/$profileId/setup'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSetupRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/secrets': {
+      id: '/_authenticated/profiles/$profileId/secrets'
+      path: '/profiles/$profileId/secrets'
+      fullPath: '/profiles/$profileId/secrets'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdSecretsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/packages': {
+      id: '/_authenticated/profiles/$profileId/packages'
+      path: '/profiles/$profileId/packages'
+      fullPath: '/profiles/$profileId/packages'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdPackagesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/env-variables': {
+      id: '/_authenticated/profiles/$profileId/env-variables'
+      path: '/profiles/$profileId/env-variables'
+      fullPath: '/profiles/$profileId/env-variables'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/profiles/$profileId/access': {
+      id: '/_authenticated/profiles/$profileId/access'
+      path: '/profiles/$profileId/access'
+      fullPath: '/profiles/$profileId/access'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/registry/$registryId/$repo/$tag': {
@@ -278,17 +755,75 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 interface AuthenticatedRouteChildren {
   AuthenticatedAboutRoute: typeof AuthenticatedAboutRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedIssuesAssignedRoute: typeof AuthenticatedIssuesAssignedRoute
+  AuthenticatedIssuesReadyRoute: typeof AuthenticatedIssuesReadyRoute
+  AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
+  AuthenticatedRunsActiveRoute: typeof AuthenticatedRunsActiveRoute
+  AuthenticatedRunsFailedRoute: typeof AuthenticatedRunsFailedRoute
+  AuthenticatedIssuesIndexRoute: typeof AuthenticatedIssuesIndexRoute
+  AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
+  AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
+  AuthenticatedRunsIndexRoute: typeof AuthenticatedRunsIndexRoute
+  AuthenticatedProfilesProfileIdAccessRoute: typeof AuthenticatedProfilesProfileIdAccessRoute
+  AuthenticatedProfilesProfileIdEnvVariablesRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
+  AuthenticatedProfilesProfileIdPackagesRoute: typeof AuthenticatedProfilesProfileIdPackagesRoute
+  AuthenticatedProfilesProfileIdSecretsRoute: typeof AuthenticatedProfilesProfileIdSecretsRoute
+  AuthenticatedProfilesProfileIdSetupRoute: typeof AuthenticatedProfilesProfileIdSetupRoute
+  AuthenticatedRepositoriesRepoIdRunsRoute: typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  AuthenticatedRepositoriesRepoIdSettingsRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRoute
+  AuthenticatedRepositoriesRepoIdSetupRoute: typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  AuthenticatedRunsRunIdDiffRoute: typeof AuthenticatedRunsRunIdDiffRoute
+  AuthenticatedRunsRunIdSpecRoute: typeof AuthenticatedRunsRunIdSpecRoute
+  AuthenticatedRunsRunIdTraceRoute: typeof AuthenticatedRunsRunIdTraceRoute
+  AuthenticatedRunsRunIdValidationRoute: typeof AuthenticatedRunsRunIdValidationRoute
+  AuthenticatedProfilesProfileIdIndexRoute: typeof AuthenticatedProfilesProfileIdIndexRoute
   AuthenticatedRegistryRegistryIdIndexRoute: typeof AuthenticatedRegistryRegistryIdIndexRoute
+  AuthenticatedRepositoriesRepoIdIndexRoute: typeof AuthenticatedRepositoriesRepoIdIndexRoute
+  AuthenticatedRunsRunIdIndexRoute: typeof AuthenticatedRunsRunIdIndexRoute
   AuthenticatedRegistryRegistryIdRepoTagRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAboutRoute: AuthenticatedAboutRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedIssuesAssignedRoute: AuthenticatedIssuesAssignedRoute,
+  AuthenticatedIssuesReadyRoute: AuthenticatedIssuesReadyRoute,
+  AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
+  AuthenticatedRunsActiveRoute: AuthenticatedRunsActiveRoute,
+  AuthenticatedRunsFailedRoute: AuthenticatedRunsFailedRoute,
+  AuthenticatedIssuesIndexRoute: AuthenticatedIssuesIndexRoute,
+  AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
+  AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
+  AuthenticatedRunsIndexRoute: AuthenticatedRunsIndexRoute,
+  AuthenticatedProfilesProfileIdAccessRoute:
+    AuthenticatedProfilesProfileIdAccessRoute,
+  AuthenticatedProfilesProfileIdEnvVariablesRoute:
+    AuthenticatedProfilesProfileIdEnvVariablesRoute,
+  AuthenticatedProfilesProfileIdPackagesRoute:
+    AuthenticatedProfilesProfileIdPackagesRoute,
+  AuthenticatedProfilesProfileIdSecretsRoute:
+    AuthenticatedProfilesProfileIdSecretsRoute,
+  AuthenticatedProfilesProfileIdSetupRoute:
+    AuthenticatedProfilesProfileIdSetupRoute,
+  AuthenticatedRepositoriesRepoIdRunsRoute:
+    AuthenticatedRepositoriesRepoIdRunsRoute,
+  AuthenticatedRepositoriesRepoIdSettingsRoute:
+    AuthenticatedRepositoriesRepoIdSettingsRoute,
+  AuthenticatedRepositoriesRepoIdSetupRoute:
+    AuthenticatedRepositoriesRepoIdSetupRoute,
+  AuthenticatedRunsRunIdDiffRoute: AuthenticatedRunsRunIdDiffRoute,
+  AuthenticatedRunsRunIdSpecRoute: AuthenticatedRunsRunIdSpecRoute,
+  AuthenticatedRunsRunIdTraceRoute: AuthenticatedRunsRunIdTraceRoute,
+  AuthenticatedRunsRunIdValidationRoute: AuthenticatedRunsRunIdValidationRoute,
+  AuthenticatedProfilesProfileIdIndexRoute:
+    AuthenticatedProfilesProfileIdIndexRoute,
   AuthenticatedRegistryRegistryIdIndexRoute:
     AuthenticatedRegistryRegistryIdIndexRoute,
+  AuthenticatedRepositoriesRepoIdIndexRoute:
+    AuthenticatedRepositoriesRepoIdIndexRoute,
+  AuthenticatedRunsRunIdIndexRoute: AuthenticatedRunsRunIdIndexRoute,
   AuthenticatedRegistryRegistryIdRepoTagRoute:
     AuthenticatedRegistryRegistryIdRepoTagRoute,
 }
