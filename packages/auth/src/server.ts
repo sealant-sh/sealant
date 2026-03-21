@@ -1,4 +1,9 @@
-import { createDatabaseClientFromEnv, runMigrations, schema, type DatabaseClient } from "@sealant/db";
+import {
+  createDatabaseClientFromEnv,
+  runMigrations,
+  schema,
+  type DatabaseClient,
+} from "@sealant/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
@@ -31,9 +36,7 @@ const toTrustedOrigins = (env: AuthEnv): Array<string> => {
   return [...trustedOrigins];
 };
 
-export const createSealantAuth = async (
-  options: CreateSealantAuthOptions = {},
-) => {
+export const createSealantAuth = async (options: CreateSealantAuthOptions = {}) => {
   const resolvedEnv = options.env ?? authEnv;
 
   if (options.databaseClient === undefined) {

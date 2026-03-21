@@ -1,15 +1,17 @@
-import { useState, type ReactNode } from "react";
-
 import type { AuthSession } from "@sealant/auth/session";
 import { Button } from "@sealant/ui";
 import { cn } from "@sealant/ui";
-import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { LogOut, Search, ShieldCheck } from "lucide-react";
+import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { LogOut, Search } from "lucide-react";
+import { useState, type ReactNode } from "react";
 
+import { capitalizeFirstLetter } from "#/lib/utils/text";
+import packageJson from "@/../package.json";
+import { LogoBlob, LogoText } from "@/components/app/Logo";
+import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 import { authClient } from "@/lib/auth/auth-client";
 import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
-import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 
 interface AppShellProps {
   readonly session: AuthSession;
@@ -101,20 +103,24 @@ export function AppShell({ session, children }: AppShellProps) {
       <div className="relative flex min-h-svh w-full flex-col border-x border-border">
         <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
           <div className="flex min-h-16 flex-wrap items-center gap-4 px-4 py-3 sm:px-6">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="size-5 text-muted-foreground" />
-              <Link to={"/runs" as never} className="font-display text-4xl uppercase tracking-[0.02em] text-foreground no-underline">
-                Sealant
-              </Link>
-            </div>
-
-            <nav className="flex flex-wrap items-center gap-4 sm:gap-5" aria-label="Global navigation">
+            <Link to={"/runs" as never} className="pr-2 mb-[2px]">
+              <div className="flex items-center gap-3">
+                <LogoBlob className="size-8 transition" />
+                <LogoText className="h-8 transition" />
+              </div>
+            </Link>
+            <nav
+              className="flex flex-wrap items-center gap-4 sm:gap-5"
+              aria-label="Global navigation"
+            >
               {GLOBAL_NAV_ITEMS.map((item) => (
                 <Link
                   key={item.href}
                   to={item.href as never}
-                  className="border-b-2 border-transparent pb-1 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground no-underline transition duration-200 hover:text-foreground"
-                  activeProps={{ className: "border-primary pb-1 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-primary no-underline" }}
+                  className="border-b-2 border-transparent text-md font-semibold no-underline transition duration-200 hover:text-foreground"
+                  activeProps={{
+                    className: "border-primary text-primary no-underline",
+                  }}
                 >
                   {item.label}
                 </Link>
@@ -127,18 +133,18 @@ export function AppShell({ session, children }: AppShellProps) {
                 <input
                   type="search"
                   placeholder="Search"
-                  className="h-9 w-full border border-border bg-background pl-9 pr-3 font-mono text-[0.62rem] tracking-[0.11em] uppercase text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
+                  className="h-9 w-full border border-border bg-background pl-9 pr-3 text-md text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
                 />
               </label>
 
               <ThemeSwitcher className="h-9" />
 
               <div className="hidden items-center gap-2 border border-border px-2.5 py-1.5 sm:flex">
-                <div className="flex h-7 w-7 items-center justify-center border border-border bg-background text-xs font-semibold uppercase text-foreground">
+                <div className="flex h-7 w-7 items-center justify-center border border-border bg-background text-xs font-semibold text-foreground">
                   {(session.user.name || session.user.email).slice(0, 1)}
                 </div>
                 <div>
-                  <p className="font-mono text-[0.58rem] uppercase tracking-[0.11em] text-muted-foreground">
+                  <p className="fonts-sans text-[0.58rem] tracking-[0.11em] text-muted-foreground">
                     {session.user.email}
                   </p>
                 </div>
@@ -148,7 +154,7 @@ export function AppShell({ session, children }: AppShellProps) {
                 type="button"
                 variant="outline"
                 className={cn(
-                  "h-9 border-border bg-transparent px-3 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground",
+                  "h-9 border-border bg-transparent px-3 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground",
                   isSigningOut && "opacity-70",
                 )}
                 disabled={isSigningOut}
@@ -166,17 +172,19 @@ export function AppShell({ session, children }: AppShellProps) {
         <div className="grid min-h-[calc(100svh-4.25rem)] min-w-0 lg:grid-cols-[17rem_minmax(0,1fr)]">
           <aside className="flex min-h-full flex-col border-r border-border bg-card/80">
             <div className="border-b border-border px-4 py-4">
-              <p className="font-mono text-[0.64rem] uppercase tracking-[0.16em] text-muted-foreground">
-                {runDetail === null ? `${activeArea} context` : `run ${runDetail.runId}`}
+              <p className="fonts-sans text-md  text-muted-foreground">
+                {capitalizeFirstLetter(activeArea)}
               </p>
-              <p className="mt-1 font-mono text-[0.62rem] uppercase tracking-[0.11em] text-muted-foreground">v2.0 stable</p>
+              <p className="mt-1 fonts-sans text-[12px] text-muted-foreground">{`v${packageJson.version}`}</p>
             </div>
 
             <div className="flex-1 overflow-auto px-4 py-5">
               <div className="space-y-5">
                 {sidebarGroups.map((group) => (
                   <section key={group.label}>
-                    <p className="border-b border-border pb-2 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground">{group.label}</p>
+                    <p className="border-b border-border pb-2 fonts-sans text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+                      {group.label}
+                    </p>
                     <nav className="mt-2" aria-label={group.label}>
                       {group.links.map((item) => {
                         const isActive = isPathActive(pathname, item.href, item.exact ?? false);
@@ -185,7 +193,7 @@ export function AppShell({ session, children }: AppShellProps) {
                             key={item.href}
                             to={item.href as never}
                             className={cn(
-                              "mb-1.5 block border border-transparent px-3 py-2 font-mono text-[0.66rem] uppercase tracking-[0.11em] no-underline transition-colors duration-200",
+                              "mb-1.5 block border border-transparent px-3 py-2 fonts-sans text-sm no-underline transition-colors duration-200",
                               isActive
                                 ? "border-l-primary border-l-2 bg-muted text-foreground"
                                 : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
@@ -204,7 +212,7 @@ export function AppShell({ session, children }: AppShellProps) {
             <div className="border-t border-border p-4">
               <Link
                 to={"/runs" as never}
-                className="block border border-primary bg-primary px-3 py-3 text-center font-mono text-[0.64rem] font-semibold uppercase tracking-[0.14em] text-primary-foreground no-underline transition-colors hover:bg-transparent hover:text-foreground"
+                className="block border border-primary bg-primary px-3 py-3 text-center fonts-sans text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-colors hover:bg-transparent hover:text-foreground"
               >
                 New Run
               </Link>

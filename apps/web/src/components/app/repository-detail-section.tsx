@@ -10,7 +10,12 @@ interface RepositoryDetailSectionProps {
   readonly children: ReactNode;
 }
 
-export function RepositoryDetailSection({ repository, section, description, children }: RepositoryDetailSectionProps) {
+export function RepositoryDetailSection({
+  repository,
+  section,
+  description,
+  children,
+}: RepositoryDetailSectionProps) {
   if (repository === null) {
     return (
       <WorkspacePage

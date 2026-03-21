@@ -190,6 +190,9 @@ importers:
       '@fontsource/inter':
         specifier: ^5.2.8
         version: 5.2.8
+      '@fontsource/plus-jakarta-sans':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@fontsource/space-grotesk':
         specifier: ^5.2.8
         version: 5.2.10

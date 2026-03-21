@@ -1,11 +1,12 @@
-import { Link } from "@tanstack/react-router"
-import { ScrollText, Layers, BarChart2, Settings2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Link } from "@tanstack/react-router";
+import { ScrollText, Layers, BarChart2, Settings2 } from "lucide-react";
+
+import { cn } from "@/lib/utils";
 
 interface NavItem {
-  label: string
-  to: string
-  icon: React.ComponentType<{ className?: string }>
+  label: string;
+  to: string;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -13,10 +14,10 @@ const NAV_ITEMS: NavItem[] = [
   { label: "REGISTRY", to: "/registry", icon: Layers },
   { label: "STATS", to: "/stats", icon: BarChart2 },
   { label: "CONFIG", to: "/config", icon: Settings2 },
-]
+];
 
 interface BottomNavBarProps {
-  className?: string
+  className?: string;
 }
 
 export function BottomNavBar({ className }: BottomNavBarProps) {
@@ -24,7 +25,7 @@ export function BottomNavBar({ className }: BottomNavBarProps) {
     <nav
       className={cn(
         "fixed bottom-0 left-0 right-0 z-50 flex h-16 items-stretch border-t-2 border-foreground bg-card",
-        className
+        className,
       )}
       aria-label="Bottom navigation"
     >
@@ -42,18 +43,13 @@ export function BottomNavBar({ className }: BottomNavBarProps) {
           {({ isActive }) => (
             <>
               <Icon
-                className={cn(
-                  "size-5",
-                  isActive ? "text-primary-foreground" : "text-current"
-                )}
+                className={cn("size-5", isActive ? "text-primary-foreground" : "text-current")}
               />
-              <span className="text-[9px] font-semibold tracking-[0.12em] uppercase">
-                {label}
-              </span>
+              <span className="text-[9px] font-semibold tracking-[0.12em] uppercase">{label}</span>
             </>
           )}
         </Link>
       ))}
     </nav>
-  )
+  );
 }

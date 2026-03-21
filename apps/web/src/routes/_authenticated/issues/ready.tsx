@@ -18,7 +18,10 @@ function ReadyIssuesPage() {
       description="These issues have enough context to launch execution immediately without extra setup steps."
       metrics={[
         { label: "Ready", value: String(readyIssues.length) },
-        { label: "Assigned", value: String(readyIssues.filter((issue) => issue.assignedToMe).length) },
+        {
+          label: "Assigned",
+          value: String(readyIssues.filter((issue) => issue.assignedToMe).length),
+        },
         { label: "Avg prep", value: "5m" },
       ]}
     >

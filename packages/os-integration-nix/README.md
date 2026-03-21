@@ -1,6 +1,7 @@
 # Nix OS Integration
 
-`@sealant/os-integration-nix` is the concrete Nix-backed OS integration for Sealant workspace composition.
+`@sealant/os-integration-nix` is the concrete Nix-backed OS integration for Sealant workspace
+composition.
 
 It turns a workspace definition into:
 
@@ -38,10 +39,9 @@ nix build "path:$PWD/packages/os-integration-nix#example-minimal-image"
 
 ## Run The Contract Wrapper Demo
 
-This package also contains a minimal end-to-end wrapper that starts from a
-hardcoded user-facing spec, normalizes it through `@sealant/workspace-composition`,
-maps it into the current Nix executor spec, and can optionally build through the
-existing Nix backend.
+This package also contains a minimal end-to-end wrapper that starts from a hardcoded user-facing
+spec, normalizes it through `@sealant/workspace-composition`, maps it into the current Nix executor
+spec, and can optionally build through the existing Nix backend.
 
 Print the hardcoded user spec, normalized blueprint, support result, and mapped Nix executor spec:
 

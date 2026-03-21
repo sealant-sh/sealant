@@ -33,7 +33,8 @@ export const parseAuthEnv = (input: Record<string, string | undefined>): AuthEnv
 
   return {
     ...env,
-    BETTER_AUTH_URL: input.PORT === undefined ? "http://localhost:3000" : `http://localhost:${input.PORT}`,
+    BETTER_AUTH_URL:
+      input.PORT === undefined ? "http://localhost:3000" : `http://localhost:${input.PORT}`,
   };
 };
 

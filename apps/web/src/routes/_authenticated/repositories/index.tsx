@@ -16,8 +16,14 @@ function RepositoriesPage() {
       description="Configure repositories, verify ownership, and inspect run readiness from one rule-driven surface."
       metrics={[
         { label: "Configured", value: String(REPOSITORIES.length) },
-        { label: "Stable", value: String(REPOSITORIES.filter((repository) => repository.health === "Stable").length) },
-        { label: "Watch", value: String(REPOSITORIES.filter((repository) => repository.health === "Watch").length) },
+        {
+          label: "Stable",
+          value: String(REPOSITORIES.filter((repository) => repository.health === "Stable").length),
+        },
+        {
+          label: "Watch",
+          value: String(REPOSITORIES.filter((repository) => repository.health === "Watch").length),
+        },
       ]}
     >
       <RepositoryRows repositories={REPOSITORIES} />

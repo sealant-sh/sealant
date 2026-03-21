@@ -5,41 +5,41 @@
 
 export interface RegistrySummary {
   /** Routing ID — maps to REGISTRY_NAME env var in the API */
-  id: string
-  name: string
-  baseUrl: string
-  pushRegistry: string
-  hasBasicAuth: boolean
+  id: string;
+  name: string;
+  baseUrl: string;
+  pushRegistry: string;
+  hasBasicAuth: boolean;
 }
 
 export interface TagsResponse {
-  repository: string
-  tags: string[]
+  repository: string;
+  tags: string[];
 }
 
 export interface OciManifestLayer {
-  mediaType: string
-  size: number
-  digest: string
+  mediaType: string;
+  size: number;
+  digest: string;
 }
 
 export interface OciManifestConfig {
-  mediaType: string
-  size: number
-  digest: string
+  mediaType: string;
+  size: number;
+  digest: string;
 }
 
 export interface OciImageManifest {
-  schemaVersion: number
-  mediaType: string
-  config: OciManifestConfig
-  layers: OciManifestLayer[]
+  schemaVersion: number;
+  mediaType: string;
+  config: OciManifestConfig;
+  layers: OciManifestLayer[];
 }
 
 export interface ManifestResponse {
-  repository: string
-  reference: string
-  digest?: string
-  contentType: string | null
-  manifest: unknown
+  repository: string;
+  reference: string;
+  digest?: string;
+  contentType: string | null;
+  manifest: unknown;
 }

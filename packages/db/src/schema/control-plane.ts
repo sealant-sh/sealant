@@ -1,5 +1,12 @@
 import type { UserWorkspaceSpec, WorkspaceBlueprint } from "@sealant/workspace-composition";
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 import { user } from "./auth.js";
 
@@ -142,7 +149,9 @@ export const profileRevisions = sqliteTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    configPatch: text("config_patch", { mode: "json" }).$type<Partial<UserWorkspaceSpec>>().notNull(),
+    configPatch: text("config_patch", { mode: "json" })
+      .$type<Partial<UserWorkspaceSpec>>()
+      .notNull(),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -172,7 +181,10 @@ export const profileEnvVars = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    uniqueIndex("profile_env_vars_profile_revision_id_key_idx").on(table.profileRevisionId, table.key),
+    uniqueIndex("profile_env_vars_profile_revision_id_key_idx").on(
+      table.profileRevisionId,
+      table.key,
+    ),
     index("profile_env_vars_profile_revision_id_idx").on(table.profileRevisionId),
   ],
 );
@@ -363,7 +375,9 @@ export const repositoryProfileRevisions = sqliteTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    runTemplate: text("run_template", { mode: "json" }).$type<Partial<UserWorkspaceSpec>>().notNull(),
+    runTemplate: text("run_template", { mode: "json" })
+      .$type<Partial<UserWorkspaceSpec>>()
+      .notNull(),
     policyConfig: text("policy_config", { mode: "json" }).$type<Record<string, unknown>>(),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
@@ -556,10 +570,12 @@ export const runInputSnapshots = sqliteTable("run_input_snapshots", {
   blueprintPayload: text("blueprint_payload", { mode: "json" })
     .$type<WorkspaceBlueprint>()
     .notNull(),
-  profileConfigSnapshot: text("profile_config_snapshot", { mode: "json" }).$type<Record<string, unknown>>(),
-  repositoryProfileConfigSnapshot: text("repository_profile_config_snapshot", { mode: "json" }).$type<
+  profileConfigSnapshot: text("profile_config_snapshot", { mode: "json" }).$type<
     Record<string, unknown>
   >(),
+  repositoryProfileConfigSnapshot: text("repository_profile_config_snapshot", {
+    mode: "json",
+  }).$type<Record<string, unknown>>(),
   createdAt: integer({ mode: "timestamp_ms" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -587,7 +603,10 @@ export const runArtifacts = sqliteTable(
   },
   (table) => [
     index("run_artifacts_run_id_kind_idx").on(table.runId, table.kind),
-    index("run_artifacts_storage_backend_storage_key_idx").on(table.storageBackend, table.storageKey),
+    index("run_artifacts_storage_backend_storage_key_idx").on(
+      table.storageBackend,
+      table.storageKey,
+    ),
   ],
 );
 
@@ -726,7 +745,10 @@ export const runPullRequestLinks = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.pullRequestId] }),
-    index("run_pull_request_links_pull_request_id_relation_idx").on(table.pullRequestId, table.relation),
+    index("run_pull_request_links_pull_request_id_relation_idx").on(
+      table.pullRequestId,
+      table.relation,
+    ),
   ],
 );
 
@@ -746,7 +768,10 @@ export const issuePullRequestLinks = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.issueId, table.pullRequestId] }),
-    index("issue_pull_request_links_pull_request_id_relation_idx").on(table.pullRequestId, table.relation),
+    index("issue_pull_request_links_pull_request_id_relation_idx").on(
+      table.pullRequestId,
+      table.relation,
+    ),
   ],
 );
 

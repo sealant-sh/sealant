@@ -1,7 +1,7 @@
-import { Button as ButtonPrimitive } from "@base-ui/react/button"
-import { cva, type VariantProps } from "class-variance-authority"
+import { Button as ButtonPrimitive } from "@base-ui/react/button";
+import { cva, type VariantProps } from "class-variance-authority";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-none border border-transparent bg-clip-padding text-[0.72rem] font-semibold leading-none whitespace-nowrap uppercase tracking-[0.11em] transition-[background-color,color,border-color,transform] duration-200 outline-none select-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -35,8 +35,8 @@ const buttonVariants = cva(
       variant: "default",
       size: "default",
     },
-  }
-)
+  },
+);
 
 function Button({
   className,
@@ -52,7 +52,7 @@ function Button({
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
-  )
+  );
 }
 
-export { Button, buttonVariants }
+export { Button, buttonVariants };

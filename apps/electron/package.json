@@ -1,6 +1,6 @@
 {
   "name": "@sealant/electron",
-  "private": true,
   "version": "0.0.0",
+  "private": true,
   "description": "Desktop application surface for Sealant"
 }

@@ -5,7 +5,8 @@
 It currently provides:
 
 - a small Zot client for health checks, tag lookup, manifest inspection, and extension discovery
-- a first publish helper that loads a docker-compatible image archive, retags it, and pushes it into Zot
+- a first publish helper that loads a docker-compatible image archive, retags it, and pushes it into
+  Zot
 - a local dev Zot deployment under `dev/zot/`
 
 ## Local dev registry
@@ -42,19 +43,23 @@ await registry.publishOciImage({
 
 `baseUrl` is the HTTP address the calling process should use for Zot API requests.
 
-`pushRegistry` is the host and port that should appear in pushed image references. This can differ from `baseUrl` when the caller talks to Zot over an internal container network but the Docker daemon needs a host-reachable registry address.
+`pushRegistry` is the host and port that should appear in pushed image references. This can differ
+from `baseUrl` when the caller talks to Zot over an internal container network but the Docker daemon
+needs a host-reachable registry address.
 
 ## Terminology
 
 - `publish` means uploading an image into the registry
 - `pull` means downloading an image from the registry
-- `run` or `deploy` means starting something from that image on a runtime such as Docker, Kubernetes, Kata, or gVisor
+- `run` or `deploy` means starting something from that image on a runtime such as Docker,
+  Kubernetes, Kata, or gVisor
 
 This package currently handles the first part: publishing OCI images into Zot.
 
 ## Current publish behavior
 
-`publishOciImage(...)` currently expects the artifact path to point at a docker-loadable image archive, which matches the current Nix output from `@sealant/os-integration-nix`.
+`publishOciImage(...)` currently expects the artifact path to point at a docker-loadable image
+archive, which matches the current Nix output from `@sealant/os-integration-nix`.
 
 The helper runs:
 
@@ -62,21 +67,27 @@ The helper runs:
 2. `docker tag <loaded-image> <pushRegistry>/<repository>:<tag>`
 3. `docker push <pushRegistry>/<repository>:<tag>`
 
-After the push completes, it resolves the manifest digest back from Zot and returns both tag and digest references.
+After the push completes, it resolves the manifest digest back from Zot and returns both tag and
+digest references.
 
 ## Why Docker Is Involved Right Now
 
-The current Nix executor already produces an OCI image in a form that Docker can import with `docker load`. This package uses that existing handoff format as the shortest path to getting images into Zot.
+The current Nix executor already produces an OCI image in a form that Docker can import with
+`docker load`. This package uses that existing handoff format as the shortest path to getting images
+into Zot.
 
-That Docker step is an implementation detail of the current upload flow, not a statement about the final runtime target.
+That Docker step is an implementation detail of the current upload flow, not a statement about the
+final runtime target.
 
 - the artifact being published is still an `oci-image`
 - the registry still stores a standard image that other runtimes can pull
 - Kubernetes, Kata, gVisor, and other OCI-capable runtimes are still valid downstream targets
 
-In other words, Docker is just the current bridge between the Nix-produced image archive on disk and the registry.
+In other words, Docker is just the current bridge between the Nix-produced image archive on disk and
+the registry.
 
-Future versions of this package can add other upload paths if a backend emits a different image packaging format.
+Future versions of this package can add other upload paths if a backend emits a different image
+packaging format.
 
 ## End-to-End Example
 

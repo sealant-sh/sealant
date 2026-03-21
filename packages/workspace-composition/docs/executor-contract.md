@@ -3,7 +3,8 @@
 `OsExecutor` is the shared interface that OS-specific backends implement so the composition layer
 can call them uniformly.
 
-The first concrete backends will live in packages such as `@sealant/os-integration-nix`, `@sealant/os-integration-fedora`, and `@sealant/os-integration-arch`.
+The first concrete backends will live in packages such as `@sealant/os-integration-nix`,
+`@sealant/os-integration-fedora`, and `@sealant/os-integration-arch`.
 
 ## Responsibilities
 
@@ -22,7 +23,8 @@ The runtime contract is defined in `src/executor.ts` as the `OsExecutor` TypeScr
 
 ## Zod-backed schemas
 
-`@sealant/workspace-composition` also exports Zod schemas for the data that flows through the interface:
+`@sealant/workspace-composition` also exports Zod schemas for the data that flows through the
+interface:
 
 - `osExecutorIdSchema`
 - `osExecutorSupportSchema`

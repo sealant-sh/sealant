@@ -1,11 +1,13 @@
-import { useState } from "react";
-
 import { Button, useAppForm } from "@sealant/ui";
 import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { AuthShell } from "@/components/auth/auth-shell";
-import { resetPasswordFormDefaults, resetPasswordFormSchema } from "@/features/auth/forms/reset-password-form";
+import {
+  resetPasswordFormDefaults,
+  resetPasswordFormSchema,
+} from "@/features/auth/forms/reset-password-form";
 
 export const Route = createFileRoute("/_auth/reset-password")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -21,9 +23,7 @@ function ResetPasswordPage() {
     defaultValues: resetPasswordFormDefaults,
     validationLogic: revalidateLogic(),
     onSubmit: () => {
-      setNotice(
-        "Password reset is not available yet for this deployment. Please try again later.",
-      );
+      setNotice("Password reset is not available yet for this deployment. Please try again later.");
     },
     validators: {
       onDynamic: resetPasswordFormSchema,
@@ -38,8 +38,10 @@ function ResetPasswordPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Reset Password</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">New Password</h2>
+          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
+            Reset Password
+          </p>
+          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground">New Password</h2>
           <p className="text-sm leading-7 text-muted-foreground">
             {search.token !== undefined
               ? `A reset token was detected: ${search.token.slice(0, 8)}…`
@@ -64,7 +66,7 @@ function ResetPasswordPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="New password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Create a password..."
                   required
                 />
@@ -79,7 +81,7 @@ function ResetPasswordPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Confirm password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Repeat the password..."
                   required
                 />
@@ -99,11 +101,7 @@ function ResetPasswordPage() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button
-                className="h-12 w-full"
-                disabled={isSubmitting}
-                type="submit"
-              >
+              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
                 {isSubmitting ? "Setting Password..." : "Set Password"}
               </Button>
             )}
@@ -112,7 +110,10 @@ function ResetPasswordPage() {
 
         <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Need a new link?</p>
-          <a href="/forgot-password" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
+          <a
+            href="/forgot-password"
+            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+          >
             Request Reset
           </a>
         </div>

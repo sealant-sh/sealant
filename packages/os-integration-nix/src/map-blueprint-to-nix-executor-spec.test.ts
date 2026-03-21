@@ -1,9 +1,11 @@
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import { normalizeUserWorkspaceSpec } from "@zweit/workspace-composition";
 import { describe, expect, it } from "vitest";
 
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
-
-import { getNixExecutorSupport, mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
+import {
+  getNixExecutorSupport,
+  mapBlueprintToNixExecutorSpec,
+} from "./map-blueprint-to-nix-executor-spec.js";
 
 describe("getNixExecutorSupport", () => {
   it("supports the minimal nix path", () => {

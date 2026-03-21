@@ -1,4 +1,4 @@
-import type { ManifestResponse, OciImageManifest, RegistrySummary, TagsResponse } from "./types"
+import type { ManifestResponse, OciImageManifest, RegistrySummary, TagsResponse } from "./types";
 
 export const MOCK_REGISTRIES: RegistrySummary[] = [
   {
@@ -22,7 +22,7 @@ export const MOCK_REGISTRIES: RegistrySummary[] = [
     pushRegistry: "registry.prod.sealant.internal",
     hasBasicAuth: true,
   },
-]
+];
 
 export const MOCK_REPOSITORIES: Record<string, string[]> = {
   "local-dev": [
@@ -32,16 +32,9 @@ export const MOCK_REPOSITORIES: Record<string, string[]> = {
     "base/fedora-dev",
     "base/arch-dev",
   ],
-  staging: [
-    "workspace/opencode",
-    "workspace/claude-code",
-    "base/fedora-dev",
-  ],
-  production: [
-    "workspace/opencode",
-    "workspace/claude-code",
-  ],
-}
+  staging: ["workspace/opencode", "workspace/claude-code", "base/fedora-dev"],
+  production: ["workspace/opencode", "workspace/claude-code"],
+};
 
 export const MOCK_TAGS: Record<string, TagsResponse> = {
   "local-dev/workspace/opencode": {
@@ -84,10 +77,10 @@ export const MOCK_TAGS: Record<string, TagsResponse> = {
     repository: "workspace/claude-code",
     tags: ["v1.1.0"],
   },
-}
+};
 
 function makeManifest(repository: string, reference: string): ManifestResponse {
-  const digest = `sha256:${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("")}`
+  const digest = `sha256:${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("")}`;
 
   const manifest: OciImageManifest = {
     schemaVersion: 2,
@@ -114,7 +107,7 @@ function makeManifest(repository: string, reference: string): ManifestResponse {
         digest: `sha256:${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join("")}`,
       },
     ],
-  }
+  };
 
   return {
     repository,
@@ -122,10 +115,14 @@ function makeManifest(repository: string, reference: string): ManifestResponse {
     digest,
     contentType: "application/vnd.oci.image.manifest.v1+json",
     manifest,
-  }
+  };
 }
 
-export function getMockManifest(_registryId: string, repository: string, reference: string): ManifestResponse {
+export function getMockManifest(
+  _registryId: string,
+  repository: string,
+  reference: string,
+): ManifestResponse {
   // Return deterministic-ish manifest based on the key
-  return makeManifest(repository, reference)
+  return makeManifest(repository, reference);
 }

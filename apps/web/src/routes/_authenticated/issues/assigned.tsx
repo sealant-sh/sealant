@@ -18,8 +18,14 @@ function AssignedIssuesPage() {
       description="Focus only on issues you currently own and drive each one into a validated run workspace."
       metrics={[
         { label: "Owned now", value: String(assignedIssues.length) },
-        { label: "Ready", value: String(assignedIssues.filter((issue) => issue.readyForRun).length) },
-        { label: "Blocked", value: String(assignedIssues.filter((issue) => !issue.readyForRun).length) },
+        {
+          label: "Ready",
+          value: String(assignedIssues.filter((issue) => issue.readyForRun).length),
+        },
+        {
+          label: "Blocked",
+          value: String(assignedIssues.filter((issue) => !issue.readyForRun).length),
+        },
       ]}
     >
       <IssueRows issues={assignedIssues} />

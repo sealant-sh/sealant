@@ -1,28 +1,29 @@
-import * as React from "react"
-import { Link } from "@tanstack/react-router"
-import { cn } from "@/lib/utils"
+import { Link } from "@tanstack/react-router";
+import * as React from "react";
 
-export type SystemStatus = "online" | "degraded" | "offline"
+import { cn } from "@/lib/utils";
+
+export type SystemStatus = "online" | "degraded" | "offline";
 
 interface TopAppBarProps {
-  status?: SystemStatus
-  className?: string
+  status?: SystemStatus;
+  className?: string;
 }
 
 const statusConfig: Record<SystemStatus, { label: string; color: string }> = {
   online: { label: "ONLINE", color: "bg-foreground" },
   degraded: { label: "DEGRADED", color: "bg-muted-foreground" },
   offline: { label: "OFFLINE", color: "bg-red-500" },
-}
+};
 
 export function TopAppBar({ status = "online", className }: TopAppBarProps) {
-  const { label, color } = statusConfig[status]
+  const { label, color } = statusConfig[status];
 
   return (
     <header
       className={cn(
         "fixed top-0 left-0 right-0 z-50 flex h-16 items-center border-b-2 border-foreground bg-card px-6",
-        className
+        className,
       )}
     >
       {/* Brand */}
@@ -43,21 +44,18 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
 
       {/* System status — right aligned */}
       <div className="ml-auto flex items-center gap-2">
-        <div
-          className={cn("h-2 w-2 rounded-full", color)}
-          aria-hidden="true"
-        />
+        <div className={cn("h-2 w-2 rounded-full", color)} aria-hidden="true" />
         <span className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
           {label}
         </span>
       </div>
     </header>
-  )
+  );
 }
 
 interface TopNavLinkProps {
-  to: string
-  children: React.ReactNode
+  to: string;
+  children: React.ReactNode;
 }
 
 function TopNavLink({ to, children }: TopNavLinkProps) {
@@ -72,5 +70,5 @@ function TopNavLink({ to, children }: TopNavLinkProps) {
     >
       {children}
     </Link>
-  )
+  );
 }

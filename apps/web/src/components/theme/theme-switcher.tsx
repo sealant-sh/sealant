@@ -22,8 +22,14 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
 
   return (
     <div className={cn("inline-flex items-center gap-2", className)}>
-      <span className="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-muted-foreground">Theme</span>
-      <div className="inline-flex overflow-hidden border border-border bg-background" role="group" aria-label="Theme selection">
+      <span className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
+        Theme
+      </span>
+      <div
+        className="inline-flex overflow-hidden border border-border bg-background"
+        role="group"
+        aria-label="Theme selection"
+      >
         {themeOptions.map((option) => {
           const Icon = option.icon;
           const isActive = userTheme === option.value;
@@ -37,8 +43,9 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
                 setTheme(option.value);
               }}
               className={cn(
-                "inline-flex h-8 items-center gap-1.5 border-r border-border px-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground transition-colors duration-200 last:border-r-0 hover:bg-muted hover:text-foreground focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-                isActive && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
+                "inline-flex h-8 items-center gap-1.5 border-r border-border px-2.5 text-[0.62rem] font-semibold tracking-[0.12em] text-muted-foreground transition-colors duration-200 last:border-r-0 hover:bg-muted hover:text-foreground focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+                isActive &&
+                  "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
               )}
             >
               <Icon className="size-3.5" />

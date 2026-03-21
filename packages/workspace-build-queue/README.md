@@ -23,4 +23,5 @@ Start RabbitMQ locally:
 docker compose -f packages/workspace-build-queue/dev/rabbitmq/compose.yaml up -d
 ```
 
-The broker listens on `amqp://sealant:sealant@127.0.0.1:5673` and the management UI is available at `http://127.0.0.1:15673`.
+The broker listens on `amqp://sealant:sealant@127.0.0.1:5673` and the management UI is available at
+`http://127.0.0.1:15673`.

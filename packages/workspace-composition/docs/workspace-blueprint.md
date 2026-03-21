@@ -1,6 +1,7 @@
 # Workspace Blueprint
 
-`WorkspaceBlueprint` is the normalized, OS-agnostic internal contract owned by `@sealant/workspace-composition`.
+`WorkspaceBlueprint` is the normalized, OS-agnostic internal contract owned by
+`@sealant/workspace-composition`.
 
 It captures the parts of a workspace request that should survive across OS integrations:
 

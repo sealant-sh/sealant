@@ -15,7 +15,7 @@ function RunsPage() {
   return (
     <WorkspacePage
       kicker="Runs"
-      title="Execution history"
+      title="Execution History"
       description="Track every execution, isolate failed workflows quickly, and open run workspaces without leaving this surface."
       metrics={[
         { label: "Total runs", value: String(RUNS.length) },

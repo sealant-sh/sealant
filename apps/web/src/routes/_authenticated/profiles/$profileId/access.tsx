@@ -24,8 +24,13 @@ function ProfileAccessPage() {
           ["Host allowlist", "10.20.0.0/16"],
           ["Session timeout", "45m"],
         ].map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0">
-            <p className="font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground">{label}</p>
+          <div
+            key={label}
+            className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
+          >
+            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+              {label}
+            </p>
             <p className="text-sm font-semibold text-foreground">{value}</p>
           </div>
         ))}

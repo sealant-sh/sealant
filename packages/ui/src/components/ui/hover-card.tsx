@@ -1,15 +1,13 @@
-import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card"
+import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 function HoverCard({ ...props }: PreviewCardPrimitive.Root.Props) {
-  return <PreviewCardPrimitive.Root data-slot="hover-card" {...props} />
+  return <PreviewCardPrimitive.Root data-slot="hover-card" {...props} />;
 }
 
 function HoverCardTrigger({ ...props }: PreviewCardPrimitive.Trigger.Props) {
-  return (
-    <PreviewCardPrimitive.Trigger data-slot="hover-card-trigger" {...props} />
-  )
+  return <PreviewCardPrimitive.Trigger data-slot="hover-card-trigger" {...props} />;
 }
 
 function HoverCardContent({
@@ -20,10 +18,7 @@ function HoverCardContent({
   alignOffset = 4,
   ...props
 }: PreviewCardPrimitive.Popup.Props &
-  Pick<
-    PreviewCardPrimitive.Positioner.Props,
-    "align" | "alignOffset" | "side" | "sideOffset"
-  >) {
+  Pick<PreviewCardPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
   return (
     <PreviewCardPrimitive.Portal data-slot="hover-card-portal">
       <PreviewCardPrimitive.Positioner
@@ -37,13 +32,13 @@ function HoverCardContent({
           data-slot="hover-card-content"
           className={cn(
             "z-50 w-64 origin-(--transform-origin) rounded-none border border-border bg-popover p-2.5 text-sm text-popover-foreground outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-1 data-[side=inline-end]:slide-in-from-left-1 data-[side=inline-start]:slide-in-from-right-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
-            className
+            className,
           )}
           {...props}
         />
       </PreviewCardPrimitive.Positioner>
     </PreviewCardPrimitive.Portal>
-  )
+  );
 }
 
-export { HoverCard, HoverCardTrigger, HoverCardContent }
+export { HoverCard, HoverCardTrigger, HoverCardContent };

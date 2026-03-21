@@ -2,8 +2,8 @@ import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
 import * as React from "react";
 
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 function Dialog({ ...props }: DialogPrimitive.Root.Props) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
@@ -85,7 +85,7 @@ function DialogFooter({
   return (
     <div
       data-slot="dialog-footer"
-        className={cn(
+      className={cn(
         "-mx-4 -mb-4 flex flex-col-reverse gap-2 border-t border-border bg-muted/30 p-4 sm:flex-row sm:justify-end",
         className,
       )}

@@ -27,8 +27,11 @@ function RegistryDetailPage() {
 
   return (
     <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <nav className="mb-6 flex items-center gap-2 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground">
-        <Link to="/registry" className="flex items-center gap-1 text-muted-foreground no-underline transition-colors hover:text-foreground">
+      <nav className="mb-6 flex items-center gap-2 font-mono text-xs tracking-[0.1em] text-muted-foreground">
+        <Link
+          to="/registry"
+          className="flex items-center gap-1 text-muted-foreground no-underline transition-colors hover:text-foreground"
+        >
           <ArrowLeft className="size-3" />
           Registry
         </Link>
@@ -37,14 +40,16 @@ function RegistryDetailPage() {
       </nav>
 
       <div className="mb-8">
-        <h1 className="font-display text-6xl tracking-[0.02em] uppercase text-foreground leading-none">{registry.name.toUpperCase()}</h1>
+        <h1 className="font-display text-6xl tracking-[0.02em] text-foreground leading-none">
+          {registry.name.toUpperCase()}
+        </h1>
         <div className="mt-4 flex flex-wrap items-center gap-4">
           <span className="font-mono text-sm text-foreground">{registry.baseUrl}</span>
           <Badge
             className={
               registry.hasBasicAuth
-                ? "rounded-none bg-primary text-primary-foreground font-mono text-[10px] tracking-[0.12em] uppercase"
-                : "rounded-none border border-border bg-muted text-muted-foreground font-mono text-[10px] tracking-[0.12em] uppercase"
+                ? "rounded-none bg-primary text-primary-foreground font-mono text-[10px] tracking-[0.12em] "
+                : "rounded-none border border-border bg-muted text-muted-foreground font-mono text-[10px] tracking-[0.12em] "
             }
           >
             {registry.hasBasicAuth ? "Basic auth" : "No auth"}
@@ -60,10 +65,14 @@ function RegistryDetailPage() {
 
       <div>
         <div className="mb-4 flex items-baseline gap-3">
-          <h2 className="text-sm font-semibold tracking-[0.1em] uppercase text-foreground">Repositories</h2>
+          <h2 className="text-sm font-semibold tracking-[0.1em] text-foreground">Repositories</h2>
           <span className="font-mono text-xs text-muted-foreground">({repositories.length})</span>
         </div>
-        <RepositoryList registryId={registry.id} repositories={repositories} onLoadTags={loadTags} />
+        <RepositoryList
+          registryId={registry.id}
+          repositories={repositories}
+          onLoadTags={loadTags}
+        />
       </div>
     </div>
   );
@@ -72,7 +81,7 @@ function RegistryDetailPage() {
 function MetaField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground">{label}</p>
+      <p className="font-mono text-[10px] tracking-[0.12em] text-muted-foreground">{label}</p>
       <p className="mt-1 font-mono text-xs text-foreground truncate" title={value}>
         {value}
       </p>
@@ -97,7 +106,10 @@ function RegistryDetailSkeleton() {
       <Skeleton className="mb-4 h-3 w-28 rounded-none bg-muted" />
       <div className="border border-border">
         {Array.from({ length: 4 }).map((_, index) => (
-          <div key={index} className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0">
+          <div
+            key={index}
+            className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+          >
             <Skeleton className="h-3 w-3 rounded-none bg-muted" />
             <Skeleton className="h-3 flex-1 rounded-none bg-muted" />
             <Skeleton className="h-5 w-10 rounded-none bg-muted" />
