@@ -6,6 +6,19 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  Sidebar,
+  SidebarContent as UiSidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  useSidebar,
 } from "@sealant/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
@@ -23,10 +36,16 @@ import {
   Search,
   Sun,
   UserRound,
-  X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
@@ -89,7 +108,6 @@ const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
 
 export function AppShell({ session, children }: AppShellProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -106,10 +124,6 @@ export function AppShell({ session, children }: AppShellProps) {
     selectedRepository,
     selectedProfile,
   });
-
-  useEffect(() => {
-    setIsMobileSidebarOpen(false);
-  }, [pathname]);
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
@@ -128,111 +142,84 @@ export function AppShell({ session, children }: AppShellProps) {
     <div className="min-h-svh bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--sw-rule)_16%,transparent)_1px,transparent_0)] [background-size:20px_20px] opacity-15" />
 
-      <div className="relative flex min-h-svh w-full flex-col border-x border-border">
-        <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
-          <div className="flex min-h-16 items-center gap-3 px-4 py-3 sm:px-6">
-            <button
-              type="button"
-              aria-label={isMobileSidebarOpen ? "Close navigation" : "Open navigation"}
-              aria-expanded={isMobileSidebarOpen}
-              onClick={() => {
-                setIsMobileSidebarOpen((current) => !current);
-              }}
-              className="inline-flex h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:hidden"
-            >
-              {isMobileSidebarOpen ? (
-                <X className="size-4" />
-              ) : (
-                <PanelLeftOpen className="size-4" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              aria-label={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-              aria-expanded={isSidebarOpen}
-              onClick={() => {
-                setIsSidebarOpen((current) => !current);
-              }}
-              className="hidden h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted lg:inline-flex"
-            >
-              {isSidebarOpen ? (
-                <PanelLeftClose className="size-4" />
-              ) : (
-                <PanelLeftOpen className="size-4" />
-              )}
-            </button>
-            <div className="ml-auto flex items-center gap-3">
-              <label className="relative hidden min-w-52 items-center xl:flex">
-                <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
-                <input
-                  type="search"
-                  placeholder="Search runs, repos, profiles"
-                  className="h-9 w-full border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
-                />
-              </label>
-            </div>
-          </div>
-        </header>
-
-        <div className="relative flex min-h-[calc(100svh-4.25rem)] min-w-0">
-          <div
-            aria-hidden={!isMobileSidebarOpen}
-            className={cn(
-              "fixed inset-0 z-30 bg-background/70 transition-opacity duration-200 lg:hidden",
-              isMobileSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0",
-            )}
-            onClick={() => {
-              setIsMobileSidebarOpen(false);
-            }}
+      <SidebarProvider
+        open={isSidebarOpen}
+        onOpenChange={setIsSidebarOpen}
+        className="relative min-h-svh border-x border-border"
+        style={{ "--sidebar-offset": "4.25rem" } as CSSProperties}
+      >
+        <Sidebar
+          collapsible="icon"
+          className="z-30 border-r border-sidebar-border bg-card"
+        >
+          <AppSidebarNav
+            activeArea={activeArea}
+            pathname={pathname}
+            sidebarGroups={sidebarGroups}
+            session={session}
+            isSigningOut={isSigningOut}
+            onSignOut={handleSignOut}
           />
+        </Sidebar>
 
-          <aside
-            className={cn(
-              "fixed inset-y-[4.25rem] left-0 z-40 flex w-[18rem] flex-col border-r border-border bg-card transition-transform duration-200 ease-out lg:hidden",
-              isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
-            )}
-          >
-            <SidebarContent
-              activeArea={activeArea}
-              pathname={pathname}
-              sidebarGroups={sidebarGroups}
-              isExpanded={true}
-              session={session}
-              isSigningOut={isSigningOut}
-              onSignOut={handleSignOut}
-            />
-          </aside>
-
-          <aside
-            className={cn(
-              "hidden shrink-0 border-r border-border bg-card transition-[width] duration-200 ease-out lg:flex",
-              isSidebarOpen ? "w-[18rem]" : "w-[5.25rem]",
-            )}
-          >
-            <SidebarContent
-              activeArea={activeArea}
-              pathname={pathname}
-              sidebarGroups={sidebarGroups}
-              isExpanded={isSidebarOpen}
-              session={session}
-              isSigningOut={isSigningOut}
-              onSignOut={handleSignOut}
-            />
-          </aside>
-
-          <main className="min-h-0 min-w-0 flex-1 overflow-auto p-4 sm:p-6">{children}</main>
-        </div>
-      </div>
+        <SidebarInset className="min-h-svh border-0 bg-transparent">
+          <ShellHeader isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} />
+          <main className="min-h-[calc(100svh-4.25rem)] min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
+        </SidebarInset>
+      </SidebarProvider>
     </div>
   );
 }
 
-function SidebarContent({
+function ShellHeader({
+  isSidebarOpen,
+  setIsSidebarOpen,
+}: {
+  readonly isSidebarOpen: boolean;
+  readonly setIsSidebarOpen: Dispatch<SetStateAction<boolean>>;
+}) {
+  const { isMobile, openMobile, setOpenMobile } = useSidebar();
+  const isOpen = isMobile ? openMobile : isSidebarOpen;
+
+  return (
+    <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
+      <div className="flex min-h-16 items-center gap-3 px-4 py-3 sm:px-6">
+        <button
+          type="button"
+          aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
+          aria-expanded={isOpen}
+          onClick={() => {
+            if (isMobile) {
+              setOpenMobile(!openMobile);
+              return;
+            }
+
+            setIsSidebarOpen((current) => !current);
+          }}
+          className="inline-flex h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted"
+        >
+          {isOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
+        </button>
+
+        <div className="ml-auto flex items-center gap-3">
+          <label className="relative hidden min-w-52 items-center xl:flex">
+            <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
+            <input
+              type="search"
+              placeholder="Search runs, repos, profiles"
+              className="h-9 w-full border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
+            />
+          </label>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function AppSidebarNav({
   activeArea,
   pathname,
   sidebarGroups,
-  isExpanded,
   session,
   isSigningOut,
   onSignOut,
@@ -240,25 +227,25 @@ function SidebarContent({
   readonly activeArea: GlobalArea;
   readonly pathname: string;
   readonly sidebarGroups: readonly SidebarGroup[];
-  readonly isExpanded: boolean;
   readonly session: AuthSession;
   readonly isSigningOut: boolean;
   readonly onSignOut: () => Promise<void>;
 }) {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const { isMobile, setOpenMobile, state } = useSidebar();
   const { userTheme, setTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
   const currentTheme = getThemeMenuState(userTheme);
   const ThemeIcon = currentTheme.icon;
+  const isExpanded = isMobile || state === "expanded";
+
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        className={cn(
-          "flex h-16 items-center border-b border-border",
-          isExpanded ? "px-3" : "justify-center px-2",
-        )}
-      >
+    <>
+      <SidebarHeader>
         <div className={cn("flex items-center", isExpanded ? "gap-3" : "justify-center")}>
           <Link
             to={"/runs" as never}
@@ -277,88 +264,78 @@ function SidebarContent({
             <LogoText className="h-8" />
           </div>
         </div>
-      </div>
+      </SidebarHeader>
 
-      <div className={cn("border-b border-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}>
-        <nav aria-label="Global navigation" className="space-y-1.5">
+      <UiSidebarContent>
+        <SidebarGroup className={cn("border-b border-sidebar-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}>
+          <SidebarMenu aria-label="Global navigation" className="space-y-1.5">
           {GLOBAL_NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = activeArea === getGlobalArea(item.href);
 
             return (
-              <Link
-                key={item.href}
-                to={item.href as never}
-                className={cn(
-                  "group flex h-11 items-center border border-transparent text-sm no-underline transition-all duration-200 ease-out",
-                  isActive
-                    ? "border-l-2 border-l-primary bg-muted text-foreground"
-                    : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                  isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
-                )}
-                title={!isExpanded ? item.label : undefined}
-                aria-label={item.label}
-              >
-                <span className="flex shrink-0 items-center justify-center">
-                  <Icon className="size-4 shrink-0" />
-                </span>
-                <span
+              <SidebarMenuItem key={item.href}>
+                <SidebarMenuButton
+                  render={<Link to={item.href as never} />}
+                  isActive={isActive}
+                  tooltip={item.label}
+                  aria-label={item.label}
                   className={cn(
-                    "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+                    isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
+                    "[&>span:last-child]:transition-[max-width,opacity,transform] [&>span:last-child]:duration-200 [&>span:last-child]:ease-out [&>span:last-child]:whitespace-nowrap",
                     isExpanded
-                      ? "max-w-[10rem] translate-x-0 opacity-100"
-                      : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+                      ? "[&>span:last-child]:max-w-[10rem] [&>span:last-child]:translate-x-0 [&>span:last-child]:opacity-100"
+                      : "[&>span:last-child]:pointer-events-none [&>span:last-child]:max-w-0 [&>span:last-child]:-translate-x-2 [&>span:last-child]:opacity-0",
                   )}
-                  aria-hidden={!isExpanded}
                 >
-                  {item.label}
-                </span>
-              </Link>
+                  <Icon className="size-4 shrink-0" />
+                  <span>{item.label}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             );
           })}
-        </nav>
-      </div>
+          </SidebarMenu>
+        </SidebarGroup>
 
-      <div className={cn("flex-1 overflow-auto", isExpanded ? "px-3 py-4" : "px-2 py-3")}>
-        <div
-          className={cn(
-            "overflow-hidden transition-[max-height,opacity,transform] duration-200 ease-out",
-            isExpanded ? "max-h-[160rem] translate-y-0 opacity-100" : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
-          )}
-          aria-hidden={!isExpanded}
-        >
-          <div className="space-y-5">
-            {sidebarGroups.map((group) => (
-              <section key={group.label}>
-                <p className="border-b border-border pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                  {group.label}
-                </p>
-                <nav className="mt-2 space-y-1" aria-label={group.label}>
-                  {group.links.map((item) => {
-                    const isActive = isPathActive(pathname, item.href, item.exact ?? false);
-                    return (
-                      <Link
-                        key={item.href}
-                        to={item.href as never}
-                        className={cn(
-                          "block border border-transparent px-3 py-2 text-sm no-underline transition-all duration-200 ease-out",
-                          isActive
-                            ? "border-l-2 border-l-primary bg-muted text-foreground"
-                            : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                        )}
-                      >
-                        {item.label}
-                      </Link>
-                    );
-                  })}
-                </nav>
-              </section>
-            ))}
+        <SidebarGroup className={cn(isExpanded ? "px-3 py-4" : "px-2 py-0")}> 
+          <div
+            className={cn(
+              "overflow-hidden transition-[max-height,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-h-[160rem] translate-y-0 opacity-100" : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            <div className="space-y-5">
+              {sidebarGroups.map((group) => (
+                <div key={group.label}>
+                  <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                  <SidebarGroupContent className="mt-2">
+                    <SidebarMenu className="space-y-1">
+                      {group.links.map((item) => {
+                        const isActive = isPathActive(pathname, item.href, item.exact ?? false);
+
+                        return (
+                          <SidebarMenuItem key={item.href}>
+                            <SidebarMenuButton
+                              render={<Link to={item.href as never} />}
+                              isActive={isActive}
+                              className="px-3 text-sm normal-case tracking-normal"
+                            >
+                              <span>{item.label}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </div>
+        </SidebarGroup>
+      </UiSidebarContent>
 
-      <div className={cn("border-t border-border", isExpanded ? "px-3 py-4" : "px-2 py-4")}>
+      <SidebarFooter>
         <p
           className={cn(
             "overflow-hidden font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground transition-[max-height,opacity,transform,margin] duration-200 ease-out",
@@ -456,8 +433,8 @@ function SidebarContent({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
-    </div>
+      </SidebarFooter>
+    </>
   );
 }
 
@@ -524,30 +501,32 @@ function getGlobalArea(pathname: string): GlobalArea {
 
 function getRunDetail(pathname: string): { runId: string } | null {
   const segments = pathname.split("/").filter(Boolean);
+  const runId = segments[1];
 
-  if (segments[0] !== "runs" || segments.length < 2) {
+  if (segments[0] !== "runs" || runId === undefined) {
     return null;
   }
 
-  if (segments[1] === "active" || segments[1] === "failed") {
+  if (runId === "active" || runId === "failed") {
     return null;
   }
 
-  return { runId: decodeURIComponent(segments[1]) };
+  return { runId: decodeURIComponent(runId) };
 }
 
 function getSelectedEntity(pathname: string, area: "repositories" | "profiles"): string | null {
   const segments = pathname.split("/").filter(Boolean);
+  const entityId = segments[1];
 
-  if (segments[0] !== area || segments.length < 2) {
+  if (segments[0] !== area || entityId === undefined) {
     return null;
   }
 
-  if (area === "profiles" && segments[1] === "create") {
+  if (area === "profiles" && entityId === "create") {
     return null;
   }
 
-  return decodeURIComponent(segments[1]);
+  return decodeURIComponent(entityId);
 }
 
 function getSidebarGroups({

@@ -14,7 +14,7 @@ export const ThemeToggle = () => {
     const themes = Object.keys(themeConfig) as UserTheme[];
     const currentIndex = themes.indexOf(userTheme);
     const nextIndex = (currentIndex + 1) % themes.length;
-    return themes[nextIndex];
+    return themes[nextIndex] ?? themes[0]!;
   };
 
   return (

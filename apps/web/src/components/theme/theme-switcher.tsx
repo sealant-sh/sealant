@@ -26,7 +26,7 @@ function getNextTheme(theme: UserTheme): UserTheme {
 
 export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
   const { userTheme, setTheme } = useTheme();
-  const currentOption = themeOptions.find((option) => option.value === userTheme) ?? themeOptions[0];
+  const currentOption = themeOptions.find((option) => option.value === userTheme) ?? themeOptions[0]!;
   const Icon = currentOption.icon;
 
   return (

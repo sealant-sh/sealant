@@ -14,7 +14,7 @@ interface WorkspacePageProps {
 }
 
 export function WorkspacePage({
-  kicker,
+  kicker: _kicker,
   title,
   description,
   metrics,
