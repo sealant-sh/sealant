@@ -14,16 +14,13 @@ export function RunRows({ runs }: RunRowsProps) {
         <Link
           key={run.id}
           to={`/runs/${encodeURIComponent(run.id)}` as never}
-          className="grid gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
+          className="grid grid-cols-3 gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
         >
-          <div>
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">Run</p>
+          <div className="">
             <p className="mt-1 text-sm font-semibold text-foreground">{run.id}</p>
           </div>
           <div>
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              Repository
-            </p>
+            <p className="font-mono text-sm text-muted-foreground">Repository</p>
             <p className="mt-1 font-mono text-xs text-foreground">{run.repoId}</p>
           </div>
           <div>

@@ -64,7 +64,7 @@ export const LogoBlob = (props: React.ComponentPropsWithoutRef<"svg"> | { dark: 
       <path
         id="rect3"
         style={{
-          fill: "#00effa",
+          fill: "#d92f24",
           fillOpacity: 1,
           stroke: "#000000",
           strokeWidth: 0,
@@ -75,7 +75,7 @@ export const LogoBlob = (props: React.ComponentPropsWithoutRef<"svg"> | { dark: 
       <path
         id="rect3-9"
         style={{
-          fill: "#fa68ff",
+          fill: "#d92f24",
           fillOpacity: 1,
           stroke: "#000000",
           strokeWidth: 0,

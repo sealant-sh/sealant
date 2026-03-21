@@ -117,10 +117,9 @@ export function AppShell({ session, children }: AppShellProps) {
                 <Link
                   key={item.href}
                   to={item.href as never}
-                  className="border-b-2 border-transparent text-[1rem] tracking-[0.14em] no-underline transition duration-200 hover:text-foreground"
+                  className="border-b-2 border-transparent text-md font-semibold no-underline transition duration-200 hover:text-foreground"
                   activeProps={{
-                    className:
-                      "border-primary text-[1rem] tracking-[0.14em] text-primary no-underline",
+                    className: "border-primary text-primary no-underline",
                   }}
                 >
                   {item.label}
