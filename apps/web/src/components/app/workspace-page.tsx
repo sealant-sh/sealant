@@ -24,10 +24,8 @@ export function WorkspacePage({
     <section className="overflow-hidden border border-border bg-card">
       <div className="h-1 w-full bg-primary" />
       <div className="px-6 py-7 sm:px-8 sm:py-8">
-        <p className="text-md text-muted-foreground">{kicker}</p>
-        <h1 className="mt-4 font-sans text-5xl text-foreground text-balance sm:text-6xl">
-          {title}
-        </h1>
+        {/* <p className="text-md text-muted-foreground">{kicker}</p> */}
+        <h1 className="font-sans text-xl text-balance sm:text-2xl">{title}</h1>
         <p className="mt-5 max-w-3xl text-sm leading-7 text-muted-foreground">{description}</p>
 
         {metrics && metrics.length > 0 ? (
