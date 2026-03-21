@@ -8,6 +8,8 @@ console.log("Sealant worker starting", {
   rabbitMqUrl: env.RABBITMQ_URL,
   registryBaseUrl: env.REGISTRY_BASE_URL,
   databaseFilePath: env.DATABASE_FILE_PATH,
+  composeProjectName: env.COMPOSE_PROJECT_NAME,
+  nixBuilderService: env.NIX_BUILDER_SERVICE,
 });
 
 const wait = async (ms: number) => {

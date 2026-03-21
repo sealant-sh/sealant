@@ -41,7 +41,7 @@ nix build "path:$PWD/packages/os-integration-nix#example-minimal-image"
 
 This package also contains a minimal end-to-end wrapper that starts from a hardcoded user-facing
 spec, normalizes it through `@sealant/workspace-composition`, maps it into the current Nix executor
-spec, and can optionally build through the existing Nix backend.
+spec, and reports support.
 
 Print the hardcoded user spec, normalized blueprint, support result, and mapped Nix executor spec:
 
@@ -49,8 +49,4 @@ Print the hardcoded user spec, normalized blueprint, support result, and mapped 
 pnpm --filter @sealant/os-integration-nix run demo:user-spec
 ```
 
-Run the same flow and build the resulting artifacts:
-
-```bash
-pnpm --filter @sealant/os-integration-nix run demo:user-spec -- --build
-```
+Build execution now runs through the worker + `nix-builder` container flow.

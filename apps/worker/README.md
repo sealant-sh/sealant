@@ -18,11 +18,24 @@ Run the worker locally:
 pnpm --filter @sealant/worker dev
 ```
 
+Run the worker in Docker Compose:
+
+```bash
+docker compose --profile apps up -d worker
+```
+
+This also starts `nix-builder`, which the worker uses for Nix compilation via the Docker API.
+
+Deep dive for the Docker-based Nix command runner:
+
+- `apps/worker/NIX_BUILDER_COMMAND_RUNNER.md`
+
 The worker expects:
 
 - the SQLite database from `@sealant/db`
-- RabbitMQ from `packages/workspace-build-queue/dev/rabbitmq/compose.yaml`
-- Zot from `packages/registry-integration/dev/zot/compose.yaml`
+- RabbitMQ from the root `compose.yaml` (`rabbitmq` service)
+- Zot from the root `compose.yaml` (`zot` service)
+- Nix builder from the root `compose.yaml` (`nix-builder` service)
 
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.

@@ -2,6 +2,7 @@ import { createDatabaseClientFromEnv, closeDatabaseClient } from "@sealant/db";
 import { NixOsExecutor } from "@sealant/os-integration-nix";
 import { closeRabbitMqSingleton, consumeWorkspaceBuildJobs } from "@sealant/workspace-build-queue";
 
+import { createNixBuilderCommandRunner } from "./create-nix-builder-command-runner.js";
 import { createRegistryClient } from "./create-registry-client.js";
 import type { WorkerEnv } from "./env.js";
 import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
@@ -9,7 +10,8 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 export const startWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
   const registryClient = createRegistryClient(env);
-  const executor = new NixOsExecutor();
+  const nixBuilderCommandRunner = createNixBuilderCommandRunner(env);
+  const executors = [new NixOsExecutor({ commandRunner: nixBuilderCommandRunner })];
 
   const consumer = await consumeWorkspaceBuildJobs({
     connectionUrl: env.RABBITMQ_URL,
@@ -21,7 +23,7 @@ export const startWorker = async (env: WorkerEnv) => {
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
           dbClient,
-          executor,
+          executors,
           registryClient,
         });
         ack();
