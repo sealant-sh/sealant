@@ -8,6 +8,67 @@ export {
 export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./env.js";
 
 export {
+  createLineageRepository,
+  type IssueRunRecord,
+  type LineageRepository,
+  type LinkIssuePullRequestInput,
+  type LinkIssueRunInput,
+  type LinkRunPullRequestInput,
+  type RunPullRequestRecord,
+  type UpsertIssueInput,
+  type UpsertPullRequestInput,
+} from "./repositories/lineage.js";
+
+export {
+  createProfileRepository,
+  type CreateProfileInput,
+  type CreateProfileRevisionGraphInput,
+  type ListProfilesByOwnerInput,
+  type ProfileRepository,
+  type ProfileRevisionEnvVarInput,
+  type ProfileRevisionGraph,
+  type ProfileRevisionSecretBindingInput,
+  type ProfileRevisionSshKeyBindingInput,
+  type ProfileRevisionSshSettingsInput,
+  type SetActiveProfileRevisionInput,
+} from "./repositories/profiles.js";
+
+export {
+  createRepositoryProfileRepository,
+  type CreateRepositoryProfileInput,
+  type CreateRepositoryProfileRevisionInput,
+  type ListRepositoryProfilesInput,
+  type ReplaceRepositoryProfileLinksInput,
+  type RepositoryProfileRepository,
+  type RepositoryProfileRevisionBundle,
+  type SetActiveRepositoryProfileRevisionInput,
+  type UpsertRepositoryInput,
+} from "./repositories/repository-profiles.js";
+
+export {
+  createRunReportingRepository,
+  type AppendRunEventInput,
+  type InsertRunArtifactInput,
+  type ReplaceRunDiffFileInput,
+  type ReplaceRunValidationResultInput,
+  type RunDetailBundle,
+  type RunReportingRepository,
+  type UpsertRunSummaryInput,
+} from "./repositories/run-reporting.js";
+
+export {
+  createWorkspaceRunRepository,
+  type CreateQueuedWorkspaceRunInput,
+  type ListWorkspaceRunsInput,
+  type MarkWorkspaceRunCancelledInput,
+  type MarkWorkspaceRunFailedInput,
+  type MarkWorkspaceRunRunningInput,
+  type MarkWorkspaceRunSucceededInput,
+  type SetRunInputSnapshotInput,
+  type WorkspaceRunRepository,
+} from "./repositories/workspace-runs.js";
+
+export {
   createWorkspaceBuildJobRepository,
   type ClaimWorkspaceBuildJobByIdInput,
   type ClaimNextWorkspaceBuildJobInput,
