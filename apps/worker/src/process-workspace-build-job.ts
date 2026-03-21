@@ -4,6 +4,12 @@ import {
   type DatabaseClient,
 } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
+import {
+  selectRuntimeAdapter,
+  type PublishedImage,
+  type RuntimeAdapter,
+  type RuntimeAdapterId,
+} from "@sealant/runtime-adapters-api";
 import type {
   ConcreteWorkspaceTargetOsFamily,
   OciImageBuildArtifact,
@@ -19,6 +25,8 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly leaseDurationMs: number;
   readonly dbClient: DatabaseClient;
   readonly executors: readonly OsExecutor[];
+  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly registryClient: RegistryClient;
 }
 
@@ -78,6 +86,24 @@ const selectPublishableImageArtifact = (compileResult: OsExecutorCompileResult) 
   return artifact;
 };
 
+const launchPublishedImage = async (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  readonly defaultRuntimeAdapterId: RuntimeAdapterId;
+  readonly publishedImage: PublishedImage;
+}) => {
+  const selectedAdapter = selectRuntimeAdapter({
+    blueprint: input.blueprint,
+    adapters: input.runtimeAdapters,
+    defaultAdapterId: input.defaultRuntimeAdapterId,
+  });
+
+  return selectedAdapter.adapter.launch({
+    blueprint: input.blueprint,
+    publishedImage: input.publishedImage,
+  });
+};
+
 const toErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : "Workspace build job failed.";
 };
@@ -120,6 +146,12 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
       ...(imageArtifact.reference === undefined
         ? {}
         : { sourceReference: imageArtifact.reference }),
+    });
+    await launchPublishedImage({
+      blueprint,
+      runtimeAdapters: options.runtimeAdapters,
+      defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
+      publishedImage,
     });
 
     await jobs.markJobSucceeded({

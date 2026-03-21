@@ -10,6 +10,7 @@ console.log("Sealant worker starting", {
   databaseFilePath: env.DATABASE_FILE_PATH,
   composeProjectName: env.COMPOSE_PROJECT_NAME,
   nixBuilderService: env.NIX_BUILDER_SERVICE,
+  defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
 });
 
 const wait = async (ms: number) => {

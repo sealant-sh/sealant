@@ -42,9 +42,15 @@ describe("parseOsExecutorCompileInput", () => {
       },
     });
 
-    expect(input.blueprint.target.os).toEqual({
-      family: "auto",
-      mode: "prefer",
+    expect(input.blueprint.target).toEqual({
+      os: {
+        family: "auto",
+        mode: "prefer",
+      },
+      runtime: {
+        family: "auto",
+        mode: "prefer",
+      },
     });
   });
 });

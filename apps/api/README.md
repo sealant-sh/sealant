@@ -102,7 +102,10 @@ curl -X POST http://localhost:3000/v1/workspace-build-jobs \
     "spec": {
       "source": "https://github.com/example/repo",
       "harness": "opencode",
-      "os": "nix"
+      "os": "nix",
+      "target": {
+        "runtime": "docker"
+      }
     }
   }'
 ```

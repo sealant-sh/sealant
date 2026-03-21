@@ -15,6 +15,7 @@ expanded during normalization.
 - `setup: ["pnpm install"]` for setup steps
 - `startup: "pnpm dev"` for a foreground startup command
 - `os: "fedora"` instead of `target.os.family: "fedora"`
+- `target.runtime: "docker"` to choose the runtime adapter family
 
 ## Normalization rules
 
@@ -24,6 +25,7 @@ expanded during normalization.
 - package requests are deduplicated by package id
 - setup and startup command strings are expanded into structured command steps
 - target OS shorthand is expanded into the normalized `target.os` object
+- runtime target shorthand is expanded into the normalized `target.runtime` object
 - the final result is validated by `workspaceBlueprintSchema`
 
 ## Entry points

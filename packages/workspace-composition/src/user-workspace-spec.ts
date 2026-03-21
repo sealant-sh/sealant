@@ -10,6 +10,8 @@ import {
   workspaceSourceProviderSchema,
   workspaceTargetOsFamilySchema,
   workspaceTargetOsModeSchema,
+  workspaceTargetRuntimeFamilySchema,
+  workspaceTargetRuntimeModeSchema,
   type WorkspaceBlueprint,
 } from "./blueprint.js";
 
@@ -143,6 +145,16 @@ const userWorkspaceTargetOsSchema = z.union([
   }),
 ]);
 
+// Runtime target is modeled separately from `runtime` because this value chooses
+// where the workspace should run, not process-level env/fs/network behavior.
+const userWorkspaceTargetRuntimeSchema = z.union([
+  workspaceTargetRuntimeFamilySchema,
+  z.strictObject({
+    family: workspaceTargetRuntimeFamilySchema.optional(),
+    mode: workspaceTargetRuntimeModeSchema.optional(),
+  }),
+]);
+
 // This is the raw, user-facing contract that product surfaces submit before the
 // composition layer produces a normalized blueprint. It deliberately supports
 // aliases and ergonomic forms such as:
@@ -190,6 +202,7 @@ export const userWorkspaceSpecSchema = z
     target: z
       .strictObject({
         os: userWorkspaceTargetOsSchema.optional(),
+        runtime: userWorkspaceTargetRuntimeSchema.optional(),
       })
       .optional(),
   })
@@ -276,6 +289,7 @@ type UserWorkspaceCommandStep = z.infer<typeof userWorkspaceCommandStepSchema>;
 type UserWorkspaceStartup = z.infer<typeof userWorkspaceStartupSchema>;
 type UserWorkspaceSsh = z.infer<typeof userWorkspaceSshSchema>;
 type UserWorkspaceTargetOs = z.infer<typeof userWorkspaceTargetOsSchema>;
+type UserWorkspaceTargetRuntime = z.infer<typeof userWorkspaceTargetRuntimeSchema>;
 
 export const parseUserWorkspaceSpec = (input: unknown): UserWorkspaceSpec =>
   userWorkspaceSpecSchema.parse(input);
@@ -546,6 +560,31 @@ const normalizeTargetOs = (
   };
 };
 
+// Runtime target normalization mirrors OS target shorthand handling so adapter
+// selection receives one explicit shape.
+const normalizeTargetRuntime = (
+  runtime: UserWorkspaceTargetRuntime | undefined,
+): WorkspaceBlueprint["target"]["runtime"] => {
+  if (runtime === undefined) {
+    return {
+      family: "auto",
+      mode: "prefer",
+    };
+  }
+
+  if (typeof runtime === "string") {
+    return {
+      family: runtime,
+      mode: "prefer",
+    };
+  }
+
+  return {
+    family: runtime.family ?? "auto",
+    mode: runtime.mode ?? "prefer",
+  };
+};
+
 // This is the full user-input to blueprint boundary. It exists so the rest of
 // the system can rely on one strict internal contract while product surfaces
 // keep a friendlier request shape.
@@ -559,6 +598,7 @@ export const normalizeUserWorkspaceSpec = (input: unknown): WorkspaceBlueprint =
   const setup = spec.lifecycle?.setup ?? spec.setup;
   const startup = spec.lifecycle?.startup ?? spec.startup;
   const os = spec.target?.os ?? spec.os;
+  const runtimeTarget = spec.target?.runtime;
 
   return parseWorkspaceBlueprint({
     version: workspaceBlueprintVersion,
@@ -580,6 +620,7 @@ export const normalizeUserWorkspaceSpec = (input: unknown): WorkspaceBlueprint =
     runtime: normalizeRuntime(spec.runtime, spec.env),
     target: {
       os: normalizeTargetOs(os),
+      runtime: normalizeTargetRuntime(runtimeTarget),
     },
   });
 };

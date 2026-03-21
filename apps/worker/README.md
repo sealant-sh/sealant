@@ -9,6 +9,7 @@ It currently provides:
 - durable job state updates through `@sealant/db`
 - Nix compilation through `@sealant/os-integration-nix`
 - image publishing through `@sealant/registry-integration`
+- runtime launch selection through `@sealant/runtime-adapters-api`
 
 ## Development
 
@@ -39,3 +40,6 @@ The worker expects:
 
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.
+
+Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
+spec leaves `target.runtime.family` as `auto`.

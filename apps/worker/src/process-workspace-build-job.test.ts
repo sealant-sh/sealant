@@ -1,5 +1,6 @@
 import type { DatabaseClient } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
+import type { RuntimeAdapter } from "@sealant/runtime-adapters-api";
 import type { OsExecutor } from "@sealant/workspace-composition";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,6 +16,27 @@ vi.mock("@sealant/db", () => {
 });
 
 const { createWorkspaceBuildJobRepository } = await import("@sealant/db");
+
+const createRuntimeAdapterStub = (
+  id: RuntimeAdapter["id"],
+  options: {
+    supports?: RuntimeAdapter["supports"];
+    launch?: RuntimeAdapter["launch"];
+  } = {},
+): RuntimeAdapter => {
+  return {
+    id,
+    supports: options.supports ?? vi.fn(() => ({ supported: true as const })),
+    launch:
+      options.launch ??
+      vi.fn(async () => ({
+        adapter: id,
+        resourceId: "resource_123",
+        reference: "sealant-resource",
+        status: "running",
+      })),
+  };
+};
 
 describe("processWorkspaceBuildJob", () => {
   it("claims, compiles, publishes, and marks a job as succeeded", async () => {
@@ -65,6 +87,7 @@ describe("processWorkspaceBuildJob", () => {
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
 
     const result = await processWorkspaceBuildJob({
       jobId: "job_123",
@@ -72,6 +95,8 @@ describe("processWorkspaceBuildJob", () => {
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
       executors: [executor],
+      runtimeAdapters: [runtimeAdapter],
+      defaultRuntimeAdapterId: "docker",
       registryClient,
     });
 
@@ -83,6 +108,7 @@ describe("processWorkspaceBuildJob", () => {
     });
     expect(repository.markJobSucceeded).toHaveBeenCalled();
     expect(repository.markJobFailed).not.toHaveBeenCalled();
+    expect(runtimeAdapter.launch).toHaveBeenCalledTimes(1);
   });
 
   it("marks a job as failed when compile or publish throws", async () => {
@@ -119,6 +145,8 @@ describe("processWorkspaceBuildJob", () => {
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
         executors: [executor],
+        runtimeAdapters: [createRuntimeAdapterStub("docker")],
+        defaultRuntimeAdapterId: "docker",
         registryClient: {} as RegistryClient,
       }),
     ).rejects.toThrow("compile exploded");
@@ -163,6 +191,8 @@ describe("processWorkspaceBuildJob", () => {
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
         executors: [nixExecutor],
+        runtimeAdapters: [createRuntimeAdapterStub("docker")],
+        defaultRuntimeAdapterId: "docker",
         registryClient: {} as RegistryClient,
       }),
     ).rejects.toThrow("No executor is registered for target.os.family 'fedora'.");
@@ -171,6 +201,81 @@ describe("processWorkspaceBuildJob", () => {
       id: "job_123",
       errorCode: "unsupported-os",
       errorMessage: "No executor is registered for target.os.family 'fedora'.",
+    });
+    expect(repository.markJobSucceeded).not.toHaveBeenCalled();
+  });
+
+  it("marks a job as failed when no runtime adapter is registered for a required runtime", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_123",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          target: {
+            runtime: {
+              family: "k8s",
+              mode: "require",
+            },
+          },
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+
+    const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+
+    await expect(
+      processWorkspaceBuildJob({
+        jobId: "job_123",
+        workerId: "worker-test",
+        leaseDurationMs: 60000,
+        dbClient: {} as DatabaseClient,
+        executors: [executor],
+        runtimeAdapters: [createRuntimeAdapterStub("docker")],
+        defaultRuntimeAdapterId: "docker",
+        registryClient,
+      }),
+    ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");
+
+    expect(repository.markJobFailed).toHaveBeenCalledWith({
+      id: "job_123",
+      errorCode: "unsupported-runtime",
+      errorMessage: "No runtime adapter is registered for target.runtime.family 'k8s'.",
     });
     expect(repository.markJobSucceeded).not.toHaveBeenCalled();
   });

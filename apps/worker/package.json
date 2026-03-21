@@ -11,6 +11,10 @@
   "dependencies": {
     "@sealant/db": "workspace:*",
     "@sealant/os-integration-nix": "workspace:*",
+    "@sealant/runtime-adapter-docker": "workspace:*",
+    "@sealant/runtime-adapter-k3s": "workspace:*",
+    "@sealant/runtime-adapter-k8s": "workspace:*",
+    "@sealant/runtime-adapters-api": "workspace:*",
     "@sealant/registry-integration": "workspace:*",
     "@sealant/workspace-build-queue": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
