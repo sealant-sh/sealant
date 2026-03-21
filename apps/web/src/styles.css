@@ -10,6 +10,8 @@
 @import "tailwindcss";
 @import "@sealant/ui/styles/globals.css";
 
+@source "../../../packages/ui/src";
+
 @theme inline {
   --font-sans: "Plus Jakarta Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Space Grotesk", ui-monospace, monospace;

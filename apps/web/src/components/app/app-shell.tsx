@@ -40,11 +40,10 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
-  type Dispatch,
   type ReactNode,
-  type SetStateAction,
 } from "react";
 
 import packageJson from "@/../package.json";
@@ -146,12 +145,9 @@ export function AppShell({ session, children }: AppShellProps) {
         open={isSidebarOpen}
         onOpenChange={setIsSidebarOpen}
         className="relative min-h-svh border-x border-border"
-        style={{ "--sidebar-offset": "4.25rem" } as CSSProperties}
+        style={{ "--sidebar-offset": "0px" } as CSSProperties}
       >
-        <Sidebar
-          collapsible="icon"
-          className="z-30 border-r border-sidebar-border bg-card"
-        >
+        <Sidebar collapsible="icon" className="z-30 border-r border-sidebar-border bg-card">
           <AppSidebarNav
             activeArea={activeArea}
             pathname={pathname}
@@ -163,56 +159,12 @@ export function AppShell({ session, children }: AppShellProps) {
         </Sidebar>
 
         <SidebarInset className="min-h-svh border-0 bg-transparent">
-          <ShellHeader isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} />
-          <main className="min-h-[calc(100svh-4.25rem)] min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
+          <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">
+            {children}
+          </main>
         </SidebarInset>
       </SidebarProvider>
     </div>
-  );
-}
-
-function ShellHeader({
-  isSidebarOpen,
-  setIsSidebarOpen,
-}: {
-  readonly isSidebarOpen: boolean;
-  readonly setIsSidebarOpen: Dispatch<SetStateAction<boolean>>;
-}) {
-  const { isMobile, openMobile, setOpenMobile } = useSidebar();
-  const isOpen = isMobile ? openMobile : isSidebarOpen;
-
-  return (
-    <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
-      <div className="flex min-h-16 items-center gap-3 px-4 py-3 sm:px-6">
-        <button
-          type="button"
-          aria-label={isOpen ? "Collapse sidebar" : "Expand sidebar"}
-          aria-expanded={isOpen}
-          onClick={() => {
-            if (isMobile) {
-              setOpenMobile(!openMobile);
-              return;
-            }
-
-            setIsSidebarOpen((current) => !current);
-          }}
-          className="inline-flex h-10 w-10 items-center justify-center border border-border bg-background text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted"
-        >
-          {isOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
-        </button>
-
-        <div className="ml-auto flex items-center gap-3">
-          <label className="relative hidden min-w-52 items-center xl:flex">
-            <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
-            <input
-              type="search"
-              placeholder="Search runs, repos, profiles"
-              className="h-9 w-full border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
-            />
-          </label>
-        </div>
-      </div>
-    </header>
   );
 }
 
@@ -232,76 +184,159 @@ function AppSidebarNav({
   readonly onSignOut: () => Promise<void>;
 }) {
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
-  const { isMobile, setOpenMobile, state } = useSidebar();
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const { isMobile, openMobile, setOpen, setOpenMobile, state } = useSidebar();
   const { userTheme, setTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
   const currentTheme = getThemeMenuState(userTheme);
   const ThemeIcon = currentTheme.icon;
   const isExpanded = isMobile || state === "expanded";
-
   useEffect(() => {
     setOpenMobile(false);
   }, [pathname, setOpenMobile]);
 
   return (
     <>
-      <SidebarHeader>
-        <div className={cn("flex items-center", isExpanded ? "gap-3" : "justify-center")}>
-          <Link
-            to={"/runs" as never}
-            className="inline-flex items-center text-foreground no-underline"
-            aria-label="Sealant home"
-          >
-            <LogoBlob className="size-8 shrink-0" />
-          </Link>
+      <SidebarHeader className="group-data-[collapsible=icon]:py-4">
+        <div className={cn("flex items-center", isExpanded ? "justify-between gap-3" : "justify-center")}>
           <div
             className={cn(
-              "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
-              isExpanded ? "max-w-[11rem] translate-x-0 opacity-100" : "max-w-0 -translate-x-2 opacity-0",
+              "flex items-center overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-w-[14rem] translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
             )}
             aria-hidden={!isExpanded}
           >
-            <LogoText className="h-8" />
+            <Link
+              to={"/runs" as never}
+              className="inline-flex items-center gap-3 text-foreground no-underline"
+              aria-label="Sealant home"
+            >
+              <LogoBlob className="size-8 shrink-0" />
+              <LogoText className="h-8 shrink-0" />
+            </Link>
           </div>
+
+          <button
+            type="button"
+            aria-label={(isMobile ? openMobile : isExpanded) ? "Collapse sidebar" : "Expand sidebar"}
+            aria-expanded={isMobile ? openMobile : isExpanded}
+            onClick={() => {
+              if (isMobile) {
+                setOpenMobile(!openMobile);
+                return;
+              }
+
+              setOpen(!isExpanded);
+            }}
+            className={cn(
+              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
+              isExpanded ? "w-10" : "w-full",
+            )}
+          >
+            {isMobile ? (
+              openMobile ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />
+            ) : isExpanded ? (
+              <PanelLeftClose className="size-4" />
+            ) : (
+              <PanelLeftOpen className="size-4" />
+            )}
+          </button>
+        </div>
+
+        <div className={cn("mt-4 flex w-full items-center", isExpanded ? "gap-2" : "justify-center") }>
+          <button
+            type="button"
+            aria-label="Open search"
+            onClick={() => {
+              const focusSearch = () => {
+                requestAnimationFrame(() => {
+                  searchInputRef.current?.focus();
+                });
+              };
+
+              if (isMobile) {
+                if (!openMobile) {
+                  setOpenMobile(true);
+                  focusSearch();
+                } else {
+                  searchInputRef.current?.focus();
+                }
+                return;
+              }
+
+              if (!isExpanded) {
+                setOpen(true);
+                focusSearch();
+              } else {
+                searchInputRef.current?.focus();
+              }
+            }}
+            className={cn(
+              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
+              isExpanded ? "w-10" : "w-full",
+            )}
+          >
+            <Search className="size-3.5" />
+          </button>
+
+          <label
+            className={cn(
+              "min-w-0 flex-1 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-w-full translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            <input
+              ref={searchInputRef}
+              type="search"
+              aria-label="Search runs, repos, profiles"
+              placeholder="Search runs, repos, profiles"
+              className="h-10 w-full border border-sidebar-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-sidebar-foreground focus:outline-none"
+            />
+          </label>
         </div>
       </SidebarHeader>
 
       <UiSidebarContent>
-        <SidebarGroup className={cn("border-b border-sidebar-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}>
+        <SidebarGroup
+          className={cn("border-b border-sidebar-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}
+        >
           <SidebarMenu aria-label="Global navigation" className="space-y-1.5">
-          {GLOBAL_NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeArea === getGlobalArea(item.href);
+            {GLOBAL_NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeArea === getGlobalArea(item.href);
 
-            return (
-              <SidebarMenuItem key={item.href}>
-                <SidebarMenuButton
-                  render={<Link to={item.href as never} />}
-                  isActive={isActive}
-                  tooltip={item.label}
-                  aria-label={item.label}
-                  className={cn(
-                    isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
-                    "[&>span:last-child]:transition-[max-width,opacity,transform] [&>span:last-child]:duration-200 [&>span:last-child]:ease-out [&>span:last-child]:whitespace-nowrap",
-                    isExpanded
-                      ? "[&>span:last-child]:max-w-[10rem] [&>span:last-child]:translate-x-0 [&>span:last-child]:opacity-100"
-                      : "[&>span:last-child]:pointer-events-none [&>span:last-child]:max-w-0 [&>span:last-child]:-translate-x-2 [&>span:last-child]:opacity-0",
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" />
-                  <span>{item.label}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            );
-          })}
+              return (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton
+                    render={<Link to={item.href as never} />}
+                    isActive={isActive}
+                    tooltip={item.label}
+                    aria-label={item.label}
+                    className={cn(
+                      isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
+                      "[&>span:last-child]:transition-[max-width,opacity,transform] [&>span:last-child]:duration-200 [&>span:last-child]:ease-out [&>span:last-child]:whitespace-nowrap",
+                      isExpanded
+                        ? "[&>span:last-child]:max-w-[10rem] [&>span:last-child]:translate-x-0 [&>span:last-child]:opacity-100"
+                        : "[&>span:last-child]:pointer-events-none [&>span:last-child]:max-w-0 [&>span:last-child]:-translate-x-2 [&>span:last-child]:opacity-0",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    <span>{item.label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
           </SidebarMenu>
         </SidebarGroup>
 
-        <SidebarGroup className={cn(isExpanded ? "px-3 py-4" : "px-2 py-0")}> 
+        <SidebarGroup className={cn(isExpanded ? "px-3 py-4" : "px-2 py-0")}>
           <div
             className={cn(
               "overflow-hidden transition-[max-height,opacity,transform] duration-200 ease-out",
-              isExpanded ? "max-h-[160rem] translate-y-0 opacity-100" : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
+              isExpanded
+                ? "max-h-[160rem] translate-y-0 opacity-100"
+                : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
             )}
             aria-hidden={!isExpanded}
           >
@@ -338,10 +373,8 @@ function AppSidebarNav({
       <SidebarFooter>
         <p
           className={cn(
-            "overflow-hidden font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground transition-[max-height,opacity,transform,margin] duration-200 ease-out",
-            isExpanded
-              ? "mb-3 max-h-8 translate-y-0 opacity-100"
-              : "mb-2 max-h-12 -translate-y-1 text-center opacity-100",
+            "mb-3 h-4 overflow-hidden font-mono text-[0.58rem] leading-none tracking-[0.12em] text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
+            isExpanded ? "translate-y-0 opacity-100" : "text-center -translate-y-0.5 opacity-100",
           )}
         >
           {`v${packageJson.version}`}
@@ -350,7 +383,7 @@ function AppSidebarNav({
           to={"/runs" as never}
           className={cn(
             "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
-            isExpanded ? "gap-2 px-3 py-3" : "h-[4.75rem] gap-0 px-2 py-3",
+            isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
           )}
           title={!isExpanded ? "New Run" : undefined}
           aria-label="New Run"
@@ -397,7 +430,9 @@ function AppSidebarNav({
             <ChevronsUpDown
               className={cn(
                 "ml-auto size-4 shrink-0 text-muted-foreground transition-[opacity,transform,max-width] duration-200 ease-out",
-                isExpanded ? "max-w-4 translate-x-0 opacity-100" : "pointer-events-none max-w-0 translate-x-2 opacity-0",
+                isExpanded
+                  ? "max-w-4 translate-x-0 opacity-100"
+                  : "pointer-events-none max-w-0 translate-x-2 opacity-0",
               )}
               aria-hidden={!isExpanded}
             />
