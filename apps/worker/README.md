@@ -43,3 +43,16 @@ existing local RabbitMQ instance on `5672`.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
+
+The worker now applies runtime defaults when requests omit startup/SSH fields:
+
+- `DEFAULT_WORKSPACE_STARTUP_MODE=idle` (or `harness`)
+- `DEFAULT_WORKSPACE_IDLE_COMMAND="while :; do sleep 30; done"`
+- `DEFAULT_WORKSPACE_SSH_ENABLED=true`
+- `DEFAULT_WORKSPACE_SSH_LISTEN_PORT=2222`
+- `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/workspace/.secrets/authorized_keys`
+- `DEFAULT_SSH_BIND_HOST=127.0.0.1`
+
+For local Docker Compose usage, create `./.secrets/authorized_keys` in the repo with one or more
+public keys. When SSH is enabled the Docker runtime adapter injects that key material into the
+sandbox and publishes SSH on an available host port.

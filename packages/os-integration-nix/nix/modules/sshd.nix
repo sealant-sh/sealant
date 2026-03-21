@@ -17,6 +17,13 @@ in
       SSH_PORT="''${SEALANT_SSH_PORT:-2222}"
       SSH_AUTHORIZED_KEYS_FILE="''${SEALANT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"
 
+      if [ -n "''${SEALANT_SSH_AUTHORIZED_KEYS_BASE64:-}" ]; then
+        install -m 700 -d "$SSH_RUNTIME_DIR"
+        printf '%s' "$SEALANT_SSH_AUTHORIZED_KEYS_BASE64" | ${pkgs.coreutils}/bin/base64 --decode > "$SSH_RUNTIME_DIR/authorized_keys.input"
+        chmod 600 "$SSH_RUNTIME_DIR/authorized_keys.input"
+        SSH_AUTHORIZED_KEYS_FILE="$SSH_RUNTIME_DIR/authorized_keys.input"
+      fi
+
       if [ ! -f "$SSH_AUTHORIZED_KEYS_FILE" ]; then
         printf '%s\n' "SSH enabled but no authorized keys file found at $SSH_AUTHORIZED_KEYS_FILE" >&2
         exit 1

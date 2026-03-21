@@ -1,5 +1,4 @@
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
-import { normalizeUserWorkspaceSpec } from "@zweit/workspace-composition";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -51,6 +50,20 @@ describe("getNixExecutorSupport", () => {
       reason: "unsupported-runtime-requirement",
       message: "The minimal Nix executor path does not support lifecycle.setup yet.",
     });
+  });
+
+  it("supports SSH access in the Nix executor path", () => {
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: "https://github.com/example/project.git",
+      harness: "opencode",
+      os: "nix",
+      ssh: {
+        enabled: true,
+        listenPort: 2222,
+      },
+    });
+
+    expect(getNixExecutorSupport(blueprint)).toEqual({ supported: true });
   });
 });
 

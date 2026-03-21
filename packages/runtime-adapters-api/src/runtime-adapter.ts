@@ -7,6 +7,8 @@ export const runtimeAdapterBlueprintSchema = z
         ssh: z
           .object({
             enabled: z.boolean(),
+            listenPort: z.number().int().min(1).max(65535).optional(),
+            authorizedKeysRef: z.string().trim().min(1).optional(),
           })
           .passthrough(),
       })

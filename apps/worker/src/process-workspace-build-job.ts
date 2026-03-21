@@ -1,6 +1,8 @@
 import {
   createWorkspaceBuildJobRepository,
   workspaceBuildJobRequestPayloadSchema,
+  type WorkspaceBuildJobRequestPayload,
+  type WorkspaceBuildJobResultPayload,
   type DatabaseClient,
 } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
@@ -27,6 +29,10 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly executors: readonly OsExecutor[];
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
+  readonly defaultStartupMode: "idle" | "harness";
+  readonly defaultIdleCommand: string;
+  readonly defaultSshEnabled: boolean;
+  readonly defaultSshListenPort: number;
   readonly registryClient: RegistryClient;
 }
 
@@ -121,6 +127,39 @@ const toErrorCode = (error: unknown) => {
   return undefined;
 };
 
+const hasExplicitStartup = (requestPayload: WorkspaceBuildJobRequestPayload): boolean => {
+  return requestPayload.startup !== undefined || requestPayload.lifecycle?.startup !== undefined;
+};
+
+const hasExplicitSsh = (requestPayload: WorkspaceBuildJobRequestPayload): boolean => {
+  return requestPayload.ssh !== undefined || requestPayload.access?.ssh !== undefined;
+};
+
+const applyRuntimeDefaults = (
+  requestPayload: WorkspaceBuildJobRequestPayload,
+  options: Pick<
+    ProcessWorkspaceBuildJobOptions,
+    "defaultStartupMode" | "defaultIdleCommand" | "defaultSshEnabled" | "defaultSshListenPort"
+  >,
+): WorkspaceBuildJobRequestPayload => {
+  const nextPayload: Record<string, unknown> = {
+    ...requestPayload,
+  };
+
+  if (!hasExplicitStartup(requestPayload) && options.defaultStartupMode === "idle") {
+    nextPayload.startup = options.defaultIdleCommand;
+  }
+
+  if (!hasExplicitSsh(requestPayload) && options.defaultSshEnabled) {
+    nextPayload.ssh = {
+      enabled: true,
+      listenPort: options.defaultSshListenPort,
+    };
+  }
+
+  return workspaceBuildJobRequestPayloadSchema.parse(nextPayload);
+};
+
 export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJobOptions) => {
   const jobs = createWorkspaceBuildJobRepository(options.dbClient);
   const job = await jobs.claimJobById({
@@ -134,7 +173,8 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
   }
 
   try {
-    const requestPayload = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
+    const parsedRequestPayload = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
+    const requestPayload = applyRuntimeDefaults(parsedRequestPayload, options);
     const blueprint = normalizeUserWorkspaceSpec(requestPayload);
     const executor = selectExecutorForBlueprint(blueprint, options.executors);
     const compileResult = await executor.compile({ blueprint });
@@ -147,17 +187,21 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
         ? {}
         : { sourceReference: imageArtifact.reference }),
     });
-    await launchPublishedImage({
+    const runtimeLaunchResult = await launchPublishedImage({
       blueprint,
       runtimeAdapters: options.runtimeAdapters,
       defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
       publishedImage,
     });
+    const resultPayload: WorkspaceBuildJobResultPayload = {
+      compile: compileResult,
+      runtime: runtimeLaunchResult,
+    };
 
     await jobs.markJobSucceeded({
       id: job.id,
       executorId: compileResult.executor.id,
-      resultPayload: compileResult,
+      resultPayload,
       publishedReference: publishedImage.reference,
       publishedDigestReference: publishedImage.digestReference,
       publishedDigest: publishedImage.digest,

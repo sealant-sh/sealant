@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import {
@@ -30,6 +31,8 @@ export interface DockerRuntimeAdapterOptions {
   readonly containerNamePrefix?: string;
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
+  readonly defaultSshAuthorizedKeysFile?: string;
+  readonly sshBindHost?: string;
 }
 
 const defaultCommandRunner: DockerCommandRunner = async (command, args) => {
@@ -81,14 +84,6 @@ const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSuppo
     });
   }
 
-  if (input.blueprint.access.ssh.enabled) {
-    return parseRuntimeAdapterSupport({
-      supported: false,
-      reason: "unsupported-access-mode",
-      message: "The Docker runtime adapter does not support SSH wiring yet.",
-    });
-  }
-
   if (input.blueprint.runtime.persistence !== "ephemeral") {
     return parseRuntimeAdapterSupport({
       supported: false,
@@ -119,11 +114,79 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly verifyRunning: boolean;
 
+  private readonly defaultSshAuthorizedKeysFile: string | undefined;
+
+  private readonly sshBindHost: string;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     this.commandRunner = options.commandRunner ?? defaultCommandRunner;
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
+    this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
+    this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
+  }
+
+  private async resolveAuthorizedKeysBase64(input: RuntimeAdapterLaunchInput): Promise<string> {
+    const configuredPath = input.blueprint.access.ssh.authorizedKeysRef ?? this.defaultSshAuthorizedKeysFile;
+
+    if (configuredPath === undefined || configuredPath.length === 0) {
+      throw createAdapterError(
+        "unsupported-access-mode",
+        "SSH is enabled but no authorized keys file is configured.",
+      );
+    }
+
+    let keyData: string;
+    try {
+      keyData = await readFile(configuredPath, "utf8");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : `Could not read SSH authorized keys file: ${configuredPath}`;
+      throw createAdapterError(
+        "unsupported-access-mode",
+        `SSH authorized keys file could not be read at '${configuredPath}': ${message}`,
+      );
+    }
+    const trimmed = keyData.trim();
+    if (trimmed.length === 0) {
+      throw createAdapterError(
+        "unsupported-access-mode",
+        `SSH authorized keys file is empty: ${configuredPath}`,
+      );
+    }
+
+    return Buffer.from(trimmed, "utf8").toString("base64");
+  }
+
+  private async resolvePublishedSshEndpoint(
+    containerId: string,
+    containerSshPort: number,
+  ): Promise<string | undefined> {
+    const portResult = await this.commandRunner("docker", [
+      "port",
+      containerId,
+      `${containerSshPort}/tcp`,
+    ]);
+    const output = portResult.stdout.trim();
+
+    if (output.length === 0) {
+      return undefined;
+    }
+
+    const lastLine = output.split("\n").pop();
+    if (lastLine === undefined) {
+      return undefined;
+    }
+
+    const match = /^(?<host>.+):(?<port>\d+)$/.exec(lastLine.trim());
+    if (match?.groups?.host === undefined || match.groups.port === undefined) {
+      return undefined;
+    }
+
+    const host = match.groups.host === "0.0.0.0" ? "127.0.0.1" : match.groups.host;
+    const endpointHost = host.includes(":") ? `[${host}]` : host;
+    return `ssh://root@${endpointHost}:${match.groups.port}`;
   }
 
   private async inspectContainerState(containerId: string): Promise<{
@@ -193,7 +256,25 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
     const parsed = parseRuntimeAdapterSupportInput(input);
-    return supportForInput(parsed);
+    const support = supportForInput(parsed);
+    if (!support.supported) {
+      return support;
+    }
+
+    if (
+      parsed.blueprint.access.ssh.enabled &&
+      parsed.blueprint.access.ssh.authorizedKeysRef === undefined &&
+      this.defaultSshAuthorizedKeysFile === undefined
+    ) {
+      return parseRuntimeAdapterSupport({
+        supported: false,
+        reason: "unsupported-access-mode",
+        message:
+          "SSH is enabled but no authorized keys file was provided in access.ssh.authorizedKeysRef or adapter defaults.",
+      });
+    }
+
+    return support;
   }
 
   public async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
@@ -208,6 +289,25 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
     const imageReference = parsed.publishedImage.digestReference;
+    const sshEnabled = parsed.blueprint.access.ssh.enabled;
+    const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
+    const sshArgs =
+      sshEnabled === true
+        ? ["-p", `${this.sshBindHost}::${containerSshPort}`]
+        : [];
+    const sshEnvArgs =
+      sshEnabled === true
+        ? [
+            "-e",
+            "SEALANT_ENABLE_SSH=true",
+            "-e",
+            `SEALANT_SSH_PORT=${containerSshPort}`,
+            "-e",
+            "SEALANT_SSH_AUTHORIZED_KEYS_FILE=/workspace/.ssh-runtime/authorized_keys.input",
+            "-e",
+            `SEALANT_SSH_AUTHORIZED_KEYS_BASE64=${await this.resolveAuthorizedKeysBase64(parsed)}`,
+          ]
+        : [];
     const args = [
       "run",
       "-d",
@@ -215,6 +315,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       containerName,
       "-w",
       parsed.blueprint.runtime.workingDirectory,
+      ...sshArgs,
+      ...sshEnvArgs,
       ...envArgsFromBlueprint(parsed),
       imageReference,
     ];
@@ -244,11 +346,24 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       }
     }
 
+    const endpoint =
+      sshEnabled === true
+        ? await this.resolvePublishedSshEndpoint(containerId, containerSshPort)
+        : undefined;
+
+    if (sshEnabled && endpoint === undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker container '${containerName}' started but SSH endpoint discovery failed for container port ${containerSshPort}.`,
+      );
+    }
+
     return parseRuntimeAdapterLaunchResult({
       adapter: this.id,
       resourceId: containerId,
       reference: containerName,
       status: "running",
+      ...(endpoint === undefined ? {} : { endpoint }),
     });
   }
 }

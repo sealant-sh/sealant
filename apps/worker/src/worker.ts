@@ -16,7 +16,10 @@ export const startWorker = async (env: WorkerEnv) => {
   const nixBuilderCommandRunner = createNixBuilderCommandRunner(env);
   const executors = [new NixOsExecutor({ commandRunner: nixBuilderCommandRunner })];
   const runtimeAdapters = [
-    new DockerRuntimeAdapter(),
+    new DockerRuntimeAdapter({
+      defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
+      sshBindHost: env.DEFAULT_SSH_BIND_HOST,
+    }),
     new K8sRuntimeAdapter(),
     new K3sRuntimeAdapter(),
   ];
@@ -34,6 +37,10 @@ export const startWorker = async (env: WorkerEnv) => {
           executors,
           runtimeAdapters,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+          defaultStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
+          defaultIdleCommand: env.DEFAULT_WORKSPACE_IDLE_COMMAND,
+          defaultSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
+          defaultSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
           registryClient,
         });
         ack();

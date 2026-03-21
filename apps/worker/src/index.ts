@@ -11,6 +11,11 @@ console.log("Sealant worker starting", {
   composeProjectName: env.COMPOSE_PROJECT_NAME,
   nixBuilderService: env.NIX_BUILDER_SERVICE,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
+  defaultWorkspaceStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
+  defaultWorkspaceSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
+  defaultWorkspaceSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
+  defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
+  defaultSshBindHost: env.DEFAULT_SSH_BIND_HOST,
 });
 
 const wait = async (ms: number) => {

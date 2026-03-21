@@ -125,6 +125,9 @@ On success, the response includes:
 - `publishedImage.reference`
 - `publishedImage.digestReference`
 - `publishedImage.digest`
+- `result.runtime.adapter`
+- `result.runtime.resourceId`
+- `result.runtime.endpoint` (when exposed by the selected runtime adapter)
 
 ### Confirm image exists in registry
 

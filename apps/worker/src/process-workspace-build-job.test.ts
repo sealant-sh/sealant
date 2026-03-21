@@ -33,12 +33,175 @@ const createRuntimeAdapterStub = (
         adapter: id,
         resourceId: "resource_123",
         reference: "sealant-resource",
-        status: "running",
+        status: "running" as const,
       })),
   };
 };
 
 describe("processWorkspaceBuildJob", () => {
+  it("applies idle startup and SSH defaults when spec omits them", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_defaults",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+
+    const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    await processWorkspaceBuildJob({
+      jobId: "job_defaults",
+      workerId: "worker-test",
+      leaseDurationMs: 60000,
+      dbClient: {} as DatabaseClient,
+      executors: [executor],
+      runtimeAdapters: [runtimeAdapter],
+      defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
+      registryClient,
+    });
+
+    const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+    expect(launchCall?.blueprint.access.ssh).toEqual({
+      enabled: true,
+      listenPort: 2222,
+    });
+    expect((launchCall?.blueprint as { lifecycle: unknown } | undefined)?.lifecycle).toMatchObject({
+      startup: {
+        foreground: {
+          kind: "command",
+          run: "while :; do sleep 30; done",
+          shell: "bash",
+        },
+      },
+    });
+  });
+
+  it("respects explicit startup and SSH settings from spec", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_explicit",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+          ssh: false,
+          startup: "pnpm dev",
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+
+    const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    await processWorkspaceBuildJob({
+      jobId: "job_explicit",
+      workerId: "worker-test",
+      leaseDurationMs: 60000,
+      dbClient: {} as DatabaseClient,
+      executors: [executor],
+      runtimeAdapters: [runtimeAdapter],
+      defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
+      registryClient,
+    });
+
+    const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+    expect(launchCall?.blueprint.access.ssh.enabled).toBe(false);
+    expect((launchCall?.blueprint as { lifecycle: unknown } | undefined)?.lifecycle).toMatchObject({
+      startup: {
+        foreground: {
+          kind: "command",
+          run: "pnpm dev",
+          shell: "bash",
+        },
+      },
+    });
+  });
+
   it("claims, compiles, publishes, and marks a job as succeeded", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
@@ -97,6 +260,10 @@ describe("processWorkspaceBuildJob", () => {
       executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
       registryClient,
     });
 
@@ -109,6 +276,17 @@ describe("processWorkspaceBuildJob", () => {
     expect(repository.markJobSucceeded).toHaveBeenCalled();
     expect(repository.markJobFailed).not.toHaveBeenCalled();
     expect(runtimeAdapter.launch).toHaveBeenCalledTimes(1);
+    expect(repository.markJobSucceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resultPayload: expect.objectContaining({
+          compile: expect.any(Object),
+          runtime: expect.objectContaining({
+            adapter: "docker",
+            resourceId: "resource_123",
+          }),
+        }),
+      }),
+    );
   });
 
   it("marks a job as failed when compile or publish throws", async () => {
@@ -147,6 +325,10 @@ describe("processWorkspaceBuildJob", () => {
         executors: [executor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
+        defaultStartupMode: "idle",
+        defaultIdleCommand: "while :; do sleep 30; done",
+        defaultSshEnabled: true,
+        defaultSshListenPort: 2222,
         registryClient: {} as RegistryClient,
       }),
     ).rejects.toThrow("compile exploded");
@@ -193,6 +375,10 @@ describe("processWorkspaceBuildJob", () => {
         executors: [nixExecutor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
+        defaultStartupMode: "idle",
+        defaultIdleCommand: "while :; do sleep 30; done",
+        defaultSshEnabled: true,
+        defaultSshListenPort: 2222,
         registryClient: {} as RegistryClient,
       }),
     ).rejects.toThrow("No executor is registered for target.os.family 'fedora'.");
@@ -268,6 +454,10 @@ describe("processWorkspaceBuildJob", () => {
         executors: [executor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
+        defaultStartupMode: "idle",
+        defaultIdleCommand: "while :; do sleep 30; done",
+        defaultSshEnabled: true,
+        defaultSshListenPort: 2222,
         registryClient,
       }),
     ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");

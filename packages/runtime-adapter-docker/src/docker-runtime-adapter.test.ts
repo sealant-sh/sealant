@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -48,13 +52,31 @@ const createLaunchInput = (overrides: Record<string, unknown> = {}) => {
 };
 
 describe("DockerRuntimeAdapter", () => {
-  it("reports unsupported when SSH is enabled", () => {
+  it("supports SSH-enabled blueprints when key source is configured", () => {
     const adapter = new DockerRuntimeAdapter();
     const support = adapter.supports({
       blueprint: createBlueprint({
         access: {
           ssh: {
             enabled: true,
+            listenPort: 2222,
+            authorizedKeysRef: "/workspace/.secrets/authorized_keys",
+          },
+        },
+      }),
+    });
+
+    expect(support).toEqual({ supported: true });
+  });
+
+  it("rejects SSH-enabled blueprints when no key source is configured", () => {
+    const adapter = new DockerRuntimeAdapter();
+    const support = adapter.supports({
+      blueprint: createBlueprint({
+        access: {
+          ssh: {
+            enabled: true,
+            listenPort: 2222,
           },
         },
       }),
@@ -63,7 +85,8 @@ describe("DockerRuntimeAdapter", () => {
     expect(support).toEqual({
       supported: false,
       reason: "unsupported-access-mode",
-      message: "The Docker runtime adapter does not support SSH wiring yet.",
+      message:
+        "SSH is enabled but no authorized keys file was provided in access.ssh.authorizedKeysRef or adapter defaults.",
     });
   });
 
@@ -162,5 +185,69 @@ describe("DockerRuntimeAdapter", () => {
     await expect(adapter.launch(createLaunchInput())).rejects.toThrow(
       "exited immediately (status: exited, exitCode: 127, error: exec failed)",
     );
+  });
+
+  it("publishes SSH port and endpoint when SSH is enabled", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
+    const keyFile = join(tempDir, "authorized_keys");
+    await writeFile(keyFile, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n", "utf8");
+
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-456\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect") {
+        return {
+          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "port") {
+        return {
+          stdout: "127.0.0.1:49153\n",
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: "",
+        stderr: "",
+      };
+    });
+
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      defaultSshAuthorizedKeysFile: keyFile,
+    });
+
+    try {
+      const result = await adapter.launch(
+        createLaunchInput({
+          access: {
+            ssh: {
+              enabled: true,
+              listenPort: 2222,
+            },
+          },
+        }),
+      );
+
+      const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+      expect(runArgs).toContain("-p");
+      expect(runArgs).toContain("127.0.0.1::2222");
+      expect(runArgs).toContain("SEALANT_ENABLE_SSH=true");
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_AUTHORIZED_KEYS_BASE64="))).toBe(true);
+      expect(result.endpoint).toBe("ssh://root@127.0.0.1:49153");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });

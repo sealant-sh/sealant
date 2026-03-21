@@ -34,15 +34,6 @@ export const getNixExecutorSupport = (blueprint: WorkspaceBlueprint): OsExecutor
     });
   }
 
-  if (blueprint.access.ssh.enabled) {
-    return parseOsExecutorSupport({
-      supported: false,
-      reason: "unsupported-access-mode",
-      message:
-        "The minimal Nix executor path does not support SSH wiring from the shared blueprint yet.",
-    });
-  }
-
   for (const pkg of blueprint.tooling.packages) {
     if (pkg.version !== undefined) {
       return parseOsExecutorSupport({
@@ -140,6 +131,11 @@ export const mapBlueprintToNixExecutorSpec = (blueprint: WorkspaceBlueprint): Ni
 
   if (blueprint.lifecycle.startup.foreground.kind === "command") {
     env.SEALANT_FOREGROUND_COMMAND = blueprint.lifecycle.startup.foreground.run;
+  }
+
+  if (blueprint.access.ssh.enabled) {
+    env.SEALANT_ENABLE_SSH = "true";
+    env.SEALANT_SSH_PORT = String(blueprint.access.ssh.listenPort);
   }
 
   return parseNixExecutorSpec({
