@@ -10,7 +10,12 @@ interface ProfileDetailSectionProps {
   readonly children: ReactNode;
 }
 
-export function ProfileDetailSection({ profile, section, description, children }: ProfileDetailSectionProps) {
+export function ProfileDetailSection({
+  profile,
+  section,
+  description,
+  children,
+}: ProfileDetailSectionProps) {
   if (profile === null) {
     return (
       <WorkspacePage

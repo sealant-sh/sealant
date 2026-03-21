@@ -1,7 +1,7 @@
-@import "@fontsource/inter/400.css";
-@import "@fontsource/inter/700.css";
-@import "@fontsource/inter/800.css";
-@import "@fontsource/inter/900.css";
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
 
 @import "@fontsource/space-grotesk/400.css";
 @import "@fontsource/space-grotesk/500.css";
@@ -11,7 +11,7 @@
 @import "@sealant/ui/styles/globals.css";
 
 @theme inline {
-  --font-sans: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Space Grotesk", ui-monospace, monospace;
   --font-display: "Bebas Neue", "Oswald", "Impact", sans-serif;
 }
@@ -97,6 +97,11 @@ html {
 body {
   min-height: 100svh;
   background:
-    linear-gradient(90deg, color-mix(in oklab, var(--sw-rule) 6%, transparent) 1px, transparent 1px) 0 0 / calc(100% / 12) 100%,
-    linear-gradient(180deg, color-mix(in oklab, var(--sw-panel) 70%, var(--sw-bg)) 0%, var(--sw-bg) 100%);
+    linear-gradient(90deg, color-mix(in oklab, var(--sw-rule) 6%, transparent) 1px, transparent 1px)
+      0 0 / calc(100% / 12) 100%,
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--sw-panel) 70%, var(--sw-bg)) 0%,
+      var(--sw-bg) 100%
+    );
 }

@@ -24,4 +24,5 @@ The worker expects:
 - RabbitMQ from `packages/workspace-build-queue/dev/rabbitmq/compose.yaml`
 - Zot from `packages/registry-integration/dev/zot/compose.yaml`
 
-By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an existing local RabbitMQ instance on `5672`.
+By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
+existing local RabbitMQ instance on `5672`.

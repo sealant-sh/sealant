@@ -1,11 +1,13 @@
-import { useState } from "react";
-
 import { Button, useAppForm } from "@sealant/ui";
 import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { AuthShell } from "@/components/auth/auth-shell";
-import { forgotPasswordFormDefaults, forgotPasswordFormSchema } from "@/features/auth/forms/forgot-password-form";
+import {
+  forgotPasswordFormDefaults,
+  forgotPasswordFormSchema,
+} from "@/features/auth/forms/forgot-password-form";
 import { normalizeRequiredString } from "@/lib/forms/zod";
 
 export const Route = createFileRoute("/_auth/forgot-password")({
@@ -36,9 +38,15 @@ function ForgotPasswordPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Forgot Password</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground">Reset Your Password</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Enter the email for your account.</p>
+          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
+            Forgot Password
+          </p>
+          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground">
+            Reset Your Password
+          </h2>
+          <p className="text-sm leading-7 text-muted-foreground">
+            Enter the email for your account.
+          </p>
         </div>
 
         <form
@@ -57,7 +65,7 @@ function ForgotPasswordPage() {
                 fieldClassName="space-y-2"
                 inputClassName="h-12 px-4"
                 label="Email"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                 placeholder="you@company.com"
                 required
                 spellCheck={false}
@@ -78,11 +86,7 @@ function ForgotPasswordPage() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button
-                className="h-12 w-full"
-                disabled={isSubmitting}
-                type="submit"
-              >
+              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
                 {isSubmitting ? "Requesting..." : "Request Reset"}
               </Button>
             )}
@@ -91,7 +95,10 @@ function ForgotPasswordPage() {
 
         <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Remembered the password?</p>
-          <a href="/login" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
+          <a
+            href="/login"
+            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+          >
             Sign In
           </a>
         </div>

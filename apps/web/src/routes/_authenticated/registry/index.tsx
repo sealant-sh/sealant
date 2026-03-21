@@ -15,16 +15,20 @@ function RegistryListPage() {
   return (
     <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
       <div className="mb-8">
-        <p className="font-mono text-xs tracking-[0.12em] uppercase text-muted-foreground">Instances</p>
-        <h1 className="mt-3 font-display text-6xl tracking-[0.02em] uppercase text-foreground leading-none">Registry</h1>
-        <p className="mt-4 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground">
+        <p className="font-mono text-xs tracking-[0.12em] text-muted-foreground">Instances</p>
+        <h1 className="mt-3 font-display text-6xl tracking-[0.02em] text-foreground leading-none">
+          Registry
+        </h1>
+        <p className="mt-4 font-mono text-xs tracking-[0.1em] text-muted-foreground">
           {registries.length} configured instance{registries.length !== 1 ? "s" : ""}
         </p>
       </div>
 
       {registries.length === 0 ? (
         <div className="flex items-center justify-center border border-border bg-muted/30 py-24">
-          <p className="font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground">No registries configured</p>
+          <p className="font-mono text-xs tracking-[0.1em] text-muted-foreground">
+            No registries configured
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">

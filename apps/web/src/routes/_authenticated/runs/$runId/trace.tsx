@@ -24,8 +24,13 @@ function RunTracePage() {
           ["00:18", "Validation suite started"],
           ["00:42", "Artifact upload completed"],
         ].map(([time, message]) => (
-          <div key={`${time}-${message}`} className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[auto_1fr] sm:items-center">
-            <p className="font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground">{time}</p>
+          <div
+            key={`${time}-${message}`}
+            className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[auto_1fr] sm:items-center"
+          >
+            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+              {time}
+            </p>
             <p className="text-sm text-foreground">{message}</p>
           </div>
         ))}

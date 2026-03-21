@@ -102,17 +102,12 @@
       "indexes": {
         "account_provider_account_idx": {
           "name": "account_provider_account_idx",
-          "columns": [
-            "provider_id",
-            "account_id"
-          ],
+          "columns": ["provider_id", "account_id"],
           "isUnique": true
         },
         "account_user_id_idx": {
           "name": "account_user_id_idx",
-          "columns": [
-            "user_id"
-          ],
+          "columns": ["user_id"],
           "isUnique": false
         }
       },
@@ -121,12 +116,8 @@
           "name": "account_user_id_user_id_fk",
           "tableFrom": "account",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -198,23 +189,17 @@
       "indexes": {
         "session_token_idx": {
           "name": "session_token_idx",
-          "columns": [
-            "token"
-          ],
+          "columns": ["token"],
           "isUnique": true
         },
         "session_user_id_idx": {
           "name": "session_user_id_idx",
-          "columns": [
-            "user_id"
-          ],
+          "columns": ["user_id"],
           "isUnique": false
         },
         "session_expires_at_idx": {
           "name": "session_expires_at_idx",
-          "columns": [
-            "expires_at"
-          ],
+          "columns": ["expires_at"],
           "isUnique": false
         }
       },
@@ -223,12 +208,8 @@
           "name": "session_user_id_user_id_fk",
           "tableFrom": "session",
           "tableTo": "user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -294,9 +275,7 @@
       "indexes": {
         "user_email_idx": {
           "name": "user_email_idx",
-          "columns": [
-            "email"
-          ],
+          "columns": ["email"],
           "isUnique": true
         }
       },
@@ -354,17 +333,12 @@
       "indexes": {
         "verification_identifier_value_idx": {
           "name": "verification_identifier_value_idx",
-          "columns": [
-            "identifier",
-            "value"
-          ],
+          "columns": ["identifier", "value"],
           "isUnique": true
         },
         "verification_expires_at_idx": {
           "name": "verification_expires_at_idx",
-          "columns": [
-            "expires_at"
-          ],
+          "columns": ["expires_at"],
           "isUnique": false
         }
       },
@@ -551,32 +525,22 @@
       "indexes": {
         "workspace_build_jobs_status_available_at_idx": {
           "name": "workspace_build_jobs_status_available_at_idx",
-          "columns": [
-            "status",
-            "available_at"
-          ],
+          "columns": ["status", "available_at"],
           "isUnique": false
         },
         "workspace_build_jobs_status_claimed_at_idx": {
           "name": "workspace_build_jobs_status_claimed_at_idx",
-          "columns": [
-            "status",
-            "claimed_at"
-          ],
+          "columns": ["status", "claimed_at"],
           "isUnique": false
         },
         "workspace_build_jobs_created_at_idx": {
           "name": "workspace_build_jobs_created_at_idx",
-          "columns": [
-            "created_at"
-          ],
+          "columns": ["created_at"],
           "isUnique": false
         },
         "workspace_build_jobs_idempotency_key_idx": {
           "name": "workspace_build_jobs_idempotency_key_idx",
-          "columns": [
-            "idempotency_key"
-          ],
+          "columns": ["idempotency_key"],
           "isUnique": true
         }
       },

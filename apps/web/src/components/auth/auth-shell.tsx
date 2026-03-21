@@ -1,6 +1,5 @@
-import type { ReactNode } from "react";
-
 import { cn } from "@sealant/ui";
+import type { ReactNode } from "react";
 
 import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 
@@ -20,12 +19,7 @@ const accentStyles = {
   },
 } as const;
 
-export function AuthShell({
-  title,
-  description,
-  children,
-  accent = "magenta",
-}: AuthShellProps) {
+export function AuthShell({ title, description, children, accent = "magenta" }: AuthShellProps) {
   const styles = accentStyles[accent];
 
   return (
@@ -37,7 +31,9 @@ export function AuthShell({
       <div className="relative mx-auto flex min-h-svh w-full max-w-[1440px] flex-col px-8 py-8 sm:px-10 lg:px-12">
         <header className="flex h-20 items-center justify-between border-b-2 border-foreground">
           <div>
-            <p className="font-mono text-[0.65rem] uppercase tracking-[0.24em] text-muted-foreground">Sealant</p>
+            <p className="font-mono text-[0.65rem] tracking-[0.24em] text-muted-foreground">
+              Sealant
+            </p>
           </div>
           <div className="flex items-center">
             <ThemeSwitcher className="hidden sm:inline-flex" />
@@ -51,10 +47,12 @@ export function AuthShell({
         <div className="flex flex-1 items-center py-12 lg:grid lg:grid-cols-12 lg:gap-8 lg:py-0">
           <section className="lg:col-span-7 xl:col-span-8">
             <div className="max-w-3xl">
-              <h1 className="font-display text-6xl uppercase leading-[0.84] tracking-[0.02em] text-foreground text-balance sm:text-7xl xl:text-[5.5rem]">
+              <h1 className="font-display text-6xl leading-[0.84] tracking-[0.02em] text-foreground text-balance sm:text-7xl xl:text-[5.5rem]">
                 {title}
               </h1>
-              <p className="mt-6 max-w-xl text-base leading-8 text-muted-foreground">{description}</p>
+              <p className="mt-6 max-w-xl text-base leading-8 text-muted-foreground">
+                {description}
+              </p>
             </div>
           </section>
 

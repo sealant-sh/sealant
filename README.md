@@ -1,8 +1,11 @@
 # Sealant
 
-Sealant is a product for spinning up isolated, ready-to-code microVM environments from a polished web UI.
+Sealant is a product for spinning up isolated, ready-to-code microVM environments from a polished
+web UI.
 
-The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional personalization inputs like dotfiles or Nix flakes. Sealant turns those inputs into a composed environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
+The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional
+personalization inputs like dotfiles or Nix flakes. Sealant turns those inputs into a composed
+environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
 
 ## Status
 
@@ -82,20 +85,33 @@ Supporting integrations feed into that flow without owning it:
 
 ### Current implementation status
 
-- `packages/db/`: shared Drizzle + SQLite package for durable control-plane state including auth, repositories, profiles, runs, issue/PR lineage, and build-job coordination
-- `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the shared SQLite database package
-- `packages/workspace-composition/`: core composition package that owns the shared workspace contracts and OS-agnostic composition model
-- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current composition flow and example specs
-- `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar reference UI, and the first registry-backed route group
-- `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs, running the Nix executor, and publishing images to the registry
-- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build outputs
-- `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image build requests and dead-letter handling
-- `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry compose/config; today it publishes the current Nix-produced OCI image archive through a Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image for later runtime adapters
-- the other package and app workspaces are scaffolded so the intended architecture is explicit before each implementation is filled in
+- `packages/db/`: shared Drizzle + SQLite package for durable control-plane state including auth,
+  repositories, profiles, runs, issue/PR lineage, and build-job coordination
+- `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
+  shared SQLite database package
+- `packages/workspace-composition/`: core composition package that owns the shared workspace
+  contracts and OS-agnostic composition model
+- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current
+  composition flow and example specs
+- `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
+  reference UI, and the first registry-backed route group
+- `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
+  running the Nix executor, and publishing images to the registry
+- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build
+  outputs
+- `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image
+  build requests and dead-letter handling
+- `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry
+  compose/config; today it publishes the current Nix-produced OCI image archive through a
+  Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image
+  for later runtime adapters
+- the other package and app workspaces are scaffolded so the intended architecture is explicit
+  before each implementation is filled in
 
 ## Planned product shape
 
-Sealant still has three major product areas, but they will be implemented through the monorepo workspaces:
+Sealant still has three major product areas, but they will be implemented through the monorepo
+workspaces:
 
 ### 1. Website
 
@@ -133,15 +149,22 @@ The infrastructure side contains the deployment and execution model for isolated
 - networking, storage, and secrets wiring
 - adapter implementations for different deployment targets
 
-The architecture should stay adapter-oriented so Sealant can target different execution backends over time.
+The architecture should stay adapter-oriented so Sealant can target different execution backends
+over time.
 
 ## Defined package architecture
 
-- `packages/db/`: shared SQLite database package for durable control-plane state, Drizzle schema, migrations, and repositories for build-job processing
-- `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session helpers across product apps
-- `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts, publishers, consumers, and dev broker setup
-- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`, `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build artifact definitions
-- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into a concrete Nix build path
+- `packages/db/`: shared SQLite database package for durable control-plane state, Drizzle schema,
+  migrations, and repositories for build-job processing
+- `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session
+  helpers across product apps
+- `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts,
+  publishers, consumers, and dev broker setup
+- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
+  `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
+  artifact definitions
+- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into
+  a concrete Nix build path
 - `packages/os-integration-fedora/`: Fedora-specific OS integration placeholder
 - `packages/os-integration-arch/`: Arch-specific OS integration placeholder
 - `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter
@@ -158,7 +181,8 @@ The architecture should stay adapter-oriented so Sealant can target different ex
 
 - `apps/web/`: main product web app for creating and managing workspaces
 - `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
-- `apps/worker/`: background worker for consuming queued workspace image build jobs and driving compile/publish work
+- `apps/worker/`: background worker for consuming queued workspace image build jobs and driving
+  compile/publish work
 - `apps/docs/`: user and contributor documentation site
 - `apps/marketing/`: public website and launch surfaces
 - `apps/electron/`: desktop client surface if desktop becomes a first-class client
@@ -255,7 +279,8 @@ commands run from the repo root so the baseline tooling works before app package
 
 ## Why this repo exists
 
-Sealant is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean without giving up reproducibility or isolation.
+Sealant is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean
+without giving up reproducibility or isolation.
 
 The goal is a product experience that feels simple on the surface while staying disciplined
 underneath.

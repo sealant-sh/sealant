@@ -66,4 +66,6 @@
 
 ## Current Implementation Note
 
-The first concrete Nix-backed build path now lives in `@sealant/os-integration-nix`. This package stays focused on the shared composition contracts, normalization, and executor-selection boundary that feed concrete OS integrations.
+The first concrete Nix-backed build path now lives in `@sealant/os-integration-nix`. This package
+stays focused on the shared composition contracts, normalization, and executor-selection boundary
+that feed concrete OS integrations.

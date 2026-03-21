@@ -1,8 +1,7 @@
-import { useState } from "react";
-
 import { Button, useAppForm } from "@sealant/ui";
 import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { AuthShell } from "@/components/auth/auth-shell";
 import { loginFormDefaults, loginFormSchema } from "@/features/auth/forms/login-form";
@@ -50,15 +49,26 @@ function LoginPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Sign In</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Welcome Back</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Sign in with your account details.</p>
+          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
+            Sign In
+          </p>
+          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground text-balance">
+            Welcome Back
+          </h2>
+          <p className="text-sm leading-7 text-muted-foreground">
+            Sign in with your account details.
+          </p>
         </div>
 
         <div className="space-y-5">
           <div className="flex items-center justify-between gap-4">
-            <span className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground">Password</span>
-            <a href="/forgot-password" className="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground no-underline hover:text-foreground">
+            <span className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+              Password
+            </span>
+            <a
+              href="/forgot-password"
+              className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground no-underline hover:text-foreground"
+            >
               Reset Password
             </a>
           </div>
@@ -79,7 +89,7 @@ function LoginPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Email"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="you@company.com"
                   required
                   spellCheck={false}
@@ -96,7 +106,7 @@ function LoginPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Enter your password..."
                   required
                 />
@@ -111,11 +121,7 @@ function LoginPage() {
 
             <form.Subscribe selector={(state) => state.isSubmitting}>
               {(isSubmitting) => (
-                <Button
-                  className="h-12 w-full"
-                  disabled={isSubmitting}
-                  type="submit"
-                >
+                <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
                   {isSubmitting ? "Signing In..." : "Sign In"}
                 </Button>
               )}
@@ -125,7 +131,10 @@ function LoginPage() {
 
         <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Need access?</p>
-          <a href="/register" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
+          <a
+            href="/register"
+            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+          >
             Register
           </a>
         </div>

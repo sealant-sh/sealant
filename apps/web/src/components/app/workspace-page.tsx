@@ -13,13 +13,19 @@ interface WorkspacePageProps {
   readonly children?: ReactNode;
 }
 
-export function WorkspacePage({ kicker, title, description, metrics, children }: WorkspacePageProps) {
+export function WorkspacePage({
+  kicker,
+  title,
+  description,
+  metrics,
+  children,
+}: WorkspacePageProps) {
   return (
     <section className="overflow-hidden border border-border bg-card">
       <div className="h-1 w-full bg-primary" />
       <div className="px-6 py-7 sm:px-8 sm:py-8">
-        <p className="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-muted-foreground">{kicker}</p>
-        <h1 className="mt-4 font-display text-5xl leading-[0.88] tracking-[0.02em] uppercase text-foreground text-balance sm:text-6xl">
+        <p className="text-md text-muted-foreground">{kicker}</p>
+        <h1 className="mt-4 font-sans text-5xl text-foreground text-balance sm:text-6xl">
           {title}
         </h1>
         <p className="mt-5 max-w-3xl text-sm leading-7 text-muted-foreground">{description}</p>
@@ -28,7 +34,9 @@ export function WorkspacePage({ kicker, title, description, metrics, children }:
           <div className="mt-8 grid gap-px border border-border bg-border sm:grid-cols-3">
             {metrics.map((metric) => (
               <div key={metric.label} className="bg-card px-4 py-4">
-                <p className="font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground">{metric.label}</p>
+                <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+                  {metric.label}
+                </p>
                 <p className="mt-2 text-lg font-semibold text-foreground">{metric.value}</p>
               </div>
             ))}

@@ -24,16 +24,27 @@ function ManifestPage() {
 
   return (
     <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground">
-        <Link to="/registry" className="text-muted-foreground no-underline transition-colors hover:text-foreground">
+      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs tracking-[0.1em] text-muted-foreground">
+        <Link
+          to="/registry"
+          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+        >
           Registry
         </Link>
         <span className="text-muted-foreground/60">/</span>
-        <Link to="/registry/$registryId" params={{ registryId }} className="text-muted-foreground no-underline transition-colors hover:text-foreground">
+        <Link
+          to="/registry/$registryId"
+          params={{ registryId }}
+          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+        >
           {registry.name.toUpperCase()}
         </Link>
         <span className="text-muted-foreground/60">/</span>
-        <Link to="/registry/$registryId" params={{ registryId }} className="text-muted-foreground no-underline transition-colors hover:text-foreground">
+        <Link
+          to="/registry/$registryId"
+          params={{ registryId }}
+          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+        >
           {repository}
         </Link>
         <span className="text-muted-foreground/60">/</span>
@@ -43,7 +54,7 @@ function ManifestPage() {
       <Link
         to="/registry/$registryId"
         params={{ registryId }}
-        className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs tracking-[0.1em] uppercase text-muted-foreground no-underline transition-colors hover:text-foreground"
+        className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs tracking-[0.1em] text-muted-foreground no-underline transition-colors hover:text-foreground"
       >
         <ArrowLeft className="size-3" />
         Back to registry
@@ -82,7 +93,10 @@ function ManifestSkeleton() {
       <Skeleton className="mb-3 h-3 w-16 rounded-none bg-muted" />
       <div className="border border-border">
         {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="flex items-center gap-4 border-b border-border px-4 py-2.5 last:border-b-0">
+          <div
+            key={index}
+            className="flex items-center gap-4 border-b border-border px-4 py-2.5 last:border-b-0"
+          >
             <Skeleton className="h-3 flex-1 rounded-none bg-muted" />
             <Skeleton className="h-3 w-16 rounded-none bg-muted" />
             <Skeleton className="h-5 w-24 rounded-none bg-muted" />

@@ -1,18 +1,20 @@
 {
   "name": "@sealant/web",
+  "version": "0.0.0-alpha-0",
   "private": true,
   "type": "module",
   "imports": {
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev --port 3000",
     "build": "vite build",
+    "dev": "vite dev --port 3000",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.8",
     "@sealant/auth": "workspace:*",
     "@sealant/ui": "workspace:*",

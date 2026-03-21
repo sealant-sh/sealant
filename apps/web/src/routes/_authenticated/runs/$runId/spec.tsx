@@ -22,12 +22,12 @@ function RunSpecPage() {
           {`profile: ${run?.profileId ?? "unknown"}
 repo: ${run?.repoId ?? "unknown"}
 runtime:
-  node: "22"
-  packageManager: "pnpm"
+ node: "22"
+ packageManager: "pnpm"
 checks:
-  - lint
-  - typecheck
-  - validation`}
+ - lint
+ - typecheck
+ - validation`}
         </pre>
       </div>
     </RunDetailSection>

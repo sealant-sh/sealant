@@ -1,8 +1,7 @@
-import { useState } from "react";
-
 import { Button, useAppForm } from "@sealant/ui";
 import { revalidateLogic } from "@tanstack/react-form";
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { AuthShell } from "@/components/auth/auth-shell";
 import { registerFormDefaults, registerFormSchema } from "@/features/auth/forms/register-form";
@@ -45,15 +44,18 @@ function RegisterPage() {
   });
 
   return (
-    <AuthShell
-      title="Create your account."
-      description="Set up your account to get started."
-    >
+    <AuthShell title="Create your account." description="Set up your account to get started.">
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-muted-foreground">Register</p>
-          <h2 className="font-display text-4xl uppercase tracking-[0.02em] text-foreground text-balance">Create Account</h2>
-          <p className="text-sm leading-7 text-muted-foreground">Use your details to create an account.</p>
+          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
+            Register
+          </p>
+          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground text-balance">
+            Create Account
+          </h2>
+          <p className="text-sm leading-7 text-muted-foreground">
+            Use your details to create an account.
+          </p>
         </div>
 
         <form
@@ -72,7 +74,7 @@ function RegisterPage() {
                 fieldClassName="space-y-2"
                 inputClassName="h-12 px-4"
                 label="Name"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                 placeholder="Full name..."
                 required
               />
@@ -87,7 +89,7 @@ function RegisterPage() {
                 fieldClassName="space-y-2"
                 inputClassName="h-12 px-4"
                 label="Email"
-                labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                 placeholder="you@company.com"
                 required
                 spellCheck={false}
@@ -105,7 +107,7 @@ function RegisterPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Password"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Create a password..."
                   required
                 />
@@ -120,7 +122,7 @@ function RegisterPage() {
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Confirm"
-                  labelClassName="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted-foreground"
+                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Repeat the password..."
                   required
                 />
@@ -136,11 +138,7 @@ function RegisterPage() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button
-                className="h-12 w-full"
-                disabled={isSubmitting}
-                type="submit"
-              >
+              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
                 {isSubmitting ? "Creating Account..." : "Create Account"}
               </Button>
             )}
@@ -149,7 +147,10 @@ function RegisterPage() {
 
         <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Already registered?</p>
-          <a href="/login" className="font-semibold uppercase tracking-[0.1em] text-foreground no-underline hover:text-primary">
+          <a
+            href="/login"
+            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+          >
             Sign In
           </a>
         </div>

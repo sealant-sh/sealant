@@ -3,7 +3,6 @@ import { Menubar as MenubarPrimitive } from "@base-ui/react/menubar";
 import { CheckIcon } from "lucide-react";
 import * as React from "react";
 
-import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,12 +18,16 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 function Menubar({ className, ...props }: MenubarPrimitive.Props) {
   return (
     <MenubarPrimitive
       data-slot="menubar"
-      className={cn("flex h-9 items-center gap-0.5 rounded-none border border-border p-[2px]", className)}
+      className={cn(
+        "flex h-9 items-center gap-0.5 rounded-none border border-border p-[2px]",
+        className,
+      )}
       {...props}
     />
   );

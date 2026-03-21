@@ -1,16 +1,17 @@
-import * as React from "react"
-import { Link } from "@tanstack/react-router"
-import { ChevronRight, Tag } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Link } from "@tanstack/react-router";
+import { ChevronRight, Tag } from "lucide-react";
+import * as React from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 export interface RepositoryRowProps {
-  registryId: string
-  repository: string
+  registryId: string;
+  repository: string;
   /** Called when row is first expanded to fetch tags */
-  onLoadTags: (repository: string) => Promise<string[]>
-  className?: string
+  onLoadTags: (repository: string) => Promise<string[]>;
+  className?: string;
 }
 
 export function RepositoryRow({
@@ -19,25 +20,25 @@ export function RepositoryRow({
   onLoadTags,
   className,
 }: RepositoryRowProps) {
-  const [expanded, setExpanded] = React.useState(false)
-  const [tags, setTags] = React.useState<string[] | null>(null)
-  const [loading, setLoading] = React.useState(false)
+  const [expanded, setExpanded] = React.useState(false);
+  const [tags, setTags] = React.useState<string[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
 
   const handleToggle = React.useCallback(async () => {
-    const next = !expanded
-    setExpanded(next)
+    const next = !expanded;
+    setExpanded(next);
     if (next && tags === null) {
-      setLoading(true)
+      setLoading(true);
       try {
-        const result = await onLoadTags(repository)
-        setTags(result)
+        const result = await onLoadTags(repository);
+        setTags(result);
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
     }
-  }, [expanded, tags, repository, onLoadTags])
+  }, [expanded, tags, repository, onLoadTags]);
 
-  const encodedRepo = encodeURIComponent(repository)
+  const encodedRepo = encodeURIComponent(repository);
 
   return (
     <div className={cn("border-b border-border last:border-b-0", className)}>
@@ -51,12 +52,10 @@ export function RepositoryRow({
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
-            expanded && "rotate-90"
+            expanded && "rotate-90",
           )}
         />
-        <span className="flex-1 font-mono text-sm text-foreground truncate">
-          {repository}
-        </span>
+        <span className="flex-1 font-mono text-sm text-foreground truncate">{repository}</span>
         {tags !== null && (
           <Badge className="shrink-0 rounded-none border border-border bg-muted text-muted-foreground font-mono text-[10px] tracking-[0.12em]">
             <Tag className="size-2.5 mr-1" />
@@ -97,5 +96,5 @@ export function RepositoryRow({
         </div>
       )}
     </div>
-  )
+  );
 }

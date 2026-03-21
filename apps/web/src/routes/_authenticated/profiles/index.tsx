@@ -16,7 +16,10 @@ function ProfilesPage() {
       description="Profiles define repeatable runtime context so runs and issue delegation stay deterministic across teams."
       metrics={[
         { label: "Profiles", value: String(PROFILES.length) },
-        { label: "Staging", value: String(PROFILES.filter((profile) => profile.environment === "Staging").length) },
+        {
+          label: "Staging",
+          value: String(PROFILES.filter((profile) => profile.environment === "Staging").length),
+        },
         {
           label: "Secrets",
           value: String(PROFILES.reduce((total, profile) => total + profile.secretCount, 0)),

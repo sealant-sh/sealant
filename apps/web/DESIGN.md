@@ -1,14 +1,14 @@
 # Swiss Operational Poster Design Language
 
-Version: 1.0
-Owner: Product Design + Frontend
-Applies to: Marketing pages, product surfaces, component library, content style
+Version: 1.0 Owner: Product Design + Frontend Applies to: Marketing pages, product surfaces,
+component library, content style
 
 ## 1) Design Intent
 
 This system defines our chosen aesthetic: **Swiss structure + poster energy + operational clarity**.
 
-We do not design for decoration first. We design for confidence in live-service environments (kitchens, bars, floor teams) where speed, clarity, and trust matter.
+We do not design for decoration first. We design for confidence in live-service environments
+(kitchens, bars, floor teams) where speed, clarity, and trust matter.
 
 ### The core feel
 
@@ -548,8 +548,7 @@ Every component should feel like it belongs to one coherent system:
 - **Poster confidence in headline moments**
 - **Operational clarity in content**
 
-If it looks stylish but cannot be scanned quickly, it fails.
-If it is clear but visually generic, it fails.
-If it is expressive but not useful, it fails.
+If it looks stylish but cannot be scanned quickly, it fails. If it is clear but visually generic, it
+fails. If it is expressive but not useful, it fails.
 
 This design language exists to keep us in the narrow, intentional space where all three are true.

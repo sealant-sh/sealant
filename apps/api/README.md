@@ -34,9 +34,12 @@ Run the API locally:
 pnpm --filter @sealant/api dev
 ```
 
-The default registry settings point at the local Zot instance started from `packages/registry-integration/dev/zot/compose.yaml`.
+The default registry settings point at the local Zot instance started from
+`packages/registry-integration/dev/zot/compose.yaml`.
 
-The workspace build job routes also expect RabbitMQ from `packages/workspace-build-queue/dev/rabbitmq/compose.yaml` on `127.0.0.1:5673` and the shared SQLite database from `@sealant/db`.
+The workspace build job routes also expect RabbitMQ from
+`packages/workspace-build-queue/dev/rabbitmq/compose.yaml` on `127.0.0.1:5673` and the shared SQLite
+database from `@sealant/db`.
 
 ## Operations Runbook (Local Image Build Flow)
 
@@ -44,9 +47,12 @@ This API is the control-plane entrypoint for workspace image builds.
 
 ### What this flow does
 
-1. `POST /v1/workspace-build-jobs` stores a durable build job in SQLite and publishes a queue message to RabbitMQ.
-2. `@sealant/worker` consumes the job, compiles via `@sealant/os-integration-nix`, and publishes the OCI image to Zot via `@sealant/registry-integration`.
-3. `GET /v1/workspace-build-jobs/{jobId}` returns the durable job state, including success/failure details and published image references.
+1. `POST /v1/workspace-build-jobs` stores a durable build job in SQLite and publishes a queue
+   message to RabbitMQ.
+2. `@sealant/worker` consumes the job, compiles via `@sealant/os-integration-nix`, and publishes the
+   OCI image to Zot via `@sealant/registry-integration`.
+3. `GET /v1/workspace-build-jobs/{jobId}` returns the durable job state, including success/failure
+   details and published image references.
 
 ### Prerequisites
 
@@ -133,7 +139,9 @@ curl "http://localhost:3000/v1/registries/default/tags?repository=sealant/worksp
 
 ## Architecture
 
-The layout follows the general route-group split from the `hono-open-api-starter` project while using `hono-openapi` instead of `@hono/zod-openapi` so the API layer can stay aligned with Standard Schema validators over time.
+The layout follows the general route-group split from the `hono-open-api-starter` project while
+using `hono-openapi` instead of `@hono/zod-openapi` so the API layer can stay aligned with Standard
+Schema validators over time.
 
 - `src/app.ts`: app assembly and route mounting
 - `src/index.ts`: Node server bootstrap

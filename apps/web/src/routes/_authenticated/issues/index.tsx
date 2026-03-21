@@ -16,8 +16,14 @@ function IssuesPage() {
       description="Start here when triaging incoming issues and routing each one into the right run and profile context."
       metrics={[
         { label: "All issues", value: String(ISSUES.length) },
-        { label: "Assigned to me", value: String(ISSUES.filter((issue) => issue.assignedToMe).length) },
-        { label: "Ready for run", value: String(ISSUES.filter((issue) => issue.readyForRun).length) },
+        {
+          label: "Assigned to me",
+          value: String(ISSUES.filter((issue) => issue.assignedToMe).length),
+        },
+        {
+          label: "Ready for run",
+          value: String(ISSUES.filter((issue) => issue.readyForRun).length),
+        },
       ]}
     >
       <IssueRows issues={ISSUES} />

@@ -1,7 +1,5 @@
 {
   "name": "@sealant/workspace-composition",
-  "private": true,
-  "type": "module",
   "version": "0.0.0",
   "private": true,
   "description": "Core workspace composition contracts and normalization logic",

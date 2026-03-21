@@ -1,34 +1,35 @@
-import * as React from "react"
-import { Copy, Check } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Copy, Check } from "lucide-react";
+import * as React from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export interface OciLayer {
-  mediaType: string
-  size: number
-  digest: string
+  mediaType: string;
+  size: number;
+  digest: string;
 }
 
 export interface ManifestDetailProps {
-  repository: string
-  reference: string
-  digest?: string
-  contentType: string | null
-  manifest: unknown
-  className?: string
+  repository: string;
+  reference: string;
+  digest?: string;
+  contentType: string | null;
+  manifest: unknown;
+  className?: string;
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function truncateDigest(digest: string, chars = 16): string {
-  if (!digest.startsWith("sha256:")) return digest
-  return `sha256:${digest.slice(7, 7 + chars)}…`
+  if (!digest.startsWith("sha256:")) return digest;
+  return `sha256:${digest.slice(7, 7 + chars)}…`;
 }
 
 export function ManifestDetail({
@@ -39,17 +40,17 @@ export function ManifestDetail({
   manifest,
   className,
 }: ManifestDetailProps) {
-  const [copied, setCopied] = React.useState(false)
+  const [copied, setCopied] = React.useState(false);
 
   const handleCopyDigest = React.useCallback(async () => {
-    if (!digest) return
-    await navigator.clipboard.writeText(digest)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }, [digest])
+    if (!digest) return;
+    await navigator.clipboard.writeText(digest);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [digest]);
 
-  const layers = getLayers(manifest)
-  const totalSize = layers.reduce((sum, l) => sum + l.size, 0)
+  const layers = getLayers(manifest);
+  const totalSize = layers.reduce((sum, l) => sum + l.size, 0);
 
   return (
     <div className={cn("flex flex-col gap-6", className)}>
@@ -72,13 +73,9 @@ export function ManifestDetail({
               size="icon-xs"
               onClick={handleCopyDigest}
               aria-label="Copy full digest"
-                className="shrink-0 rounded-none border border-border text-muted-foreground hover:text-foreground"
-              >
-              {copied ? (
-                <Check className="size-3 text-secondary" />
-              ) : (
-                <Copy className="size-3" />
-              )}
+              className="shrink-0 rounded-none border border-border text-muted-foreground hover:text-foreground"
+            >
+              {copied ? <Check className="size-3 text-secondary" /> : <Copy className="size-3" />}
             </Button>
           </div>
         )}
@@ -115,7 +112,7 @@ export function ManifestDetail({
                 key={layer.digest}
                 className={cn(
                   "grid grid-cols-[1fr_auto_auto] gap-4 px-4 py-2.5 items-center",
-                  i < layers.length - 1 && "border-b border-border"
+                  i < layers.length - 1 && "border-b border-border",
                 )}
               >
                 <span className="font-mono text-xs text-foreground truncate">
@@ -125,7 +122,8 @@ export function ManifestDetail({
                   {formatBytes(layer.size)}
                 </span>
                 <Badge className="w-24 justify-center rounded-none border border-border bg-muted text-muted-foreground font-mono text-[9px] tracking-[0.11em] truncate">
-                  {layer.mediaType.split("/").pop()?.replace("vnd.oci.image.layer.v1.", "") ?? layer.mediaType}
+                  {layer.mediaType.split("/").pop()?.replace("vnd.oci.image.layer.v1.", "") ??
+                    layer.mediaType}
                 </Badge>
               </div>
             ))}
@@ -143,13 +141,13 @@ export function ManifestDetail({
         </pre>
       </div>
     </div>
-  )
+  );
 }
 
 interface MetaCellProps {
-  label: string
-  value: string
-  mono?: boolean
+  label: string;
+  value: string;
+  mono?: boolean;
 }
 
 function MetaCell({ label, value, mono }: MetaCellProps) {
@@ -158,16 +156,9 @@ function MetaCell({ label, value, mono }: MetaCellProps) {
       <p className="mb-1 font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60">
         {label}
       </p>
-      <p
-        className={cn(
-          "text-sm text-foreground break-all",
-          mono && "font-mono"
-        )}
-      >
-        {value}
-      </p>
+      <p className={cn("text-sm text-foreground break-all", mono && "font-mono")}>{value}</p>
     </div>
-  )
+  );
 }
 
 function getLayers(manifest: unknown): OciLayer[] {
@@ -177,7 +168,7 @@ function getLayers(manifest: unknown): OciLayer[] {
     "layers" in manifest &&
     Array.isArray((manifest as { layers: unknown }).layers)
   ) {
-    return (manifest as { layers: OciLayer[] }).layers
+    return (manifest as { layers: OciLayer[] }).layers;
   }
-  return []
+  return [];
 }
