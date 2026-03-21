@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { capitalizeFirstLetter } from "#/lib/utils/text";
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
 import { ThemeSwitcher } from "@/components/theme/theme-switcher";
@@ -259,107 +258,35 @@ function SidebarContent({
 }) {
   const userLabel = session.user.name || session.user.email;
 
-  if (!isExpanded) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-border px-2 py-3">
-          <Link
-            to={"/runs" as never}
-            className="flex justify-center text-foreground no-underline"
-            aria-label="Sealant home"
-          >
-            <LogoBlob className="size-8" />
-          </Link>
-        </div>
-
-        <nav aria-label="Global navigation" className="flex-1 px-2 py-3">
-          <div className="space-y-1.5">
-            {GLOBAL_NAV_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeArea === getGlobalArea(item.href);
-
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href as never}
-                  className={cn(
-                    "flex h-11 items-center justify-center border border-transparent text-sm no-underline transition-all duration-200",
-                    isActive
-                      ? "border-l-2 border-l-primary bg-muted text-foreground"
-                      : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                  )}
-                  title={item.label}
-                  aria-label={item.label}
-                >
-                  <Icon className="size-4 shrink-0" />
-                </Link>
-              );
-            })}
-          </div>
-        </nav>
-
-        <div className="border-t border-border px-2 py-4">
-          <p className="mb-3 text-center font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
-            {`v${packageJson.version}`}
-          </p>
-          <Link
-            to={"/runs" as never}
-            className="flex h-[4.75rem] items-center justify-center border border-primary bg-primary text-primary-foreground no-underline transition-colors duration-200 hover:bg-transparent hover:text-foreground"
-            title="New Run"
-            aria-label="New Run"
-          >
-            <Plus className="size-4 shrink-0" />
-          </Link>
-
-          <div className="mt-3 flex justify-center border border-border bg-background px-2 py-3">
-            <div
-              className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground"
-              title={userLabel}
-              aria-label={userLabel}
-            >
-              {userLabel.slice(0, 1)}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b border-border px-3 py-4">
-        <div className="flex items-start justify-between gap-3">
+      <div
+        className={cn(
+          "flex h-16 items-center border-b border-border",
+          isExpanded ? "px-3" : "justify-center px-2",
+        )}
+      >
+        <div className={cn("flex items-center", isExpanded ? "gap-3" : "justify-center")}>
+          <Link
+            to={"/runs" as never}
+            className="inline-flex items-center text-foreground no-underline"
+            aria-label="Sealant home"
+          >
+            <LogoBlob className="size-8 shrink-0" />
+          </Link>
           <div
             className={cn(
-              "min-w-0 overflow-hidden transition-all duration-200",
-              isExpanded
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none w-0 -translate-x-2 opacity-0",
+              "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-w-[11rem] translate-x-0 opacity-100" : "max-w-0 -translate-x-2 opacity-0",
             )}
+            aria-hidden={!isExpanded}
           >
-            <Link
-              to={"/runs" as never}
-              className="inline-flex items-center gap-3 text-foreground no-underline"
-            >
-              <LogoBlob className="size-8 shrink-0" />
-              <LogoText className="h-8" />
-            </Link>
-            {/* <p className="mt-4 font-display text-3xl leading-none tracking-[0.02em] text-foreground">
-              {capitalizeFirstLetter(activeArea)}
-            </p> */}
+            <LogoText className="h-8" />
           </div>
         </div>
       </div>
 
-      <div className="border-b border-border px-3 py-3">
-        {/* <p
-          className={cn(
-            "pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground transition-all duration-200",
-            isExpanded ? "opacity-100" : "pointer-events-none opacity-0",
-          )}
-        >
-          Global navigation
-        </p> */}
+      <div className={cn("border-b border-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}>
         <nav aria-label="Global navigation" className="space-y-1.5">
           {GLOBAL_NAV_ITEMS.map((item) => {
             const Icon = item.icon;
@@ -370,22 +297,26 @@ function SidebarContent({
                 key={item.href}
                 to={item.href as never}
                 className={cn(
-                  "group flex items-center gap-3 border border-transparent px-3 py-2.5 text-sm no-underline transition-all duration-200",
+                  "group flex h-11 items-center border border-transparent text-sm no-underline transition-all duration-200 ease-out",
                   isActive
                     ? "border-l-2 border-l-primary bg-muted text-foreground"
                     : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                  !isExpanded && "justify-center px-2",
+                  isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
                 )}
                 title={!isExpanded ? item.label : undefined}
+                aria-label={item.label}
               >
-                <Icon className="size-4 shrink-0" />
+                <span className="flex shrink-0 items-center justify-center">
+                  <Icon className="size-4 shrink-0" />
+                </span>
                 <span
                   className={cn(
-                    "truncate transition-all duration-200",
+                    "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
                     isExpanded
-                      ? "translate-x-0 opacity-100"
-                      : "pointer-events-none w-0 -translate-x-2 opacity-0",
+                      ? "max-w-[10rem] translate-x-0 opacity-100"
+                      : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
                   )}
+                  aria-hidden={!isExpanded}
                 >
                   {item.label}
                 </span>
@@ -395,66 +326,74 @@ function SidebarContent({
         </nav>
       </div>
 
-      <div className="flex-1 overflow-auto px-3 py-4">
+      <div className={cn("flex-1 overflow-auto", isExpanded ? "px-3 py-4" : "px-2 py-3")}>
         <div
           className={cn(
-            "space-y-5 transition-all duration-200",
-            isExpanded ? "opacity-100" : "pointer-events-none opacity-0",
+            "overflow-hidden transition-[max-height,opacity,transform] duration-200 ease-out",
+            isExpanded ? "max-h-[160rem] translate-y-0 opacity-100" : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
           )}
+          aria-hidden={!isExpanded}
         >
-          {sidebarGroups.map((group) => (
-            <section key={group.label}>
-              <p
-                className={cn(
-                  "border-b border-border pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground",
-                )}
-              >
-                {group.label}
-              </p>
-              <nav className="mt-2 space-y-1" aria-label={group.label}>
-                {group.links.map((item) => {
-                  const isActive = isPathActive(pathname, item.href, item.exact ?? false);
-                  return (
-                    <Link
-                      key={item.href}
-                      to={item.href as never}
-                      className={cn(
-                        "block border border-transparent px-3 py-2 text-sm no-underline transition-all duration-200",
-                        isActive
-                          ? "border-l-2 border-l-primary bg-muted text-foreground"
-                          : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                      )}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </nav>
-            </section>
-          ))}
+          <div className="space-y-5">
+            {sidebarGroups.map((group) => (
+              <section key={group.label}>
+                <p className="border-b border-border pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+                  {group.label}
+                </p>
+                <nav className="mt-2 space-y-1" aria-label={group.label}>
+                  {group.links.map((item) => {
+                    const isActive = isPathActive(pathname, item.href, item.exact ?? false);
+                    return (
+                      <Link
+                        key={item.href}
+                        to={item.href as never}
+                        className={cn(
+                          "block border border-transparent px-3 py-2 text-sm no-underline transition-all duration-200 ease-out",
+                          isActive
+                            ? "border-l-2 border-l-primary bg-muted text-foreground"
+                            : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
+                        )}
+                      >
+                        {item.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              </section>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="border-t border-border px-3 py-4">
-        <p className="mb-3 font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+      <div className={cn("border-t border-border", isExpanded ? "px-3 py-4" : "px-2 py-4")}>
+        <p
+          className={cn(
+            "overflow-hidden font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground transition-[max-height,opacity,transform,margin] duration-200 ease-out",
+            isExpanded
+              ? "mb-3 max-h-8 translate-y-0 opacity-100"
+              : "mb-2 max-h-12 -translate-y-1 text-center opacity-100",
+          )}
+        >
           {`v${packageJson.version}`}
         </p>
         <Link
           to={"/runs" as never}
           className={cn(
-            "flex items-center justify-center gap-2 border border-primary bg-primary px-3 py-3 text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-colors duration-200 hover:bg-transparent hover:text-foreground",
-            !isExpanded && "gap-0 px-2",
+            "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
+            isExpanded ? "gap-2 px-3 py-3" : "h-[4.75rem] gap-0 px-2 py-3",
           )}
           title={!isExpanded ? "New Run" : undefined}
+          aria-label="New Run"
         >
           <Plus className="size-4 shrink-0" />
           <span
             className={cn(
-              "transition-all duration-200",
+              "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
               isExpanded
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none w-0 -translate-x-2 opacity-0",
+                ? "max-w-[8rem] translate-x-0 opacity-100"
+                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
             )}
+            aria-hidden={!isExpanded}
           >
             New Run
           </span>
@@ -462,8 +401,8 @@ function SidebarContent({
 
         <div
           className={cn(
-            "mt-4 flex items-center gap-3 border border-border bg-background px-3 py-3 transition-all duration-200",
-            !isExpanded && "justify-center px-2",
+            "mt-3 flex items-center border border-border bg-background transition-all duration-200 ease-out",
+            isExpanded ? "gap-3 px-3 py-3" : "justify-center gap-0 px-2 py-3",
           )}
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
@@ -471,11 +410,12 @@ function SidebarContent({
           </div>
           <div
             className={cn(
-              "min-w-0 overflow-hidden transition-all duration-200",
+              "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
               isExpanded
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none w-0 -translate-x-2 opacity-0",
+                ? "max-w-[10rem] translate-x-0 opacity-100"
+                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
             )}
+            aria-hidden={!isExpanded}
           >
             <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
               Operator
