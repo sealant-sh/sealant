@@ -1,4 +1,8 @@
-import { createDatabaseClientFromEnv, createWorkspaceBuildJobRepository } from "@sealant/db";
+import {
+  createDatabaseClientFromEnv,
+  createWorkspaceBuildJobRepository,
+  createWorkspaceRunRepository,
+} from "@sealant/db";
 
 import { env } from "./env.js";
 import { configureOpenAPI } from "./lib/configure-openapi.js";
@@ -31,6 +35,7 @@ const app = createApiApp({
   registryClient: createRegistryClient(env),
   workspaceBuildJobPublisher: createWorkspaceBuildJobPublisher(env),
   workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
+  workspaceRunRepository: createWorkspaceRunRepository(databaseClient),
 });
 
 export default app;

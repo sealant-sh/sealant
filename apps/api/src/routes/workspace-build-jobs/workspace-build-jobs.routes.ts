@@ -15,6 +15,7 @@ export const workspaceBuildJobIdParamsSchema = z.object({
 });
 
 export const createWorkspaceBuildJobRequestSchema = z.object({
+  ownerUserId: z.string().trim().min(1),
   registryId: z.string().trim().min(1),
   repository: z.string().trim().min(1),
   tag: z.string().trim().min(1),
@@ -23,6 +24,7 @@ export const createWorkspaceBuildJobRequestSchema = z.object({
 
 export const createWorkspaceBuildJobResponseSchema = z.object({
   jobId: z.string(),
+  runId: z.string(),
   status: workspaceBuildJobStatusSchema,
   registryId: z.string(),
   repository: z.string(),
@@ -42,6 +44,7 @@ export const workspaceBuildJobErrorSchema = z.object({
 
 export const workspaceBuildJobDetailsSchema = z.object({
   jobId: z.string(),
+  runId: z.string().optional(),
   status: workspaceBuildJobStatusSchema,
   registryId: z.string(),
   repository: z.string(),
@@ -76,7 +79,7 @@ export const createWorkspaceBuildJobRoute = describeRoute({
       },
     },
     404: {
-      description: "Unknown registry id",
+      description: "Unknown registry id or owner user",
       content: {
         "application/json": {
           schema: resolver(messageResponseSchema),

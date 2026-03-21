@@ -1,4 +1,8 @@
-import type { WorkspaceBuildJob, WorkspaceBuildJobRepository } from "@sealant/db";
+import type {
+  WorkspaceBuildJob,
+  WorkspaceBuildJobRepository,
+  WorkspaceRunRepository,
+} from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
 import { describe, expect, it } from "vitest";
 
@@ -17,6 +21,13 @@ const testEnv: AppEnv = {
   REGISTRY_PUSH_REGISTRY: "127.0.0.1:5000",
   WORKSPACE_BUILD_QUEUE_PREFETCH: 1,
 };
+
+const testUserId = "user_test";
+
+type WorkspaceRunRecord = Awaited<ReturnType<WorkspaceRunRepository["createQueuedRun"]>>;
+type RunInputSnapshotRecord = Awaited<
+  ReturnType<WorkspaceRunRepository["setRunInputSnapshot"]>
+>;
 
 const createRegistryClientStub = (): RegistryClient => {
   return {
@@ -164,6 +175,159 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
   } satisfies WorkspaceBuildJobRepository;
 };
 
+const createWorkspaceRunRepositoryStub = (
+  options: {
+    knownUserIds?: readonly string[];
+  } = {},
+): WorkspaceRunRepository => {
+  const runs = new Map<string, WorkspaceRunRecord>();
+  const snapshots = new Map<string, RunInputSnapshotRecord>();
+  const knownUserIds = new Set(options.knownUserIds ?? [testUserId]);
+
+  const touchUpdatedAt = (run: WorkspaceRunRecord): WorkspaceRunRecord => {
+    return {
+      ...run,
+      updatedAt: new Date(),
+    };
+  };
+
+  const finalizeRun = (
+    run: WorkspaceRunRecord,
+    status: WorkspaceRunRecord["status"],
+    finishedAt: Date,
+  ) => {
+    const durationMs = run.startedAt === null ? null : Math.max(0, finishedAt.getTime() - run.startedAt.getTime());
+
+    return touchUpdatedAt({
+      ...run,
+      status,
+      finishedAt,
+      durationMs,
+    });
+  };
+
+  return {
+    createQueuedRun: async (input) => {
+      if (!knownUserIds.has(input.ownerUserId)) {
+        throw new Error("FOREIGN KEY constraint failed");
+      }
+
+      if (input.requestedByUserId !== undefined && !knownUserIds.has(input.requestedByUserId)) {
+        throw new Error("FOREIGN KEY constraint failed");
+      }
+
+      const now = input.queuedAt ?? new Date();
+      const run: WorkspaceRunRecord = {
+        id: input.id,
+        ownerUserId: input.ownerUserId,
+        repositoryId: input.repositoryId ?? null,
+        repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
+        profileRevisionId: input.profileRevisionId ?? null,
+        issueId: input.issueId ?? null,
+        status: "queued",
+        triggerType: input.triggerType ?? "manual",
+        triggerRef: input.triggerRef ?? null,
+        requestedByUserId: input.requestedByUserId ?? null,
+        retryOfRunId: input.retryOfRunId ?? null,
+        cancelReason: null,
+        queuedAt: now,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      runs.set(run.id, run);
+      return run;
+    },
+    getRunById: async (id) => runs.get(id),
+    listRuns: async (input = {}) => {
+      const allRuns = [...runs.values()]
+        .filter((run) => (input.ownerUserId === undefined ? true : run.ownerUserId === input.ownerUserId))
+        .filter((run) => (input.repositoryId === undefined ? true : run.repositoryId === input.repositoryId))
+        .filter((run) => (input.issueId === undefined ? true : run.issueId === input.issueId))
+        .filter((run) =>
+          input.statuses === undefined || input.statuses.length === 0
+            ? true
+            : input.statuses.includes(run.status),
+        )
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+      return allRuns.slice(0, input.limit ?? 100);
+    },
+    markRunCancelled: async (input) => {
+      const existing = runs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = finalizeRun(existing, "cancelled", input.finishedAt ?? new Date());
+      const cancelled = {
+        ...next,
+        cancelReason: input.cancelReason,
+      };
+
+      runs.set(cancelled.id, cancelled);
+      return cancelled;
+    },
+    markRunFailed: async (input) => {
+      const existing = runs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = finalizeRun(existing, "failed", input.finishedAt ?? new Date());
+      runs.set(next.id, next);
+      return next;
+    },
+    markRunRunning: async (input) => {
+      const existing = runs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = touchUpdatedAt({
+        ...existing,
+        status: "running",
+        startedAt: input.startedAt ?? new Date(),
+      });
+
+      runs.set(next.id, next);
+      return next;
+    },
+    markRunSucceeded: async (input) => {
+      const existing = runs.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = finalizeRun(existing, "succeeded", input.finishedAt ?? new Date());
+      runs.set(next.id, next);
+      return next;
+    },
+    setRunInputSnapshot: async (input) => {
+      const existing = snapshots.get(input.runId);
+      const snapshot: RunInputSnapshotRecord = {
+        runId: input.runId,
+        userSpecPayload: input.userSpecPayload,
+        resolvedSpecPayload: input.resolvedSpecPayload,
+        blueprintPayload: input.blueprintPayload,
+        profileConfigSnapshot: input.profileConfigSnapshot ?? null,
+        repositoryProfileConfigSnapshot: input.repositoryProfileConfigSnapshot ?? null,
+        createdAt: existing?.createdAt ?? new Date(),
+      };
+
+      snapshots.set(input.runId, snapshot);
+      return snapshot;
+    },
+  } satisfies WorkspaceRunRepository;
+};
+
 const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
   return {
     publishRequested: async () => undefined,
@@ -177,6 +341,7 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
     });
 
     const response = await app.request("/healthz");
@@ -193,6 +358,7 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
     });
 
     const response = await app.request(
@@ -212,6 +378,7 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
     });
 
     const response = await app.request("/openapi.json");
@@ -234,11 +401,13 @@ describe("createApiApp", () => {
   it("creates and queues a workspace build job", async () => {
     const repository = createWorkspaceBuildJobRepositoryStub();
     const publisher = createWorkspaceBuildJobPublisherStub();
+    const runs = createWorkspaceRunRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: publisher,
       workspaceBuildJobRepository: repository,
+      workspaceRunRepository: runs,
     });
 
     const response = await app.request("/v1/workspace-build-jobs", {
@@ -247,6 +416,7 @@ describe("createApiApp", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
+        ownerUserId: testUserId,
         registryId: "default",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
@@ -262,15 +432,53 @@ describe("createApiApp", () => {
 
     const body = (await response.json()) as {
       jobId: string;
+      runId: string;
       status: string;
       repository: string;
     };
 
+    expect(body.runId).toBeDefined();
     expect(body.status).toBe("queued");
     expect(body.repository).toBe("sealant/workspaces/demo");
 
     const savedJob = await repository.getJobById(body.jobId);
     expect(savedJob?.status).toBe("queued");
+    expect(savedJob?.runId).toBe(body.runId);
+  });
+
+  it("returns 404 when owner user does not exist", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      workspaceRunRepository: createWorkspaceRunRepositoryStub({
+        knownUserIds: [testUserId],
+      }),
+    });
+
+    const response = await app.request("/v1/workspace-build-jobs", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerUserId: "missing-user",
+        registryId: "default",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        spec: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      message: "Unknown owner user: missing-user",
+    });
   });
 
   it("returns durable workspace build job details", async () => {
@@ -315,6 +523,7 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: repository,
+      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
     });
 
     const response = await app.request("/v1/workspace-build-jobs/job_test");

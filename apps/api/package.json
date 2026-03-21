@@ -14,6 +14,7 @@
     "@scalar/hono-api-reference": "^0.9.13",
     "@sealant/db": "workspace:*",
     "@sealant/registry-integration": "workspace:*",
+    "@sealant/workspace-composition": "workspace:*",
     "@sealant/workspace-build-queue": "workspace:*",
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
