@@ -159,9 +159,7 @@ export interface RuntimeAdapterSelection {
   readonly adapterId: RuntimeAdapterId;
 }
 
-export const selectRuntimeAdapter = (
-  input: SelectRuntimeAdapterInput,
-): RuntimeAdapterSelection => {
+export const selectRuntimeAdapter = (input: SelectRuntimeAdapterInput): RuntimeAdapterSelection => {
   const supportInput = parseRuntimeAdapterSupportInput({
     blueprint: input.blueprint,
   });

@@ -22,6 +22,7 @@ import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_au
 import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
 import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
+import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthenticatedRunsFailedRouteImport } from './routes/_authenticated/runs/failed'
 import { Route as AuthenticatedRunsActiveRouteImport } from './routes/_authenticated/runs/active'
@@ -113,6 +114,11 @@ const AuthenticatedIssuesIndexRoute =
     path: '/issues/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({
+  id: '/api/trpc/$',
+  path: '/api/trpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -262,6 +268,7 @@ export interface FileRoutesByFullPath {
   '/runs/active': typeof AuthenticatedRunsActiveRoute
   '/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues/': typeof AuthenticatedIssuesIndexRoute
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/registry/': typeof AuthenticatedRegistryIndexRoute
@@ -298,6 +305,7 @@ export interface FileRoutesByTo {
   '/runs/active': typeof AuthenticatedRunsActiveRoute
   '/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues': typeof AuthenticatedIssuesIndexRoute
   '/profiles': typeof AuthenticatedProfilesIndexRoute
   '/registry': typeof AuthenticatedRegistryIndexRoute
@@ -337,6 +345,7 @@ export interface FileRoutesById {
   '/_authenticated/runs/active': typeof AuthenticatedRunsActiveRoute
   '/_authenticated/runs/failed': typeof AuthenticatedRunsFailedRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
@@ -375,6 +384,7 @@ export interface FileRouteTypes {
     | '/runs/active'
     | '/runs/failed'
     | '/api/auth/$'
+    | '/api/trpc/$'
     | '/issues/'
     | '/profiles/'
     | '/registry/'
@@ -411,6 +421,7 @@ export interface FileRouteTypes {
     | '/runs/active'
     | '/runs/failed'
     | '/api/auth/$'
+    | '/api/trpc/$'
     | '/issues'
     | '/profiles'
     | '/registry'
@@ -449,6 +460,7 @@ export interface FileRouteTypes {
     | '/_authenticated/runs/active'
     | '/_authenticated/runs/failed'
     | '/api/auth/$'
+    | '/api/trpc/$'
     | '/_authenticated/issues/'
     | '/_authenticated/profiles/'
     | '/_authenticated/registry/'
@@ -477,6 +489,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiTrpcSplatRoute: typeof ApiTrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -571,6 +584,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/issues/'
       preLoaderRoute: typeof AuthenticatedIssuesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
+    }
+    '/api/trpc/$': {
+      id: '/api/trpc/$'
+      path: '/api/trpc/$'
+      fullPath: '/api/trpc/$'
+      preLoaderRoute: typeof ApiTrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -836,6 +856,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiTrpcSplatRoute: ApiTrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

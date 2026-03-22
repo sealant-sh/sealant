@@ -1,10 +1,10 @@
 import { RegistryCard, Skeleton } from "@sealant/ui";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { listRegistries } from "@/lib/api/registry-service";
-
 export const Route = createFileRoute("/_authenticated/registry/")({
-  loader: () => listRegistries(),
+  loader: ({ context }) => {
+    return context.queryClient.ensureQueryData(context.trpc.registry.list.queryOptions(undefined));
+  },
   pendingComponent: RegistryListSkeleton,
   component: RegistryListPage,
 });

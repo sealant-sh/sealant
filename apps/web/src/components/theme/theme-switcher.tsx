@@ -26,7 +26,8 @@ function getNextTheme(theme: UserTheme): UserTheme {
 
 export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
   const { userTheme, setTheme } = useTheme();
-  const currentOption = themeOptions.find((option) => option.value === userTheme) ?? themeOptions[0]!;
+  const currentOption =
+    themeOptions.find((option) => option.value === userTheme) ?? themeOptions[0]!;
   const Icon = currentOption.icon;
 
   return (
@@ -42,7 +43,9 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
       aria-label={`Theme: ${currentOption.label}`}
       title={`Theme: ${currentOption.label}`}
     >
-      <span className="font-mono text-[0.58rem] tracking-[0.16em] text-muted-foreground">Theme</span>
+      <span className="font-mono text-[0.58rem] tracking-[0.16em] text-muted-foreground">
+        Theme
+      </span>
       <span
         className="inline-flex items-center gap-1.5 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground"
         aria-hidden="true"

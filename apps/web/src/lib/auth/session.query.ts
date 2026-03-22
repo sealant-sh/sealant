@@ -1,10 +1,7 @@
-import { queryOptions } from "@tanstack/react-query";
+import type { AppTrpc } from "@/lib/trpc/client";
 
-import { getSessionServerFn } from "./session";
-
-export const sessionQueryOptions = () =>
-  queryOptions({
-    queryKey: ["auth", "session"],
-    queryFn: () => getSessionServerFn(),
+export const sessionQueryOptions = (trpc: AppTrpc) => {
+  return trpc.auth.session.queryOptions(undefined, {
     staleTime: 30_000,
   });
+};

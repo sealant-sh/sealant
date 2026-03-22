@@ -69,7 +69,10 @@ const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): s
 };
 
 const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> => {
-  return Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  return Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => [
+    "-e",
+    `${key}=${value}`,
+  ]);
 };
 
 const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
@@ -79,8 +82,7 @@ const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSuppo
     return parseRuntimeAdapterSupport({
       supported: false,
       reason: "unsupported-runtime",
-      message:
-        "The Docker runtime adapter only supports target.runtime.family of auto or docker.",
+      message: "The Docker runtime adapter only supports target.runtime.family of auto or docker.",
     });
   }
 
@@ -128,7 +130,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async resolveAuthorizedKeysBase64(input: RuntimeAdapterLaunchInput): Promise<string> {
-    const configuredPath = input.blueprint.access.ssh.authorizedKeysRef ?? this.defaultSshAuthorizedKeysFile;
+    const configuredPath =
+      input.blueprint.access.ssh.authorizedKeysRef ?? this.defaultSshAuthorizedKeysFile;
 
     if (configuredPath === undefined || configuredPath.length === 0) {
       throw createAdapterError(
@@ -142,7 +145,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       keyData = await readFile(configuredPath, "utf8");
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : `Could not read SSH authorized keys file: ${configuredPath}`;
+        error instanceof Error
+          ? error.message
+          : `Could not read SSH authorized keys file: ${configuredPath}`;
       throw createAdapterError(
         "unsupported-access-mode",
         `SSH authorized keys file could not be read at '${configuredPath}': ${message}`,
@@ -247,7 +252,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private async readContainerLogs(containerId: string): Promise<string | undefined> {
     try {
       const result = await this.commandRunner("docker", ["logs", "--tail", "200", containerId]);
-      const logs = [result.stdout, result.stderr].filter((chunk) => chunk.trim().length > 0).join("\n").trim();
+      const logs = [result.stdout, result.stderr]
+        .filter((chunk) => chunk.trim().length > 0)
+        .join("\n")
+        .trim();
       return logs.length === 0 ? undefined : logs;
     } catch {
       return undefined;
@@ -291,10 +299,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const imageReference = parsed.publishedImage.digestReference;
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
     const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
-    const sshArgs =
-      sshEnabled === true
-        ? ["-p", `${this.sshBindHost}::${containerSshPort}`]
-        : [];
+    const sshArgs = sshEnabled === true ? ["-p", `${this.sshBindHost}::${containerSshPort}`] : [];
     const sshEnvArgs =
       sshEnabled === true
         ? [
@@ -327,10 +332,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const containerId = runResult.stdout.trim();
 
     if (containerId.length === 0) {
-      throw createAdapterError(
-        "adapter-unavailable",
-        "Docker run did not return a container id.",
-      );
+      throw createAdapterError("adapter-unavailable", "Docker run did not return a container id.");
     }
 
     if (this.verifyRunning) {

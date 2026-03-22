@@ -145,14 +145,14 @@ describe("normalizeUserWorkspaceSpec", () => {
           },
         },
       },
-        target: {
-          os: {
-            family: "arch",
-            mode: "require",
-          },
-          runtime: "k3s",
+      target: {
+        os: {
+          family: "arch",
+          mode: "require",
         },
-      });
+        runtime: "k3s",
+      },
+    });
 
     expect(blueprint.sources.workspace.provider).toBe("gitlab");
     expect(blueprint.sources.inputs).toEqual([

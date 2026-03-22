@@ -5,11 +5,13 @@ import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import type { ReactNode } from "react";
 
 import { ThemeProvider } from "@/lib/theme/theme-provider";
+import type { AppTrpc } from "@/lib/trpc/client";
 
 import appCss from "../styles.css?url";
 
 interface RouterContext {
   readonly queryClient: QueryClient;
+  readonly trpc: AppTrpc;
 }
 
 const THEME_INIT_SCRIPT = `(function(){try{var stored=window.localStorage.getItem("ui-theme");var mode=(stored==="light"||stored==="dark"||stored==="system")?stored:"system";var prefersDark=window.matchMedia("(prefers-color-scheme: dark)").matches;var resolved=mode==="system"?(prefersDark?"dark":"light"):mode;var root=document.documentElement;root.classList.remove("light","dark","system");root.classList.add(resolved);if(mode==="system"){root.classList.add("system")}root.style.colorScheme=resolved;}catch(e){}})();`;

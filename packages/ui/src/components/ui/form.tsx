@@ -196,7 +196,10 @@ function TextField({
           }
           value={getTextValue(field.state.value)}
         />
-        <FieldMessages {...getFieldMessageProps({ description, descriptionClassName, errorClassName })} errors={errors} />
+        <FieldMessages
+          {...getFieldMessageProps({ description, descriptionClassName, errorClassName })}
+          errors={errors}
+        />
       </FieldContent>
     </Field>
   );
@@ -247,7 +250,10 @@ function TextareaField({
           }
           value={getTextValue(field.state.value)}
         />
-        <FieldMessages {...getFieldMessageProps({ description, descriptionClassName, errorClassName })} errors={errors} />
+        <FieldMessages
+          {...getFieldMessageProps({ description, descriptionClassName, errorClassName })}
+          errors={errors}
+        />
       </FieldContent>
     </Field>
   );
@@ -308,7 +314,10 @@ function SelectField({
             ))}
           </SelectContent>
         </Select>
-        <FieldMessages {...getFieldMessageProps({ description, descriptionClassName, errorClassName })} errors={errors} />
+        <FieldMessages
+          {...getFieldMessageProps({ description, descriptionClassName, errorClassName })}
+          errors={errors}
+        />
       </FieldContent>
     </Field>
   );
@@ -358,7 +367,10 @@ function CheckboxField({
             {label}
           </FieldLabel>
         ) : null}
-        <FieldMessages {...getFieldMessageProps({ description, descriptionClassName, errorClassName })} errors={errors} />
+        <FieldMessages
+          {...getFieldMessageProps({ description, descriptionClassName, errorClassName })}
+          errors={errors}
+        />
       </FieldContent>
     </Field>
   );
@@ -408,7 +420,10 @@ function SwitchField({
             {label}
           </FieldLabel>
         ) : null}
-        <FieldMessages {...getFieldMessageProps({ description, descriptionClassName, errorClassName })} errors={errors} />
+        <FieldMessages
+          {...getFieldMessageProps({ description, descriptionClassName, errorClassName })}
+          errors={errors}
+        />
       </FieldContent>
     </Field>
   );

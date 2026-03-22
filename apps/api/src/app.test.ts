@@ -25,9 +25,7 @@ const testEnv: AppEnv = {
 const testUserId = "user_test";
 
 type WorkspaceRunRecord = Awaited<ReturnType<WorkspaceRunRepository["createQueuedRun"]>>;
-type RunInputSnapshotRecord = Awaited<
-  ReturnType<WorkspaceRunRepository["setRunInputSnapshot"]>
->;
+type RunInputSnapshotRecord = Awaited<ReturnType<WorkspaceRunRepository["setRunInputSnapshot"]>>;
 
 const createRegistryClientStub = (): RegistryClient => {
   return {
@@ -196,7 +194,8 @@ const createWorkspaceRunRepositoryStub = (
     status: WorkspaceRunRecord["status"],
     finishedAt: Date,
   ) => {
-    const durationMs = run.startedAt === null ? null : Math.max(0, finishedAt.getTime() - run.startedAt.getTime());
+    const durationMs =
+      run.startedAt === null ? null : Math.max(0, finishedAt.getTime() - run.startedAt.getTime());
 
     return touchUpdatedAt({
       ...run,
@@ -244,8 +243,12 @@ const createWorkspaceRunRepositoryStub = (
     getRunById: async (id) => runs.get(id),
     listRuns: async (input = {}) => {
       const allRuns = [...runs.values()]
-        .filter((run) => (input.ownerUserId === undefined ? true : run.ownerUserId === input.ownerUserId))
-        .filter((run) => (input.repositoryId === undefined ? true : run.repositoryId === input.repositoryId))
+        .filter((run) =>
+          input.ownerUserId === undefined ? true : run.ownerUserId === input.ownerUserId,
+        )
+        .filter((run) =>
+          input.repositoryId === undefined ? true : run.repositoryId === input.repositoryId,
+        )
         .filter((run) => (input.issueId === undefined ? true : run.issueId === input.issueId))
         .filter((run) =>
           input.statuses === undefined || input.statuses.length === 0

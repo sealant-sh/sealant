@@ -3,10 +3,11 @@ import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/app/app-shell";
 import { sessionQueryOptions } from "@/lib/auth/session.query";
+import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ context, location }) => {
-    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
+    const session = await context.queryClient.ensureQueryData(sessionQueryOptions(context.trpc));
 
     if (session === null) {
       throw redirect({
@@ -21,7 +22,8 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 function AuthenticatedLayout() {
-  const { data: session } = useSuspenseQuery(sessionQueryOptions());
+  const trpc = useTRPC();
+  const { data: session } = useSuspenseQuery(sessionQueryOptions(trpc));
 
   if (session === null) {
     return null;

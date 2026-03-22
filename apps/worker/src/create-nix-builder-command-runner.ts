@@ -1,8 +1,7 @@
 import { Writable } from "node:stream";
 
-import Docker from "dockerode";
-
 import type { NixExecutorCommandRunner } from "@sealant/os-integration-nix";
+import Docker from "dockerode";
 
 import type { WorkerEnv } from "./env.js";
 

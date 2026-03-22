@@ -1,14 +1,19 @@
 import { Badge, RepositoryList, Separator, Skeleton } from "@sealant/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 
-import { getRegistry, getRepositoryTags, listRepositories } from "@/lib/api/registry-service";
+import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated/registry/$registryId/")({
-  loader: async ({ params }) => {
+  loader: async ({ context, params }) => {
     const [registry, repositories] = await Promise.all([
-      getRegistry(params.registryId),
-      listRepositories(params.registryId),
+      context.queryClient.ensureQueryData(
+        context.trpc.registry.byId.queryOptions({ registryId: params.registryId }),
+      ),
+      context.queryClient.ensureQueryData(
+        context.trpc.registry.repositories.queryOptions({ registryId: params.registryId }),
+      ),
     ]);
 
     return { registry, repositories };
@@ -19,9 +24,17 @@ export const Route = createFileRoute("/_authenticated/registry/$registryId/")({
 
 function RegistryDetailPage() {
   const { registry, repositories } = Route.useLoaderData();
+  const queryClient = useQueryClient();
+  const trpc = useTRPC();
 
   async function loadTags(repository: string) {
-    const result = await getRepositoryTags(registry.id, repository);
+    const result = await queryClient.fetchQuery(
+      trpc.registry.tags.queryOptions({
+        registryId: registry.id,
+        repository,
+      }),
+    );
+
     return result.tags;
   }
 
