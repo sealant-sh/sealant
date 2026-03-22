@@ -3,16 +3,14 @@ import { chromium } from "@playwright/test";
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
 const headless = process.env.PLAYWRIGHT_HEADLESS !== "0";
 
-const browser = await chromium.launch(
-  {
-    ...(executablePath
-      ? {
-          executablePath,
-        }
-      : {}),
-    headless,
-  },
-);
+const browser = await chromium.launch({
+  ...(executablePath
+    ? {
+        executablePath,
+      }
+    : {}),
+  headless,
+});
 
 try {
   const page = await browser.newPage();

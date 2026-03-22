@@ -4,8 +4,8 @@ This document explains how `apps/worker/src/create-nix-builder-command-runner.ts
 
 ## Why this exists
 
-The worker should orchestrate builds, not require Nix installed in the worker runtime itself.
-So instead of running `nix build ...` as a local process, the worker executes commands inside the
+The worker should orchestrate builds, not require Nix installed in the worker runtime itself. So
+instead of running `nix build ...` as a local process, the worker executes commands inside the
 `nix-builder` container through the Docker API.
 
 That gives us:

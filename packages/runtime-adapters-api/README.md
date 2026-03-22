@@ -14,7 +14,8 @@ runtime adapter implementations.
 
 - `target.runtime.family = auto`: use `defaultAdapterId`
 - explicit runtime with `mode = require`: must select that adapter
-- explicit runtime with `mode = prefer`: try requested adapter first, then fallback to default adapter
+- explicit runtime with `mode = prefer`: try requested adapter first, then fallback to default
+  adapter
 
 ## Typical flow
 

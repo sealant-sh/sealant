@@ -34,11 +34,10 @@ Run the API locally:
 pnpm --filter @sealant/api dev
 ```
 
-The default registry settings point at the local Zot instance started from the root
-`compose.yaml`.
+The default registry settings point at the local Zot instance started from the root `compose.yaml`.
 
-The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on
-`127.0.0.1:5673` and the shared SQLite database from `@sealant/db`.
+The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
+and the shared SQLite database from `@sealant/db`.
 
 ## Operations Runbook (Local Image Build Flow)
 

@@ -47,7 +47,9 @@ const createWorkerError = (code: string, message: string) => {
 const resolveRequestedOsFamily = (
   blueprint: WorkspaceBlueprint,
 ): ConcreteWorkspaceTargetOsFamily => {
-  return blueprint.target.os.family === "auto" ? autoTargetFallbackOsFamily : blueprint.target.os.family;
+  return blueprint.target.os.family === "auto"
+    ? autoTargetFallbackOsFamily
+    : blueprint.target.os.family;
 };
 
 const selectExecutorForBlueprint = (

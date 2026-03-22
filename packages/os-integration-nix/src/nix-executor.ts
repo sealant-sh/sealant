@@ -108,7 +108,11 @@ export class NixOsExecutor implements OsExecutor {
     const spec = mapBlueprintToNixExecutorSpec(parsed.blueprint);
     const imagePath = await buildWorkspaceAttribute(spec, "image", this.commandRunner);
     const envPath = await buildWorkspaceAttribute(spec, "env", this.commandRunner);
-    const specJsonDirectoryPath = await buildWorkspaceAttribute(spec, "specJson", this.commandRunner);
+    const specJsonDirectoryPath = await buildWorkspaceAttribute(
+      spec,
+      "specJson",
+      this.commandRunner,
+    );
 
     return parseOsExecutorCompileResult({
       executor: {

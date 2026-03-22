@@ -1,15 +1,14 @@
 # Swiss Operational Poster Design Language
 
-Version: 1.1
-Owner: Product Design + Frontend
-Applies to: auth flows, workspace surfaces, component library, content style
+Version: 1.1 Owner: Product Design + Frontend Applies to: auth flows, workspace surfaces, component
+library, content style
 
 ## 1) Design Intent
 
 This system defines our chosen aesthetic: **Swiss structure + poster energy + operational clarity**.
 
-We do not design for decoration first. We design for confidence in operational software where
-speed, clarity, and trust matter.
+We do not design for decoration first. We design for confidence in operational software where speed,
+clarity, and trust matter.
 
 ### The core feel
 
@@ -128,7 +127,8 @@ Typography is the main identity layer.
 - **Display**: `Bebas Neue` for high-impact headlines and numeric marks
 - **Body/UI**: `Plus Jakarta Sans` for readability, controls, and long-form text
 - **Mono/meta**: `Geist Mono` for utility labels, versioning, compact metadata, and theme controls
-- **Support fallback**: `Space Grotesk` can support mono/display-adjacent moments when system stacks require it
+- **Support fallback**: `Space Grotesk` can support mono/display-adjacent moments when system stacks
+  require it
 
 ### Typographic hierarchy
 
@@ -169,7 +169,8 @@ Use a consistent spacing scale. Favor generous section padding and tighter intra
 - Large sections should have clear top/bottom breathing room
 - Internal list rows should be compact and repeatable
 - Breakpoints should preserve hierarchy, not just shrink everything
-- Keep shell spacing tight enough that navigation, search, theme controls, and account actions live on one line on desktop
+- Keep shell spacing tight enough that navigation, search, theme controls, and account actions live
+  on one line on desktop
 
 ## 4.4 Rules, Borders, Geometry
 
@@ -193,9 +194,11 @@ Our system uses lines as structure.
 
 The product now has a defined Sealant mark and wordmark system.
 
-- **Blob mark**: black/white circular form with red directional bars; works in both light and dark themes
+- **Blob mark**: black/white circular form with red directional bars; works in both light and dark
+  themes
 - **Wordmark**: custom `Plus Jakarta Sans` drawing, not generic text treatment
-- **Placement**: use mark + wordmark together in primary shell headers; mark alone is acceptable in constrained spaces
+- **Placement**: use mark + wordmark together in primary shell headers; mark alone is acceptable in
+  constrained spaces
 - **Behavior**: branding should remain static and crisp; no decorative animation on the logo
 
 ---
@@ -265,7 +268,8 @@ This is the default pattern for authenticated product surfaces.
 
 ### Structure
 
-- Sticky top bar with brand, global navigation, search, theme switcher, account chip, and one utility action
+- Sticky top bar with brand, global navigation, search, theme switcher, account chip, and one
+  utility action
 - Fixed left sidebar for context-specific navigation groups
 - Scrollable main pane with simple page padding
 

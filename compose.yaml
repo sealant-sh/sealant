@@ -89,7 +89,8 @@ services:
       [
         "sh",
         "-lc",
-        "nix shell nixpkgs#nodejs_24 nixpkgs#nodePackages.pnpm nixpkgs#docker nixpkgs#gnused -c sh -lc 'pnpm install --frozen-lockfile && pnpm --filter @sealant/worker dev'",
+        "nix shell nixpkgs#nodejs_24 nixpkgs#nodePackages.pnpm nixpkgs#docker nixpkgs#gnused -c sh
+        -lc 'pnpm install --frozen-lockfile && pnpm --filter @sealant/worker dev'",
       ]
     restart: unless-stopped
 

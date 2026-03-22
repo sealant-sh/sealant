@@ -10,6 +10,7 @@
     "**/dist/**",
     "**/build/**",
     "**/coverage/**",
+    "**/routeTree.gen.ts",
     ".turbo/**",
     ".direnv/**"
   ],

@@ -38,13 +38,7 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
@@ -159,9 +153,7 @@ export function AppShell({ session, children }: AppShellProps) {
         </Sidebar>
 
         <SidebarInset className="min-h-svh border-0 bg-transparent">
-          <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">
-            {children}
-          </main>
+          <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
         </SidebarInset>
       </SidebarProvider>
     </div>
@@ -198,11 +190,18 @@ function AppSidebarNav({
   return (
     <>
       <SidebarHeader className="group-data-[collapsible=icon]:py-4">
-        <div className={cn("flex items-center", isExpanded ? "justify-between gap-3" : "justify-center")}>
+        <div
+          className={cn(
+            "flex items-center",
+            isExpanded ? "justify-between gap-3" : "justify-center",
+          )}
+        >
           <div
             className={cn(
               "flex items-center overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
-              isExpanded ? "max-w-[14rem] translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+              isExpanded
+                ? "max-w-[14rem] translate-x-0 opacity-100"
+                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
             )}
             aria-hidden={!isExpanded}
           >
@@ -218,7 +217,9 @@ function AppSidebarNav({
 
           <button
             type="button"
-            aria-label={(isMobile ? openMobile : isExpanded) ? "Collapse sidebar" : "Expand sidebar"}
+            aria-label={
+              (isMobile ? openMobile : isExpanded) ? "Collapse sidebar" : "Expand sidebar"
+            }
             aria-expanded={isMobile ? openMobile : isExpanded}
             onClick={() => {
               if (isMobile) {
@@ -234,7 +235,11 @@ function AppSidebarNav({
             )}
           >
             {isMobile ? (
-              openMobile ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />
+              openMobile ? (
+                <PanelLeftClose className="size-4" />
+              ) : (
+                <PanelLeftOpen className="size-4" />
+              )
             ) : isExpanded ? (
               <PanelLeftClose className="size-4" />
             ) : (
@@ -243,7 +248,9 @@ function AppSidebarNav({
           </button>
         </div>
 
-        <div className={cn("mt-4 flex w-full items-center", isExpanded ? "gap-2" : "justify-center") }>
+        <div
+          className={cn("mt-4 flex w-full items-center", isExpanded ? "gap-2" : "justify-center")}
+        >
           <button
             type="button"
             aria-label="Open search"
@@ -282,7 +289,9 @@ function AppSidebarNav({
           <label
             className={cn(
               "min-w-0 flex-1 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
-              isExpanded ? "max-w-full translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+              isExpanded
+                ? "max-w-full translate-x-0 opacity-100"
+                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
             )}
             aria-hidden={!isExpanded}
           >

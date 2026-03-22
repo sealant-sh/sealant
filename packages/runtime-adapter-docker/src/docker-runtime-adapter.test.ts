@@ -2,12 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
-
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterSupportInput,
 } from "@sealant/runtime-adapters-api";
+import { describe, expect, it, vi } from "vitest";
 
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
 
@@ -190,7 +189,11 @@ describe("DockerRuntimeAdapter", () => {
   it("publishes SSH port and endpoint when SSH is enabled", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
     const keyFile = join(tempDir, "authorized_keys");
-    await writeFile(keyFile, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n", "utf8");
+    await writeFile(
+      keyFile,
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
+      "utf8",
+    );
 
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
@@ -244,7 +247,9 @@ describe("DockerRuntimeAdapter", () => {
       expect(runArgs).toContain("-p");
       expect(runArgs).toContain("127.0.0.1::2222");
       expect(runArgs).toContain("SEALANT_ENABLE_SSH=true");
-      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_AUTHORIZED_KEYS_BASE64="))).toBe(true);
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_AUTHORIZED_KEYS_BASE64="))).toBe(
+        true,
+      );
       expect(result.endpoint).toBe("ssh://root@127.0.0.1:49153");
     } finally {
       await rm(tempDir, { recursive: true, force: true });

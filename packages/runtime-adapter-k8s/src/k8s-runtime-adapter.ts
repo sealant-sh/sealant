@@ -9,8 +9,7 @@ import {
   type RuntimeAdapterSupport,
 } from "@sealant/runtime-adapters-api";
 
-const notImplementedMessage =
-  "The Kubernetes runtime adapter launch path is not implemented yet.";
+const notImplementedMessage = "The Kubernetes runtime adapter launch path is not implemented yet.";
 
 const notImplementedError = (): Error & { code: string } => {
   const error = new Error(notImplementedMessage) as Error & { code: string };
