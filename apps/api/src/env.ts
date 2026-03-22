@@ -8,6 +8,11 @@ export const appEnvSchema = databaseEnvSchema
     z.object({
       NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
       PORT: z.coerce.number().int().positive().default(4000),
+      CORS_ALLOWED_ORIGINS: z
+        .string()
+        .trim()
+        .min(1)
+        .default("http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001"),
       REGISTRY_NAME: z.string().trim().min(1).default("default"),
       REGISTRY_BASE_URL: z.string().url().default("http://127.0.0.1:5000"),
       REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),

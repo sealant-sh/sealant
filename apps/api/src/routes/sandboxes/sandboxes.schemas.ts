@@ -2,6 +2,7 @@ import {
   sandboxAttemptTriggerTypeValues,
   workspaceBuildJobRequestPayloadSchema,
 } from "@sealant/db";
+import { workspaceBlueprintSchema } from "@sealant/workspace-composition";
 import { z } from "zod";
 
 export const sandboxStatusSchema = z.enum(["queued", "running", "ready", "failed", "cancelled"]);
@@ -63,6 +64,7 @@ export const sandboxSummarySchema = z.object({
 
 export const sandboxDetailsSchema = sandboxSummarySchema.extend({
   spec: workspaceBuildJobRequestPayloadSchema.optional(),
+  blueprint: workspaceBlueprintSchema.optional(),
 });
 
 export const listSandboxesQuerySchema = z.object({

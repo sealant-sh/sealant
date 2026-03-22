@@ -12,7 +12,7 @@ import {
   sandboxIdParamsSchema,
 } from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
 
-const DEFAULT_CORE_API_URL = "http://localhost:3001";
+const DEFAULT_CORE_API_URL = "http://localhost:4000";
 
 interface JsonSchema<TOutput> {
   parse(input: unknown): TOutput;
@@ -52,7 +52,7 @@ const normalizeBaseUrl = (input: string): string => {
 };
 
 const getCoreApiBaseUrl = (): string => {
-  const configuredBaseUrl = process.env.VITE_API_URL;
+  const configuredBaseUrl = import.meta.env.VITE_API_URL ?? process.env.VITE_API_URL;
 
   if (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim().length > 0) {
     return configuredBaseUrl;
@@ -154,7 +154,7 @@ class CoreApiClientImpl implements CoreApiClient {
       const parsedMessageResponse = messageResponseSchema.safeParse(payload);
       const message = parsedMessageResponse.success
         ? parsedMessageResponse.data.message
-        : `Core API request failed with status ${response.status}.`;
+        : `Core API request to ${url.toString()} failed with status ${response.status}.`;
 
       throw new CoreApiHttpError({
         message,

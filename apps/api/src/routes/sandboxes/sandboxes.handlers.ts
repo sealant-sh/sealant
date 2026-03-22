@@ -38,6 +38,9 @@ type WorkspaceBuildJobRecord = Awaited<
 type SandboxRuntimeInstanceRecord = Awaited<
   ReturnType<SandboxRuntimeInstanceRepository["getRuntimeInstanceByRunId"]>
 >;
+type SandboxAttemptSnapshotRecord = Awaited<
+  ReturnType<SandboxAttemptRepository["getAttemptSnapshotByRunId"]>
+>;
 type SandboxRunLinkRecord = Awaited<
   ReturnType<SandboxRepository["listSandboxAttemptLinks"]>
 >[number];
@@ -269,12 +272,15 @@ const mapSandboxDetails = (
   attempt: SandboxAttemptRecord | undefined,
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
+  attemptSnapshot: SandboxAttemptSnapshotRecord,
 ): z.infer<typeof sandboxDetailsSchema> => {
   const summary = mapSandboxSummary(sandbox, attempt, latestJob, runtimeInstance);
+  const userSpec = attemptSnapshot?.userSpecPayload ?? latestJob?.requestPayload;
 
   return {
     ...summary,
-    ...(latestJob === undefined ? {} : { spec: latestJob.requestPayload }),
+    ...(userSpec === undefined ? {} : { spec: userSpec }),
+    ...(attemptSnapshot === undefined ? {} : { blueprint: attemptSnapshot.blueprintPayload }),
   };
 };
 
@@ -523,10 +529,13 @@ export const getSandbox = async (c: Context<AppBindings>) => {
   }
 
   if (sandbox.latestRunId === null) {
-    return c.json(mapSandboxDetails(sandbox, undefined, undefined, undefined));
+    return c.json(mapSandboxDetails(sandbox, undefined, undefined, undefined, undefined));
   }
 
   const attempt = await c.get("sandboxAttemptRepository").getAttemptById(sandbox.latestRunId);
+  const attemptSnapshot = await c
+    .get("sandboxAttemptRepository")
+    .getAttemptSnapshotByRunId(sandbox.latestRunId);
   const latestJob = await c
     .get("workspaceBuildJobRepository")
     .getLatestJobByRunId(sandbox.latestRunId);
@@ -534,7 +543,7 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     .get("sandboxRuntimeInstanceRepository")
     .getRuntimeInstanceByRunId(sandbox.latestRunId);
 
-  return c.json(mapSandboxDetails(sandbox, attempt, latestJob, runtimeInstance));
+  return c.json(mapSandboxDetails(sandbox, attempt, latestJob, runtimeInstance, attemptSnapshot));
 };
 
 export const listSandboxAttempts = async (c: Context<AppBindings>) => {

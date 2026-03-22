@@ -114,6 +114,18 @@ export const createSandboxAttemptRepository = (client: DatabaseClient) => {
     return attempt;
   };
 
+  const getAttemptSnapshotByRunId = async (
+    runId: string,
+  ): Promise<SandboxAttemptSnapshot | undefined> => {
+    const [snapshot] = await db
+      .select()
+      .from(sandboxAttemptSnapshots)
+      .where(eq(sandboxAttemptSnapshots.runId, runId))
+      .limit(1);
+
+    return snapshot;
+  };
+
   const setAttemptSnapshot = async (
     input: SetSandboxAttemptSnapshotInput,
   ): Promise<SandboxAttemptSnapshot> => {
@@ -258,6 +270,7 @@ export const createSandboxAttemptRepository = (client: DatabaseClient) => {
   return {
     createQueuedAttempt,
     getAttemptById,
+    getAttemptSnapshotByRunId,
     listAttempts,
     markAttemptCancelled,
     markAttemptFailed,

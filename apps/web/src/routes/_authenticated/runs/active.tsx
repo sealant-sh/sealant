@@ -1,28 +1,37 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunRows } from "@/components/app/run-rows";
+import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
-import { RUNS } from "@/lib/navigation/workspace-data";
+import { runningSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/active" as never)({
-  component: ActiveRunsPage,
+export const Route = createFileRoute("/_authenticated/runs/active")({
+  loader: ({ context }) => {
+    return context.queryClient.ensureQueryData(runningSandboxesQueryOptions(context.trpc));
+  },
+  component: ActiveSandboxesPage,
 });
 
-function ActiveRunsPage() {
-  const activeRuns = RUNS.filter((run) => run.status === "active");
+function ActiveSandboxesPage() {
+  const activeSandboxes = Route.useLoaderData().items;
 
   return (
     <WorkspacePage
-      kicker="Runs"
-      title="Active runs"
-      description="Monitor live executions and confirm every delegated issue is progressing inside its expected profile."
+      kicker="Sandboxes"
+      title="Running sandboxes"
+      description="Monitor live sandbox builds and verify execution capacity across your active environments."
       metrics={[
-        { label: "Live now", value: String(activeRuns.length) },
-        { label: "Queued", value: "3" },
-        { label: "Median startup", value: "39s" },
+        { label: "Running", value: String(activeSandboxes.length) },
+        {
+          label: "Latest update",
+          value:
+            activeSandboxes[0] === undefined
+              ? "n/a"
+              : new Date(activeSandboxes[0].updatedAt).toLocaleTimeString(),
+        },
+        { label: "Route", value: "/runs/active" },
       ]}
     >
-      <RunRows runs={activeRuns} />
+      <SandboxRows sandboxes={activeSandboxes} />
     </WorkspacePage>
   );
 }

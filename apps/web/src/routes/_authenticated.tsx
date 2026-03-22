@@ -1,8 +1,9 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/app/app-shell";
 import { sessionQueryOptions } from "@/lib/auth/session.query";
+import { sidebarSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -24,13 +25,14 @@ export const Route = createFileRoute("/_authenticated")({
 function AuthenticatedLayout() {
   const trpc = useTRPC();
   const { data: session } = useSuspenseQuery(sessionQueryOptions(trpc));
+  const { data: sidebarSandboxesResponse } = useQuery(sidebarSandboxesQueryOptions(trpc));
 
   if (session === null) {
     return null;
   }
 
   return (
-    <AppShell session={session}>
+    <AppShell session={session} sidebarSandboxes={sidebarSandboxesResponse?.items ?? []}>
       <Outlet />
     </AppShell>
   );
