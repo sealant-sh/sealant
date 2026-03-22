@@ -212,14 +212,6 @@ const getBuildkitExecutorSupport = (
         message: `The ${osFamily} BuildKit executor does not support package version pinning yet: ${pkg.id}.`,
       });
     }
-
-    if (distro.packageMap[pkg.id] === undefined) {
-      return parseOsExecutorSupport({
-        supported: false,
-        reason: "unsupported-package",
-        message: `Unsupported package for the ${osFamily} BuildKit executor: ${pkg.id}.`,
-      });
-    }
   }
 
   const unsupportedInput = blueprint.sources.inputs.find((input) => input.purpose !== "dotfiles");
@@ -259,7 +251,7 @@ const resolvePackages = (
   }
 
   return requests.map((request) => {
-    const mapping = distro.packageMap[request.id]!;
+    const mapping = distro.packageMap[request.id] ?? { installPackages: [request.id] };
     return {
       requestId: request.id,
       ...(request.version === undefined ? {} : { requestedVersion: request.version }),

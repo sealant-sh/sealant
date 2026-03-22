@@ -4,8 +4,10 @@ import type {
   SandboxAttemptRepository,
   SandboxRepository,
   SandboxRuntimeInstanceRepository,
+  WorkspaceBuildJobRequestPayload,
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
+import { workspaceBuildJobRequestPayloadSchema } from "@sealant/db";
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -301,6 +303,109 @@ const acceptedSandboxResponse = (
   };
 };
 
+const parseRequestedPackageIds = (spec: WorkspaceBuildJobRequestPayload): string[] => {
+  const requests = spec.tooling?.packages ?? spec.packages ?? [];
+
+  return requests.map((pkg) => {
+    return typeof pkg === "string" ? pkg : pkg.id;
+  });
+};
+
+const parseRequestedOsFamily = (
+  spec: WorkspaceBuildJobRequestPayload,
+): "auto" | "arch" | "fedora" | "nix" => {
+  const targetOs = spec.target?.os ?? spec.os;
+
+  if (targetOs === undefined) {
+    return "auto";
+  }
+
+  if (typeof targetOs === "string") {
+    return targetOs;
+  }
+
+  return targetOs.family ?? "auto";
+};
+
+const dedupePackageNames = (input: readonly string[]): string[] => {
+  const deduped = new Set<string>();
+
+  for (const value of input) {
+    const normalized = value.trim();
+
+    if (normalized.length === 0) {
+      continue;
+    }
+
+    deduped.add(normalized);
+  }
+
+  return [...deduped];
+};
+
+const standardizeRequestedPackages = async (
+  c: Context<AppBindings>,
+  spec: WorkspaceBuildJobRequestPayload,
+): Promise<{ spec: WorkspaceBuildJobRequestPayload; errors: readonly string[] }> => {
+  const requestedPackages = parseRequestedPackageIds(spec);
+
+  if (requestedPackages.length === 0) {
+    return {
+      spec,
+      errors: [],
+    };
+  }
+
+  const targetOs = parseRequestedOsFamily(spec);
+
+  if (targetOs === "auto") {
+    return {
+      spec,
+      errors: [
+        "Package validation requires an explicit target OS. Set spec.os to arch or fedora for this request.",
+      ],
+    };
+  }
+
+  const standardizedPackageNames: string[] = [];
+  const errors: string[] = [];
+
+  for (const requested of requestedPackages) {
+    const resolution = await c.get("packageStandardizer").resolvePackage({
+      query: requested,
+    });
+    const osSupport = resolution.osSupport[targetOs];
+
+    if (!osSupport.supported || osSupport.packageName === undefined) {
+      errors.push(
+        `Package '${requested}' is not available for ${targetOs}. Resolution status: ${resolution.status}.`,
+      );
+      continue;
+    }
+
+    standardizedPackageNames.push(osSupport.packageName);
+  }
+
+  if (errors.length > 0) {
+    return {
+      spec,
+      errors,
+    };
+  }
+
+  const nextSpec: Record<string, unknown> = {
+    ...spec,
+    packages: dedupePackageNames(standardizedPackageNames),
+  };
+
+  delete nextSpec.tooling;
+
+  return {
+    spec: workspaceBuildJobRequestPayloadSchema.parse(nextSpec),
+    errors: [],
+  };
+};
+
 export const createSandbox = async (c: Context<AppBindings>) => {
   const body = (
     c.req as typeof c.req & {
@@ -348,7 +453,27 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   const sandboxId = randomUUID();
   const runId = randomUUID();
   const jobId = randomUUID();
-  const blueprintPayload = normalizeUserWorkspaceSpec(body.spec);
+  const packageStandardization = await standardizeRequestedPackages(c, body.spec);
+
+  if (packageStandardization.errors.length > 0) {
+    console.error("[sandboxes.create] package standardization failed", {
+      sandboxId,
+      ownerUserId: body.ownerUserId,
+      errors: packageStandardization.errors,
+      requestedPackages: parseRequestedPackageIds(body.spec),
+      targetOs: parseRequestedOsFamily(body.spec),
+    });
+
+    return c.json(
+      {
+        message: packageStandardization.errors[0],
+      },
+      400,
+    );
+  }
+
+  const resolvedSpec = packageStandardization.spec;
+  const blueprintPayload = normalizeUserWorkspaceSpec(resolvedSpec);
 
   try {
     const sandbox = await sandboxes.createSandbox({
@@ -374,7 +499,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     await sandboxAttempts.setAttemptSnapshot({
       runId: attempt.id,
       userSpecPayload: body.spec,
-      resolvedSpecPayload: body.spec,
+      resolvedSpecPayload: resolvedSpec,
       blueprintPayload,
     });
 
@@ -384,7 +509,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       registryId: body.registryId,
       repository: body.repository,
       tag: body.tag,
-      requestPayload: body.spec,
+      requestPayload: resolvedSpec,
       ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     });
   } catch (error) {

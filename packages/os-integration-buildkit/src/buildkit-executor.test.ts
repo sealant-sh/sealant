@@ -87,4 +87,22 @@ describe("BuildkitDistroOsExecutor", () => {
     expect(entrypoint).toContain('git clone --branch "$WORKSPACE_REPO_REF"');
     expect(entrypoint).toContain("exec /bin/bash -lc 'pnpm dev'");
   });
+
+  it("supports distro package passthrough for unmapped package ids", () => {
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: "https://github.com/example/repo.git",
+      harness: "opencode",
+      packages: ["htop"],
+      os: "arch",
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch");
+
+    expect(plan.packages).toEqual([
+      {
+        requestId: "htop",
+        installPackages: ["htop"],
+      },
+    ]);
+  });
 });

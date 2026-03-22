@@ -1,7 +1,7 @@
 import { Button } from "@sealant/ui";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { useTRPC } from "@/lib/trpc/react";
 
@@ -21,6 +21,26 @@ interface NewSandboxFormState {
   readonly entrypoint: string;
   readonly sshEnabled: boolean;
 }
+
+interface PackageValidationState {
+  readonly packageId: string;
+  readonly state: "pending" | "valid" | "invalid";
+  readonly message: string;
+  readonly debugMessage?: string;
+  readonly resolvedPackageName?: string;
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  return "Unknown validation error.";
+};
 
 const HARNESS_OPTIONS: ReadonlyArray<{ readonly value: HarnessId; readonly label: string }> = [
   { value: "opencode", label: "OpenCode (Standard)" },
@@ -51,8 +71,102 @@ function NewSandboxPage() {
   const [setupStepInput, setSetupStepInput] = useState("");
   const [formErrors, setFormErrors] = useState<readonly string[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const loggedPackageValidationErrorsRef = useRef<Set<string>>(new Set());
 
   const createSandboxMutation = useMutation(trpc.sandbox.create.mutationOptions());
+  const packageResolutionQueries = useQueries({
+    queries: form.packages.map((pkg) => {
+      return {
+        ...trpc.package.resolve.queryOptions({ query: pkg }),
+        staleTime: 1000 * 60 * 10,
+      };
+    }),
+  });
+
+  const packageValidationStates = useMemo<readonly PackageValidationState[]>(() => {
+    return form.packages.map((pkg, index) => {
+      const query = packageResolutionQueries[index];
+
+      if (query === undefined || query.isPending) {
+        return {
+          packageId: pkg,
+          state: "pending",
+          message: `Validating '${pkg}' for ${form.targetOs}.`,
+        };
+      }
+
+      if (query.isError || query.data === undefined) {
+        const debugMessage = getErrorMessage(query.error);
+
+        return {
+          packageId: pkg,
+          state: "invalid",
+          message: `Unable to validate '${pkg}' right now (${debugMessage}).`,
+          debugMessage,
+        };
+      }
+
+      const osSupport = query.data.osSupport[form.targetOs];
+
+      if (!osSupport.supported || osSupport.packageName === undefined) {
+        return {
+          packageId: pkg,
+          state: "invalid",
+          message: `Package '${pkg}' is not available for ${form.targetOs}.`,
+        };
+      }
+
+      return {
+        packageId: pkg,
+        state: "valid",
+        resolvedPackageName: osSupport.packageName,
+        message:
+          osSupport.packageName === pkg
+            ? `Package '${pkg}' is valid for ${form.targetOs}.`
+            : `Package '${pkg}' will install as '${osSupport.packageName}' on ${form.targetOs}.`,
+      };
+    });
+  }, [form.packages, form.targetOs, packageResolutionQueries]);
+
+  const packageValidationById = useMemo(() => {
+    return new Map(packageValidationStates.map((entry) => [entry.packageId, entry]));
+  }, [packageValidationStates]);
+
+  const packageValidationIssues = useMemo(() => {
+    return packageValidationStates
+      .filter((entry) => entry.state === "invalid")
+      .map((entry) => entry.message);
+  }, [packageValidationStates]);
+
+  const packageValidationPending = packageValidationStates.some(
+    (entry) => entry.state === "pending",
+  );
+
+  const compatibilityIssues = [
+    ...(packageValidationPending ? ["Package validation is still running."] : []),
+    ...packageValidationIssues,
+  ];
+
+  useEffect(() => {
+    for (const validationState of packageValidationStates) {
+      if (validationState.state !== "invalid" || validationState.debugMessage === undefined) {
+        continue;
+      }
+
+      const errorKey = `${validationState.packageId}:${validationState.debugMessage}`;
+
+      if (loggedPackageValidationErrorsRef.current.has(errorKey)) {
+        continue;
+      }
+
+      loggedPackageValidationErrorsRef.current.add(errorKey);
+      console.error("[new-sandbox] package validation failed", {
+        packageId: validationState.packageId,
+        targetOs: form.targetOs,
+        error: validationState.debugMessage,
+      });
+    }
+  }, [form.targetOs, packageValidationStates]);
 
   const previewManifest = useMemo(() => {
     const normalizedRepositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
@@ -140,7 +254,7 @@ function NewSandboxPage() {
 
     setSubmitError(null);
 
-    const validationErrors = validateForm(form, selectedRegistryId);
+    const validationErrors = validateForm(form, selectedRegistryId, compatibilityIssues);
     setFormErrors(validationErrors);
 
     if (validationErrors.length > 0) {
@@ -181,9 +295,6 @@ function NewSandboxPage() {
   };
 
   const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.source.url);
-  const hasCommands =
-    Array.isArray(previewManifest.spec.setup) && previewManifest.spec.setup.length > 0;
-  const compatibilityIssues = getCompatibilityIssues();
 
   return (
     <section className="overflow-hidden border border-border bg-card">
@@ -341,24 +452,56 @@ function NewSandboxPage() {
                   <LabeledField label="Package Inventory">
                     <div className="space-y-3">
                       <div className="flex flex-wrap gap-2">
-                        {form.packages.map((pkg) => (
-                          <button
-                            key={pkg}
-                            type="button"
-                            className="inline-flex h-8 items-center gap-2 border border-border bg-muted/50 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-foreground"
-                            onClick={() => {
-                              setField(
-                                "packages",
-                                form.packages.filter((entry) => entry !== pkg),
-                              );
-                            }}
-                            aria-label={`Remove package ${pkg}`}
-                          >
-                            <span>{pkg.toUpperCase()}</span>
-                            <span aria-hidden>×</span>
-                          </button>
-                        ))}
+                        {form.packages.map((pkg) => {
+                          const validation = packageValidationById.get(pkg);
+                          const packageState = validation?.state ?? "pending";
+
+                          return (
+                            <button
+                              key={pkg}
+                              type="button"
+                              className={
+                                packageState === "invalid"
+                                  ? "inline-flex h-8 items-center gap-2 border border-amber-500/50 bg-amber-950/15 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-amber-300"
+                                  : packageState === "valid"
+                                    ? "inline-flex h-8 items-center gap-2 border border-emerald-500/45 bg-emerald-950/15 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-emerald-300"
+                                    : "inline-flex h-8 items-center gap-2 border border-border bg-muted/50 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-foreground"
+                              }
+                              onClick={() => {
+                                setField(
+                                  "packages",
+                                  form.packages.filter((entry) => entry !== pkg),
+                                );
+                              }}
+                              aria-label={`Remove package ${pkg}`}
+                              title={validation?.message}
+                            >
+                              <span>{pkg.toUpperCase()}</span>
+                              <span>
+                                {packageState === "valid"
+                                  ? "OK"
+                                  : packageState === "invalid"
+                                    ? "WARN"
+                                    : "..."}
+                              </span>
+                              <span aria-hidden>×</span>
+                            </button>
+                          );
+                        })}
                       </div>
+
+                      {packageValidationIssues.length > 0 ? (
+                        <div className="space-y-1 border border-amber-800/40 bg-amber-950/15 px-3 py-2">
+                          {packageValidationIssues.map((issue) => (
+                            <p
+                              key={issue}
+                              className="font-mono text-[0.62rem] tracking-[0.11em] text-amber-300"
+                            >
+                              {issue}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
 
                       <div className="flex flex-col gap-2 sm:flex-row">
                         <input
@@ -600,7 +743,11 @@ function NewSandboxPage() {
                 />
                 <HealthRow
                   ok={compatibilityIssues.length === 0}
-                  text={hasCommands ? "Setup commands configured" : "No setup commands (optional)"}
+                  text={
+                    compatibilityIssues.length === 0
+                      ? "Package inventory validated"
+                      : "Package inventory has compatibility warnings"
+                  }
                 />
                 {compatibilityIssues.length > 0 ? (
                   <p className="font-mono text-[0.62rem] tracking-[0.11em] text-amber-400">
@@ -770,7 +917,11 @@ function isValidUrl(value: string): boolean {
   }
 }
 
-function validateForm(form: NewSandboxFormState, registryId: string): readonly string[] {
+function validateForm(
+  form: NewSandboxFormState,
+  registryId: string,
+  compatibilityIssues: readonly string[],
+): readonly string[] {
   const errors: string[] = [];
 
   const repositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
@@ -794,16 +945,11 @@ function validateForm(form: NewSandboxFormState, registryId: string): readonly s
     errors.push("Image tag is required.");
   }
 
-  const compatibilityIssues = getCompatibilityIssues();
   if (compatibilityIssues.length > 0) {
     errors.push(...compatibilityIssues);
   }
 
   return errors;
-}
-
-function getCompatibilityIssues(): readonly string[] {
-  return [];
 }
 
 function resolveErrorMessage(error: unknown): string {

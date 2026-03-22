@@ -9,6 +9,10 @@ import {
 } from "@/lib/api/registry-service";
 
 import {
+  resolvePackageQuerySchema,
+  resolvePackageResponseSchema,
+} from "../../../../api/src/routes/packages/packages.schemas";
+import {
   createSandboxRequestSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxEventsQuerySchema,
@@ -76,6 +80,14 @@ export const appRouter = router({
       )
       .query(async ({ input }) => {
         return getManifest(input.registryId, input.repository, input.reference);
+      }),
+  }),
+  package: router({
+    resolve: protectedProcedure
+      .input(resolvePackageQuerySchema)
+      .output(resolvePackageResponseSchema)
+      .query(async ({ ctx, input }) => {
+        return ctx.coreApi.packages.resolve(input);
       }),
   }),
   sandbox: router({

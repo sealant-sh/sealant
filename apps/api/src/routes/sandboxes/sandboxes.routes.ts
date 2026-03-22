@@ -44,6 +44,14 @@ export const createSandboxRoute = describeRoute({
         },
       },
     },
+    400: {
+      description: "Invalid package resolution or unsupported package request",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
     502: {
       description: "Failed to enqueue sandbox build request",
       content: {

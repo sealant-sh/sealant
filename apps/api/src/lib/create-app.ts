@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import { createPassthroughPackageStandardizer } from "./create-package-standardizer.js";
 import type { AppBindings, AppRuntimeConfig } from "./types.js";
 
 export const createRouter = () => {
@@ -42,6 +43,10 @@ export const createApp = (config: AppRuntimeConfig) => {
     c.set("registryClient", config.registryClient);
     c.set("workspaceBuildJobPublisher", config.workspaceBuildJobPublisher);
     c.set("workspaceBuildJobRepository", config.workspaceBuildJobRepository);
+    c.set(
+      "packageStandardizer",
+      config.packageStandardizer ?? createPassthroughPackageStandardizer(),
+    );
     c.set("sandboxRepository", config.sandboxRepository);
     c.set("sandboxRuntimeInstanceRepository", config.sandboxRuntimeInstanceRepository);
     c.set("sandboxAttemptRepository", config.sandboxAttemptRepository);
@@ -58,6 +63,13 @@ export const createApp = (config: AppRuntimeConfig) => {
   });
 
   app.onError((error, c) => {
+    console.error("[api] request failed", {
+      method: c.req.method,
+      path: c.req.path,
+      error: error.message,
+      stack: error.stack,
+    });
+
     return c.json(
       {
         message: error.message.length > 0 ? error.message : "Internal Server Error",

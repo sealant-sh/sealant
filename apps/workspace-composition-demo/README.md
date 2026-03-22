@@ -1,25 +1,12 @@
 # Workspace Composition Demo
 
-This app is the thin runnable layer on top of `packages/os-integration-nix`.
+This app is currently a placeholder while the dedicated Nix integration is offline.
 
-It keeps the demo spec close to the commands you use locally, while the concrete Nix build logic
-stays in the shared OS integration package.
+The BuildKit-backed Arch/Fedora path lives in `packages/os-integration-buildkit`.
 
 ## Build The Demo Image
 
-```bash
-nix build "path:$PWD/packages/os-integration-nix#example-opencode-home-manager-image"
-docker load < result
-docker run --rm -it sealant-workspace-demo:opencode
-```
-
-Or from this workspace with pnpm:
-
-```bash
-pnpm --filter @sealant/workspace-composition-demo run build:image
-docker load < result
-docker run --rm -it sealant-workspace-demo:opencode
-```
+Demo build scripts are temporarily disabled.
 
 ## Run The SSH Demo
 
@@ -38,5 +25,5 @@ ssh -p 2222 root@127.0.0.1
 
 ## Files
 
-- `package.json`: small convenience scripts for building the Nix integration examples
-- `nix/specs/demo.nix`: demo spec mirror used for documentation and future app wiring
+- `package.json`: placeholder scripts while Nix integration is offline
+- `nix/specs/demo.nix`: historical demo spec mirror kept for future rework

@@ -46,6 +46,12 @@ export {
 } from "./repositories/repository-profiles.js";
 
 export {
+  createPackageResolutionCacheRepository,
+  type PackageResolutionCacheRepository,
+  type UpsertPackageResolutionCacheEntryInput,
+} from "./repositories/package-resolution-cache.js";
+
+export {
   createSandboxRepository,
   type CreateSandboxInput,
   type LinkSandboxAttemptInput,
@@ -121,6 +127,7 @@ export {
   issueWorkflowExecutionValidationStatusValues,
   issueWorkflows,
   issueWorkflowStatusValues,
+  packageResolutionCacheEntries,
   sandboxAttempts,
   sandboxAttemptStatusValues,
   sandboxAttemptTriggerTypeValues,
@@ -151,6 +158,7 @@ export {
   type NewIssueWorkflowExecutionPullRequestLink,
   type NewIssueWorkflowExecutionSummary,
   type NewIssueWorkflowExecutionValidationResult,
+  type NewPackageResolutionCacheEntry,
   type NewSandboxAttempt,
   type NewSandboxAttemptSnapshot,
   type NewOciImageBuildJob,
@@ -175,6 +183,7 @@ export {
   type IssueWorkflowExecutionValidationResult,
   type IssueWorkflowExecutionValidationStatus,
   type IssueWorkflowStatus,
+  type PackageResolutionCacheEntry,
   type SandboxAttempt,
   type SandboxAttemptSnapshot,
   type SandboxAttemptStatus,

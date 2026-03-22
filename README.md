@@ -66,9 +66,8 @@ every implementation lands.
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
 │   ├── ai-harness-integrations/
-│   ├── os-integration-arch/
-│   ├── os-integration-fedora/
-│   ├── os-integration-nix/
+│   ├── os-integration-buildkit/
+│   ├── package-standardization/
 │   ├── registry-integration/
 │   ├── runtime-adapter-docker/
 │   ├── runtime-adapter-k3s/
@@ -142,13 +141,11 @@ Supporting integrations feed into both flows without owning either flow:
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
-  running the Nix executor, and publishing images to the registry
-- `packages/os-integration-nix/`: extracted Nix-specific executor implementation and example build
-  outputs
+  running BuildKit executors for Fedora and Arch, and publishing images to the registry
 - `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image
   build requests and dead-letter handling
 - `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry
-  compose/config; today it publishes the current Nix-produced OCI image archive through a
+  compose/config; today it publishes the current BuildKit-produced OCI image archive through a
   Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image
   for later runtime adapters
 - the other package and app workspaces are scaffolded so the intended architecture is explicit
@@ -211,10 +208,10 @@ over time.
 - `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
   `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
   artifact definitions
-- `packages/os-integration-nix/`: Nix-specific OS integration that turns a `WorkspaceBlueprint` into
-  a concrete Nix build path
-- `packages/os-integration-fedora/`: Fedora-specific OS integration placeholder
-- `packages/os-integration-arch/`: Arch-specific OS integration placeholder
+- `packages/os-integration-buildkit/`: BuildKit-based OS integration for Fedora and Arch image
+  compilation
+- `packages/package-standardization/`: Repology-backed package resolution and normalized package
+  contract utilities
 - `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter
   implementations
 - `packages/runtime-adapter-docker/`: Docker runtime adapter placeholder
@@ -253,8 +250,8 @@ over time.
 
 ## Workspace composition
 
-The composition contracts now live in `packages/workspace-composition/`, and the concrete Nix build
-path now lives in `packages/os-integration-nix/` instead of the temporary sandbox under `temp/`.
+The composition contracts now live in `packages/workspace-composition/`, and the concrete BuildKit
+OS execution path now lives in `packages/os-integration-buildkit/`.
 
 That package contains:
 
@@ -262,7 +259,7 @@ That package contains:
 - normalization and defaulting helpers
 - executor and artifact contract definitions
 - shared composition contracts that feed concrete OS integrations such as
-  `packages/os-integration-nix/`
+  `packages/os-integration-buildkit/`
 
 The runnable demo documentation lives in `apps/workspace-composition-demo/`.
 

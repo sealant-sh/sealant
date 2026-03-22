@@ -59,7 +59,7 @@ This package currently handles the first part: publishing OCI images into Zot.
 ## Current publish behavior
 
 `publishOciImage(...)` currently expects the artifact path to point at a docker-loadable image
-archive, which matches the current Nix output from `@sealant/os-integration-nix`.
+archive, which matches the current BuildKit output from `@sealant/os-integration-buildkit`.
 
 The helper runs:
 
@@ -72,7 +72,7 @@ digest references.
 
 ## Why Docker Is Involved Right Now
 
-The current Nix executor already produces an OCI image in a form that Docker can import with
+The current BuildKit executors already produce OCI images in a form that Docker can import with
 `docker load`. This package uses that existing handoff format as the shortest path to getting images
 into Zot.
 

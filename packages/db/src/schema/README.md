@@ -33,6 +33,11 @@ model orchestration and reporting internals.
 - `oci_image_build_jobs`: queue/worker state for OCI build and publish operations.
 - `sandbox_runtime_instances`: runtime launch outcome and connectivity state per execution attempt.
 
+## Package resolution cache table
+
+- `package_resolution_cache_entries`: cache of standardized package-resolution responses keyed by
+  normalized package query.
+
 ## Repository and template-context tables
 
 - `repositories`: known source repositories and sync metadata.

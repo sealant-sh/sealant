@@ -1,3 +1,4 @@
-# The demo app reuses the canonical example spec from the Nix integration so the
-# runnable example and the concrete build path stay in sync.
-import ../../../../packages/os-integration-nix/examples/opencode-with-home-manager.nix
+{
+  # Placeholder kept while the dedicated Nix integration path is temporarily
+  # disabled. This file remains as a stable reference point for future work.
+}

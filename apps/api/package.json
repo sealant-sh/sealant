@@ -13,6 +13,7 @@
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",
     "@sealant/db": "workspace:*",
+    "@sealant/package-standardization": "workspace:*",
     "@sealant/registry-integration": "workspace:*",
     "@sealant/workspace-build-queue": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",

@@ -1,5 +1,9 @@
 import { messageResponseSchema } from "../../../../api/src/lib/schemas";
 import {
+  resolvePackageQuerySchema,
+  resolvePackageResponseSchema,
+} from "../../../../api/src/routes/packages/packages.schemas";
+import {
   createSandboxRequestSchema,
   createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
@@ -74,6 +78,11 @@ const parseWithSchema = <TOutput>(schema: JsonSchema<TOutput>, input: unknown): 
 };
 
 export interface CoreApiClient {
+  readonly packages: {
+    resolve(
+      input: InferSchema<typeof resolvePackageQuerySchema>,
+    ): Promise<InferSchema<typeof resolvePackageResponseSchema>>;
+  };
   readonly sandboxes: {
     create(
       input: InferSchema<typeof createSandboxRequestSchema>,
@@ -103,6 +112,7 @@ class CoreApiClientImpl implements CoreApiClient {
   private readonly fetchImplementation: typeof fetch;
 
   public readonly sandboxes: CoreApiClient["sandboxes"];
+  public readonly packages: CoreApiClient["packages"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -114,6 +124,22 @@ class CoreApiClientImpl implements CoreApiClient {
       attempts: (input) => this.listSandboxAttempts(input),
       events: (input) => this.listSandboxEvents(input),
     };
+    this.packages = {
+      resolve: (input) => this.resolvePackage(input),
+    };
+  }
+
+  private async resolvePackage(
+    input: InferSchema<typeof resolvePackageQuerySchema>,
+  ): Promise<InferSchema<typeof resolvePackageResponseSchema>> {
+    const query = resolvePackageQuerySchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/packages/resolve",
+      schema: resolvePackageResponseSchema,
+      query,
+    });
   }
 
   private buildUrl(

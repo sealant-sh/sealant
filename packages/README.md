@@ -10,10 +10,9 @@ The current package architecture is:
 - `workspace-build-queue`: RabbitMQ transport package for queueing workspace image build jobs
 - `workspace-composition`: core composition system with `UserWorkspaceSpec`, `WorkspaceBlueprint`,
   normalization/defaulting, executor contracts, executor selection, and build artifact definitions
-- `os-integration-nix`: Nix-specific OS integration implementation for building concrete Nix-backed
-  workspace artifacts
-- `os-integration-fedora`: Fedora OS integration placeholder
-- `os-integration-arch`: Arch OS integration placeholder
+- `os-integration-buildkit`: BuildKit-backed Arch and Fedora workspace image compilation
+- `package-standardization`: Repology-backed package resolution and normalization layer with
+  cache-first lookups
 - `runtime-adapters-api`: shared contract between the control plane and concrete runtime adapters
 - `runtime-adapter-docker`: Docker runtime adapter implementation for launching published images
 - `runtime-adapter-k8s`: Kubernetes runtime adapter scaffold and contract wiring

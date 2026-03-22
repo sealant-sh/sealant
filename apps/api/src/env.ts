@@ -18,6 +18,14 @@ export const appEnvSchema = databaseEnvSchema
       REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),
       REGISTRY_USERNAME: z.string().trim().min(1).optional(),
       REGISTRY_PASSWORD: z.string().min(1).optional(),
+      REPOLOGY_API_BASE_URL: z.string().url().default("https://repology.org/api/v1"),
+      REPOLOGY_USER_AGENT: z
+        .string()
+        .trim()
+        .min(1)
+        .default("sealant-control-plane/0.1 (+https://github.com/sealant-ops/sealant)"),
+      REPOLOGY_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+      REPOLOGY_MINIMUM_INTERVAL_MS: z.coerce.number().int().positive().default(1_000),
     }),
   )
   .superRefine((input, ctx) => {
