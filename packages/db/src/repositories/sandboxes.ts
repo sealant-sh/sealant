@@ -80,6 +80,17 @@ export const createSandboxRepository = (client: DatabaseClient) => {
     return sandbox;
   };
 
+  const getSandboxByAttemptId = async (attemptId: string): Promise<Sandbox | undefined> => {
+    const [row] = await db
+      .select({ sandbox: sandboxes })
+      .from(sandboxRunLinks)
+      .innerJoin(sandboxes, eq(sandboxes.id, sandboxRunLinks.sandboxId))
+      .where(eq(sandboxRunLinks.runId, attemptId))
+      .limit(1);
+
+    return row?.sandbox;
+  };
+
   const listSandboxes = async (input: ListSandboxesInput = {}): Promise<readonly Sandbox[]> => {
     const whereClauses = [
       ...(input.ownerUserId === undefined ? [] : [eq(sandboxes.ownerUserId, input.ownerUserId)]),
@@ -159,6 +170,7 @@ export const createSandboxRepository = (client: DatabaseClient) => {
 
   return {
     createSandbox,
+    getSandboxByAttemptId,
     getSandboxById,
     linkSandboxAttempt,
     listSandboxes,

@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { messageResponseSchema } from "../../lib/schemas.js";
 
-const tags = ["Workspace Build Jobs"];
+const tags = ["Internal Diagnostics"];
 
 export const workspaceBuildJobIdParamsSchema = z.object({
   jobId: z.string().trim().min(1),
@@ -68,7 +68,7 @@ export const createWorkspaceBuildJobValidator = validator(
 
 export const createWorkspaceBuildJobRoute = describeRoute({
   tags,
-  description: "Queue a workspace image composition and publish job.",
+  description: "Internal route: queue a low-level OCI image build and publish job.",
   responses: {
     202: {
       description: "Workspace build job queued",
@@ -99,7 +99,7 @@ export const createWorkspaceBuildJobRoute = describeRoute({
 
 export const getWorkspaceBuildJobRoute = describeRoute({
   tags,
-  description: "Get the current durable state for a workspace image build job.",
+  description: "Internal route: get low-level durable state for an OCI image build job.",
   responses: {
     200: {
       description: "Workspace build job details",

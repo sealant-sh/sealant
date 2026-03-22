@@ -41,8 +41,6 @@ export const sandboxErrorSchema = z.object({
 
 export const createSandboxResponseSchema = z.object({
   sandboxId: z.string(),
-  runId: z.string(),
-  jobId: z.string(),
   status: sandboxStatusSchema,
   registryId: z.string(),
   repository: z.string(),
@@ -51,8 +49,6 @@ export const createSandboxResponseSchema = z.object({
 
 export const sandboxSummarySchema = z.object({
   sandboxId: z.string(),
-  runId: z.string(),
-  jobId: z.string().optional(),
   ownerUserId: z.string(),
   status: sandboxStatusSchema,
   registryId: z.string().optional(),
@@ -68,8 +64,6 @@ export const sandboxSummarySchema = z.object({
 });
 
 export const sandboxDetailsSchema = sandboxSummarySchema.extend({
-  runStatus: z.enum(["queued", "running", "succeeded", "failed", "cancelled"]),
-  jobStatus: z.enum(["queued", "running", "succeeded", "failed"]).optional(),
   spec: workspaceBuildJobRequestPayloadSchema.optional(),
 });
 
@@ -89,7 +83,7 @@ export const listSandboxesQueryValidator = validator("query", listSandboxesQuery
 
 export const createSandboxRoute = describeRoute({
   tags,
-  description: "Create and queue a sandbox build request for a user workspace spec.",
+  description: "Create and queue a sandbox launch request for a user workspace spec.",
   responses: {
     202: {
       description: "Sandbox creation accepted and queued",

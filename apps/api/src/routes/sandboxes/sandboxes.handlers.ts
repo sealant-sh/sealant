@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   SandboxAttemptRepository,
+  SandboxRepository,
   SandboxRuntimeInstanceRepository,
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
@@ -26,6 +27,7 @@ import type {
 type SandboxAttemptRecord = NonNullable<
   Awaited<ReturnType<SandboxAttemptRepository["getAttemptById"]>>
 >;
+type SandboxRecord = NonNullable<Awaited<ReturnType<SandboxRepository["getSandboxById"]>>>;
 type WorkspaceBuildJobRecord = Awaited<
   ReturnType<WorkspaceBuildJobRepository["getLatestJobByRunId"]>
 >;
@@ -37,12 +39,16 @@ const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();
 };
 
-const latestDate = (a: Date, b: Date | undefined): Date => {
-  if (b === undefined || a.getTime() >= b.getTime()) {
-    return a;
+const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
+  let latest = first;
+
+  for (const candidate of rest) {
+    if (candidate !== undefined && candidate.getTime() > latest.getTime()) {
+      latest = candidate;
+    }
   }
 
-  return b;
+  return latest;
 };
 
 const toQueuePublishErrorMessage = (error: unknown) => {
@@ -67,28 +73,101 @@ const readIdempotencyKey = (c: Context<AppBindings>): string | undefined => {
   return key;
 };
 
-const mapSandboxSummary = (
+const mapStoredSandboxStatus = (
+  status: SandboxRecord["status"],
+): z.infer<typeof sandboxSummarySchema>["status"] => {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return "running";
+    case "ready":
+      return "ready";
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "cancelled";
+  }
+};
+
+const mapAttemptStatusToSandboxStatus = (
+  status: SandboxAttemptRecord["status"],
+): SandboxRecord["status"] => {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return "running";
+    case "succeeded":
+      return "ready";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+  }
+};
+
+const ensureSandboxForAttempt = async (
+  sandboxRepository: SandboxRepository,
   attempt: SandboxAttemptRecord,
+): Promise<SandboxRecord> => {
+  const existing = await sandboxRepository.getSandboxByAttemptId(attempt.id);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const sandbox = await sandboxRepository.createSandbox({
+    id: randomUUID(),
+    ownerUserId: attempt.ownerUserId,
+    ...(attempt.repositoryId === null ? {} : { repositoryId: attempt.repositoryId }),
+    ...(attempt.repositoryProfileRevisionId === null
+      ? {}
+      : { repositoryProfileRevisionId: attempt.repositoryProfileRevisionId }),
+    ...(attempt.profileRevisionId === null ? {} : { profileRevisionId: attempt.profileRevisionId }),
+    ...(attempt.requestedByUserId === null ? {} : { requestedByUserId: attempt.requestedByUserId }),
+    status: mapAttemptStatusToSandboxStatus(attempt.status),
+  });
+
+  await sandboxRepository.linkSandboxAttempt({
+    sandboxId: sandbox.id,
+    attemptId: attempt.id,
+    relation: "launch",
+  });
+
+  return sandbox;
+};
+
+const mapSandboxSummary = (
+  sandbox: SandboxRecord,
+  attempt: SandboxAttemptRecord | undefined,
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
 ): z.infer<typeof sandboxSummarySchema> => {
   const runtime = resolveSandboxRuntime(runtimeInstance);
   const publishedImage = resolveSandboxPublishedImage(latestJob);
   const error = resolveSandboxError(latestJob);
-  const updatedAt = latestDate(attempt.updatedAt, latestJob?.updatedAt);
-  const startedAt = attempt.startedAt ?? latestJob?.startedAt;
-  const finishedAt = attempt.finishedAt ?? latestJob?.finishedAt;
+  const updatedAt = latestDate(
+    sandbox.updatedAt,
+    attempt?.updatedAt,
+    latestJob?.updatedAt,
+    runtimeInstance?.updatedAt,
+  );
+  const startedAt = attempt?.startedAt ?? latestJob?.startedAt;
+  const finishedAt = attempt?.finishedAt ?? latestJob?.finishedAt;
+  const status =
+    attempt === undefined
+      ? mapStoredSandboxStatus(sandbox.status)
+      : resolveSandboxStatus({
+          attempt,
+          latestJob,
+          runtimeInstance,
+        });
 
   return {
-    sandboxId: attempt.id,
-    runId: attempt.id,
-    ...(latestJob === undefined ? {} : { jobId: latestJob.id }),
-    ownerUserId: attempt.ownerUserId,
-    status: resolveSandboxStatus({
-      attempt,
-      latestJob,
-      runtimeInstance,
-    }),
+    sandboxId: sandbox.id,
+    ownerUserId: sandbox.ownerUserId,
+    status,
     ...(latestJob === undefined
       ? {}
       : {
@@ -99,7 +178,7 @@ const mapSandboxSummary = (
     ...(runtime === undefined ? {} : { runtime }),
     ...(publishedImage === undefined ? {} : { publishedImage }),
     ...(error === undefined ? {} : { error }),
-    createdAt: attempt.createdAt.toISOString(),
+    createdAt: sandbox.createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     ...(toIsoString(startedAt) === undefined ? {} : { startedAt: toIsoString(startedAt) }),
     ...(toIsoString(finishedAt) === undefined ? {} : { finishedAt: toIsoString(finishedAt) }),
@@ -107,23 +186,21 @@ const mapSandboxSummary = (
 };
 
 const mapSandboxDetails = (
-  attempt: SandboxAttemptRecord,
+  sandbox: SandboxRecord,
+  attempt: SandboxAttemptRecord | undefined,
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
 ): z.infer<typeof sandboxDetailsSchema> => {
-  const summary = mapSandboxSummary(attempt, latestJob, runtimeInstance);
+  const summary = mapSandboxSummary(sandbox, attempt, latestJob, runtimeInstance);
 
   return {
     ...summary,
-    runStatus: attempt.status,
-    ...(latestJob === undefined ? {} : { jobStatus: latestJob.status }),
     ...(latestJob === undefined ? {} : { spec: latestJob.requestPayload }),
   };
 };
 
 const acceptedSandboxResponse = (
-  runId: string,
-  jobId: string,
+  sandboxId: string,
   input: {
     readonly registryId: string;
     readonly repository: string;
@@ -131,9 +208,7 @@ const acceptedSandboxResponse = (
   },
 ) => {
   return {
-    sandboxId: runId,
-    runId,
-    jobId,
+    sandboxId,
     status: "queued" as const,
     registryId: input.registryId,
     repository: input.repository,
@@ -159,6 +234,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   const idempotencyKey = readIdempotencyKey(c);
+  const sandboxes = c.get("sandboxRepository");
   const workspaceBuildJobs = c.get("workspaceBuildJobRepository");
   const sandboxAttempts = c.get("sandboxAttemptRepository");
 
@@ -169,9 +245,11 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
 
       if (existingRun !== undefined) {
-        c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingRun.id)}`);
+        const existingSandbox = await ensureSandboxForAttempt(sandboxes, existingRun);
+
+        c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
         return c.json(
-          acceptedSandboxResponse(existingRun.id, existingJob.id, {
+          acceptedSandboxResponse(existingSandbox.id, {
             registryId: existingJob.registryId,
             repository: existingJob.repository,
             tag: existingJob.tag,
@@ -182,16 +260,30 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     }
   }
 
+  const sandboxId = randomUUID();
   const runId = randomUUID();
   const jobId = randomUUID();
   const blueprintPayload = normalizeUserWorkspaceSpec(body.spec);
 
   try {
+    const sandbox = await sandboxes.createSandbox({
+      id: sandboxId,
+      ownerUserId: body.ownerUserId,
+      requestedByUserId: body.ownerUserId,
+      status: "queued",
+    });
+
     const attempt = await sandboxAttempts.createQueuedAttempt({
       id: runId,
       ownerUserId: body.ownerUserId,
       triggerType: "api",
       requestedByUserId: body.ownerUserId,
+    });
+
+    await sandboxes.linkSandboxAttempt({
+      sandboxId: sandbox.id,
+      attemptId: attempt.id,
+      relation: "launch",
     });
 
     await sandboxAttempts.setAttemptSnapshot({
@@ -224,15 +316,21 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       const existingJob = await workspaceBuildJobs.getJobByIdempotencyKey(idempotencyKey);
 
       if (existingJob !== undefined && existingJob.runId !== null) {
-        c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingJob.runId)}`);
-        return c.json(
-          acceptedSandboxResponse(existingJob.runId, existingJob.id, {
-            registryId: existingJob.registryId,
-            repository: existingJob.repository,
-            tag: existingJob.tag,
-          }),
-          202,
-        );
+        const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
+
+        if (existingRun !== undefined) {
+          const existingSandbox = await ensureSandboxForAttempt(sandboxes, existingRun);
+
+          c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
+          return c.json(
+            acceptedSandboxResponse(existingSandbox.id, {
+              registryId: existingJob.registryId,
+              repository: existingJob.repository,
+              tag: existingJob.tag,
+            }),
+            202,
+          );
+        }
       }
     }
 
@@ -253,20 +351,24 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       sandboxAttempts.markAttemptFailed({
         id: runId,
       }),
+      sandboxes.setSandboxStatus({
+        id: sandboxId,
+        status: "failed",
+      }),
     ]);
 
     return c.json(
       {
-        message: `Sandbox ${runId} was recorded but could not be queued.`,
+        message: `Sandbox ${sandboxId} was recorded but could not be queued.`,
       },
       502,
     );
   }
 
-  c.header("Location", `/v1/sandboxes/${encodeURIComponent(runId)}`);
+  c.header("Location", `/v1/sandboxes/${encodeURIComponent(sandboxId)}`);
 
   return c.json(
-    acceptedSandboxResponse(runId, jobId, {
+    acceptedSandboxResponse(sandboxId, {
       registryId: body.registryId,
       repository: body.repository,
       tag: body.tag,
@@ -282,26 +384,42 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
     }
   ).valid("query");
 
-  const runLimit = query.status === undefined ? query.limit : Math.min(query.limit * 4, 100);
-  const attempts = await c.get("sandboxAttemptRepository").listAttempts({
+  const sandboxLimit = query.status === undefined ? query.limit : Math.min(query.limit * 4, 100);
+  const sandboxes = await c.get("sandboxRepository").listSandboxes({
     ownerUserId: query.ownerUserId,
-    limit: runLimit,
+    limit: sandboxLimit,
   });
+  const latestRunIds = sandboxes.flatMap((sandbox) => {
+    return sandbox.latestRunId === null ? [] : [sandbox.latestRunId];
+  });
+  const attempts = await Promise.all(
+    latestRunIds.map(async (runId) => {
+      return [runId, await c.get("sandboxAttemptRepository").getAttemptById(runId)] as const;
+    }),
+  );
+  const attemptsByRunId = new Map(
+    attempts.flatMap(([runId, attempt]) => {
+      return attempt === undefined ? [] : [[runId, attempt] as const];
+    }),
+  );
   const latestJobsByRunId = await c
     .get("workspaceBuildJobRepository")
-    .listLatestJobsByRunIds(attempts.map((attempt) => attempt.id));
+    .listLatestJobsByRunIds(latestRunIds);
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
-    .listRuntimeInstancesByRunIds(attempts.map((attempt) => attempt.id));
+    .listRuntimeInstancesByRunIds(latestRunIds);
 
-  const items = attempts
-    .map((attempt) =>
-      mapSandboxSummary(
-        attempt,
-        latestJobsByRunId.get(attempt.id),
-        runtimeInstancesByRunId.get(attempt.id),
-      ),
-    )
+  const items = sandboxes
+    .map((sandbox) => {
+      const runId = sandbox.latestRunId ?? undefined;
+
+      return mapSandboxSummary(
+        sandbox,
+        runId === undefined ? undefined : attemptsByRunId.get(runId),
+        runId === undefined ? undefined : latestJobsByRunId.get(runId),
+        runId === undefined ? undefined : runtimeInstancesByRunId.get(runId),
+      );
+    })
     .filter((item) => (query.status === undefined ? true : item.status === query.status))
     .slice(0, query.limit);
 
@@ -314,9 +432,9 @@ export const getSandbox = async (c: Context<AppBindings>) => {
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
-  const attempt = await c.get("sandboxAttemptRepository").getAttemptById(sandboxId);
+  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
 
-  if (attempt === undefined) {
+  if (sandbox === undefined) {
     return c.json(
       {
         message: `Sandbox not found: ${sandboxId}`,
@@ -325,10 +443,17 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     );
   }
 
-  const latestJob = await c.get("workspaceBuildJobRepository").getLatestJobByRunId(attempt.id);
+  if (sandbox.latestRunId === null) {
+    return c.json(mapSandboxDetails(sandbox, undefined, undefined, undefined));
+  }
+
+  const attempt = await c.get("sandboxAttemptRepository").getAttemptById(sandbox.latestRunId);
+  const latestJob = await c
+    .get("workspaceBuildJobRepository")
+    .getLatestJobByRunId(sandbox.latestRunId);
   const runtimeInstance = await c
     .get("sandboxRuntimeInstanceRepository")
-    .getRuntimeInstanceByRunId(attempt.id);
+    .getRuntimeInstanceByRunId(sandbox.latestRunId);
 
-  return c.json(mapSandboxDetails(attempt, latestJob, runtimeInstance));
+  return c.json(mapSandboxDetails(sandbox, attempt, latestJob, runtimeInstance));
 };

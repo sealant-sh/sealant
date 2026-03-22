@@ -19,7 +19,7 @@ export const configureOpenAPI = (
         info: {
           title: "Sealant Control Plane API",
           version: packageJson.version,
-          description: "Core API scaffold for Sealant control-plane and registry flows.",
+          description: "Sandbox-first control-plane API with internal diagnostics surfaces.",
         },
         servers: [
           {

@@ -50,7 +50,8 @@ and reporting internals.
 - `profile_ssh_key_bindings`: SSH key references attached to profile revisions.
 - `secrets`: logical secret containers.
 - `secret_versions`: encrypted secret value versions.
-- `ssh_keys`: managed SSH public-key records and private-key secret references.
+- `ssh_keys`: manag id, ownerUserId, repositoryId, templateId/revisionId, profileRevisionId, status, activeRunId, createdAt, updatedAt, archivedAt
+- sandbox_run_links (history): sandboxId, runed SSH public-key records and private-key secret references.
 
 ## Issue workflow and SCM lineage tables
 
