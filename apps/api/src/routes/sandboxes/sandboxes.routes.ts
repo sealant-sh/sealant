@@ -1,4 +1,7 @@
-import { workspaceBuildJobRequestPayloadSchema } from "@sealant/db";
+import {
+  sandboxAttemptTriggerTypeValues,
+  workspaceBuildJobRequestPayloadSchema,
+} from "@sealant/db";
 import { describeRoute, resolver, validator } from "hono-openapi";
 import { z } from "zod";
 
@@ -73,6 +76,67 @@ export const listSandboxesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
+export const listSandboxAttemptsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const listSandboxEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+export const sandboxAttemptRelationSchema = z.enum(["launch", "rebuild", "retry", "resume"]);
+
+export const sandboxAttemptSummarySchema = z.object({
+  attemptId: z.string(),
+  relation: sandboxAttemptRelationSchema,
+  status: sandboxStatusSchema,
+  triggerType: z.enum(sandboxAttemptTriggerTypeValues),
+  triggerRef: z.string().optional(),
+  runtime: sandboxRuntimeSchema.optional(),
+  publishedImage: sandboxPublishedImageSchema.optional(),
+  error: sandboxErrorSchema.optional(),
+  spec: workspaceBuildJobRequestPayloadSchema.optional(),
+  queuedAt: z.string().datetime(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  linkedAt: z.string().datetime(),
+  startedAt: z.string().datetime().optional(),
+  finishedAt: z.string().datetime().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+});
+
+export const listSandboxAttemptsResponseSchema = z.object({
+  items: z.array(sandboxAttemptSummarySchema),
+});
+
+export const sandboxEventTypeSchema = z.enum([
+  "sandbox.created",
+  "attempt.queued",
+  "attempt.running",
+  "attempt.succeeded",
+  "attempt.failed",
+  "attempt.cancelled",
+  "image.published",
+  "runtime.pending",
+  "runtime.running",
+  "runtime.failed",
+  "runtime.stopped",
+]);
+
+export const sandboxEventSchema = z.object({
+  eventId: z.string(),
+  sandboxId: z.string(),
+  attemptId: z.string().optional(),
+  type: sandboxEventTypeSchema,
+  occurredAt: z.string().datetime(),
+  message: z.string().optional(),
+  data: z.record(z.unknown()).optional(),
+});
+
+export const listSandboxEventsResponseSchema = z.object({
+  items: z.array(sandboxEventSchema),
+});
+
 export const listSandboxesResponseSchema = z.object({
   items: z.array(sandboxSummarySchema),
 });
@@ -80,6 +144,8 @@ export const listSandboxesResponseSchema = z.object({
 export const createSandboxValidator = validator("json", createSandboxRequestSchema);
 export const sandboxIdValidator = validator("param", sandboxIdParamsSchema);
 export const listSandboxesQueryValidator = validator("query", listSandboxesQuerySchema);
+export const listSandboxAttemptsQueryValidator = validator("query", listSandboxAttemptsQuerySchema);
+export const listSandboxEventsQueryValidator = validator("query", listSandboxEventsQuerySchema);
 
 export const createSandboxRoute = describeRoute({
   tags,
@@ -136,6 +202,53 @@ export const getSandboxRoute = describeRoute({
       content: {
         "application/json": {
           schema: resolver(sandboxDetailsSchema),
+        },
+      },
+    },
+    404: {
+      description: "Sandbox not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+  },
+});
+
+export const listSandboxAttemptsRoute = describeRoute({
+  tags,
+  description: "List sandbox attempts linked to a sandbox id, ordered by most recent link first.",
+  responses: {
+    200: {
+      description: "Sandbox attempts list",
+      content: {
+        "application/json": {
+          schema: resolver(listSandboxAttemptsResponseSchema),
+        },
+      },
+    },
+    404: {
+      description: "Sandbox not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+  },
+});
+
+export const listSandboxEventsRoute = describeRoute({
+  tags,
+  description:
+    "List sandbox lifecycle events synthesized from sandbox attempts and runtime records.",
+  responses: {
+    200: {
+      description: "Sandbox event timeline",
+      content: {
+        "application/json": {
+          schema: resolver(listSandboxEventsResponseSchema),
         },
       },
     },

@@ -612,6 +612,8 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
     expect(body.paths["/v1/sandboxes"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
     expect(body.paths["/v1/runs/{runId}"]).toBeUndefined();
   });
 
@@ -995,6 +997,67 @@ describe("createApiApp", () => {
     expect(detailBody.sandboxId).toBe("sandbox_ready");
     expect(detailBody.status).toBe("ready");
     expect(detailBody.spec?.harness).toBe("opencode");
+
+    const attemptsResponse = await app.request("/v1/sandboxes/sandbox_ready/attempts?limit=10");
+    expect(attemptsResponse.status).toBe(200);
+
+    const attemptsBody = (await attemptsResponse.json()) as {
+      items: Array<{
+        attemptId: string;
+        relation: string;
+        status: string;
+        spec?: {
+          harness: string;
+        };
+      }>;
+    };
+
+    expect(attemptsBody.items).toHaveLength(1);
+    expect(attemptsBody.items[0]?.attemptId).toBe("run_ready");
+    expect(attemptsBody.items[0]?.relation).toBe("launch");
+    expect(attemptsBody.items[0]?.status).toBe("ready");
+    expect(attemptsBody.items[0]?.spec?.harness).toBe("opencode");
+
+    const eventsResponse = await app.request("/v1/sandboxes/sandbox_ready/events?limit=20");
+    expect(eventsResponse.status).toBe(200);
+
+    const eventsBody = (await eventsResponse.json()) as {
+      items: Array<{
+        type: string;
+      }>;
+    };
+
+    expect(eventsBody.items.length).toBeGreaterThan(0);
+    expect(eventsBody.items.some((event) => event.type === "sandbox.created")).toBe(true);
+    expect(eventsBody.items.some((event) => event.type === "attempt.queued")).toBe(true);
+    expect(eventsBody.items.some((event) => event.type === "attempt.running")).toBe(true);
+    expect(eventsBody.items.some((event) => event.type === "image.published")).toBe(true);
+    expect(eventsBody.items.some((event) => event.type === "runtime.running")).toBe(true);
+    expect(eventsBody.items.some((event) => event.type === "attempt.succeeded")).toBe(true);
+  });
+
+  it("returns 404 for attempts and events when sandbox does not exist", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const attemptsResponse = await app.request("/v1/sandboxes/sandbox_missing/attempts");
+    expect(attemptsResponse.status).toBe(404);
+    await expect(attemptsResponse.json()).resolves.toEqual({
+      message: "Sandbox not found: sandbox_missing",
+    });
+
+    const eventsResponse = await app.request("/v1/sandboxes/sandbox_missing/events");
+    expect(eventsResponse.status).toBe(404);
+    await expect(eventsResponse.json()).resolves.toEqual({
+      message: "Sandbox not found: sandbox_missing",
+    });
   });
 
   it("does not expose run detail routes", async () => {

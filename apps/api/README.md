@@ -22,6 +22,8 @@ It currently provides:
 - `POST /v1/sandboxes`
 - `GET /v1/sandboxes?ownerUserId=...&status=...&limit=...`
 - `GET /v1/sandboxes/{sandboxId}`
+- `GET /v1/sandboxes/{sandboxId}/attempts?limit=...`
+- `GET /v1/sandboxes/{sandboxId}/events?limit=...`
 - `GET /v1/registries/{registryId}`
 - `GET /v1/registries/{registryId}/ping`
 - `GET /v1/registries/{registryId}/extensions`
