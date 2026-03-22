@@ -48,6 +48,8 @@ Top-level sections:
 - `runtime.network.outbound`: `true`
 - `target.os.family`: `"auto"`
 - `target.os.mode`: `"prefer"`
+- `target.runtime.family`: `"auto"`
+- `target.runtime.mode`: `"prefer"`
 
 ## Boundary
 

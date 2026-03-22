@@ -1,7 +1,9 @@
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
-import { mapBlueprintToNixExecutorSpec } from "./map-blueprint-to-nix-executor-spec.js";
-import { NixOsExecutor } from "./nix-executor.js";
+import {
+  getNixExecutorSupport,
+  mapBlueprintToNixExecutorSpec,
+} from "./map-blueprint-to-nix-executor-spec.js";
 
 // This is the minimal end-to-end demo path for the new contracts: start from a
 // user-facing JSON-like spec, normalize it, map it into the current Nix spec,
@@ -18,8 +20,7 @@ const hardcodedUserSpec = {
 
 const blueprint = normalizeUserWorkspaceSpec(hardcodedUserSpec);
 const nixSpec = mapBlueprintToNixExecutorSpec(blueprint);
-const executor = new NixOsExecutor();
-const support = executor.supports({ blueprint });
+const support = getNixExecutorSupport(blueprint);
 
 console.log(JSON.stringify({ hardcodedUserSpec, blueprint, support, nixSpec }, null, 2));
 
@@ -29,6 +30,7 @@ if (!support.supported) {
 }
 
 if (process.argv.includes("--build")) {
-  const result = await executor.compile({ blueprint });
-  console.log(JSON.stringify(result, null, 2));
+  throw new Error(
+    "Local Nix execution is disabled. Run builds through the worker+nix-builder container flow.",
+  );
 }

@@ -45,7 +45,15 @@ export const getRabbitMqSingleton = async (connectionUrl: string): Promise<Rabbi
   }
 
   singletonConnectionUrl = connectionUrl;
-  singletonPromise = createRabbitMqSingleton(connectionUrl);
+  const connectingPromise = createRabbitMqSingleton(connectionUrl).catch((error) => {
+    if (singletonPromise === connectingPromise) {
+      singletonPromise = undefined;
+      singletonConnectionUrl = undefined;
+    }
+
+    throw error;
+  });
+  singletonPromise = connectingPromise;
 
   return singletonPromise;
 };

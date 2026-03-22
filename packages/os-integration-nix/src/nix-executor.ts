@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import {
   normalizeUserWorkspaceSpec,
@@ -18,7 +16,6 @@ import {
 } from "./map-blueprint-to-nix-executor-spec.js";
 import { parseNixExecutorSpec, type NixExecutorSpec } from "./nix-executor-spec.js";
 
-const execFileAsync = promisify(execFile);
 const packageDir = fileURLToPath(new URL("..", import.meta.url));
 
 type NixBuildJson = Array<{
@@ -26,6 +23,25 @@ type NixBuildJson = Array<{
     out: string;
   };
 }>;
+
+export interface NixExecutorCommandResult {
+  stdout: string;
+  stderr: string;
+}
+
+export interface NixExecutorCommandOptions {
+  cwd?: string;
+}
+
+export type NixExecutorCommandRunner = (
+  command: string,
+  args: string[],
+  options?: NixExecutorCommandOptions,
+) => Promise<NixExecutorCommandResult>;
+
+export interface NixOsExecutorOptions {
+  commandRunner: NixExecutorCommandRunner;
+}
 
 // The existing Nix backend is already exposed via flake legacyPackages.mkWorkspace.
 // This helper renders the mapped Nix spec as JSON and lets Nix reconstruct the
@@ -44,15 +60,13 @@ const createNixWorkspaceExpression = (
 const buildWorkspaceAttribute = async (
   spec: NixExecutorSpec,
   attribute: "image" | "env" | "specJson",
+  commandRunner: NixExecutorCommandRunner,
 ): Promise<string> => {
   const expression = createNixWorkspaceExpression(spec, attribute);
-  const { stdout } = await execFileAsync(
+  const { stdout } = await commandRunner(
     "nix",
     ["build", "--impure", "--json", "--no-link", "--expr", expression],
-    {
-      cwd: packageDir,
-      maxBuffer: 1024 * 1024 * 10,
-    },
+    { cwd: packageDir },
   );
 
   const parsed = JSON.parse(stdout) as NixBuildJson;
@@ -72,6 +86,12 @@ export class NixOsExecutor implements OsExecutor {
 
   public readonly osFamily = "nix" as const;
 
+  private readonly commandRunner: NixExecutorCommandRunner;
+
+  public constructor(options: NixOsExecutorOptions) {
+    this.commandRunner = options.commandRunner;
+  }
+
   public supports(input: OsExecutorCompileInput): OsExecutorSupport {
     const parsed = parseOsExecutorCompileInput(input);
     return getNixExecutorSupport(parsed.blueprint);
@@ -86,9 +106,9 @@ export class NixOsExecutor implements OsExecutor {
     }
 
     const spec = mapBlueprintToNixExecutorSpec(parsed.blueprint);
-    const imagePath = await buildWorkspaceAttribute(spec, "image");
-    const envPath = await buildWorkspaceAttribute(spec, "env");
-    const specJsonDirectoryPath = await buildWorkspaceAttribute(spec, "specJson");
+    const imagePath = await buildWorkspaceAttribute(spec, "image", this.commandRunner);
+    const envPath = await buildWorkspaceAttribute(spec, "env", this.commandRunner);
+    const specJsonDirectoryPath = await buildWorkspaceAttribute(spec, "specJson", this.commandRunner);
 
     return parseOsExecutorCompileResult({
       executor: {

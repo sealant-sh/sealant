@@ -58,6 +58,10 @@ describe("parseWorkspaceBlueprint", () => {
           family: "auto",
           mode: "prefer",
         },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
       },
     });
   });

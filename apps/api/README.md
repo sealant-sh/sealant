@@ -34,12 +34,11 @@ Run the API locally:
 pnpm --filter @sealant/api dev
 ```
 
-The default registry settings point at the local Zot instance started from
-`packages/registry-integration/dev/zot/compose.yaml`.
+The default registry settings point at the local Zot instance started from the root
+`compose.yaml`.
 
-The workspace build job routes also expect RabbitMQ from
-`packages/workspace-build-queue/dev/rabbitmq/compose.yaml` on `127.0.0.1:5673` and the shared SQLite
-database from `@sealant/db`.
+The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on
+`127.0.0.1:5673` and the shared SQLite database from `@sealant/db`.
 
 ## Operations Runbook (Local Image Build Flow)
 
@@ -68,8 +67,7 @@ pnpm --filter @sealant/db db:migrate
 ### Start local dependencies
 
 ```bash
-docker compose -f packages/workspace-build-queue/dev/rabbitmq/compose.yaml up -d
-docker compose -f packages/registry-integration/dev/zot/compose.yaml up -d
+docker compose up -d rabbitmq zot
 ```
 
 - RabbitMQ AMQP: `amqp://sealant:sealant@127.0.0.1:5673`
@@ -104,7 +102,10 @@ curl -X POST http://localhost:3000/v1/workspace-build-jobs \
     "spec": {
       "source": "https://github.com/example/repo",
       "harness": "opencode",
-      "os": "nix"
+      "os": "nix",
+      "target": {
+        "runtime": "docker"
+      }
     }
   }'
 ```
@@ -124,6 +125,9 @@ On success, the response includes:
 - `publishedImage.reference`
 - `publishedImage.digestReference`
 - `publishedImage.digest`
+- `result.runtime.adapter`
+- `result.runtime.resourceId`
+- `result.runtime.endpoint` (when exposed by the selected runtime adapter)
 
 ### Confirm image exists in registry
 
