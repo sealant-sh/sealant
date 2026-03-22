@@ -3,9 +3,12 @@ import { getAuthSession, type MaybeAuthSession } from "@sealant/auth/session";
 import { createDatabaseClientFromEnv, type DatabaseClient } from "@sealant/db";
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 
+import { createCoreApiClient, type CoreApiClient } from "@/lib/api/core-api-client";
+
 interface TrpcServerResources {
   readonly auth: SealantAuth;
   readonly db: DatabaseClient;
+  readonly coreApi: CoreApiClient;
 }
 
 const parseCookies = (cookieHeader: string | null): ReadonlyMap<string, string> => {
@@ -40,8 +43,9 @@ const getTrpcServerResources = (): Promise<TrpcServerResources> => {
   trpcServerResourcesPromise ??= (async () => {
     const db = await createDatabaseClientFromEnv();
     const auth = await createSealantAuth({ databaseClient: db });
+    const coreApi = createCoreApiClient();
 
-    return { auth, db };
+    return { auth, coreApi, db };
   })();
 
   return trpcServerResourcesPromise;
@@ -50,6 +54,7 @@ const getTrpcServerResources = (): Promise<TrpcServerResources> => {
 export interface TrpcContext {
   readonly auth: SealantAuth;
   readonly db: DatabaseClient;
+  readonly coreApi: CoreApiClient;
   readonly session: MaybeAuthSession;
   readonly headers: Headers;
   readonly cookies: ReadonlyMap<string, string>;
@@ -66,6 +71,7 @@ export const createTrpcContext = async (
 
   return {
     auth: resources.auth,
+    coreApi: resources.coreApi,
     db: resources.db,
     session,
     headers: options.req.headers,
