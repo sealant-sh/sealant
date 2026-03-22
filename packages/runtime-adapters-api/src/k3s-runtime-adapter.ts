@@ -7,9 +7,9 @@ import {
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapterSupport,
-} from "@sealant/runtime-adapters-api";
+} from "./runtime-adapter.js";
 
-const notImplementedMessage = "The Kubernetes runtime adapter launch path is not implemented yet.";
+const notImplementedMessage = "The K3s runtime adapter launch path is not implemented yet.";
 
 const notImplementedError = (): Error & { code: string } => {
   const error = new Error(notImplementedMessage) as Error & { code: string };
@@ -17,8 +17,8 @@ const notImplementedError = (): Error & { code: string } => {
   return error;
 };
 
-export class K8sRuntimeAdapter implements RuntimeAdapter {
-  public readonly id = "k8s" as const;
+export class K3sRuntimeAdapter implements RuntimeAdapter {
+  public readonly id = "k3s" as const;
 
   public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
     parseRuntimeAdapterSupportInput(input);

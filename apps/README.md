@@ -1,6 +1,6 @@
 # Apps
 
-Deployable applications, services, and runnable demo entrypoints live here.
+Deployable applications and services live here.
 
 The current app architecture is:
 
@@ -10,5 +10,3 @@ The current app architecture is:
 - `docs`: documentation site for users, contributors, and developers
 - `marketing`: public-facing website and launch surfaces
 - `electron`: desktop application surface if desktop becomes a first-class client
-- `workspace-composition-demo`: runnable demo for exercising composition flows and blueprint
-  examples

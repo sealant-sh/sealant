@@ -14,8 +14,8 @@
 - `BuildArtifact`: the concrete result produced by an OS integration, such as an image, closure,
   manifest, metadata bundle, or another launchable artifact; its first standardized schema now lives
   in `src/executor.ts`
-- `RuntimeAdapter`: contract implemented by packages such as `runtime-adapter-docker` or
-  `runtime-adapter-k8s` that can launch a build artifact on a specific runtime target
+- `RuntimeAdapter`: contract implemented by concrete adapters exported from `runtime-adapters-api`
+  that can launch a build artifact on a specific runtime target
 
 ## Ownership Boundaries
 
@@ -38,10 +38,7 @@
 `runtime-adapters-api` owns:
 
 - the launch contract between the control plane and runtime adapter implementations
-
-`runtime-adapter-*` packages own:
-
-- launch, stop, inspect, and lifecycle behavior for a concrete runtime backend
+- concrete launch, stop, inspect, and lifecycle behavior for built-in runtime backends
 
 `source-integrations` owns:
 

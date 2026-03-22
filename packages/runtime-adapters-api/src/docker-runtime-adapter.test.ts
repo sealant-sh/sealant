@@ -2,13 +2,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  parseRuntimeAdapterLaunchInput,
-  parseRuntimeAdapterSupportInput,
-} from "@sealant/runtime-adapters-api";
 import { describe, expect, it, vi } from "vitest";
 
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
+import {
+  parseRuntimeAdapterLaunchInput,
+  parseRuntimeAdapterSupportInput,
+} from "./runtime-adapter.js";
 
 const createBlueprint = (overrides: Record<string, unknown> = {}) => {
   return parseRuntimeAdapterSupportInput({

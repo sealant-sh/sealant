@@ -1,7 +1,7 @@
 # Runtime Adapters API
 
 `@sealant/runtime-adapters-api` defines the shared launch contract between the control plane and
-runtime adapter implementations.
+runtime adapter implementations, and exports the built-in runtime adapter classes.
 
 ## What it provides
 
@@ -9,6 +9,9 @@ runtime adapter implementations.
 - a minimal runtime-launch blueprint contract
 - `RuntimeAdapter` interface (`supports`, `launch`)
 - runtime adapter selection helper with `auto` + `prefer/require` behavior
+- `DockerRuntimeAdapter` implementation
+- `K8sRuntimeAdapter` scaffold
+- `K3sRuntimeAdapter` scaffold
 
 ## Selection behavior
 

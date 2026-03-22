@@ -317,15 +317,6 @@ importers:
       '@sealant/registry-integration':
         specifier: workspace:*
         version: link:../../packages/registry-integration
-      '@sealant/runtime-adapter-docker':
-        specifier: workspace:*
-        version: link:../../packages/runtime-adapter-docker
-      '@sealant/runtime-adapter-k3s':
-        specifier: workspace:*
-        version: link:../../packages/runtime-adapter-k3s
-      '@sealant/runtime-adapter-k8s':
-        specifier: workspace:*
-        version: link:../../packages/runtime-adapter-k8s
       '@sealant/runtime-adapters-api':
         specifier: workspace:*
         version: link:../../packages/runtime-adapters-api
@@ -338,8 +329,6 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
-
-  apps/workspace-composition-demo: {}
 
   packages/ai-harness-integrations: {}
 
@@ -393,24 +382,6 @@ importers:
         version: 3.25.76
 
   packages/registry-integration: {}
-
-  packages/runtime-adapter-docker:
-    dependencies:
-      '@sealant/runtime-adapters-api':
-        specifier: workspace:*
-        version: link:../runtime-adapters-api
-
-  packages/runtime-adapter-k3s:
-    dependencies:
-      '@sealant/runtime-adapters-api':
-        specifier: workspace:*
-        version: link:../runtime-adapters-api
-
-  packages/runtime-adapter-k8s:
-    dependencies:
-      '@sealant/runtime-adapters-api':
-        specifier: workspace:*
-        version: link:../runtime-adapters-api
 
   packages/runtime-adapters-api:
     dependencies:

@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { K8sRuntimeAdapter } from "./k8s-runtime-adapter.js";
+import { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 
-describe("K8sRuntimeAdapter", () => {
+describe("K3sRuntimeAdapter", () => {
   it("returns adapter-unavailable support state", () => {
-    const adapter = new K8sRuntimeAdapter();
+    const adapter = new K3sRuntimeAdapter();
     const support = adapter.supports({
       blueprint: {
+        sources: {
+          workspace: {
+            url: "https://github.com/example/repo.git",
+            ref: "main",
+          },
+        },
         access: {
           ssh: {
             enabled: false,
@@ -22,7 +28,7 @@ describe("K8sRuntimeAdapter", () => {
         },
         target: {
           runtime: {
-            family: "k8s",
+            family: "k3s",
             mode: "require",
           },
         },
@@ -32,7 +38,7 @@ describe("K8sRuntimeAdapter", () => {
     expect(support).toEqual({
       supported: false,
       reason: "adapter-unavailable",
-      message: "The Kubernetes runtime adapter launch path is not implemented yet.",
+      message: "The K3s runtime adapter launch path is not implemented yet.",
     });
   });
 });
