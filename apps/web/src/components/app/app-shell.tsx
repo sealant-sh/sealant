@@ -1,17 +1,56 @@
 import type { AuthSession } from "@sealant/auth/session";
-import { Button } from "@sealant/ui";
 import { cn } from "@sealant/ui";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Sidebar,
+  SidebarContent as UiSidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  useSidebar,
+} from "@sealant/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
-import { LogOut, Search } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import {
+  Activity,
+  ChevronsUpDown,
+  CircleAlert,
+  FolderGit2,
+  LogOut,
+  Monitor,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  Sun,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
-import { capitalizeFirstLetter } from "#/lib/utils/text";
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
-import { ThemeSwitcher } from "@/components/theme/theme-switcher";
 import { authClient } from "@/lib/auth/auth-client";
 import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
+import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
   readonly session: AuthSession;
@@ -23,6 +62,7 @@ type GlobalArea = "runs" | "issues" | "repositories" | "profiles";
 interface GlobalNavItem {
   readonly href: string;
   readonly label: string;
+  readonly icon: LucideIcon;
 }
 
 interface SidebarLink {
@@ -37,10 +77,10 @@ interface SidebarGroup {
 }
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
-  { href: "/runs", label: "Runs" },
-  { href: "/issues", label: "Issues" },
-  { href: "/repositories", label: "Repositories" },
-  { href: "/profiles", label: "Profiles" },
+  { href: "/runs", label: "Runs", icon: Activity },
+  { href: "/issues", label: "Issues", icon: CircleAlert },
+  { href: "/repositories", label: "Repositories", icon: FolderGit2 },
+  { href: "/profiles", label: "Profiles", icon: UserRound },
 ] as const;
 
 const RUN_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
@@ -66,6 +106,7 @@ const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
 ];
 
 export function AppShell({ session, children }: AppShellProps) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -100,130 +141,363 @@ export function AppShell({ session, children }: AppShellProps) {
     <div className="min-h-svh bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--sw-rule)_16%,transparent)_1px,transparent_0)] [background-size:20px_20px] opacity-15" />
 
-      <div className="relative flex min-h-svh w-full flex-col border-x border-border">
-        <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-sm">
-          <div className="flex min-h-16 flex-wrap items-center gap-4 px-4 py-3 sm:px-6">
-            <Link to={"/runs" as never} className="pr-2 mb-[2px]">
-              <div className="flex items-center gap-3">
-                <LogoBlob className="size-8 transition" />
-                <LogoText className="h-8 transition" />
-              </div>
-            </Link>
-            <nav
-              className="flex flex-wrap items-center gap-4 sm:gap-5"
-              aria-label="Global navigation"
-            >
-              {GLOBAL_NAV_ITEMS.map((item) => (
-                <Link
-                  key={item.href}
-                  to={item.href as never}
-                  className="border-b-2 border-transparent text-md font-semibold no-underline transition duration-200 hover:text-foreground"
-                  activeProps={{
-                    className: "border-primary text-primary no-underline",
-                  }}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
+      <SidebarProvider
+        open={isSidebarOpen}
+        onOpenChange={setIsSidebarOpen}
+        className="relative min-h-svh border-x border-border"
+        style={{ "--sidebar-offset": "0px" } as CSSProperties}
+      >
+        <Sidebar collapsible="icon" className="z-30 border-r border-sidebar-border bg-card">
+          <AppSidebarNav
+            activeArea={activeArea}
+            pathname={pathname}
+            sidebarGroups={sidebarGroups}
+            session={session}
+            isSigningOut={isSigningOut}
+            onSignOut={handleSignOut}
+          />
+        </Sidebar>
 
-            <div className="ml-auto flex items-center gap-3">
-              <label className="relative hidden min-w-56 items-center lg:flex">
-                <Search className="pointer-events-none absolute left-3 size-3.5 text-muted-foreground" />
-                <input
-                  type="search"
-                  placeholder="Search"
-                  className="h-9 w-full border border-border bg-background pl-9 pr-3 text-md text-foreground placeholder:text-muted-foreground/80 focus:border-foreground focus:outline-none"
-                />
-              </label>
-
-              <ThemeSwitcher className="h-9" />
-
-              <div className="hidden items-center gap-2 border border-border px-2.5 py-1.5 sm:flex">
-                <div className="flex h-7 w-7 items-center justify-center border border-border bg-background text-xs font-semibold text-foreground">
-                  {(session.user.name || session.user.email).slice(0, 1)}
-                </div>
-                <div>
-                  <p className="fonts-sans text-[0.58rem] tracking-[0.11em] text-muted-foreground">
-                    {session.user.email}
-                  </p>
-                </div>
-              </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                className={cn(
-                  "h-9 border-border bg-transparent px-3 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground hover:border-primary hover:bg-primary hover:text-primary-foreground",
-                  isSigningOut && "opacity-70",
-                )}
-                disabled={isSigningOut}
-                onClick={() => {
-                  void handleSignOut();
-                }}
-              >
-                <LogOut className="size-4" />
-                {isSigningOut ? "Signing out" : "Sign out"}
-              </Button>
-            </div>
-          </div>
-        </header>
-
-        <div className="grid min-h-[calc(100svh-4.25rem)] min-w-0 lg:grid-cols-[17rem_minmax(0,1fr)]">
-          <aside className="flex min-h-full flex-col border-r border-border bg-card/80">
-            <div className="border-b border-border px-4 py-4">
-              <p className="fonts-sans text-md  text-muted-foreground">
-                {capitalizeFirstLetter(activeArea)}
-              </p>
-              <p className="mt-1 fonts-sans text-[12px] text-muted-foreground">{`v${packageJson.version}`}</p>
-            </div>
-
-            <div className="flex-1 overflow-auto px-4 py-5">
-              <div className="space-y-5">
-                {sidebarGroups.map((group) => (
-                  <section key={group.label}>
-                    <p className="border-b border-border pb-2 fonts-sans text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                      {group.label}
-                    </p>
-                    <nav className="mt-2" aria-label={group.label}>
-                      {group.links.map((item) => {
-                        const isActive = isPathActive(pathname, item.href, item.exact ?? false);
-                        return (
-                          <Link
-                            key={item.href}
-                            to={item.href as never}
-                            className={cn(
-                              "mb-1.5 block border border-transparent px-3 py-2 fonts-sans text-sm no-underline transition-colors duration-200",
-                              isActive
-                                ? "border-l-primary border-l-2 bg-muted text-foreground"
-                                : "text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground",
-                            )}
-                          >
-                            {item.label}
-                          </Link>
-                        );
-                      })}
-                    </nav>
-                  </section>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t border-border p-4">
-              <Link
-                to={"/runs" as never}
-                className="block border border-primary bg-primary px-3 py-3 text-center fonts-sans text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-colors hover:bg-transparent hover:text-foreground"
-              >
-                New Run
-              </Link>
-            </div>
-          </aside>
-
-          <main className="min-h-0 min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
-        </div>
-      </div>
+        <SidebarInset className="min-h-svh border-0 bg-transparent">
+          <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">
+            {children}
+          </main>
+        </SidebarInset>
+      </SidebarProvider>
     </div>
   );
+}
+
+function AppSidebarNav({
+  activeArea,
+  pathname,
+  sidebarGroups,
+  session,
+  isSigningOut,
+  onSignOut,
+}: {
+  readonly activeArea: GlobalArea;
+  readonly pathname: string;
+  readonly sidebarGroups: readonly SidebarGroup[];
+  readonly session: AuthSession;
+  readonly isSigningOut: boolean;
+  readonly onSignOut: () => Promise<void>;
+}) {
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const { isMobile, openMobile, setOpen, setOpenMobile, state } = useSidebar();
+  const { userTheme, setTheme } = useTheme();
+  const userLabel = session.user.name || session.user.email;
+  const currentTheme = getThemeMenuState(userTheme);
+  const ThemeIcon = currentTheme.icon;
+  const isExpanded = isMobile || state === "expanded";
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
+
+  return (
+    <>
+      <SidebarHeader className="group-data-[collapsible=icon]:py-4">
+        <div className={cn("flex items-center", isExpanded ? "justify-between gap-3" : "justify-center")}>
+          <div
+            className={cn(
+              "flex items-center overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-w-[14rem] translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            <Link
+              to={"/runs" as never}
+              className="inline-flex items-center gap-3 text-foreground no-underline"
+              aria-label="Sealant home"
+            >
+              <LogoBlob className="size-8 shrink-0" />
+              <LogoText className="h-8 shrink-0" />
+            </Link>
+          </div>
+
+          <button
+            type="button"
+            aria-label={(isMobile ? openMobile : isExpanded) ? "Collapse sidebar" : "Expand sidebar"}
+            aria-expanded={isMobile ? openMobile : isExpanded}
+            onClick={() => {
+              if (isMobile) {
+                setOpenMobile(!openMobile);
+                return;
+              }
+
+              setOpen(!isExpanded);
+            }}
+            className={cn(
+              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
+              isExpanded ? "w-10" : "w-full",
+            )}
+          >
+            {isMobile ? (
+              openMobile ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />
+            ) : isExpanded ? (
+              <PanelLeftClose className="size-4" />
+            ) : (
+              <PanelLeftOpen className="size-4" />
+            )}
+          </button>
+        </div>
+
+        <div className={cn("mt-4 flex w-full items-center", isExpanded ? "gap-2" : "justify-center") }>
+          <button
+            type="button"
+            aria-label="Open search"
+            onClick={() => {
+              const focusSearch = () => {
+                requestAnimationFrame(() => {
+                  searchInputRef.current?.focus();
+                });
+              };
+
+              if (isMobile) {
+                if (!openMobile) {
+                  setOpenMobile(true);
+                  focusSearch();
+                } else {
+                  searchInputRef.current?.focus();
+                }
+                return;
+              }
+
+              if (!isExpanded) {
+                setOpen(true);
+                focusSearch();
+              } else {
+                searchInputRef.current?.focus();
+              }
+            }}
+            className={cn(
+              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
+              isExpanded ? "w-10" : "w-full",
+            )}
+          >
+            <Search className="size-3.5" />
+          </button>
+
+          <label
+            className={cn(
+              "min-w-0 flex-1 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded ? "max-w-full translate-x-0 opacity-100" : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            <input
+              ref={searchInputRef}
+              type="search"
+              aria-label="Search runs, repos, profiles"
+              placeholder="Search runs, repos, profiles"
+              className="h-10 w-full border border-sidebar-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-sidebar-foreground focus:outline-none"
+            />
+          </label>
+        </div>
+      </SidebarHeader>
+
+      <UiSidebarContent>
+        <SidebarGroup
+          className={cn("border-b border-sidebar-border", isExpanded ? "px-3 py-3" : "px-2 py-3")}
+        >
+          <SidebarMenu aria-label="Global navigation" className="space-y-1.5">
+            {GLOBAL_NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeArea === getGlobalArea(item.href);
+
+              return (
+                <SidebarMenuItem key={item.href}>
+                  <SidebarMenuButton
+                    render={<Link to={item.href as never} />}
+                    isActive={isActive}
+                    tooltip={item.label}
+                    aria-label={item.label}
+                    className={cn(
+                      isExpanded ? "gap-3 px-3" : "justify-center gap-0 px-2",
+                      "[&>span:last-child]:transition-[max-width,opacity,transform] [&>span:last-child]:duration-200 [&>span:last-child]:ease-out [&>span:last-child]:whitespace-nowrap",
+                      isExpanded
+                        ? "[&>span:last-child]:max-w-[10rem] [&>span:last-child]:translate-x-0 [&>span:last-child]:opacity-100"
+                        : "[&>span:last-child]:pointer-events-none [&>span:last-child]:max-w-0 [&>span:last-child]:-translate-x-2 [&>span:last-child]:opacity-0",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" />
+                    <span>{item.label}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarGroup className={cn(isExpanded ? "px-3 py-4" : "px-2 py-0")}>
+          <div
+            className={cn(
+              "overflow-hidden transition-[max-height,opacity,transform] duration-200 ease-out",
+              isExpanded
+                ? "max-h-[160rem] translate-y-0 opacity-100"
+                : "pointer-events-none max-h-0 -translate-y-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            <div className="space-y-5">
+              {sidebarGroups.map((group) => (
+                <div key={group.label}>
+                  <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                  <SidebarGroupContent className="mt-2">
+                    <SidebarMenu className="space-y-1">
+                      {group.links.map((item) => {
+                        const isActive = isPathActive(pathname, item.href, item.exact ?? false);
+
+                        return (
+                          <SidebarMenuItem key={item.href}>
+                            <SidebarMenuButton
+                              render={<Link to={item.href as never} />}
+                              isActive={isActive}
+                              className="px-3 text-sm normal-case tracking-normal"
+                            >
+                              <span>{item.label}</span>
+                            </SidebarMenuButton>
+                          </SidebarMenuItem>
+                        );
+                      })}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SidebarGroup>
+      </UiSidebarContent>
+
+      <SidebarFooter>
+        <p
+          className={cn(
+            "mb-3 h-4 overflow-hidden font-mono text-[0.58rem] leading-none tracking-[0.12em] text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
+            isExpanded ? "translate-y-0 opacity-100" : "text-center -translate-y-0.5 opacity-100",
+          )}
+        >
+          {`v${packageJson.version}`}
+        </p>
+        <Link
+          to={"/runs" as never}
+          className={cn(
+            "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
+            isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
+          )}
+          title={!isExpanded ? "New Run" : undefined}
+          aria-label="New Run"
+        >
+          <Plus className="size-4 shrink-0" />
+          <span
+            className={cn(
+              "overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out",
+              isExpanded
+                ? "max-w-[8rem] translate-x-0 opacity-100"
+                : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+            )}
+            aria-hidden={!isExpanded}
+          >
+            New Run
+          </span>
+        </Link>
+
+        <DropdownMenu open={isProfileMenuOpen} onOpenChange={setIsProfileMenuOpen}>
+          <DropdownMenuTrigger
+            className={cn(
+              "mt-3 flex w-full items-center border border-border bg-background text-left text-foreground transition-all duration-200 ease-out hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              isExpanded ? "gap-3 px-3 py-3" : "justify-center gap-0 px-2 py-3",
+            )}
+            aria-label="Open profile menu"
+          >
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
+              {userLabel.slice(0, 1)}
+            </div>
+            <div
+              className={cn(
+                "min-w-0 overflow-hidden transition-[max-width,opacity,transform] duration-200 ease-out",
+                isExpanded
+                  ? "max-w-[10rem] translate-x-0 opacity-100"
+                  : "pointer-events-none max-w-0 -translate-x-2 opacity-0",
+              )}
+              aria-hidden={!isExpanded}
+            >
+              <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+                Operator
+              </p>
+              <p className="truncate text-sm text-foreground">{userLabel}</p>
+            </div>
+            <ChevronsUpDown
+              className={cn(
+                "ml-auto size-4 shrink-0 text-muted-foreground transition-[opacity,transform,max-width] duration-200 ease-out",
+                isExpanded
+                  ? "max-w-4 translate-x-0 opacity-100"
+                  : "pointer-events-none max-w-0 translate-x-2 opacity-0",
+              )}
+              aria-hidden={!isExpanded}
+            />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align={isExpanded ? "start" : "end"}
+            sideOffset={8}
+            className="w-56 min-w-56 border-border bg-card p-0"
+          >
+            <DropdownMenuItem
+              onClick={() => {
+                setTheme(getNextTheme(userTheme));
+                requestAnimationFrame(() => {
+                  setIsProfileMenuOpen(true);
+                });
+              }}
+              className="flex items-center gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+            >
+              <ThemeIcon className="size-4" />
+              <span>{`Theme: ${currentTheme.menuLabel}`}</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-0 -mx-0 bg-border" />
+            <DropdownMenuItem
+              disabled={isSigningOut}
+              onClick={() => {
+                void onSignOut();
+              }}
+              className="flex items-center gap-3 px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+            >
+              <LogOut className="size-4" />
+              <span>{isSigningOut ? "Signing out" : "Sign out"}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarFooter>
+    </>
+  );
+}
+
+function getNextTheme(theme: UserTheme): UserTheme {
+  if (theme === "light") {
+    return "dark";
+  }
+
+  if (theme === "dark") {
+    return "system";
+  }
+
+  return "light";
+}
+
+function getThemeMenuState(theme: UserTheme): {
+  readonly icon: LucideIcon;
+  readonly menuLabel: string;
+} {
+  if (theme === "light") {
+    return { icon: Sun, menuLabel: "Light" };
+  }
+
+  if (theme === "dark") {
+    return { icon: Moon, menuLabel: "Dark" };
+  }
+
+  return { icon: Monitor, menuLabel: "System" };
 }
 
 function normalizePath(pathname: string): string {
@@ -262,30 +536,32 @@ function getGlobalArea(pathname: string): GlobalArea {
 
 function getRunDetail(pathname: string): { runId: string } | null {
   const segments = pathname.split("/").filter(Boolean);
+  const runId = segments[1];
 
-  if (segments[0] !== "runs" || segments.length < 2) {
+  if (segments[0] !== "runs" || runId === undefined) {
     return null;
   }
 
-  if (segments[1] === "active" || segments[1] === "failed") {
+  if (runId === "active" || runId === "failed") {
     return null;
   }
 
-  return { runId: decodeURIComponent(segments[1]) };
+  return { runId: decodeURIComponent(runId) };
 }
 
 function getSelectedEntity(pathname: string, area: "repositories" | "profiles"): string | null {
   const segments = pathname.split("/").filter(Boolean);
+  const entityId = segments[1];
 
-  if (segments[0] !== area || segments.length < 2) {
+  if (segments[0] !== area || entityId === undefined) {
     return null;
   }
 
-  if (area === "profiles" && segments[1] === "create") {
+  if (area === "profiles" && entityId === "create") {
     return null;
   }
 
-  return decodeURIComponent(segments[1]);
+  return decodeURIComponent(entityId);
 }
 
 function getSidebarGroups({

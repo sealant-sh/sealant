@@ -238,6 +238,34 @@ Then install dependencies:
 pnpm install
 ```
 
+### Playwright on NixOS
+
+Use the Playwright-specific shell when you want browser automation without relying on Playwright's
+Ubuntu/Debian browser installer:
+
+```bash
+nix develop .#playwright
+pnpm install
+pnpm playwright:open-google
+```
+
+That shell points Playwright at the Nix-provided Chromium binary through
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and disables Playwright's normal browser download flow, which
+is the part that fails on NixOS.
+
+The repo now includes root Playwright tooling:
+
+```bash
+pnpm test:e2e
+pnpm test:e2e:ui
+pnpm playwright:open-google
+```
+
+Set `PLAYWRIGHT_HEADLESS=0` if you want `pnpm playwright:open-google` to keep a visible browser open
+for 30 seconds.
+
+Place end-to-end specs in `tests/e2e/`.
+
 Run common workspace tasks from the repo root:
 
 ```bash

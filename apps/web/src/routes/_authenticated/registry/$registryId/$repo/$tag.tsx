@@ -63,7 +63,7 @@ function ManifestPage() {
       <ManifestDetail
         repository={manifest.repository}
         reference={manifest.reference}
-        digest={manifest.digest}
+        {...(manifest.digest !== undefined ? { digest: manifest.digest } : {})}
         contentType={manifest.contentType}
         manifest={manifest.manifest}
         className="mt-6"

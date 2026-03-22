@@ -17,43 +17,39 @@ const themeOptions: ReadonlyArray<{
   { value: "system", label: "System", icon: Monitor },
 ];
 
+function getNextTheme(theme: UserTheme): UserTheme {
+  const currentIndex = themeOptions.findIndex((option) => option.value === theme);
+  const nextIndex = (currentIndex + 1) % themeOptions.length;
+
+  return themeOptions[nextIndex]?.value ?? "light";
+}
+
 export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
   const { userTheme, setTheme } = useTheme();
+  const currentOption = themeOptions.find((option) => option.value === userTheme) ?? themeOptions[0]!;
+  const Icon = currentOption.icon;
 
   return (
-    <div className={cn("inline-flex items-center gap-2", className)}>
-      <span className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
-        Theme
-      </span>
-      <div
-        className="inline-flex overflow-hidden border border-border bg-background"
-        role="group"
-        aria-label="Theme selection"
+    <button
+      type="button"
+      onClick={() => {
+        setTheme(getNextTheme(userTheme));
+      }}
+      className={cn(
+        "inline-flex h-8 items-center gap-2 border border-border bg-background px-2.5 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+        className,
+      )}
+      aria-label={`Theme: ${currentOption.label}`}
+      title={`Theme: ${currentOption.label}`}
+    >
+      <span className="font-mono text-[0.58rem] tracking-[0.16em] text-muted-foreground">Theme</span>
+      <span
+        className="inline-flex items-center gap-1.5 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground"
+        aria-hidden="true"
       >
-        {themeOptions.map((option) => {
-          const Icon = option.icon;
-          const isActive = userTheme === option.value;
-
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={isActive}
-              onClick={() => {
-                setTheme(option.value);
-              }}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 border-r border-border px-2.5 text-[0.62rem] font-semibold tracking-[0.12em] text-muted-foreground transition-colors duration-200 last:border-r-0 hover:bg-muted hover:text-foreground focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-                isActive &&
-                  "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
-              )}
-            >
-              <Icon className="size-3.5" />
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+        <Icon className="size-3.5" />
+        {currentOption.label}
+      </span>
+    </button>
   );
 }
