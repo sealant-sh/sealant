@@ -1,9 +1,0 @@
-FROM {{ distro_config.base_image }}
-
-{% if distro_packages | length > 0 %}
-RUN {{ distro_config.update_command }} \
-    && {{ distro_config.install_command }} {{ distro_packages | join(' ') }} \
-    && {{ distro_config.cleanup_command }}
-{% endif %}
-
-CMD ["sh"]

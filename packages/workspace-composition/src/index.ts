@@ -1,4 +1,22 @@
 export {
+  buildkitBuildSpecSchema,
+  buildkitOsExecutorCompileInputSchema,
+  buildkitOsExecutorCompileResultSchema,
+  buildkitPackageManagerSchema,
+  buildkitSecretKindSchema,
+  buildkitSecretSchema,
+  buildkitSecretUsePhaseSchema,
+  buildkitTargetOsFamilySchema,
+  parseBuildkitBuildSpec,
+  parseBuildkitOsExecutorCompileInput,
+  parseBuildkitOsExecutorCompileResult,
+  parseResolvedImagePlan,
+  resolvedDotfilesPlanSchema,
+  resolvedImagePackageSchema,
+  resolvedImagePlanSchema,
+} from "./buildkit.js";
+
+export {
   buildArtifactSchema,
   concreteWorkspaceTargetOsFamilySchema,
   filesystemClosureBuildArtifactSchema,
@@ -27,6 +45,7 @@ export {
   workspaceHarnessSchema,
   workspaceInputPurposeSchema,
   workspaceInputSourceSchema,
+  workspaceLoginShellSchema,
   workspaceLifecycleSchema,
   workspacePackageRequestSchema,
   workspacePersistenceSchema,
@@ -41,6 +60,7 @@ export {
   workspaceTargetRuntimeSchema,
   workspaceTargetSchema,
   workspaceToolingSchema,
+  workspaceCustomizationSchema,
   workspaceBlueprintVersion,
 } from "./blueprint.js";
 
@@ -65,6 +85,21 @@ export type {
   OsExecutorSupport,
   OsExecutorSupportFailureReason,
 } from "./executor.js";
+
+export type {
+  BuildkitBuildSpec,
+  BuildkitOsExecutor,
+  BuildkitOsExecutorCompileInput,
+  BuildkitOsExecutorCompileResult,
+  BuildkitPackageManager,
+  BuildkitSecret,
+  BuildkitSecretKind,
+  BuildkitSecretUsePhase,
+  BuildkitTargetOsFamily,
+  ResolvedDotfilesPlan,
+  ResolvedImagePackage,
+  ResolvedImagePlan,
+} from "./buildkit.js";
 
 export type { WorkspaceBlueprint } from "./blueprint.js";
 export type { UserWorkspaceSpec } from "./user-workspace-spec.js";

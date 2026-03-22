@@ -8,8 +8,6 @@ console.log("Sealant worker starting", {
   rabbitMqUrl: env.RABBITMQ_URL,
   registryBaseUrl: env.REGISTRY_BASE_URL,
   databaseFilePath: env.DATABASE_FILE_PATH,
-  composeProjectName: env.COMPOSE_PROJECT_NAME,
-  nixBuilderService: env.NIX_BUILDER_SERVICE,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
   defaultWorkspaceStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
   defaultWorkspaceSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,

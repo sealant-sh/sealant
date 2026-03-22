@@ -24,6 +24,10 @@ const testEnv: AppEnv = {
   REGISTRY_NAME: "default",
   REGISTRY_BASE_URL: "http://127.0.0.1:5000",
   REGISTRY_PUSH_REGISTRY: "127.0.0.1:5000",
+  REPOLOGY_API_BASE_URL: "https://repology.org/api/v1",
+  REPOLOGY_USER_AGENT: "sealant-tests/0.1 (+https://github.com/sealant-ops/sealant)",
+  REPOLOGY_REQUEST_TIMEOUT_MS: 10_000,
+  REPOLOGY_MINIMUM_INTERVAL_MS: 1_000,
   WORKSPACE_BUILD_QUEUE_PREFETCH: 1,
 };
 
@@ -585,6 +589,33 @@ describe("createApiApp", () => {
       repository: "sealant/workspaces/demo",
       tags: ["latest", "opencode"],
     });
+  });
+
+  it("resolves package requests through the package route", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/packages/resolve?query=ripgrep");
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      status: string;
+      osSupport: {
+        arch: { supported: boolean; packageName?: string };
+      };
+    };
+
+    expect(body.status).toBe("resolved");
+    expect(body.osSupport.arch.supported).toBe(true);
+    expect(body.osSupport.arch.packageName).toBe("ripgrep");
   });
 
   it("sets cors headers for configured origins", async () => {

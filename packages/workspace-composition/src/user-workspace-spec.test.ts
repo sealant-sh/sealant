@@ -78,6 +78,10 @@ describe("normalizeUserWorkspaceSpec", () => {
       tooling: {
         packages: [{ id: "nodejs" }, { id: "pnpm" }],
       },
+      customization: {
+        defaultShell: "bash",
+        applyDotfiles: true,
+      },
       lifecycle: {
         setup: [
           {
@@ -183,6 +187,39 @@ describe("normalizeUserWorkspaceSpec", () => {
     expect(blueprint.target.runtime).toEqual({
       family: "k3s",
       mode: "prefer",
+    });
+  });
+
+  it("carries source auth refs and customization into the blueprint", () => {
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: {
+        url: "https://github.com/example/project.git",
+        authRef: "secret://git/workspace-key",
+      },
+      inputs: [
+        {
+          purpose: "dotfiles",
+          url: "https://github.com/example/dotfiles.git",
+          authRef: "secret://git/dotfiles-key",
+        },
+      ],
+      harness: "opencode",
+      customization: {
+        defaultShell: "zsh",
+        dotfilesManager: "chezmoi",
+        applyDotfiles: true,
+      },
+    });
+
+    expect(blueprint.sources.workspace.authRef).toBe("secret://git/workspace-key");
+    expect(blueprint.sources.inputs[0]).toMatchObject({
+      purpose: "dotfiles",
+      authRef: "secret://git/dotfiles-key",
+    });
+    expect(blueprint.customization).toEqual({
+      defaultShell: "zsh",
+      dotfilesManager: "chezmoi",
+      applyDotfiles: true,
     });
   });
 });

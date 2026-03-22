@@ -1,0 +1,15 @@
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+tooling/*/node_modules
+.git
+.turbo
+.node_modules.root-owned
+.deps-root-owned
+..bin.root-owned
+.@sealant.root-owned
+packages/*/.node_modules.root-owned
+packages/*/.deps-root-owned
+apps/*/..bin.root-owned
+apps/*/node_modules/.@sealant.root-owned
+packages/*/node_modules/.@sealant.root-owned

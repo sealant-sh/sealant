@@ -4,7 +4,7 @@
   "private": true,
   "description": "Runnable demo for the Sealant workspace composition builder",
   "scripts": {
-    "build:image": "nix build path:../../packages/os-integration-nix#example-opencode-home-manager-image",
-    "build:minimal": "nix build path:../../packages/os-integration-nix#example-minimal-image"
+    "build:image": "node -e \"console.log('Workspace composition demo build scripts are temporarily disabled while Nix integration is offline.')\"",
+    "build:minimal": "node -e \"console.log('Workspace composition demo build scripts are temporarily disabled while Nix integration is offline.')\""
   }
 }

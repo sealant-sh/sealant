@@ -7,10 +7,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./blueprint": "./src/blueprint.ts",
+    "./buildkit": "./src/buildkit.ts",
     "./executor": "./src/executor.ts"
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run src/*.test.ts"
   },
   "dependencies": {
     "zod": "^3.24.1"

@@ -39,6 +39,7 @@ High-level table map:
 - sandbox lifecycle: `sandboxes`, `sandbox_attempts`, `sandbox_attempt_snapshots`,
   `sandbox_run_links`
 - build/runtime orchestration: `oci_image_build_jobs`, `sandbox_runtime_instances`
+- package standardization cache: `package_resolution_cache_entries`
 - repository/profile context: `repositories`, `repository_profiles`, `repository_profile_revisions`,
   `repository_profile_profile_links`, `profiles`, `profile_revisions`, `profile_env_vars`,
   `profile_secret_bindings`, `profile_ssh_settings`, `profile_ssh_key_bindings`, `secrets`,

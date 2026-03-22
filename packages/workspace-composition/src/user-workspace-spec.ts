@@ -5,6 +5,7 @@ import {
   workspaceBlueprintVersion,
   workspaceHarnessIdSchema,
   workspaceInputPurposeSchema,
+  workspaceLoginShellSchema,
   workspacePersistenceSchema,
   workspaceShellSchema,
   workspaceSourceProviderSchema,
@@ -27,6 +28,7 @@ const userWorkspaceSourceReferenceSchema = z.union([
     provider: workspaceSourceProviderSchema.optional(),
     url: z.string().url(),
     ref: nonEmptyStringSchema.optional(),
+    authRef: nonEmptyStringSchema.optional(),
   }),
 ]);
 
@@ -40,6 +42,7 @@ const userWorkspaceInputSourceSchema = z.strictObject({
   provider: workspaceSourceProviderSchema.optional(),
   url: z.string().url(),
   ref: nonEmptyStringSchema.optional(),
+  authRef: nonEmptyStringSchema.optional(),
   mountPath: nonEmptyStringSchema.optional(),
 });
 
@@ -134,6 +137,15 @@ const userWorkspaceRuntimeSchema = z.strictObject({
     .optional(),
 });
 
+// User-facing customization keeps the most common sandbox-personalization knobs
+// explicit without forcing the caller to encode shell or dotfiles behavior in
+// ad hoc setup scripts.
+const userWorkspaceCustomizationSchema = z.strictObject({
+  defaultShell: workspaceLoginShellSchema.optional(),
+  dotfilesManager: z.enum(["chezmoi"]).optional(),
+  applyDotfiles: z.boolean().optional(),
+});
+
 // OS intent also supports shorthand because users usually think in terms like
 // "use Fedora" rather than a structured executor-selection object. The richer
 // object form still lets us carry preference vs requirement semantics.
@@ -198,6 +210,7 @@ export const userWorkspaceSpecSchema = z
       .optional(),
     env: z.record(z.string()).optional(),
     runtime: userWorkspaceRuntimeSchema.optional(),
+    customization: userWorkspaceCustomizationSchema.optional(),
     os: userWorkspaceTargetOsSchema.optional(),
     target: z
       .strictObject({
@@ -338,6 +351,7 @@ const normalizeWorkspaceSource = (
     provider: inferSourceProvider(source.url, source.provider),
     url: source.url,
     ref: source.ref ?? "main",
+    ...(source.authRef !== undefined ? { authRef: source.authRef } : {}),
   };
 };
 
@@ -357,6 +371,7 @@ const normalizeInputSource = (
     provider: inferSourceProvider(input.url, input.provider),
     url: input.url,
     ref: input.ref ?? "main",
+    ...(input.authRef !== undefined ? { authRef: input.authRef } : {}),
     ...(input.mountPath !== undefined ? { mountPath: input.mountPath } : {}),
   };
 };
@@ -535,6 +550,18 @@ const normalizeRuntime = (
   };
 };
 
+const normalizeCustomization = (
+  customization: UserWorkspaceSpec["customization"] | undefined,
+): WorkspaceBlueprint["customization"] => {
+  return {
+    defaultShell: customization?.defaultShell ?? "bash",
+    ...(customization?.dotfilesManager !== undefined
+      ? { dotfilesManager: customization.dotfilesManager }
+      : {}),
+    applyDotfiles: customization?.applyDotfiles ?? true,
+  };
+};
+
 // Target OS normalization converts shorthand user intent into the explicit form
 // executor selection logic expects.
 const normalizeTargetOs = (
@@ -613,6 +640,7 @@ export const normalizeUserWorkspaceSpec = (input: unknown): WorkspaceBlueprint =
     tooling: {
       packages: dedupePackages(packages.map(normalizePackage)),
     },
+    customization: normalizeCustomization(spec.customization),
     lifecycle: {
       setup: normalizeCommandSteps(setup),
       startup: normalizeStartup(startup),

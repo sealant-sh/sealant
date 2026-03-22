@@ -4,6 +4,7 @@
   "scripts": {
     "build": "turbo build",
     "clean": "turbo clean",
+    "clean:workspaces": "node tooling/scripts/clean-workspaces.mjs",
     "db:migrate": "pnpm --filter @sealant/db db:migrate",
     "db:studio": "pnpm --filter @sealant/db exec drizzle-kit studio --config drizzle.config.ts",
     "dev": "turbo dev",

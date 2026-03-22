@@ -683,6 +683,28 @@ export const sandboxAttemptSnapshots = sqliteTable("sandbox_attempt_snapshots", 
     .$defaultFn(() => new Date()),
 });
 
+export const packageResolutionCacheEntries = sqliteTable(
+  "package_resolution_cache_entries",
+  {
+    query: text().primaryKey(),
+    resolutionPayload: text("resolution_payload", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    fetchedAt: integer("fetched_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    hitCount: integer("hit_count", { mode: "number" }).notNull().default(0),
+  },
+  (table) => [
+    index("package_resolution_cache_entries_expires_at_idx").on(table.expiresAt),
+    index("package_resolution_cache_entries_last_used_at_idx").on(table.lastUsedAt),
+  ],
+);
+
 export const issueWorkflows = sqliteTable(
   "issue_workflows",
   {
@@ -1022,6 +1044,9 @@ export type NewSandboxRunLink = typeof sandboxRunLinks.$inferInsert;
 
 export type SandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferSelect;
 export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferInsert;
+
+export type PackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferSelect;
+export type NewPackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferInsert;
 
 export type IssueWorkflow = typeof issueWorkflows.$inferSelect;
 export type NewIssueWorkflow = typeof issueWorkflows.$inferInsert;

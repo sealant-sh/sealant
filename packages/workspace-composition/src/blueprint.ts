@@ -24,6 +24,11 @@ export const workspaceInputPurposeSchema = z.enum(["config", "dotfiles", "bootst
 // translate across backends instead of implicitly depending on one OS flavor.
 export const workspaceShellSchema = z.enum(["sh", "bash"]);
 
+// Login-shell customization is separate from command-step shells because users
+// need environment-level control over the interactive shell regardless of how a
+// particular lifecycle command executes.
+export const workspaceLoginShellSchema = z.enum(["bash", "zsh", "fish"]);
+
 // Persistence belongs in the shared blueprint because it is a user/runtime
 // expectation, not an implementation detail of a specific executor.
 export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
@@ -46,6 +51,7 @@ export const workspaceGitSourceSchema = z.strictObject({
   provider: workspaceSourceProviderSchema.default("generic"),
   url: z.string().url(),
   ref: nonEmptyStringSchema.default("main"),
+  authRef: nonEmptyStringSchema.optional(),
 });
 
 // Extra input sources let the blueprint capture config repos, dotfiles, and
@@ -58,6 +64,7 @@ export const workspaceInputSourceSchema = z.strictObject({
   provider: workspaceSourceProviderSchema.default("generic"),
   url: z.string().url(),
   ref: nonEmptyStringSchema.default("main"),
+  authRef: nonEmptyStringSchema.optional(),
   mountPath: nonEmptyStringSchema.optional(),
 });
 
@@ -101,6 +108,16 @@ export const workspacePackageRequestSchema = z.strictObject({
 export const workspaceToolingSchema = z
   .strictObject({
     packages: z.array(workspacePackageRequestSchema).default([]),
+  })
+  .default({});
+
+// Customization keeps shell and dotfile behavior explicit in the shared
+// blueprint so all OS backends can target the same user-facing feature set.
+export const workspaceCustomizationSchema = z
+  .strictObject({
+    defaultShell: workspaceLoginShellSchema.default("bash"),
+    dotfilesManager: z.enum(["chezmoi"]).optional(),
+    applyDotfiles: z.boolean().default(true),
   })
   .default({});
 
@@ -202,6 +219,7 @@ export const workspaceTargetSchema = z
 // - harness: which AI tool anchors the session
 // - access: how a user can connect to the environment
 // - tooling: which symbolic packages the environment should contain
+// - customization: which shell and dotfile behavior should be applied
 // - lifecycle: what setup and startup behavior should run
 // - runtime: baseline process, filesystem, and network expectations
 // - target: which OS family the composition layer should aim for
@@ -214,6 +232,7 @@ export const workspaceBlueprintSchema = z.strictObject({
   harness: workspaceHarnessSchema,
   access: workspaceAccessSchema.default({}),
   tooling: workspaceToolingSchema.default({}),
+  customization: workspaceCustomizationSchema.default({}),
   lifecycle: workspaceLifecycleSchema.default({}),
   runtime: workspaceRuntimeSchema.default({}),
   target: workspaceTargetSchema.default({}),

@@ -2,6 +2,17 @@ import { z } from "zod";
 
 export const runtimeAdapterBlueprintSchema = z
   .object({
+    sources: z
+      .object({
+        workspace: z
+          .object({
+            url: z.string().trim().min(1),
+            ref: z.string().trim().min(1),
+            authRef: z.string().trim().min(1).optional(),
+          })
+          .passthrough(),
+      })
+      .passthrough(),
     access: z
       .object({
         ssh: z

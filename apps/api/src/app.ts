@@ -1,4 +1,5 @@
 import {
+  createPackageResolutionCacheRepository,
   createSandboxAttemptRepository,
   createDatabaseClientFromEnv,
   createSandboxRepository,
@@ -9,9 +10,11 @@ import {
 import { env } from "./env.js";
 import { configureOpenAPI } from "./lib/configure-openapi.js";
 import { createApp, createRouter } from "./lib/create-app.js";
+import { createApiPackageStandardizer } from "./lib/create-package-standardizer.js";
 import { createRegistryClient } from "./lib/create-registry-client.js";
 import { createWorkspaceBuildJobPublisher } from "./lib/create-workspace-build-job-publisher.js";
 import type { AppRuntimeConfig } from "./lib/types.js";
+import packages from "./routes/packages/packages.index.js";
 import registries from "./routes/registries/registries.index.js";
 import sandboxes from "./routes/sandboxes/sandboxes.index.js";
 import system from "./routes/system/system.index.js";
@@ -22,6 +25,7 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   const routes = createRouter();
 
   routes.route("/", system);
+  routes.route("/v1/packages", packages);
   routes.route("/v1/sandboxes", sandboxes);
   routes.route("/v1/registries", registries);
   routes.route("/v1/workspace-build-jobs", workspaceBuildJobs);
@@ -33,12 +37,18 @@ export const createApiApp = (config: AppRuntimeConfig) => {
 };
 
 const databaseClient = await createDatabaseClientFromEnv(env);
+const packageResolutionCacheRepository = createPackageResolutionCacheRepository(databaseClient);
+const packageStandardizer = createApiPackageStandardizer({
+  env,
+  cacheRepository: packageResolutionCacheRepository,
+});
 
 const app = createApiApp({
   env,
   registryClient: createRegistryClient(env),
   workspaceBuildJobPublisher: createWorkspaceBuildJobPublisher(env),
   workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
+  packageStandardizer,
   sandboxRepository: createSandboxRepository(databaseClient),
   sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepository(databaseClient),
   sandboxAttemptRepository: createSandboxAttemptRepository(databaseClient),

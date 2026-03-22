@@ -1,11 +1,10 @@
 import { createDatabaseClientFromEnv, closeDatabaseClient } from "@sealant/db";
-import { NixOsExecutor } from "@sealant/os-integration-nix";
+import { createBuildkitOsExecutor } from "@sealant/os-integration-buildkit";
 import { DockerRuntimeAdapter } from "@sealant/runtime-adapter-docker";
 import { K3sRuntimeAdapter } from "@sealant/runtime-adapter-k3s";
 import { K8sRuntimeAdapter } from "@sealant/runtime-adapter-k8s";
 import { closeRabbitMqSingleton, consumeWorkspaceBuildJobs } from "@sealant/workspace-build-queue";
 
-import { createNixBuilderCommandRunner } from "./create-nix-builder-command-runner.js";
 import { createRegistryClient } from "./create-registry-client.js";
 import type { WorkerEnv } from "./env.js";
 import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
@@ -13,8 +12,7 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 export const startWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
   const registryClient = createRegistryClient(env);
-  const nixBuilderCommandRunner = createNixBuilderCommandRunner(env);
-  const executors = [new NixOsExecutor({ commandRunner: nixBuilderCommandRunner })];
+  const executors = [createBuildkitOsExecutor("fedora"), createBuildkitOsExecutor("arch")];
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,

@@ -7,7 +7,7 @@ It currently provides:
 - a Node worker entrypoint
 - RabbitMQ consumption via `@sealant/workspace-build-queue`
 - durable job state updates through `@sealant/db`
-- Nix compilation through `@sealant/os-integration-nix`
+- BuildKit-backed Fedora and Arch image compilation through `@sealant/os-integration-buildkit`
 - image publishing through `@sealant/registry-integration`
 - runtime launch selection through `@sealant/runtime-adapters-api`
 
@@ -25,18 +25,22 @@ Run the worker in Docker Compose:
 docker compose --profile apps up -d worker
 ```
 
-This also starts `nix-builder`, which the worker uses for Nix compilation via the Docker API.
+The Compose worker image now bakes the repo into the container and talks to the host Docker daemon
+through the mounted socket. That keeps local `node_modules` ownership on the host untouched.
 
-Deep dive for the Docker-based Nix command runner:
+For local development, the Compose worker shares the same SQLite file as the host apps by mounting
+`packages/db/.data` into the container. Run migrations on the host before starting the worker:
 
-- `apps/worker/NIX_BUILDER_COMMAND_RUNNER.md`
+```bash
+pnpm db:migrate
+```
 
 The worker expects:
 
 - the SQLite database from `@sealant/db`
 - RabbitMQ from the root `compose.yaml` (`rabbitmq` service)
 - Zot from the root `compose.yaml` (`zot` service)
-- Nix builder from the root `compose.yaml` (`nix-builder` service)
+- access to the host Docker socket for BuildKit image builds and Docker runtime launches
 
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.
@@ -50,7 +54,7 @@ The worker now applies runtime defaults when requests omit startup/SSH fields:
 - `DEFAULT_WORKSPACE_IDLE_COMMAND="while :; do sleep 30; done"`
 - `DEFAULT_WORKSPACE_SSH_ENABLED=true`
 - `DEFAULT_WORKSPACE_SSH_LISTEN_PORT=2222`
-- `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/workspace/.secrets/authorized_keys`
+- `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
 
 For local Docker Compose usage, create `./.secrets/authorized_keys` in the repo with one or more
