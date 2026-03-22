@@ -24,6 +24,8 @@ import type {
   listSandboxAttemptsQuerySchema,
   listSandboxEventsQuerySchema,
   listSandboxesQuerySchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   sandboxAttemptSummarySchema,
   sandboxDetailsSchema,
   sandboxEventSchema,
@@ -93,6 +95,80 @@ const readIdempotencyKey = (c: Context<AppBindings>): string | undefined => {
   }
 
   return key;
+};
+
+const sanitizeSandboxName = (name: string): string => {
+  return name.trim().replace(/\s+/g, " ").slice(0, 120);
+};
+
+const toTitleToken = (value: string): string => {
+  return value
+    .trim()
+    .split(/[\s._-]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => {
+      return segment.charAt(0).toUpperCase() + segment.slice(1);
+    })
+    .join(" ");
+};
+
+const deriveRepositoryNameToken = (repository: string): string => {
+  const segments = repository.split("/").filter((segment) => segment.length > 0);
+  const tail = segments[segments.length - 1] ?? repository;
+  const token = toTitleToken(tail);
+
+  if (token.length > 0) {
+    return token;
+  }
+
+  return "Sandbox";
+};
+
+const deriveSourceRef = (spec: WorkspaceBuildJobRequestPayload): string | undefined => {
+  const source = spec.sources?.workspace ?? spec.source ?? spec.repo;
+
+  if (typeof source === "string" || source === undefined) {
+    return undefined;
+  }
+
+  const ref = source.ref?.trim();
+
+  if (ref === undefined || ref.length === 0) {
+    return undefined;
+  }
+
+  return ref;
+};
+
+const inferSandboxName = (input: {
+  readonly repository: string;
+  readonly tag: string;
+  readonly spec: WorkspaceBuildJobRequestPayload;
+  readonly fallbackId: string;
+}): string => {
+  const repositoryToken = deriveRepositoryNameToken(input.repository);
+  const tagToken = toTitleToken(input.tag);
+  const sourceRef = deriveSourceRef(input.spec);
+  const refToken = sourceRef === undefined ? "" : toTitleToken(sourceRef);
+  const name = sanitizeSandboxName(
+    [repositoryToken, tagToken, refToken].filter((segment) => segment.length > 0).join(" "),
+  );
+
+  if (name.length > 0) {
+    return name;
+  }
+
+  return `Sandbox ${input.fallbackId.slice(0, 8)}`;
+};
+
+const resolveStoredSandboxName = (sandbox: Pick<SandboxRecord, "id" | "name">): string => {
+  const sanitized = sanitizeSandboxName(sandbox.name);
+
+  if (sanitized.length > 0) {
+    return sanitized;
+  }
+
+  return `Sandbox ${sandbox.id.slice(0, 8)}`;
 };
 
 const mapStoredSandboxStatus = (
@@ -203,6 +279,7 @@ const ensureSandboxForAttempt = async (
 
   const sandbox = await sandboxRepository.createSandbox({
     id: randomUUID(),
+    name: `Sandbox ${attempt.id.slice(0, 8)}`,
     ownerUserId: attempt.ownerUserId,
     ...(attempt.repositoryId === null ? {} : { repositoryId: attempt.repositoryId }),
     ...(attempt.repositoryProfileRevisionId === null
@@ -250,6 +327,7 @@ const mapSandboxSummary = (
 
   return {
     sandboxId: sandbox.id,
+    name: resolveStoredSandboxName(sandbox),
     ownerUserId: sandbox.ownerUserId,
     status,
     ...(latestJob === undefined
@@ -288,6 +366,7 @@ const mapSandboxDetails = (
 
 const acceptedSandboxResponse = (
   sandboxId: string,
+  name: string,
   input: {
     readonly registryId: string;
     readonly repository: string;
@@ -296,6 +375,7 @@ const acceptedSandboxResponse = (
 ) => {
   return {
     sandboxId,
+    name,
     status: "queued" as const,
     registryId: input.registryId,
     repository: input.repository,
@@ -439,7 +519,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
         c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
         return c.json(
-          acceptedSandboxResponse(existingSandbox.id, {
+          acceptedSandboxResponse(existingSandbox.id, resolveStoredSandboxName(existingSandbox), {
             registryId: existingJob.registryId,
             repository: existingJob.repository,
             tag: existingJob.tag,
@@ -474,10 +554,20 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
   const resolvedSpec = packageStandardization.spec;
   const blueprintPayload = normalizeUserWorkspaceSpec(resolvedSpec);
+  const sandboxName =
+    body.name === undefined
+      ? inferSandboxName({
+          repository: body.repository,
+          tag: body.tag,
+          spec: resolvedSpec,
+          fallbackId: sandboxId,
+        })
+      : sanitizeSandboxName(body.name);
 
   try {
     const sandbox = await sandboxes.createSandbox({
       id: sandboxId,
+      name: sandboxName,
       ownerUserId: body.ownerUserId,
       requestedByUserId: body.ownerUserId,
       status: "queued",
@@ -533,7 +623,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
           c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
           return c.json(
-            acceptedSandboxResponse(existingSandbox.id, {
+            acceptedSandboxResponse(existingSandbox.id, resolveStoredSandboxName(existingSandbox), {
               registryId: existingJob.registryId,
               repository: existingJob.repository,
               tag: existingJob.tag,
@@ -578,13 +668,45 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   c.header("Location", `/v1/sandboxes/${encodeURIComponent(sandboxId)}`);
 
   return c.json(
-    acceptedSandboxResponse(sandboxId, {
+    acceptedSandboxResponse(sandboxId, sandboxName, {
       registryId: body.registryId,
       repository: body.repository,
       tag: body.tag,
     }),
     202,
   );
+};
+
+export const renameSandbox = async (c: Context<AppBindings>) => {
+  const { sandboxId } = c.req.param() as {
+    sandboxId: string;
+  };
+  const body = (
+    c.req as typeof c.req & {
+      valid(target: "json"): z.infer<typeof renameSandboxRequestSchema>;
+    }
+  ).valid("json");
+  const sandbox = await c.get("sandboxRepository").setSandboxName({
+    id: sandboxId,
+    name: sanitizeSandboxName(body.name),
+  });
+
+  if (sandbox === null) {
+    return c.json(
+      {
+        message: `Sandbox not found: ${sandboxId}`,
+      },
+      404,
+    );
+  }
+
+  const response: z.infer<typeof renameSandboxResponseSchema> = {
+    sandboxId: sandbox.id,
+    name: resolveStoredSandboxName(sandbox),
+    updatedAt: sandbox.updatedAt.toISOString(),
+  };
+
+  return c.json(response);
 };
 
 export const listSandboxes = async (c: Context<AppBindings>) => {

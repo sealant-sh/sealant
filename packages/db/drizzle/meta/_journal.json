@@ -57,6 +57,13 @@
       "when": 1774205056423,
       "tag": "0007_package_resolution_cache_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1775000003000,
+      "tag": "0008_sandbox_names",
+      "breakpoints": true
     }
   ]
 }

@@ -17,6 +17,8 @@ import {
   listSandboxAttemptsQuerySchema,
   listSandboxEventsQuerySchema,
   listSandboxesQuerySchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   sandboxIdParamsSchema,
 } from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
@@ -40,6 +42,8 @@ const sandboxEventsInputSchema = sandboxIdParamsSchema.extend({
 const createSandboxForSessionSchema = createSandboxRequestSchema.omit({
   ownerUserId: true,
 });
+
+const renameSandboxInputSchema = sandboxIdParamsSchema.merge(renameSandboxRequestSchema);
 
 export const appRouter = router({
   auth: router({
@@ -118,6 +122,12 @@ export const appRouter = router({
     events: protectedProcedure.input(sandboxEventsInputSchema).query(async ({ ctx, input }) => {
       return ctx.coreApi.sandboxes.events(input);
     }),
+    rename: protectedProcedure
+      .input(renameSandboxInputSchema)
+      .output(renameSandboxResponseSchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.sandboxes.rename(input);
+      }),
   }),
 });
 

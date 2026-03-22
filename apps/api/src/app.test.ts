@@ -239,6 +239,7 @@ const createSandboxRepositoryStub = (
       const now = new Date();
       const sandbox: SandboxRecord = {
         id: input.id,
+        name: input.name,
         ownerUserId: input.ownerUserId,
         repositoryId: input.repositoryId ?? null,
         repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
@@ -332,6 +333,20 @@ const createSandboxRepositoryStub = (
       const next = touchUpdatedAt({
         ...existing,
         status: input.status,
+      });
+      sandboxes.set(next.id, next);
+      return next;
+    },
+    setSandboxName: async (input) => {
+      const existing = sandboxes.get(input.id);
+
+      if (existing === undefined) {
+        return null;
+      }
+
+      const next = touchUpdatedAt({
+        ...existing,
+        name: input.name,
       });
       sandboxes.set(next.id, next);
       return next;
@@ -688,6 +703,7 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
     expect(body.paths["/v1/sandboxes"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes/{sandboxId}/name"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
     expect(body.paths["/v1/runs/{runId}"]).toBeUndefined();
@@ -881,18 +897,67 @@ describe("createApiApp", () => {
 
     const body = (await response.json()) as {
       sandboxId: string;
+      name: string;
       status: string;
     };
 
     expect(body.sandboxId).toBeDefined();
+    expect(body.name).toContain("Demo");
     expect(body.status).toBe("queued");
     expect(response.headers.get("location")).toBe(`/v1/sandboxes/${body.sandboxId}`);
 
     const savedSandbox = await sandboxRepository.getSandboxById(body.sandboxId);
+    expect(savedSandbox?.name).toBe(body.name);
     expect(savedSandbox?.latestRunId).toBeDefined();
 
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
     expect(savedJob?.runId).toBe(savedSandbox?.latestRunId ?? null);
+  });
+
+  it("renames sandboxes via the sandbox route", async () => {
+    const sandboxRepository = createSandboxRepositoryStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository,
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const sandbox = await sandboxRepository.createSandbox({
+      id: "sandbox_rename",
+      name: "Demo Opencode",
+      ownerUserId: testUserId,
+      requestedByUserId: testUserId,
+      status: "queued",
+    });
+
+    const response = await app.request(`/v1/sandboxes/${sandbox.id}/name`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "Checkout Incident Repro",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      sandboxId: string;
+      name: string;
+      updatedAt: string;
+    };
+
+    expect(body.sandboxId).toBe(sandbox.id);
+    expect(body.name).toBe("Checkout Incident Repro");
+    expect(body.updatedAt).toBeDefined();
+
+    const renamedSandbox = await sandboxRepository.getSandboxById(sandbox.id);
+    expect(renamedSandbox?.name).toBe("Checkout Incident Repro");
   });
 
   it("replays idempotent sandbox create with the same sandbox id", async () => {
@@ -952,6 +1017,7 @@ describe("createApiApp", () => {
     const now = new Date();
     const sandbox = await sandboxRepository.createSandbox({
       id: "sandbox_ready",
+      name: "Demo Opencode",
       ownerUserId: testUserId,
       requestedByUserId: testUserId,
       status: "queued",

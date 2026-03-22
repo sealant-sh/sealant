@@ -602,6 +602,7 @@ export const sandboxes = sqliteTable(
   "sandboxes",
   {
     id: text().primaryKey(),
+    name: text().notNull().default(""),
     ownerUserId: text("owner_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),

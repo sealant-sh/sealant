@@ -8,6 +8,8 @@ import {
   createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxAttemptsResponseSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   listSandboxEventsQuerySchema,
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
@@ -38,7 +40,7 @@ export class CoreApiHttpError extends Error {
 }
 
 interface CoreApiRequestOptions<TOutput> {
-  readonly method: "GET" | "POST";
+  readonly method: "GET" | "POST" | "PATCH";
   readonly path: string;
   readonly schema: JsonSchema<TOutput>;
   readonly query?: Readonly<Record<string, string | number | undefined>>;
@@ -104,6 +106,10 @@ export interface CoreApiClient {
       readonly sandboxId: string;
       readonly limit?: number;
     }): Promise<InferSchema<typeof listSandboxEventsResponseSchema>>;
+    rename(input: {
+      readonly sandboxId: string;
+      readonly name: string;
+    }): Promise<InferSchema<typeof renameSandboxResponseSchema>>;
   };
 }
 
@@ -123,6 +129,7 @@ class CoreApiClientImpl implements CoreApiClient {
       byId: (input) => this.getSandbox(input),
       attempts: (input) => this.listSandboxAttempts(input),
       events: (input) => this.listSandboxEvents(input),
+      rename: (input) => this.renameSandbox(input),
     };
     this.packages = {
       resolve: (input) => this.resolvePackage(input),
@@ -267,6 +274,21 @@ class CoreApiClientImpl implements CoreApiClient {
       path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}/events`,
       schema: listSandboxEventsResponseSchema,
       query,
+    });
+  }
+
+  private async renameSandbox(input: {
+    readonly sandboxId: string;
+    readonly name: string;
+  }): Promise<InferSchema<typeof renameSandboxResponseSchema>> {
+    const params = sandboxIdParamsSchema.parse({ sandboxId: input.sandboxId });
+    const payload = renameSandboxRequestSchema.parse({ name: input.name });
+
+    return this.requestJson({
+      method: "PATCH",
+      path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}/name`,
+      schema: renameSandboxResponseSchema,
+      body: payload,
     });
   }
 }

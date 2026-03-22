@@ -5,6 +5,7 @@ type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
 interface SandboxListItem {
   readonly sandboxId: string;
+  readonly name: string;
   readonly status: SandboxStatus;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
@@ -31,14 +32,17 @@ export function SandboxRows({ sandboxes }: SandboxRowsProps) {
       {sandboxes.map((sandbox) => (
         <Link
           key={sandbox.sandboxId}
-          to={`/runs/${encodeURIComponent(sandbox.sandboxId)}` as never}
+          to={`/sandboxes/${encodeURIComponent(sandbox.sandboxId)}` as never}
           className="grid grid-cols-1 gap-3 border-b border-border px-4 py-3 no-underline transition-[background-color,transform] duration-200 last:border-b-0 hover:bg-muted/40 sm:grid-cols-[1.3fr_1fr_auto] sm:items-center"
         >
           <div>
             <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
               Sandbox
             </p>
-            <p className="mt-1 text-sm font-semibold text-foreground">{sandbox.sandboxId}</p>
+            <p className="mt-1 text-sm font-semibold text-foreground">{sandbox.name}</p>
+            <p className="mt-1 font-mono text-[0.62rem] tracking-[0.11em] text-muted-foreground">
+              {sandbox.sandboxId}
+            </p>
           </div>
 
           <div>

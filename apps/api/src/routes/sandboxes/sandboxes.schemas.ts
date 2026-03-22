@@ -16,7 +16,12 @@ export const createSandboxRequestSchema = z.object({
   registryId: z.string().trim().min(1),
   repository: z.string().trim().min(1),
   tag: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(120).optional(),
   spec: workspaceBuildJobRequestPayloadSchema,
+});
+
+export const renameSandboxRequestSchema = z.object({
+  name: z.string().trim().min(1).max(120),
 });
 
 export const sandboxRuntimeSchema = z.object({
@@ -40,14 +45,22 @@ export const sandboxErrorSchema = z.object({
 
 export const createSandboxResponseSchema = z.object({
   sandboxId: z.string(),
+  name: z.string(),
   status: sandboxStatusSchema,
   registryId: z.string(),
   repository: z.string(),
   tag: z.string(),
 });
 
+export const renameSandboxResponseSchema = z.object({
+  sandboxId: z.string(),
+  name: z.string(),
+  updatedAt: z.string().datetime(),
+});
+
 export const sandboxSummarySchema = z.object({
   sandboxId: z.string(),
+  name: z.string(),
   ownerUserId: z.string(),
   status: sandboxStatusSchema,
   registryId: z.string().optional(),

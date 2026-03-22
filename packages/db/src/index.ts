@@ -56,6 +56,7 @@ export {
   type CreateSandboxInput,
   type LinkSandboxAttemptInput,
   type ListSandboxesInput,
+  type SetSandboxNameInput,
   type SandboxRepository,
   type SetSandboxStatusInput,
 } from "./repositories/sandboxes.js";

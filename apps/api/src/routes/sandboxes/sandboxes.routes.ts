@@ -6,6 +6,8 @@ import {
   createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxAttemptsResponseSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   listSandboxEventsQuerySchema,
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
@@ -19,6 +21,7 @@ const tags = ["Sandboxes"];
 export * from "./sandboxes.schemas.js";
 
 export const createSandboxValidator = validator("json", createSandboxRequestSchema);
+export const renameSandboxValidator = validator("json", renameSandboxRequestSchema);
 export const sandboxIdValidator = validator("param", sandboxIdParamsSchema);
 export const listSandboxesQueryValidator = validator("query", listSandboxesQuerySchema);
 export const listSandboxAttemptsQueryValidator = validator("query", listSandboxAttemptsQuerySchema);
@@ -87,6 +90,29 @@ export const getSandboxRoute = describeRoute({
       content: {
         "application/json": {
           schema: resolver(sandboxDetailsSchema),
+        },
+      },
+    },
+    404: {
+      description: "Sandbox not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+  },
+});
+
+export const renameSandboxRoute = describeRoute({
+  tags,
+  description: "Rename an existing sandbox.",
+  responses: {
+    200: {
+      description: "Sandbox renamed",
+      content: {
+        "application/json": {
+          schema: resolver(renameSandboxResponseSchema),
         },
       },
     },

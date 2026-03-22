@@ -6,24 +6,25 @@ type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
 interface SandboxDetail {
   readonly sandboxId: string;
+  readonly name: string;
   readonly status: SandboxStatus;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
 }
 
-interface RunDetailSectionProps {
+interface SandboxDetailSectionProps {
   readonly sandbox: SandboxDetail | null;
   readonly section: string;
   readonly description: string;
   readonly children: ReactNode;
 }
 
-export function RunDetailSection({
+export function SandboxDetailSection({
   sandbox,
   section,
   description,
   children,
-}: RunDetailSectionProps) {
+}: SandboxDetailSectionProps) {
   if (sandbox === null) {
     return (
       <WorkspacePage
@@ -37,9 +38,10 @@ export function RunDetailSection({
   return (
     <WorkspacePage
       kicker="Sandbox Detail"
-      title={`${sandbox.sandboxId} ${section}`}
+      title={`${sandbox.name} ${section}`}
       description={description}
       metrics={[
+        { label: "Sandbox ID", value: sandbox.sandboxId },
         { label: "Repository", value: sandbox.repository ?? "Unknown" },
         { label: "Tag", value: sandbox.tag ?? "n/a" },
         { label: "Status", value: sandbox.status },

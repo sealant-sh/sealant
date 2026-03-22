@@ -4,7 +4,7 @@ import { RepositoryDetailSection } from "@/components/app/repository-detail-sect
 import { RunRows } from "@/components/app/run-rows";
 import { RUNS, getRepositoryById } from "@/lib/navigation/workspace-data";
 
-export const Route = createFileRoute("/_authenticated/repositories/$repoId/runs" as never)({
+export const Route = createFileRoute("/_authenticated/repositories/$repoId/sandboxes" as never)({
   loader: ({ params }: { params: { repoId: string } }) => getRepositoryById(params.repoId),
   component: RepositoryRunsPage,
 });
@@ -16,8 +16,8 @@ function RepositoryRunsPage() {
   return (
     <RepositoryDetailSection
       repository={repository}
-      section="Runs"
-      description="Inspect execution history for this repository and open failed runs directly into their detailed workspace navigation."
+      section="Sandboxes"
+      description="Inspect execution history for this repository and open failed sandboxes directly into their detailed workspace navigation."
     >
       <RunRows runs={runs} />
     </RepositoryDetailSection>

@@ -2,7 +2,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_authenticated/")({
   beforeLoad: () => {
-    throw redirect({ to: "/runs" as never });
+    throw redirect({ to: "/sandboxes" as never });
   },
   component: RedirectPage,
 });

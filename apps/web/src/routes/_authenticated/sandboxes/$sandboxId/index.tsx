@@ -1,15 +1,25 @@
-import type { WorkspaceBuildJobRequestPayload } from "@sealant/db";
+import {
+  workspaceBuildJobRequestPayloadSchema,
+  type WorkspaceBuildJobRequestPayload,
+} from "@sealant/db";
 import { Badge, Button } from "@sealant/ui";
-import type { QueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import type { AppTrpc } from "@/lib/trpc/client";
+import { useTRPC } from "@/lib/trpc/react";
 
 type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
 interface SandboxSummary {
   readonly sandboxId: string;
+  readonly name: string;
   readonly status: SandboxStatus;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
@@ -73,31 +83,136 @@ interface SandboxEvent {
 }
 
 interface SandboxSummaryLoaderData {
-  readonly sandbox: SandboxSummary;
   readonly attempts: readonly SandboxAttemptSummary[];
   readonly events: readonly SandboxEvent[];
 }
 
-export const Route = createFileRoute("/_authenticated/runs/$runId/" as never)({
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function toSandboxSummary(input: {
+  readonly sandboxId: string;
+  readonly name: string;
+  readonly status: SandboxStatus;
+  readonly repository?: string | undefined;
+  readonly tag?: string | undefined;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly runtime?: unknown;
+  readonly publishedImage?: unknown;
+  readonly spec?: unknown;
+  readonly blueprint?: unknown;
+}): SandboxSummary {
+  const parsedSpec = workspaceBuildJobRequestPayloadSchema.safeParse(input.spec);
+
+  return {
+    sandboxId: input.sandboxId,
+    name: input.name,
+    status: input.status,
+    ...(input.repository === undefined ? {} : { repository: input.repository }),
+    ...(input.tag === undefined ? {} : { tag: input.tag }),
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    ...(isRecord(input.runtime) &&
+    typeof input.runtime.adapter === "string" &&
+    typeof input.runtime.resourceId === "string" &&
+    typeof input.runtime.status === "string"
+      ? {
+          runtime: {
+            adapter: input.runtime.adapter,
+            resourceId: input.runtime.resourceId,
+            status: input.runtime.status,
+            ...(typeof input.runtime.endpoint === "string"
+              ? { endpoint: input.runtime.endpoint }
+              : {}),
+          },
+        }
+      : {}),
+    ...(isRecord(input.publishedImage) &&
+    typeof input.publishedImage.reference === "string" &&
+    typeof input.publishedImage.digestReference === "string"
+      ? {
+          publishedImage: {
+            reference: input.publishedImage.reference,
+            digestReference: input.publishedImage.digestReference,
+          },
+        }
+      : {}),
+    ...(parsedSpec.success ? { spec: parsedSpec.data } : {}),
+    ...(isRecord(input.blueprint) &&
+    isRecord(input.blueprint.sources) &&
+    isRecord(input.blueprint.sources.workspace) &&
+    typeof input.blueprint.sources.workspace.provider === "string" &&
+    typeof input.blueprint.sources.workspace.url === "string" &&
+    typeof input.blueprint.sources.workspace.ref === "string" &&
+    isRecord(input.blueprint.harness) &&
+    typeof input.blueprint.harness.id === "string" &&
+    isRecord(input.blueprint.access) &&
+    isRecord(input.blueprint.access.ssh) &&
+    typeof input.blueprint.access.ssh.enabled === "boolean" &&
+    typeof input.blueprint.access.ssh.listenPort === "number" &&
+    isRecord(input.blueprint.runtime) &&
+    typeof input.blueprint.runtime.workingDirectory === "string" &&
+    isRecord(input.blueprint.target) &&
+    isRecord(input.blueprint.target.os) &&
+    typeof input.blueprint.target.os.family === "string" &&
+    isRecord(input.blueprint.target.runtime) &&
+    typeof input.blueprint.target.runtime.family === "string"
+      ? {
+          blueprint: {
+            sources: {
+              workspace: {
+                provider: input.blueprint.sources.workspace.provider,
+                url: input.blueprint.sources.workspace.url,
+                ref: input.blueprint.sources.workspace.ref,
+              },
+            },
+            harness: {
+              id: input.blueprint.harness.id,
+            },
+            access: {
+              ssh: {
+                enabled: input.blueprint.access.ssh.enabled,
+                listenPort: input.blueprint.access.ssh.listenPort,
+              },
+            },
+            runtime: {
+              workingDirectory: input.blueprint.runtime.workingDirectory,
+            },
+            target: {
+              os: {
+                family: input.blueprint.target.os.family,
+              },
+              runtime: {
+                family: input.blueprint.target.runtime.family,
+              },
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/" as never)({
   loader: async ({
     context,
     params,
   }: {
     context: { queryClient: QueryClient; trpc: AppTrpc };
-    params: { runId: string };
+    params: { sandboxId: string };
   }) => {
-    const sandbox = await context.queryClient.ensureQueryData(
-      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.runId }),
+    await context.queryClient.ensureQueryData(
+      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.sandboxId }),
     );
     const attemptsResponse = await context.queryClient.ensureQueryData(
-      context.trpc.sandbox.attempts.queryOptions({ sandboxId: params.runId, limit: 5 }),
+      context.trpc.sandbox.attempts.queryOptions({ sandboxId: params.sandboxId, limit: 5 }),
     );
     const eventsResponse = await context.queryClient.ensureQueryData(
-      context.trpc.sandbox.events.queryOptions({ sandboxId: params.runId, limit: 8 }),
+      context.trpc.sandbox.events.queryOptions({ sandboxId: params.sandboxId, limit: 8 }),
     );
 
     return {
-      sandbox,
       attempts: attemptsResponse.items,
       events: eventsResponse.items,
     };
@@ -106,10 +221,27 @@ export const Route = createFileRoute("/_authenticated/runs/$runId/" as never)({
 });
 
 function SandboxSummaryPage() {
-  const { sandbox, attempts, events } = Route.useLoaderData() as SandboxSummaryLoaderData;
+  const { sandboxId } = Route.useParams();
+  const { attempts, events } = Route.useLoaderData() as SandboxSummaryLoaderData;
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const sandboxQueryOptions = trpc.sandbox.byId.queryOptions({ sandboxId });
+  const { data: sandboxResponse } = useSuspenseQuery(sandboxQueryOptions);
+  const sandbox = toSandboxSummary(sandboxResponse);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [sshCopyState, setSshCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const [nameMutationError, setNameMutationError] = useState<string | null>(null);
   const sshCommand = buildSshCommand(sandbox.runtime?.endpoint);
   const workspaceSpecDetails = resolveWorkspaceSpecDetails(sandbox);
+  const nameSuggestions = suggestSandboxNames(sandbox);
+
+  const renameSandboxMutation = useMutation(
+    trpc.sandbox.rename.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: sandboxQueryOptions.queryKey });
+      },
+    }),
+  );
 
   const copySshCommand = async () => {
     if (sshCommand === null) {
@@ -129,6 +261,26 @@ function SandboxSummaryPage() {
     }
   };
 
+  const saveSandboxName = async () => {
+    const name = nameInputRef.current?.value.trim() ?? "";
+
+    if (name.length === 0) {
+      setNameMutationError("Sandbox name cannot be empty.");
+      return;
+    }
+
+    setNameMutationError(null);
+
+    try {
+      await renameSandboxMutation.mutateAsync({
+        sandboxId: sandbox.sandboxId,
+        name,
+      });
+    } catch (error) {
+      setNameMutationError(resolveMutationErrorMessage(error));
+    }
+  };
+
   return (
     <section className="overflow-hidden border border-border bg-card">
       <div className="h-1 w-full bg-primary" />
@@ -139,11 +291,61 @@ function SandboxSummaryPage() {
             Operational Log // Sandbox Detail
           </p>
           <h1 className="mt-4 max-w-4xl font-display text-6xl leading-[0.86] tracking-[0.02em] text-foreground sm:text-7xl">
-            {sandbox.sandboxId}
+            {sandbox.name}
           </h1>
           <p className="mt-4 font-mono text-[0.72rem] text-muted-foreground">
+            Sandbox ID: {sandbox.sandboxId}
+          </p>
+          <p className="mt-2 font-mono text-[0.72rem] text-muted-foreground">
             {(sandbox.repository ?? "unknown-repository") + " / " + (sandbox.tag ?? "unknown-tag")}
           </p>
+
+          <div className="mt-5 border border-border px-4 py-4">
+            <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">Name</p>
+            <div className="mt-3 flex flex-col gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <input
+                  key={`${sandbox.sandboxId}:${sandbox.name}`}
+                  ref={nameInputRef}
+                  defaultValue={sandbox.name}
+                  className="h-10 w-full border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-10 shrink-0 px-4 text-[0.64rem] tracking-[0.1em]"
+                  onClick={() => {
+                    void saveSandboxName();
+                  }}
+                  disabled={renameSandboxMutation.isPending}
+                >
+                  {renameSandboxMutation.isPending ? "Saving" : "Save Name"}
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {nameSuggestions.map((suggestion) => (
+                  <Button
+                    key={suggestion}
+                    type="button"
+                    variant="outline"
+                    className="h-8 px-3 text-[0.58rem] tracking-[0.1em]"
+                    onClick={() => {
+                      if (nameInputRef.current !== null) {
+                        nameInputRef.current.value = suggestion;
+                      }
+                    }}
+                  >
+                    {suggestion}
+                  </Button>
+                ))}
+              </div>
+              {nameMutationError === null ? null : (
+                <p className="font-mono text-[0.62rem] tracking-[0.11em] text-destructive">
+                  {nameMutationError}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border p-6 sm:flex-row sm:border-l sm:border-t-0 sm:p-8 lg:flex-col">
@@ -566,4 +768,66 @@ function inferSourceProvider(url: string): string {
   } catch {
     return "unknown";
   }
+}
+
+function suggestSandboxNames(sandbox: {
+  readonly sandboxId: string;
+  readonly repository?: string | undefined;
+  readonly tag?: string | undefined;
+  readonly spec?: WorkspaceBuildJobRequestPayload;
+}): readonly string[] {
+  const repository = sandbox.repository?.trim() ?? "";
+  const repositoryTail =
+    repository
+      .split("/")
+      .filter((segment) => segment.length > 0)
+      .pop() ?? "";
+  const repositoryLabel = toTitleWords(repositoryTail);
+  const tagLabel = toTitleWords(sandbox.tag?.trim() ?? "");
+  const sourceRef = resolveSourceRef(sandbox.spec);
+  const refLabel = sourceRef === undefined ? "" : toTitleWords(sourceRef);
+
+  const suggestions = [
+    [repositoryLabel, tagLabel, refLabel].filter((value) => value.length > 0).join(" "),
+    [repositoryLabel, tagLabel].filter((value) => value.length > 0).join(" "),
+    [repositoryLabel, `Sandbox ${sandbox.sandboxId.slice(0, 8)}`]
+      .filter((value) => value.length > 0)
+      .join(" "),
+  ]
+    .map((value) => value.trim().replace(/\s+/g, " "))
+    .filter((value) => value.length > 0);
+
+  return [...new Set(suggestions)].slice(0, 3);
+}
+
+function resolveSourceRef(spec: WorkspaceBuildJobRequestPayload | undefined): string | undefined {
+  const source = spec?.sources?.workspace ?? spec?.source ?? spec?.repo;
+
+  if (source === undefined || typeof source === "string") {
+    return undefined;
+  }
+
+  const ref = source.ref?.trim();
+
+  if (ref === undefined || ref.length === 0) {
+    return undefined;
+  }
+
+  return ref;
+}
+
+function toTitleWords(value: string): string {
+  return value
+    .split(/[\s._-]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function resolveMutationErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return "Unable to update sandbox name.";
 }

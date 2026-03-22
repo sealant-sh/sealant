@@ -56,6 +56,7 @@ type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
 interface SidebarSandbox {
   readonly sandboxId: string;
+  readonly name: string;
   readonly status: SandboxStatus;
 }
 
@@ -80,7 +81,7 @@ interface SidebarGroup {
 }
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
-  { href: "/runs", label: "Sandboxes", icon: Activity },
+  { href: "/sandboxes", label: "Sandboxes", icon: Activity },
   { href: "/issues", label: "Issues", icon: CircleAlert },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
   { href: "/profiles", label: "Profiles", icon: UserRound },
@@ -90,10 +91,10 @@ const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
   {
     label: "Sandbox Views",
     links: [
-      { href: "/runs/new", label: "Create Sandbox", exact: true },
-      { href: "/runs", label: "All Sandboxes", exact: true },
-      { href: "/runs/active", label: "Running", exact: true },
-      { href: "/runs/failed", label: "Failed", exact: true },
+      { href: "/sandboxes/new", label: "Create Sandbox", exact: true },
+      { href: "/sandboxes", label: "All Sandboxes", exact: true },
+      { href: "/sandboxes/active", label: "Running", exact: true },
+      { href: "/sandboxes/failed", label: "Failed", exact: true },
     ],
   },
 ];
@@ -217,7 +218,7 @@ function AppSidebarNav({
             aria-hidden={!isExpanded}
           >
             <Link
-              to={"/runs" as never}
+              to={"/sandboxes" as never}
               className="inline-flex items-center gap-3 text-foreground no-underline"
               aria-label="Sealant home"
             >
@@ -405,7 +406,7 @@ function AppSidebarNav({
           {`v${packageJson.version}`}
         </p>
         <Link
-          to={"/runs/new" as never}
+          to={"/sandboxes/new" as never}
           className={cn(
             "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
             isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
@@ -563,7 +564,7 @@ function getSandboxDetail(pathname: string): { sandboxId: string } | null {
   const segments = pathname.split("/").filter(Boolean);
   const sandboxId = segments[1];
 
-  if (segments[0] !== "runs" || sandboxId === undefined) {
+  if (segments[0] !== "sandboxes" || sandboxId === undefined) {
     return null;
   }
 
@@ -604,7 +605,7 @@ function getSidebarGroups({
 }): readonly SidebarGroup[] {
   if (sandboxDetail !== null) {
     const encodedSandboxId = encodeURIComponent(sandboxDetail.sandboxId);
-    const sandboxBase = `/runs/${encodedSandboxId}`;
+    const sandboxBase = `/sandboxes/${encodedSandboxId}`;
 
     return [
       {
@@ -657,7 +658,7 @@ function getSidebarGroups({
         links: [
           { href: repositoryBase, label: "Overview", exact: true },
           { href: `${repositoryBase}/setup`, label: "Setup", exact: true },
-          { href: `${repositoryBase}/runs`, label: "Runs", exact: true },
+          { href: `${repositoryBase}/sandboxes`, label: "Sandboxes", exact: true },
           { href: `${repositoryBase}/settings`, label: "Settings", exact: true },
         ],
       },
@@ -717,8 +718,8 @@ function getSidebarGroups({
       {
         label: "Recent Sandboxes",
         links: sidebarSandboxes.map((sandbox) => ({
-          href: `/runs/${encodeURIComponent(sandbox.sandboxId)}`,
-          label: sandbox.sandboxId,
+          href: `/sandboxes/${encodeURIComponent(sandbox.sandboxId)}`,
+          label: sandbox.name,
           meta: formatSandboxStatus(sandbox.status),
           exact: false,
         })),
