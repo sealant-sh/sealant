@@ -1,5 +1,5 @@
 import { Button } from "@sealant/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
@@ -34,8 +34,7 @@ const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly labe
   { value: "arch", label: "Arch" },
 ];
 
-const DEFAULT_PACKAGES = ["nodejs", "pnpm", "bun", "git"] as const;
-const DEFAULT_SETUP_STEPS = ["pnpm install", "pnpm db:generate"] as const;
+const NIX_SUPPORTED_PACKAGES = new Set(["curl", "git", "jq", "nodejs", "pnpm", "ripgrep"]);
 
 export const Route = createFileRoute("/_authenticated/runs/new" as never)({
   component: NewSandboxPage,
@@ -43,33 +42,14 @@ export const Route = createFileRoute("/_authenticated/runs/new" as never)({
 
 function NewSandboxPage() {
   const trpc = useTRPC();
-  const { data: registriesData } = useQuery(trpc.registry.list.queryOptions(undefined));
-  const registries = registriesData ?? [];
-  const registryOptions = useMemo(() => {
-    const baseOptions = [{ id: "default", name: "default" }];
-
-    for (const registry of registries) {
-      if (registry.id === "default") {
-        continue;
-      }
-
-      baseOptions.push({
-        id: registry.id,
-        name: registry.name,
-      });
-    }
-
-    return baseOptions;
-  }, [registries]);
-  const defaultRegistryId = registryOptions[0]?.id ?? "default";
   const queryClient = useQueryClient();
   const [form, setForm] = useState<NewSandboxFormState>(() => {
-    return createInitialFormState("");
+    return createInitialFormState("default");
   });
   const selectedRegistryId =
     normalizeRequiredValue(form.registryId).length > 0
       ? normalizeRequiredValue(form.registryId)
-      : defaultRegistryId;
+      : "default";
   const [packageInput, setPackageInput] = useState("");
   const [setupStepInput, setSetupStepInput] = useState("");
   const [formErrors, setFormErrors] = useState<readonly string[]>([]);
@@ -79,6 +59,10 @@ function NewSandboxPage() {
 
   const previewManifest = useMemo(() => {
     const normalizedRepositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
+    const normalizedSetupSteps = form.setupSteps
+      .map(normalizeCommandStep)
+      .filter((value) => value.length > 0);
+    const normalizedEntrypoint = normalizeRequiredValue(form.entrypoint);
 
     return {
       registryId: selectedRegistryId,
@@ -92,9 +76,9 @@ function NewSandboxPage() {
         harness: form.harness,
         os: form.targetOs,
         packages: form.packages,
-        setup: form.setupSteps,
-        startup: normalizeRequiredValue(form.entrypoint),
         ssh: form.sshEnabled,
+        ...(normalizedSetupSteps.length === 0 ? {} : { setup: normalizedSetupSteps }),
+        ...(normalizedEntrypoint.length === 0 ? {} : { startup: normalizedEntrypoint }),
       },
     };
   }, [form, selectedRegistryId]);
@@ -109,6 +93,8 @@ function NewSandboxPage() {
         [field]: value,
       };
     });
+    setFormErrors([]);
+    setSubmitError(null);
   };
 
   const appendPackage = () => {
@@ -128,6 +114,8 @@ function NewSandboxPage() {
         packages: [...current.packages, candidate],
       };
     });
+    setFormErrors([]);
+    setSubmitError(null);
     setPackageInput("");
   };
 
@@ -144,6 +132,8 @@ function NewSandboxPage() {
         setupSteps: [...current.setupSteps, candidate],
       };
     });
+    setFormErrors([]);
+    setSubmitError(null);
     setSetupStepInput("");
   };
 
@@ -165,6 +155,7 @@ function NewSandboxPage() {
       .map(normalizePackageIdentifier)
       .filter((value) => value.length > 0);
     const setup = form.setupSteps.map(normalizeCommandStep).filter((value) => value.length > 0);
+    const startup = normalizeRequiredValue(form.entrypoint);
 
     try {
       const response = await createSandboxMutation.mutateAsync({
@@ -181,7 +172,7 @@ function NewSandboxPage() {
           ssh: form.sshEnabled,
           ...(packages.length === 0 ? {} : { packages }),
           ...(setup.length === 0 ? {} : { setup }),
-          startup: normalizeRequiredValue(form.entrypoint),
+          ...(startup.length === 0 ? {} : { startup }),
         },
       });
 
@@ -193,7 +184,9 @@ function NewSandboxPage() {
   };
 
   const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.source.url);
-  const hasCommands = previewManifest.spec.setup.length > 0;
+  const hasCommands =
+    Array.isArray(previewManifest.spec.setup) && previewManifest.spec.setup.length > 0;
+  const compatibilityIssues = getCompatibilityIssues(form);
 
   return (
     <section className="overflow-hidden border border-border bg-card">
@@ -301,19 +294,16 @@ function NewSandboxPage() {
 
                   <div className="grid gap-4 sm:grid-cols-3">
                     <LabeledField label="Registry ID">
-                      <select
+                      <input
                         value={selectedRegistryId}
                         onChange={(event) => {
                           setField("registryId", event.target.value);
                         }}
                         className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
-                      >
-                        {registryOptions.map((registry) => (
-                          <option key={registry.id} value={registry.id}>
-                            {registry.name}
-                          </option>
-                        ))}
-                      </select>
+                        placeholder="default"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
                     </LabeledField>
 
                     <LabeledField label="Image Repository">
@@ -410,7 +400,7 @@ function NewSandboxPage() {
               title="Runtime Commands"
               content={
                 <div className="space-y-6">
-                  <LabeledField label="Setup Steps (Ordered)">
+                  <LabeledField label="Setup Steps (Ordered, Optional)">
                     <div className="space-y-2">
                       {form.setupSteps.map((command, index) => (
                         <div
@@ -435,12 +425,7 @@ function NewSandboxPage() {
                             type="button"
                             variant="outline"
                             className="h-10 px-3 text-[0.62rem] tracking-[0.11em]"
-                            disabled={form.setupSteps.length === 1}
                             onClick={() => {
-                              if (form.setupSteps.length === 1) {
-                                return;
-                              }
-
                               setField(
                                 "setupSteps",
                                 form.setupSteps.filter((_, commandIndex) => commandIndex !== index),
@@ -484,7 +469,7 @@ function NewSandboxPage() {
                     </div>
                   </LabeledField>
 
-                  <LabeledField label="Entrypoint Command">
+                  <LabeledField label="Entrypoint Command (Optional)">
                     <input
                       value={form.entrypoint}
                       onChange={(event) => {
@@ -617,9 +602,14 @@ function NewSandboxPage() {
                   }
                 />
                 <HealthRow
-                  ok={hasCommands}
-                  text={hasCommands ? "Setup commands configured" : "No setup commands configured"}
+                  ok={compatibilityIssues.length === 0}
+                  text={hasCommands ? "Setup commands configured" : "No setup commands (optional)"}
                 />
+                {compatibilityIssues.length > 0 ? (
+                  <p className="font-mono text-[0.62rem] tracking-[0.11em] text-amber-400">
+                    {compatibilityIssues[0]}
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -637,7 +627,7 @@ function NewSandboxPage() {
                 variant="outline"
                 className="h-12 w-full text-[0.7rem] tracking-[0.12em]"
                 onClick={() => {
-                  setForm(createInitialFormState(defaultRegistryId));
+                  setForm(createInitialFormState("default"));
                   setFormErrors([]);
                   setSubmitError(null);
                 }}
@@ -733,9 +723,9 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
     registryId,
     artifactRepository: "sealant/workspaces/demo",
     artifactTag: "opencode",
-    packages: [...DEFAULT_PACKAGES],
-    setupSteps: [...DEFAULT_SETUP_STEPS],
-    entrypoint: "pnpm dev",
+    packages: [],
+    setupSteps: [],
+    entrypoint: "",
     sshEnabled: true,
   };
 }
@@ -807,15 +797,36 @@ function validateForm(form: NewSandboxFormState, registryId: string): readonly s
     errors.push("Image tag is required.");
   }
 
-  if (form.setupSteps.map(normalizeCommandStep).filter((value) => value.length > 0).length === 0) {
-    errors.push("At least one setup command is required.");
-  }
-
-  if (normalizeRequiredValue(form.entrypoint).length === 0) {
-    errors.push("Entrypoint command is required.");
+  const compatibilityIssues = getCompatibilityIssues(form);
+  if (compatibilityIssues.length > 0) {
+    errors.push(...compatibilityIssues);
   }
 
   return errors;
+}
+
+function getCompatibilityIssues(form: NewSandboxFormState): readonly string[] {
+  const issues: string[] = [];
+
+  if (form.targetOs !== "nix") {
+    return issues;
+  }
+
+  const setupCount = form.setupSteps
+    .map(normalizeCommandStep)
+    .filter((value) => value.length > 0).length;
+  if (setupCount > 0) {
+    issues.push("Nix target does not support setup steps yet. Remove setup commands to continue.");
+  }
+
+  const unsupportedPackages = form.packages.filter((pkg) => !NIX_SUPPORTED_PACKAGES.has(pkg));
+  if (unsupportedPackages.length > 0) {
+    issues.push(
+      `Nix target does not support packages: ${unsupportedPackages.join(", ")}. Supported: curl, git, jq, nodejs, pnpm, ripgrep.`,
+    );
+  }
+
+  return issues;
 }
 
 function resolveErrorMessage(error: unknown): string {
