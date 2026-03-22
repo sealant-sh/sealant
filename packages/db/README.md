@@ -1,17 +1,22 @@
 # DB Package
 
-`@sealant/db` is the shared SQLite database package for Sealant control-plane state.
+`@sealant/db` is the shared SQLite package for Sealant control-plane state.
 
-It currently provides:
+It models two primary product domains:
+
+- sandboxes
+- issue workflows
+
+## What this package provides
 
 - Better Auth core tables for `user`, `session`, `account`, and `verification`
-- a Drizzle schema for workspace image build jobs
-- control-plane tables for repositories, profiles, profile revisions, runs, and issue/PR lineage
+- Drizzle schema + migrations for sandbox lifecycle, build/runtime orchestration, and issue workflow
+  execution reporting
+- typed repositories for sandbox attempts, build jobs, runtime instances, profiles, repository
+  profiles, and issue workflow data
+- generated Zod schemas from Drizzle tables
+- payload schemas for job request/result JSON
 - a local SQLite client with `WAL` and `busy_timeout` enabled
-- a small repository for enqueueing, claiming, and updating workspace build jobs
-- generated Zod schemas from the Drizzle table plus typed payload schemas for request and result
-  JSON
-- a Drizzle config and migration entrypoint for committed SQL migrations
 
 ## Environment
 
@@ -28,39 +33,46 @@ pnpm --filter @sealant/db db:migrate
 
 ## Current schema
 
-The package now includes:
+High-level table map:
 
-- Better Auth core tables: `user`, `session`, `account`, and `verification`
-- `workspace_build_jobs`, which backs queued image build work for API + worker handoff
-- repository catalog tables: `repositories`, `issues`, `pull_requests`, and link tables
-- profile and secret tables: `profiles`, `profile_revisions`, `profile_env_vars`, `secrets`,
-  `secret_versions`, `profile_secret_bindings`, `ssh_keys`, `profile_ssh_settings`, and
-  `profile_ssh_key_bindings`
-- repository-scoped run setup tables: `repository_profiles`, `repository_profile_revisions`, and
-  `repository_profile_profile_links`
-- run execution and reporting tables: `workspace_runs`, `run_input_snapshots`, `run_events`,
-  `run_validation_results`, `run_diff_files`, `run_summaries`, and `run_artifacts`
+- auth: `user`, `session`, `account`, `verification`
+- sandbox lifecycle: `sandboxes`, `sandbox_attempts`, `sandbox_attempt_snapshots`,
+  `sandbox_run_links`
+- build/runtime orchestration: `oci_image_build_jobs`, `sandbox_runtime_instances`
+- repository/profile context: `repositories`, `repository_profiles`, `repository_profile_revisions`,
+  `repository_profile_profile_links`, `profiles`, `profile_revisions`, `profile_env_vars`,
+  `profile_secret_bindings`, `profile_ssh_settings`, `profile_ssh_key_bindings`, `secrets`,
+  `secret_versions`, `ssh_keys`
+- issue workflows: `issue_workflows`, `issue_workflow_executions`,
+  `issue_workflow_execution_events`, `issue_workflow_execution_validation_results`,
+  `issue_workflow_execution_diff_files`, `issue_workflow_execution_artifacts`,
+  `issue_workflow_execution_summaries`, `issue_workflow_execution_pull_request_links`, `issues`,
+  `pull_requests`, `issue_pull_request_links`
 
-`workspace_build_jobs` stores:
-
-- durable job status (`queued`, `running`, `succeeded`, `failed`)
-- optional linkage to a parent run (`run_id`) so queue activity can be traced to run history
-- requested registry target metadata
-- serialized request payloads and optional result payloads
-- worker claim/lease fields for future queue processing
-- published image references and digests
-- terminal error metadata and timestamps
+For a per-table purpose summary, see `packages/db/src/schema/README.md`.
 
 ## Usage
 
 ```ts
-import { createDatabaseClientFromEnv, createWorkspaceBuildJobRepository } from "@sealant/db";
+import {
+  createDatabaseClientFromEnv,
+  createSandboxAttemptRepository,
+  createWorkspaceBuildJobRepository,
+} from "@sealant/db";
 
 const client = await createDatabaseClientFromEnv();
+const attempts = createSandboxAttemptRepository(client);
 const jobs = createWorkspaceBuildJobRepository(client);
 
-const job = await jobs.insertQueuedJob({
+const attempt = await attempts.createQueuedAttempt({
+  id: "attempt_123",
+  ownerUserId: "user_123",
+  triggerType: "api",
+});
+
+await jobs.insertQueuedJob({
   id: "job_123",
+  runId: attempt.id,
   registryId: "default",
   repository: "sealant/workspaces/demo",
   tag: "opencode",

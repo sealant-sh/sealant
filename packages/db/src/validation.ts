@@ -3,6 +3,11 @@ import { z } from "zod";
 
 import {
   issueStateValues,
+  issueWorkflowExecutions,
+  issueWorkflowExecutionStatusValues,
+  issueWorkflowExecutionTriggerTypeValues,
+  issueWorkflows,
+  issueWorkflowStatusValues,
   profileStatusValues,
   pullRequestStateValues,
   sandboxAttempts,
@@ -32,6 +37,22 @@ export const sandboxSelectSchema = createSelectSchema(sandboxes);
 export const sandboxInsertSchema = createInsertSchema(sandboxes);
 
 export const sandboxStatusSchema = z.enum(sandboxStatusValues);
+
+export const issueWorkflowSelectSchema = createSelectSchema(issueWorkflows);
+
+export const issueWorkflowInsertSchema = createInsertSchema(issueWorkflows);
+
+export const issueWorkflowStatusSchema = z.enum(issueWorkflowStatusValues);
+
+export const issueWorkflowExecutionSelectSchema = createSelectSchema(issueWorkflowExecutions);
+
+export const issueWorkflowExecutionInsertSchema = createInsertSchema(issueWorkflowExecutions);
+
+export const issueWorkflowExecutionStatusSchema = z.enum(issueWorkflowExecutionStatusValues);
+
+export const issueWorkflowExecutionTriggerTypeSchema = z.enum(
+  issueWorkflowExecutionTriggerTypeValues,
+);
 
 export const profileStatusSchema = z.enum(profileStatusValues);
 

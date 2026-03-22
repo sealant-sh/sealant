@@ -7,10 +7,10 @@ It currently provides:
 - a Node-based Hono server entrypoint
 - OpenAPI generation with `hono-openapi`
 - interactive docs at `/docs` backed by Scalar
-- a starter route layout split into `system`, `sandboxes`, `runs`, `registries`, and
-  `workspace-build-jobs` groups
+- a route layout split into `system`, `sandboxes`, `registries`, and `workspace-build-jobs` groups
 - initial read-only registry endpoints backed by `@sealant/registry-integration`
-- initial image composition job routes backed by `@sealant/db` and `@sealant/workspace-build-queue`
+- sandbox-first lifecycle routes backed by `@sealant/db` and `@sealant/workspace-build-queue`
+- internal low-level image composition job routes for diagnostics and operator workflows
 
 ## Current routes
 
@@ -22,7 +22,8 @@ It currently provides:
 - `POST /v1/sandboxes`
 - `GET /v1/sandboxes?ownerUserId=...&status=...&limit=...`
 - `GET /v1/sandboxes/{sandboxId}`
-- `GET /v1/runs/{runId}`
+- `GET /v1/sandboxes/{sandboxId}/attempts?limit=...`
+- `GET /v1/sandboxes/{sandboxId}/events?limit=...`
 - `GET /v1/registries/{registryId}`
 - `GET /v1/registries/{registryId}/ping`
 - `GET /v1/registries/{registryId}/extensions`
@@ -50,13 +51,12 @@ This API is the control-plane entrypoint for workspace image builds.
 
 ### What this flow does
 
-1. `POST /v1/sandboxes` stores a durable run plus build job in SQLite and publishes a queue message
-   to RabbitMQ.
+1. `POST /v1/sandboxes` stores a durable sandbox plus internal execution records in SQLite and
+   publishes a queue message to RabbitMQ.
 2. `@sealant/worker` consumes the job, compiles via `@sealant/os-integration-nix`, and publishes the
    OCI image to Zot via `@sealant/registry-integration`.
-3. `GET /v1/sandboxes/{sandboxId}` and `GET /v1/runs/{runId}` expose UI-facing lifecycle and run
-   detail surfaces, while `GET /v1/workspace-build-jobs/{jobId}` remains available for lower-level
-   queue-job inspection.
+3. `GET /v1/sandboxes/{sandboxId}` exposes the UI-facing sandbox lifecycle surface, while
+   `GET /v1/workspace-build-jobs/{jobId}` remains available for lower-level queue-job inspection.
 
 ### Prerequisites
 
@@ -115,14 +115,13 @@ curl -X POST http://localhost:3000/v1/sandboxes \
   }'
 ```
 
-Expected response: `202` with `sandboxId`, `runId`, and `jobId`.
+Expected response: `202` with `sandboxId`.
 
 ### Poll job status
 
 ````bash
 curl "http://localhost:3000/v1/sandboxes?ownerUserId=<userId>"
 curl http://localhost:3000/v1/sandboxes/<sandboxId>
-curl http://localhost:3000/v1/runs/<runId>
 
 Optional lower-level queue view:
 
@@ -167,9 +166,8 @@ Schema validators over time.
 - `src/lib/`: shared app setup and OpenAPI wiring
 - `src/routes/system/`: liveness and API index routes
 - `src/routes/sandboxes/`: UI-facing sandbox lifecycle routes
-- `src/routes/runs/`: UI-facing run detail routes
+- `src/routes/workspace-build-jobs/`: lower-level queued image composition job routes (internal)
 - `src/routes/registries/`: first registry-backed API routes
-- `src/routes/workspace-build-jobs/`: lower-level queued image composition job routes
 
 ## Proposed API Roadmap
 

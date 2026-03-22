@@ -3,28 +3,31 @@ import { asc, desc, eq } from "drizzle-orm";
 import type { DatabaseClient } from "../client.js";
 import {
   issuePullRequestLinks,
-  issueRunLinks,
   issues,
+  issueWorkflowExecutionPullRequestLinks,
+  issueWorkflowExecutions,
+  issueWorkflows,
   pullRequests,
-  runPullRequestLinks,
-  sandboxAttempts,
   type Issue,
   type IssuePullRequestLink,
   type IssuePullRequestLinkRelation,
-  type IssueRunLink,
-  type IssueRunLinkRelation,
   type IssueState,
+  type IssueWorkflow,
+  type IssueWorkflowExecution,
+  type IssueWorkflowExecutionPullRequestLink,
+  type IssueWorkflowExecutionPullRequestLinkRelation,
+  type IssueWorkflowExecutionStatus,
+  type IssueWorkflowExecutionTriggerType,
+  type IssueWorkflowStatus,
   type NewIssue,
   type NewIssuePullRequestLink,
-  type NewIssueRunLink,
+  type NewIssueWorkflow,
+  type NewIssueWorkflowExecution,
+  type NewIssueWorkflowExecutionPullRequestLink,
   type NewPullRequest,
-  type NewRunPullRequestLink,
   type PullRequest,
   type PullRequestState,
-  type RunPullRequestLink,
-  type RunPullRequestLinkRelation,
   type SourceProvider,
-  type SandboxAttempt,
 } from "../schema.js";
 
 export interface UpsertIssueInput {
@@ -62,17 +65,30 @@ export interface UpsertPullRequestInput {
   readonly syncedAt?: Date;
 }
 
-export interface LinkIssueRunInput {
+export interface CreateIssueWorkflowInput {
+  readonly id: string;
   readonly issueId: string;
-  readonly runId: string;
-  readonly relation?: IssueRunLinkRelation;
-  readonly linkedAt?: Date;
+  readonly repositoryId: string;
+  readonly ownerUserId?: string;
+  readonly requestedByUserId?: string;
+  readonly status?: IssueWorkflowStatus;
 }
 
-export interface LinkRunPullRequestInput {
-  readonly runId: string;
+export interface CreateIssueWorkflowExecutionInput {
+  readonly id: string;
+  readonly issueWorkflowId: string;
+  readonly sandboxId?: string;
+  readonly sandboxAttemptId?: string;
+  readonly status?: IssueWorkflowExecutionStatus;
+  readonly triggerType?: IssueWorkflowExecutionTriggerType;
+  readonly requestedByUserId?: string;
+  readonly queuedAt?: Date;
+}
+
+export interface LinkIssueWorkflowExecutionPullRequestInput {
+  readonly executionId: string;
   readonly pullRequestId: string;
-  readonly relation?: RunPullRequestLinkRelation;
+  readonly relation?: IssueWorkflowExecutionPullRequestLinkRelation;
   readonly linkedAt?: Date;
 }
 
@@ -83,13 +99,8 @@ export interface LinkIssuePullRequestInput {
   readonly linkedAt?: Date;
 }
 
-export interface IssueRunRecord {
-  readonly link: IssueRunLink;
-  readonly run: SandboxAttempt;
-}
-
-export interface RunPullRequestRecord {
-  readonly link: RunPullRequestLink;
+export interface IssueWorkflowExecutionPullRequestRecord {
+  readonly link: IssueWorkflowExecutionPullRequestLink;
   readonly pullRequest: PullRequest;
 }
 
@@ -101,7 +112,7 @@ const assertInserted = <T>(row: T | undefined, message: string): T => {
   return row;
 };
 
-export const createLineageRepository = (client: DatabaseClient) => {
+export const createIssueWorkflowRepository = (client: DatabaseClient) => {
   const { db } = client;
 
   const upsertIssue = async (input: UpsertIssueInput): Promise<Issue> => {
@@ -184,40 +195,64 @@ export const createLineageRepository = (client: DatabaseClient) => {
     return assertInserted(pullRequest, "Failed to upsert pull request.");
   };
 
-  const linkIssueRun = async (input: LinkIssueRunInput): Promise<IssueRunLink> => {
-    const [link] = await db
-      .insert(issueRunLinks)
+  const createIssueWorkflow = async (input: CreateIssueWorkflowInput): Promise<IssueWorkflow> => {
+    const [workflow] = await db
+      .insert(issueWorkflows)
       .values({
+        id: input.id,
         issueId: input.issueId,
-        runId: input.runId,
-        ...(input.relation === undefined ? {} : { relation: input.relation }),
-        ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-      } satisfies NewIssueRunLink)
-      .onConflictDoUpdate({
-        target: [issueRunLinks.issueId, issueRunLinks.runId],
-        set: {
-          ...(input.relation === undefined ? {} : { relation: input.relation }),
-          ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-        },
-      })
+        repositoryId: input.repositoryId,
+        ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
+        ...(input.requestedByUserId === undefined
+          ? {}
+          : { requestedByUserId: input.requestedByUserId }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+      } satisfies NewIssueWorkflow)
       .returning();
 
-    return assertInserted(link, "Failed to link issue and run.");
+    return assertInserted(workflow, "Failed to create issue workflow.");
   };
 
-  const linkRunPullRequest = async (
-    input: LinkRunPullRequestInput,
-  ): Promise<RunPullRequestLink> => {
-    const [link] = await db
-      .insert(runPullRequestLinks)
+  const createIssueWorkflowExecution = async (
+    input: CreateIssueWorkflowExecutionInput,
+  ): Promise<IssueWorkflowExecution> => {
+    const [execution] = await db
+      .insert(issueWorkflowExecutions)
       .values({
-        runId: input.runId,
+        id: input.id,
+        issueWorkflowId: input.issueWorkflowId,
+        ...(input.sandboxId === undefined ? {} : { sandboxId: input.sandboxId }),
+        ...(input.sandboxAttemptId === undefined
+          ? {}
+          : { sandboxAttemptId: input.sandboxAttemptId }),
+        ...(input.status === undefined ? {} : { status: input.status }),
+        ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
+        ...(input.requestedByUserId === undefined
+          ? {}
+          : { requestedByUserId: input.requestedByUserId }),
+        ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
+      } satisfies NewIssueWorkflowExecution)
+      .returning();
+
+    return assertInserted(execution, "Failed to create issue workflow execution.");
+  };
+
+  const linkExecutionPullRequest = async (
+    input: LinkIssueWorkflowExecutionPullRequestInput,
+  ): Promise<IssueWorkflowExecutionPullRequestLink> => {
+    const [link] = await db
+      .insert(issueWorkflowExecutionPullRequestLinks)
+      .values({
+        executionId: input.executionId,
         pullRequestId: input.pullRequestId,
         ...(input.relation === undefined ? {} : { relation: input.relation }),
         ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-      } satisfies NewRunPullRequestLink)
+      } satisfies NewIssueWorkflowExecutionPullRequestLink)
       .onConflictDoUpdate({
-        target: [runPullRequestLinks.runId, runPullRequestLinks.pullRequestId],
+        target: [
+          issueWorkflowExecutionPullRequestLinks.executionId,
+          issueWorkflowExecutionPullRequestLinks.pullRequestId,
+        ],
         set: {
           ...(input.relation === undefined ? {} : { relation: input.relation }),
           ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
@@ -225,7 +260,7 @@ export const createLineageRepository = (client: DatabaseClient) => {
       })
       .returning();
 
-    return assertInserted(link, "Failed to link run and pull request.");
+    return assertInserted(link, "Failed to link issue workflow execution and pull request.");
   };
 
   const linkIssuePullRequest = async (
@@ -251,43 +286,52 @@ export const createLineageRepository = (client: DatabaseClient) => {
     return assertInserted(link, "Failed to link issue and pull request.");
   };
 
-  const listIssueRuns = async (issueId: string): Promise<readonly IssueRunRecord[]> => {
-    const rows = await db
-      .select({
-        link: issueRunLinks,
-        run: sandboxAttempts,
-      })
-      .from(issueRunLinks)
-      .innerJoin(sandboxAttempts, eq(sandboxAttempts.id, issueRunLinks.runId))
-      .where(eq(issueRunLinks.issueId, issueId))
-      .orderBy(desc(sandboxAttempts.createdAt));
-
-    return rows;
+  const listIssueWorkflows = async (issueId: string): Promise<readonly IssueWorkflow[]> => {
+    return db
+      .select()
+      .from(issueWorkflows)
+      .where(eq(issueWorkflows.issueId, issueId))
+      .orderBy(desc(issueWorkflows.createdAt));
   };
 
-  const listRunPullRequests = async (runId: string): Promise<readonly RunPullRequestRecord[]> => {
-    const rows = await db
+  const listWorkflowExecutions = async (
+    issueWorkflowId: string,
+  ): Promise<readonly IssueWorkflowExecution[]> => {
+    return db
+      .select()
+      .from(issueWorkflowExecutions)
+      .where(eq(issueWorkflowExecutions.issueWorkflowId, issueWorkflowId))
+      .orderBy(desc(issueWorkflowExecutions.createdAt));
+  };
+
+  const listExecutionPullRequests = async (
+    executionId: string,
+  ): Promise<readonly IssueWorkflowExecutionPullRequestRecord[]> => {
+    return db
       .select({
-        link: runPullRequestLinks,
+        link: issueWorkflowExecutionPullRequestLinks,
         pullRequest: pullRequests,
       })
-      .from(runPullRequestLinks)
-      .innerJoin(pullRequests, eq(pullRequests.id, runPullRequestLinks.pullRequestId))
-      .where(eq(runPullRequestLinks.runId, runId))
-      .orderBy(desc(runPullRequestLinks.linkedAt), asc(pullRequests.number));
-
-    return rows;
+      .from(issueWorkflowExecutionPullRequestLinks)
+      .innerJoin(
+        pullRequests,
+        eq(pullRequests.id, issueWorkflowExecutionPullRequestLinks.pullRequestId),
+      )
+      .where(eq(issueWorkflowExecutionPullRequestLinks.executionId, executionId))
+      .orderBy(desc(issueWorkflowExecutionPullRequestLinks.linkedAt), asc(pullRequests.number));
   };
 
   return {
+    createIssueWorkflow,
+    createIssueWorkflowExecution,
+    linkExecutionPullRequest,
     linkIssuePullRequest,
-    linkIssueRun,
-    linkRunPullRequest,
-    listIssueRuns,
-    listRunPullRequests,
+    listExecutionPullRequests,
+    listIssueWorkflows,
+    listWorkflowExecutions,
     upsertIssue,
     upsertPullRequest,
   };
 };
 
-export type LineageRepository = ReturnType<typeof createLineageRepository>;
+export type IssueWorkflowRepository = ReturnType<typeof createIssueWorkflowRepository>;

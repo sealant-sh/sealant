@@ -7,8 +7,8 @@ Product-facing language is centered on two domains:
 - sandboxes
 - issue workflows
 
-Some tables still use internal execution vocabulary (`run`, `job`) because they model orchestration
-and reporting internals.
+Some tables still use internal execution vocabulary (`attempt`, `execution`, `job`) because they
+model orchestration and reporting internals.
 
 ## Auth tables
 
@@ -50,20 +50,26 @@ and reporting internals.
 - `profile_ssh_key_bindings`: SSH key references attached to profile revisions.
 - `secrets`: logical secret containers.
 - `secret_versions`: encrypted secret value versions.
-- `ssh_keys`: managed SSH public-key records and private-key secret references.
+- `ssh_keys`: manag id, ownerUserId, repositoryId, templateId/revisionId, profileRevisionId, status,
+  activeRunId, createdAt, updatedAt, archivedAt
+- sandbox_run_links (history): sandboxId, runed SSH public-key records and private-key secret
+  references.
 
 ## Issue workflow and SCM lineage tables
 
 - `issues`: synchronized issue records from source providers.
 - `pull_requests`: synchronized pull request records from source providers.
-- `issue_run_links`: links issues to execution attempts.
-- `run_pull_request_links`: links execution attempts to pull requests.
+- `issue_workflows`: primary issue workflow product object anchored to an issue.
+- `issue_workflow_executions`: concrete executions of an issue workflow.
+- `issue_workflow_execution_pull_request_links`: pull request lineage for workflow executions.
 - `issue_pull_request_links`: direct issue-to-pull-request lineage links.
 
-## Execution reporting tables (internal)
+## Issue workflow execution reporting tables
 
-- `run_events`: ordered execution event stream per attempt.
-- `run_validation_results`: structured validation outcomes per attempt.
-- `run_diff_files`: structured changed-file metadata per attempt.
-- `run_artifacts`: artifact references and inline payloads per attempt.
-- `run_summaries`: synthesized execution summaries.
+- `issue_workflow_execution_events`: ordered execution event stream per workflow execution.
+- `issue_workflow_execution_validation_results`: structured validation outcomes per workflow
+  execution.
+- `issue_workflow_execution_diff_files`: structured changed-file metadata per workflow execution.
+- `issue_workflow_execution_artifacts`: artifact references and inline payloads per workflow
+  execution.
+- `issue_workflow_execution_summaries`: synthesized execution summaries.
