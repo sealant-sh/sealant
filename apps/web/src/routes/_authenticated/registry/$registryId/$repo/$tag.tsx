@@ -2,14 +2,20 @@ import { ManifestDetail, Skeleton } from "@sealant/ui";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 
-import { getManifest, getRegistry } from "@/lib/api/registry-service";
-
 export const Route = createFileRoute("/_authenticated/registry/$registryId/$repo/$tag")({
-  loader: async ({ params }) => {
+  loader: async ({ context, params }) => {
     const repository = decodeURIComponent(params.repo);
     const [registry, manifest] = await Promise.all([
-      getRegistry(params.registryId),
-      getManifest(params.registryId, repository, params.tag),
+      context.queryClient.ensureQueryData(
+        context.trpc.registry.byId.queryOptions({ registryId: params.registryId }),
+      ),
+      context.queryClient.ensureQueryData(
+        context.trpc.registry.manifest.queryOptions({
+          registryId: params.registryId,
+          reference: params.tag,
+          repository,
+        }),
+      ),
     ]);
 
     return { registry, manifest, repository };

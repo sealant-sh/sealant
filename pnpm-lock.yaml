@@ -202,6 +202,9 @@ importers:
       '@sealant/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@sealant/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@sealant/ui':
         specifier: workspace:*
         version: link:../../packages/ui

@@ -17,6 +17,7 @@
     "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.8",
     "@sealant/auth": "workspace:*",
+    "@sealant/db": "workspace:*",
     "@sealant/ui": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
