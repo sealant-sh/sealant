@@ -42,6 +42,14 @@ pnpm --filter @sealant/api dev
 
 The default registry settings point at the local Zot instance started from the root `compose.yaml`.
 
+By default, CORS is enabled for:
+
+- `http://localhost:3000`
+- `http://127.0.0.1:3000`
+- `http://localhost:3001`
+
+Override with `CORS_ALLOWED_ORIGINS` as a comma-separated list.
+
 The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
 and the shared SQLite database from `@sealant/db`.
 
@@ -91,14 +99,14 @@ pnpm --filter @sealant/worker dev
 ### Verify control-plane health
 
 ```bash
-curl http://localhost:3000/healthz
-curl http://localhost:3000/v1/registries/default/ping
+curl http://localhost:4000/healthz
+curl http://localhost:4000/v1/registries/default/ping
 ```
 
 ### Queue a workspace image build
 
 ```bash
-curl -X POST http://localhost:3000/v1/sandboxes \
+curl -X POST http://localhost:4000/v1/sandboxes \
   -H 'content-type: application/json' \
   -d '{
     "registryId": "default",
@@ -120,13 +128,13 @@ Expected response: `202` with `sandboxId`.
 ### Poll job status
 
 ````bash
-curl "http://localhost:3000/v1/sandboxes?ownerUserId=<userId>"
-curl http://localhost:3000/v1/sandboxes/<sandboxId>
+curl "http://localhost:4000/v1/sandboxes?ownerUserId=<userId>"
+curl http://localhost:4000/v1/sandboxes/<sandboxId>
 
 Optional lower-level queue view:
 
 ```bash
-curl http://localhost:3000/v1/workspace-build-jobs/<jobId>
+curl http://localhost:4000/v1/workspace-build-jobs/<jobId>
 ````
 
 ````
@@ -145,7 +153,7 @@ On success, the response includes:
 ### Confirm image exists in registry
 
 ```bash
-curl "http://localhost:3000/v1/registries/default/tags?repository=sealant/workspaces/demo"
+curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/workspaces/demo"
 ````
 
 ### Common failure cases

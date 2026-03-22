@@ -7,6 +7,7 @@ import type {
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
@@ -16,6 +17,7 @@ import type { WorkspaceBuildJobPublisher } from "./lib/types.js";
 const testEnv: AppEnv = {
   DATABASE_BUSY_TIMEOUT_MS: 5000,
   DATABASE_FILE_PATH: ":memory:",
+  CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001",
   NODE_ENV: "test",
   PORT: 3000,
   RABBITMQ_URL: "amqp://sealant:sealant@127.0.0.1:5673",
@@ -401,6 +403,7 @@ const createSandboxAttemptRepositoryStub = (
       return run;
     },
     getAttemptById: async (id) => runs.get(id),
+    getAttemptSnapshotByRunId: async (runId) => snapshots.get(runId),
     listAttempts: async (input = {}) => {
       const allRuns = [...runs.values()]
         .filter((run) =>
@@ -582,6 +585,48 @@ describe("createApiApp", () => {
       repository: "sealant/workspaces/demo",
       tags: ["latest", "opencode"],
     });
+  });
+
+  it("sets cors headers for configured origins", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/healthz", {
+      headers: {
+        origin: "http://localhost:3000",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:3000");
+  });
+
+  it("does not set cors headers for unknown origins", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/healthz", {
+      headers: {
+        origin: "https://untrusted.example.com",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("serves the generated OpenAPI document without run routes", async () => {
@@ -887,6 +932,18 @@ describe("createApiApp", () => {
       requestedByUserId: testUserId,
       queuedAt: now,
     });
+    const requestSpec = {
+      source: "https://github.com/example/repo",
+      harness: "opencode",
+      os: "nix",
+    } as const;
+
+    await runs.setAttemptSnapshot({
+      runId: run.id,
+      userSpecPayload: requestSpec,
+      resolvedSpecPayload: requestSpec,
+      blueprintPayload: normalizeUserWorkspaceSpec(requestSpec),
+    });
 
     await sandboxRepository.linkSandboxAttempt({
       sandboxId: sandbox.id,
@@ -904,9 +961,7 @@ describe("createApiApp", () => {
       repository: "sealant/workspaces/demo",
       tag: "opencode",
       requestPayload: {
-        source: "https://github.com/example/repo",
-        harness: "opencode",
-        os: "nix",
+        ...requestSpec,
       },
     });
 
@@ -992,11 +1047,21 @@ describe("createApiApp", () => {
       spec?: {
         harness: string;
       };
+      blueprint?: {
+        sources?: {
+          workspace?: {
+            url: string;
+            ref: string;
+          };
+        };
+      };
     };
 
     expect(detailBody.sandboxId).toBe("sandbox_ready");
     expect(detailBody.status).toBe("ready");
     expect(detailBody.spec?.harness).toBe("opencode");
+    expect(detailBody.blueprint?.sources?.workspace?.url).toBe("https://github.com/example/repo");
+    expect(detailBody.blueprint?.sources?.workspace?.ref).toBe("main");
 
     const attemptsResponse = await app.request("/v1/sandboxes/sandbox_ready/attempts?limit=10");
     expect(attemptsResponse.status).toBe(200);

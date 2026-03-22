@@ -1,21 +1,37 @@
+import type { QueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { RunDetailSection } from "@/components/app/run-detail-section";
-import { getRunById } from "@/lib/navigation/workspace-data";
+import type { AppTrpc } from "@/lib/trpc/client";
 
 export const Route = createFileRoute("/_authenticated/runs/$runId/diff" as never)({
-  loader: ({ params }: { params: { runId: string } }) => getRunById(params.runId),
+  loader: ({
+    context,
+    params,
+  }: {
+    context: { queryClient: QueryClient; trpc: AppTrpc };
+    params: { runId: string };
+  }) => {
+    return context.queryClient.ensureQueryData(
+      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.runId }),
+    );
+  },
   component: RunDiffPage,
 });
 
 function RunDiffPage() {
-  const run = Route.useLoaderData() as ReturnType<typeof getRunById>;
+  const sandbox = Route.useLoaderData() as {
+    sandboxId: string;
+    status: "queued" | "running" | "ready" | "failed" | "cancelled";
+    repository?: string | undefined;
+    tag?: string | undefined;
+  };
 
   return (
     <RunDetailSection
-      run={run}
+      sandbox={sandbox}
       section="Diff"
-      description="Review exactly what changed in this execution before promoting it into a broader profile or repository workflow."
+      description="Review exactly what changed in this sandbox attempt before promoting it into broader environment usage."
     >
       <div className="border border-border">
         {[

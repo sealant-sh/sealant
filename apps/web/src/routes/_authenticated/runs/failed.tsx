@@ -1,28 +1,37 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunRows } from "@/components/app/run-rows";
+import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
-import { RUNS } from "@/lib/navigation/workspace-data";
+import { failedSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/failed" as never)({
-  component: FailedRunsPage,
+export const Route = createFileRoute("/_authenticated/runs/failed")({
+  loader: ({ context }) => {
+    return context.queryClient.ensureQueryData(failedSandboxesQueryOptions(context.trpc));
+  },
+  component: FailedSandboxesPage,
 });
 
-function FailedRunsPage() {
-  const failedRuns = RUNS.filter((run) => run.status === "failed");
+function FailedSandboxesPage() {
+  const failedSandboxes = Route.useLoaderData().items;
 
   return (
     <WorkspacePage
-      kicker="Runs"
-      title="Failed runs"
-      description="Review the runs that stopped execution and jump into diff, validation, or trace details without changing context."
+      kicker="Sandboxes"
+      title="Failed sandboxes"
+      description="Review failed builds, inspect traces, and rerun sandboxes with full execution context in one place."
       metrics={[
-        { label: "Failed", value: String(failedRuns.length) },
-        { label: "Escalated", value: "1" },
-        { label: "Avg triage", value: "7m" },
+        { label: "Failed", value: String(failedSandboxes.length) },
+        {
+          label: "Latest failure",
+          value:
+            failedSandboxes[0] === undefined
+              ? "n/a"
+              : new Date(failedSandboxes[0].updatedAt).toLocaleTimeString(),
+        },
+        { label: "Recovery", value: "Trace + rerun" },
       ]}
     >
-      <RunRows runs={failedRuns} />
+      <SandboxRows sandboxes={failedSandboxes} />
     </WorkspacePage>
   );
 }

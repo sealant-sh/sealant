@@ -1,29 +1,33 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunRows } from "@/components/app/run-rows";
+import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
-import { RUNS } from "@/lib/navigation/workspace-data";
+import { allSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/" as never)({
-  component: RunsPage,
+export const Route = createFileRoute("/_authenticated/runs/")({
+  loader: ({ context }) => {
+    return context.queryClient.ensureQueryData(allSandboxesQueryOptions(context.trpc));
+  },
+  component: SandboxesPage,
 });
 
-function RunsPage() {
-  const activeCount = RUNS.filter((run) => run.status === "active").length;
-  const failedCount = RUNS.filter((run) => run.status === "failed").length;
+function SandboxesPage() {
+  const sandboxes = Route.useLoaderData().items;
+  const runningCount = sandboxes.filter((sandbox) => sandbox.status === "running").length;
+  const failedCount = sandboxes.filter((sandbox) => sandbox.status === "failed").length;
 
   return (
     <WorkspacePage
-      kicker="Runs"
-      title="Execution History"
-      description="Track every execution, isolate failed workflows quickly, and open run workspaces without leaving this surface."
+      kicker="Sandboxes"
+      title="Sandbox Fleet"
+      description="Track sandbox lifecycle, isolate failed builds quickly, and open detailed traces without leaving this workspace."
       metrics={[
-        { label: "Total runs", value: String(RUNS.length) },
-        { label: "Active", value: String(activeCount) },
+        { label: "Total sandboxes", value: String(sandboxes.length) },
+        { label: "Running", value: String(runningCount) },
         { label: "Failed", value: String(failedCount) },
       ]}
     >
-      <RunRows runs={RUNS} />
+      <SandboxRows sandboxes={sandboxes} />
     </WorkspacePage>
   );
 }

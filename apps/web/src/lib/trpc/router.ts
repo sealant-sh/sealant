@@ -8,10 +8,33 @@ import {
   listRepositories,
 } from "@/lib/api/registry-service";
 
+import {
+  createSandboxRequestSchema,
+  listSandboxAttemptsQuerySchema,
+  listSandboxEventsQuerySchema,
+  listSandboxesQuerySchema,
+  sandboxIdParamsSchema,
+} from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
 const registryIdSchema = z.object({
   registryId: z.string().trim().min(1),
+});
+
+const listOwnedSandboxesInputSchema = listSandboxesQuerySchema.omit({
+  ownerUserId: true,
+});
+
+const sandboxAttemptsInputSchema = sandboxIdParamsSchema.extend({
+  limit: listSandboxAttemptsQuerySchema.shape.limit,
+});
+
+const sandboxEventsInputSchema = sandboxIdParamsSchema.extend({
+  limit: listSandboxEventsQuerySchema.shape.limit,
+});
+
+const createSandboxForSessionSchema = createSandboxRequestSchema.omit({
+  ownerUserId: true,
 });
 
 export const appRouter = router({
@@ -54,6 +77,35 @@ export const appRouter = router({
       .query(async ({ input }) => {
         return getManifest(input.registryId, input.repository, input.reference);
       }),
+  }),
+  sandbox: router({
+    create: protectedProcedure
+      .input(createSandboxForSessionSchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.sandboxes.create({
+          ...input,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    list: protectedProcedure
+      .input(listOwnedSandboxesInputSchema.optional())
+      .query(async ({ ctx, input }) => {
+        const query = listOwnedSandboxesInputSchema.parse(input ?? {});
+
+        return ctx.coreApi.sandboxes.list({
+          ...query,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    byId: protectedProcedure.input(sandboxIdParamsSchema).query(async ({ ctx, input }) => {
+      return ctx.coreApi.sandboxes.byId(input);
+    }),
+    attempts: protectedProcedure.input(sandboxAttemptsInputSchema).query(async ({ ctx, input }) => {
+      return ctx.coreApi.sandboxes.attempts(input);
+    }),
+    events: protectedProcedure.input(sandboxEventsInputSchema).query(async ({ ctx, input }) => {
+      return ctx.coreApi.sandboxes.events(input);
+    }),
   }),
 });
 

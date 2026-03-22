@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
 import type { AppBindings, AppRuntimeConfig } from "./types.js";
 
@@ -8,6 +9,33 @@ export const createRouter = () => {
 
 export const createApp = (config: AppRuntimeConfig) => {
   const app = createRouter();
+  const allowAllOrigins = config.env.CORS_ALLOWED_ORIGINS.trim() === "*";
+  const allowedOrigins = parseAllowedOrigins(config.env.CORS_ALLOWED_ORIGINS);
+
+  app.use(
+    "*",
+    cors({
+      origin: (origin) => {
+        if (allowAllOrigins) {
+          return "*";
+        }
+
+        if (origin.length === 0) {
+          return origin;
+        }
+
+        if (allowedOrigins.has(origin)) {
+          return origin;
+        }
+
+        return "";
+      },
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowHeaders: ["content-type", "authorization", "idempotency-key"],
+      exposeHeaders: ["location"],
+      maxAge: 86_400,
+    }),
+  );
 
   app.use("*", async (c, next) => {
     c.set("env", config.env);
@@ -39,4 +67,13 @@ export const createApp = (config: AppRuntimeConfig) => {
   });
 
   return app;
+};
+
+const parseAllowedOrigins = (value: string): Set<string> => {
+  return new Set(
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
+  );
 };

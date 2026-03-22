@@ -48,10 +48,18 @@ import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
   readonly session: AuthSession;
+  readonly sidebarSandboxes: readonly SidebarSandbox[];
   readonly children: ReactNode;
 }
 
-type GlobalArea = "runs" | "issues" | "repositories" | "profiles";
+type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+
+interface SidebarSandbox {
+  readonly sandboxId: string;
+  readonly status: SandboxStatus;
+}
+
+type GlobalArea = "sandboxes" | "issues" | "repositories" | "profiles";
 
 interface GlobalNavItem {
   readonly href: string;
@@ -62,6 +70,7 @@ interface GlobalNavItem {
 interface SidebarLink {
   readonly href: string;
   readonly label: string;
+  readonly meta?: string;
   readonly exact?: boolean;
 }
 
@@ -71,19 +80,19 @@ interface SidebarGroup {
 }
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
-  { href: "/runs", label: "Runs", icon: Activity },
+  { href: "/runs", label: "Sandboxes", icon: Activity },
   { href: "/issues", label: "Issues", icon: CircleAlert },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
   { href: "/profiles", label: "Profiles", icon: UserRound },
 ] as const;
 
-const RUN_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
+const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
   {
-    label: "Run Views",
+    label: "Sandbox Views",
     links: [
-      { href: "/runs", label: "All Runs", exact: true },
-      { href: "/runs/active", label: "Active Runs", exact: true },
-      { href: "/runs/failed", label: "Failed Runs", exact: true },
+      { href: "/runs", label: "All Sandboxes", exact: true },
+      { href: "/runs/active", label: "Running", exact: true },
+      { href: "/runs/failed", label: "Failed", exact: true },
     ],
   },
 ];
@@ -94,12 +103,12 @@ const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
     links: [
       { href: "/issues", label: "All Issues", exact: true },
       { href: "/issues/assigned", label: "Assigned to me", exact: true },
-      { href: "/issues/ready", label: "Ready for run", exact: true },
+      { href: "/issues/ready", label: "Ready for workflow", exact: true },
     ],
   },
 ];
 
-export function AppShell({ session, children }: AppShellProps) {
+export function AppShell({ session, sidebarSandboxes, children }: AppShellProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const router = useRouter();
@@ -107,13 +116,14 @@ export function AppShell({ session, children }: AppShellProps) {
   const pathname = useRouterState({ select: (state) => normalizePath(state.location.pathname) });
 
   const activeArea = getGlobalArea(pathname);
-  const runDetail = getRunDetail(pathname);
+  const sandboxDetail = getSandboxDetail(pathname);
   const selectedRepository = getSelectedEntity(pathname, "repositories");
   const selectedProfile = getSelectedEntity(pathname, "profiles");
 
   const sidebarGroups = getSidebarGroups({
     activeArea,
-    runDetail,
+    sidebarSandboxes,
+    sandboxDetail,
     selectedRepository,
     selectedProfile,
   });
@@ -298,8 +308,8 @@ function AppSidebarNav({
             <input
               ref={searchInputRef}
               type="search"
-              aria-label="Search runs, repos, profiles"
-              placeholder="Search runs, repos, profiles"
+              aria-label="Search sandboxes, repos, profiles"
+              placeholder="Search sandboxes, repos, profiles"
               className="h-10 w-full border border-sidebar-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-sidebar-foreground focus:outline-none"
             />
           </label>
@@ -366,6 +376,11 @@ function AppSidebarNav({
                               className="px-3 text-sm normal-case tracking-normal"
                             >
                               <span>{item.label}</span>
+                              {item.meta === undefined ? null : (
+                                <span className="ml-auto font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+                                  {item.meta}
+                                </span>
+                              )}
                             </SidebarMenuButton>
                           </SidebarMenuItem>
                         );
@@ -394,8 +409,8 @@ function AppSidebarNav({
             "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
             isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
           )}
-          title={!isExpanded ? "New Run" : undefined}
-          aria-label="New Run"
+          title={!isExpanded ? "New Sandbox" : undefined}
+          aria-label="New Sandbox"
         >
           <Plus className="size-4 shrink-0" />
           <span
@@ -407,7 +422,7 @@ function AppSidebarNav({
             )}
             aria-hidden={!isExpanded}
           >
-            New Run
+            New Sandbox
           </span>
         </Link>
 
@@ -540,22 +555,22 @@ function getGlobalArea(pathname: string): GlobalArea {
     return "profiles";
   }
 
-  return "runs";
+  return "sandboxes";
 }
 
-function getRunDetail(pathname: string): { runId: string } | null {
+function getSandboxDetail(pathname: string): { sandboxId: string } | null {
   const segments = pathname.split("/").filter(Boolean);
-  const runId = segments[1];
+  const sandboxId = segments[1];
 
-  if (segments[0] !== "runs" || runId === undefined) {
+  if (segments[0] !== "runs" || sandboxId === undefined) {
     return null;
   }
 
-  if (runId === "active" || runId === "failed") {
+  if (sandboxId === "active" || sandboxId === "failed") {
     return null;
   }
 
-  return { runId: decodeURIComponent(runId) };
+  return { sandboxId: decodeURIComponent(sandboxId) };
 }
 
 function getSelectedEntity(pathname: string, area: "repositories" | "profiles"): string | null {
@@ -575,28 +590,30 @@ function getSelectedEntity(pathname: string, area: "repositories" | "profiles"):
 
 function getSidebarGroups({
   activeArea,
-  runDetail,
+  sidebarSandboxes,
+  sandboxDetail,
   selectedRepository,
   selectedProfile,
 }: {
   readonly activeArea: GlobalArea;
-  readonly runDetail: { runId: string } | null;
+  readonly sidebarSandboxes: readonly SidebarSandbox[];
+  readonly sandboxDetail: { sandboxId: string } | null;
   readonly selectedRepository: string | null;
   readonly selectedProfile: string | null;
 }): readonly SidebarGroup[] {
-  if (runDetail !== null) {
-    const encodedRunId = encodeURIComponent(runDetail.runId);
-    const runBase = `/runs/${encodedRunId}`;
+  if (sandboxDetail !== null) {
+    const encodedSandboxId = encodeURIComponent(sandboxDetail.sandboxId);
+    const sandboxBase = `/runs/${encodedSandboxId}`;
 
     return [
       {
-        label: "Run Navigation",
+        label: "Sandbox Navigation",
         links: [
-          { href: runBase, label: "Summary", exact: true },
-          { href: `${runBase}/diff`, label: "Diff", exact: true },
-          { href: `${runBase}/validation`, label: "Validation", exact: true },
-          { href: `${runBase}/trace`, label: "Trace", exact: true },
-          { href: `${runBase}/spec`, label: "Spec", exact: true },
+          { href: sandboxBase, label: "Summary", exact: true },
+          { href: `${sandboxBase}/diff`, label: "Diff", exact: true },
+          { href: `${sandboxBase}/validation`, label: "Validation", exact: true },
+          { href: `${sandboxBase}/trace`, label: "Trace", exact: true },
+          { href: `${sandboxBase}/spec`, label: "Spec", exact: true },
         ],
       },
     ];
@@ -689,5 +706,44 @@ function getSidebarGroups({
     ];
   }
 
-  return RUN_OVERVIEW_SIDEBAR;
+  if (activeArea === "sandboxes") {
+    if (sidebarSandboxes.length === 0) {
+      return SANDBOX_OVERVIEW_SIDEBAR;
+    }
+
+    return [
+      ...SANDBOX_OVERVIEW_SIDEBAR,
+      {
+        label: "Recent Sandboxes",
+        links: sidebarSandboxes.map((sandbox) => ({
+          href: `/runs/${encodeURIComponent(sandbox.sandboxId)}`,
+          label: sandbox.sandboxId,
+          meta: formatSandboxStatus(sandbox.status),
+          exact: false,
+        })),
+      },
+    ];
+  }
+
+  return SANDBOX_OVERVIEW_SIDEBAR;
+}
+
+function formatSandboxStatus(status: SidebarSandbox["status"]): string {
+  if (status === "running") {
+    return "Running";
+  }
+
+  if (status === "ready") {
+    return "Ready";
+  }
+
+  if (status === "failed") {
+    return "Failed";
+  }
+
+  if (status === "cancelled") {
+    return "Cancelled";
+  }
+
+  return "Queued";
 }
