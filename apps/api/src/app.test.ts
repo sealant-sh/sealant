@@ -1,9 +1,14 @@
 import type {
+  RunDetailBundle,
+  RunReportingRepository,
+  SandboxAttemptRepository,
+  SandboxRuntimeInstance,
+  SandboxRuntimeInstanceRepository,
   WorkspaceBuildJob,
   WorkspaceBuildJobRepository,
-  WorkspaceRunRepository,
 } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
@@ -24,8 +29,10 @@ const testEnv: AppEnv = {
 
 const testUserId = "user_test";
 
-type WorkspaceRunRecord = Awaited<ReturnType<WorkspaceRunRepository["createQueuedRun"]>>;
-type RunInputSnapshotRecord = Awaited<ReturnType<WorkspaceRunRepository["setRunInputSnapshot"]>>;
+type SandboxAttemptRecord = Awaited<ReturnType<SandboxAttemptRepository["createQueuedAttempt"]>>;
+type SandboxAttemptSnapshotRecord = Awaited<
+  ReturnType<SandboxAttemptRepository["setAttemptSnapshot"]>
+>;
 
 const createRegistryClientStub = (): RegistryClient => {
   return {
@@ -59,6 +66,10 @@ const createRegistryClientStub = (): RegistryClient => {
 const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository => {
   const jobs = new Map<string, WorkspaceBuildJob>();
 
+  const byCreatedAtDesc = (left: WorkspaceBuildJob, right: WorkspaceBuildJob) => {
+    return right.createdAt.getTime() - left.createdAt.getTime();
+  };
+
   const touchUpdatedAt = (job: WorkspaceBuildJob): WorkspaceBuildJob => {
     return {
       ...job,
@@ -70,6 +81,12 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
     claimJobById: async () => null,
     claimNextQueuedJob: async () => null,
     getJobById: async (id) => jobs.get(id),
+    getJobByIdempotencyKey: async (idempotencyKey) => {
+      return [...jobs.values()].find((job) => job.idempotencyKey === idempotencyKey);
+    },
+    getLatestJobByRunId: async (runId) => {
+      return [...jobs.values()].filter((job) => job.runId === runId).sort(byCreatedAtDesc)[0];
+    },
     insertQueuedJob: async (input) => {
       const now = new Date();
       const job: WorkspaceBuildJob = {
@@ -106,6 +123,21 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
     },
     listJobsByStatus: async (status) => {
       return [...jobs.values()].filter((job) => job.status === status);
+    },
+    listLatestJobsByRunIds: async (runIds) => {
+      const latestJobsByRunId = new Map<string, WorkspaceBuildJob>();
+
+      for (const runId of runIds) {
+        const latestJob = [...jobs.values()]
+          .filter((job) => job.runId === runId)
+          .sort(byCreatedAtDesc)[0];
+
+        if (latestJob !== undefined) {
+          latestJobsByRunId.set(runId, latestJob);
+        }
+      }
+
+      return latestJobsByRunId;
     },
     markJobFailed: async (input) => {
       const existing = jobs.get(input.id);
@@ -173,16 +205,16 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
   } satisfies WorkspaceBuildJobRepository;
 };
 
-const createWorkspaceRunRepositoryStub = (
+const createSandboxAttemptRepositoryStub = (
   options: {
     knownUserIds?: readonly string[];
   } = {},
-): WorkspaceRunRepository => {
-  const runs = new Map<string, WorkspaceRunRecord>();
-  const snapshots = new Map<string, RunInputSnapshotRecord>();
+): SandboxAttemptRepository => {
+  const runs = new Map<string, SandboxAttemptRecord>();
+  const snapshots = new Map<string, SandboxAttemptSnapshotRecord>();
   const knownUserIds = new Set(options.knownUserIds ?? [testUserId]);
 
-  const touchUpdatedAt = (run: WorkspaceRunRecord): WorkspaceRunRecord => {
+  const touchUpdatedAt = (run: SandboxAttemptRecord): SandboxAttemptRecord => {
     return {
       ...run,
       updatedAt: new Date(),
@@ -190,8 +222,8 @@ const createWorkspaceRunRepositoryStub = (
   };
 
   const finalizeRun = (
-    run: WorkspaceRunRecord,
-    status: WorkspaceRunRecord["status"],
+    run: SandboxAttemptRecord,
+    status: SandboxAttemptRecord["status"],
     finishedAt: Date,
   ) => {
     const durationMs =
@@ -206,7 +238,7 @@ const createWorkspaceRunRepositoryStub = (
   };
 
   return {
-    createQueuedRun: async (input) => {
+    createQueuedAttempt: async (input) => {
       if (!knownUserIds.has(input.ownerUserId)) {
         throw new Error("FOREIGN KEY constraint failed");
       }
@@ -216,7 +248,7 @@ const createWorkspaceRunRepositoryStub = (
       }
 
       const now = input.queuedAt ?? new Date();
-      const run: WorkspaceRunRecord = {
+      const run: SandboxAttemptRecord = {
         id: input.id,
         ownerUserId: input.ownerUserId,
         repositoryId: input.repositoryId ?? null,
@@ -240,8 +272,8 @@ const createWorkspaceRunRepositoryStub = (
       runs.set(run.id, run);
       return run;
     },
-    getRunById: async (id) => runs.get(id),
-    listRuns: async (input = {}) => {
+    getAttemptById: async (id) => runs.get(id),
+    listAttempts: async (input = {}) => {
       const allRuns = [...runs.values()]
         .filter((run) =>
           input.ownerUserId === undefined ? true : run.ownerUserId === input.ownerUserId,
@@ -259,7 +291,7 @@ const createWorkspaceRunRepositoryStub = (
 
       return allRuns.slice(0, input.limit ?? 100);
     },
-    markRunCancelled: async (input) => {
+    markAttemptCancelled: async (input) => {
       const existing = runs.get(input.id);
 
       if (existing === undefined) {
@@ -275,7 +307,7 @@ const createWorkspaceRunRepositoryStub = (
       runs.set(cancelled.id, cancelled);
       return cancelled;
     },
-    markRunFailed: async (input) => {
+    markAttemptFailed: async (input) => {
       const existing = runs.get(input.id);
 
       if (existing === undefined) {
@@ -286,7 +318,7 @@ const createWorkspaceRunRepositoryStub = (
       runs.set(next.id, next);
       return next;
     },
-    markRunRunning: async (input) => {
+    markAttemptRunning: async (input) => {
       const existing = runs.get(input.id);
 
       if (existing === undefined) {
@@ -302,7 +334,7 @@ const createWorkspaceRunRepositoryStub = (
       runs.set(next.id, next);
       return next;
     },
-    markRunSucceeded: async (input) => {
+    markAttemptSucceeded: async (input) => {
       const existing = runs.get(input.id);
 
       if (existing === undefined) {
@@ -313,9 +345,9 @@ const createWorkspaceRunRepositoryStub = (
       runs.set(next.id, next);
       return next;
     },
-    setRunInputSnapshot: async (input) => {
+    setAttemptSnapshot: async (input) => {
       const existing = snapshots.get(input.runId);
-      const snapshot: RunInputSnapshotRecord = {
+      const snapshot: SandboxAttemptSnapshotRecord = {
         runId: input.runId,
         userSpecPayload: input.userSpecPayload,
         resolvedSpecPayload: input.resolvedSpecPayload,
@@ -328,7 +360,72 @@ const createWorkspaceRunRepositoryStub = (
       snapshots.set(input.runId, snapshot);
       return snapshot;
     },
-  } satisfies WorkspaceRunRepository;
+  } satisfies SandboxAttemptRepository;
+};
+
+const createRunReportingRepositoryStub = (
+  options: {
+    bundles?: ReadonlyMap<string, RunDetailBundle>;
+  } = {},
+): RunReportingRepository => {
+  const bundles = new Map(options.bundles ?? []);
+  const fail = async (): Promise<never> => {
+    throw new Error("Not implemented in test stub.");
+  };
+
+  return {
+    appendRunEvents: async () => fail(),
+    replaceRunValidationResults: async () => fail(),
+    replaceRunDiffFiles: async () => fail(),
+    insertRunArtifacts: async () => fail(),
+    upsertRunSummary: async () => fail(),
+    getRunDetailBundle: async (runId) => bundles.get(runId) ?? null,
+  } satisfies RunReportingRepository;
+};
+
+const createSandboxRuntimeInstanceRepositoryStub = (
+  options: {
+    byRunId?: ReadonlyMap<string, SandboxRuntimeInstance>;
+  } = {},
+): SandboxRuntimeInstanceRepository => {
+  const byRunId = new Map(options.byRunId ?? []);
+
+  return {
+    getRuntimeInstanceByRunId: async (runId) => byRunId.get(runId),
+    listRuntimeInstancesByRunIds: async (runIds) => {
+      const result = new Map<string, SandboxRuntimeInstance>();
+
+      for (const runId of runIds) {
+        const row = byRunId.get(runId);
+        if (row !== undefined) {
+          result.set(runId, row);
+        }
+      }
+
+      return result;
+    },
+    upsertRuntimeInstance: async (input) => {
+      const now = new Date();
+      const existing = byRunId.get(input.runId);
+      const next: SandboxRuntimeInstance = {
+        runId: input.runId,
+        status: input.status,
+        adapter: input.adapter ?? existing?.adapter ?? null,
+        resourceId: input.resourceId ?? existing?.resourceId ?? null,
+        reference: input.reference ?? existing?.reference ?? null,
+        endpoint: input.endpoint ?? existing?.endpoint ?? null,
+        errorCode: input.errorCode ?? existing?.errorCode ?? null,
+        errorMessage: input.errorMessage ?? existing?.errorMessage ?? null,
+        launchedAt: input.launchedAt ?? existing?.launchedAt ?? null,
+        finishedAt: input.finishedAt ?? existing?.finishedAt ?? null,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      byRunId.set(input.runId, next);
+      return next;
+    },
+  } satisfies SandboxRuntimeInstanceRepository;
 };
 
 const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
@@ -344,7 +441,9 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request("/healthz");
@@ -361,7 +460,9 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request(
@@ -381,7 +482,9 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request("/openapi.json");
@@ -399,18 +502,23 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/registries/{registryId}/ping"]).toBeDefined();
     expect(body.paths["/healthz"]).toBeDefined();
     expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes/{sandboxId}"]).toBeDefined();
+    expect(body.paths["/v1/runs/{runId}"]).toBeDefined();
   });
 
   it("creates and queues a workspace build job", async () => {
     const repository = createWorkspaceBuildJobRepositoryStub();
     const publisher = createWorkspaceBuildJobPublisherStub();
-    const runs = createWorkspaceRunRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: publisher,
       workspaceBuildJobRepository: repository,
-      workspaceRunRepository: runs,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request("/v1/workspace-build-jobs", {
@@ -455,9 +563,11 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      workspaceRunRepository: createWorkspaceRunRepositoryStub({
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub({
         knownUserIds: [testUserId],
       }),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request("/v1/workspace-build-jobs", {
@@ -526,7 +636,9 @@ describe("createApiApp", () => {
       registryClient: createRegistryClientStub(),
       workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
       workspaceBuildJobRepository: repository,
-      workspaceRunRepository: createWorkspaceRunRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
     });
 
     const response = await app.request("/v1/workspace-build-jobs/job_test");
@@ -546,5 +658,394 @@ describe("createApiApp", () => {
     expect(body.status).toBe("succeeded");
     expect(body.executorId).toBe("nix");
     expect(body.publishedImage?.digest).toBe("sha256:test");
+  });
+
+  it("creates sandboxes via the UI-facing sandbox route", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+      runReportingRepository: createRunReportingRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/sandboxes", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerUserId: testUserId,
+        registryId: "default",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        spec: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+
+    const body = (await response.json()) as {
+      sandboxId: string;
+      runId: string;
+      jobId: string;
+      status: string;
+    };
+
+    expect(body.sandboxId).toBe(body.runId);
+    expect(body.status).toBe("queued");
+    expect(response.headers.get("location")).toBe(`/v1/sandboxes/${body.runId}`);
+
+    const savedJob = await repository.getJobById(body.jobId);
+    expect(savedJob?.runId).toBe(body.runId);
+  });
+
+  it("lists and fetches consolidated sandbox lifecycle details", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
+    const now = new Date();
+    const run = await runs.createQueuedAttempt({
+      id: "run_ready",
+      ownerUserId: testUserId,
+      triggerType: "api",
+      requestedByUserId: testUserId,
+      queuedAt: now,
+    });
+
+    await runs.markAttemptRunning({ id: run.id, startedAt: new Date(now.getTime() + 10_000) });
+    await runs.markAttemptSucceeded({ id: run.id, finishedAt: new Date(now.getTime() + 30_000) });
+
+    const queuedJob = await repository.insertQueuedJob({
+      id: "job_ready",
+      runId: run.id,
+      registryId: "default",
+      repository: "sealant/workspaces/demo",
+      tag: "opencode",
+      requestPayload: {
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      },
+    });
+
+    await repository.markJobSucceeded({
+      id: queuedJob.id,
+      executorId: "nix",
+      resultPayload: {
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      },
+      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      publishedDigest: "sha256:test",
+    });
+
+    const runtimeInstances = createSandboxRuntimeInstanceRepositoryStub({
+      byRunId: new Map([
+        [
+          run.id,
+          {
+            runId: run.id,
+            status: "running",
+            adapter: "docker",
+            resourceId: "container_123",
+            reference: "sealant-demo",
+            endpoint: "ssh://root@127.0.0.1:40222",
+            errorCode: null,
+            errorMessage: null,
+            launchedAt: new Date(now.getTime() + 20_000),
+            finishedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      ]),
+    });
+
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: runtimeInstances,
+      runReportingRepository: createRunReportingRepositoryStub(),
+    });
+
+    const listResponse = await app.request(`/v1/sandboxes?ownerUserId=${testUserId}&limit=10`);
+    expect(listResponse.status).toBe(200);
+
+    const listBody = (await listResponse.json()) as {
+      items: Array<{
+        sandboxId: string;
+        status: string;
+        runtime?: {
+          endpoint?: string;
+        };
+      }>;
+    };
+
+    expect(listBody.items).toHaveLength(1);
+    expect(listBody.items[0]?.sandboxId).toBe("run_ready");
+    expect(listBody.items[0]?.status).toBe("ready");
+    expect(listBody.items[0]?.runtime?.endpoint).toBe("ssh://root@127.0.0.1:40222");
+
+    const detailResponse = await app.request("/v1/sandboxes/run_ready");
+    expect(detailResponse.status).toBe(200);
+
+    const detailBody = (await detailResponse.json()) as {
+      sandboxId: string;
+      runStatus: string;
+      jobStatus?: string;
+      status: string;
+    };
+
+    expect(detailBody.sandboxId).toBe("run_ready");
+    expect(detailBody.runStatus).toBe("succeeded");
+    expect(detailBody.jobStatus).toBe("succeeded");
+    expect(detailBody.status).toBe("ready");
+  });
+
+  it("returns run detail bundles for run UI surfaces", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
+    const run = await runs.createQueuedAttempt({
+      id: "run_detail",
+      ownerUserId: testUserId,
+      triggerType: "api",
+      requestedByUserId: testUserId,
+    });
+
+    await runs.setAttemptSnapshot({
+      runId: run.id,
+      userSpecPayload: {
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      },
+      resolvedSpecPayload: {
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      },
+      blueprintPayload: normalizeUserWorkspaceSpec({
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      }),
+    });
+
+    await runs.markAttemptRunning({ id: run.id });
+    await runs.markAttemptSucceeded({ id: run.id });
+
+    const storedRun = await runs.getAttemptById(run.id);
+    if (storedRun === undefined) {
+      throw new Error("Expected run to exist in test setup.");
+    }
+
+    const detailBundle: RunDetailBundle = {
+      run: storedRun,
+      inputSnapshot: {
+        runId: run.id,
+        userSpecPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+        resolvedSpecPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+        blueprintPayload: normalizeUserWorkspaceSpec({
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        }),
+        profileConfigSnapshot: null,
+        repositoryProfileConfigSnapshot: null,
+        createdAt: new Date(),
+      },
+      summary: {
+        runId: run.id,
+        objective: "Stabilize mobile header behavior",
+        linkedIssueRef: "#492",
+        filesChanged: 3,
+        additions: 42,
+        deletions: 12,
+        assumptions: ["Assumed mobile breakpoint at 390px"],
+        warnings: ["Large diff in layout.css"],
+        summaryMarkdown: "Updated responsive header behavior and validation coverage.",
+        generatedAt: new Date(),
+        updatedAt: new Date(),
+      },
+      events: [
+        {
+          id: "evt_1",
+          runId: run.id,
+          sequence: 1,
+          phase: "bootstrap",
+          level: "info",
+          eventType: "setup",
+          message: "Environment provisioned",
+          payload: null,
+          occurredAt: new Date(),
+        },
+      ],
+      validationResults: [
+        {
+          id: "val_1",
+          runId: run.id,
+          checkKey: "lint",
+          status: "pass",
+          durationMs: 1_200,
+          message: "All checks passed",
+          details: null,
+          createdAt: new Date(),
+        },
+      ],
+      diffFiles: [
+        {
+          id: "diff_1",
+          runId: run.id,
+          changeType: "modified",
+          path: "src/components/layout/Header.tsx",
+          oldPath: null,
+          additions: 42,
+          deletions: 12,
+          isBinary: false,
+          patchArtifactId: null,
+          createdAt: new Date(),
+        },
+      ],
+      artifacts: [
+        {
+          id: "artifact_1",
+          runId: run.id,
+          kind: "summary",
+          storageBackend: "inline",
+          storageKey: null,
+          contentType: "application/json",
+          byteSize: 128,
+          checksum: null,
+          inlineJson: {
+            ok: true,
+          },
+          createdAt: new Date(),
+        },
+      ],
+    };
+
+    const queuedJob = await repository.insertQueuedJob({
+      id: "job_detail",
+      runId: run.id,
+      registryId: "default",
+      repository: "sealant/workspaces/demo",
+      tag: "opencode",
+      requestPayload: {
+        source: "https://github.com/example/repo",
+        harness: "opencode",
+        os: "nix",
+      },
+    });
+
+    await repository.markJobSucceeded({
+      id: queuedJob.id,
+      executorId: "nix",
+      resultPayload: {
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      },
+      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      publishedDigest: "sha256:test",
+    });
+
+    const runtimeInstances = createSandboxRuntimeInstanceRepositoryStub({
+      byRunId: new Map([
+        [
+          run.id,
+          {
+            runId: run.id,
+            status: "running",
+            adapter: "docker",
+            resourceId: "container_123",
+            reference: "sealant-demo",
+            endpoint: "ssh://root@127.0.0.1:40222",
+            errorCode: null,
+            errorMessage: null,
+            launchedAt: new Date(),
+            finishedAt: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+      ]),
+    });
+
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: runtimeInstances,
+      runReportingRepository: createRunReportingRepositoryStub({
+        bundles: new Map([[run.id, detailBundle]]),
+      }),
+    });
+
+    const response = await app.request(`/v1/runs/${run.id}`);
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      run: {
+        id: string;
+      };
+      sandbox: {
+        status: string;
+      };
+      events: unknown[];
+      validationResults: unknown[];
+      diffFiles: unknown[];
+      artifacts: unknown[];
+    };
+
+    expect(body.run.id).toBe(run.id);
+    expect(body.sandbox.status).toBe("ready");
+    expect(body.events).toHaveLength(1);
+    expect(body.validationResults).toHaveLength(1);
+    expect(body.diffFiles).toHaveLength(1);
+    expect(body.artifacts).toHaveLength(1);
   });
 });

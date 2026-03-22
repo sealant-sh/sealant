@@ -1,4 +1,4 @@
-import { and, asc, eq, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, or } from "drizzle-orm";
 
 import type { DatabaseClient } from "../client.js";
 import type {
@@ -104,6 +104,55 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
       .where(eq(workspaceBuildJobs.id, id))
       .limit(1);
     return job;
+  };
+
+  const getJobByIdempotencyKey = async (
+    idempotencyKey: string,
+  ): Promise<WorkspaceBuildJob | undefined> => {
+    const [job] = await db
+      .select()
+      .from(workspaceBuildJobs)
+      .where(eq(workspaceBuildJobs.idempotencyKey, idempotencyKey))
+      .limit(1);
+
+    return job;
+  };
+
+  const getLatestJobByRunId = async (runId: string): Promise<WorkspaceBuildJob | undefined> => {
+    const [job] = await db
+      .select()
+      .from(workspaceBuildJobs)
+      .where(eq(workspaceBuildJobs.runId, runId))
+      .orderBy(desc(workspaceBuildJobs.createdAt))
+      .limit(1);
+
+    return job;
+  };
+
+  const listLatestJobsByRunIds = async (
+    runIds: readonly string[],
+  ): Promise<ReadonlyMap<string, WorkspaceBuildJob>> => {
+    if (runIds.length === 0) {
+      return new Map();
+    }
+
+    const jobs = await db
+      .select()
+      .from(workspaceBuildJobs)
+      .where(inArray(workspaceBuildJobs.runId, [...runIds]))
+      .orderBy(desc(workspaceBuildJobs.createdAt));
+
+    const latestJobsByRunId = new Map<string, WorkspaceBuildJob>();
+
+    for (const job of jobs) {
+      if (job.runId === null || latestJobsByRunId.has(job.runId)) {
+        continue;
+      }
+
+      latestJobsByRunId.set(job.runId, job);
+    }
+
+    return latestJobsByRunId;
   };
 
   const listJobsByStatus = async (
@@ -274,7 +323,10 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
     claimJobById,
     claimNextQueuedJob,
     getJobById,
+    getJobByIdempotencyKey,
+    getLatestJobByRunId,
     insertQueuedJob,
+    listLatestJobsByRunIds,
     listJobsByStatus,
     markJobFailed,
     markJobRunning,

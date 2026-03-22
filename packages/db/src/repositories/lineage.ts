@@ -7,7 +7,7 @@ import {
   issues,
   pullRequests,
   runPullRequestLinks,
-  workspaceRuns,
+  sandboxAttempts,
   type Issue,
   type IssuePullRequestLink,
   type IssuePullRequestLinkRelation,
@@ -24,7 +24,7 @@ import {
   type RunPullRequestLink,
   type RunPullRequestLinkRelation,
   type SourceProvider,
-  type WorkspaceRun,
+  type SandboxAttempt,
 } from "../schema.js";
 
 export interface UpsertIssueInput {
@@ -85,7 +85,7 @@ export interface LinkIssuePullRequestInput {
 
 export interface IssueRunRecord {
   readonly link: IssueRunLink;
-  readonly run: WorkspaceRun;
+  readonly run: SandboxAttempt;
 }
 
 export interface RunPullRequestRecord {
@@ -255,12 +255,12 @@ export const createLineageRepository = (client: DatabaseClient) => {
     const rows = await db
       .select({
         link: issueRunLinks,
-        run: workspaceRuns,
+        run: sandboxAttempts,
       })
       .from(issueRunLinks)
-      .innerJoin(workspaceRuns, eq(workspaceRuns.id, issueRunLinks.runId))
+      .innerJoin(sandboxAttempts, eq(sandboxAttempts.id, issueRunLinks.runId))
       .where(eq(issueRunLinks.issueId, issueId))
-      .orderBy(desc(workspaceRuns.createdAt));
+      .orderBy(desc(sandboxAttempts.createdAt));
 
     return rows;
   };

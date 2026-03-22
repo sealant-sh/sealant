@@ -8,6 +8,8 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 
 vi.mock("@sealant/db", () => {
   return {
+    createSandboxAttemptRepository: vi.fn(),
+    createSandboxRuntimeInstanceRepository: vi.fn(),
     createWorkspaceBuildJobRepository: vi.fn(),
     workspaceBuildJobRequestPayloadSchema: {
       parse: vi.fn((input: unknown) => input),
@@ -15,7 +17,25 @@ vi.mock("@sealant/db", () => {
   };
 });
 
-const { createWorkspaceBuildJobRepository } = await import("@sealant/db");
+const {
+  createSandboxAttemptRepository,
+  createSandboxRuntimeInstanceRepository,
+  createWorkspaceBuildJobRepository,
+} = await import("@sealant/db");
+
+const createSandboxAttemptRepositoryStub = () => {
+  return {
+    markAttemptRunning: vi.fn(async () => null),
+    markAttemptSucceeded: vi.fn(async () => null),
+    markAttemptFailed: vi.fn(async () => null),
+  };
+};
+
+const createSandboxRuntimeInstanceRepositoryStub = () => {
+  return {
+    upsertRuntimeInstance: vi.fn(async () => null),
+  };
+};
 
 const createRuntimeAdapterStub = (
   id: RuntimeAdapter["id"],
@@ -43,6 +63,7 @@ describe("processWorkspaceBuildJob", () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_defaults",
+        runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -56,6 +77,12 @@ describe("processWorkspaceBuildJob", () => {
     };
 
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
 
     const executor = {
       id: "nix",
@@ -106,11 +133,12 @@ describe("processWorkspaceBuildJob", () => {
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+    const lifecycle = (launchCall?.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
     expect(launchCall?.blueprint.access.ssh).toEqual({
       enabled: true,
       listenPort: 2222,
     });
-    expect((launchCall?.blueprint as { lifecycle: unknown } | undefined)?.lifecycle).toMatchObject({
+    expect(lifecycle).toMatchObject({
       startup: {
         foreground: {
           kind: "command",
@@ -125,6 +153,7 @@ describe("processWorkspaceBuildJob", () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_explicit",
+        runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -140,6 +169,12 @@ describe("processWorkspaceBuildJob", () => {
     };
 
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
 
     const executor = {
       id: "nix",
@@ -190,8 +225,9 @@ describe("processWorkspaceBuildJob", () => {
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+    const lifecycle = (launchCall?.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
     expect(launchCall?.blueprint.access.ssh.enabled).toBe(false);
-    expect((launchCall?.blueprint as { lifecycle: unknown } | undefined)?.lifecycle).toMatchObject({
+    expect(lifecycle).toMatchObject({
       startup: {
         foreground: {
           kind: "command",
@@ -206,6 +242,7 @@ describe("processWorkspaceBuildJob", () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
+        runId: "run_123",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -218,7 +255,12 @@ describe("processWorkspaceBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
+    const runRepository = createSandboxAttemptRepositoryStub();
+
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
+    const runtimeRepository = createSandboxRuntimeInstanceRepositoryStub();
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(runtimeRepository as never);
 
     const executor = {
       id: "nix",
@@ -275,15 +317,15 @@ describe("processWorkspaceBuildJob", () => {
     });
     expect(repository.markJobSucceeded).toHaveBeenCalled();
     expect(repository.markJobFailed).not.toHaveBeenCalled();
+    expect(runRepository.markAttemptRunning).toHaveBeenCalledWith({ id: "run_123" });
+    expect(runRepository.markAttemptSucceeded).toHaveBeenCalledWith({ id: "run_123" });
+    expect(runRepository.markAttemptFailed).not.toHaveBeenCalled();
+    expect(runtimeRepository.upsertRuntimeInstance).toHaveBeenCalledTimes(2);
     expect(runtimeAdapter.launch).toHaveBeenCalledTimes(1);
     expect(repository.markJobSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         resultPayload: expect.objectContaining({
-          compile: expect.any(Object),
-          runtime: expect.objectContaining({
-            adapter: "docker",
-            resourceId: "resource_123",
-          }),
+          executor: expect.any(Object),
         }),
       }),
     );
@@ -293,6 +335,7 @@ describe("processWorkspaceBuildJob", () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
+        runId: "run_123",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -305,7 +348,13 @@ describe("processWorkspaceBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
+    const runRepository = createSandboxAttemptRepositoryStub();
+
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
 
     const executor = {
       id: "nix",
@@ -337,12 +386,14 @@ describe("processWorkspaceBuildJob", () => {
       id: "job_123",
       errorMessage: "compile exploded",
     });
+    expect(runRepository.markAttemptFailed).toHaveBeenCalledWith({ id: "run_123" });
   });
 
   it("marks a job as failed when no executor is registered for the requested OS", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
+        runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -356,6 +407,12 @@ describe("processWorkspaceBuildJob", () => {
     };
 
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
 
     const nixExecutor = {
       id: "nix",
@@ -391,10 +448,11 @@ describe("processWorkspaceBuildJob", () => {
     expect(repository.markJobSucceeded).not.toHaveBeenCalled();
   });
 
-  it("marks a job as failed when no runtime adapter is registered for a required runtime", async () => {
+  it("keeps build succeeded when runtime launch selection fails", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
+        runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: {
@@ -413,6 +471,12 @@ describe("processWorkspaceBuildJob", () => {
     };
 
     vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
 
     const executor = {
       id: "nix",
@@ -462,11 +526,7 @@ describe("processWorkspaceBuildJob", () => {
       }),
     ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");
 
-    expect(repository.markJobFailed).toHaveBeenCalledWith({
-      id: "job_123",
-      errorCode: "unsupported-runtime",
-      errorMessage: "No runtime adapter is registered for target.runtime.family 'k8s'.",
-    });
-    expect(repository.markJobSucceeded).not.toHaveBeenCalled();
+    expect(repository.markJobFailed).not.toHaveBeenCalled();
+    expect(repository.markJobSucceeded).toHaveBeenCalledTimes(1);
   });
 });

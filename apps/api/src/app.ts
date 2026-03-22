@@ -1,7 +1,9 @@
 import {
+  createSandboxAttemptRepository,
   createDatabaseClientFromEnv,
+  createRunReportingRepository,
+  createSandboxRuntimeInstanceRepository,
   createWorkspaceBuildJobRepository,
-  createWorkspaceRunRepository,
 } from "@sealant/db";
 
 import { env } from "./env.js";
@@ -11,6 +13,8 @@ import { createRegistryClient } from "./lib/create-registry-client.js";
 import { createWorkspaceBuildJobPublisher } from "./lib/create-workspace-build-job-publisher.js";
 import type { AppRuntimeConfig } from "./lib/types.js";
 import registries from "./routes/registries/registries.index.js";
+import runs from "./routes/runs/runs.index.js";
+import sandboxes from "./routes/sandboxes/sandboxes.index.js";
 import system from "./routes/system/system.index.js";
 import workspaceBuildJobs from "./routes/workspace-build-jobs/workspace-build-jobs.index.js";
 
@@ -19,6 +23,8 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   const routes = createRouter();
 
   routes.route("/", system);
+  routes.route("/v1/sandboxes", sandboxes);
+  routes.route("/v1/runs", runs);
   routes.route("/v1/registries", registries);
   routes.route("/v1/workspace-build-jobs", workspaceBuildJobs);
 
@@ -35,7 +41,9 @@ const app = createApiApp({
   registryClient: createRegistryClient(env),
   workspaceBuildJobPublisher: createWorkspaceBuildJobPublisher(env),
   workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
-  workspaceRunRepository: createWorkspaceRunRepository(databaseClient),
+  sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepository(databaseClient),
+  sandboxAttemptRepository: createSandboxAttemptRepository(databaseClient),
+  runReportingRepository: createRunReportingRepository(databaseClient),
 });
 
 export default app;

@@ -5,10 +5,12 @@ import {
   issueStateValues,
   profileStatusValues,
   pullRequestStateValues,
+  sandboxAttempts,
+  sandboxAttemptStatusValues,
+  sandboxAttemptTriggerTypeValues,
+  sandboxes,
+  sandboxStatusValues,
   workspaceBuildJobs,
-  workspaceRunStatusValues,
-  workspaceRuns,
-  workspaceRunTriggerTypeValues,
 } from "./schema.js";
 
 export const workspaceBuildJobSelectSchema = createSelectSchema(workspaceBuildJobs);
@@ -17,13 +19,19 @@ export const workspaceBuildJobInsertSchema = createInsertSchema(workspaceBuildJo
 
 export const workspaceBuildJobStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
 
-export const workspaceRunSelectSchema = createSelectSchema(workspaceRuns);
+export const sandboxAttemptSelectSchema = createSelectSchema(sandboxAttempts);
 
-export const workspaceRunInsertSchema = createInsertSchema(workspaceRuns);
+export const sandboxAttemptInsertSchema = createInsertSchema(sandboxAttempts);
 
-export const workspaceRunStatusSchema = z.enum(workspaceRunStatusValues);
+export const sandboxAttemptStatusSchema = z.enum(sandboxAttemptStatusValues);
 
-export const workspaceRunTriggerTypeSchema = z.enum(workspaceRunTriggerTypeValues);
+export const sandboxAttemptTriggerTypeSchema = z.enum(sandboxAttemptTriggerTypeValues);
+
+export const sandboxSelectSchema = createSelectSchema(sandboxes);
+
+export const sandboxInsertSchema = createInsertSchema(sandboxes);
+
+export const sandboxStatusSchema = z.enum(sandboxStatusValues);
 
 export const profileStatusSchema = z.enum(profileStatusValues);
 

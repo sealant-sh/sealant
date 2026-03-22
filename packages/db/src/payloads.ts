@@ -21,10 +21,7 @@ export const workspaceBuildJobRuntimeResultPayloadSchema = z.strictObject({
   runtime: runtimeAdapterLaunchResultSchema,
 });
 
-export const workspaceBuildJobResultPayloadSchema = z.union([
-  osExecutorCompileResultSchema,
-  workspaceBuildJobRuntimeResultPayloadSchema,
-]);
+export const workspaceBuildJobResultPayloadSchema = osExecutorCompileResultSchema;
 
 export type WorkspaceBuildJobRequestPayload = UserWorkspaceSpec;
 
@@ -33,6 +30,4 @@ export type WorkspaceBuildJobRuntimeResultPayload = {
   runtime: z.infer<typeof runtimeAdapterLaunchResultSchema>;
 };
 
-export type WorkspaceBuildJobResultPayload =
-  | OsExecutorCompileResult
-  | WorkspaceBuildJobRuntimeResultPayload;
+export type WorkspaceBuildJobResultPayload = OsExecutorCompileResult;

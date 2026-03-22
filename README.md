@@ -1,11 +1,44 @@
 # Sealant
 
-Sealant is a product for spinning up isolated, ready-to-code microVM environments from a polished
-web UI.
+Sealant is a product built around two core ideas:
 
-The core idea stays the same: a user picks a Git repository, an AI coding harness, and optional
-personalization inputs like dotfiles or Nix flakes. Sealant turns those inputs into a composed
-environment and provisions a disposable runtime that feels personal, reproducible, and isolated.
+1. Fast, highly customizable, isolated sandboxes (ready-to-code microVM environments).
+2. Detailed, reproducible issue-to-PR workflows with clear reporting of what happened.
+
+Everything else in the architecture exists to serve those two product loops.
+
+## Product terminology contract
+
+To keep the product clear for users, we use exactly two primary domain terms in product-facing
+surfaces and API contracts:
+
+- `sandbox`: a launched, isolated coding environment
+- `issue workflow`: an issue-to-PR execution flow with lifecycle and reporting
+
+Implementation terms are still valid internally, but are not primary product nouns:
+
+- `workspace run`: internal execution record
+- `workspace build job`: internal queue/worker build task
+
+If an API endpoint serves product UI, prefer naming and resource modeling around `sandboxes` and
+`issue-workflows`.
+
+## Two core product loops
+
+### 1. Sandboxes / coding environments
+
+A user picks a Git repository, an AI coding harness, and optional personalization inputs like
+dotfiles or Nix flakes. Sealant turns those inputs into a composed environment and provisions a
+disposable runtime that feels personal, reproducible, and isolated.
+
+These environments are meant to be launched quickly and used however the user wants: AI-assisted
+coding, manual development with their own tooling, testing ideas, or other focused tasks.
+
+### 2. Issue-to-PR workflows
+
+Sealant uses the same sandbox and composition engine to run structured issue-to-PR execution flows.
+Each workflow execution is isolated, tracked, and reproducible, with clear lineage and reporting on
+what the system did from issue intake through code changes and pull request output.
 
 ## Status
 
@@ -69,7 +102,10 @@ every implementation lands.
 
 ## Architecture flow
 
-The long-term architecture is built around a small set of explicit contracts:
+The long-term architecture is built around explicit contracts and shared infrastructure that power
+both core loops.
+
+Sandbox flow:
 
 1. The product surfaces submit a `UserWorkspaceSpec`.
 2. The control plane normalizes that into a `WorkspaceBlueprint`.
@@ -77,7 +113,17 @@ The long-term architecture is built around a small set of explicit contracts:
 4. The selected OS integration produces one or more build artifacts.
 5. Runtime adapters launch those artifacts on Docker, Kubernetes, K3s, or future targets.
 
-Supporting integrations feed into that flow without owning it:
+Issue-to-PR flow:
+
+1. The product surfaces submit issue context, repository details, and execution preferences.
+2. The control plane resolves inputs, composes the execution request, and provisions an isolated
+   environment.
+3. The worker executes the workflow, coordinates builds/tooling/harness actions, and records
+   execution lineage.
+4. The system persists artifacts, state transitions, and issue-to-PR reporting for auditability and
+   reproducibility.
+
+Supporting integrations feed into both flows without owning either flow:
 
 - source integrations resolve repositories, refs, and provider-specific access details
 - AI harness integrations describe harness requirements and launch behavior
@@ -86,7 +132,7 @@ Supporting integrations feed into that flow without owning it:
 ### Current implementation status
 
 - `packages/db/`: shared Drizzle + SQLite package for durable control-plane state including auth,
-  repositories, profiles, runs, issue/PR lineage, and build-job coordination
+  repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job coordination
 - `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
   shared SQLite database package
 - `packages/workspace-composition/`: core composition package that owns the shared workspace
@@ -110,39 +156,41 @@ Supporting integrations feed into that flow without owning it:
 
 ## Planned product shape
 
-Sealant still has three major product areas, but they will be implemented through the monorepo
-workspaces:
+Sealant still has three major product areas, but each one exists to support the two core loops
+(sandboxes and issue-to-PR):
 
 ### 1. Website
 
-The website is the user-facing product surface. It should make environment creation feel fast,
-obvious, and trustworthy.
+The website is the user-facing product surface. It should make both sandbox launch and issue-to-PR
+execution feel fast, obvious, and trustworthy.
 
 Core responsibilities:
 
-- collect repo and environment inputs
+- collect repo, environment, and issue inputs
 - present available AI harnesses and runtime options
-- show launch status and environment lifecycle state
+- show sandbox launch status and environment lifecycle state
+- show issue workflow progress, outcomes, and reporting
 - eventually manage saved templates, profiles, and histories
 
 ### 2. Backend / control plane
 
-The backend turns user intent into a running environment.
+The backend turns user intent into sandbox sessions and issue workflows.
 
 Core responsibilities:
 
-- validate and normalize user inputs
+- validate and normalize sandbox and issue-to-PR inputs
 - produce `WorkspaceBlueprint` values from validated requests
 - resolve repos and configuration sources
 - select OS integrations and runtime adapters
-- compose the final build request
-- coordinate provisioning and lifecycle
+- compose final build and execution requests
+- coordinate provisioning, execution, and lifecycle
 - talk to runtime adapters
-- track environment state, logs, and failures
+- track environment state, logs, failures, and issue-to-PR lineage/reporting
 
 ### 3. Runtime / infra layer
 
-The infrastructure side contains the deployment and execution model for isolated environments:
+The infrastructure side contains the deployment and execution model for isolated environments and
+repeatable issue workflows:
 
 - Kubernetes manifests and platform configuration
 - runtime and scheduling integration
@@ -307,8 +355,11 @@ commands run from the repo root so the baseline tooling works before app package
 
 ## Why this repo exists
 
-Sealant is trying to make spinning up a personal, AI-ready coding microVM feel easy, fast, and clean
-without giving up reproducibility or isolation.
+Sealant exists to make two outcomes feel easy, fast, and trustworthy without giving up isolation or
+reproducibility:
+
+- launching personal, highly customizable, AI-ready coding sandboxes
+- running detailed, tracked, reproducible issue workflows with clear reporting
 
 The goal is a product experience that feels simple on the surface while staying disciplined
 underneath.
