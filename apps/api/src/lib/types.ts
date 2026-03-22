@@ -1,4 +1,9 @@
-import type { WorkspaceBuildJobRepository, WorkspaceRunRepository } from "@sealant/db";
+import type {
+  RunReportingRepository,
+  SandboxAttemptRepository,
+  SandboxRuntimeInstanceRepository,
+  WorkspaceBuildJobRepository,
+} from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
 
 import type { AppEnv } from "../env.js";
@@ -13,7 +18,9 @@ export interface AppBindings {
     registryClient: RegistryClient;
     workspaceBuildJobPublisher: WorkspaceBuildJobPublisher;
     workspaceBuildJobRepository: WorkspaceBuildJobRepository;
-    workspaceRunRepository: WorkspaceRunRepository;
+    sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
+    sandboxAttemptRepository: SandboxAttemptRepository;
+    runReportingRepository: RunReportingRepository;
   };
 }
 
@@ -22,5 +29,7 @@ export interface AppRuntimeConfig {
   readonly registryClient: RegistryClient;
   readonly workspaceBuildJobPublisher: WorkspaceBuildJobPublisher;
   readonly workspaceBuildJobRepository: WorkspaceBuildJobRepository;
-  readonly workspaceRunRepository: WorkspaceRunRepository;
+  readonly sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
+  readonly sandboxAttemptRepository: SandboxAttemptRepository;
+  readonly runReportingRepository: RunReportingRepository;
 }

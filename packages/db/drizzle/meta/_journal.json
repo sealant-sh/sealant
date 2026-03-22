@@ -22,6 +22,27 @@
       "when": 1774054153957,
       "tag": "0002_open_smiling_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1774147281278,
+      "tag": "0003_zippy_proudstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1775000000000,
+      "tag": "0004_crisp_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1775000001000,
+      "tag": "0005_sturdy_echo",
+      "breakpoints": true
     }
   ]
 }

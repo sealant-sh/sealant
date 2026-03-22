@@ -4,18 +4,27 @@ import type {
   WorkspaceBuildJobRequestPayload,
   WorkspaceBuildJobResultPayload,
 } from "../payloads.js";
-import { workspaceRuns } from "./control-plane.js";
+import { sandboxAttempts } from "./control-plane.js";
 
-export const workspaceBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;
+export const ociImageBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;
 
-export type WorkspaceBuildJobStatus = (typeof workspaceBuildJobStatusValues)[number];
+export type OciImageBuildJobStatus = (typeof ociImageBuildJobStatusValues)[number];
 
-export const workspaceBuildJobs = sqliteTable(
-  "workspace_build_jobs",
+export const sandboxRuntimeInstanceStatusValues = [
+  "pending",
+  "running",
+  "failed",
+  "stopped",
+] as const;
+
+export type SandboxRuntimeInstanceStatus = (typeof sandboxRuntimeInstanceStatusValues)[number];
+
+export const ociImageBuildJobs = sqliteTable(
+  "oci_image_build_jobs",
   {
     id: text().primaryKey(),
-    runId: text("run_id").references(() => workspaceRuns.id, { onDelete: "set null" }),
-    status: text({ enum: workspaceBuildJobStatusValues }).notNull().default("queued"),
+    runId: text("run_id").references(() => sandboxAttempts.id, { onDelete: "set null" }),
+    status: text({ enum: ociImageBuildJobStatusValues }).notNull().default("queued"),
     registryId: text().notNull(),
     repository: text().notNull(),
     tag: text().notNull(),
@@ -49,13 +58,56 @@ export const workspaceBuildJobs = sqliteTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    index("workspace_build_jobs_status_available_at_idx").on(table.status, table.availableAt),
-    index("workspace_build_jobs_status_claimed_at_idx").on(table.status, table.claimedAt),
-    index("workspace_build_jobs_created_at_idx").on(table.createdAt),
-    index("workspace_build_jobs_run_id_idx").on(table.runId),
-    uniqueIndex("workspace_build_jobs_idempotency_key_idx").on(table.idempotencyKey),
+    index("oci_image_build_jobs_status_available_at_idx").on(table.status, table.availableAt),
+    index("oci_image_build_jobs_status_claimed_at_idx").on(table.status, table.claimedAt),
+    index("oci_image_build_jobs_created_at_idx").on(table.createdAt),
+    index("oci_image_build_jobs_run_id_idx").on(table.runId),
+    uniqueIndex("oci_image_build_jobs_idempotency_key_idx").on(table.idempotencyKey),
   ],
 );
 
-export type WorkspaceBuildJob = typeof workspaceBuildJobs.$inferSelect;
-export type NewWorkspaceBuildJob = typeof workspaceBuildJobs.$inferInsert;
+export const sandboxRuntimeInstances = sqliteTable(
+  "sandbox_runtime_instances",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+    status: text({ enum: sandboxRuntimeInstanceStatusValues }).notNull().default("pending"),
+    adapter: text({ enum: ["docker", "k8s", "k3s"] }),
+    resourceId: text("resource_id"),
+    reference: text(),
+    endpoint: text(),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    launchedAt: integer("launched_at", { mode: "timestamp_ms" }),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("sandbox_runtime_instances_status_updated_at_idx").on(table.status, table.updatedAt),
+    index("sandbox_runtime_instances_adapter_status_idx").on(table.adapter, table.status),
+  ],
+);
+
+export type OciImageBuildJob = typeof ociImageBuildJobs.$inferSelect;
+export type NewOciImageBuildJob = typeof ociImageBuildJobs.$inferInsert;
+
+export type SandboxRuntimeInstance = typeof sandboxRuntimeInstances.$inferSelect;
+export type NewSandboxRuntimeInstance = typeof sandboxRuntimeInstances.$inferInsert;
+
+// Compatibility exports while the rest of the codebase migrates away from
+// workspace_build_jobs naming.
+export const workspaceBuildJobStatusValues = ociImageBuildJobStatusValues;
+
+export type WorkspaceBuildJobStatus = OciImageBuildJobStatus;
+
+export const workspaceBuildJobs = ociImageBuildJobs;
+
+export type WorkspaceBuildJob = OciImageBuildJob;
+export type NewWorkspaceBuildJob = NewOciImageBuildJob;

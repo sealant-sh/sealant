@@ -22,23 +22,29 @@ export type IssueState = (typeof issueStateValues)[number];
 export const pullRequestStateValues = ["draft", "open", "merged", "closed"] as const;
 export type PullRequestState = (typeof pullRequestStateValues)[number];
 
-export const workspaceRunStatusValues = [
+export const sandboxAttemptStatusValues = [
   "queued",
   "running",
   "succeeded",
   "failed",
   "cancelled",
 ] as const;
-export type WorkspaceRunStatus = (typeof workspaceRunStatusValues)[number];
+export type SandboxAttemptStatus = (typeof sandboxAttemptStatusValues)[number];
 
-export const workspaceRunTriggerTypeValues = [
+export const sandboxAttemptTriggerTypeValues = [
   "manual",
   "issue",
   "schedule",
   "api",
   "retry",
 ] as const;
-export type WorkspaceRunTriggerType = (typeof workspaceRunTriggerTypeValues)[number];
+export type SandboxAttemptTriggerType = (typeof sandboxAttemptTriggerTypeValues)[number];
+
+export const sandboxStatusValues = ["queued", "running", "ready", "failed", "stopped"] as const;
+export type SandboxStatus = (typeof sandboxStatusValues)[number];
+
+export const sandboxRunLinkRelationValues = ["launch", "rebuild", "retry", "resume"] as const;
+export type SandboxRunLinkRelation = (typeof sandboxRunLinkRelationValues)[number];
 
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
 export type ProfileSshKeyPurpose = (typeof profileSshKeyPurposeValues)[number];
@@ -499,8 +505,8 @@ export const pullRequests = sqliteTable(
   ],
 );
 
-export const workspaceRuns = sqliteTable(
-  "workspace_runs",
+export const sandboxAttempts = sqliteTable(
+  "sandbox_attempts",
   {
     id: text().primaryKey(),
     ownerUserId: text("owner_user_id")
@@ -515,8 +521,8 @@ export const workspaceRuns = sqliteTable(
       onDelete: "set null",
     }),
     issueId: text("issue_id").references(() => issues.id, { onDelete: "set null" }),
-    status: text({ enum: workspaceRunStatusValues }).notNull().default("queued"),
-    triggerType: text("trigger_type", { enum: workspaceRunTriggerTypeValues })
+    status: text({ enum: sandboxAttemptStatusValues }).notNull().default("queued"),
+    triggerType: text("trigger_type", { enum: sandboxAttemptTriggerTypeValues })
       .notNull()
       .default("manual"),
     triggerRef: text("trigger_ref"),
@@ -540,29 +546,92 @@ export const workspaceRuns = sqliteTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    index("workspace_runs_owner_user_id_status_created_at_idx").on(
+    index("sandbox_attempts_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,
       table.createdAt,
     ),
-    index("workspace_runs_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
-    index("workspace_runs_profile_revision_id_created_at_idx").on(
+    index("sandbox_attempts_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
+    index("sandbox_attempts_profile_revision_id_created_at_idx").on(
       table.profileRevisionId,
       table.createdAt,
     ),
-    index("workspace_runs_repository_profile_revision_id_created_at_idx").on(
+    index("sandbox_attempts_repository_profile_revision_id_created_at_idx").on(
       table.repositoryProfileRevisionId,
       table.createdAt,
     ),
-    index("workspace_runs_issue_id_created_at_idx").on(table.issueId, table.createdAt),
-    index("workspace_runs_status_started_at_idx").on(table.status, table.startedAt),
+    index("sandbox_attempts_issue_id_created_at_idx").on(table.issueId, table.createdAt),
+    index("sandbox_attempts_status_started_at_idx").on(table.status, table.startedAt),
   ],
 );
 
-export const runInputSnapshots = sqliteTable("run_input_snapshots", {
+export const sandboxes = sqliteTable(
+  "sandboxes",
+  {
+    id: text().primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    repositoryId: text("repository_id").references(() => repositories.id, { onDelete: "set null" }),
+    repositoryProfileRevisionId: text("repository_profile_revision_id").references(
+      () => repositoryProfileRevisions.id,
+      { onDelete: "set null" },
+    ),
+    profileRevisionId: text("profile_revision_id").references(() => profileRevisions.id, {
+      onDelete: "set null",
+    }),
+    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    status: text({ enum: sandboxStatusValues }).notNull().default("queued"),
+    latestRunId: text("latest_run_id").references(() => sandboxAttempts.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    index("sandboxes_owner_user_id_status_created_at_idx").on(
+      table.ownerUserId,
+      table.status,
+      table.createdAt,
+    ),
+    index("sandboxes_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
+    uniqueIndex("sandboxes_latest_run_id_idx").on(table.latestRunId),
+  ],
+);
+
+export const sandboxRunLinks = sqliteTable(
+  "sandbox_run_links",
+  {
+    sandboxId: text("sandbox_id")
+      .notNull()
+      .references(() => sandboxes.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+    relation: text({ enum: sandboxRunLinkRelationValues }).notNull().default("launch"),
+    linkedAt: integer("linked_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sandboxId, table.runId] }),
+    uniqueIndex("sandbox_run_links_run_id_idx").on(table.runId),
+    index("sandbox_run_links_sandbox_id_linked_at_idx").on(table.sandboxId, table.linkedAt),
+  ],
+);
+
+export const sandboxAttemptSnapshots = sqliteTable("sandbox_attempt_snapshots", {
   runId: text("run_id")
     .primaryKey()
-    .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+    .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
   userSpecPayload: text("user_spec_payload", { mode: "json" }).$type<UserWorkspaceSpec>().notNull(),
   resolvedSpecPayload: text("resolved_spec_payload", { mode: "json" })
     .$type<UserWorkspaceSpec>()
@@ -587,7 +656,7 @@ export const runArtifacts = sqliteTable(
     id: text().primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     kind: text({ enum: runArtifactKindValues }).notNull().default("other"),
     storageBackend: text("storage_backend", { enum: runArtifactStorageBackendValues })
       .notNull()
@@ -616,7 +685,7 @@ export const runEvents = sqliteTable(
     id: text().primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     sequence: integer({ mode: "number" }).notNull(),
     phase: text().notNull(),
     level: text({ enum: runEventLevelValues }).notNull().default("info"),
@@ -640,7 +709,7 @@ export const runValidationResults = sqliteTable(
     id: text().primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     checkKey: text("check_key").notNull(),
     status: text({ enum: runValidationStatusValues }).notNull(),
     durationMs: integer("duration_ms", { mode: "number" }),
@@ -662,7 +731,7 @@ export const runDiffFiles = sqliteTable(
     id: text().primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     changeType: text("change_type", { enum: runDiffChangeTypeValues }).notNull(),
     path: text().notNull(),
     oldPath: text("old_path"),
@@ -685,7 +754,7 @@ export const runDiffFiles = sqliteTable(
 export const runSummaries = sqliteTable("run_summaries", {
   runId: text("run_id")
     .primaryKey()
-    .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+    .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
   objective: text(),
   linkedIssueRef: text("linked_issue_ref"),
   filesChanged: integer("files_changed", { mode: "number" }).notNull().default(0),
@@ -717,7 +786,7 @@ export const issueRunLinks = sqliteTable(
       .references(() => issues.id, { onDelete: "cascade" }),
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     relation: text({ enum: issueRunLinkRelationValues }).notNull().default("primary"),
     linkedAt: integer("linked_at", { mode: "timestamp_ms" })
       .notNull()
@@ -734,7 +803,7 @@ export const runPullRequestLinks = sqliteTable(
   {
     runId: text("run_id")
       .notNull()
-      .references(() => workspaceRuns.id, { onDelete: "cascade" }),
+      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
     pullRequestId: text("pull_request_id")
       .notNull()
       .references(() => pullRequests.id, { onDelete: "cascade" }),
@@ -820,11 +889,17 @@ export type NewIssue = typeof issues.$inferInsert;
 export type PullRequest = typeof pullRequests.$inferSelect;
 export type NewPullRequest = typeof pullRequests.$inferInsert;
 
-export type WorkspaceRun = typeof workspaceRuns.$inferSelect;
-export type NewWorkspaceRun = typeof workspaceRuns.$inferInsert;
+export type SandboxAttempt = typeof sandboxAttempts.$inferSelect;
+export type NewSandboxAttempt = typeof sandboxAttempts.$inferInsert;
 
-export type RunInputSnapshot = typeof runInputSnapshots.$inferSelect;
-export type NewRunInputSnapshot = typeof runInputSnapshots.$inferInsert;
+export type Sandbox = typeof sandboxes.$inferSelect;
+export type NewSandbox = typeof sandboxes.$inferInsert;
+
+export type SandboxRunLink = typeof sandboxRunLinks.$inferSelect;
+export type NewSandboxRunLink = typeof sandboxRunLinks.$inferInsert;
+
+export type SandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferSelect;
+export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferInsert;
 
 export type RunArtifact = typeof runArtifacts.$inferSelect;
 export type NewRunArtifact = typeof runArtifacts.$inferInsert;

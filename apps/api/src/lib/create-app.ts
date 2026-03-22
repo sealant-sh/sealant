@@ -14,7 +14,9 @@ export const createApp = (config: AppRuntimeConfig) => {
     c.set("registryClient", config.registryClient);
     c.set("workspaceBuildJobPublisher", config.workspaceBuildJobPublisher);
     c.set("workspaceBuildJobRepository", config.workspaceBuildJobRepository);
-    c.set("workspaceRunRepository", config.workspaceRunRepository);
+    c.set("sandboxRuntimeInstanceRepository", config.sandboxRuntimeInstanceRepository);
+    c.set("sandboxAttemptRepository", config.sandboxAttemptRepository);
+    c.set("runReportingRepository", config.runReportingRepository);
     await next();
   });
 

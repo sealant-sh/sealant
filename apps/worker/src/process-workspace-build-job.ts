@@ -1,4 +1,6 @@
 import {
+  createSandboxAttemptRepository,
+  createSandboxRuntimeInstanceRepository,
   createWorkspaceBuildJobRepository,
   workspaceBuildJobRequestPayloadSchema,
   type WorkspaceBuildJobRequestPayload,
@@ -164,6 +166,8 @@ const applyRuntimeDefaults = (
 
 export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJobOptions) => {
   const jobs = createWorkspaceBuildJobRepository(options.dbClient);
+  const runtimeInstances = createSandboxRuntimeInstanceRepository(options.dbClient);
+  const attempts = createSandboxAttemptRepository(options.dbClient);
   const job = await jobs.claimJobById({
     id: options.jobId,
     workerId: options.workerId,
@@ -174,7 +178,13 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
     return null;
   }
 
+  let buildSucceeded = false;
+
   try {
+    if (job.runId !== null) {
+      await attempts.markAttemptRunning({ id: job.runId }).catch(() => null);
+    }
+
     const parsedRequestPayload = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
     const requestPayload = applyRuntimeDefaults(parsedRequestPayload, options);
     const blueprint = normalizeUserWorkspaceSpec(requestPayload);
@@ -189,16 +199,7 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
         ? {}
         : { sourceReference: imageArtifact.reference }),
     });
-    const runtimeLaunchResult = await launchPublishedImage({
-      blueprint,
-      runtimeAdapters: options.runtimeAdapters,
-      defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
-      publishedImage,
-    });
-    const resultPayload: WorkspaceBuildJobResultPayload = {
-      compile: compileResult,
-      runtime: runtimeLaunchResult,
-    };
+    const resultPayload: WorkspaceBuildJobResultPayload = compileResult;
 
     await jobs.markJobSucceeded({
       id: job.id,
@@ -208,16 +209,66 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
       publishedDigestReference: publishedImage.digestReference,
       publishedDigest: publishedImage.digest,
     });
+    buildSucceeded = true;
+
+    if (job.runId !== null) {
+      await runtimeInstances.upsertRuntimeInstance({
+        runId: job.runId,
+        status: "pending",
+      });
+    }
+
+    const runtimeLaunchResult = await launchPublishedImage({
+      blueprint,
+      runtimeAdapters: options.runtimeAdapters,
+      defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
+      publishedImage,
+    });
+
+    if (job.runId !== null) {
+      await runtimeInstances.upsertRuntimeInstance({
+        runId: job.runId,
+        status: runtimeLaunchResult.status,
+        adapter: runtimeLaunchResult.adapter,
+        resourceId: runtimeLaunchResult.resourceId,
+        reference: runtimeLaunchResult.reference,
+        ...(runtimeLaunchResult.endpoint === undefined
+          ? {}
+          : { endpoint: runtimeLaunchResult.endpoint }),
+        launchedAt: new Date(),
+      });
+    }
+
+    if (job.runId !== null) {
+      await attempts.markAttemptSucceeded({ id: job.runId }).catch(() => null);
+    }
 
     return publishedImage;
   } catch (error) {
     const errorCode = toErrorCode(error);
 
-    await jobs.markJobFailed({
-      id: job.id,
-      errorMessage: toErrorMessage(error),
-      ...(errorCode === undefined ? {} : { errorCode }),
-    });
+    if (job.runId !== null) {
+      await runtimeInstances.upsertRuntimeInstance({
+        runId: job.runId,
+        status: "failed",
+        ...(errorCode === undefined ? {} : { errorCode }),
+        errorMessage: toErrorMessage(error),
+        finishedAt: new Date(),
+      });
+    }
+
+    await Promise.allSettled([
+      ...(buildSucceeded
+        ? []
+        : [
+            jobs.markJobFailed({
+              id: job.id,
+              errorMessage: toErrorMessage(error),
+              ...(errorCode === undefined ? {} : { errorCode }),
+            }),
+          ]),
+      ...(job.runId === null ? [] : [attempts.markAttemptFailed({ id: job.runId })]),
+    ]);
 
     throw error;
   }

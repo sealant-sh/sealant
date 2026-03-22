@@ -86,20 +86,20 @@ export const createWorkspaceBuildJob = async (c: Context<AppBindings>) => {
   const jobId = randomUUID();
   const runId = randomUUID();
   const workspaceBuildJobs = c.get("workspaceBuildJobRepository");
-  const workspaceRuns = c.get("workspaceRunRepository");
+  const sandboxAttempts = c.get("sandboxAttemptRepository");
   const blueprintPayload = normalizeUserWorkspaceSpec(body.spec);
 
   let job: WorkspaceBuildJob;
 
   try {
-    const run = await workspaceRuns.createQueuedRun({
+    const run = await sandboxAttempts.createQueuedAttempt({
       id: runId,
       ownerUserId: body.ownerUserId,
       triggerType: "api",
       requestedByUserId: body.ownerUserId,
     });
 
-    await workspaceRuns.setRunInputSnapshot({
+    await sandboxAttempts.setAttemptSnapshot({
       runId: run.id,
       userSpecPayload: body.spec,
       resolvedSpecPayload: body.spec,
@@ -138,7 +138,7 @@ export const createWorkspaceBuildJob = async (c: Context<AppBindings>) => {
         errorCode: "queue_publish_failed",
         errorMessage: toQueuePublishErrorMessage(error),
       }),
-      workspaceRuns.markRunFailed({
+      sandboxAttempts.markAttemptFailed({
         id: runId,
       }),
     ]);

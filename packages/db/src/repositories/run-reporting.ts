@@ -5,22 +5,22 @@ import {
   runArtifacts,
   runDiffFiles,
   runEvents,
-  runInputSnapshots,
+  sandboxAttemptSnapshots,
+  sandboxAttempts,
   runSummaries,
   runValidationResults,
-  workspaceRuns,
   type NewRunArtifact,
   type NewRunDiffFile,
   type NewRunEvent,
   type NewRunSummary,
   type NewRunValidationResult,
+  type SandboxAttempt,
+  type SandboxAttemptSnapshot,
   type RunArtifact,
   type RunDiffFile,
   type RunEvent,
-  type RunInputSnapshot,
   type RunSummary,
   type RunValidationResult,
-  type WorkspaceRun,
 } from "../schema.js";
 
 export interface AppendRunEventInput {
@@ -79,8 +79,8 @@ export interface UpsertRunSummaryInput {
 }
 
 export interface RunDetailBundle {
-  readonly run: WorkspaceRun;
-  readonly inputSnapshot: RunInputSnapshot | null;
+  readonly run: SandboxAttempt;
+  readonly inputSnapshot: SandboxAttemptSnapshot | null;
   readonly summary: RunSummary | null;
   readonly events: readonly RunEvent[];
   readonly validationResults: readonly RunValidationResult[];
@@ -276,7 +276,11 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
   };
 
   const getRunDetailBundle = async (runId: string): Promise<RunDetailBundle | null> => {
-    const [run] = await db.select().from(workspaceRuns).where(eq(workspaceRuns.id, runId)).limit(1);
+    const [run] = await db
+      .select()
+      .from(sandboxAttempts)
+      .where(eq(sandboxAttempts.id, runId))
+      .limit(1);
 
     if (run === undefined) {
       return null;
@@ -284,8 +288,8 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
 
     const [inputSnapshot] = await db
       .select()
-      .from(runInputSnapshots)
-      .where(eq(runInputSnapshots.runId, runId))
+      .from(sandboxAttemptSnapshots)
+      .where(eq(sandboxAttemptSnapshots.runId, runId))
       .limit(1);
 
     const [summary] = await db

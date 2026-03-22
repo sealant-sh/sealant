@@ -7,6 +7,15 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 - `apps/worker`: background workspace build worker.
 - `packages/*`: shared libraries (`db`, `auth`, `ui`, `workspace-*`, `registry-*`, integrations).
 
+## Product Language Contract
+
+- Treat `sandboxes` and `issue workflows` as the two primary product domains.
+- For user-facing API design and UI copy, prefer these terms over implementation terms.
+- Treat `run` and `workspace build job` as internal execution/orchestration vocabulary unless a task
+  explicitly asks for internals.
+- When shaping core API surfaces for the web app, model around sandbox lifecycle and issue workflow
+  lifecycle/reporting first.
+
 ## Agent Defaults
 
 - After code changes, always run `pnpm format:fix`.

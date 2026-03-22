@@ -7,7 +7,8 @@ It currently provides:
 - a Node-based Hono server entrypoint
 - OpenAPI generation with `hono-openapi`
 - interactive docs at `/docs` backed by Scalar
-- a starter route layout split into `system`, `registries`, and `workspace-build-jobs` groups
+- a starter route layout split into `system`, `sandboxes`, `runs`, `registries`, and
+  `workspace-build-jobs` groups
 - initial read-only registry endpoints backed by `@sealant/registry-integration`
 - initial image composition job routes backed by `@sealant/db` and `@sealant/workspace-build-queue`
 
@@ -18,13 +19,17 @@ It currently provides:
 - `GET /readyz`
 - `GET /openapi.json`
 - `GET /docs`
+- `POST /v1/sandboxes`
+- `GET /v1/sandboxes?ownerUserId=...&status=...&limit=...`
+- `GET /v1/sandboxes/{sandboxId}`
+- `GET /v1/runs/{runId}`
 - `GET /v1/registries/{registryId}`
 - `GET /v1/registries/{registryId}/ping`
 - `GET /v1/registries/{registryId}/extensions`
 - `GET /v1/registries/{registryId}/tags?repository=...`
 - `GET /v1/registries/{registryId}/manifest?repository=...&reference=...`
-- `POST /v1/workspace-build-jobs`
-- `GET /v1/workspace-build-jobs/{jobId}`
+- `POST /v1/workspace-build-jobs` (lower-level orchestration route)
+- `GET /v1/workspace-build-jobs/{jobId}` (lower-level orchestration route)
 
 ## Development
 
@@ -45,12 +50,13 @@ This API is the control-plane entrypoint for workspace image builds.
 
 ### What this flow does
 
-1. `POST /v1/workspace-build-jobs` stores a durable build job in SQLite and publishes a queue
-   message to RabbitMQ.
+1. `POST /v1/sandboxes` stores a durable run plus build job in SQLite and publishes a queue message
+   to RabbitMQ.
 2. `@sealant/worker` consumes the job, compiles via `@sealant/os-integration-nix`, and publishes the
    OCI image to Zot via `@sealant/registry-integration`.
-3. `GET /v1/workspace-build-jobs/{jobId}` returns the durable job state, including success/failure
-   details and published image references.
+3. `GET /v1/sandboxes/{sandboxId}` and `GET /v1/runs/{runId}` expose UI-facing lifecycle and run
+   detail surfaces, while `GET /v1/workspace-build-jobs/{jobId}` remains available for lower-level
+   queue-job inspection.
 
 ### Prerequisites
 
@@ -92,7 +98,7 @@ curl http://localhost:3000/v1/registries/default/ping
 ### Queue a workspace image build
 
 ```bash
-curl -X POST http://localhost:3000/v1/workspace-build-jobs \
+curl -X POST http://localhost:3000/v1/sandboxes \
   -H 'content-type: application/json' \
   -d '{
     "registryId": "default",
@@ -109,13 +115,22 @@ curl -X POST http://localhost:3000/v1/workspace-build-jobs \
   }'
 ```
 
-Expected response: `202` with `jobId`.
+Expected response: `202` with `sandboxId`, `runId`, and `jobId`.
 
 ### Poll job status
 
+````bash
+curl "http://localhost:3000/v1/sandboxes?ownerUserId=<userId>"
+curl http://localhost:3000/v1/sandboxes/<sandboxId>
+curl http://localhost:3000/v1/runs/<runId>
+
+Optional lower-level queue view:
+
 ```bash
 curl http://localhost:3000/v1/workspace-build-jobs/<jobId>
-```
+````
+
+````
 
 Terminal states: `queued`, `running`, `succeeded`, `failed`.
 
@@ -132,7 +147,7 @@ On success, the response includes:
 
 ```bash
 curl "http://localhost:3000/v1/registries/default/tags?repository=sealant/workspaces/demo"
-```
+````
 
 ### Common failure cases
 
@@ -151,5 +166,49 @@ Schema validators over time.
 - `src/env.ts`: typed runtime env parsing
 - `src/lib/`: shared app setup and OpenAPI wiring
 - `src/routes/system/`: liveness and API index routes
+- `src/routes/sandboxes/`: UI-facing sandbox lifecycle routes
+- `src/routes/runs/`: UI-facing run detail routes
 - `src/routes/registries/`: first registry-backed API routes
-- `src/routes/workspace-build-jobs/`: queued image composition job routes
+- `src/routes/workspace-build-jobs/`: lower-level queued image composition job routes
+
+## Proposed API Roadmap
+
+This roadmap aligns the API with the two primary product domains:
+
+- sandboxes
+- issue workflows
+
+### Guiding rules
+
+- Product-facing endpoints should be modeled around `sandboxes` and `issue-workflows`.
+- Internal orchestration terms (`run`, `job`) should stay internal unless explicitly needed for
+  debugging.
+- Command endpoints should be asynchronous (`202` + `Location`) when work is delegated to workers.
+- Query endpoints should return screen-shaped data so the UI does not stitch low-level records.
+
+### Phase 1: Sandbox-first core (in progress)
+
+- Keep `POST /v1/sandboxes`, `GET /v1/sandboxes`, and `GET /v1/sandboxes/{sandboxId}` as the primary
+  sandbox lifecycle surface.
+- Move runtime launch state to dedicated persistence (`sandbox_runtime_instances`) so runtime
+  details are no longer inferred from build-job payloads.
+- Keep lower-level job endpoints available for operator/debug workflows.
+
+### Phase 2: Sandbox launch dependencies
+
+- Add repository APIs needed for launch pickers and repository health views.
+- Add profile APIs needed for launch context and readiness checks.
+- Add sandbox template APIs (repository-scoped templates first) for reusable launch presets.
+- Add a launch-plan endpoint that returns resolved/validated sandbox input before enqueueing work.
+
+### Phase 3: Issue workflow API surface
+
+- Introduce `issue-workflows` as a first-class product resource.
+- Provide list/detail/action endpoints for workflow lifecycle, retries, and cancellation.
+- Expose issue-to-PR lineage through workflow-oriented read models.
+
+### Phase 4: Contract hardening
+
+- Remove product-facing dependency on `runs` naming in web-facing API contracts.
+- Keep internal orchestration routes for diagnostics with clear internal labeling.
+- Add pagination/cursor contracts and consistent machine-readable error codes across all domains.
