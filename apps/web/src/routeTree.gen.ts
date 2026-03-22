@@ -24,6 +24,7 @@ import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthenticatedRunsNewRouteImport } from './routes/_authenticated/runs/new'
 import { Route as AuthenticatedRunsFailedRouteImport } from './routes/_authenticated/runs/failed'
 import { Route as AuthenticatedRunsActiveRouteImport } from './routes/_authenticated/runs/active'
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
@@ -123,6 +124,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedRunsNewRoute = AuthenticatedRunsNewRouteImport.update({
+  id: '/runs/new',
+  path: '/runs/new',
+  getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedRunsFailedRoute = AuthenticatedRunsFailedRouteImport.update({
   id: '/runs/failed',
@@ -267,6 +273,7 @@ export interface FileRoutesByFullPath {
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/runs/active': typeof AuthenticatedRunsActiveRoute
   '/runs/failed': typeof AuthenticatedRunsFailedRoute
+  '/runs/new': typeof AuthenticatedRunsNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues/': typeof AuthenticatedIssuesIndexRoute
@@ -304,6 +311,7 @@ export interface FileRoutesByTo {
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/runs/active': typeof AuthenticatedRunsActiveRoute
   '/runs/failed': typeof AuthenticatedRunsFailedRoute
+  '/runs/new': typeof AuthenticatedRunsNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues': typeof AuthenticatedIssuesIndexRoute
@@ -344,6 +352,7 @@ export interface FileRoutesById {
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/_authenticated/runs/active': typeof AuthenticatedRunsActiveRoute
   '/_authenticated/runs/failed': typeof AuthenticatedRunsFailedRoute
+  '/_authenticated/runs/new': typeof AuthenticatedRunsNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
@@ -383,6 +392,7 @@ export interface FileRouteTypes {
     | '/profiles/create'
     | '/runs/active'
     | '/runs/failed'
+    | '/runs/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/issues/'
@@ -420,6 +430,7 @@ export interface FileRouteTypes {
     | '/profiles/create'
     | '/runs/active'
     | '/runs/failed'
+    | '/runs/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/issues'
@@ -459,6 +470,7 @@ export interface FileRouteTypes {
     | '/_authenticated/profiles/create'
     | '/_authenticated/runs/active'
     | '/_authenticated/runs/failed'
+    | '/_authenticated/runs/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/_authenticated/issues/'
@@ -598,6 +610,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/runs/new': {
+      id: '/_authenticated/runs/new'
+      path: '/runs/new'
+      fullPath: '/runs/new'
+      preLoaderRoute: typeof AuthenticatedRunsNewRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/runs/failed': {
       id: '/_authenticated/runs/failed'
@@ -780,6 +799,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
   AuthenticatedRunsActiveRoute: typeof AuthenticatedRunsActiveRoute
   AuthenticatedRunsFailedRoute: typeof AuthenticatedRunsFailedRoute
+  AuthenticatedRunsNewRoute: typeof AuthenticatedRunsNewRoute
   AuthenticatedIssuesIndexRoute: typeof AuthenticatedIssuesIndexRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
@@ -812,6 +832,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
   AuthenticatedRunsActiveRoute: AuthenticatedRunsActiveRoute,
   AuthenticatedRunsFailedRoute: AuthenticatedRunsFailedRoute,
+  AuthenticatedRunsNewRoute: AuthenticatedRunsNewRoute,
   AuthenticatedIssuesIndexRoute: AuthenticatedIssuesIndexRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
