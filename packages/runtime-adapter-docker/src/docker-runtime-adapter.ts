@@ -69,10 +69,18 @@ const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): s
 };
 
 const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> => {
-  return Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => [
+  const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => [
     "-e",
     `${key}=${value}`,
   ]);
+
+  return [
+    "-e",
+    `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
+    "-e",
+    `SEALANT_WORKSPACE_REPO_REF=${input.blueprint.sources.workspace.ref}`,
+    ...runtimeEnvArgs,
+  ];
 };
 
 const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
@@ -162,6 +170,40 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
 
     return Buffer.from(trimmed, "utf8").toString("base64");
+  }
+
+  private async resolveWorkspaceAuthKeyBase64(
+    input: RuntimeAdapterLaunchInput,
+  ): Promise<string | undefined> {
+    const configuredPath = input.blueprint.sources.workspace.authRef;
+
+    if (configuredPath === undefined || configuredPath.length === 0) {
+      return undefined;
+    }
+
+    let keyData: string;
+    try {
+      keyData = await readFile(configuredPath, "utf8");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : `Could not read workspace clone key file: ${configuredPath}`;
+      throw createAdapterError(
+        "unsupported-access-mode",
+        `Workspace clone key could not be read at '${configuredPath}': ${message}`,
+      );
+    }
+
+    const trimmed = keyData.trim();
+    if (trimmed.length === 0) {
+      throw createAdapterError(
+        "unsupported-access-mode",
+        `Workspace clone key file is empty: ${configuredPath}`,
+      );
+    }
+
+    return Buffer.from(`${trimmed}\n`, "utf8").toString("base64");
   }
 
   private async resolvePublishedSshEndpoint(
@@ -299,6 +341,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const imageReference = parsed.publishedImage.digestReference;
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
     const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
+    const workspaceAuthKeyBase64 = await this.resolveWorkspaceAuthKeyBase64(parsed);
     const sshArgs = sshEnabled === true ? ["-p", `${this.sshBindHost}::${containerSshPort}`] : [];
     const sshEnvArgs =
       sshEnabled === true
@@ -313,6 +356,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             `SEALANT_SSH_AUTHORIZED_KEYS_BASE64=${await this.resolveAuthorizedKeysBase64(parsed)}`,
           ]
         : [];
+    const workspaceAuthEnvArgs =
+      workspaceAuthKeyBase64 === undefined
+        ? []
+        : ["-e", `SEALANT_WORKSPACE_AUTH_KEY_BASE64=${workspaceAuthKeyBase64}`];
     const args = [
       "run",
       "-d",
@@ -322,6 +369,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       parsed.blueprint.runtime.workingDirectory,
       ...sshArgs,
       ...sshEnvArgs,
+      ...workspaceAuthEnvArgs,
       ...envArgsFromBlueprint(parsed),
       imageReference,
     ];

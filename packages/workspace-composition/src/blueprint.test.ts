@@ -35,6 +35,10 @@ describe("parseWorkspaceBlueprint", () => {
       tooling: {
         packages: [],
       },
+      customization: {
+        defaultShell: "bash",
+        applyDotfiles: true,
+      },
       lifecycle: {
         setup: [],
         startup: {

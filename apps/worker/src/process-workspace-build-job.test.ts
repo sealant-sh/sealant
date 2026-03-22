@@ -448,6 +448,101 @@ describe("processWorkspaceBuildJob", () => {
     expect(repository.markJobSucceeded).not.toHaveBeenCalled();
   });
 
+  it("prefers a non-nix executor when target.os.family is auto", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_auto",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
+
+    const fedoraExecutor = {
+      id: "fedora",
+      osFamily: "fedora",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "fedora",
+          osFamily: "fedora",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo-fedora",
+            path: "/tmp/demo-fedora.tar",
+            reference: "demo-fedora:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const nixExecutor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo-nix",
+            path: "/tmp/demo-nix.tar",
+            reference: "demo-nix:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+
+    await processWorkspaceBuildJob({
+      jobId: "job_auto",
+      workerId: "worker-test",
+      leaseDurationMs: 60000,
+      dbClient: {} as DatabaseClient,
+      executors: [fedoraExecutor, nixExecutor],
+      runtimeAdapters: [createRuntimeAdapterStub("docker")],
+      defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
+      registryClient,
+    });
+
+    expect(vi.mocked(fedoraExecutor.compile)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(nixExecutor.compile)).not.toHaveBeenCalled();
+  });
+
   it("keeps build succeeded when runtime launch selection fails", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({

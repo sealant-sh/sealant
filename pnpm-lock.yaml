@@ -308,9 +308,9 @@ importers:
       '@sealant/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@sealant/os-integration-nix':
+      '@sealant/os-integration-buildkit':
         specifier: workspace:*
-        version: link:../../packages/os-integration-nix
+        version: link:../../packages/os-integration-buildkit
       '@sealant/registry-integration':
         specifier: workspace:*
         version: link:../../packages/registry-integration
@@ -332,20 +332,22 @@ importers:
       '@sealant/workspace-composition':
         specifier: workspace:*
         version: link:../../packages/workspace-composition
-      dockerode:
-        specifier: ^4.0.10
-        version: 4.0.10
       zod:
         specifier: ^3.24.1
         version: 3.25.76
-    devDependencies:
-      '@types/dockerode':
-        specifier: ^4.0.1
-        version: 4.0.1
 
   apps/workspace-composition-demo: {}
 
   packages/ai-harness-integrations: {}
+
+  packages/os-integration-buildkit:
+    dependencies:
+      '@sealant/workspace-composition':
+        specifier: workspace:*
+        version: link:../workspace-composition
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/auth:
     dependencies:

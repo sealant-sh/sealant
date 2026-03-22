@@ -15,7 +15,6 @@ import {
   type RuntimeAdapterId,
 } from "@sealant/runtime-adapters-api";
 import type {
-  ConcreteWorkspaceTargetOsFamily,
   OciImageBuildArtifact,
   OsExecutor,
   OsExecutorCompileResult,
@@ -38,42 +37,67 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly registryClient: RegistryClient;
 }
 
-const autoTargetFallbackOsFamily = "nix" satisfies ConcreteWorkspaceTargetOsFamily;
-
 const createWorkerError = (code: string, message: string) => {
   const error = new Error(message) as Error & { code: string };
   error.code = code;
   return error;
 };
 
-const resolveRequestedOsFamily = (
-  blueprint: WorkspaceBlueprint,
-): ConcreteWorkspaceTargetOsFamily => {
-  return blueprint.target.os.family === "auto"
-    ? autoTargetFallbackOsFamily
-    : blueprint.target.os.family;
-};
-
 const selectExecutorForBlueprint = (
   blueprint: WorkspaceBlueprint,
   executors: readonly OsExecutor[],
 ): OsExecutor => {
-  const requestedOsFamily = resolveRequestedOsFamily(blueprint);
-  const executor = executors.find((candidate) => candidate.osFamily === requestedOsFamily);
+  const requestedOsFamily = blueprint.target.os.family;
 
-  if (executor === undefined) {
+  const candidates =
+    requestedOsFamily === "auto"
+      ? [...executors].sort((left, right) => {
+          if (left.osFamily === right.osFamily) {
+            return 0;
+          }
+
+          if (left.osFamily === "nix") {
+            return 1;
+          }
+
+          if (right.osFamily === "nix") {
+            return -1;
+          }
+
+          return 0;
+        })
+      : executors.filter((candidate) => candidate.osFamily === requestedOsFamily);
+
+  if (candidates.length === 0) {
     throw createWorkerError(
       "unsupported-os",
       `No executor is registered for target.os.family '${requestedOsFamily}'.`,
     );
   }
 
-  const support = executor.supports({ blueprint });
-  if (!support.supported) {
-    throw createWorkerError(support.reason, support.message);
+  let firstSupportFailure:
+    | Exclude<ReturnType<OsExecutor["supports"]>, { supported: true }>
+    | undefined;
+
+  for (const executor of candidates) {
+    const support = executor.supports({ blueprint });
+    if (support.supported) {
+      return executor;
+    }
+
+    if (firstSupportFailure === undefined) {
+      firstSupportFailure = support;
+    }
   }
 
-  return executor;
+  if (firstSupportFailure !== undefined) {
+    throw createWorkerError(firstSupportFailure.reason, firstSupportFailure.message);
+  }
+
+  throw createWorkerError(
+    "unsupported-os",
+    `No executor can compile target.os.family '${requestedOsFamily}'.`,
+  );
 };
 
 const isPublishableOciImageArtifact = (

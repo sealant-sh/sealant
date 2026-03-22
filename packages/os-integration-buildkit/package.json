@@ -1,0 +1,17 @@
+{
+  "name": "@sealant/os-integration-buildkit",
+  "version": "0.0.0",
+  "private": true,
+  "description": "BuildKit-based OS integration for Fedora and Arch workspace images",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sealant/workspace-composition": "workspace:*",
+    "zod": "^3.24.1"
+  }
+}

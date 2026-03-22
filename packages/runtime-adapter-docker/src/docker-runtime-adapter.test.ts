@@ -13,6 +13,12 @@ import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
 const createBlueprint = (overrides: Record<string, unknown> = {}) => {
   return parseRuntimeAdapterSupportInput({
     blueprint: {
+      sources: {
+        workspace: {
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
+      },
       access: {
         ssh: {
           enabled: false,
@@ -148,9 +154,59 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).not.toContain("--rm");
     expect(args).toContain("127.0.0.1:5000/sealant/workspaces/demo@sha256:test");
     expect(args).toContain("NODE_ENV=development");
+    expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
+    expect(args).toContain("SEALANT_WORKSPACE_REPO_REF=main");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
     expect(result.status).toBe("running");
+  });
+
+  it("passes workspace clone auth when a workspace auth ref is configured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-workspace-key-"));
+    const keyFile = join(tempDir, "workspace_repo_key");
+    await writeFile(keyFile, "PRIVATE KEY CONTENT\n", "utf8");
+
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-789\n",
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+    });
+
+    try {
+      await adapter.launch(
+        createLaunchInput({
+          sources: {
+            workspace: {
+              url: "https://github.com/example/repo.git",
+              ref: "main",
+              authRef: keyFile,
+            },
+          },
+        }),
+      );
+
+      const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_WORKSPACE_AUTH_KEY_BASE64="))).toBe(
+        true,
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("fails launch when container exits immediately", async () => {

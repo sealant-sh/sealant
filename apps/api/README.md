@@ -61,8 +61,8 @@ This API is the control-plane entrypoint for workspace image builds.
 
 1. `POST /v1/sandboxes` stores a durable sandbox plus internal execution records in SQLite and
    publishes a queue message to RabbitMQ.
-2. `@sealant/worker` consumes the job, compiles via `@sealant/os-integration-nix`, and publishes the
-   OCI image to Zot via `@sealant/registry-integration`.
+2. `@sealant/worker` consumes the job, compiles via the active OS integration, and publishes the OCI
+   image to Zot via `@sealant/registry-integration`.
 3. `GET /v1/sandboxes/{sandboxId}` exposes the UI-facing sandbox lifecycle surface, while
    `GET /v1/workspace-build-jobs/{jobId}` remains available for lower-level queue-job inspection.
 
@@ -94,6 +94,15 @@ In separate terminals:
 ```bash
 pnpm --filter @sealant/api dev
 pnpm --filter @sealant/worker dev
+```
+
+If you run the worker through Docker Compose instead, keep using the same host SQLite file by
+running migrations on the host first:
+
+```bash
+pnpm db:migrate
+docker compose build worker
+docker compose --profile apps up -d worker
 ```
 
 ### Verify control-plane health

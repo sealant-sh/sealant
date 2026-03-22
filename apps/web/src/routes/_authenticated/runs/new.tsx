@@ -6,7 +6,7 @@ import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useTRPC } from "@/lib/trpc/react";
 
 type HarnessId = "opencode" | "codex" | "claude-code";
-type TargetOs = "fedora" | "nix" | "arch";
+type TargetOs = "fedora" | "arch";
 
 interface NewSandboxFormState {
   readonly workspaceSource: string;
@@ -30,11 +30,8 @@ const HARNESS_OPTIONS: ReadonlyArray<{ readonly value: HarnessId; readonly label
 
 const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly label: string }> = [
   { value: "fedora", label: "Fedora" },
-  { value: "nix", label: "Nix" },
   { value: "arch", label: "Arch" },
 ];
-
-const NIX_SUPPORTED_PACKAGES = new Set(["curl", "git", "jq", "nodejs", "pnpm", "ripgrep"]);
 
 export const Route = createFileRoute("/_authenticated/runs/new" as never)({
   component: NewSandboxPage,
@@ -186,7 +183,7 @@ function NewSandboxPage() {
   const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.source.url);
   const hasCommands =
     Array.isArray(previewManifest.spec.setup) && previewManifest.spec.setup.length > 0;
-  const compatibilityIssues = getCompatibilityIssues(form);
+  const compatibilityIssues = getCompatibilityIssues();
 
   return (
     <section className="overflow-hidden border border-border bg-card">
@@ -267,7 +264,7 @@ function NewSandboxPage() {
                     </LabeledField>
 
                     <LabeledField label="Target OS">
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-2">
                         {TARGET_OS_OPTIONS.map((option) => {
                           const isActive = form.targetOs === option.value;
 
@@ -797,7 +794,7 @@ function validateForm(form: NewSandboxFormState, registryId: string): readonly s
     errors.push("Image tag is required.");
   }
 
-  const compatibilityIssues = getCompatibilityIssues(form);
+  const compatibilityIssues = getCompatibilityIssues();
   if (compatibilityIssues.length > 0) {
     errors.push(...compatibilityIssues);
   }
@@ -805,28 +802,8 @@ function validateForm(form: NewSandboxFormState, registryId: string): readonly s
   return errors;
 }
 
-function getCompatibilityIssues(form: NewSandboxFormState): readonly string[] {
-  const issues: string[] = [];
-
-  if (form.targetOs !== "nix") {
-    return issues;
-  }
-
-  const setupCount = form.setupSteps
-    .map(normalizeCommandStep)
-    .filter((value) => value.length > 0).length;
-  if (setupCount > 0) {
-    issues.push("Nix target does not support setup steps yet. Remove setup commands to continue.");
-  }
-
-  const unsupportedPackages = form.packages.filter((pkg) => !NIX_SUPPORTED_PACKAGES.has(pkg));
-  if (unsupportedPackages.length > 0) {
-    issues.push(
-      `Nix target does not support packages: ${unsupportedPackages.join(", ")}. Supported: curl, git, jq, nodejs, pnpm, ripgrep.`,
-    );
-  }
-
-  return issues;
+function getCompatibilityIssues(): readonly string[] {
+  return [];
 }
 
 function resolveErrorMessage(error: unknown): string {

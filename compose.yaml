@@ -19,82 +19,28 @@ services:
       - ./packages/registry-integration/dev/zot/config.json:/etc/zot/config.json:ro
       - zot-data:/var/lib/registry
 
-  ansible-builder:
-    image: cytopia/ansible:latest-tools
-    profiles:
-      - builders
-    working_dir: /workspace
-    volumes:
-      - ./:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      DOCKER_HOST: unix:///var/run/docker.sock
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: ["sleep", "infinity"]
-    restart: unless-stopped
-
-  nix-builder:
-    image: nixos/nix:2.24.11
-    profiles:
-      - builders
-      - apps
-    working_dir: /workspace
-    volumes:
-      - ./:/workspace
-      - /var/run/docker.sock:/var/run/docker.sock
-      - nix-store:/nix
-      - nix-cache:/root/.cache/nix
-    environment:
-      CI: "true"
-      DOCKER_HOST: unix:///var/run/docker.sock
-      NIX_CONFIG: |
-        experimental-features = nix-command flakes
-        accept-flake-config = true
-        sandbox = false
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    command: ["sleep", "infinity"]
-    restart: unless-stopped
-
   worker:
-    image: nixos/nix:2.24.11
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
     profiles:
       - apps
-    working_dir: /workspace
     depends_on:
       - rabbitmq
       - zot
-      - nix-builder
     volumes:
-      - ./:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
-      - nix-store:/nix
-      - nix-cache:/root/.cache/nix
+      - ./.secrets:/app/.secrets:ro
+      - ./packages/db/.data:/app/packages/db/.data
     environment:
-      CI: "true"
-      DOCKER_HOST: unix:///var/run/docker.sock
-      NIX_CONFIG: |
-        experimental-features = nix-command flakes
-        accept-flake-config = true
-        sandbox = false
       RABBITMQ_URL: amqp://sealant:sealant@rabbitmq:5672
       REGISTRY_BASE_URL: http://zot:5000
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
-      COMPOSE_PROJECT_NAME: sealant
-      NIX_BUILDER_SERVICE: nix-builder
+      DATABASE_FILE_PATH: /app/packages/db/.data/sealant-control-plane.sqlite
+      DEFAULT_SSH_AUTHORIZED_KEYS_FILE: /app/.secrets/authorized_keys
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command:
-      [
-        "sh",
-        "-lc",
-        "nix shell nixpkgs#nodejs_24 nixpkgs#nodePackages.pnpm nixpkgs#docker nixpkgs#gnused -c sh
-        -lc 'pnpm install --frozen-lockfile && pnpm --filter @sealant/worker dev'",
-      ]
     restart: unless-stopped
 
 volumes:
   zot-data:
-  nix-store:
-  nix-cache:
