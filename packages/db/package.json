@@ -8,9 +8,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "dev": "exec drizzle-kit studio --config drizzle.config.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/run-migrations.ts"
+    "db:migrate": "tsx src/run-migrations.ts",
+    "dev": "exec drizzle-kit studio --config drizzle.config.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",

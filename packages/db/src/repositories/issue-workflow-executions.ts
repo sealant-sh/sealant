@@ -2,50 +2,48 @@ import { asc, eq } from "drizzle-orm";
 
 import type { DatabaseClient } from "../client.js";
 import {
-  runArtifacts,
-  runDiffFiles,
-  runEvents,
-  sandboxAttemptSnapshots,
-  sandboxAttempts,
-  runSummaries,
-  runValidationResults,
-  type NewRunArtifact,
-  type NewRunDiffFile,
-  type NewRunEvent,
-  type NewRunSummary,
-  type NewRunValidationResult,
-  type SandboxAttempt,
-  type SandboxAttemptSnapshot,
-  type RunArtifact,
-  type RunDiffFile,
-  type RunEvent,
-  type RunSummary,
-  type RunValidationResult,
+  issueWorkflowExecutionArtifacts,
+  issueWorkflowExecutionDiffFiles,
+  issueWorkflowExecutionEvents,
+  issueWorkflowExecutions,
+  issueWorkflowExecutionSummaries,
+  issueWorkflowExecutionValidationResults,
+  type IssueWorkflowExecution,
+  type IssueWorkflowExecutionArtifact,
+  type IssueWorkflowExecutionDiffFile,
+  type IssueWorkflowExecutionEvent,
+  type IssueWorkflowExecutionSummary,
+  type IssueWorkflowExecutionValidationResult,
+  type NewIssueWorkflowExecutionArtifact,
+  type NewIssueWorkflowExecutionDiffFile,
+  type NewIssueWorkflowExecutionEvent,
+  type NewIssueWorkflowExecutionSummary,
+  type NewIssueWorkflowExecutionValidationResult,
 } from "../schema.js";
 
-export interface AppendRunEventInput {
+export interface AppendIssueWorkflowExecutionEventInput {
   readonly id: string;
   readonly sequence: number;
   readonly phase: string;
-  readonly level?: RunEvent["level"];
+  readonly level?: IssueWorkflowExecutionEvent["level"];
   readonly eventType: string;
   readonly message: string;
-  readonly payload?: RunEvent["payload"];
+  readonly payload?: IssueWorkflowExecutionEvent["payload"];
   readonly occurredAt?: Date;
 }
 
-export interface ReplaceRunValidationResultInput {
+export interface ReplaceIssueWorkflowExecutionValidationResultInput {
   readonly id: string;
   readonly checkKey: string;
-  readonly status: RunValidationResult["status"];
+  readonly status: IssueWorkflowExecutionValidationResult["status"];
   readonly durationMs?: number;
   readonly message?: string;
-  readonly details?: RunValidationResult["details"];
+  readonly details?: IssueWorkflowExecutionValidationResult["details"];
 }
 
-export interface ReplaceRunDiffFileInput {
+export interface ReplaceIssueWorkflowExecutionDiffFileInput {
   readonly id: string;
-  readonly changeType: RunDiffFile["changeType"];
+  readonly changeType: IssueWorkflowExecutionDiffFile["changeType"];
   readonly path: string;
   readonly oldPath?: string;
   readonly additions?: number;
@@ -54,19 +52,19 @@ export interface ReplaceRunDiffFileInput {
   readonly patchArtifactId?: string;
 }
 
-export interface InsertRunArtifactInput {
+export interface InsertIssueWorkflowExecutionArtifactInput {
   readonly id: string;
-  readonly kind?: RunArtifact["kind"];
-  readonly storageBackend?: RunArtifact["storageBackend"];
+  readonly kind?: IssueWorkflowExecutionArtifact["kind"];
+  readonly storageBackend?: IssueWorkflowExecutionArtifact["storageBackend"];
   readonly storageKey?: string;
   readonly contentType?: string;
   readonly byteSize?: number;
   readonly checksum?: string;
-  readonly inlineJson?: RunArtifact["inlineJson"];
+  readonly inlineJson?: IssueWorkflowExecutionArtifact["inlineJson"];
 }
 
-export interface UpsertRunSummaryInput {
-  readonly runId: string;
+export interface UpsertIssueWorkflowExecutionSummaryInput {
+  readonly executionId: string;
   readonly objective?: string;
   readonly linkedIssueRef?: string;
   readonly filesChanged?: number;
@@ -78,14 +76,13 @@ export interface UpsertRunSummaryInput {
   readonly generatedAt?: Date;
 }
 
-export interface RunDetailBundle {
-  readonly run: SandboxAttempt;
-  readonly inputSnapshot: SandboxAttemptSnapshot | null;
-  readonly summary: RunSummary | null;
-  readonly events: readonly RunEvent[];
-  readonly validationResults: readonly RunValidationResult[];
-  readonly diffFiles: readonly RunDiffFile[];
-  readonly artifacts: readonly RunArtifact[];
+export interface IssueWorkflowExecutionDetailBundle {
+  readonly execution: IssueWorkflowExecution;
+  readonly summary: IssueWorkflowExecutionSummary | null;
+  readonly events: readonly IssueWorkflowExecutionEvent[];
+  readonly validationResults: readonly IssueWorkflowExecutionValidationResult[];
+  readonly diffFiles: readonly IssueWorkflowExecutionDiffFile[];
+  readonly artifacts: readonly IssueWorkflowExecutionArtifact[];
 }
 
 const assertInserted = <T>(row: T | undefined, message: string): T => {
@@ -96,26 +93,26 @@ const assertInserted = <T>(row: T | undefined, message: string): T => {
   return row;
 };
 
-export const createRunReportingRepository = (client: DatabaseClient) => {
+export const createIssueWorkflowExecutionRepository = (client: DatabaseClient) => {
   const { db } = client;
 
-  const appendRunEvents = async (
-    runId: string,
-    events: readonly AppendRunEventInput[],
-  ): Promise<readonly RunEvent[]> => {
+  const appendExecutionEvents = async (
+    executionId: string,
+    events: readonly AppendIssueWorkflowExecutionEventInput[],
+  ): Promise<readonly IssueWorkflowExecutionEvent[]> => {
     if (events.length === 0) {
       return [];
     }
 
     return db.transaction(async (tx) => {
-      const inserted: RunEvent[] = [];
+      const inserted: IssueWorkflowExecutionEvent[] = [];
 
       for (const event of events) {
         const [row] = await tx
-          .insert(runEvents)
+          .insert(issueWorkflowExecutionEvents)
           .values({
             id: event.id,
-            runId,
+            executionId,
             sequence: event.sequence,
             phase: event.phase,
             ...(event.level === undefined ? {} : { level: event.level }),
@@ -123,9 +120,12 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
             message: event.message,
             ...(event.payload === undefined ? {} : { payload: event.payload }),
             ...(event.occurredAt === undefined ? {} : { occurredAt: event.occurredAt }),
-          } satisfies NewRunEvent)
+          } satisfies NewIssueWorkflowExecutionEvent)
           .onConflictDoUpdate({
-            target: [runEvents.runId, runEvents.sequence],
+            target: [
+              issueWorkflowExecutionEvents.executionId,
+              issueWorkflowExecutionEvents.sequence,
+            ],
             set: {
               id: event.id,
               phase: event.phase,
@@ -145,54 +145,58 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
     });
   };
 
-  const replaceRunValidationResults = async (
-    runId: string,
-    results: readonly ReplaceRunValidationResultInput[],
-  ): Promise<readonly RunValidationResult[]> => {
+  const replaceExecutionValidationResults = async (
+    executionId: string,
+    results: readonly ReplaceIssueWorkflowExecutionValidationResultInput[],
+  ): Promise<readonly IssueWorkflowExecutionValidationResult[]> => {
     return db.transaction(async (tx) => {
-      await tx.delete(runValidationResults).where(eq(runValidationResults.runId, runId));
+      await tx
+        .delete(issueWorkflowExecutionValidationResults)
+        .where(eq(issueWorkflowExecutionValidationResults.executionId, executionId));
 
       if (results.length === 0) {
         return [];
       }
 
       return tx
-        .insert(runValidationResults)
+        .insert(issueWorkflowExecutionValidationResults)
         .values(
           results.map((result) => {
             return {
               id: result.id,
-              runId,
+              executionId,
               checkKey: result.checkKey,
               status: result.status,
               ...(result.durationMs === undefined ? {} : { durationMs: result.durationMs }),
               ...(result.message === undefined ? {} : { message: result.message }),
               ...(result.details === undefined ? {} : { details: result.details }),
-            } satisfies NewRunValidationResult;
+            } satisfies NewIssueWorkflowExecutionValidationResult;
           }),
         )
         .returning();
     });
   };
 
-  const replaceRunDiffFiles = async (
-    runId: string,
-    files: readonly ReplaceRunDiffFileInput[],
-  ): Promise<readonly RunDiffFile[]> => {
+  const replaceExecutionDiffFiles = async (
+    executionId: string,
+    files: readonly ReplaceIssueWorkflowExecutionDiffFileInput[],
+  ): Promise<readonly IssueWorkflowExecutionDiffFile[]> => {
     return db.transaction(async (tx) => {
-      await tx.delete(runDiffFiles).where(eq(runDiffFiles.runId, runId));
+      await tx
+        .delete(issueWorkflowExecutionDiffFiles)
+        .where(eq(issueWorkflowExecutionDiffFiles.executionId, executionId));
 
       if (files.length === 0) {
         return [];
       }
 
       return tx
-        .insert(runDiffFiles)
+        .insert(issueWorkflowExecutionDiffFiles)
         .values(
           files.map((file) => {
             return {
               id: file.id,
-              runId,
+              executionId,
               changeType: file.changeType,
               path: file.path,
               ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
@@ -202,28 +206,28 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
               ...(file.patchArtifactId === undefined
                 ? {}
                 : { patchArtifactId: file.patchArtifactId }),
-            } satisfies NewRunDiffFile;
+            } satisfies NewIssueWorkflowExecutionDiffFile;
           }),
         )
         .returning();
     });
   };
 
-  const insertRunArtifacts = async (
-    runId: string,
-    artifacts: readonly InsertRunArtifactInput[],
-  ): Promise<readonly RunArtifact[]> => {
+  const insertExecutionArtifacts = async (
+    executionId: string,
+    artifacts: readonly InsertIssueWorkflowExecutionArtifactInput[],
+  ): Promise<readonly IssueWorkflowExecutionArtifact[]> => {
     if (artifacts.length === 0) {
       return [];
     }
 
     return db
-      .insert(runArtifacts)
+      .insert(issueWorkflowExecutionArtifacts)
       .values(
         artifacts.map((artifact) => {
           return {
             id: artifact.id,
-            runId,
+            executionId,
             ...(artifact.kind === undefined ? {} : { kind: artifact.kind }),
             ...(artifact.storageBackend === undefined
               ? {}
@@ -233,17 +237,19 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
             ...(artifact.byteSize === undefined ? {} : { byteSize: artifact.byteSize }),
             ...(artifact.checksum === undefined ? {} : { checksum: artifact.checksum }),
             ...(artifact.inlineJson === undefined ? {} : { inlineJson: artifact.inlineJson }),
-          } satisfies NewRunArtifact;
+          } satisfies NewIssueWorkflowExecutionArtifact;
         }),
       )
       .returning();
   };
 
-  const upsertRunSummary = async (input: UpsertRunSummaryInput): Promise<RunSummary> => {
+  const upsertExecutionSummary = async (
+    input: UpsertIssueWorkflowExecutionSummaryInput,
+  ): Promise<IssueWorkflowExecutionSummary> => {
     const [summary] = await db
-      .insert(runSummaries)
+      .insert(issueWorkflowExecutionSummaries)
       .values({
-        runId: input.runId,
+        executionId: input.executionId,
         ...(input.objective === undefined ? {} : { objective: input.objective }),
         ...(input.linkedIssueRef === undefined ? {} : { linkedIssueRef: input.linkedIssueRef }),
         ...(input.filesChanged === undefined ? {} : { filesChanged: input.filesChanged }),
@@ -253,9 +259,9 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
         ...(input.warnings === undefined ? {} : { warnings: input.warnings }),
         ...(input.summaryMarkdown === undefined ? {} : { summaryMarkdown: input.summaryMarkdown }),
         ...(input.generatedAt === undefined ? {} : { generatedAt: input.generatedAt }),
-      } satisfies NewRunSummary)
+      } satisfies NewIssueWorkflowExecutionSummary)
       .onConflictDoUpdate({
-        target: runSummaries.runId,
+        target: issueWorkflowExecutionSummaries.executionId,
         set: {
           ...(input.objective === undefined ? {} : { objective: input.objective }),
           ...(input.linkedIssueRef === undefined ? {} : { linkedIssueRef: input.linkedIssueRef }),
@@ -272,59 +278,54 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
       })
       .returning();
 
-    return assertInserted(summary, `Failed to upsert run summary for run ${input.runId}.`);
+    return assertInserted(summary, `Failed to upsert summary for execution ${input.executionId}.`);
   };
 
-  const getRunDetailBundle = async (runId: string): Promise<RunDetailBundle | null> => {
-    const [run] = await db
+  const getExecutionDetailBundle = async (
+    executionId: string,
+  ): Promise<IssueWorkflowExecutionDetailBundle | null> => {
+    const [execution] = await db
       .select()
-      .from(sandboxAttempts)
-      .where(eq(sandboxAttempts.id, runId))
+      .from(issueWorkflowExecutions)
+      .where(eq(issueWorkflowExecutions.id, executionId))
       .limit(1);
 
-    if (run === undefined) {
+    if (execution === undefined) {
       return null;
     }
 
-    const [inputSnapshot] = await db
-      .select()
-      .from(sandboxAttemptSnapshots)
-      .where(eq(sandboxAttemptSnapshots.runId, runId))
-      .limit(1);
-
     const [summary] = await db
       .select()
-      .from(runSummaries)
-      .where(eq(runSummaries.runId, runId))
+      .from(issueWorkflowExecutionSummaries)
+      .where(eq(issueWorkflowExecutionSummaries.executionId, executionId))
       .limit(1);
 
     const events = await db
       .select()
-      .from(runEvents)
-      .where(eq(runEvents.runId, runId))
-      .orderBy(asc(runEvents.sequence));
+      .from(issueWorkflowExecutionEvents)
+      .where(eq(issueWorkflowExecutionEvents.executionId, executionId))
+      .orderBy(asc(issueWorkflowExecutionEvents.sequence));
 
     const validationResults = await db
       .select()
-      .from(runValidationResults)
-      .where(eq(runValidationResults.runId, runId))
-      .orderBy(asc(runValidationResults.checkKey));
+      .from(issueWorkflowExecutionValidationResults)
+      .where(eq(issueWorkflowExecutionValidationResults.executionId, executionId))
+      .orderBy(asc(issueWorkflowExecutionValidationResults.checkKey));
 
     const diffFiles = await db
       .select()
-      .from(runDiffFiles)
-      .where(eq(runDiffFiles.runId, runId))
-      .orderBy(asc(runDiffFiles.path));
+      .from(issueWorkflowExecutionDiffFiles)
+      .where(eq(issueWorkflowExecutionDiffFiles.executionId, executionId))
+      .orderBy(asc(issueWorkflowExecutionDiffFiles.path));
 
     const artifacts = await db
       .select()
-      .from(runArtifacts)
-      .where(eq(runArtifacts.runId, runId))
-      .orderBy(asc(runArtifacts.createdAt));
+      .from(issueWorkflowExecutionArtifacts)
+      .where(eq(issueWorkflowExecutionArtifacts.executionId, executionId))
+      .orderBy(asc(issueWorkflowExecutionArtifacts.createdAt));
 
     return {
-      run,
-      inputSnapshot: inputSnapshot ?? null,
+      execution,
       summary: summary ?? null,
       events,
       validationResults,
@@ -334,13 +335,15 @@ export const createRunReportingRepository = (client: DatabaseClient) => {
   };
 
   return {
-    appendRunEvents,
-    getRunDetailBundle,
-    insertRunArtifacts,
-    replaceRunDiffFiles,
-    replaceRunValidationResults,
-    upsertRunSummary,
+    appendExecutionEvents,
+    getExecutionDetailBundle,
+    insertExecutionArtifacts,
+    replaceExecutionDiffFiles,
+    replaceExecutionValidationResults,
+    upsertExecutionSummary,
   };
 };
 
-export type RunReportingRepository = ReturnType<typeof createRunReportingRepository>;
+export type IssueWorkflowExecutionRepository = ReturnType<
+  typeof createIssueWorkflowExecutionRepository
+>;

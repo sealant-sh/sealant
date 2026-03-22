@@ -49,16 +49,45 @@ export type SandboxRunLinkRelation = (typeof sandboxRunLinkRelationValues)[numbe
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
 export type ProfileSshKeyPurpose = (typeof profileSshKeyPurposeValues)[number];
 
-export const runEventLevelValues = ["debug", "info", "warn", "error"] as const;
-export type RunEventLevel = (typeof runEventLevelValues)[number];
+export const issueWorkflowStatusValues = ["active", "completed", "failed", "cancelled"] as const;
+export type IssueWorkflowStatus = (typeof issueWorkflowStatusValues)[number];
 
-export const runValidationStatusValues = ["pass", "warn", "fail", "skip"] as const;
-export type RunValidationStatus = (typeof runValidationStatusValues)[number];
+export const issueWorkflowExecutionStatusValues = [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
+export type IssueWorkflowExecutionStatus = (typeof issueWorkflowExecutionStatusValues)[number];
 
-export const runDiffChangeTypeValues = ["added", "modified", "deleted", "renamed"] as const;
-export type RunDiffChangeType = (typeof runDiffChangeTypeValues)[number];
+export const issueWorkflowExecutionTriggerTypeValues = ["manual", "api", "retry"] as const;
+export type IssueWorkflowExecutionTriggerType =
+  (typeof issueWorkflowExecutionTriggerTypeValues)[number];
 
-export const runArtifactKindValues = [
+export const issueWorkflowExecutionEventLevelValues = ["debug", "info", "warn", "error"] as const;
+export type IssueWorkflowExecutionEventLevel =
+  (typeof issueWorkflowExecutionEventLevelValues)[number];
+
+export const issueWorkflowExecutionValidationStatusValues = [
+  "pass",
+  "warn",
+  "fail",
+  "skip",
+] as const;
+export type IssueWorkflowExecutionValidationStatus =
+  (typeof issueWorkflowExecutionValidationStatusValues)[number];
+
+export const issueWorkflowExecutionDiffChangeTypeValues = [
+  "added",
+  "modified",
+  "deleted",
+  "renamed",
+] as const;
+export type IssueWorkflowExecutionDiffChangeType =
+  (typeof issueWorkflowExecutionDiffChangeTypeValues)[number];
+
+export const issueWorkflowExecutionArtifactKindValues = [
   "log",
   "trace",
   "diff",
@@ -67,9 +96,10 @@ export const runArtifactKindValues = [
   "compiled-spec",
   "other",
 ] as const;
-export type RunArtifactKind = (typeof runArtifactKindValues)[number];
+export type IssueWorkflowExecutionArtifactKind =
+  (typeof issueWorkflowExecutionArtifactKindValues)[number];
 
-export const runArtifactStorageBackendValues = [
+export const issueWorkflowExecutionArtifactStorageBackendValues = [
   "inline",
   "database",
   "s3",
@@ -77,13 +107,16 @@ export const runArtifactStorageBackendValues = [
   "azure-blob",
   "filesystem",
 ] as const;
-export type RunArtifactStorageBackend = (typeof runArtifactStorageBackendValues)[number];
+export type IssueWorkflowExecutionArtifactStorageBackend =
+  (typeof issueWorkflowExecutionArtifactStorageBackendValues)[number];
 
-export const issueRunLinkRelationValues = ["primary", "retry", "exploratory"] as const;
-export type IssueRunLinkRelation = (typeof issueRunLinkRelationValues)[number];
-
-export const runPullRequestLinkRelationValues = ["created", "updated", "referenced"] as const;
-export type RunPullRequestLinkRelation = (typeof runPullRequestLinkRelationValues)[number];
+export const issueWorkflowExecutionPullRequestLinkRelationValues = [
+  "created",
+  "updated",
+  "referenced",
+] as const;
+export type IssueWorkflowExecutionPullRequestLinkRelation =
+  (typeof issueWorkflowExecutionPullRequestLinkRelationValues)[number];
 
 export const issuePullRequestLinkRelationValues = ["fixes", "relates_to"] as const;
 export type IssuePullRequestLinkRelation = (typeof issuePullRequestLinkRelationValues)[number];
@@ -650,15 +683,95 @@ export const sandboxAttemptSnapshots = sqliteTable("sandbox_attempt_snapshots", 
     .$defaultFn(() => new Date()),
 });
 
-export const runArtifacts = sqliteTable(
-  "run_artifacts",
+export const issueWorkflows = sqliteTable(
+  "issue_workflows",
   {
     id: text().primaryKey(),
-    runId: text("run_id")
+    issueId: text("issue_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-    kind: text({ enum: runArtifactKindValues }).notNull().default("other"),
-    storageBackend: text("storage_backend", { enum: runArtifactStorageBackendValues })
+      .references(() => issues.id, { onDelete: "cascade" }),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: text({ enum: issueWorkflowStatusValues }).notNull().default("active"),
+    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    index("issue_workflows_issue_id_status_idx").on(table.issueId, table.status),
+    index("issue_workflows_repository_id_status_idx").on(table.repositoryId, table.status),
+    index("issue_workflows_owner_user_id_status_idx").on(table.ownerUserId, table.status),
+  ],
+);
+
+export const issueWorkflowExecutions = sqliteTable(
+  "issue_workflow_executions",
+  {
+    id: text().primaryKey(),
+    issueWorkflowId: text("issue_workflow_id")
+      .notNull()
+      .references(() => issueWorkflows.id, { onDelete: "cascade" }),
+    sandboxId: text("sandbox_id").references(() => sandboxes.id, { onDelete: "set null" }),
+    sandboxAttemptId: text("sandbox_attempt_id").references(() => sandboxAttempts.id, {
+      onDelete: "set null",
+    }),
+    status: text({ enum: issueWorkflowExecutionStatusValues }).notNull().default("queued"),
+    triggerType: text("trigger_type", { enum: issueWorkflowExecutionTriggerTypeValues })
+      .notNull()
+      .default("manual"),
+    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    cancelReason: text("cancel_reason"),
+    queuedAt: integer("queued_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+    durationMs: integer("duration_ms", { mode: "number" }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("issue_workflow_executions_workflow_id_created_at_idx").on(
+      table.issueWorkflowId,
+      table.createdAt,
+    ),
+    index("issue_workflow_executions_status_started_at_idx").on(table.status, table.startedAt),
+    index("issue_workflow_executions_sandbox_id_created_at_idx").on(
+      table.sandboxId,
+      table.createdAt,
+    ),
+    uniqueIndex("issue_workflow_executions_sandbox_attempt_id_idx").on(table.sandboxAttemptId),
+  ],
+);
+
+export const issueWorkflowExecutionArtifacts = sqliteTable(
+  "issue_workflow_execution_artifacts",
+  {
+    id: text().primaryKey(),
+    executionId: text("execution_id")
+      .notNull()
+      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
+    kind: text({ enum: issueWorkflowExecutionArtifactKindValues }).notNull().default("other"),
+    storageBackend: text("storage_backend", {
+      enum: issueWorkflowExecutionArtifactStorageBackendValues,
+    })
       .notNull()
       .default("inline"),
     storageKey: text("storage_key"),
@@ -671,24 +784,27 @@ export const runArtifacts = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    index("run_artifacts_run_id_kind_idx").on(table.runId, table.kind),
-    index("run_artifacts_storage_backend_storage_key_idx").on(
+    index("issue_workflow_execution_artifacts_execution_id_kind_idx").on(
+      table.executionId,
+      table.kind,
+    ),
+    index("issue_workflow_execution_artifacts_storage_backend_storage_key_idx").on(
       table.storageBackend,
       table.storageKey,
     ),
   ],
 );
 
-export const runEvents = sqliteTable(
-  "run_events",
+export const issueWorkflowExecutionEvents = sqliteTable(
+  "issue_workflow_execution_events",
   {
     id: text().primaryKey(),
-    runId: text("run_id")
+    executionId: text("execution_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
     sequence: integer({ mode: "number" }).notNull(),
     phase: text().notNull(),
-    level: text({ enum: runEventLevelValues }).notNull().default("info"),
+    level: text({ enum: issueWorkflowExecutionEventLevelValues }).notNull().default("info"),
     eventType: text("event_type").notNull(),
     message: text().notNull(),
     payload: text({ mode: "json" }).$type<Record<string, unknown>>(),
@@ -697,21 +813,30 @@ export const runEvents = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    uniqueIndex("run_events_run_id_sequence_idx").on(table.runId, table.sequence),
-    index("run_events_run_id_occurred_at_idx").on(table.runId, table.occurredAt),
-    index("run_events_run_id_level_idx").on(table.runId, table.level),
+    uniqueIndex("issue_workflow_execution_events_execution_id_sequence_idx").on(
+      table.executionId,
+      table.sequence,
+    ),
+    index("issue_workflow_execution_events_execution_id_occurred_at_idx").on(
+      table.executionId,
+      table.occurredAt,
+    ),
+    index("issue_workflow_execution_events_execution_id_level_idx").on(
+      table.executionId,
+      table.level,
+    ),
   ],
 );
 
-export const runValidationResults = sqliteTable(
-  "run_validation_results",
+export const issueWorkflowExecutionValidationResults = sqliteTable(
+  "issue_workflow_execution_validation_results",
   {
     id: text().primaryKey(),
-    runId: text("run_id")
+    executionId: text("execution_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
     checkKey: text("check_key").notNull(),
-    status: text({ enum: runValidationStatusValues }).notNull(),
+    status: text({ enum: issueWorkflowExecutionValidationStatusValues }).notNull(),
     durationMs: integer("duration_ms", { mode: "number" }),
     message: text(),
     details: text({ mode: "json" }).$type<Record<string, unknown>>(),
@@ -720,41 +845,56 @@ export const runValidationResults = sqliteTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    uniqueIndex("run_validation_results_run_id_check_key_idx").on(table.runId, table.checkKey),
-    index("run_validation_results_run_id_status_idx").on(table.runId, table.status),
+    uniqueIndex("issue_workflow_execution_validation_results_execution_id_check_key_idx").on(
+      table.executionId,
+      table.checkKey,
+    ),
+    index("issue_workflow_execution_validation_results_execution_id_status_idx").on(
+      table.executionId,
+      table.status,
+    ),
   ],
 );
 
-export const runDiffFiles = sqliteTable(
-  "run_diff_files",
+export const issueWorkflowExecutionDiffFiles = sqliteTable(
+  "issue_workflow_execution_diff_files",
   {
     id: text().primaryKey(),
-    runId: text("run_id")
+    executionId: text("execution_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-    changeType: text("change_type", { enum: runDiffChangeTypeValues }).notNull(),
+      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
+    changeType: text("change_type", { enum: issueWorkflowExecutionDiffChangeTypeValues }).notNull(),
     path: text().notNull(),
     oldPath: text("old_path"),
     additions: integer({ mode: "number" }).notNull().default(0),
     deletions: integer({ mode: "number" }).notNull().default(0),
     isBinary: integer("is_binary", { mode: "boolean" }).notNull().default(false),
-    patchArtifactId: text("patch_artifact_id").references(() => runArtifacts.id, {
-      onDelete: "set null",
-    }),
+    patchArtifactId: text("patch_artifact_id").references(
+      () => issueWorkflowExecutionArtifacts.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    index("run_diff_files_run_id_path_idx").on(table.runId, table.path),
-    index("run_diff_files_run_id_change_type_idx").on(table.runId, table.changeType),
+    index("issue_workflow_execution_diff_files_execution_id_path_idx").on(
+      table.executionId,
+      table.path,
+    ),
+    index("issue_workflow_execution_diff_files_execution_id_change_type_idx").on(
+      table.executionId,
+      table.changeType,
+    ),
   ],
 );
 
-export const runSummaries = sqliteTable("run_summaries", {
-  runId: text("run_id")
+export const issueWorkflowExecutionSummaries = sqliteTable("issue_workflow_execution_summaries", {
+  executionId: text("execution_id")
     .primaryKey()
-    .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+    .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
   objective: text(),
   linkedIssueRef: text("linked_issue_ref"),
   filesChanged: integer("files_changed", { mode: "number" }).notNull().default(0),
@@ -778,43 +918,25 @@ export const runSummaries = sqliteTable("run_summaries", {
     .$onUpdate(() => new Date()),
 });
 
-export const issueRunLinks = sqliteTable(
-  "issue_run_links",
+export const issueWorkflowExecutionPullRequestLinks = sqliteTable(
+  "issue_workflow_execution_pull_request_links",
   {
-    issueId: text("issue_id")
+    executionId: text("execution_id")
       .notNull()
-      .references(() => issues.id, { onDelete: "cascade" }),
-    runId: text("run_id")
-      .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-    relation: text({ enum: issueRunLinkRelationValues }).notNull().default("primary"),
-    linkedAt: integer("linked_at", { mode: "timestamp_ms" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    primaryKey({ columns: [table.issueId, table.runId] }),
-    index("issue_run_links_run_id_relation_idx").on(table.runId, table.relation),
-  ],
-);
-
-export const runPullRequestLinks = sqliteTable(
-  "run_pull_request_links",
-  {
-    runId: text("run_id")
-      .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
     pullRequestId: text("pull_request_id")
       .notNull()
       .references(() => pullRequests.id, { onDelete: "cascade" }),
-    relation: text({ enum: runPullRequestLinkRelationValues }).notNull().default("created"),
+    relation: text({ enum: issueWorkflowExecutionPullRequestLinkRelationValues })
+      .notNull()
+      .default("created"),
     linkedAt: integer("linked_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    primaryKey({ columns: [table.runId, table.pullRequestId] }),
-    index("run_pull_request_links_pull_request_id_relation_idx").on(
+    primaryKey({ columns: [table.executionId, table.pullRequestId] }),
+    index("issue_workflow_execution_pull_request_links_pull_request_id_relation_idx").on(
       table.pullRequestId,
       table.relation,
     ),
@@ -901,26 +1023,33 @@ export type NewSandboxRunLink = typeof sandboxRunLinks.$inferInsert;
 export type SandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferSelect;
 export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferInsert;
 
-export type RunArtifact = typeof runArtifacts.$inferSelect;
-export type NewRunArtifact = typeof runArtifacts.$inferInsert;
+export type IssueWorkflow = typeof issueWorkflows.$inferSelect;
+export type NewIssueWorkflow = typeof issueWorkflows.$inferInsert;
 
-export type RunEvent = typeof runEvents.$inferSelect;
-export type NewRunEvent = typeof runEvents.$inferInsert;
+export type IssueWorkflowExecution = typeof issueWorkflowExecutions.$inferSelect;
+export type NewIssueWorkflowExecution = typeof issueWorkflowExecutions.$inferInsert;
 
-export type RunValidationResult = typeof runValidationResults.$inferSelect;
-export type NewRunValidationResult = typeof runValidationResults.$inferInsert;
+export type IssueWorkflowExecutionArtifact = typeof issueWorkflowExecutionArtifacts.$inferSelect;
+export type NewIssueWorkflowExecutionArtifact = typeof issueWorkflowExecutionArtifacts.$inferInsert;
 
-export type RunDiffFile = typeof runDiffFiles.$inferSelect;
-export type NewRunDiffFile = typeof runDiffFiles.$inferInsert;
+export type IssueWorkflowExecutionEvent = typeof issueWorkflowExecutionEvents.$inferSelect;
+export type NewIssueWorkflowExecutionEvent = typeof issueWorkflowExecutionEvents.$inferInsert;
 
-export type RunSummary = typeof runSummaries.$inferSelect;
-export type NewRunSummary = typeof runSummaries.$inferInsert;
+export type IssueWorkflowExecutionValidationResult =
+  typeof issueWorkflowExecutionValidationResults.$inferSelect;
+export type NewIssueWorkflowExecutionValidationResult =
+  typeof issueWorkflowExecutionValidationResults.$inferInsert;
 
-export type IssueRunLink = typeof issueRunLinks.$inferSelect;
-export type NewIssueRunLink = typeof issueRunLinks.$inferInsert;
+export type IssueWorkflowExecutionDiffFile = typeof issueWorkflowExecutionDiffFiles.$inferSelect;
+export type NewIssueWorkflowExecutionDiffFile = typeof issueWorkflowExecutionDiffFiles.$inferInsert;
 
-export type RunPullRequestLink = typeof runPullRequestLinks.$inferSelect;
-export type NewRunPullRequestLink = typeof runPullRequestLinks.$inferInsert;
+export type IssueWorkflowExecutionSummary = typeof issueWorkflowExecutionSummaries.$inferSelect;
+export type NewIssueWorkflowExecutionSummary = typeof issueWorkflowExecutionSummaries.$inferInsert;
+
+export type IssueWorkflowExecutionPullRequestLink =
+  typeof issueWorkflowExecutionPullRequestLinks.$inferSelect;
+export type NewIssueWorkflowExecutionPullRequestLink =
+  typeof issueWorkflowExecutionPullRequestLinks.$inferInsert;
 
 export type IssuePullRequestLink = typeof issuePullRequestLinks.$inferSelect;
 export type NewIssuePullRequestLink = typeof issuePullRequestLinks.$inferInsert;

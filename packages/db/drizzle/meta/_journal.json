@@ -43,6 +43,13 @@
       "when": 1775000001000,
       "tag": "0005_sturdy_echo",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1775000002000,
+      "tag": "0006_issue_workflows_clarity",
+      "breakpoints": true
     }
   ]
 }
