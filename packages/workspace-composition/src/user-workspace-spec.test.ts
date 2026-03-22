@@ -110,6 +110,10 @@ describe("normalizeUserWorkspaceSpec", () => {
           family: "fedora",
           mode: "prefer",
         },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
       },
     });
   });
@@ -141,13 +145,14 @@ describe("normalizeUserWorkspaceSpec", () => {
           },
         },
       },
-      target: {
-        os: {
-          family: "arch",
-          mode: "require",
+        target: {
+          os: {
+            family: "arch",
+            mode: "require",
+          },
+          runtime: "k3s",
         },
-      },
-    });
+      });
 
     expect(blueprint.sources.workspace.provider).toBe("gitlab");
     expect(blueprint.sources.inputs).toEqual([
@@ -174,6 +179,10 @@ describe("normalizeUserWorkspaceSpec", () => {
     expect(blueprint.target.os).toEqual({
       family: "arch",
       mode: "require",
+    });
+    expect(blueprint.target.runtime).toEqual({
+      family: "k3s",
+      mode: "prefer",
     });
   });
 });

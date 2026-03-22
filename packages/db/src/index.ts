@@ -82,8 +82,10 @@ export {
 export {
   workspaceBuildJobRequestPayloadSchema,
   workspaceBuildJobResultPayloadSchema,
+  workspaceBuildJobRuntimeResultPayloadSchema,
   type WorkspaceBuildJobRequestPayload,
   type WorkspaceBuildJobResultPayload,
+  type WorkspaceBuildJobRuntimeResultPayload,
 } from "./payloads.js";
 
 export {

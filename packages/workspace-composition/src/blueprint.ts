@@ -33,6 +33,8 @@ export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
 // choose the concrete backend implementation.
 export const workspaceTargetOsFamilySchema = z.enum(["auto", "nix", "fedora", "arch"]);
 export const workspaceTargetOsModeSchema = z.enum(["prefer", "require"]);
+export const workspaceTargetRuntimeFamilySchema = z.enum(["auto", "docker", "k8s", "k3s"]);
+export const workspaceTargetRuntimeModeSchema = z.enum(["prefer", "require"]);
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -174,11 +176,22 @@ export const workspaceTargetOsSchema = z
   })
   .default({});
 
+// Runtime target is separated from OS target because the same compiled artifact
+// can often run on more than one backend. Keeping runtime intent explicit gives
+// adapter selection one stable place to look.
+export const workspaceTargetRuntimeSchema = z
+  .strictObject({
+    family: workspaceTargetRuntimeFamilySchema.default("auto"),
+    mode: workspaceTargetRuntimeModeSchema.default("prefer"),
+  })
+  .default({});
+
 // The top-level target object leaves room for future selection constraints while
 // keeping OS preference grouped under a clear executor-selection namespace.
 export const workspaceTargetSchema = z
   .strictObject({
     os: workspaceTargetOsSchema.default({}),
+    runtime: workspaceTargetRuntimeSchema.default({}),
   })
   .default({});
 

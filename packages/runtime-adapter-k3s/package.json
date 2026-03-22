@@ -2,5 +2,15 @@
   "name": "@sealant/runtime-adapter-k3s",
   "version": "0.0.0",
   "private": true,
-  "description": "K3s runtime adapter placeholder"
+  "description": "K3s runtime adapter scaffold",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sealant/runtime-adapters-api": "workspace:*"
+  }
 }

@@ -102,7 +102,10 @@ curl -X POST http://localhost:3000/v1/workspace-build-jobs \
     "spec": {
       "source": "https://github.com/example/repo",
       "harness": "opencode",
-      "os": "nix"
+      "os": "nix",
+      "target": {
+        "runtime": "docker"
+      }
     }
   }'
 ```
@@ -122,6 +125,9 @@ On success, the response includes:
 - `publishedImage.reference`
 - `publishedImage.digestReference`
 - `publishedImage.digest`
+- `result.runtime.adapter`
+- `result.runtime.resourceId`
+- `result.runtime.endpoint` (when exposed by the selected runtime adapter)
 
 ### Confirm image exists in registry
 

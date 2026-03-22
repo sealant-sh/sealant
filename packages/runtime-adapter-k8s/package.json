@@ -2,5 +2,15 @@
   "name": "@sealant/runtime-adapter-k8s",
   "version": "0.0.0",
   "private": true,
-  "description": "Kubernetes runtime adapter placeholder"
+  "description": "Kubernetes runtime adapter scaffold",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sealant/runtime-adapters-api": "workspace:*"
+  }
 }

@@ -1,5 +1,8 @@
 import { createDatabaseClientFromEnv, closeDatabaseClient } from "@sealant/db";
 import { NixOsExecutor } from "@sealant/os-integration-nix";
+import { DockerRuntimeAdapter } from "@sealant/runtime-adapter-docker";
+import { K3sRuntimeAdapter } from "@sealant/runtime-adapter-k3s";
+import { K8sRuntimeAdapter } from "@sealant/runtime-adapter-k8s";
 import { closeRabbitMqSingleton, consumeWorkspaceBuildJobs } from "@sealant/workspace-build-queue";
 
 import { createNixBuilderCommandRunner } from "./create-nix-builder-command-runner.js";
@@ -12,6 +15,14 @@ export const startWorker = async (env: WorkerEnv) => {
   const registryClient = createRegistryClient(env);
   const nixBuilderCommandRunner = createNixBuilderCommandRunner(env);
   const executors = [new NixOsExecutor({ commandRunner: nixBuilderCommandRunner })];
+  const runtimeAdapters = [
+    new DockerRuntimeAdapter({
+      defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
+      sshBindHost: env.DEFAULT_SSH_BIND_HOST,
+    }),
+    new K8sRuntimeAdapter(),
+    new K3sRuntimeAdapter(),
+  ];
 
   const consumer = await consumeWorkspaceBuildJobs({
     connectionUrl: env.RABBITMQ_URL,
@@ -24,6 +35,12 @@ export const startWorker = async (env: WorkerEnv) => {
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
           dbClient,
           executors,
+          runtimeAdapters,
+          defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+          defaultStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
+          defaultIdleCommand: env.DEFAULT_WORKSPACE_IDLE_COMMAND,
+          defaultSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
+          defaultSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
           registryClient,
         });
         ack();
