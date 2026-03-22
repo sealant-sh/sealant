@@ -90,6 +90,7 @@ const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
   {
     label: "Sandbox Views",
     links: [
+      { href: "/runs/new", label: "Create Sandbox", exact: true },
       { href: "/runs", label: "All Sandboxes", exact: true },
       { href: "/runs/active", label: "Running", exact: true },
       { href: "/runs/failed", label: "Failed", exact: true },
@@ -404,7 +405,7 @@ function AppSidebarNav({
           {`v${packageJson.version}`}
         </p>
         <Link
-          to={"/runs" as never}
+          to={"/runs/new" as never}
           className={cn(
             "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
             isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
@@ -566,7 +567,7 @@ function getSandboxDetail(pathname: string): { sandboxId: string } | null {
     return null;
   }
 
-  if (sandboxId === "active" || sandboxId === "failed") {
+  if (sandboxId === "active" || sandboxId === "failed" || sandboxId === "new") {
     return null;
   }
 
