@@ -12,7 +12,7 @@ import {
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterSupport,
-} from "@sealant/runtime-adapters-api";
+} from "./runtime-adapter.js";
 
 const execFileAsync = promisify(execFile);
 

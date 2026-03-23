@@ -17,30 +17,30 @@ import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-pass
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
-import { Route as AuthenticatedRunsIndexRouteImport } from './routes/_authenticated/runs/index'
+import { Route as AuthenticatedSandboxesIndexRouteImport } from './routes/_authenticated/sandboxes/index'
 import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
 import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
 import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as AuthenticatedRunsNewRouteImport } from './routes/_authenticated/runs/new'
-import { Route as AuthenticatedRunsFailedRouteImport } from './routes/_authenticated/runs/failed'
-import { Route as AuthenticatedRunsActiveRouteImport } from './routes/_authenticated/runs/active'
+import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authenticated/sandboxes/new'
+import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
+import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_authenticated/sandboxes/active'
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
 import { Route as AuthenticatedIssuesReadyRouteImport } from './routes/_authenticated/issues/ready'
 import { Route as AuthenticatedIssuesAssignedRouteImport } from './routes/_authenticated/issues/assigned'
-import { Route as AuthenticatedRunsRunIdIndexRouteImport } from './routes/_authenticated/runs/$runId/index'
+import { Route as AuthenticatedSandboxesSandboxIdIndexRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/index'
 import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
 import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
 import { Route as AuthenticatedProfilesProfileIdIndexRouteImport } from './routes/_authenticated/profiles/$profileId/index'
-import { Route as AuthenticatedRunsRunIdValidationRouteImport } from './routes/_authenticated/runs/$runId/validation'
-import { Route as AuthenticatedRunsRunIdTraceRouteImport } from './routes/_authenticated/runs/$runId/trace'
-import { Route as AuthenticatedRunsRunIdSpecRouteImport } from './routes/_authenticated/runs/$runId/spec'
-import { Route as AuthenticatedRunsRunIdDiffRouteImport } from './routes/_authenticated/runs/$runId/diff'
+import { Route as AuthenticatedSandboxesSandboxIdValidationRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/validation'
+import { Route as AuthenticatedSandboxesSandboxIdTraceRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/trace'
+import { Route as AuthenticatedSandboxesSandboxIdSpecRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/spec'
+import { Route as AuthenticatedSandboxesSandboxIdDiffRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/diff'
 import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
 import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
-import { Route as AuthenticatedRepositoriesRepoIdRunsRouteImport } from './routes/_authenticated/repositories/$repoId/runs'
+import { Route as AuthenticatedRepositoriesRepoIdSandboxesRouteImport } from './routes/_authenticated/repositories/$repoId/sandboxes'
 import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
 import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
 import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
@@ -86,11 +86,12 @@ const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => AuthRoute,
 } as any)
-const AuthenticatedRunsIndexRoute = AuthenticatedRunsIndexRouteImport.update({
-  id: '/runs/',
-  path: '/runs/',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
+const AuthenticatedSandboxesIndexRoute =
+  AuthenticatedSandboxesIndexRouteImport.update({
+    id: '/sandboxes/',
+    path: '/sandboxes/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedRepositoriesIndexRoute =
   AuthenticatedRepositoriesIndexRouteImport.update({
     id: '/repositories/',
@@ -125,21 +126,24 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedRunsNewRoute = AuthenticatedRunsNewRouteImport.update({
-  id: '/runs/new',
-  path: '/runs/new',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedRunsFailedRoute = AuthenticatedRunsFailedRouteImport.update({
-  id: '/runs/failed',
-  path: '/runs/failed',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedRunsActiveRoute = AuthenticatedRunsActiveRouteImport.update({
-  id: '/runs/active',
-  path: '/runs/active',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
+const AuthenticatedSandboxesNewRoute =
+  AuthenticatedSandboxesNewRouteImport.update({
+    id: '/sandboxes/new',
+    path: '/sandboxes/new',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSandboxesFailedRoute =
+  AuthenticatedSandboxesFailedRouteImport.update({
+    id: '/sandboxes/failed',
+    path: '/sandboxes/failed',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSandboxesActiveRoute =
+  AuthenticatedSandboxesActiveRouteImport.update({
+    id: '/sandboxes/active',
+    path: '/sandboxes/active',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedProfilesCreateRoute =
   AuthenticatedProfilesCreateRouteImport.update({
     id: '/profiles/create',
@@ -158,10 +162,10 @@ const AuthenticatedIssuesAssignedRoute =
     path: '/issues/assigned',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRunsRunIdIndexRoute =
-  AuthenticatedRunsRunIdIndexRouteImport.update({
-    id: '/runs/$runId/',
-    path: '/runs/$runId/',
+const AuthenticatedSandboxesSandboxIdIndexRoute =
+  AuthenticatedSandboxesSandboxIdIndexRouteImport.update({
+    id: '/sandboxes/$sandboxId/',
+    path: '/sandboxes/$sandboxId/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRepositoriesRepoIdIndexRoute =
@@ -182,28 +186,28 @@ const AuthenticatedProfilesProfileIdIndexRoute =
     path: '/profiles/$profileId/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRunsRunIdValidationRoute =
-  AuthenticatedRunsRunIdValidationRouteImport.update({
-    id: '/runs/$runId/validation',
-    path: '/runs/$runId/validation',
+const AuthenticatedSandboxesSandboxIdValidationRoute =
+  AuthenticatedSandboxesSandboxIdValidationRouteImport.update({
+    id: '/sandboxes/$sandboxId/validation',
+    path: '/sandboxes/$sandboxId/validation',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRunsRunIdTraceRoute =
-  AuthenticatedRunsRunIdTraceRouteImport.update({
-    id: '/runs/$runId/trace',
-    path: '/runs/$runId/trace',
+const AuthenticatedSandboxesSandboxIdTraceRoute =
+  AuthenticatedSandboxesSandboxIdTraceRouteImport.update({
+    id: '/sandboxes/$sandboxId/trace',
+    path: '/sandboxes/$sandboxId/trace',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRunsRunIdSpecRoute =
-  AuthenticatedRunsRunIdSpecRouteImport.update({
-    id: '/runs/$runId/spec',
-    path: '/runs/$runId/spec',
+const AuthenticatedSandboxesSandboxIdSpecRoute =
+  AuthenticatedSandboxesSandboxIdSpecRouteImport.update({
+    id: '/sandboxes/$sandboxId/spec',
+    path: '/sandboxes/$sandboxId/spec',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRunsRunIdDiffRoute =
-  AuthenticatedRunsRunIdDiffRouteImport.update({
-    id: '/runs/$runId/diff',
-    path: '/runs/$runId/diff',
+const AuthenticatedSandboxesSandboxIdDiffRoute =
+  AuthenticatedSandboxesSandboxIdDiffRouteImport.update({
+    id: '/sandboxes/$sandboxId/diff',
+    path: '/sandboxes/$sandboxId/diff',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRepositoriesRepoIdSetupRoute =
@@ -218,10 +222,10 @@ const AuthenticatedRepositoriesRepoIdSettingsRoute =
     path: '/repositories/$repoId/settings',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRepositoriesRepoIdRunsRoute =
-  AuthenticatedRepositoriesRepoIdRunsRouteImport.update({
-    id: '/repositories/$repoId/runs',
-    path: '/repositories/$repoId/runs',
+const AuthenticatedRepositoriesRepoIdSandboxesRoute =
+  AuthenticatedRepositoriesRepoIdSandboxesRouteImport.update({
+    id: '/repositories/$repoId/sandboxes',
+    path: '/repositories/$repoId/sandboxes',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesProfileIdSetupRoute =
@@ -271,32 +275,32 @@ export interface FileRoutesByFullPath {
   '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/runs/active': typeof AuthenticatedRunsActiveRoute
-  '/runs/failed': typeof AuthenticatedRunsFailedRoute
-  '/runs/new': typeof AuthenticatedRunsNewRoute
+  '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
+  '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
+  '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues/': typeof AuthenticatedIssuesIndexRoute
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/registry/': typeof AuthenticatedRegistryIndexRoute
   '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
-  '/runs/': typeof AuthenticatedRunsIndexRoute
+  '/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
-  '/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
-  '/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
-  '/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
+  '/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
+  '/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
+  '/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
   '/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/runs/$runId/': typeof AuthenticatedRunsRunIdIndexRoute
+  '/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesByTo {
@@ -309,32 +313,32 @@ export interface FileRoutesByTo {
   '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/runs/active': typeof AuthenticatedRunsActiveRoute
-  '/runs/failed': typeof AuthenticatedRunsFailedRoute
-  '/runs/new': typeof AuthenticatedRunsNewRoute
+  '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
+  '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
+  '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues': typeof AuthenticatedIssuesIndexRoute
   '/profiles': typeof AuthenticatedProfilesIndexRoute
   '/registry': typeof AuthenticatedRegistryIndexRoute
   '/repositories': typeof AuthenticatedRepositoriesIndexRoute
-  '/runs': typeof AuthenticatedRunsIndexRoute
+  '/sandboxes': typeof AuthenticatedSandboxesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
-  '/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
-  '/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
-  '/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
+  '/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
+  '/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
+  '/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
   '/profiles/$profileId': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/repositories/$repoId': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/runs/$runId': typeof AuthenticatedRunsRunIdIndexRoute
+  '/sandboxes/$sandboxId': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRoutesById {
@@ -350,32 +354,32 @@ export interface FileRoutesById {
   '/_authenticated/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/_authenticated/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/_authenticated/runs/active': typeof AuthenticatedRunsActiveRoute
-  '/_authenticated/runs/failed': typeof AuthenticatedRunsFailedRoute
-  '/_authenticated/runs/new': typeof AuthenticatedRunsNewRoute
+  '/_authenticated/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
+  '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
+  '/_authenticated/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
   '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
-  '/_authenticated/runs/': typeof AuthenticatedRunsIndexRoute
+  '/_authenticated/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
   '/_authenticated/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/_authenticated/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/_authenticated/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/_authenticated/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/_authenticated/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/_authenticated/repositories/$repoId/runs': typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  '/_authenticated/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
   '/_authenticated/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/_authenticated/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/_authenticated/runs/$runId/diff': typeof AuthenticatedRunsRunIdDiffRoute
-  '/_authenticated/runs/$runId/spec': typeof AuthenticatedRunsRunIdSpecRoute
-  '/_authenticated/runs/$runId/trace': typeof AuthenticatedRunsRunIdTraceRoute
-  '/_authenticated/runs/$runId/validation': typeof AuthenticatedRunsRunIdValidationRoute
+  '/_authenticated/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
+  '/_authenticated/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
+  '/_authenticated/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
+  '/_authenticated/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
   '/_authenticated/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/_authenticated/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/_authenticated/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/_authenticated/runs/$runId/': typeof AuthenticatedRunsRunIdIndexRoute
+  '/_authenticated/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/_authenticated/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 export interface FileRouteTypes {
@@ -390,32 +394,32 @@ export interface FileRouteTypes {
     | '/issues/assigned'
     | '/issues/ready'
     | '/profiles/create'
-    | '/runs/active'
-    | '/runs/failed'
-    | '/runs/new'
+    | '/sandboxes/active'
+    | '/sandboxes/failed'
+    | '/sandboxes/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/issues/'
     | '/profiles/'
     | '/registry/'
     | '/repositories/'
-    | '/runs/'
+    | '/sandboxes/'
     | '/profiles/$profileId/access'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/runs'
+    | '/repositories/$repoId/sandboxes'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
-    | '/runs/$runId/diff'
-    | '/runs/$runId/spec'
-    | '/runs/$runId/trace'
-    | '/runs/$runId/validation'
+    | '/sandboxes/$sandboxId/diff'
+    | '/sandboxes/$sandboxId/spec'
+    | '/sandboxes/$sandboxId/trace'
+    | '/sandboxes/$sandboxId/validation'
     | '/profiles/$profileId/'
     | '/registry/$registryId/'
     | '/repositories/$repoId/'
-    | '/runs/$runId/'
+    | '/sandboxes/$sandboxId/'
     | '/registry/$registryId/$repo/$tag'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -428,32 +432,32 @@ export interface FileRouteTypes {
     | '/issues/assigned'
     | '/issues/ready'
     | '/profiles/create'
-    | '/runs/active'
-    | '/runs/failed'
-    | '/runs/new'
+    | '/sandboxes/active'
+    | '/sandboxes/failed'
+    | '/sandboxes/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/issues'
     | '/profiles'
     | '/registry'
     | '/repositories'
-    | '/runs'
+    | '/sandboxes'
     | '/profiles/$profileId/access'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/runs'
+    | '/repositories/$repoId/sandboxes'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
-    | '/runs/$runId/diff'
-    | '/runs/$runId/spec'
-    | '/runs/$runId/trace'
-    | '/runs/$runId/validation'
+    | '/sandboxes/$sandboxId/diff'
+    | '/sandboxes/$sandboxId/spec'
+    | '/sandboxes/$sandboxId/trace'
+    | '/sandboxes/$sandboxId/validation'
     | '/profiles/$profileId'
     | '/registry/$registryId'
     | '/repositories/$repoId'
-    | '/runs/$runId'
+    | '/sandboxes/$sandboxId'
     | '/registry/$registryId/$repo/$tag'
   id:
     | '__root__'
@@ -468,32 +472,32 @@ export interface FileRouteTypes {
     | '/_authenticated/issues/assigned'
     | '/_authenticated/issues/ready'
     | '/_authenticated/profiles/create'
-    | '/_authenticated/runs/active'
-    | '/_authenticated/runs/failed'
-    | '/_authenticated/runs/new'
+    | '/_authenticated/sandboxes/active'
+    | '/_authenticated/sandboxes/failed'
+    | '/_authenticated/sandboxes/new'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/_authenticated/issues/'
     | '/_authenticated/profiles/'
     | '/_authenticated/registry/'
     | '/_authenticated/repositories/'
-    | '/_authenticated/runs/'
+    | '/_authenticated/sandboxes/'
     | '/_authenticated/profiles/$profileId/access'
     | '/_authenticated/profiles/$profileId/env-variables'
     | '/_authenticated/profiles/$profileId/packages'
     | '/_authenticated/profiles/$profileId/secrets'
     | '/_authenticated/profiles/$profileId/setup'
-    | '/_authenticated/repositories/$repoId/runs'
+    | '/_authenticated/repositories/$repoId/sandboxes'
     | '/_authenticated/repositories/$repoId/settings'
     | '/_authenticated/repositories/$repoId/setup'
-    | '/_authenticated/runs/$runId/diff'
-    | '/_authenticated/runs/$runId/spec'
-    | '/_authenticated/runs/$runId/trace'
-    | '/_authenticated/runs/$runId/validation'
+    | '/_authenticated/sandboxes/$sandboxId/diff'
+    | '/_authenticated/sandboxes/$sandboxId/spec'
+    | '/_authenticated/sandboxes/$sandboxId/trace'
+    | '/_authenticated/sandboxes/$sandboxId/validation'
     | '/_authenticated/profiles/$profileId/'
     | '/_authenticated/registry/$registryId/'
     | '/_authenticated/repositories/$repoId/'
-    | '/_authenticated/runs/$runId/'
+    | '/_authenticated/sandboxes/$sandboxId/'
     | '/_authenticated/registry/$registryId/$repo/$tag'
   fileRoutesById: FileRoutesById
 }
@@ -562,11 +566,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
     }
-    '/_authenticated/runs/': {
-      id: '/_authenticated/runs/'
-      path: '/runs'
-      fullPath: '/runs/'
-      preLoaderRoute: typeof AuthenticatedRunsIndexRouteImport
+    '/_authenticated/sandboxes/': {
+      id: '/_authenticated/sandboxes/'
+      path: '/sandboxes'
+      fullPath: '/sandboxes/'
+      preLoaderRoute: typeof AuthenticatedSandboxesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/': {
@@ -611,25 +615,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/runs/new': {
-      id: '/_authenticated/runs/new'
-      path: '/runs/new'
-      fullPath: '/runs/new'
-      preLoaderRoute: typeof AuthenticatedRunsNewRouteImport
+    '/_authenticated/sandboxes/new': {
+      id: '/_authenticated/sandboxes/new'
+      path: '/sandboxes/new'
+      fullPath: '/sandboxes/new'
+      preLoaderRoute: typeof AuthenticatedSandboxesNewRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/failed': {
-      id: '/_authenticated/runs/failed'
-      path: '/runs/failed'
-      fullPath: '/runs/failed'
-      preLoaderRoute: typeof AuthenticatedRunsFailedRouteImport
+    '/_authenticated/sandboxes/failed': {
+      id: '/_authenticated/sandboxes/failed'
+      path: '/sandboxes/failed'
+      fullPath: '/sandboxes/failed'
+      preLoaderRoute: typeof AuthenticatedSandboxesFailedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/active': {
-      id: '/_authenticated/runs/active'
-      path: '/runs/active'
-      fullPath: '/runs/active'
-      preLoaderRoute: typeof AuthenticatedRunsActiveRouteImport
+    '/_authenticated/sandboxes/active': {
+      id: '/_authenticated/sandboxes/active'
+      path: '/sandboxes/active'
+      fullPath: '/sandboxes/active'
+      preLoaderRoute: typeof AuthenticatedSandboxesActiveRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/create': {
@@ -653,11 +657,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIssuesAssignedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/$runId/': {
-      id: '/_authenticated/runs/$runId/'
-      path: '/runs/$runId'
-      fullPath: '/runs/$runId/'
-      preLoaderRoute: typeof AuthenticatedRunsRunIdIndexRouteImport
+    '/_authenticated/sandboxes/$sandboxId/': {
+      id: '/_authenticated/sandboxes/$sandboxId/'
+      path: '/sandboxes/$sandboxId'
+      fullPath: '/sandboxes/$sandboxId/'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/$repoId/': {
@@ -681,32 +685,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/$runId/validation': {
-      id: '/_authenticated/runs/$runId/validation'
-      path: '/runs/$runId/validation'
-      fullPath: '/runs/$runId/validation'
-      preLoaderRoute: typeof AuthenticatedRunsRunIdValidationRouteImport
+    '/_authenticated/sandboxes/$sandboxId/validation': {
+      id: '/_authenticated/sandboxes/$sandboxId/validation'
+      path: '/sandboxes/$sandboxId/validation'
+      fullPath: '/sandboxes/$sandboxId/validation'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdValidationRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/$runId/trace': {
-      id: '/_authenticated/runs/$runId/trace'
-      path: '/runs/$runId/trace'
-      fullPath: '/runs/$runId/trace'
-      preLoaderRoute: typeof AuthenticatedRunsRunIdTraceRouteImport
+    '/_authenticated/sandboxes/$sandboxId/trace': {
+      id: '/_authenticated/sandboxes/$sandboxId/trace'
+      path: '/sandboxes/$sandboxId/trace'
+      fullPath: '/sandboxes/$sandboxId/trace'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdTraceRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/$runId/spec': {
-      id: '/_authenticated/runs/$runId/spec'
-      path: '/runs/$runId/spec'
-      fullPath: '/runs/$runId/spec'
-      preLoaderRoute: typeof AuthenticatedRunsRunIdSpecRouteImport
+    '/_authenticated/sandboxes/$sandboxId/spec': {
+      id: '/_authenticated/sandboxes/$sandboxId/spec'
+      path: '/sandboxes/$sandboxId/spec'
+      fullPath: '/sandboxes/$sandboxId/spec'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdSpecRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/runs/$runId/diff': {
-      id: '/_authenticated/runs/$runId/diff'
-      path: '/runs/$runId/diff'
-      fullPath: '/runs/$runId/diff'
-      preLoaderRoute: typeof AuthenticatedRunsRunIdDiffRouteImport
+    '/_authenticated/sandboxes/$sandboxId/diff': {
+      id: '/_authenticated/sandboxes/$sandboxId/diff'
+      path: '/sandboxes/$sandboxId/diff'
+      fullPath: '/sandboxes/$sandboxId/diff'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdDiffRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/$repoId/setup': {
@@ -723,11 +727,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/repositories/$repoId/runs': {
-      id: '/_authenticated/repositories/$repoId/runs'
-      path: '/repositories/$repoId/runs'
-      fullPath: '/repositories/$repoId/runs'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdRunsRouteImport
+    '/_authenticated/repositories/$repoId/sandboxes': {
+      id: '/_authenticated/repositories/$repoId/sandboxes'
+      path: '/repositories/$repoId/sandboxes'
+      fullPath: '/repositories/$repoId/sandboxes'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSandboxesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/$profileId/setup': {
@@ -797,30 +801,30 @@ interface AuthenticatedRouteChildren {
   AuthenticatedIssuesAssignedRoute: typeof AuthenticatedIssuesAssignedRoute
   AuthenticatedIssuesReadyRoute: typeof AuthenticatedIssuesReadyRoute
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
-  AuthenticatedRunsActiveRoute: typeof AuthenticatedRunsActiveRoute
-  AuthenticatedRunsFailedRoute: typeof AuthenticatedRunsFailedRoute
-  AuthenticatedRunsNewRoute: typeof AuthenticatedRunsNewRoute
+  AuthenticatedSandboxesActiveRoute: typeof AuthenticatedSandboxesActiveRoute
+  AuthenticatedSandboxesFailedRoute: typeof AuthenticatedSandboxesFailedRoute
+  AuthenticatedSandboxesNewRoute: typeof AuthenticatedSandboxesNewRoute
   AuthenticatedIssuesIndexRoute: typeof AuthenticatedIssuesIndexRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
-  AuthenticatedRunsIndexRoute: typeof AuthenticatedRunsIndexRoute
+  AuthenticatedSandboxesIndexRoute: typeof AuthenticatedSandboxesIndexRoute
   AuthenticatedProfilesProfileIdAccessRoute: typeof AuthenticatedProfilesProfileIdAccessRoute
   AuthenticatedProfilesProfileIdEnvVariablesRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   AuthenticatedProfilesProfileIdPackagesRoute: typeof AuthenticatedProfilesProfileIdPackagesRoute
   AuthenticatedProfilesProfileIdSecretsRoute: typeof AuthenticatedProfilesProfileIdSecretsRoute
   AuthenticatedProfilesProfileIdSetupRoute: typeof AuthenticatedProfilesProfileIdSetupRoute
-  AuthenticatedRepositoriesRepoIdRunsRoute: typeof AuthenticatedRepositoriesRepoIdRunsRoute
+  AuthenticatedRepositoriesRepoIdSandboxesRoute: typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
   AuthenticatedRepositoriesRepoIdSettingsRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   AuthenticatedRepositoriesRepoIdSetupRoute: typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  AuthenticatedRunsRunIdDiffRoute: typeof AuthenticatedRunsRunIdDiffRoute
-  AuthenticatedRunsRunIdSpecRoute: typeof AuthenticatedRunsRunIdSpecRoute
-  AuthenticatedRunsRunIdTraceRoute: typeof AuthenticatedRunsRunIdTraceRoute
-  AuthenticatedRunsRunIdValidationRoute: typeof AuthenticatedRunsRunIdValidationRoute
+  AuthenticatedSandboxesSandboxIdDiffRoute: typeof AuthenticatedSandboxesSandboxIdDiffRoute
+  AuthenticatedSandboxesSandboxIdSpecRoute: typeof AuthenticatedSandboxesSandboxIdSpecRoute
+  AuthenticatedSandboxesSandboxIdTraceRoute: typeof AuthenticatedSandboxesSandboxIdTraceRoute
+  AuthenticatedSandboxesSandboxIdValidationRoute: typeof AuthenticatedSandboxesSandboxIdValidationRoute
   AuthenticatedProfilesProfileIdIndexRoute: typeof AuthenticatedProfilesProfileIdIndexRoute
   AuthenticatedRegistryRegistryIdIndexRoute: typeof AuthenticatedRegistryRegistryIdIndexRoute
   AuthenticatedRepositoriesRepoIdIndexRoute: typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  AuthenticatedRunsRunIdIndexRoute: typeof AuthenticatedRunsRunIdIndexRoute
+  AuthenticatedSandboxesSandboxIdIndexRoute: typeof AuthenticatedSandboxesSandboxIdIndexRoute
   AuthenticatedRegistryRegistryIdRepoTagRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRoute
 }
 
@@ -830,14 +834,14 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIssuesAssignedRoute: AuthenticatedIssuesAssignedRoute,
   AuthenticatedIssuesReadyRoute: AuthenticatedIssuesReadyRoute,
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
-  AuthenticatedRunsActiveRoute: AuthenticatedRunsActiveRoute,
-  AuthenticatedRunsFailedRoute: AuthenticatedRunsFailedRoute,
-  AuthenticatedRunsNewRoute: AuthenticatedRunsNewRoute,
+  AuthenticatedSandboxesActiveRoute: AuthenticatedSandboxesActiveRoute,
+  AuthenticatedSandboxesFailedRoute: AuthenticatedSandboxesFailedRoute,
+  AuthenticatedSandboxesNewRoute: AuthenticatedSandboxesNewRoute,
   AuthenticatedIssuesIndexRoute: AuthenticatedIssuesIndexRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
   AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
-  AuthenticatedRunsIndexRoute: AuthenticatedRunsIndexRoute,
+  AuthenticatedSandboxesIndexRoute: AuthenticatedSandboxesIndexRoute,
   AuthenticatedProfilesProfileIdAccessRoute:
     AuthenticatedProfilesProfileIdAccessRoute,
   AuthenticatedProfilesProfileIdEnvVariablesRoute:
@@ -848,23 +852,28 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
     AuthenticatedProfilesProfileIdSecretsRoute,
   AuthenticatedProfilesProfileIdSetupRoute:
     AuthenticatedProfilesProfileIdSetupRoute,
-  AuthenticatedRepositoriesRepoIdRunsRoute:
-    AuthenticatedRepositoriesRepoIdRunsRoute,
+  AuthenticatedRepositoriesRepoIdSandboxesRoute:
+    AuthenticatedRepositoriesRepoIdSandboxesRoute,
   AuthenticatedRepositoriesRepoIdSettingsRoute:
     AuthenticatedRepositoriesRepoIdSettingsRoute,
   AuthenticatedRepositoriesRepoIdSetupRoute:
     AuthenticatedRepositoriesRepoIdSetupRoute,
-  AuthenticatedRunsRunIdDiffRoute: AuthenticatedRunsRunIdDiffRoute,
-  AuthenticatedRunsRunIdSpecRoute: AuthenticatedRunsRunIdSpecRoute,
-  AuthenticatedRunsRunIdTraceRoute: AuthenticatedRunsRunIdTraceRoute,
-  AuthenticatedRunsRunIdValidationRoute: AuthenticatedRunsRunIdValidationRoute,
+  AuthenticatedSandboxesSandboxIdDiffRoute:
+    AuthenticatedSandboxesSandboxIdDiffRoute,
+  AuthenticatedSandboxesSandboxIdSpecRoute:
+    AuthenticatedSandboxesSandboxIdSpecRoute,
+  AuthenticatedSandboxesSandboxIdTraceRoute:
+    AuthenticatedSandboxesSandboxIdTraceRoute,
+  AuthenticatedSandboxesSandboxIdValidationRoute:
+    AuthenticatedSandboxesSandboxIdValidationRoute,
   AuthenticatedProfilesProfileIdIndexRoute:
     AuthenticatedProfilesProfileIdIndexRoute,
   AuthenticatedRegistryRegistryIdIndexRoute:
     AuthenticatedRegistryRegistryIdIndexRoute,
   AuthenticatedRepositoriesRepoIdIndexRoute:
     AuthenticatedRepositoriesRepoIdIndexRoute,
-  AuthenticatedRunsRunIdIndexRoute: AuthenticatedRunsRunIdIndexRoute,
+  AuthenticatedSandboxesSandboxIdIndexRoute:
+    AuthenticatedSandboxesSandboxIdIndexRoute,
   AuthenticatedRegistryRegistryIdRepoTagRoute:
     AuthenticatedRegistryRegistryIdRepoTagRoute,
 }

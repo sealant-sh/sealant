@@ -55,23 +55,19 @@ every implementation lands.
 
 ```text
 .
-├── apps/                 # deployable apps and runnable demos
+├── apps/                 # deployable apps and services
 │   ├── README.md
 │   ├── api/
 │   ├── docs/
 │   ├── electron/
 │   ├── marketing/
-│   ├── web/
-│   └── workspace-composition-demo/
+│   └── web/
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
 │   ├── ai-harness-integrations/
 │   ├── os-integration-buildkit/
 │   ├── package-standardization/
 │   ├── registry-integration/
-│   ├── runtime-adapter-docker/
-│   ├── runtime-adapter-k3s/
-│   ├── runtime-adapter-k8s/
 │   ├── runtime-adapters-api/
 │   ├── source-integrations/
 │   └── workspace-composition/
@@ -92,8 +88,7 @@ every implementation lands.
 
 ### Workspace roles
 
-- `apps/`: user-facing and deployable surfaces such as the website, API, docs, desktop clients, or
-  runnable demo entrypoints
+- `apps/`: user-facing and deployable surfaces such as the website, API, docs, and desktop clients
 - `packages/`: shared code such as composition models, OS integrations, runtime adapters, source
   integrations, harness orchestration, SDKs, and reusable utilities
 - `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest,
@@ -136,8 +131,6 @@ Supporting integrations feed into both flows without owning either flow:
   shared SQLite database package
 - `packages/workspace-composition/`: core composition package that owns the shared workspace
   contracts and OS-agnostic composition model
-- `apps/workspace-composition-demo/`: thin runnable demo workspace that exercises the current
-  composition flow and example specs
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
@@ -212,11 +205,8 @@ over time.
   compilation
 - `packages/package-standardization/`: Repology-backed package resolution and normalized package
   contract utilities
-- `packages/runtime-adapters-api/`: shared contract between the control plane and runtime adapter
-  implementations
-- `packages/runtime-adapter-docker/`: Docker runtime adapter placeholder
-- `packages/runtime-adapter-k8s/`: Kubernetes runtime adapter placeholder
-- `packages/runtime-adapter-k3s/`: K3s runtime adapter placeholder
+- `packages/runtime-adapters-api/`: shared launch contracts and built-in runtime adapter
+  implementations (Docker, plus Kubernetes/K3s scaffolds)
 - `packages/source-integrations/`: source-provider integration package for repository selection, ref
   resolution, and provider-specific access flows; GitHub will be the first provider here
 - `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
@@ -231,7 +221,6 @@ over time.
 - `apps/docs/`: user and contributor documentation site
 - `apps/marketing/`: public website and launch surfaces
 - `apps/electron/`: desktop client surface if desktop becomes a first-class client
-- `apps/workspace-composition-demo/`: runnable demo for composition flows and blueprint examples
 
 ## Why the monorepo uses Turbo + pnpm
 
@@ -261,7 +250,7 @@ That package contains:
 - shared composition contracts that feed concrete OS integrations such as
   `packages/os-integration-buildkit/`
 
-The runnable demo documentation lives in `apps/workspace-composition-demo/`.
+Composition documentation lives in `packages/workspace-composition/docs/`.
 
 ## Getting started
 

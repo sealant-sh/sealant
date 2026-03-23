@@ -22,10 +22,10 @@ export function IssueRows({ issues }: IssueRowsProps) {
             {issue.repoId}
           </p>
           <Link
-            to={"/runs" as never}
+            to={"/sandboxes" as never}
             className="justify-self-start border border-border px-3 py-2 font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground no-underline transition-colors hover:border-foreground hover:text-foreground"
           >
-            Open runs
+            Open sandboxes
           </Link>
         </div>
       ))}

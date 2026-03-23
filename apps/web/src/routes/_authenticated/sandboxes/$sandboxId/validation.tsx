@@ -1,27 +1,28 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunDetailSection } from "@/components/app/run-detail-section";
+import { SandboxDetailSection } from "@/components/app/sandbox-detail-section";
 import type { AppTrpc } from "@/lib/trpc/client";
 
-export const Route = createFileRoute("/_authenticated/runs/$runId/validation" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/validation" as never)({
   loader: ({
     context,
     params,
   }: {
     context: { queryClient: QueryClient; trpc: AppTrpc };
-    params: { runId: string };
+    params: { sandboxId: string };
   }) => {
     return context.queryClient.ensureQueryData(
-      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.runId }),
+      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.sandboxId }),
     );
   },
-  component: RunValidationPage,
+  component: SandboxValidationPage,
 });
 
-function RunValidationPage() {
+function SandboxValidationPage() {
   const sandbox = Route.useLoaderData() as {
     sandboxId: string;
+    name: string;
     status: "queued" | "running" | "ready" | "failed" | "cancelled";
     repository?: string | undefined;
     tag?: string | undefined;
@@ -32,7 +33,7 @@ function RunValidationPage() {
   };
 
   return (
-    <RunDetailSection
+    <SandboxDetailSection
       sandbox={sandbox}
       section="Validation"
       description="Confirm contract checks, policy checks, and sandbox requirements before allowing the build to complete."
@@ -55,6 +56,6 @@ function RunValidationPage() {
           </div>
         ))}
       </div>
-    </RunDetailSection>
+    </SandboxDetailSection>
   );
 }

@@ -14,6 +14,7 @@ import {
 
 export interface CreateSandboxInput {
   readonly id: string;
+  readonly name: string;
   readonly ownerUserId: string;
   readonly repositoryId?: string;
   readonly repositoryProfileRevisionId?: string;
@@ -32,6 +33,11 @@ export interface ListSandboxesInput {
 export interface SetSandboxStatusInput {
   readonly id: string;
   readonly status: SandboxStatus;
+}
+
+export interface SetSandboxNameInput {
+  readonly id: string;
+  readonly name: string;
 }
 
 export interface LinkSandboxAttemptInput {
@@ -57,6 +63,7 @@ export const createSandboxRepository = (client: DatabaseClient) => {
       .insert(sandboxes)
       .values({
         id: input.id,
+        name: input.name,
         ownerUserId: input.ownerUserId,
         ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
         ...(input.repositoryProfileRevisionId === undefined
@@ -126,6 +133,16 @@ export const createSandboxRepository = (client: DatabaseClient) => {
     return sandbox ?? null;
   };
 
+  const setSandboxName = async (input: SetSandboxNameInput): Promise<Sandbox | null> => {
+    const [sandbox] = await db
+      .update(sandboxes)
+      .set({ name: input.name })
+      .where(eq(sandboxes.id, input.id))
+      .returning();
+
+    return sandbox ?? null;
+  };
+
   const linkSandboxAttempt = async (input: LinkSandboxAttemptInput): Promise<SandboxRunLink> => {
     return db.transaction(async (tx) => {
       const [link] = await tx
@@ -175,6 +192,7 @@ export const createSandboxRepository = (client: DatabaseClient) => {
     linkSandboxAttempt,
     listSandboxes,
     listSandboxAttemptLinks,
+    setSandboxName,
     setSandboxStatus,
   };
 };

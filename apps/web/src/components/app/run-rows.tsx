@@ -13,7 +13,7 @@ export function RunRows({ runs }: RunRowsProps) {
       {runs.map((run) => (
         <Link
           key={run.id}
-          to={`/runs/${encodeURIComponent(run.id)}` as never}
+          to={`/sandboxes/${encodeURIComponent(run.id)}` as never}
           className="grid grid-cols-3 gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
         >
           <div className="">

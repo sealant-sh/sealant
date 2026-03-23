@@ -1,27 +1,28 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunDetailSection } from "@/components/app/run-detail-section";
+import { SandboxDetailSection } from "@/components/app/sandbox-detail-section";
 import type { AppTrpc } from "@/lib/trpc/client";
 
-export const Route = createFileRoute("/_authenticated/runs/$runId/spec" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/spec" as never)({
   loader: ({
     context,
     params,
   }: {
     context: { queryClient: QueryClient; trpc: AppTrpc };
-    params: { runId: string };
+    params: { sandboxId: string };
   }) => {
     return context.queryClient.ensureQueryData(
-      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.runId }),
+      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.sandboxId }),
     );
   },
-  component: RunSpecPage,
+  component: SandboxSpecPage,
 });
 
-function RunSpecPage() {
+function SandboxSpecPage() {
   const sandbox = Route.useLoaderData() as {
     sandboxId: string;
+    name: string;
     status: "queued" | "running" | "ready" | "failed" | "cancelled";
     repository?: string | undefined;
     tag?: string | undefined;
@@ -29,7 +30,7 @@ function RunSpecPage() {
   };
 
   return (
-    <RunDetailSection
+    <SandboxDetailSection
       sandbox={sandbox}
       section="Spec"
       description="Read the applied sandbox specification so the team can verify environment, package, and runtime intent."
@@ -51,6 +52,6 @@ rawSpec:
 ${JSON.stringify(sandbox.spec ?? {}, null, 2)}`}
         </pre>
       </div>
-    </RunDetailSection>
+    </SandboxDetailSection>
   );
 }

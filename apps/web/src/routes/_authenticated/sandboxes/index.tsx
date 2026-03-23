@@ -4,7 +4,7 @@ import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
 import { allSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/")({
+export const Route = createFileRoute("/_authenticated/sandboxes/")({
   loader: ({ context }) => {
     return context.queryClient.ensureQueryData(allSandboxesQueryOptions(context.trpc));
   },

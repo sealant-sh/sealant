@@ -2,33 +2,42 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseRuntimeAdapterSupport,
+  parseRuntimeAdapterSupportInput,
   selectRuntimeAdapter,
   type RuntimeAdapter,
 } from "./runtime-adapter.js";
 
 const createBlueprint = (overrides: Record<string, unknown> = {}) => {
-  return {
-    access: {
-      ssh: {
-        enabled: false,
+  return parseRuntimeAdapterSupportInput({
+    blueprint: {
+      sources: {
+        workspace: {
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
       },
-    },
-    runtime: {
-      env: {},
-      workingDirectory: "/workspace/repo",
-      persistence: "ephemeral",
-      network: {
-        outbound: true,
+      access: {
+        ssh: {
+          enabled: false,
+        },
       },
-    },
-    target: {
       runtime: {
-        family: "auto",
-        mode: "prefer",
+        env: {},
+        workingDirectory: "/workspace/repo",
+        persistence: "ephemeral",
+        network: {
+          outbound: true,
+        },
       },
+      target: {
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
+      ...overrides,
     },
-    ...overrides,
-  };
+  }).blueprint;
 };
 
 const createAdapter = (

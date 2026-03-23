@@ -1,8 +1,10 @@
 import { createDatabaseClientFromEnv, closeDatabaseClient } from "@sealant/db";
 import { createBuildkitOsExecutor } from "@sealant/os-integration-buildkit";
-import { DockerRuntimeAdapter } from "@sealant/runtime-adapter-docker";
-import { K3sRuntimeAdapter } from "@sealant/runtime-adapter-k3s";
-import { K8sRuntimeAdapter } from "@sealant/runtime-adapter-k8s";
+import {
+  DockerRuntimeAdapter,
+  K3sRuntimeAdapter,
+  K8sRuntimeAdapter,
+} from "@sealant/runtime-adapters-api";
 import { closeRabbitMqSingleton, consumeWorkspaceBuildJobs } from "@sealant/workspace-build-queue";
 
 import { createRegistryClient } from "./create-registry-client.js";

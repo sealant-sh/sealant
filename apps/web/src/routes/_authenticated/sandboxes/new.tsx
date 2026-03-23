@@ -53,7 +53,7 @@ const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly labe
   { value: "arch", label: "Arch" },
 ];
 
-export const Route = createFileRoute("/_authenticated/runs/new" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/new" as never)({
   component: NewSandboxPage,
 });
 
@@ -288,7 +288,7 @@ function NewSandboxPage() {
       });
 
       await queryClient.invalidateQueries({ queryKey: trpc.sandbox.list.pathKey() });
-      window.location.assign(`/runs/${encodeURIComponent(response.sandboxId)}`);
+      window.location.assign(`/sandboxes/${encodeURIComponent(response.sandboxId)}`);
     } catch (error) {
       setSubmitError(resolveErrorMessage(error));
     }
@@ -663,7 +663,7 @@ function NewSandboxPage() {
               <div className="border-t border-border px-6 py-5 sm:px-8">
                 <div className="border border-destructive/35 bg-destructive/10 px-4 py-3">
                   <p className="font-mono text-[0.64rem] tracking-[0.14em] text-destructive">
-                    Fix the fields below before starting the run
+                    Fix the fields below before starting the sandbox
                   </p>
                   <ul className="mt-2 space-y-1 text-sm leading-6 text-destructive">
                     {formErrors.map((error) => (
@@ -764,7 +764,7 @@ function NewSandboxPage() {
                 disabled={createSandboxMutation.isPending}
                 form="new-sandbox-form"
               >
-                {createSandboxMutation.isPending ? "Starting Run..." : "Start Run"}
+                {createSandboxMutation.isPending ? "Starting Sandbox..." : "Start Sandbox"}
               </Button>
               <Button
                 type="button"

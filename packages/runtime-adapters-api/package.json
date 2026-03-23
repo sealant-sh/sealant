@@ -2,7 +2,7 @@
   "name": "@sealant/runtime-adapters-api",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared contracts between the control plane and runtime adapter implementations",
+  "description": "Runtime adapter contracts and built-in adapter implementations",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

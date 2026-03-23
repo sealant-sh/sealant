@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { getHarnessIntegration, type HarnessIntegration } from "@sealant/ai-harness-integrations";
 import {
   parseBuildkitOsExecutorCompileInput,
   parseBuildkitOsExecutorCompileResult,
@@ -203,7 +204,15 @@ const getBuildkitExecutorSupport = (
     });
   }
 
-  const distro = distroDefinitions[osFamily];
+  const harnessIntegration = getHarnessIntegration(blueprint.harness.id);
+  if (harnessIntegration === undefined) {
+    return parseOsExecutorSupport({
+      supported: false,
+      reason: "unsupported-harness",
+      message: `No AI harness integration is registered for '${blueprint.harness.id}'.`,
+    });
+  }
+
   for (const pkg of blueprint.tooling.packages) {
     if (pkg.version !== undefined) {
       return parseOsExecutorSupport({
@@ -235,12 +244,28 @@ const getBuildkitExecutorSupport = (
   return parseOsExecutorSupport({ supported: true });
 };
 
+const resolveHarnessIntegration = (blueprint: WorkspaceBlueprint): HarnessIntegration => {
+  const integration = getHarnessIntegration(blueprint.harness.id);
+
+  if (integration === undefined) {
+    throw new Error(`No AI harness integration is registered for '${blueprint.harness.id}'.`);
+  }
+
+  return integration;
+};
+
 const resolvePackages = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePackage[] => {
   const distro = distroDefinitions[osFamily];
-  const requests = [...blueprint.tooling.packages];
+  const harnessIntegration = resolveHarnessIntegration(blueprint);
+  const harnessPackageRequests: WorkspaceBlueprint["tooling"]["packages"] =
+    harnessIntegration.installPackages.map((id) => ({ id }));
+  const requests: Array<WorkspaceBlueprint["tooling"]["packages"][number]> = [
+    ...blueprint.tooling.packages,
+    ...harnessPackageRequests,
+  ];
 
   if (blueprint.customization.defaultShell !== "bash") {
     requests.push({ id: blueprint.customization.defaultShell });
@@ -345,9 +370,9 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
-const renderDefaultShellCommand = (plan: ResolvedImagePlan): string => {
-  const shellPath = distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
-  return `exec ${shellPath} -l`;
+const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
+  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
+  return `RUN ${harnessIntegration.installCommand}`;
 };
 
 const renderRuntimeStep = (
@@ -375,13 +400,18 @@ const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
     ].join("\n");
   }
 
+  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
+  const shellPath = distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
+
   return [
     `cd ${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
-    renderDefaultShellCommand(plan),
+    `exec ${shellPath} -lc ${shellQuote(harnessIntegration.launchCommand)}`,
   ].join("\n");
 };
 
 const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
+  const loginShellPath =
+    distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
   const setupSteps = plan.blueprint.lifecycle.setup
     .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory))
     .join("\n\n");
@@ -401,7 +431,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "SSH_RUNTIME_DIR=/workspace/.ssh-runtime",
     "REPO_SSH_KEY_PATH=$SSH_RUNTIME_DIR/workspace_repo_key",
     "",
-    'mkdir -p "$WORKSPACE_ROOT" "$SSH_RUNTIME_DIR" /root /tmp /var/empty /run/sshd',
+    'mkdir -p "$WORKSPACE_ROOT" "$WORKING_DIRECTORY" "$SSH_RUNTIME_DIR" /root /tmp /var/empty /run/sshd',
     "export HOME=/root",
     "export USER=root",
     "export LOGNAME=root",
@@ -433,6 +463,25 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     '    ssh-keygen -q -t ed25519 -N "" -f "$SSH_RUNTIME_DIR/ssh_host_ed25519_key"',
     "  fi",
     "",
+    "  cat > /usr/local/bin/workspace-ssh-shell <<'EOF'",
+    "#!/bin/bash",
+    "set -euo pipefail",
+    `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
+    `LOGIN_SHELL=${shellQuote(loginShellPath)}`,
+    'if [ ! -x "$LOGIN_SHELL" ]; then',
+    "  LOGIN_SHELL=/bin/bash",
+    "fi",
+    'if [ -d "$WORKING_DIRECTORY" ]; then',
+    '  cd "$WORKING_DIRECTORY"',
+    "fi",
+    'if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then',
+    '  exec "$LOGIN_SHELL" -lc "$SSH_ORIGINAL_COMMAND"',
+    "fi",
+    'exec "$LOGIN_SHELL" -l',
+    "EOF",
+    "",
+    "  chmod 755 /usr/local/bin/workspace-ssh-shell",
+    "",
     '  cat > "$SSH_RUNTIME_DIR/sshd_config" <<EOF',
     "Port $SSH_PORT",
     "ListenAddress 0.0.0.0",
@@ -448,6 +497,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "PidFile $SSH_RUNTIME_DIR/sshd.pid",
     "PrintMotd no",
     "StrictModes yes",
+    "ForceCommand /usr/local/bin/workspace-ssh-shell",
     "Subsystem sftp internal-sftp",
     "EOF",
     "",
@@ -497,12 +547,15 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const shellPath = distro.shellPaths[plan.customization.defaultShell];
   const dotfilesStep = renderDotfilesStep(plan);
+  const harnessInstallStep = renderHarnessInstallCommand(plan);
 
   return [
     "# syntax=docker/dockerfile:1.7",
     `FROM ${plan.baseImage}`,
     "",
     renderPackageInstallCommand(plan),
+    "",
+    harnessInstallStep,
     "",
     `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",

@@ -5,6 +5,13 @@ import * as routes from "./sandboxes.routes.js";
 const router = createRouter();
 
 router.post("/", routes.createSandboxRoute, routes.createSandboxValidator, handlers.createSandbox);
+router.patch(
+  "/:sandboxId/name",
+  routes.renameSandboxRoute,
+  routes.sandboxIdValidator,
+  routes.renameSandboxValidator,
+  handlers.renameSandbox,
+);
 router.get(
   "/",
   routes.listSandboxesRoute,

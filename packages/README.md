@@ -13,10 +13,8 @@ The current package architecture is:
 - `os-integration-buildkit`: BuildKit-backed Arch and Fedora workspace image compilation
 - `package-standardization`: Repology-backed package resolution and normalization layer with
   cache-first lookups
-- `runtime-adapters-api`: shared contract between the control plane and concrete runtime adapters
-- `runtime-adapter-docker`: Docker runtime adapter implementation for launching published images
-- `runtime-adapter-k8s`: Kubernetes runtime adapter scaffold and contract wiring
-- `runtime-adapter-k3s`: K3s runtime adapter scaffold and contract wiring
+- `runtime-adapters-api`: shared contract between the control plane and concrete runtime adapters,
+  including Docker implementation and Kubernetes/K3s scaffolds
 - `source-integrations`: source-provider integration logic such as GitHub repository selection, ref
   resolution, and access-related flows
 - `ai-harness-integrations`: shared AI harness contracts and orchestration

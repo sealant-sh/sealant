@@ -83,9 +83,42 @@ describe("BuildkitDistroOsExecutor", () => {
     const entrypoint = await readFile(entrypointPath, "utf8");
 
     expect(containerfile).toContain("FROM fedora:41");
+    expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/workspace-entrypoint"]');
+    expect(entrypoint).toContain('mkdir -p "$WORKSPACE_ROOT" "$WORKING_DIRECTORY"');
+    expect(entrypoint).toContain("cat > /usr/local/bin/workspace-ssh-shell <<'EOF'");
+    expect(entrypoint).toContain("ForceCommand /usr/local/bin/workspace-ssh-shell");
     expect(entrypoint).toContain('git clone --branch "$WORKSPACE_REPO_REF"');
     expect(entrypoint).toContain("exec /bin/bash -lc 'pnpm dev'");
+  });
+
+  it("starts the selected harness when startup foreground is harness", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const executor = new BuildkitDistroOsExecutor({
+      osFamily: "arch",
+      commandRunner,
+    });
+
+    const result = await executor.compile({
+      blueprint: normalizeUserWorkspaceSpec({
+        source: "https://github.com/example/repo.git",
+        harness: "codex",
+        customization: {
+          defaultShell: "zsh",
+        },
+        os: "arch",
+      }),
+    });
+
+    const containerfilePath = result.buildkit.spec.containerfilePath;
+    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
+    const containerfile = await readFile(containerfilePath, "utf8");
+    const entrypoint = await readFile(entrypointPath, "utf8");
+
+    expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
+    expect(entrypoint).toContain("exec /usr/bin/zsh -lc 'codex'");
   });
 
   it("supports distro package passthrough for unmapped package ids", () => {
@@ -98,11 +131,17 @@ describe("BuildkitDistroOsExecutor", () => {
 
     const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch");
 
-    expect(plan.packages).toEqual([
-      {
-        requestId: "htop",
-        installPackages: ["htop"],
-      },
-    ]);
+    expect(plan.packages).toEqual(
+      expect.arrayContaining([
+        {
+          requestId: "htop",
+          installPackages: ["htop"],
+        },
+        {
+          requestId: "nodejs",
+          installPackages: ["nodejs"],
+        },
+      ]),
+    );
   });
 });

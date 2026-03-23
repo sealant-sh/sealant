@@ -4,7 +4,7 @@ import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
 import { runningSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/active")({
+export const Route = createFileRoute("/_authenticated/sandboxes/active")({
   loader: ({ context }) => {
     return context.queryClient.ensureQueryData(runningSandboxesQueryOptions(context.trpc));
   },
@@ -28,7 +28,7 @@ function ActiveSandboxesPage() {
               ? "n/a"
               : new Date(activeSandboxes[0].updatedAt).toLocaleTimeString(),
         },
-        { label: "Route", value: "/runs/active" },
+        { label: "Route", value: "/sandboxes/active" },
       ]}
     >
       <SandboxRows sandboxes={activeSandboxes} />

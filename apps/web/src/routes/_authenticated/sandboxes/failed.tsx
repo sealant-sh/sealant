@@ -4,7 +4,7 @@ import { SandboxRows } from "@/components/app/sandbox-rows";
 import { WorkspacePage } from "@/components/app/workspace-page";
 import { failedSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
-export const Route = createFileRoute("/_authenticated/runs/failed")({
+export const Route = createFileRoute("/_authenticated/sandboxes/failed")({
   loader: ({ context }) => {
     return context.queryClient.ensureQueryData(failedSandboxesQueryOptions(context.trpc));
   },

@@ -1,22 +1,22 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { RunDetailSection } from "@/components/app/run-detail-section";
+import { SandboxDetailSection } from "@/components/app/sandbox-detail-section";
 import type { AppTrpc } from "@/lib/trpc/client";
 
-export const Route = createFileRoute("/_authenticated/runs/$runId/trace" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/trace" as never)({
   loader: async ({
     context,
     params,
   }: {
     context: { queryClient: QueryClient; trpc: AppTrpc };
-    params: { runId: string };
+    params: { sandboxId: string };
   }) => {
     const sandbox = await context.queryClient.ensureQueryData(
-      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.runId }),
+      context.trpc.sandbox.byId.queryOptions({ sandboxId: params.sandboxId }),
     );
     const eventsResponse = await context.queryClient.ensureQueryData(
-      context.trpc.sandbox.events.queryOptions({ sandboxId: params.runId, limit: 20 }),
+      context.trpc.sandbox.events.queryOptions({ sandboxId: params.sandboxId, limit: 20 }),
     );
 
     return {
@@ -24,13 +24,14 @@ export const Route = createFileRoute("/_authenticated/runs/$runId/trace" as neve
       events: eventsResponse.items,
     };
   },
-  component: RunTracePage,
+  component: SandboxTracePage,
 });
 
-function RunTracePage() {
+function SandboxTracePage() {
   const { sandbox, events } = Route.useLoaderData() as {
     sandbox: {
       sandboxId: string;
+      name: string;
       status: "queued" | "running" | "ready" | "failed" | "cancelled";
       repository?: string | undefined;
       tag?: string | undefined;
@@ -44,7 +45,7 @@ function RunTracePage() {
   };
 
   return (
-    <RunDetailSection
+    <SandboxDetailSection
       sandbox={sandbox}
       section="Trace"
       description="Inspect timeline events across the sandbox lifecycle to locate exactly where execution degraded."
@@ -62,7 +63,7 @@ function RunTracePage() {
           </div>
         ))}
       </div>
-    </RunDetailSection>
+    </SandboxDetailSection>
   );
 }
 
