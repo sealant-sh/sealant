@@ -5,7 +5,8 @@
   "description": "Shared SQLite database package for control-plane state",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./payloads": "./src/payloads.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

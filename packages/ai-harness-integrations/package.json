@@ -2,5 +2,12 @@
   "name": "@sealant/ai-harness-integrations",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared contracts and orchestration for AI coding harness integrations"
+  "description": "Shared contracts and orchestration for AI coding harness integrations",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  }
 }

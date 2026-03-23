@@ -1,7 +1,7 @@
 import {
   workspaceBuildJobRequestPayloadSchema,
   type WorkspaceBuildJobRequestPayload,
-} from "@sealant/db";
+} from "@sealant/db/payloads";
 import { Badge, Button } from "@sealant/ui";
 import {
   useMutation,
@@ -21,6 +21,7 @@ interface SandboxSummary {
   readonly sandboxId: string;
   readonly name: string;
   readonly status: SandboxStatus;
+  readonly registryId?: string | undefined;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
   readonly createdAt: string;
@@ -95,6 +96,7 @@ function toSandboxSummary(input: {
   readonly sandboxId: string;
   readonly name: string;
   readonly status: SandboxStatus;
+  readonly registryId?: string | undefined;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
   readonly createdAt: string;
@@ -110,6 +112,7 @@ function toSandboxSummary(input: {
     sandboxId: input.sandboxId,
     name: input.name,
     status: input.status,
+    ...(input.registryId === undefined ? {} : { registryId: input.registryId }),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.tag === undefined ? {} : { tag: input.tag }),
     createdAt: input.createdAt,
@@ -231,9 +234,15 @@ function SandboxSummaryPage() {
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [sshCopyState, setSshCopyState] = useState<"idle" | "copied" | "error">("idle");
   const [nameMutationError, setNameMutationError] = useState<string | null>(null);
+  const [rerunMutationError, setRerunMutationError] = useState<string | null>(null);
   const sshCommand = buildSshCommand(sandbox.runtime?.endpoint);
   const workspaceSpecDetails = resolveWorkspaceSpecDetails(sandbox);
   const nameSuggestions = suggestSandboxNames(sandbox);
+  const canRerunSandbox =
+    sandbox.registryId !== undefined &&
+    sandbox.repository !== undefined &&
+    sandbox.tag !== undefined &&
+    sandbox.spec !== undefined;
 
   const renameSandboxMutation = useMutation(
     trpc.sandbox.rename.mutationOptions({
@@ -242,6 +251,7 @@ function SandboxSummaryPage() {
       },
     }),
   );
+  const rerunSandboxMutation = useMutation(trpc.sandbox.create.mutationOptions());
 
   const copySshCommand = async () => {
     if (sshCommand === null) {
@@ -278,6 +288,31 @@ function SandboxSummaryPage() {
       });
     } catch (error) {
       setNameMutationError(resolveMutationErrorMessage(error));
+    }
+  };
+
+  const rerunSandbox = async () => {
+    if (!canRerunSandbox) {
+      setRerunMutationError(
+        "Sandbox rerun is unavailable until source image metadata and spec are ready.",
+      );
+      return;
+    }
+
+    setRerunMutationError(null);
+
+    try {
+      const nextSandbox = await rerunSandboxMutation.mutateAsync({
+        registryId: sandbox.registryId,
+        repository: sandbox.repository,
+        tag: sandbox.tag,
+        name: sandbox.name,
+        spec: sandbox.spec,
+      });
+
+      window.location.assign(`/sandboxes/${encodeURIComponent(nextSandbox.sandboxId)}`);
+    } catch (error) {
+      setRerunMutationError(resolveMutationErrorMessage(error));
     }
   };
 
@@ -350,12 +385,24 @@ function SandboxSummaryPage() {
 
         <div className="flex flex-col gap-3 border-t border-border p-6 sm:flex-row sm:border-l sm:border-t-0 sm:p-8 lg:flex-col">
           <Button className="h-11 px-5">Open Sandbox</Button>
-          <Button variant="outline" className="h-11 px-5">
-            Rerun Sandbox
+          <Button
+            variant="outline"
+            className="h-11 px-5"
+            onClick={() => {
+              void rerunSandbox();
+            }}
+            disabled={rerunSandboxMutation.isPending || !canRerunSandbox}
+          >
+            {rerunSandboxMutation.isPending ? "Rerunning" : "Rerun Sandbox"}
           </Button>
           <Button variant="outline" className="h-11 px-5">
             View Spec
           </Button>
+          {rerunMutationError === null ? null : (
+            <p className="font-mono text-[0.62rem] tracking-[0.11em] text-destructive">
+              {rerunMutationError}
+            </p>
+          )}
         </div>
       </div>
 

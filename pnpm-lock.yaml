@@ -368,6 +368,9 @@ importers:
 
   packages/os-integration-buildkit:
     dependencies:
+      '@sealant/ai-harness-integrations':
+        specifier: workspace:*
+        version: link:../ai-harness-integrations
       '@sealant/workspace-composition':
         specifier: workspace:*
         version: link:../workspace-composition
