@@ -30,12 +30,15 @@ describe("parseAppEnv", () => {
     try {
       writeFileSync(privateKeyPath, privateKey, "utf8");
 
-      const env = parseAppEnv({
-        ...createBaseEnv(),
-        GITHUB_APP_ID: "123456",
-        GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath,
-        GITHUB_APP_WEBHOOK_SECRET: "secret",
-      });
+      const env = parseAppEnv(
+        {
+          ...createBaseEnv(),
+          GITHUB_APP_ID: "123456",
+          GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath,
+          GITHUB_APP_WEBHOOK_SECRET: "secret",
+        },
+        { loadDotenvFiles: false },
+      );
 
       expect(env.GITHUB_APP_PRIVATE_KEY_PATH).toBe(privateKeyPath);
       expect(env.GITHUB_APP_PRIVATE_KEY).toBe(privateKey);
@@ -46,10 +49,13 @@ describe("parseAppEnv", () => {
 
   it("rejects GitHub App configuration when neither key input is provided", () => {
     expect(() => {
-      parseAppEnv({
-        ...createBaseEnv(),
-        GITHUB_APP_ID: "123456",
-      });
+      parseAppEnv(
+        {
+          ...createBaseEnv(),
+          GITHUB_APP_ID: "123456",
+        },
+        { loadDotenvFiles: false },
+      );
     }).toThrowError(/GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH/);
   });
 });

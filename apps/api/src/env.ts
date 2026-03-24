@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { databaseEnvSchema } from "@sealant/db";
@@ -136,20 +137,37 @@ const loadAppDotenvFiles = (processEnv: NodeJS.ProcessEnv): void => {
   }
 };
 
+const expandEnvironmentPath = (value: string): string => {
+  const homeDirectory = process.env.HOME ?? homedir();
+
+  return value.replace(/^~(?=\/|$)/, homeDirectory).replace(/^\$HOME(?=\/|$)/, homeDirectory);
+};
+
 const resolveGitHubAppPrivateKey = (input: AppEnv): AppEnv => {
   if (input.GITHUB_APP_PRIVATE_KEY_PATH === undefined) {
     return input;
   }
 
-  const privateKey = readFileSync(input.GITHUB_APP_PRIVATE_KEY_PATH, "utf8");
+  const privateKeyPath = expandEnvironmentPath(input.GITHUB_APP_PRIVATE_KEY_PATH);
+  const privateKey = readFileSync(privateKeyPath, "utf8");
+
   return {
     ...input,
     GITHUB_APP_PRIVATE_KEY: privateKey,
+    GITHUB_APP_PRIVATE_KEY_PATH: privateKeyPath,
   };
 };
 
-export const parseAppEnv = (input: NodeJS.ProcessEnv): AppEnv => {
-  loadAppDotenvFiles(input);
+export const parseAppEnv = (
+  input: NodeJS.ProcessEnv,
+  options: {
+    readonly loadDotenvFiles?: boolean;
+  } = {},
+): AppEnv => {
+  if (options.loadDotenvFiles ?? true) {
+    loadAppDotenvFiles(input);
+  }
+
   return resolveGitHubAppPrivateKey(appEnvSchema.parse(input));
 };
 
