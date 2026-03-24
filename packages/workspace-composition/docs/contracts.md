@@ -63,6 +63,6 @@
 
 ## Current Implementation Note
 
-The current concrete distro-backed build path lives in `@sealant/os-integration-buildkit` for Arch
-and Fedora. This package stays focused on the shared composition contracts, normalization, and
+The current concrete distro-backed build path lives in `@sealant/os-integration-buildkit` for Arch,
+Fedora, and Nix. This package stays focused on the shared composition contracts, normalization, and
 executor-selection boundary that feed concrete OS integrations.

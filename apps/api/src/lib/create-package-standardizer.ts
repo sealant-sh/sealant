@@ -95,7 +95,7 @@ export const createApiPackageStandardizer = (options: {
 
 export const createPassthroughPackageStandardizer = (): PackageStandardizer => {
   return {
-    resolvePackage: async ({ query }) => {
+    resolvePackage: async ({ query, targetOs: _targetOs }) => {
       const normalized = query.trim().toLowerCase();
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);

@@ -7,7 +7,7 @@ It currently provides:
 - a Node worker entrypoint
 - RabbitMQ consumption via `@sealant/workspace-build-queue`
 - durable job state updates through `@sealant/db`
-- BuildKit-backed Fedora and Arch image compilation through `@sealant/os-integration-buildkit`
+- BuildKit-backed Fedora, Arch, and Nix image compilation through `@sealant/os-integration-buildkit`
 - image publishing through `@sealant/registry-integration`
 - runtime launch selection through `@sealant/runtime-adapters-api`
 
