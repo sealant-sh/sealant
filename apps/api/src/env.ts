@@ -26,6 +26,13 @@ export const appEnvSchema = databaseEnvSchema
         .default("sealant-control-plane/0.1 (+https://github.com/sealant-ops/sealant)"),
       REPOLOGY_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
       REPOLOGY_MINIMUM_INTERVAL_MS: z.coerce.number().int().positive().default(1_000),
+      GITHUB_API_BASE_URL: z.string().url().default("https://api.github.com"),
+      GITHUB_APP_ID: z.string().trim().min(1).optional(),
+      GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
+      GITHUB_APP_WEBHOOK_SECRET: z.string().min(1).optional(),
+      GITHUB_APP_CLIENT_ID: z.string().trim().min(1).optional(),
+      GITHUB_APP_CLIENT_SECRET: z.string().min(1).optional(),
+      GITHUB_APP_SLUG: z.string().trim().min(1).optional(),
     }),
   )
   .superRefine((input, ctx) => {
@@ -34,6 +41,25 @@ export const appEnvSchema = databaseEnvSchema
         code: z.ZodIssueCode.custom,
         path: ["REGISTRY_PASSWORD"],
         message: "REGISTRY_USERNAME and REGISTRY_PASSWORD must be provided together.",
+      });
+    }
+
+    if ((input.GITHUB_APP_ID === undefined) !== (input.GITHUB_APP_PRIVATE_KEY === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GITHUB_APP_PRIVATE_KEY"],
+        message: "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be provided together.",
+      });
+    }
+
+    if (
+      (input.GITHUB_APP_CLIENT_ID === undefined) !==
+      (input.GITHUB_APP_CLIENT_SECRET === undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GITHUB_APP_CLIENT_SECRET"],
+        message: "GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET must be provided together.",
       });
     }
   });

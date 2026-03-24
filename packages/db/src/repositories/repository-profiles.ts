@@ -129,6 +129,44 @@ export const createRepositoryProfileRepository = (client: DatabaseClient) => {
     return repository;
   };
 
+  const getRepositoryByProviderExternalId = async (input: {
+    readonly provider: SourceProvider;
+    readonly externalId: string;
+  }): Promise<Repository | undefined> => {
+    const [repository] = await db
+      .select()
+      .from(repositories)
+      .where(
+        and(
+          eq(repositories.provider, input.provider),
+          eq(repositories.externalId, input.externalId),
+        ),
+      )
+      .limit(1);
+
+    return repository;
+  };
+
+  const getRepositoryByProviderOwnerName = async (input: {
+    readonly provider: SourceProvider;
+    readonly owner: string;
+    readonly name: string;
+  }): Promise<Repository | undefined> => {
+    const [repository] = await db
+      .select()
+      .from(repositories)
+      .where(
+        and(
+          eq(repositories.provider, input.provider),
+          eq(repositories.owner, input.owner),
+          eq(repositories.name, input.name),
+        ),
+      )
+      .limit(1);
+
+    return repository;
+  };
+
   const createRepositoryProfile = async (
     input: CreateRepositoryProfileInput,
   ): Promise<RepositoryProfile> => {
@@ -333,6 +371,8 @@ export const createRepositoryProfileRepository = (client: DatabaseClient) => {
     createRepositoryProfile,
     createRepositoryProfileRevision,
     getRepositoryById,
+    getRepositoryByProviderExternalId,
+    getRepositoryByProviderOwnerName,
     getRepositoryProfileRevisionBundle,
     listRepositoryProfiles,
     replaceRepositoryProfileLinks,

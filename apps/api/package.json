@@ -15,6 +15,7 @@
     "@sealant/db": "workspace:*",
     "@sealant/package-standardization": "workspace:*",
     "@sealant/registry-integration": "workspace:*",
+    "@sealant/source-integrations": "workspace:*",
     "@sealant/workspace-build-queue": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
     "@standard-community/standard-json": "^0.3.5",

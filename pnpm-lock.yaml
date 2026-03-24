@@ -59,6 +59,9 @@ importers:
       '@sealant/registry-integration':
         specifier: workspace:*
         version: link:../../packages/registry-integration
+      '@sealant/source-integrations':
+        specifier: workspace:*
+        version: link:../../packages/source-integrations
       '@sealant/workspace-build-queue':
         specifier: workspace:*
         version: link:../../packages/workspace-build-queue

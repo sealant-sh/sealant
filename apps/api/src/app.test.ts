@@ -1,4 +1,9 @@
 import type {
+  GitHubAppInstallation,
+  GitHubInstallationRepository,
+  GitHubInstallationRepositoryCacheRepository,
+  GitHubInstallationRepositoryRecord,
+  GitHubInstallationUserGrant,
   SandboxAttemptRepository,
   SandboxRepository,
   SandboxRuntimeInstance,
@@ -33,6 +38,7 @@ const testEnv: AppEnv = {
   REPOLOGY_USER_AGENT: "sealant-tests/0.1 (+https://github.com/sealant-ops/sealant)",
   REPOLOGY_REQUEST_TIMEOUT_MS: 10_000,
   REPOLOGY_MINIMUM_INTERVAL_MS: 1_000,
+  GITHUB_API_BASE_URL: "https://api.github.com",
   WORKSPACE_BUILD_QUEUE_PREFETCH: 1,
 };
 
@@ -569,6 +575,198 @@ const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
   };
 };
 
+const createGitHubInstallationRepositoryStub = (
+  options: {
+    installations?: readonly GitHubAppInstallation[];
+    grants?: readonly GitHubInstallationUserGrant[];
+  } = {},
+): GitHubInstallationRepository => {
+  const installations = new Map((options.installations ?? []).map((row) => [row.id, row]));
+  const grants = new Map(
+    (options.grants ?? []).map((row) => [`${row.installationId}:${row.userId}`, row]),
+  );
+
+  return {
+    getInstallationByExternalId: async (externalInstallationId) => {
+      return [...installations.values()].find(
+        (row) => row.externalInstallationId === externalInstallationId,
+      );
+    },
+    getInstallationById: async (id) => installations.get(id),
+    grantInstallationToUser: async (input) => {
+      const grant: GitHubInstallationUserGrant = {
+        installationId: input.installationId,
+        userId: input.userId,
+        grantedByUserId: input.grantedByUserId ?? null,
+        grantedAt: input.grantedAt ?? new Date(),
+        revokedAt: null,
+      };
+      grants.set(`${grant.installationId}:${grant.userId}`, grant);
+      return grant;
+    },
+    listActiveInstallations: async () => {
+      return [...installations.values()].filter((row) => row.status === "active");
+    },
+    listInstallationGrants: async (installationId) => {
+      return [...grants.values()].filter((row) => row.installationId === installationId);
+    },
+    listInstallationsForUser: async (input) => {
+      return [...installations.values()].filter((installation) => {
+        const grant = grants.get(`${installation.id}:${input.userId}`);
+        return (
+          grant !== undefined &&
+          grant.revokedAt === null &&
+          (input.status === undefined || installation.status === input.status)
+        );
+      });
+    },
+    revokeInstallationGrant: async (input) => {
+      const key = `${input.installationId}:${input.userId}`;
+      const existing = grants.get(key);
+      if (existing === undefined) {
+        return null;
+      }
+      const next = {
+        ...existing,
+        revokedAt: input.revokedAt ?? new Date(),
+      };
+      grants.set(key, next);
+      return next;
+    },
+    setInstallationStatus: async (input) => {
+      const existing = installations.get(input.installationId);
+      if (existing === undefined) {
+        return null;
+      }
+      const next = {
+        ...existing,
+        status: input.status,
+        suspendedAt:
+          input.suspendedAt === undefined ? existing.suspendedAt : (input.suspendedAt ?? null),
+        lastSyncedAt: input.lastSyncedAt ?? existing.lastSyncedAt,
+        updatedAt: new Date(),
+      };
+      installations.set(next.id, next);
+      return next;
+    },
+    upsertInstallation: async (input) => {
+      const existing =
+        installations.get(input.id) ??
+        [...installations.values()].find(
+          (row) => row.externalInstallationId === input.externalInstallationId,
+        );
+      const now = new Date();
+      const installation: GitHubAppInstallation = {
+        id: existing?.id ?? input.id,
+        provider: "github",
+        externalInstallationId: input.externalInstallationId,
+        externalAccountId: input.externalAccountId ?? existing?.externalAccountId ?? null,
+        accountLogin: input.accountLogin,
+        accountType: input.accountType,
+        targetType: input.targetType ?? existing?.targetType ?? null,
+        status: input.status ?? existing?.status ?? "active",
+        permissions: input.permissions ?? existing?.permissions ?? {},
+        repositorySelection: input.repositorySelection ?? existing?.repositorySelection ?? "all",
+        installedAt: input.installedAt ?? existing?.installedAt ?? null,
+        suspendedAt:
+          input.suspendedAt === undefined
+            ? (existing?.suspendedAt ?? null)
+            : (input.suspendedAt ?? null),
+        lastSyncedAt: input.lastSyncedAt ?? existing?.lastSyncedAt ?? null,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      installations.set(installation.id, installation);
+      return installation;
+    },
+    userHasInstallationGrant: async (input) => {
+      const grant = grants.get(`${input.installationId}:${input.userId}`);
+      return grant !== undefined && grant.revokedAt === null;
+    },
+  } satisfies GitHubInstallationRepository;
+};
+
+const createGitHubInstallationRepositoryCacheStub = (
+  options: {
+    repositories?: readonly GitHubInstallationRepositoryRecord[];
+  } = {},
+): GitHubInstallationRepositoryCacheRepository => {
+  const repositories = new Map((options.repositories ?? []).map((row) => [row.id, row]));
+
+  return {
+    getInstallationRepositoryByExternalRepoId: async (input) => {
+      return [...repositories.values()].find(
+        (row) =>
+          row.installationId === input.installationId &&
+          row.externalRepositoryId === input.externalRepositoryId,
+      );
+    },
+    getInstallationRepositoryById: async (id) => repositories.get(id),
+    getInstallationRepositoryByRepoId: async (input) => {
+      return [...repositories.values()].find(
+        (row) =>
+          row.installationId === input.installationId && row.repositoryId === input.repositoryId,
+      );
+    },
+    listRepositoriesForInstallation: async (input) => {
+      return [...repositories.values()]
+        .filter((row) => row.installationId === input.installationId)
+        .filter((row) => (input.includeRemoved ? true : row.removedAt === null))
+        .filter((row) => (input.search === undefined ? true : row.fullName.includes(input.search)))
+        .sort((left, right) => left.fullName.localeCompare(right.fullName));
+    },
+    listRepositoriesForUser: async (input) => {
+      return [...repositories.values()]
+        .filter((row) =>
+          input.installationId === undefined ? true : row.installationId === input.installationId,
+        )
+        .filter((row) => row.removedAt === null)
+        .filter((row) => (input.search === undefined ? true : row.fullName.includes(input.search)))
+        .sort((left, right) => left.fullName.localeCompare(right.fullName));
+    },
+    markInstallationRepositoriesRemoved: async (input) => {
+      let updated = 0;
+      for (const repository of repositories.values()) {
+        if (
+          repository.installationId === input.installationId &&
+          !input.preservedExternalRepositoryIds.includes(repository.externalRepositoryId)
+        ) {
+          repositories.set(repository.id, {
+            ...repository,
+            removedAt: input.removedAt ?? new Date(),
+            updatedAt: new Date(),
+          });
+          updated += 1;
+        }
+      }
+      return updated;
+    },
+    upsertInstallationRepository: async (input) => {
+      const existing = repositories.get(input.id);
+      const now = new Date();
+      const repository: GitHubInstallationRepositoryRecord = {
+        id: input.id,
+        installationId: input.installationId,
+        repositoryId: input.repositoryId,
+        externalRepositoryId: input.externalRepositoryId,
+        owner: input.owner,
+        name: input.name,
+        fullName: input.fullName ?? `${input.owner}/${input.name}`,
+        defaultBranch: input.defaultBranch ?? "main",
+        isPrivate: input.isPrivate ?? true,
+        isArchived: input.isArchived ?? false,
+        pushedAt: input.pushedAt ?? null,
+        lastSyncedAt: input.lastSyncedAt ?? null,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        removedAt: input.removedAt ?? null,
+      };
+      repositories.set(repository.id, repository);
+      return repository;
+    },
+  } satisfies GitHubInstallationRepositoryCacheRepository;
+};
+
 const createPackageStandardizerStub = (
   calls: Array<{ query: string; targetOs?: PackageTargetOs }>,
 ) => {
@@ -793,7 +991,69 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/sandboxes/{sandboxId}/name"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
+    expect(body.paths["/v1/github/installations"]).toBeDefined();
+    expect(body.paths["/v1/github/installations/{installationId}/repositories"]).toBeDefined();
+    expect(body.paths["/v1/github/webhooks"]).toBeDefined();
     expect(body.paths["/v1/runs/{runId}"]).toBeUndefined();
+  });
+
+  it("lists granted GitHub installations", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
+        installations: [
+          {
+            id: "gh_installation_1",
+            provider: "github",
+            externalInstallationId: "1001",
+            externalAccountId: "2001",
+            accountLogin: "sealant-ops",
+            accountType: "organization",
+            targetType: "organization",
+            status: "active",
+            permissions: { contents: "read", metadata: "read" },
+            repositorySelection: "all",
+            installedAt: new Date("2026-03-20T12:00:00.000Z"),
+            suspendedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-20T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+          },
+        ],
+        grants: [
+          {
+            installationId: "gh_installation_1",
+            userId: testUserId,
+            grantedByUserId: testUserId,
+            grantedAt: new Date("2026-03-20T12:05:00.000Z"),
+            revokedAt: null,
+          },
+        ],
+      }),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request(`/v1/github/installations?userId=${testUserId}`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      items: [
+        {
+          installationId: "gh_installation_1",
+          externalInstallationId: "1001",
+          accountLogin: "sealant-ops",
+          accountType: "organization",
+          status: "active",
+          repositorySelection: "all",
+          lastSyncedAt: "2026-03-24T12:00:00.000Z",
+        },
+      ],
+    });
   });
 
   it("creates and queues a workspace build job", async () => {
@@ -999,6 +1259,118 @@ describe("createApiApp", () => {
 
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
     expect(savedJob?.runId).toBe(savedSandbox?.latestRunId ?? null);
+  });
+
+  it("creates sandboxes from a granted GitHub installation repository", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const sandboxRepository = createSandboxRepositoryStub();
+    const attemptRepository = createSandboxAttemptRepositoryStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+      gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
+        installations: [
+          {
+            id: "gh_installation_1",
+            provider: "github",
+            externalInstallationId: "1001",
+            externalAccountId: "2001",
+            accountLogin: "sealant-ops",
+            accountType: "organization",
+            targetType: "organization",
+            status: "active",
+            permissions: { contents: "read", metadata: "read" },
+            repositorySelection: "all",
+            installedAt: new Date("2026-03-20T12:00:00.000Z"),
+            suspendedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-20T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+          },
+        ],
+        grants: [
+          {
+            installationId: "gh_installation_1",
+            userId: testUserId,
+            grantedByUserId: testUserId,
+            grantedAt: new Date("2026-03-20T12:05:00.000Z"),
+            revokedAt: null,
+          },
+        ],
+      }),
+      gitHubInstallationRepositoryCacheRepository: createGitHubInstallationRepositoryCacheStub({
+        repositories: [
+          {
+            id: "gh_installation_repo_1",
+            installationId: "gh_installation_1",
+            repositoryId: "repo_core",
+            externalRepositoryId: "3001",
+            owner: "sealant-ops",
+            name: "core",
+            fullName: "sealant-ops/core",
+            defaultBranch: "main",
+            isPrivate: true,
+            isArchived: false,
+            pushedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-24T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+            removedAt: null,
+          },
+        ],
+      }),
+      sandboxRepository,
+      sandboxAttemptRepository: attemptRepository,
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/sandboxes", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerUserId: testUserId,
+        registryId: "default",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        sourceSelection: {
+          provider: "github",
+          installationId: "gh_installation_1",
+          installationRepositoryId: "gh_installation_repo_1",
+          ref: "main",
+        },
+        spec: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+
+    const body = (await response.json()) as {
+      sandboxId: string;
+    };
+    const savedSandbox = await sandboxRepository.getSandboxById(body.sandboxId);
+
+    expect(savedSandbox?.repositoryId).toBe("repo_core");
+    expect(savedSandbox?.latestRunId).toBeDefined();
+
+    const savedAttempt = await attemptRepository.getAttemptById(savedSandbox?.latestRunId ?? "");
+    expect(savedAttempt?.repositoryId).toBe("repo_core");
+
+    const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
+    expect(savedJob?.requestPayload.source).toEqual({
+      kind: "git",
+      provider: "github",
+      url: "https://github.com/sealant-ops/core.git",
+      ref: "main",
+      authRef: "github-installation-repository:gh_installation_repo_1",
+    });
   });
 
   it("renames sandboxes via the sandbox route", async () => {
