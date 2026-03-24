@@ -2,7 +2,7 @@
   "name": "@sealant/os-integration-buildkit",
   "version": "0.0.0",
   "private": true,
-  "description": "BuildKit-based OS integration for Fedora and Arch workspace images",
+  "description": "BuildKit-based OS integration for Fedora, Arch, and Nix workspace images",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

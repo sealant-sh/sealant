@@ -51,6 +51,7 @@ interface DistroDefinition {
   readonly packageMap: Record<string, PackageMapping>;
   readonly internalPackages: readonly string[];
   readonly shellPaths: Record<"bash" | "zsh" | "fish", string>;
+  readonly sshdPath: string;
 }
 
 const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => {
@@ -134,6 +135,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       zsh: "/usr/bin/zsh",
       fish: "/usr/bin/fish",
     },
+    sshdPath: "/usr/sbin/sshd",
   },
   arch: {
     baseImage: "archlinux:latest",
@@ -157,6 +159,31 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       zsh: "/usr/bin/zsh",
       fish: "/usr/bin/fish",
     },
+    sshdPath: "/usr/sbin/sshd",
+  },
+  nix: {
+    baseImage: "nixos/nix:latest",
+    packageManager: "nix",
+    packageMap: {
+      bash: { installPackages: ["bash"] },
+      curl: { installPackages: ["curl"] },
+      fish: { installPackages: ["fish"] },
+      git: { installPackages: ["gitMinimal"] },
+      jq: { installPackages: ["jq"] },
+      neovim: { installPackages: ["neovim"] },
+      nodejs: { installPackages: ["nodejs"] },
+      pnpm: { installPackages: ["nodejs", "pnpm"] },
+      ripgrep: { installPackages: ["ripgrep"] },
+      tmux: { installPackages: ["tmux"] },
+      zsh: { installPackages: ["zsh"] },
+    },
+    internalPackages: ["bash", "cacert", "coreutils", "gitMinimal", "openssh", "shadow"],
+    shellPaths: {
+      bash: "/root/.nix-profile/bin/bash",
+      zsh: "/root/.nix-profile/bin/zsh",
+      fish: "/root/.nix-profile/bin/fish",
+    },
+    sshdPath: "/root/.nix-profile/bin/sshd",
   },
 };
 
@@ -362,24 +389,42 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     ].join("\n");
   }
 
+  if (plan.packageManager === "pacman") {
+    return [
+      "RUN --mount=type=cache,target=/var/cache/pacman/pkg \\",
+      "    pacman -Syu --noconfirm && \\",
+      `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
+      "    pacman -Scc --noconfirm || true",
+    ].join("\n");
+  }
+
+  const nixPackageList = packageList.map((pkg) => shellQuote(`nixpkgs#${pkg}`));
   return [
-    "RUN --mount=type=cache,target=/var/cache/pacman/pkg \\",
-    "    pacman -Syu --noconfirm && \\",
-    `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
-    "    pacman -Scc --noconfirm || true",
+    "RUN nix profile add --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\",
+    `    ${nixPackageList.join(" ")} && \\`,
+    "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
   ].join("\n");
 };
 
 const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
   const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
+  if (plan.osFamily === "nix") {
+    const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
+    const match = npmInstallGlobalPattern.exec(harnessIntegration.installCommand);
+    if (match !== null) {
+      return `RUN npm install -g --prefix /usr/local ${match[1]}`;
+    }
+  }
+
   return `RUN ${harnessIntegration.installCommand}`;
 };
 
 const renderRuntimeStep = (
   step: WorkspaceBlueprint["lifecycle"]["setup"][number],
   defaultWorkingDirectory: string,
+  bashShellPath: string,
 ): string => {
-  const shell = step.shell === "sh" ? "/bin/sh" : "/bin/bash";
+  const shell = step.shell === "sh" ? "/bin/sh" : bashShellPath;
   const workingDirectory = step.workingDirectory ?? defaultWorkingDirectory;
   return [
     "(",
@@ -392,7 +437,8 @@ const renderRuntimeStep = (
 const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
   const foreground = plan.blueprint.lifecycle.startup.foreground;
   if (foreground.kind === "command") {
-    const shell = foreground.shell === "sh" ? "/bin/sh" : "/bin/bash";
+    const shell =
+      foreground.shell === "sh" ? "/bin/sh" : distroDefinitions[plan.osFamily].shellPaths.bash;
     const workingDirectory = foreground.workingDirectory ?? plan.blueprint.runtime.workingDirectory;
     return [
       `cd ${shellQuote(workingDirectory)}`,
@@ -412,15 +458,17 @@ const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
 const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
   const loginShellPath =
     distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
+  const bashShellPath = distroDefinitions[plan.osFamily].shellPaths.bash;
+  const sshdPath = distroDefinitions[plan.osFamily].sshdPath;
   const setupSteps = plan.blueprint.lifecycle.setup
-    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory))
+    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory, bashShellPath))
     .join("\n\n");
   const startupSteps = plan.blueprint.lifecycle.startup.steps
-    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory))
+    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory, bashShellPath))
     .join("\n\n");
 
   return [
-    "#!/bin/bash",
+    `#!${bashShellPath}`,
     "set -euo pipefail",
     "",
     `WORKSPACE_ROOT=${shellQuote(plan.blueprint.runtime.workspaceRoot)}`,
@@ -435,7 +483,15 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "export HOME=/root",
     "export USER=root",
     "export LOGNAME=root",
+    'export PATH="/usr/local/bin:$PATH"',
     'cd "$WORKSPACE_ROOT"',
+    "if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then",
+    '  GLIBC_LOADER="$(ls /nix/store/*-glibc-*/lib/ld-linux-x86-64.so.2 2>/dev/null | head -n1 || true)"',
+    '  if [ -n "$GLIBC_LOADER" ]; then',
+    "    mkdir -p /lib64",
+    '    ln -sf "$GLIBC_LOADER" /lib64/ld-linux-x86-64.so.2',
+    "  fi",
+    "fi",
     "",
     'if [ -n "${SEALANT_WORKSPACE_AUTH_KEY_BASE64:-}" ]; then',
     '  printf \'%s\' "$SEALANT_WORKSPACE_AUTH_KEY_BASE64" | base64 --decode > "$REPO_SSH_KEY_PATH"',
@@ -446,6 +502,38 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     'if [ "${SEALANT_ENABLE_SSH:-0}" = "1" ] || [ "${SEALANT_ENABLE_SSH:-}" = "true" ]; then',
     '  SSH_PORT="${SEALANT_SSH_PORT:-2222}"',
     '  SSH_AUTHORIZED_KEYS_FILE="${SEALANT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"',
+    "  if [ ! -w /etc/passwd ] || [ ! -w /etc/group ] || [ ! -w /etc/shadow ]; then",
+    '    cp /etc/passwd "$SSH_RUNTIME_DIR/passwd.base"',
+    '    cp /etc/group "$SSH_RUNTIME_DIR/group.base"',
+    '    cp /etc/shadow "$SSH_RUNTIME_DIR/shadow.base"',
+    "    rm -f /etc/passwd /etc/group /etc/shadow",
+    '    cp "$SSH_RUNTIME_DIR/passwd.base" /etc/passwd',
+    '    cp "$SSH_RUNTIME_DIR/group.base" /etc/group',
+    '    cp "$SSH_RUNTIME_DIR/shadow.base" /etc/shadow',
+    "    chmod 644 /etc/passwd /etc/group",
+    "    chmod 600 /etc/shadow",
+    "  fi",
+    "  SHADOW_UPDATED=0",
+    '  : > "$SSH_RUNTIME_DIR/shadow.updated"',
+    "  while IFS= read -r line; do",
+    '    case "$line" in',
+    "      root:!*)",
+    '        printf "root::%s\\n" "${line#root:!:}" >> "$SSH_RUNTIME_DIR/shadow.updated"',
+    "        SHADOW_UPDATED=1",
+    "        ;;",
+    "      *)",
+    '        printf "%s\\n" "$line" >> "$SSH_RUNTIME_DIR/shadow.updated"',
+    "        ;;",
+    "    esac",
+    "  done < /etc/shadow",
+    '  if [ "$SHADOW_UPDATED" = "1" ]; then',
+    '    cat "$SSH_RUNTIME_DIR/shadow.updated" > /etc/shadow',
+    "    chmod 600 /etc/shadow",
+    "  fi",
+    "  if ! id -u sshd >/dev/null 2>&1; then",
+    "    printf '%s\n' 'sshd:x:74:' >> /etc/group",
+    "    printf '%s\n' 'sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/sh' >> /etc/passwd",
+    "  fi",
     "",
     '  if [ -n "${SEALANT_SSH_AUTHORIZED_KEYS_BASE64:-}" ]; then',
     '    printf \'%s\' "$SEALANT_SSH_AUTHORIZED_KEYS_BASE64" | base64 --decode > "$SSH_RUNTIME_DIR/authorized_keys.input"',
@@ -464,12 +552,13 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "  fi",
     "",
     "  cat > /usr/local/bin/workspace-ssh-shell <<'EOF'",
-    "#!/bin/bash",
+    `#!${bashShellPath}`,
     "set -euo pipefail",
     `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
     `LOGIN_SHELL=${shellQuote(loginShellPath)}`,
+    'export PATH="/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:$PATH"',
     'if [ ! -x "$LOGIN_SHELL" ]; then',
-    "  LOGIN_SHELL=/bin/bash",
+    `  LOGIN_SHELL=${shellQuote(bashShellPath)}`,
     "fi",
     'if [ -d "$WORKING_DIRECTORY" ]; then',
     '  cd "$WORKING_DIRECTORY"',
@@ -477,7 +566,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     'if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then',
     '  exec "$LOGIN_SHELL" -lc "$SSH_ORIGINAL_COMMAND"',
     "fi",
-    'exec "$LOGIN_SHELL" -l',
+    'exec "$LOGIN_SHELL" -i',
     "EOF",
     "",
     "  chmod 755 /usr/local/bin/workspace-ssh-shell",
@@ -501,7 +590,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "Subsystem sftp internal-sftp",
     "EOF",
     "",
-    '  /usr/sbin/sshd -f "$SSH_RUNTIME_DIR/sshd_config" -E "$SSH_RUNTIME_DIR/sshd.log"',
+    `  ${sshdPath} -f "$SSH_RUNTIME_DIR/sshd_config" -E "$SSH_RUNTIME_DIR/sshd.log"`,
     "  printf '%s\n' \"SSH server listening on port $SSH_PORT\"",
     "fi",
     "",
@@ -516,7 +605,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     ...(setupSteps.length === 0 ? [] : [setupSteps, ""]),
     ...(startupSteps.length === 0 ? [] : [startupSteps, ""]),
     'if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then',
-    '  exec /bin/bash -lc "$SEALANT_FOREGROUND_COMMAND"',
+    `  exec ${bashShellPath} -lc "$SEALANT_FOREGROUND_COMMAND"`,
     "fi",
     "",
     renderForegroundCommand(plan),
@@ -536,10 +625,10 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
   const mountPrefix =
     plan.dotfiles.authSecretId === undefined
       ? "RUN "
-      : "RUN --mount=type=secret,id=dotfiles_git_key,target=/run/sealant/dotfiles_key,required=true \\\n+    ";
+      : "RUN --mount=type=secret,id=dotfiles_git_key,target=/run/sealant/dotfiles_key,required=true \\\n    ";
 
   return [
-    `${mountPrefix}${cloneCommand} && \\\n+    HOME=/root chezmoi init --apply --source=/tmp/sealant-dotfiles && \\\n+    rm -rf /tmp/sealant-dotfiles`,
+    `${mountPrefix}${cloneCommand} && \\\n    HOME=/root chezmoi init --apply --source=/tmp/sealant-dotfiles && \\\n    rm -rf /tmp/sealant-dotfiles`,
   ].join("\n");
 };
 
@@ -557,7 +646,9 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     "",
     harnessInstallStep,
     "",
-    `RUN usermod -s ${shellQuote(shellPath)} root`,
+    plan.osFamily === "nix"
+      ? `ENV SHELL=${shellQuote(shellPath)}`
+      : `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",
     "COPY entrypoint.sh /usr/local/bin/workspace-entrypoint",
     "RUN chmod 755 /usr/local/bin/workspace-entrypoint",

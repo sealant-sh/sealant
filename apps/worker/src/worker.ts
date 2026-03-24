@@ -14,7 +14,11 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 export const startWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
   const registryClient = createRegistryClient(env);
-  const executors = [createBuildkitOsExecutor("fedora"), createBuildkitOsExecutor("arch")];
+  const executors = [
+    createBuildkitOsExecutor("fedora"),
+    createBuildkitOsExecutor("arch"),
+    createBuildkitOsExecutor("nix"),
+  ];
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,

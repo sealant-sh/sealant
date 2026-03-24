@@ -442,7 +442,7 @@ const standardizeRequestedPackages = async (
     return {
       spec,
       errors: [
-        "Package validation requires an explicit target OS. Set spec.os to arch or fedora for this request.",
+        "Package validation requires an explicit target OS. Set spec.os to arch, fedora, or nix for this request.",
       ],
     };
   }
@@ -453,6 +453,7 @@ const standardizeRequestedPackages = async (
   for (const requested of requestedPackages) {
     const resolution = await c.get("packageStandardizer").resolvePackage({
       query: requested,
+      targetOs,
     });
     const osSupport = resolution.osSupport[targetOs];
 

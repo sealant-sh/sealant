@@ -137,7 +137,7 @@ describe("DockerRuntimeAdapter", () => {
       }),
     );
 
-    expect(commandRunner).toHaveBeenCalledTimes(2);
+    expect(commandRunner).toHaveBeenCalledTimes(3);
     const firstCall = commandRunner.mock.calls[0];
     const command = firstCall?.[0];
     const args = firstCall?.[1];
@@ -307,6 +307,67 @@ describe("DockerRuntimeAdapter", () => {
         true,
       );
       expect(result.endpoint).toBe("ssh://root@127.0.0.1:49153");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps container running when SSH endpoint discovery fails", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
+    const keyFile = join(tempDir, "authorized_keys");
+    await writeFile(
+      keyFile,
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
+      "utf8",
+    );
+
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-999\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect") {
+        return {
+          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "port") {
+        throw new Error("No public port '2222/tcp' published for container-id-999");
+      }
+
+      return {
+        stdout: "",
+        stderr: "",
+      };
+    });
+
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      defaultSshAuthorizedKeysFile: keyFile,
+    });
+
+    try {
+      const result = await adapter.launch(
+        createLaunchInput({
+          access: {
+            ssh: {
+              enabled: true,
+              listenPort: 2222,
+            },
+          },
+        }),
+      );
+
+      expect(result.status).toBe("running");
+      expect(result.endpoint).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

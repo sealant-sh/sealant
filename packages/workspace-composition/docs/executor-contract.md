@@ -3,7 +3,8 @@
 `OsExecutor` is the shared interface that OS-specific backends implement so the composition layer
 can call them uniformly.
 
-The first concrete backends now live in `@sealant/os-integration-buildkit` for Arch and Fedora.
+The first concrete backends now live in `@sealant/os-integration-buildkit` for Arch, Fedora, and
+Nix.
 
 ## Responsibilities
 

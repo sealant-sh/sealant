@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import {
@@ -210,30 +211,41 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     containerId: string,
     containerSshPort: number,
   ): Promise<string | undefined> {
-    const portResult = await this.commandRunner("docker", [
-      "port",
-      containerId,
-      `${containerSshPort}/tcp`,
-    ]);
-    const output = portResult.stdout.trim();
+    const maxAttempts = 10;
 
-    if (output.length === 0) {
-      return undefined;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const portResult = await this.commandRunner("docker", [
+          "port",
+          containerId,
+          `${containerSshPort}/tcp`,
+        ]);
+        const output = portResult.stdout.trim();
+
+        if (output.length > 0) {
+          const lastLine = output.split("\n").pop();
+          if (lastLine !== undefined) {
+            const match = /^(?<host>.+):(?<port>\d+)$/.exec(lastLine.trim());
+            if (match?.groups?.host !== undefined && match.groups.port !== undefined) {
+              const host = match.groups.host === "0.0.0.0" ? "127.0.0.1" : match.groups.host;
+              const endpointHost = host.includes(":") ? `[${host}]` : host;
+              return `ssh://root@${endpointHost}:${match.groups.port}`;
+            }
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (!message.includes("No public port")) {
+          throw error;
+        }
+      }
+
+      if (attempt < maxAttempts - 1) {
+        await sleep(100);
+      }
     }
 
-    const lastLine = output.split("\n").pop();
-    if (lastLine === undefined) {
-      return undefined;
-    }
-
-    const match = /^(?<host>.+):(?<port>\d+)$/.exec(lastLine.trim());
-    if (match?.groups?.host === undefined || match.groups.port === undefined) {
-      return undefined;
-    }
-
-    const host = match.groups.host === "0.0.0.0" ? "127.0.0.1" : match.groups.host;
-    const endpointHost = host.includes(":") ? `[${host}]` : host;
-    return `ssh://root@${endpointHost}:${match.groups.port}`;
+    return undefined;
   }
 
   private async inspectContainerState(containerId: string): Promise<{
@@ -301,6 +313,19 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return logs.length === 0 ? undefined : logs;
     } catch {
       return undefined;
+    }
+  }
+
+  private async assertContainerRunning(containerId: string, containerName: string): Promise<void> {
+    const state = await this.inspectContainerState(containerId);
+    if (!state.running) {
+      const logs = await this.readContainerLogs(containerId);
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker container '${containerName}' exited immediately (status: ${state.status}, exitCode: ${state.exitCode}${
+          state.error.length > 0 ? `, error: ${state.error}` : ""
+        }).${logs === undefined ? "" : ` Logs:\n${logs}`}`,
+      );
     }
   }
 
@@ -384,16 +409,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
 
     if (this.verifyRunning) {
-      const state = await this.inspectContainerState(containerId);
-      if (!state.running) {
-        const logs = await this.readContainerLogs(containerId);
-        throw createAdapterError(
-          "adapter-unavailable",
-          `Docker container '${containerName}' exited immediately (status: ${state.status}, exitCode: ${state.exitCode}${
-            state.error.length > 0 ? `, error: ${state.error}` : ""
-          }).${logs === undefined ? "" : ` Logs:\n${logs}`}`,
-        );
-      }
+      await this.assertContainerRunning(containerId, containerName);
     }
 
     const endpoint =
@@ -402,10 +418,15 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         : undefined;
 
     if (sshEnabled && endpoint === undefined) {
-      throw createAdapterError(
-        "adapter-unavailable",
-        `Docker container '${containerName}' started but SSH endpoint discovery failed for container port ${containerSshPort}.`,
-      );
+      console.warn("[docker-runtime-adapter] SSH endpoint discovery failed", {
+        containerId,
+        containerName,
+        containerSshPort,
+      });
+    }
+
+    if (this.verifyRunning) {
+      await this.assertContainerRunning(containerId, containerName);
     }
 
     return parseRuntimeAdapterLaunchResult({

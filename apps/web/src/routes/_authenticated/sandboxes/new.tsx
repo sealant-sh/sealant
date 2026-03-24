@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { useTRPC } from "@/lib/trpc/react";
 
 type HarnessId = "opencode" | "codex" | "claude-code";
-type TargetOs = "fedora" | "arch";
+type TargetOs = "fedora" | "arch" | "nix";
 
 interface NewSandboxFormState {
   readonly workspaceSource: string;
@@ -51,6 +51,7 @@ const HARNESS_OPTIONS: ReadonlyArray<{ readonly value: HarnessId; readonly label
 const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly label: string }> = [
   { value: "fedora", label: "Fedora" },
   { value: "arch", label: "Arch" },
+  { value: "nix", label: "NixOS" },
 ];
 
 export const Route = createFileRoute("/_authenticated/sandboxes/new" as never)({
@@ -77,7 +78,10 @@ function NewSandboxPage() {
   const packageResolutionQueries = useQueries({
     queries: form.packages.map((pkg) => {
       return {
-        ...trpc.package.resolve.queryOptions({ query: pkg }),
+        ...trpc.package.resolve.queryOptions({
+          query: pkg,
+          targetOs: form.targetOs,
+        }),
         staleTime: 1000 * 60 * 10,
       };
     }),
@@ -375,7 +379,7 @@ function NewSandboxPage() {
                     </LabeledField>
 
                     <LabeledField label="Target OS">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid grid-cols-3 gap-2">
                         {TARGET_OS_OPTIONS.map((option) => {
                           const isActive = form.targetOs === option.value;
 

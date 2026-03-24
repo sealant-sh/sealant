@@ -6,6 +6,11 @@ import type {
   WorkspaceBuildJob,
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
+import {
+  packageResolutionSchema,
+  type PackageStandardizer,
+  type PackageTargetOs,
+} from "@sealant/package-standardization";
 import type { RegistryClient } from "@sealant/registry-integration";
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import { describe, expect, it } from "vitest";
@@ -564,6 +569,44 @@ const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
   };
 };
 
+const createPackageStandardizerStub = (
+  calls: Array<{ query: string; targetOs?: PackageTargetOs }>,
+) => {
+  return {
+    resolvePackage: async ({ query, targetOs }) => {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);
+      calls.push({ query, targetOs });
+
+      return packageResolutionSchema.parse({
+        requested: query,
+        normalized: query,
+        status: "resolved",
+        source: "override",
+        canonicalId: query,
+        selectedProject: query,
+        osSupport: {
+          arch: {
+            supported: true,
+            packageName: query,
+          },
+          fedora: {
+            supported: true,
+            packageName: query,
+          },
+          nix: {
+            supported: true,
+            packageName: query,
+          },
+        },
+        alternatives: [],
+        fetchedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+    },
+  } satisfies PackageStandardizer;
+};
+
 describe("createApiApp", () => {
   it("serves the system health endpoint", async () => {
     const app = createApiApp({
@@ -631,6 +674,50 @@ describe("createApiApp", () => {
     expect(body.status).toBe("resolved");
     expect(body.osSupport.arch.supported).toBe(true);
     expect(body.osSupport.arch.packageName).toBe("ripgrep");
+  });
+
+  it("defaults package resolution target OS to fedora", async () => {
+    const calls: Array<{ query: string; targetOs?: PackageTargetOs }> = [];
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      packageStandardizer: createPackageStandardizerStub(calls),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/packages/resolve?query=ripgrep");
+
+    expect(response.status).toBe(200);
+    expect(calls[0]).toEqual({
+      query: "ripgrep",
+      targetOs: "fedora",
+    });
+  });
+
+  it("uses explicit package resolution target OS when provided", async () => {
+    const calls: Array<{ query: string; targetOs?: PackageTargetOs }> = [];
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      packageStandardizer: createPackageStandardizerStub(calls),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/packages/resolve?query=ripgrep&targetOs=arch");
+
+    expect(response.status).toBe(200);
+    expect(calls[0]).toEqual({
+      query: "ripgrep",
+      targetOs: "arch",
+    });
   });
 
   it("sets cors headers for configured origins", async () => {

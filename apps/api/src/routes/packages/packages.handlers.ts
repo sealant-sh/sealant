@@ -14,6 +14,7 @@ export const resolvePackage = async (c: Context<AppBindings>) => {
   try {
     const resolution = await c.get("packageStandardizer").resolvePackage({
       query: query.query,
+      targetOs: query.targetOs,
     });
 
     return c.json(resolution);

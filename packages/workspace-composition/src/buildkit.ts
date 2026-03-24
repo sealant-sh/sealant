@@ -12,11 +12,10 @@ import {
 const nonEmptyStringSchema = z.string().trim().min(1);
 
 // BuildKit is the first concrete image-build path we want to model. It targets
-// the container-native distros we already plan to support outside the current
-// Nix-specific flow.
-export const buildkitTargetOsFamilySchema = concreteWorkspaceTargetOsFamilySchema.exclude(["nix"]);
+// the concrete distro families that can be compiled into OCI images.
+export const buildkitTargetOsFamilySchema = concreteWorkspaceTargetOsFamilySchema;
 
-export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman"]);
+export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix"]);
 
 // Secret refs stay opaque to the composition layer. Executors know how to turn
 // a ref into a mounted secret, but the shared plan only tracks when and why a

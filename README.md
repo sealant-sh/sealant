@@ -134,7 +134,7 @@ Supporting integrations feed into both flows without owning either flow:
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
-  running BuildKit executors for Fedora and Arch, and publishing images to the registry
+  running BuildKit executors for Fedora, Arch, and Nix, and publishing images to the registry
 - `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image
   build requests and dead-letter handling
 - `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry
@@ -201,7 +201,7 @@ over time.
 - `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
   `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
   artifact definitions
-- `packages/os-integration-buildkit/`: BuildKit-based OS integration for Fedora and Arch image
+- `packages/os-integration-buildkit/`: BuildKit-based OS integration for Fedora, Arch, and Nix image
   compilation
 - `packages/package-standardization/`: Repology-backed package resolution and normalized package
   contract utilities

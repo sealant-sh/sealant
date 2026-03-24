@@ -48,6 +48,8 @@ export type PackageTargetOs = z.infer<typeof packageTargetOsSchema>;
 export type PackageResolutionStatus = z.infer<typeof packageResolutionStatusSchema>;
 export type PackageResolution = z.infer<typeof packageResolutionSchema>;
 
+const defaultPackageTargetOs: PackageTargetOs = "fedora";
+
 type RepologyProjectResponseEntry = {
   readonly repo?: string;
   readonly subrepo?: string;
@@ -86,6 +88,15 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "bash" },
       fedora: { packageName: "bash" },
       nix: { packageName: "bash" },
+    },
+  },
+  {
+    id: "bat",
+    aliases: ["bat", "batcat"],
+    targets: {
+      arch: { packageName: "bat" },
+      fedora: { packageName: "bat" },
+      nix: { packageName: "bat" },
     },
   },
   {
@@ -477,7 +488,7 @@ export interface PackageResolutionCacheStore {
 
 export interface RepologyClient {
   getProject(projectName: string): Promise<readonly RepologyProjectResponseEntry[]>;
-  searchProjects(query: string): Promise<RepologySearchResponse>;
+  searchProjects(query: string, targetOs: PackageTargetOs): Promise<RepologySearchResponse>;
 }
 
 export interface RepologyClientOptions {
@@ -552,16 +563,16 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
         `/project/${encodeURIComponent(projectName)}`,
       );
     },
-    searchProjects: async (query) => {
+    searchProjects: async (query, targetOs) => {
       return fetchJson<RepologySearchResponse>(
-        `/projects/?search=${encodeURIComponent(query)}&inrepo=${encodeURIComponent(repologyRepoByTargetOs.arch)}`,
+        `/projects/?search=${encodeURIComponent(query)}&inrepo=${encodeURIComponent(repologyRepoByTargetOs[targetOs])}`,
       );
     },
   };
 };
 
 export interface PackageStandardizer {
-  resolvePackage(input: { query: string }): Promise<PackageResolution>;
+  resolvePackage(input: { query: string; targetOs?: PackageTargetOs }): Promise<PackageResolution>;
 }
 
 export interface CreatePackageStandardizerOptions {
@@ -593,17 +604,18 @@ export const createPackageStandardizer = (
   options: CreatePackageStandardizerOptions,
 ): PackageStandardizer => {
   return {
-    resolvePackage: async ({ query }) => {
+    resolvePackage: async ({ query, targetOs = defaultPackageTargetOs }) => {
       const requested = query.trim();
       const normalized = normalizePackageQuery(requested);
       const now = new Date();
+      const cacheKey = `${targetOs}:${normalized}`;
 
       if (normalized.length === 0 || !packageQueryPattern.test(normalized)) {
         return invalidResolution(requested.length > 0 ? requested : query, normalized, now);
       }
 
       if (options.cacheStore !== undefined) {
-        const cached = await options.cacheStore.getByQuery(normalized);
+        const cached = await options.cacheStore.getByQuery(cacheKey);
 
         if (cached !== null && cached.expiresAt.getTime() > now.getTime()) {
           const parsed = parseCachedResolution(cached.payload);
@@ -629,7 +641,7 @@ export const createPackageStandardizer = (
 
         if (options.cacheStore !== undefined) {
           await options.cacheStore.setByQuery({
-            query: normalized,
+            query: cacheKey,
             payload: resolution,
             expiresAt: new Date(resolution.expiresAt),
           });
@@ -652,7 +664,7 @@ export const createPackageStandardizer = (
           now,
         });
       } else {
-        const searchResult = await options.repologyClient.searchProjects(normalized);
+        const searchResult = await options.repologyClient.searchProjects(normalized, targetOs);
         const bestProject = bestProjectFromSearch(searchResult, normalized);
 
         if (bestProject === null) {
@@ -679,7 +691,7 @@ export const createPackageStandardizer = (
 
       if (options.cacheStore !== undefined) {
         await options.cacheStore.setByQuery({
-          query: normalized,
+          query: cacheKey,
           payload: resolution,
           expiresAt: new Date(resolution.expiresAt),
         });
