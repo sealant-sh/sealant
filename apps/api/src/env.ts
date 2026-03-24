@@ -1,5 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { databaseEnvSchema } from "@sealant/db";
 import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
+import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 
 export const appEnvSchema = databaseEnvSchema
@@ -29,6 +33,7 @@ export const appEnvSchema = databaseEnvSchema
       GITHUB_API_BASE_URL: z.string().url().default("https://api.github.com"),
       GITHUB_APP_ID: z.string().trim().min(1).optional(),
       GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
+      GITHUB_APP_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
       GITHUB_APP_WEBHOOK_SECRET: z.string().min(1).optional(),
       GITHUB_APP_CLIENT_ID: z.string().trim().min(1).optional(),
       GITHUB_APP_CLIENT_SECRET: z.string().min(1).optional(),
@@ -44,12 +49,27 @@ export const appEnvSchema = databaseEnvSchema
       });
     }
 
-    if ((input.GITHUB_APP_ID === undefined) !== (input.GITHUB_APP_PRIVATE_KEY === undefined)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["GITHUB_APP_PRIVATE_KEY"],
-        message: "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be provided together.",
-      });
+    const hasGitHubPrivateKey =
+      input.GITHUB_APP_PRIVATE_KEY !== undefined || input.GITHUB_APP_PRIVATE_KEY_PATH !== undefined;
+
+    if ((input.GITHUB_APP_ID === undefined) !== !hasGitHubPrivateKey) {
+      if (input.GITHUB_APP_ID === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["GITHUB_APP_ID"],
+          message:
+            "GITHUB_APP_ID must be provided when GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is set.",
+        });
+      }
+
+      if (!hasGitHubPrivateKey) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["GITHUB_APP_PRIVATE_KEY"],
+          message:
+            "GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH must be provided when GITHUB_APP_ID is set.",
+        });
+      }
     }
 
     if (
@@ -66,8 +86,71 @@ export const appEnvSchema = databaseEnvSchema
 
 export type AppEnv = z.infer<typeof appEnvSchema>;
 
+const applyDotenvFile = (input: {
+  readonly filePath: string;
+  readonly protectedKeys: ReadonlySet<string>;
+  readonly processEnv: NodeJS.ProcessEnv;
+}): void => {
+  if (!existsSync(input.filePath)) {
+    return;
+  }
+
+  const parsed = parseDotenv(readFileSync(input.filePath, "utf8"));
+
+  for (const [key, value] of Object.entries(parsed as Record<string, string>)) {
+    if (input.protectedKeys.has(key)) {
+      continue;
+    }
+
+    input.processEnv[key] = value;
+  }
+};
+
+const loadAppDotenvFiles = (processEnv: NodeJS.ProcessEnv): void => {
+  const runtimeProcess = globalThis as typeof globalThis & {
+    process?: {
+      cwd?: () => string;
+    };
+  };
+  const protectedKeys = new Set(Object.keys(processEnv));
+  const apiDirectory = fileURLToPath(new URL("..", import.meta.url));
+  const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
+  const workingDirectory = runtimeProcess.process?.cwd?.();
+  const candidateDirectories = [workspaceRoot, apiDirectory];
+
+  if (workingDirectory !== undefined && !candidateDirectories.includes(workingDirectory)) {
+    candidateDirectories.push(workingDirectory);
+  }
+
+  for (const directory of candidateDirectories) {
+    applyDotenvFile({
+      filePath: `${directory}/.env`,
+      protectedKeys,
+      processEnv,
+    });
+    applyDotenvFile({
+      filePath: `${directory}/.env.local`,
+      protectedKeys,
+      processEnv,
+    });
+  }
+};
+
+const resolveGitHubAppPrivateKey = (input: AppEnv): AppEnv => {
+  if (input.GITHUB_APP_PRIVATE_KEY_PATH === undefined) {
+    return input;
+  }
+
+  const privateKey = readFileSync(input.GITHUB_APP_PRIVATE_KEY_PATH, "utf8");
+  return {
+    ...input,
+    GITHUB_APP_PRIVATE_KEY: privateKey,
+  };
+};
+
 export const parseAppEnv = (input: NodeJS.ProcessEnv): AppEnv => {
-  return appEnvSchema.parse(input);
+  loadAppDotenvFiles(input);
+  return resolveGitHubAppPrivateKey(appEnvSchema.parse(input));
 };
 
 const runtimeProcess = globalThis as typeof globalThis & {

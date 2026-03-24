@@ -6,15 +6,19 @@ Phase 1 is started and the first backend slice is in place.
 
 Implemented in this pass:
 
-- GitHub App installation, installation repository, installation grant, and webhook delivery schema added to `packages/db/src/schema/control-plane.ts`
+- GitHub App installation, installation repository, installation grant, and webhook delivery schema
+  added to `packages/db/src/schema/control-plane.ts`
 - Drizzle migration added at `packages/db/drizzle/0009_github_app_integration.sql`
 - DB repositories added for installations, installation repositories, and webhook deliveries
 - repository lookup helpers added to `packages/db/src/repositories/repository-profiles.ts`
-- initial `@sealant/source-integrations` package implementation added for GitHub App JWT creation, webhook verification, installation token minting, repository listing, and auth-ref helpers
+- initial `@sealant/source-integrations` package implementation added for GitHub App JWT creation,
+  webhook verification, installation token minting, repository listing, and auth-ref helpers
 - API env/config wiring added for GitHub App settings
 - new GitHub API routes added under `apps/api/src/routes/github/`
 - `createApiApp` now mounts `/v1/github`
-- sandbox creation now accepts a GitHub-backed `sourceSelection`, verifies installation grants server-side, resolves the selected repository, links `repositoryId`, and rewrites the workspace source to a GitHub auth-ref based clone descriptor
+- sandbox creation now accepts a GitHub-backed `sourceSelection`, verifies installation grants
+  server-side, resolves the selected repository, links `repositoryId`, and rewrites the workspace
+  source to a GitHub auth-ref based clone descriptor
 - API tests added for granted installation listing and GitHub-backed sandbox creation
 
 Verified in this pass:
@@ -105,10 +109,15 @@ Verified in this pass:
 
 ## Notes
 
-- The current sandbox API path uses a new top-level `sourceSelection` field for GitHub-backed launches while keeping the existing raw `spec` path intact.
-- The GitHub-backed sandbox path currently rewrites the workspace source to a GitHub clone URL plus an installation-repository auth ref sentinel. That gives us durable repository linkage now without storing tokens.
-- Actual just-in-time installation token resolution inside worker/runtime is still pending, so the end-to-end private clone path is not complete yet.
-- API-side access control still uses explicit `ownerUserId` request values because the broader API auth model has not been converted to session-backed auth yet.
+- The current sandbox API path uses a new top-level `sourceSelection` field for GitHub-backed
+  launches while keeping the existing raw `spec` path intact.
+- The GitHub-backed sandbox path currently rewrites the workspace source to a GitHub clone URL plus
+  an installation-repository auth ref sentinel. That gives us durable repository linkage now without
+  storing tokens.
+- Actual just-in-time installation token resolution inside worker/runtime is still pending, so the
+  end-to-end private clone path is not complete yet.
+- API-side access control still uses explicit `ownerUserId` request values because the broader API
+  auth model has not been converted to session-backed auth yet.
 
 ## Recommended Next Slice
 
