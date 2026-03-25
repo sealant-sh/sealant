@@ -167,6 +167,8 @@ const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> =
     `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
     "-e",
     `SEALANT_WORKSPACE_REPO_REF=${input.blueprint.sources.workspace.ref}`,
+    "-e",
+    `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,
   ];
 };

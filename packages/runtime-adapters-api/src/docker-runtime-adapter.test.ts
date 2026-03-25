@@ -168,6 +168,7 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("NODE_ENV=development");
     expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
     expect(args).toContain("SEALANT_WORKSPACE_REPO_REF=main");
+    expect(args).toContain("SEALANT_OCI_RUNTIME=runc");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
     expect(result.status).toBe("running");
@@ -211,6 +212,7 @@ describe("DockerRuntimeAdapter", () => {
     const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
     expect(runArgs).toContain("--runtime");
     expect(runArgs).toContain("runsc");
+    expect(runArgs).toContain("SEALANT_OCI_RUNTIME=runsc");
   });
 
   it("fails when runsc is requested but not configured on the Docker host", async () => {
