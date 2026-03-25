@@ -29,6 +29,7 @@ export const runtimeAdapterBlueprintSchema = z
         env: z.record(z.string()),
         workingDirectory: z.string().trim().min(1),
         persistence: z.enum(["ephemeral", "persistent"]),
+        ociRuntime: z.enum(["runc", "runsc"]),
         network: z
           .object({
             outbound: z.boolean(),

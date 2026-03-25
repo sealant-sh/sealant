@@ -26,3 +26,10 @@ runtime adapter implementations, and exports the built-in runtime adapter classe
 2. Registry integration publishes that artifact and returns canonical references.
 3. Runtime adapter selection picks a concrete adapter from the normalized runtime target.
 4. The selected adapter launches the published image.
+
+## Docker OCI runtime selection
+
+- Docker launches can carry `blueprint.runtime.ociRuntime` with `runc` or `runsc`
+- the adapter probes Docker Engine `/info` before launch and rejects unsupported runtime requests
+- `runsc` must be installed and registered on the Docker host; callers do not need it locally unless
+  they are the Docker host

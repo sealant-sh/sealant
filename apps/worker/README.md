@@ -48,6 +48,9 @@ existing local RabbitMQ instance on `5672`.
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 
+Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
+`runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
+
 The worker now applies runtime defaults when requests omit startup/SSH fields:
 
 - `DEFAULT_WORKSPACE_STARTUP_MODE=idle` (or `harness`)

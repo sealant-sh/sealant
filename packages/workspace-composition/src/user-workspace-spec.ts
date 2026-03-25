@@ -6,6 +6,7 @@ import {
   workspaceHarnessIdSchema,
   workspaceInputPurposeSchema,
   workspaceLoginShellSchema,
+  workspaceOciRuntimeSchema,
   workspacePersistenceSchema,
   workspaceShellSchema,
   workspaceSourceProviderSchema,
@@ -130,6 +131,7 @@ const userWorkspaceRuntimeSchema = z.strictObject({
   workspaceRoot: nonEmptyStringSchema.optional(),
   workingDirectory: nonEmptyStringSchema.optional(),
   persistence: workspacePersistenceSchema.optional(),
+  ociRuntime: workspaceOciRuntimeSchema.optional(),
   network: z
     .strictObject({
       outbound: z.boolean().optional(),
@@ -544,6 +546,7 @@ const normalizeRuntime = (
     workspaceRoot,
     workingDirectory: runtime?.workingDirectory ?? `${workspaceRoot}/repo`,
     persistence: runtime?.persistence ?? "ephemeral",
+    ociRuntime: runtime?.ociRuntime ?? "runc",
     network: {
       outbound: runtime?.network?.outbound ?? true,
     },

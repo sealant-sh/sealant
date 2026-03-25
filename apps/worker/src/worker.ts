@@ -27,6 +27,7 @@ export const startWorker = async (env: WorkerEnv) => {
   ];
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
+      dockerSocketPath: env.DOCKER_SOCKET_PATH,
       defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
       sshBindHost: env.DEFAULT_SSH_BIND_HOST,
     }),

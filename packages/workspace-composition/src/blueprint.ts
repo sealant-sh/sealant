@@ -32,6 +32,7 @@ export const workspaceLoginShellSchema = z.enum(["bash", "zsh", "fish"]);
 // Persistence belongs in the shared blueprint because it is a user/runtime
 // expectation, not an implementation detail of a specific executor.
 export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
+export const workspaceOciRuntimeSchema = z.enum(["runc", "runsc"]);
 
 // Target OS intent needs to exist before executor selection happens. The user is
 // expressing what family they want while the composition layer remains free to
@@ -179,6 +180,7 @@ export const workspaceRuntimeSchema = z
     workspaceRoot: nonEmptyStringSchema.default("/workspace"),
     workingDirectory: nonEmptyStringSchema.default("/workspace/repo"),
     persistence: workspacePersistenceSchema.default("ephemeral"),
+    ociRuntime: workspaceOciRuntimeSchema.default("runc"),
     network: workspaceRuntimeNetworkSchema.default({}),
   })
   .default({});

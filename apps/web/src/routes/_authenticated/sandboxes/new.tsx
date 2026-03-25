@@ -8,6 +8,7 @@ import { useTRPC } from "@/lib/trpc/react";
 type HarnessId = "opencode" | "codex" | "claude-code";
 type SourceMode = "git" | "github";
 type TargetOs = "fedora" | "arch" | "nix";
+type OciRuntime = "runc" | "runsc";
 
 interface NewSandboxFormState {
   readonly sourceMode: SourceMode;
@@ -17,6 +18,7 @@ interface NewSandboxFormState {
   readonly githubInstallationRepositoryId: string;
   readonly harness: HarnessId;
   readonly targetOs: TargetOs;
+  readonly ociRuntime: OciRuntime;
   readonly registryId: string;
   readonly artifactRepository: string;
   readonly artifactTag: string;
@@ -56,6 +58,23 @@ const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly labe
   { value: "fedora", label: "Fedora" },
   { value: "arch", label: "Arch" },
   { value: "nix", label: "NixOS" },
+];
+
+const OCI_RUNTIME_OPTIONS: ReadonlyArray<{
+  readonly value: OciRuntime;
+  readonly label: string;
+  readonly detail: string;
+}> = [
+  {
+    value: "runc",
+    label: "runc",
+    detail: "Default Docker runtime for standard launches and widest compatibility.",
+  },
+  {
+    value: "runsc",
+    label: "runsc",
+    detail: "gVisor-isolated Docker runtime for stronger sandbox boundaries.",
+  },
 ];
 
 export const Route = createFileRoute("/_authenticated/sandboxes/new" as never)({
@@ -260,6 +279,9 @@ function NewSandboxPage() {
         },
         harness: form.harness,
         os: form.targetOs,
+        runtime: {
+          ociRuntime: form.ociRuntime,
+        },
         packages: form.packages,
         ssh: form.sshEnabled,
         ...(normalizedSetupSteps.length === 0 ? {} : { setup: normalizedSetupSteps }),
@@ -376,6 +398,9 @@ function NewSandboxPage() {
           },
           harness: form.harness,
           os: form.targetOs,
+          runtime: {
+            ociRuntime: form.ociRuntime,
+          },
           ssh: form.sshEnabled,
           ...(packages.length === 0 ? {} : { packages }),
           ...(setup.length === 0 ? {} : { setup }),
@@ -734,6 +759,55 @@ function NewSandboxPage() {
                     </LabeledField>
                   </div>
 
+                  <LabeledField label="OCI Runtime">
+                    <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {OCI_RUNTIME_OPTIONS.map((option) => {
+                          const isActive = form.ociRuntime === option.value;
+
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                setField("ociRuntime", option.value);
+                              }}
+                              className={
+                                isActive
+                                  ? "border border-primary bg-primary/10 px-4 py-4 text-left"
+                                  : "border border-border bg-background px-4 py-4 text-left transition-colors hover:border-foreground"
+                              }
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-display text-3xl leading-none text-foreground">
+                                    {option.label}
+                                  </p>
+                                  <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                                    {option.detail}
+                                  </p>
+                                </div>
+                                <span
+                                  className={
+                                    isActive
+                                      ? "border border-primary bg-primary px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-primary-foreground"
+                                      : "border border-border px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground"
+                                  }
+                                >
+                                  {isActive ? "ACTIVE" : "READY"}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="font-mono text-[0.62rem] leading-6 tracking-[0.11em] text-muted-foreground">
+                        `runsc` launches require the worker Docker host to have the gVisor runtime
+                        registered.
+                      </p>
+                    </div>
+                  </LabeledField>
+
                   <div className="grid gap-4 sm:grid-cols-3">
                     <LabeledField label="Registry ID">
                       <input
@@ -1036,6 +1110,10 @@ function NewSandboxPage() {
                 <SummaryRow label="Target" value={previewManifest.spec.source.url} highlighted />
                 <SummaryRow label="Harness" value={previewManifest.spec.harness.toUpperCase()} />
                 <SummaryRow label="Target OS" value={previewManifest.spec.os.toUpperCase()} />
+                <SummaryRow
+                  label="OCI runtime"
+                  value={previewManifest.spec.runtime.ociRuntime.toUpperCase()}
+                />
                 <SummaryRow label="Packages" value={String(previewManifest.spec.packages.length)} />
                 <SummaryRow
                   label="SSH state"
@@ -1205,6 +1283,7 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
     githubInstallationRepositoryId: "",
     harness: "opencode",
     targetOs: "fedora",
+    ociRuntime: "runc",
     registryId,
     artifactRepository: "sealant/workspaces/demo",
     artifactTag: "opencode",
