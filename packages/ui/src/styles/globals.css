@@ -9,7 +9,7 @@
   --sw-muted: #767676;
   --sw-rule: #141414;
   --sw-soft-rule: #e4e4e4;
-  --sw-accent: #d92f24;
+  --sw-accent: #d924d8ff;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -67,6 +67,8 @@
 :root {
   --radius: 0px;
 
+  --sw-accent-foreground: #ffffff;
+
   --background: var(--sw-bg);
   --foreground: var(--sw-ink);
 
@@ -76,11 +78,13 @@
   --popover: var(--sw-panel);
   --popover-foreground: var(--sw-ink);
 
-  --primary: var(--sw-accent);
-  --primary-foreground: #ffffff;
+  --primary: var(--sw-accent, #d924d8ff);
+  --primary-hover: color-mix(in oklab, var(--sw-accent, #d924d8ff) 88%, black);
+  --primary-foreground: var(--sw-accent-foreground, #ffffff);
 
   --secondary: #f1f1f0;
   --secondary-foreground: var(--sw-ink);
+  --secondary-hover: color-mix(in oklab, var(--secondary) 92%, var(--foreground));
 
   --muted: #f3f3f2;
   --muted-foreground: var(--sw-muted);
@@ -95,7 +99,7 @@
   --input: var(--sw-soft-rule);
   --ring: var(--sw-rule);
 
-  --chart-1: var(--sw-accent);
+  --chart-1: var(--sw-accent, #d924d8ff);
   --chart-2: #222222;
   --chart-3: #555555;
   --chart-4: #848484;
@@ -103,8 +107,8 @@
 
   --sidebar: var(--sw-panel);
   --sidebar-foreground: var(--sw-ink);
-  --sidebar-primary: var(--sw-accent);
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary: var(--sw-accent, #d924d8ff);
+  --sidebar-primary-foreground: var(--sw-accent-foreground, #ffffff);
   --sidebar-accent: #f3f3f2;
   --sidebar-accent-foreground: var(--sw-ink);
   --sidebar-border: var(--sw-soft-rule);
@@ -118,8 +122,6 @@
   --card-foreground: var(--sw-ink);
   --popover: var(--sw-panel);
   --popover-foreground: var(--sw-ink);
-  --primary: var(--sw-accent);
-  --primary-foreground: #ffffff;
   --secondary: #f1f1f0;
   --secondary-foreground: var(--sw-ink);
   --muted: #f3f3f2;
@@ -131,15 +133,12 @@
   --border: var(--sw-soft-rule);
   --input: var(--sw-soft-rule);
   --ring: var(--sw-rule);
-  --chart-1: var(--sw-accent);
   --chart-2: #222222;
   --chart-3: #555555;
   --chart-4: #848484;
   --chart-5: #b0b0b0;
   --sidebar: var(--sw-panel);
   --sidebar-foreground: var(--sw-ink);
-  --sidebar-primary: var(--sw-accent);
-  --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f3f3f2;
   --sidebar-accent-foreground: var(--sw-ink);
   --sidebar-border: var(--sw-soft-rule);

@@ -4,7 +4,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
   Sidebar,
   SidebarContent as UiSidebarContent,
@@ -30,6 +35,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -44,6 +50,13 @@ import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
 import { authClient } from "@/lib/auth/auth-client";
 import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
+import {
+  accentPresets,
+  defaultAccent,
+  getAccentInputValue,
+  getAccentLabel,
+  isUserTheme,
+} from "@/lib/theme/appearance";
 import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
@@ -109,6 +122,15 @@ const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
       { href: "/issues/ready", label: "Ready for workflow", exact: true },
     ],
   },
+];
+
+const APPEARANCE_THEME_OPTIONS: ReadonlyArray<{
+  readonly value: UserTheme;
+  readonly label: string;
+}> = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "system", label: "System" },
 ];
 
 export function AppShell({ session, sidebarSandboxes, children }: AppShellProps) {
@@ -188,17 +210,40 @@ function AppSidebarNav({
   readonly isSigningOut: boolean;
   readonly onSignOut: () => Promise<void>;
 }) {
-  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const accentInputRef = useRef<HTMLInputElement | null>(null);
   const { isMobile, openMobile, setOpen, setOpenMobile, state } = useSidebar();
-  const { userTheme, setTheme } = useTheme();
+  const { accent, resetAccent, setAccent, setTheme, userTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
   const currentTheme = getThemeMenuState(userTheme);
+  const accentLabel = getAccentLabel(accent);
   const ThemeIcon = currentTheme.icon;
   const isExpanded = isMobile || state === "expanded";
+
   useEffect(() => {
     setOpenMobile(false);
   }, [pathname, setOpenMobile]);
+
+  const openCustomAccentPicker = () => {
+    const accentInput = accentInputRef.current;
+
+    if (accentInput === null) {
+      return;
+    }
+
+    if (typeof accentInput.showPicker === "function") {
+      accentInput.showPicker();
+      return;
+    }
+
+    accentInput.click();
+  };
+
+  const handleThemeValueChange = (value: string | null) => {
+    if (value !== null && isUserTheme(value)) {
+      setTheme(value);
+    }
+  };
 
   return (
     <>
@@ -429,7 +474,7 @@ function AppSidebarNav({
           </span>
         </Link>
 
-        <DropdownMenu open={isProfileMenuOpen} onOpenChange={setIsProfileMenuOpen}>
+        <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
               "mt-3 flex w-full items-center border border-border bg-background text-left text-foreground transition-all duration-200 ease-out hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
@@ -464,24 +509,134 @@ function AppSidebarNav({
               aria-hidden={!isExpanded}
             />
           </DropdownMenuTrigger>
+          <input
+            ref={accentInputRef}
+            type="color"
+            tabIndex={-1}
+            aria-hidden="true"
+            className="sr-only"
+            value={getAccentInputValue(accent)}
+            onChange={(event) => {
+              setAccent(event.currentTarget.value);
+            }}
+          />
           <DropdownMenuContent
             side="top"
             align={isExpanded ? "start" : "end"}
             sideOffset={8}
             className="w-56 min-w-56 border-border bg-card p-0"
           >
-            <DropdownMenuItem
-              onClick={() => {
-                setTheme(getNextTheme(userTheme));
-                requestAnimationFrame(() => {
-                  setIsProfileMenuOpen(true);
-                });
-              }}
-              className="flex items-center gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal"
-            >
-              <ThemeIcon className="size-4" />
-              <span>{`Theme: ${currentTheme.menuLabel}`}</span>
-            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger className="gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal">
+                <Palette className="size-4" />
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-foreground">Appearance</span>
+                    <span className="block truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground uppercase">
+                      {`${currentTheme.menuLabel} / ${accentLabel}`}
+                    </span>
+                  </div>
+                  <span
+                    className="size-3 shrink-0 border border-border"
+                    style={{ backgroundColor: accent }}
+                    aria-hidden="true"
+                  />
+                </div>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-72 min-w-72 border-border bg-card p-0">
+                <div className="border-b border-border px-4 py-3">
+                  <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
+                    Appearance
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Switch light and dark mode, then set a custom accent for the shell.
+                  </p>
+                </div>
+
+                <div className="border-b border-border p-1">
+                  <div className="px-2 pt-2 pb-1">
+                    <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
+                      Theme
+                    </p>
+                  </div>
+                  <DropdownMenuRadioGroup value={userTheme} onValueChange={handleThemeValueChange}>
+                    {APPEARANCE_THEME_OPTIONS.map((option) => (
+                      <DropdownMenuRadioItem
+                        key={option.value}
+                        value={option.value}
+                        className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+                      >
+                        {option.label}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </div>
+
+                <div className="border-b border-border px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
+                      Accent
+                    </p>
+                    <div className="flex items-center gap-2 text-[0.62rem] text-muted-foreground">
+                      <ThemeIcon className="size-3.5" />
+                      <span>{accentLabel}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {accentPresets.map((preset) => {
+                      const isActive = accent === preset.value;
+
+                      return (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          onClick={() => {
+                            if (preset.value === defaultAccent) {
+                              resetAccent();
+                              return;
+                            }
+
+                            setAccent(preset.value);
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 border px-2 py-2 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+                            isActive
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
+                          )}
+                          aria-pressed={isActive}
+                        >
+                          <span
+                            className="size-4 shrink-0 border border-border"
+                            style={{ backgroundColor: preset.value }}
+                            aria-hidden="true"
+                          />
+                          <span className="min-w-0 truncate font-mono text-[0.58rem] tracking-[0.12em] uppercase">
+                            {preset.label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="p-1">
+                  <DropdownMenuItem
+                    onClick={openCustomAccentPicker}
+                    className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+                  >
+                    Custom accent...
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={resetAccent}
+                    className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+                  >
+                    Reset to default
+                  </DropdownMenuItem>
+                </div>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSeparator className="my-0 -mx-0 bg-border" />
             <DropdownMenuItem
               disabled={isSigningOut}
@@ -498,18 +653,6 @@ function AppSidebarNav({
       </SidebarFooter>
     </>
   );
-}
-
-function getNextTheme(theme: UserTheme): UserTheme {
-  if (theme === "light") {
-    return "dark";
-  }
-
-  if (theme === "dark") {
-    return "system";
-  }
-
-  return "light";
 }
 
 function getThemeMenuState(theme: UserTheme): {
