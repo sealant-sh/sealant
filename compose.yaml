@@ -8,6 +8,11 @@ services:
       RABBITMQ_DEFAULT_USER: sealant
       RABBITMQ_DEFAULT_PASS: sealant
     restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
 
   zot:
     image: ghcr.io/project-zot/zot-minimal:v2.1.15
@@ -26,8 +31,10 @@ services:
     profiles:
       - apps
     depends_on:
-      - rabbitmq
-      - zot
+      rabbitmq:
+        condition: service_healthy
+      zot:
+        condition: service_started
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.secrets:/app/.secrets:ro
