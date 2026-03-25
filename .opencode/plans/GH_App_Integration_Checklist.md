@@ -563,31 +563,31 @@ endpoints and submit the new source shape.
 
 ## Sandbox API
 
-- [ ] Add GitHub-backed source schema to sandbox create request
-- [ ] Resolve `installationRepositoryId` in sandbox create handler
-- [ ] Enforce installation grant checks in sandbox create handler
-- [ ] Enforce installation active-status checks in sandbox create handler
-- [ ] Populate `sandbox.repositoryId`
-- [ ] Populate `sandboxAttempt.repositoryId`
-- [ ] Keep raw installation token out of snapshots and job payloads
-- [ ] Add API tests for GitHub-backed sandbox create success and failure cases
+- [x] Add GitHub-backed source schema to sandbox create request
+- [x] Resolve `installationRepositoryId` in sandbox create handler
+- [x] Enforce installation grant checks in sandbox create handler
+- [x] Enforce installation active-status checks in sandbox create handler
+- [x] Populate `sandbox.repositoryId`
+- [x] Populate `sandboxAttempt.repositoryId`
+- [x] Keep raw installation token out of snapshots and job payloads
+- [x] Add API tests for GitHub-backed sandbox create success and failure cases
 
 ## Worker and runtime
 
-- [ ] Update worker job handling for GitHub-backed source metadata
-- [ ] Introduce an ephemeral token auth descriptor for source clone auth
-- [ ] Update runtime adapter contract to support token auth
-- [ ] Update Docker runtime adapter to inject token auth safely
-- [ ] Update buildkit executor clone bootstrapping to consume token auth safely
-- [ ] Add worker and runtime tests for token-based clone auth
+- [x] Update worker job handling for GitHub-backed source metadata
+- [x] Introduce an ephemeral token auth descriptor for source clone auth
+- [x] Update runtime adapter contract to support token auth
+- [x] Update Docker runtime adapter to inject token auth safely
+- [x] Update buildkit executor clone bootstrapping to consume token auth safely
+- [x] Add worker and runtime tests for token-based clone auth
 
 ## Web
 
-- [ ] Add grant-aware GitHub installation picker in sandbox create flow
-- [ ] Add repo picker for selected installation
-- [ ] Add ref input or ref picker for GitHub source
-- [ ] Submit GitHub-backed source shape from web to API
-- [ ] Preserve generic raw-URL sandbox creation path
+- [x] Add grant-aware GitHub installation picker in sandbox create flow
+- [x] Add repo picker for selected installation
+- [x] Add ref input or ref picker for GitHub source
+- [x] Submit GitHub-backed source shape from web to API
+- [x] Preserve generic raw-URL sandbox creation path
 
 ## Release readiness checks
 
@@ -610,3 +610,59 @@ If implementation is split into small merges, the best first slice is:
 
 That sequence keeps the most important private-repo sandbox path deliverable without dragging issue
 workflows into the same milestone.
+
+## Local-First Onboarding Checklist
+
+Goal:
+
+- support GitHub App onboarding and repo sync without requiring a public webhook URL
+- let Sealant seed installation state directly from the GitHub API
+- treat webhook delivery as optional freshness automation rather than required control-plane state
+
+### Backend import and sync
+
+- [x] Add a GitHub App installation fetch helper in `packages/source-integrations/src/github.ts`
+- [x] Normalize remote installation payloads into the same DB shape used by webhook ingestion
+- [x] Add `POST /v1/github/installations/import` in `apps/api/src/routes/github/`
+- [x] Accept `externalInstallationId` and caller `userId` for the import request
+- [x] Fetch installation metadata live from GitHub using app auth
+- [x] Upsert `github_app_installations` without requiring a webhook delivery first
+- [x] Auto-grant the importing user access to the imported installation
+- [x] Trigger repository sync immediately after import
+- [x] Return imported installation metadata plus synced repository count
+
+### Manual and pull sync behavior
+
+- [x] Make `POST /v1/github/installations/:installationId/sync` grant-aware
+- [x] Reject sync for users without an active installation grant
+- [x] Reject sync for suspended or deleted installations
+- [x] Keep repo sync pull-based through GitHub API listing
+- [x] Keep repo listing API backed by the synced installation-repository cache
+
+### Optional webhook behavior
+
+- [x] Keep `POST /v1/github/webhooks` available when `GITHUB_APP_WEBHOOK_SECRET` is configured
+- [x] Reuse shared installation-upsert logic between webhook ingestion and manual import
+- [x] Ensure import and sync continue to work when webhook config is absent
+- [x] Treat webhooks as freshness updates, not the only installation discovery path
+
+### Web product path
+
+- [x] Add GitHub client methods in `apps/web/src/lib/api/core-api-client.ts` for import, list, repo
+      list, and sync
+- [x] Add a `github` tRPC router in `apps/web/src/lib/trpc/router.ts` that injects session user id
+- [x] Add an authenticated setup route that can consume GitHub `installation_id` callback params
+- [x] Add a manual installation import form for local development fallback
+- [x] Add a GitHub installation picker and repo picker to
+      `apps/web/src/routes/_authenticated/sandboxes/new.tsx`
+- [x] Add a manual refresh action for repo sync in the GitHub picker flow
+
+### Verification
+
+- [ ] Add source-integration tests for installation fetch parsing
+- [x] Add API tests for installation import success and failure cases
+- [x] Add API tests for grant-aware sync authorization
+- [ ] Add API tests that import works without webhook configuration
+- [x] Run `pnpm format:fix`
+- [x] Run `pnpm --filter @sealant/api test`
+- [x] Run `pnpm typecheck`

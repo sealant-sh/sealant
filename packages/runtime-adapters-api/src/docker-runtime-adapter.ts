@@ -8,6 +8,7 @@ import {
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
+  type WorkspaceCloneAuth,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapter,
   type RuntimeAdapterLaunchInput,
@@ -174,9 +175,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async resolveWorkspaceAuthKeyBase64(
-    input: RuntimeAdapterLaunchInput,
+    cloneAuth: Extract<WorkspaceCloneAuth, { type: "file-ref" }>,
   ): Promise<string | undefined> {
-    const configuredPath = input.blueprint.sources.workspace.authRef;
+    const configuredPath = cloneAuth.path;
 
     if (configuredPath === undefined || configuredPath.length === 0) {
       return undefined;
@@ -205,6 +206,24 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
 
     return Buffer.from(`${trimmed}\n`, "utf8").toString("base64");
+  }
+
+  private resolveWorkspaceCloneAuth(
+    input: RuntimeAdapterLaunchInput,
+  ): WorkspaceCloneAuth | undefined {
+    if (input.workspaceCloneAuth !== undefined && input.workspaceCloneAuth.type !== "none") {
+      return input.workspaceCloneAuth;
+    }
+
+    const configuredPath = input.blueprint.sources.workspace.authRef;
+    if (configuredPath === undefined || configuredPath.length === 0) {
+      return undefined;
+    }
+
+    return {
+      type: "file-ref",
+      path: configuredPath,
+    };
   }
 
   private async resolvePublishedSshEndpoint(
@@ -366,7 +385,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const imageReference = parsed.publishedImage.digestReference;
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
     const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
-    const workspaceAuthKeyBase64 = await this.resolveWorkspaceAuthKeyBase64(parsed);
+    const workspaceCloneAuth = this.resolveWorkspaceCloneAuth(parsed);
+    const workspaceAuthKeyBase64 =
+      workspaceCloneAuth?.type === "file-ref"
+        ? await this.resolveWorkspaceAuthKeyBase64(workspaceCloneAuth)
+        : undefined;
     const sshArgs = sshEnabled === true ? ["-p", `${this.sshBindHost}::${containerSshPort}`] : [];
     const sshEnvArgs =
       sshEnabled === true
@@ -385,6 +408,15 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       workspaceAuthKeyBase64 === undefined
         ? []
         : ["-e", `SEALANT_WORKSPACE_AUTH_KEY_BASE64=${workspaceAuthKeyBase64}`];
+    const workspaceHttpAuthEnvArgs =
+      workspaceCloneAuth?.type !== "http-token"
+        ? []
+        : [
+            "-e",
+            `SEALANT_WORKSPACE_HTTP_USERNAME=${workspaceCloneAuth.username}`,
+            "-e",
+            `SEALANT_WORKSPACE_HTTP_TOKEN=${workspaceCloneAuth.token}`,
+          ];
     const args = [
       "run",
       "-d",
@@ -395,6 +427,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...sshArgs,
       ...sshEnvArgs,
       ...workspaceAuthEnvArgs,
+      ...workspaceHttpAuthEnvArgs,
       ...envArgsFromBlueprint(parsed),
       imageReference,
     ];

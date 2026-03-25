@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 
 import type { GitHubAppInstallation } from "@sealant/db";
+import type { GitHubRemoteInstallation } from "@sealant/source-integrations";
 import type { Context } from "hono";
 
 import type { AppBindings } from "../../lib/types.js";
 import type {
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
   githubInstallationSummarySchema,
   githubInstallationRepositorySummarySchema,
+  syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
 } from "./github.routes.js";
 
@@ -61,10 +65,43 @@ const toInstallationStatus = (action: string | undefined): GitHubAppInstallation
   }
 };
 
-const upsertInstallationFromWebhook = async (
+const toInstallationSummary = (
+  installation: GitHubAppInstallation,
+): typeof githubInstallationSummarySchema._type => {
+  return {
+    installationId: installation.id,
+    externalInstallationId: installation.externalInstallationId,
+    accountLogin: installation.accountLogin,
+    accountType: installation.accountType,
+    status: installation.status,
+    repositorySelection: installation.repositorySelection,
+    ...(installation.lastSyncedAt === null
+      ? {}
+      : { lastSyncedAt: toIsoString(installation.lastSyncedAt) }),
+  };
+};
+
+const toInstallationStatusFromRemote = (
+  installation: Pick<GitHubRemoteInstallation, "suspendedAt">,
+): GitHubAppInstallation["status"] => {
+  return installation.suspendedAt === undefined ? "active" : "suspended";
+};
+
+const upsertInstallationRecord = async (
   c: Context<AppBindings>,
-  payload: Record<string, unknown>,
-  action: string | undefined,
+  input: {
+    readonly externalInstallationId: string;
+    readonly externalAccountId?: string;
+    readonly accountLogin: string;
+    readonly accountType: GitHubAppInstallation["accountType"];
+    readonly targetType?: GitHubAppInstallation["accountType"];
+    readonly status: GitHubAppInstallation["status"];
+    readonly permissions?: Record<string, string>;
+    readonly repositorySelection: GitHubAppInstallation["repositorySelection"];
+    readonly suspendedAt?: Date | null;
+    readonly lastSyncedAt?: Date;
+    readonly installedAt?: Date;
+  },
 ): Promise<GitHubAppInstallation | null> => {
   const installationRepository = c.get("gitHubInstallationRepository");
 
@@ -72,6 +109,34 @@ const upsertInstallationFromWebhook = async (
     return null;
   }
 
+  const existing = await installationRepository.getInstallationByExternalId(
+    input.externalInstallationId,
+  );
+  const now = new Date();
+
+  return installationRepository.upsertInstallation({
+    id: existing?.id ?? randomUUID(),
+    externalInstallationId: input.externalInstallationId,
+    ...(input.externalAccountId === undefined
+      ? {}
+      : { externalAccountId: input.externalAccountId }),
+    accountLogin: input.accountLogin,
+    accountType: input.accountType,
+    ...(input.targetType === undefined ? {} : { targetType: input.targetType }),
+    status: input.status,
+    ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+    repositorySelection: input.repositorySelection,
+    ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
+    lastSyncedAt: input.lastSyncedAt ?? now,
+    installedAt: input.installedAt ?? existing?.installedAt ?? now,
+  });
+};
+
+const upsertInstallationFromWebhook = async (
+  c: Context<AppBindings>,
+  payload: Record<string, unknown>,
+  action: string | undefined,
+): Promise<GitHubAppInstallation | null> => {
   const installation = payload.installation;
   if (typeof installation !== "object" || installation === null) {
     return null;
@@ -92,27 +157,40 @@ const upsertInstallationFromWebhook = async (
 
   const accountType =
     "type" in account && account.type === "Organization" ? "organization" : "user";
+  const targetType =
+    "target_type" in installation && installation.target_type === "Organization"
+      ? "organization"
+      : "target_type" in installation && installation.target_type === "User"
+        ? "user"
+        : accountType;
   const externalAccountId =
     "id" in account && (typeof account.id === "number" || typeof account.id === "string")
       ? String(account.id)
       : undefined;
-  const existing = await installationRepository.getInstallationByExternalId(externalInstallationId);
+  const permissions =
+    "permissions" in installation && typeof installation.permissions === "object"
+      ? Object.fromEntries(
+          Object.entries(installation.permissions ?? {}).filter(
+            (entry): entry is [string, string] => {
+              return typeof entry[1] === "string";
+            },
+          ),
+        )
+      : undefined;
   const now = new Date();
 
-  return installationRepository.upsertInstallation({
-    id: existing?.id ?? randomUUID(),
+  return upsertInstallationRecord(c, {
     externalInstallationId,
     ...(externalAccountId === undefined ? {} : { externalAccountId }),
     accountLogin: account.login,
     accountType,
-    targetType: accountType,
+    targetType,
     status: toInstallationStatus(action),
+    ...(permissions === undefined ? {} : { permissions }),
     repositorySelection: payload.repository_selection === "selected" ? "selected" : "all",
-    ...(toInstallationStatus(action) === "suspended"
-      ? { suspendedAt: now }
-      : { suspendedAt: null }),
+    suspendedAt: toInstallationStatus(action) === "suspended" ? now : null,
     lastSyncedAt: now,
-    installedAt: existing?.installedAt ?? now,
+    installedAt: now,
   });
 };
 
@@ -196,6 +274,38 @@ const syncInstallationRepositories = async (
   return remoteRepositories.length;
 };
 
+const importInstallationState = async (
+  c: Context<AppBindings>,
+  externalInstallationId: string,
+): Promise<GitHubAppInstallation> => {
+  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
+
+  if (gitHubSourceIntegration === undefined || !gitHubSourceIntegration.isConfigured()) {
+    throw new Error("GitHub integration is not configured.");
+  }
+
+  const remoteInstallation = await gitHubSourceIntegration.getInstallation(externalInstallationId);
+  const installation = await upsertInstallationRecord(c, {
+    externalInstallationId: remoteInstallation.externalInstallationId,
+    ...(remoteInstallation.externalAccountId === undefined
+      ? {}
+      : { externalAccountId: remoteInstallation.externalAccountId }),
+    accountLogin: remoteInstallation.accountLogin,
+    accountType: remoteInstallation.accountType,
+    targetType: remoteInstallation.targetType,
+    status: toInstallationStatusFromRemote(remoteInstallation),
+    permissions: remoteInstallation.permissions,
+    repositorySelection: remoteInstallation.repositorySelection,
+    suspendedAt: remoteInstallation.suspendedAt ?? null,
+  });
+
+  if (installation === null) {
+    throw new Error("GitHub installation repository is not configured.");
+  }
+
+  return installation;
+};
+
 export const listInstallations = async (c: Context<AppBindings>) => {
   const query = (
     c.req as typeof c.req & {
@@ -212,21 +322,8 @@ export const listInstallations = async (c: Context<AppBindings>) => {
     userId: query.userId,
     status: "active",
   });
-  const items: Array<typeof githubInstallationSummarySchema._type> = installations.map(
-    (installation) => {
-      return {
-        installationId: installation.id,
-        externalInstallationId: installation.externalInstallationId,
-        accountLogin: installation.accountLogin,
-        accountType: installation.accountType,
-        status: installation.status,
-        repositorySelection: installation.repositorySelection,
-        ...(installation.lastSyncedAt === null
-          ? {}
-          : { lastSyncedAt: toIsoString(installation.lastSyncedAt) }),
-      };
-    },
-  );
+  const items: Array<typeof githubInstallationSummarySchema._type> =
+    installations.map(toInstallationSummary);
 
   return c.json({ items });
 };
@@ -306,10 +403,19 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
       valid(target: "param"): { installationId: string };
     }
   ).valid("param");
+  const query = (
+    c.req as typeof c.req & {
+      valid(target: "query"): typeof syncGitHubInstallationQuerySchema._type;
+    }
+  ).valid("query");
   const installationRepository = c.get("gitHubInstallationRepository");
   const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
 
-  if (installationRepository === undefined || gitHubSourceIntegration === undefined) {
+  if (
+    installationRepository === undefined ||
+    gitHubSourceIntegration === undefined ||
+    !gitHubSourceIntegration.isConfigured()
+  ) {
     return gitHubUnavailable(c);
   }
 
@@ -323,6 +429,29 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
     );
   }
 
+  if (installation.status !== "active") {
+    return c.json(
+      {
+        message: `GitHub installation ${params.installationId} is not active.`,
+      },
+      403,
+    );
+  }
+
+  const hasGrant = await installationRepository.userHasInstallationGrant({
+    installationId: installation.id,
+    userId: query.userId,
+  });
+
+  if (!hasGrant) {
+    return c.json(
+      {
+        message: `User ${query.userId} does not have access to GitHub installation ${params.installationId}.`,
+      },
+      403,
+    );
+  }
+
   const syncedAt = new Date();
   const syncedRepositoryCount = await syncInstallationRepositories(c, installation);
   const response: typeof syncGitHubInstallationResponseSchema._type = {
@@ -332,6 +461,59 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
   };
 
   return c.json(response);
+};
+
+export const importInstallation = async (c: Context<AppBindings>) => {
+  const body = (
+    c.req as typeof c.req & {
+      valid(target: "json"): typeof importGitHubInstallationRequestSchema._type;
+    }
+  ).valid("json");
+  const installationRepository = c.get("gitHubInstallationRepository");
+  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
+
+  if (
+    installationRepository === undefined ||
+    gitHubSourceIntegration === undefined ||
+    !gitHubSourceIntegration.isConfigured()
+  ) {
+    return gitHubUnavailable(c);
+  }
+
+  try {
+    const installation = await importInstallationState(c, body.externalInstallationId);
+
+    await installationRepository.grantInstallationToUser({
+      installationId: installation.id,
+      userId: body.userId,
+      grantedByUserId: body.userId,
+    });
+
+    const syncedAt = new Date();
+    const syncedRepositoryCount =
+      installation.status === "active" ? await syncInstallationRepositories(c, installation) : 0;
+    const response: typeof importGitHubInstallationResponseSchema._type = {
+      installation: toInstallationSummary(
+        syncedRepositoryCount === 0 && installation.status !== "active"
+          ? installation
+          : ((await installationRepository.getInstallationById(installation.id)) ?? installation),
+      ),
+      syncedRepositoryCount,
+      syncedAt: syncedAt.toISOString(),
+    };
+
+    return c.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GitHub installation import failed.";
+    const status = message.includes("status 404") ? 404 : 500;
+
+    return c.json(
+      {
+        message,
+      },
+      status,
+    );
+  }
 };
 
 export const handleWebhook = async (c: Context<AppBindings>) => {

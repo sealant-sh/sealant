@@ -326,6 +326,9 @@ importers:
       '@sealant/runtime-adapters-api':
         specifier: workspace:*
         version: link:../../packages/runtime-adapters-api
+      '@sealant/source-integrations':
+        specifier: workspace:*
+        version: link:../../packages/source-integrations
       '@sealant/workspace-build-queue':
         specifier: workspace:*
         version: link:../../packages/workspace-build-queue

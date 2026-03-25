@@ -2,12 +2,15 @@ import { describeRoute, resolver, validator } from "hono-openapi";
 
 import { messageResponseSchema } from "../../lib/schemas.js";
 import {
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubWebhookResponseSchema,
   githubInstallationsQuerySchema,
   listGitHubInstallationRepositoriesResponseSchema,
   listGitHubInstallationsResponseSchema,
+  syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
 } from "./github.schemas.js";
 
@@ -20,6 +23,14 @@ export const githubInstallationsQueryValidator = validator("query", githubInstal
 export const githubInstallationRepositoriesQueryValidator = validator(
   "query",
   githubInstallationRepositoriesQuerySchema,
+);
+export const syncGitHubInstallationQueryValidator = validator(
+  "query",
+  syncGitHubInstallationQuerySchema,
+);
+export const importGitHubInstallationBodyValidator = validator(
+  "json",
+  importGitHubInstallationRequestSchema,
 );
 
 export const listGitHubInstallationsRoute = describeRoute({
@@ -96,8 +107,56 @@ export const syncGitHubInstallationRoute = describeRoute({
         },
       },
     },
+    403: {
+      description: "User does not have access to the installation or the installation is inactive",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
     404: {
       description: "Installation not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+    503: {
+      description: "GitHub integration is not configured",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+  },
+});
+
+export const importGitHubInstallationRoute = describeRoute({
+  tags,
+  description:
+    "Import a GitHub App installation directly from GitHub and seed local installation state without a webhook.",
+  responses: {
+    200: {
+      description: "Installation imported and repository sync completed",
+      content: {
+        "application/json": {
+          schema: resolver(importGitHubInstallationResponseSchema),
+        },
+      },
+    },
+    404: {
+      description: "Installation not found in GitHub",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+    500: {
+      description: "Installation import failed",
       content: {
         "application/json": {
           schema: resolver(messageResponseSchema),

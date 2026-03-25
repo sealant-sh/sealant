@@ -92,6 +92,7 @@ const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
     label: "Sandbox Views",
     links: [
       { href: "/sandboxes/new", label: "Create Sandbox", exact: true },
+      { href: "/github/setup", label: "GitHub Access", exact: true },
       { href: "/sandboxes", label: "All Sandboxes", exact: true },
       { href: "/sandboxes/active", label: "Running", exact: true },
       { href: "/sandboxes/failed", label: "Failed", exact: true },

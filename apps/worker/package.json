@@ -13,6 +13,7 @@
     "@sealant/os-integration-buildkit": "workspace:*",
     "@sealant/registry-integration": "workspace:*",
     "@sealant/runtime-adapters-api": "workspace:*",
+    "@sealant/source-integrations": "workspace:*",
     "@sealant/workspace-build-queue": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
     "zod": "^3.24.1"

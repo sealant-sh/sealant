@@ -209,6 +209,43 @@ describe("DockerRuntimeAdapter", () => {
     }
   });
 
+  it("passes ephemeral HTTP token clone auth when provided", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-654\n",
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput(),
+        workspaceCloneAuth: {
+          type: "http-token",
+          username: "x-access-token",
+          token: "github-installation-token",
+        },
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("SEALANT_WORKSPACE_HTTP_USERNAME=x-access-token");
+    expect(runArgs).toContain("SEALANT_WORKSPACE_HTTP_TOKEN=github-installation-token");
+  });
+
   it("fails launch when container exits immediately", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

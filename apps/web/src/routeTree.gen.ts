@@ -30,6 +30,7 @@ import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_auth
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
 import { Route as AuthenticatedIssuesReadyRouteImport } from './routes/_authenticated/issues/ready'
 import { Route as AuthenticatedIssuesAssignedRouteImport } from './routes/_authenticated/issues/assigned'
+import { Route as AuthenticatedGithubSetupRouteImport } from './routes/_authenticated/github/setup'
 import { Route as AuthenticatedSandboxesSandboxIdIndexRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/index'
 import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
 import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
@@ -162,6 +163,12 @@ const AuthenticatedIssuesAssignedRoute =
     path: '/issues/assigned',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedGithubSetupRoute =
+  AuthenticatedGithubSetupRouteImport.update({
+    id: '/github/setup',
+    path: '/github/setup',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedSandboxesSandboxIdIndexRoute =
   AuthenticatedSandboxesSandboxIdIndexRouteImport.update({
     id: '/sandboxes/$sandboxId/',
@@ -272,6 +279,7 @@ export interface FileRoutesByFullPath {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
+  '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
@@ -310,6 +318,7 @@ export interface FileRoutesByTo {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
+  '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
@@ -351,6 +360,7 @@ export interface FileRoutesById {
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_authenticated/about': typeof AuthenticatedAboutRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/github/setup': typeof AuthenticatedGithubSetupRoute
   '/_authenticated/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
   '/_authenticated/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/about'
+    | '/github/setup'
     | '/issues/assigned'
     | '/issues/ready'
     | '/profiles/create'
@@ -429,6 +440,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/about'
+    | '/github/setup'
     | '/issues/assigned'
     | '/issues/ready'
     | '/profiles/create'
@@ -469,6 +481,7 @@ export interface FileRouteTypes {
     | '/_auth/reset-password'
     | '/_authenticated/about'
     | '/_authenticated/'
+    | '/_authenticated/github/setup'
     | '/_authenticated/issues/assigned'
     | '/_authenticated/issues/ready'
     | '/_authenticated/profiles/create'
@@ -657,6 +670,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIssuesAssignedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/github/setup': {
+      id: '/_authenticated/github/setup'
+      path: '/github/setup'
+      fullPath: '/github/setup'
+      preLoaderRoute: typeof AuthenticatedGithubSetupRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/sandboxes/$sandboxId/': {
       id: '/_authenticated/sandboxes/$sandboxId/'
       path: '/sandboxes/$sandboxId'
@@ -798,6 +818,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 interface AuthenticatedRouteChildren {
   AuthenticatedAboutRoute: typeof AuthenticatedAboutRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedGithubSetupRoute: typeof AuthenticatedGithubSetupRoute
   AuthenticatedIssuesAssignedRoute: typeof AuthenticatedIssuesAssignedRoute
   AuthenticatedIssuesReadyRoute: typeof AuthenticatedIssuesReadyRoute
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
@@ -831,6 +852,7 @@ interface AuthenticatedRouteChildren {
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAboutRoute: AuthenticatedAboutRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedGithubSetupRoute: AuthenticatedGithubSetupRoute,
   AuthenticatedIssuesAssignedRoute: AuthenticatedIssuesAssignedRoute,
   AuthenticatedIssuesReadyRoute: AuthenticatedIssuesReadyRoute,
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,

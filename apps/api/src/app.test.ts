@@ -4,6 +4,7 @@ import type {
   GitHubInstallationRepositoryCacheRepository,
   GitHubInstallationRepositoryRecord,
   GitHubInstallationUserGrant,
+  RepositoryProfileRepository,
   SandboxAttemptRepository,
   SandboxRepository,
   SandboxRuntimeInstance,
@@ -17,6 +18,11 @@ import {
   type PackageTargetOs,
 } from "@sealant/package-standardization";
 import type { RegistryClient } from "@sealant/registry-integration";
+import type {
+  GitHubRemoteInstallation,
+  GitHubRemoteInstallationRepository,
+  GitHubSourceIntegration,
+} from "@sealant/source-integrations";
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import { describe, expect, it } from "vitest";
 
@@ -49,6 +55,7 @@ type SandboxAttemptSnapshotRecord = Awaited<
   ReturnType<SandboxAttemptRepository["setAttemptSnapshot"]>
 >;
 type SandboxRecord = Awaited<ReturnType<SandboxRepository["createSandbox"]>>;
+type RepositoryRecord = Awaited<ReturnType<RepositoryProfileRepository["upsertRepository"]>>;
 
 const createRegistryClientStub = (): RegistryClient => {
   return {
@@ -575,6 +582,95 @@ const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
   };
 };
 
+const createGitHubSourceIntegrationStub = (
+  options: {
+    installations?: readonly GitHubRemoteInstallation[];
+    repositoriesByInstallationExternalId?: Readonly<
+      Record<string, readonly GitHubRemoteInstallationRepository[]>
+    >;
+    isConfigured?: boolean;
+    isWebhookVerificationConfigured?: boolean;
+  } = {},
+): GitHubSourceIntegration => {
+  const installationsByExternalId = new Map(
+    (options.installations ?? []).map((installation) => [
+      installation.externalInstallationId,
+      installation,
+    ]),
+  );
+  const stub = {
+    isConfigured: () => options.isConfigured ?? true,
+    isWebhookVerificationConfigured: () => options.isWebhookVerificationConfigured ?? true,
+    createAppJwt: () => "test-jwt",
+    verifyWebhookSignature: () => true,
+    createInstallationAccessToken: async () => ({
+      token: "token",
+      expiresAt: new Date("2026-03-25T12:00:00.000Z"),
+    }),
+    getInstallation: async (externalInstallationId: string) => {
+      const installation = installationsByExternalId.get(externalInstallationId);
+
+      if (installation === undefined) {
+        throw new Error("GitHub installation request failed with status 404.");
+      }
+
+      return installation;
+    },
+    listInstallationRepositories: async (externalInstallationId) => {
+      return options.repositoriesByInstallationExternalId?.[externalInstallationId] ?? [];
+    },
+  };
+
+  return stub as unknown as GitHubSourceIntegration;
+};
+
+const createRepositoryProfileRepositoryStub = (): RepositoryProfileRepository => {
+  const repositories = new Map<string, RepositoryRecord>();
+
+  const stub = {
+    getRepositoryByProviderExternalId: async (input: {
+      readonly provider: string;
+      readonly externalId: string;
+    }) => {
+      return [...repositories.values()].find((repository) => {
+        return repository.provider === input.provider && repository.externalId === input.externalId;
+      });
+    },
+    upsertRepository: async (input: {
+      readonly id: string;
+      readonly provider?: string;
+      readonly externalId?: string;
+      readonly owner: string;
+      readonly name: string;
+      readonly defaultBranch?: string;
+      readonly url?: string;
+      readonly isArchived?: boolean;
+      readonly lastSyncedAt?: Date;
+    }) => {
+      const existing = repositories.get(input.id);
+      const now = new Date();
+      const repository: RepositoryRecord = {
+        id: input.id,
+        provider: (input.provider ?? existing?.provider ?? "git") as RepositoryRecord["provider"],
+        externalId: input.externalId ?? existing?.externalId ?? null,
+        owner: input.owner,
+        name: input.name,
+        defaultBranch: input.defaultBranch ?? existing?.defaultBranch ?? "main",
+        url: input.url ?? existing?.url ?? null,
+        isArchived: input.isArchived ?? existing?.isArchived ?? false,
+        lastSyncedAt: input.lastSyncedAt ?? existing?.lastSyncedAt ?? null,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      repositories.set(repository.id, repository);
+      return repository;
+    },
+  };
+
+  return stub as unknown as RepositoryProfileRepository;
+};
+
 const createGitHubInstallationRepositoryStub = (
   options: {
     installations?: readonly GitHubAppInstallation[];
@@ -992,6 +1088,7 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
     expect(body.paths["/v1/github/installations"]).toBeDefined();
+    expect(body.paths["/v1/github/installations/import"]).toBeDefined();
     expect(body.paths["/v1/github/installations/{installationId}/repositories"]).toBeDefined();
     expect(body.paths["/v1/github/webhooks"]).toBeDefined();
     expect(body.paths["/v1/runs/{runId}"]).toBeUndefined();
@@ -1053,6 +1150,177 @@ describe("createApiApp", () => {
           lastSyncedAt: "2026-03-24T12:00:00.000Z",
         },
       ],
+    });
+  });
+
+  it("imports a GitHub installation without a webhook and syncs repositories", async () => {
+    const installationRepository = createGitHubInstallationRepositoryStub();
+    const installationRepositoryCache = createGitHubInstallationRepositoryCacheStub();
+    const repositoryProfileRepository = createRepositoryProfileRepositoryStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      gitHubSourceIntegration: createGitHubSourceIntegrationStub({
+        installations: [
+          {
+            externalInstallationId: "1001",
+            externalAccountId: "2001",
+            accountLogin: "sealant-ops",
+            accountType: "organization",
+            targetType: "organization",
+            permissions: { contents: "read", metadata: "read" },
+            repositorySelection: "all",
+          },
+        ],
+        repositoriesByInstallationExternalId: {
+          "1001": [
+            {
+              externalRepositoryId: "3001",
+              owner: "sealant-ops",
+              name: "core",
+              fullName: "sealant-ops/core",
+              defaultBranch: "main",
+              isPrivate: true,
+              isArchived: false,
+              url: "https://github.com/sealant-ops/core.git",
+            },
+          ],
+        },
+      }),
+      gitHubInstallationRepository: installationRepository,
+      gitHubInstallationRepositoryCacheRepository: installationRepositoryCache,
+      repositoryProfileRepository,
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/github/installations/import", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        userId: testUserId,
+        externalInstallationId: "1001",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      installation: {
+        installationId: string;
+        externalInstallationId: string;
+        accountLogin: string;
+        accountType: string;
+        status: string;
+        repositorySelection: string;
+        lastSyncedAt?: string;
+      };
+      syncedRepositoryCount: number;
+      syncedAt: string;
+    };
+
+    expect(body.installation.externalInstallationId).toBe("1001");
+    expect(body.installation.accountLogin).toBe("sealant-ops");
+    expect(body.installation.status).toBe("active");
+    expect(body.syncedRepositoryCount).toBe(1);
+    expect(body.syncedAt).toBeDefined();
+    expect(body.installation.lastSyncedAt).toBeDefined();
+
+    const listedInstallationsResponse = await app.request(
+      `/v1/github/installations?userId=${testUserId}`,
+    );
+    expect(listedInstallationsResponse.status).toBe(200);
+    await expect(listedInstallationsResponse.json()).resolves.toEqual({
+      items: [
+        {
+          installationId: body.installation.installationId,
+          externalInstallationId: "1001",
+          accountLogin: "sealant-ops",
+          accountType: "organization",
+          status: "active",
+          repositorySelection: "all",
+          lastSyncedAt: body.installation.lastSyncedAt,
+        },
+      ],
+    });
+
+    const repositoriesResponse = await app.request(
+      `/v1/github/installations/${body.installation.installationId}/repositories?userId=${testUserId}`,
+    );
+    expect(repositoriesResponse.status).toBe(200);
+    await expect(repositoriesResponse.json()).resolves.toEqual({
+      items: [
+        {
+          installationRepositoryId: expect.any(String),
+          installationId: body.installation.installationId,
+          repositoryId: expect.any(String),
+          externalRepositoryId: "3001",
+          owner: "sealant-ops",
+          name: "core",
+          fullName: "sealant-ops/core",
+          defaultBranch: "main",
+          isPrivate: true,
+          isArchived: false,
+          lastSyncedAt: expect.any(String),
+        },
+      ],
+    });
+  });
+
+  it("rejects manual repository sync when the user does not have a grant", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      gitHubSourceIntegration: createGitHubSourceIntegrationStub({
+        repositoriesByInstallationExternalId: {
+          "1001": [],
+        },
+      }),
+      gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
+        installations: [
+          {
+            id: "gh_installation_1",
+            provider: "github",
+            externalInstallationId: "1001",
+            externalAccountId: "2001",
+            accountLogin: "sealant-ops",
+            accountType: "organization",
+            targetType: "organization",
+            status: "active",
+            permissions: { contents: "read", metadata: "read" },
+            repositorySelection: "all",
+            installedAt: new Date("2026-03-20T12:00:00.000Z"),
+            suspendedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-20T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+          },
+        ],
+      }),
+      gitHubInstallationRepositoryCacheRepository: createGitHubInstallationRepositoryCacheStub(),
+      repositoryProfileRepository: createRepositoryProfileRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request(
+      `/v1/github/installations/gh_installation_1/sync?userId=${testUserId}`,
+      {
+        method: "POST",
+      },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      message: `User ${testUserId} does not have access to GitHub installation gh_installation_1.`,
     });
   });
 

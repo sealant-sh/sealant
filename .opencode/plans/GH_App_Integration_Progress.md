@@ -2,7 +2,9 @@
 
 ## Status
 
-Phase 1 is started and the first backend slice is in place.
+Phase 1 now covers the full local-first private-repo sandbox path in product and runtime code:
+webhook-optional installation import, grant-aware GitHub repo selection, and just-in-time
+installation-token clone auth at launch.
 
 Implemented in this pass:
 
@@ -20,12 +22,36 @@ Implemented in this pass:
   server-side, resolves the selected repository, links `repositoryId`, and rewrites the workspace
   source to a GitHub auth-ref based clone descriptor
 - API tests added for granted installation listing and GitHub-backed sandbox creation
+- GitHub source integration now supports fetching a single installation directly from the GitHub App
+  API
+- new `POST /v1/github/installations/import` route seeds installation state without requiring an
+  incoming webhook first
+- installation import auto-grants the importing user and immediately performs repository sync
+- manual installation sync is now grant-aware and blocks inactive installations
+- API tests added for webhookless installation import and grant-aware sync rejection
+- web core API client and tRPC router now expose GitHub installation import, listing, repository
+  listing, and manual sync flows
+- authenticated GitHub setup page added for callback-driven import and manual installation-id import
+- sandbox creation UI now supports a GitHub App source mode with installation picker, repo picker,
+  optional ref override, and manual repo refresh
+- worker now parses GitHub installation-repository auth refs and mints installation access tokens
+  immediately before runtime launch
+- runtime launch contract now supports ephemeral HTTP token clone auth alongside existing file-ref
+  auth paths
+- Docker runtime now injects GitHub HTTP token clone credentials for launch-time repo clone only
+- buildkit entrypoint now uses `GIT_ASKPASS` for HTTP token clone auth and cleans up clone auth
+  material after repository bootstrap
+- worker, runtime adapter, and buildkit tests added for token-based private clone auth
+- app shell now includes a GitHub Access entrypoint for installation management
 
 Verified in this pass:
 
 - `pnpm format:fix`
 - `pnpm typecheck`
 - `pnpm --filter @sealant/api test`
+- `pnpm --filter @sealant/runtime-adapters-api test`
+- `pnpm --filter @sealant/os-integration-buildkit test`
+- `pnpm --filter @sealant/worker test`
 
 ## Completed Checklist Items
 
@@ -69,6 +95,7 @@ Verified in this pass:
 - [x] Implement `POST /v1/github/webhooks`
 - [ ] Optionally add grant-management endpoints for manual administration
 - [x] Implement `POST /v1/github/installations/:installationId/sync`
+- [x] Implement `POST /v1/github/installations/import`
 
 ### Sandbox API
 
@@ -85,27 +112,37 @@ Verified in this pass:
 
 ### Worker and runtime
 
-- [ ] Update worker job handling for GitHub-backed source metadata
-- [ ] Introduce an ephemeral token auth descriptor for source clone auth
-- [ ] Update runtime adapter contract to support token auth
-- [ ] Update Docker runtime adapter to inject token auth safely
-- [ ] Update buildkit executor clone bootstrapping to consume token auth safely
-- [ ] Add worker and runtime tests for token-based clone auth
+- [x] Update worker job handling for GitHub-backed source metadata
+- [x] Introduce an ephemeral token auth descriptor for source clone auth
+- [x] Update runtime adapter contract to support token auth
+- [x] Update Docker runtime adapter to inject token auth safely
+- [x] Update buildkit executor clone bootstrapping to consume token auth safely
+- [x] Add worker and runtime tests for token-based clone auth
 
 ### Web
 
-- [ ] Add grant-aware GitHub installation picker in sandbox create flow
-- [ ] Add repo picker for selected installation
-- [ ] Add ref input or ref picker for GitHub source
-- [ ] Submit GitHub-backed source shape from web to API
-- [ ] Preserve generic raw-URL sandbox creation path
+- [x] Add grant-aware GitHub installation picker in sandbox create flow
+- [x] Add repo picker for selected installation
+- [x] Add ref input or ref picker for GitHub source
+- [x] Submit GitHub-backed source shape from web to API
+- [x] Preserve generic raw-URL sandbox creation path
 
 ### Additional coverage and hardening
 
 - [ ] Add DB-level tests for grant revocation and repository cache filtering
 - [ ] Add sandbox create failure tests for suspended installs and missing grants
+- [ ] Add source-integration tests for direct installation fetch parsing
 - [ ] Add webhook processing tests
 - [ ] Decide whether sync should stay as an API route or move behind a queue/job boundary later
+
+### Local-first onboarding
+
+- [x] Allow installation import without webhook delivery
+- [x] Auto-grant the importing user on installation import
+- [x] Sync repositories immediately after installation import
+- [x] Require grants for manual installation sync
+- [x] Add web callback route and manual install-import UI
+- [x] Add sandbox-form GitHub installation and repository picker
 
 ## Notes
 
@@ -114,16 +151,21 @@ Verified in this pass:
 - The GitHub-backed sandbox path currently rewrites the workspace source to a GitHub clone URL plus
   an installation-repository auth ref sentinel. That gives us durable repository linkage now without
   storing tokens.
-- Actual just-in-time installation token resolution inside worker/runtime is still pending, so the
-  end-to-end private clone path is not complete yet.
+- The worker now resolves the auth-ref sentinel into a short-lived GitHub installation token right
+  before runtime launch, and the runtime uses ephemeral HTTP token auth for clone without storing
+  the token in snapshots or job payloads.
+- Installation discovery no longer has to begin with a webhook; the API can now import installation
+  state directly from GitHub using the external installation id.
+- Webhooks are still supported for installation freshness and repo cache updates, but they are no
+  longer the only path that can seed installation state.
 - API-side access control still uses explicit `ownerUserId` request values because the broader API
   auth model has not been converted to session-backed auth yet.
 
 ## Recommended Next Slice
 
-Implement the worker/runtime clone-auth path next:
+Recommended next slice:
 
-1. parse the GitHub installation repository auth ref in worker/runtime
-2. mint a short-lived installation token right before launch
-3. extend runtime launch input to support HTTP token clone auth
-4. update container bootstrap clone logic to use HTTPS token auth without leaking secrets
+1. add source-integration tests for direct installation fetch parsing
+2. add sandbox-create failure coverage for suspended installs and missing grants
+3. verify the private GitHub sandbox flow end to end against a real GitHub App installation
+4. decide whether installation sync should remain request-driven or move behind a background job

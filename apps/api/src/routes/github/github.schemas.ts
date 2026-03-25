@@ -13,6 +13,15 @@ export const githubInstallationRepositoriesQuerySchema = z.object({
   search: z.string().trim().min(1).optional(),
 });
 
+export const syncGitHubInstallationQuerySchema = z.object({
+  userId: z.string().trim().min(1),
+});
+
+export const importGitHubInstallationRequestSchema = z.object({
+  userId: z.string().trim().min(1),
+  externalInstallationId: z.string().trim().min(1),
+});
+
 export const githubInstallationSummarySchema = z.object({
   installationId: z.string(),
   externalInstallationId: z.string(),
@@ -47,6 +56,12 @@ export const listGitHubInstallationRepositoriesResponseSchema = z.object({
 
 export const syncGitHubInstallationResponseSchema = z.object({
   installationId: z.string(),
+  syncedRepositoryCount: z.number().int().nonnegative(),
+  syncedAt: z.string().datetime(),
+});
+
+export const importGitHubInstallationResponseSchema = z.object({
+  installation: githubInstallationSummarySchema,
   syncedRepositoryCount: z.number().int().nonnegative(),
   syncedAt: z.string().datetime(),
 });

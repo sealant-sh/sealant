@@ -77,6 +77,21 @@ export const publishedImageSchema = z.strictObject({
   digest: z.string().trim().min(1),
 });
 
+export const workspaceCloneAuthSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("none"),
+  }),
+  z.strictObject({
+    type: z.literal("file-ref"),
+    path: z.string().trim().min(1),
+  }),
+  z.strictObject({
+    type: z.literal("http-token"),
+    username: z.string().trim().min(1),
+    token: z.string().trim().min(1),
+  }),
+]);
+
 export const runtimeAdapterSupportInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
 });
@@ -84,6 +99,7 @@ export const runtimeAdapterSupportInputSchema = z.strictObject({
 export const runtimeAdapterLaunchInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
   publishedImage: publishedImageSchema,
+  workspaceCloneAuth: workspaceCloneAuthSchema.optional(),
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({
@@ -123,6 +139,8 @@ export type RuntimeAdapterSupport = z.infer<typeof runtimeAdapterSupportSchema>;
 export type RuntimeAdapterSupportInput = z.infer<typeof runtimeAdapterSupportInputSchema>;
 
 export type PublishedImage = z.infer<typeof publishedImageSchema>;
+
+export type WorkspaceCloneAuth = z.infer<typeof workspaceCloneAuthSchema>;
 
 export type RuntimeAdapterLaunchInput = z.infer<typeof runtimeAdapterLaunchInputSchema>;
 

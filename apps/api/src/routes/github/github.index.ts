@@ -18,9 +18,16 @@ router.get(
   handlers.listInstallationRepositories,
 );
 router.post(
+  "/installations/import",
+  routes.importGitHubInstallationRoute,
+  routes.importGitHubInstallationBodyValidator,
+  handlers.importInstallation,
+);
+router.post(
   "/installations/:installationId/sync",
   routes.syncGitHubInstallationRoute,
   routes.githubInstallationIdValidator,
+  routes.syncGitHubInstallationQueryValidator,
   handlers.syncInstallation,
 );
 router.post("/webhooks", routes.githubWebhookRoute, handlers.handleWebhook);

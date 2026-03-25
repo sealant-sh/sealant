@@ -18,6 +18,17 @@ export interface GitHubInstallationAccessToken {
   readonly expiresAt: Date;
 }
 
+export interface GitHubRemoteInstallation {
+  readonly externalInstallationId: string;
+  readonly externalAccountId?: string;
+  readonly accountLogin: string;
+  readonly accountType: "organization" | "user";
+  readonly targetType: "organization" | "user";
+  readonly permissions: Record<string, string>;
+  readonly repositorySelection: "all" | "selected";
+  readonly suspendedAt?: Date;
+}
+
 export interface GitHubRemoteInstallationRepository {
   readonly externalRepositoryId: string;
   readonly owner: string;
@@ -81,6 +92,47 @@ const toDate = (value: unknown): Date | undefined => {
 
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date;
+};
+
+const toGitHubInstallationAccountType = (value: unknown): "organization" | "user" => {
+  return value === "Organization" ? "organization" : "user";
+};
+
+const parsePermissions = (value: unknown): Record<string, string> => {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+
+  const entries = Object.entries(value).filter((entry): entry is [string, string] => {
+    return typeof entry[1] === "string";
+  });
+
+  return Object.fromEntries(entries);
+};
+
+const parseInstallationResponse = (payload: unknown): GitHubRemoteInstallation => {
+  const parsed = assertObject(payload, "GitHub installation response must be an object.");
+  const account = assertObject(parsed.account, "GitHub installation account must be an object.");
+  const accountType = toGitHubInstallationAccountType(account.type);
+  const targetType =
+    typeof parsed.target_type === "string"
+      ? toGitHubInstallationAccountType(parsed.target_type)
+      : accountType;
+
+  return {
+    externalInstallationId: String(parsed.id),
+    ...(typeof account.id === "number" || typeof account.id === "string"
+      ? { externalAccountId: String(account.id) }
+      : {}),
+    accountLogin: assertString(account.login, "GitHub installation account login is required."),
+    accountType,
+    targetType,
+    permissions: parsePermissions(parsed.permissions),
+    repositorySelection: parsed.repository_selection === "selected" ? "selected" : "all",
+    ...(toDate(parsed.suspended_at) === undefined
+      ? {}
+      : { suspendedAt: toDate(parsed.suspended_at) }),
+  };
 };
 
 const parseRepositoriesResponse = (
@@ -266,6 +318,22 @@ export class GitHubSourceIntegration {
     }
 
     return parseInstallationTokenResponse(await response.json());
+  }
+
+  public async getInstallation(externalInstallationId: string): Promise<GitHubRemoteInstallation> {
+    const appJwt = this.createAppJwt();
+    const response = await this.fetchImpl(
+      `${this.apiBaseUrl}/app/installations/${encodeURIComponent(externalInstallationId)}`,
+      {
+        headers: toAuthorizationHeaders(appJwt),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`GitHub installation request failed with status ${response.status}.`);
+    }
+
+    return parseInstallationResponse(await response.json());
   }
 
   public async listInstallationRepositories(

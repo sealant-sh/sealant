@@ -9,6 +9,17 @@ import {
 } from "@/lib/api/registry-service";
 
 import {
+  githubInstallationIdParamsSchema,
+  githubInstallationRepositoriesQuerySchema,
+  githubInstallationsQuerySchema,
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
+  listGitHubInstallationRepositoriesResponseSchema,
+  listGitHubInstallationsResponseSchema,
+  syncGitHubInstallationQuerySchema,
+  syncGitHubInstallationResponseSchema,
+} from "../../../../api/src/routes/github/github.schemas";
+import {
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
 } from "../../../../api/src/routes/packages/packages.schemas";
@@ -26,6 +37,22 @@ import { protectedProcedure, publicProcedure, router } from "./trpc";
 const registryIdSchema = z.object({
   registryId: z.string().trim().min(1),
 });
+
+const listGitHubInstallationsForSessionSchema = githubInstallationsQuerySchema.omit({
+  userId: true,
+});
+
+const listGitHubInstallationRepositoriesForSessionSchema = githubInstallationIdParamsSchema.merge(
+  githubInstallationRepositoriesQuerySchema.omit({ userId: true }),
+);
+
+const importGitHubInstallationForSessionSchema = importGitHubInstallationRequestSchema.omit({
+  userId: true,
+});
+
+const syncGitHubInstallationForSessionSchema = githubInstallationIdParamsSchema.merge(
+  syncGitHubInstallationQuerySchema.omit({ userId: true }),
+);
 
 const listOwnedSandboxesInputSchema = listSandboxesQuerySchema.omit({
   ownerUserId: true,
@@ -92,6 +119,44 @@ export const appRouter = router({
       .output(resolvePackageResponseSchema)
       .query(async ({ ctx, input }) => {
         return ctx.coreApi.packages.resolve(input);
+      }),
+  }),
+  github: router({
+    installations: protectedProcedure
+      .input(listGitHubInstallationsForSessionSchema.optional())
+      .output(listGitHubInstallationsResponseSchema)
+      .query(async ({ ctx }) => {
+        return ctx.coreApi.github.installations({
+          userId: ctx.session.user.id,
+        });
+      }),
+    installationRepositories: protectedProcedure
+      .input(listGitHubInstallationRepositoriesForSessionSchema)
+      .output(listGitHubInstallationRepositoriesResponseSchema)
+      .query(async ({ ctx, input }) => {
+        return ctx.coreApi.github.installationRepositories({
+          installationId: input.installationId,
+          userId: ctx.session.user.id,
+          ...(input.search === undefined ? {} : { search: input.search }),
+        });
+      }),
+    importInstallation: protectedProcedure
+      .input(importGitHubInstallationForSessionSchema)
+      .output(importGitHubInstallationResponseSchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.github.importInstallation({
+          externalInstallationId: input.externalInstallationId,
+          userId: ctx.session.user.id,
+        });
+      }),
+    syncInstallation: protectedProcedure
+      .input(syncGitHubInstallationForSessionSchema)
+      .output(syncGitHubInstallationResponseSchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.github.syncInstallation({
+          installationId: input.installationId,
+          userId: ctx.session.user.id,
+        });
       }),
   }),
   sandbox: router({
