@@ -8,6 +8,7 @@ import type {
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
 import { workspaceBuildJobRequestPayloadSchema } from "@sealant/db";
+import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
 import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -49,6 +50,7 @@ type SandboxRunLinkRecord = Awaited<
   ReturnType<SandboxRepository["listSandboxAttemptLinks"]>
 >[number];
 type SandboxEventType = z.infer<typeof sandboxEventSchema>["type"];
+type GitHubSourceSelection = z.infer<typeof createSandboxRequestSchema>["sourceSelection"];
 
 interface SandboxEventDraft {
   readonly sandboxId: string;
@@ -85,6 +87,171 @@ const isForeignKeyConstraintError = (error: unknown): boolean => {
 
 const isUniqueConstraintError = (error: unknown): boolean => {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
+};
+
+const gitHubUnavailableResponse = (c: Context<AppBindings>) => {
+  return c.json(
+    {
+      message: "GitHub integration is not configured.",
+    },
+    503,
+  );
+};
+
+const cloneSpecForSourceSelection = (
+  spec: WorkspaceBuildJobRequestPayload,
+): WorkspaceBuildJobRequestPayload => {
+  return structuredClone(spec);
+};
+
+const buildGitHubWorkspaceSource = (input: {
+  readonly installationRepositoryId: string;
+  readonly fullName: string;
+  readonly ref: string;
+}): NonNullable<WorkspaceBuildJobRequestPayload["source"]> => {
+  return {
+    kind: "git",
+    provider: "github",
+    url: `https://github.com/${input.fullName}.git`,
+    ref: input.ref,
+    authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
+  };
+};
+
+const resolveGitHubSourceSelection = async (
+  c: Context<AppBindings>,
+  input: {
+    readonly ownerUserId: string;
+    readonly spec: WorkspaceBuildJobRequestPayload;
+    readonly sourceSelection: GitHubSourceSelection;
+  },
+): Promise<
+  | {
+      readonly repositoryId?: string;
+      readonly spec: WorkspaceBuildJobRequestPayload;
+    }
+  | { readonly response: Response }
+> => {
+  const sourceSelection = input.sourceSelection;
+
+  if (sourceSelection === undefined) {
+    return {
+      spec: input.spec,
+    };
+  }
+
+  const gitHubInstallationRepository = c.get("gitHubInstallationRepository");
+  const gitHubInstallationRepositoryCacheRepository = c.get(
+    "gitHubInstallationRepositoryCacheRepository",
+  );
+
+  if (
+    gitHubInstallationRepository === undefined ||
+    gitHubInstallationRepositoryCacheRepository === undefined
+  ) {
+    return { response: gitHubUnavailableResponse(c) };
+  }
+
+  const installationRepositoryRecord =
+    await gitHubInstallationRepositoryCacheRepository.getInstallationRepositoryById(
+      sourceSelection.installationRepositoryId,
+    );
+
+  if (installationRepositoryRecord === undefined) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation repository not found: ${sourceSelection.installationRepositoryId}`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installationRepositoryRecord.removedAt !== null) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation repository ${sourceSelection.installationRepositoryId} is no longer available.`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installationRepositoryRecord.installationId !== sourceSelection.installationId) {
+    return {
+      response: c.json(
+        {
+          message: "GitHub source selection did not match the selected installation.",
+        },
+        400,
+      ),
+    };
+  }
+
+  const installation = await gitHubInstallationRepository.getInstallationById(
+    sourceSelection.installationId,
+  );
+
+  if (installation === undefined) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation not found: ${sourceSelection.installationId}`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installation.status !== "active") {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation ${installation.id} is not active.`,
+        },
+        403,
+      ),
+    };
+  }
+
+  const hasGrant = await gitHubInstallationRepository.userHasInstallationGrant({
+    installationId: installation.id,
+    userId: input.ownerUserId,
+  });
+
+  if (!hasGrant) {
+    return {
+      response: c.json(
+        {
+          message: `User ${input.ownerUserId} does not have access to GitHub installation ${installation.id}.`,
+        },
+        403,
+      ),
+    };
+  }
+
+  const effectiveSpec = cloneSpecForSourceSelection(input.spec);
+  const workspaceSource = buildGitHubWorkspaceSource({
+    installationRepositoryId: installationRepositoryRecord.id,
+    fullName: installationRepositoryRecord.fullName,
+    ref: sourceSelection.ref ?? installationRepositoryRecord.defaultBranch,
+  });
+
+  delete effectiveSpec.repo;
+  if (effectiveSpec.sources !== undefined) {
+    effectiveSpec.sources = {
+      ...effectiveSpec.sources,
+      workspace: undefined,
+    };
+  }
+  effectiveSpec.source = workspaceSource;
+
+  return {
+    repositoryId: installationRepositoryRecord.repositoryId,
+    spec: effectiveSpec,
+  };
 };
 
 const readIdempotencyKey = (c: Context<AppBindings>): string | undefined => {
@@ -531,10 +698,20 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     }
   }
 
+  const sourceSelectionResult = await resolveGitHubSourceSelection(c, {
+    ownerUserId: body.ownerUserId,
+    spec: body.spec,
+    sourceSelection: body.sourceSelection,
+  });
+
+  if ("response" in sourceSelectionResult) {
+    return sourceSelectionResult.response;
+  }
+
   const sandboxId = randomUUID();
   const runId = randomUUID();
   const jobId = randomUUID();
-  const packageStandardization = await standardizeRequestedPackages(c, body.spec);
+  const packageStandardization = await standardizeRequestedPackages(c, sourceSelectionResult.spec);
 
   if (packageStandardization.errors.length > 0) {
     console.error("[sandboxes.create] package standardization failed", {
@@ -570,6 +747,9 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       id: sandboxId,
       name: sandboxName,
       ownerUserId: body.ownerUserId,
+      ...(body.sourceSelection === undefined
+        ? {}
+        : { repositoryId: sourceSelectionResult.repositoryId }),
       requestedByUserId: body.ownerUserId,
       status: "queued",
     });
@@ -577,6 +757,9 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     const attempt = await sandboxAttempts.createQueuedAttempt({
       id: runId,
       ownerUserId: body.ownerUserId,
+      ...(body.sourceSelection === undefined
+        ? {}
+        : { repositoryId: sourceSelectionResult.repositoryId }),
       triggerType: "api",
       requestedByUserId: body.ownerUserId,
     });
@@ -589,7 +772,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
     await sandboxAttempts.setAttemptSnapshot({
       runId: attempt.id,
-      userSpecPayload: body.spec,
+      userSpecPayload: sourceSelectionResult.spec,
       resolvedSpecPayload: resolvedSpec,
       blueprintPayload,
     });

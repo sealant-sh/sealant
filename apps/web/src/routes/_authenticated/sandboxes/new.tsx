@@ -1,16 +1,20 @@
 import { Button } from "@sealant/ui";
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { useTRPC } from "@/lib/trpc/react";
 
 type HarnessId = "opencode" | "codex" | "claude-code";
+type SourceMode = "git" | "github";
 type TargetOs = "fedora" | "arch" | "nix";
 
 interface NewSandboxFormState {
+  readonly sourceMode: SourceMode;
   readonly workspaceSource: string;
   readonly branch: string;
+  readonly githubInstallationId: string;
+  readonly githubInstallationRepositoryId: string;
   readonly harness: HarnessId;
   readonly targetOs: TargetOs;
   readonly registryId: string;
@@ -64,6 +68,7 @@ function NewSandboxPage() {
   const [form, setForm] = useState<NewSandboxFormState>(() => {
     return createInitialFormState("default");
   });
+  const [githubRepositorySearch, setGitHubRepositorySearch] = useState("");
   const selectedRegistryId =
     normalizeRequiredValue(form.registryId).length > 0
       ? normalizeRequiredValue(form.registryId)
@@ -75,6 +80,28 @@ function NewSandboxPage() {
   const loggedPackageValidationErrorsRef = useRef<Set<string>>(new Set());
 
   const createSandboxMutation = useMutation(trpc.sandbox.create.mutationOptions());
+  const syncGitHubInstallationMutation = useMutation(
+    trpc.github.syncInstallation.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: trpc.github.installations.pathKey() });
+        await queryClient.invalidateQueries({
+          queryKey: trpc.github.installationRepositories.pathKey(),
+        });
+      },
+    }),
+  );
+  const githubInstallationsQuery = useQuery({
+    ...trpc.github.installations.queryOptions(),
+    staleTime: 1000 * 30,
+  });
+  const githubRepositoriesQuery = useQuery({
+    ...trpc.github.installationRepositories.queryOptions({
+      installationId: form.githubInstallationId,
+    }),
+    enabled:
+      form.sourceMode === "github" && normalizeRequiredValue(form.githubInstallationId).length > 0,
+    staleTime: 1000 * 30,
+  });
   const packageResolutionQueries = useQueries({
     queries: form.packages.map((pkg) => {
       return {
@@ -172,8 +199,39 @@ function NewSandboxPage() {
     }
   }, [form.targetOs, packageValidationStates]);
 
+  const githubInstallations = githubInstallationsQuery.data?.items ?? [];
+  const githubRepositories = githubRepositoriesQuery.data?.items ?? [];
+  const filteredGitHubRepositories = useMemo(() => {
+    const search = normalizeRequiredValue(githubRepositorySearch).toLowerCase();
+
+    if (search.length === 0) {
+      return githubRepositories;
+    }
+
+    return githubRepositories.filter((repository) => {
+      return (
+        repository.fullName.toLowerCase().includes(search) ||
+        repository.name.toLowerCase().includes(search)
+      );
+    });
+  }, [githubRepositories, githubRepositorySearch]);
+  const selectedGitHubRepository = useMemo(() => {
+    return githubRepositories.find(
+      (repository) => repository.installationRepositoryId === form.githubInstallationRepositoryId,
+    );
+  }, [form.githubInstallationRepositoryId, githubRepositories]);
+  const effectiveWorkspaceSourceUrl =
+    form.sourceMode === "github"
+      ? selectedGitHubRepository === undefined
+        ? "https://github.com/owner/repository.git"
+        : buildGitHubRepositoryUrl(selectedGitHubRepository.fullName)
+      : normalizeRepositoryUrl(form.workspaceSource);
+  const effectiveWorkspaceRef =
+    form.sourceMode === "github"
+      ? normalizeOptionalValue(form.branch) || selectedGitHubRepository?.defaultBranch || "main"
+      : normalizeRequiredValue(form.branch);
+
   const previewManifest = useMemo(() => {
-    const normalizedRepositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
     const normalizedSetupSteps = form.setupSteps
       .map(normalizeCommandStep)
       .filter((value) => value.length > 0);
@@ -183,10 +241,22 @@ function NewSandboxPage() {
       registryId: selectedRegistryId,
       repository: normalizeRequiredValue(form.artifactRepository),
       tag: normalizeRequiredValue(form.artifactTag),
+      ...(form.sourceMode === "github" && selectedGitHubRepository !== undefined
+        ? {
+            sourceSelection: {
+              provider: "github",
+              installationId: form.githubInstallationId,
+              installationRepositoryId: selectedGitHubRepository.installationRepositoryId,
+              ...(normalizeOptionalValue(form.branch).length === 0
+                ? {}
+                : { ref: normalizeOptionalValue(form.branch) }),
+            },
+          }
+        : {}),
       spec: {
         source: {
-          url: normalizedRepositoryUrl,
-          ref: normalizeRequiredValue(form.branch),
+          url: effectiveWorkspaceSourceUrl,
+          ref: effectiveWorkspaceRef,
         },
         harness: form.harness,
         os: form.targetOs,
@@ -203,6 +273,14 @@ function NewSandboxPage() {
     value: NewSandboxFormState[TField],
   ) => {
     setForm((current) => {
+      if (field === "githubInstallationId") {
+        return {
+          ...current,
+          githubInstallationId: value as string,
+          githubInstallationRepositoryId: "",
+        };
+      }
+
       return {
         ...current,
         [field]: value,
@@ -210,6 +288,9 @@ function NewSandboxPage() {
     });
     setFormErrors([]);
     setSubmitError(null);
+    if (field === "sourceMode" || field === "githubInstallationId") {
+      setGitHubRepositorySearch("");
+    }
   };
 
   const appendPackage = () => {
@@ -265,7 +346,6 @@ function NewSandboxPage() {
       return;
     }
 
-    const repositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
     const packages = form.packages
       .map(normalizePackageIdentifier)
       .filter((value) => value.length > 0);
@@ -277,10 +357,22 @@ function NewSandboxPage() {
         registryId: selectedRegistryId,
         repository: normalizeRequiredValue(form.artifactRepository),
         tag: normalizeRequiredValue(form.artifactTag),
+        ...(form.sourceMode === "github" && selectedGitHubRepository !== undefined
+          ? {
+              sourceSelection: {
+                provider: "github" as const,
+                installationId: form.githubInstallationId,
+                installationRepositoryId: selectedGitHubRepository.installationRepositoryId,
+                ...(normalizeOptionalValue(form.branch).length === 0
+                  ? {}
+                  : { ref: normalizeOptionalValue(form.branch) }),
+              },
+            }
+          : {}),
         spec: {
           source: {
-            url: repositoryUrl,
-            ref: normalizeRequiredValue(form.branch),
+            url: effectiveWorkspaceSourceUrl,
+            ref: effectiveWorkspaceRef,
           },
           harness: form.harness,
           os: form.targetOs,
@@ -299,6 +391,9 @@ function NewSandboxPage() {
   };
 
   const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.source.url);
+  const githubSourceReady =
+    normalizeRequiredValue(form.githubInstallationId).length > 0 &&
+    normalizeRequiredValue(form.githubInstallationRepositoryId).length > 0;
 
   return (
     <section className="overflow-hidden border border-border bg-card">
@@ -326,32 +421,267 @@ function NewSandboxPage() {
               index="01"
               title="Workspace Source"
               content={
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <LabeledField label="Repository URL">
-                    <input
-                      value={form.workspaceSource}
-                      onChange={(event) => {
-                        setField("workspaceSource", event.target.value);
-                      }}
-                      placeholder="github.com/sealant-ops/core"
-                      className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
+                <div className="space-y-5">
+                  <LabeledField label="Source Mode">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        {
+                          value: "git",
+                          title: "Raw Git URL",
+                          detail: "Paste any public or generic repository URL.",
+                        },
+                        {
+                          value: "github",
+                          title: "GitHub App",
+                          detail: "Use a granted installation and synced private repository cache.",
+                        },
+                      ].map((option) => {
+                        const isActive = form.sourceMode === option.value;
+
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => {
+                              setField("sourceMode", option.value as SourceMode);
+                            }}
+                            className={
+                              isActive
+                                ? "border border-primary bg-primary/10 px-4 py-4 text-left"
+                                : "border border-border bg-background px-4 py-4 text-left transition-colors hover:border-foreground"
+                            }
+                          >
+                            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+                              MODE
+                            </p>
+                            <p className="mt-2 font-display text-3xl leading-none text-foreground">
+                              {option.title}
+                            </p>
+                            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                              {option.detail}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </LabeledField>
 
-                  <LabeledField label="Branch / Commit">
-                    <input
-                      value={form.branch}
-                      onChange={(event) => {
-                        setField("branch", event.target.value);
-                      }}
-                      placeholder="main"
-                      className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </LabeledField>
+                  {form.sourceMode === "git" ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <LabeledField label="Repository URL">
+                        <input
+                          value={form.workspaceSource}
+                          onChange={(event) => {
+                            setField("workspaceSource", event.target.value);
+                          }}
+                          placeholder="github.com/sealant-ops/core"
+                          className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </LabeledField>
+
+                      <LabeledField label="Branch / Commit">
+                        <input
+                          value={form.branch}
+                          onChange={(event) => {
+                            setField("branch", event.target.value);
+                          }}
+                          placeholder="main"
+                          className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </LabeledField>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex flex-col gap-3 border border-border bg-background px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
+                            INSTALLATION ACCESS
+                          </p>
+                          <p className="mt-2 text-sm leading-7 text-foreground">
+                            Import an installation once, then select any synced repository it
+                            exposes.
+                          </p>
+                        </div>
+                        <a
+                          href="/github/setup"
+                          className="inline-flex h-10 items-center justify-center border border-border px-4 font-mono text-[0.62rem] tracking-[0.12em] text-foreground no-underline transition-colors hover:border-foreground"
+                        >
+                          Manage GitHub Access
+                        </a>
+                      </div>
+
+                      {githubInstallationsQuery.isLoading ? (
+                        <div className="border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                          Loading granted GitHub installations...
+                        </div>
+                      ) : githubInstallationsQuery.isError ? (
+                        <div className="border border-destructive/35 bg-destructive/10 px-4 py-4 text-sm leading-7 text-destructive">
+                          {resolveErrorMessage(githubInstallationsQuery.error)}
+                        </div>
+                      ) : githubInstallations.length === 0 ? (
+                        <div className="border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                          No granted GitHub installations are available yet. Open GitHub setup,
+                          import an installation, then come back here.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
+                            <LabeledField label="GitHub Installation">
+                              <select
+                                value={form.githubInstallationId}
+                                onChange={(event) => {
+                                  setField("githubInstallationId", event.target.value);
+                                }}
+                                className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
+                              >
+                                <option value="">Select installation</option>
+                                {githubInstallations.map((installation) => (
+                                  <option
+                                    key={installation.installationId}
+                                    value={installation.installationId}
+                                  >
+                                    {installation.accountLogin} ({installation.accountType})
+                                  </option>
+                                ))}
+                              </select>
+                            </LabeledField>
+
+                            <div className="flex items-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-11 px-4 text-[0.62rem] tracking-[0.12em]"
+                                disabled={
+                                  normalizeRequiredValue(form.githubInstallationId).length === 0 ||
+                                  syncGitHubInstallationMutation.isPending
+                                }
+                                onClick={() => {
+                                  if (
+                                    normalizeRequiredValue(form.githubInstallationId).length === 0
+                                  ) {
+                                    return;
+                                  }
+
+                                  setSubmitError(null);
+                                  syncGitHubInstallationMutation.mutate({
+                                    installationId: form.githubInstallationId,
+                                  });
+                                }}
+                              >
+                                {syncGitHubInstallationMutation.isPending
+                                  ? "Refreshing..."
+                                  : "Refresh Repos"}
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <LabeledField label="Search Synced Repositories">
+                              <input
+                                value={githubRepositorySearch}
+                                onChange={(event) => {
+                                  setGitHubRepositorySearch(event.target.value);
+                                }}
+                                placeholder="Filter by owner or repository"
+                                className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                autoComplete="off"
+                                spellCheck={false}
+                              />
+                            </LabeledField>
+
+                            <LabeledField label="Branch / Ref (Optional)">
+                              <input
+                                value={form.branch}
+                                onChange={(event) => {
+                                  setField("branch", event.target.value);
+                                }}
+                                placeholder={
+                                  selectedGitHubRepository?.defaultBranch ?? "default branch"
+                                }
+                                className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                autoComplete="off"
+                                spellCheck={false}
+                              />
+                            </LabeledField>
+                          </div>
+
+                          {syncGitHubInstallationMutation.error instanceof Error ? (
+                            <div className="border border-destructive/35 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                              {syncGitHubInstallationMutation.error.message}
+                            </div>
+                          ) : null}
+
+                          <LabeledField label="Repository Picker">
+                            <div className="border border-border bg-card">
+                              {normalizeRequiredValue(form.githubInstallationId).length === 0 ? (
+                                <div className="px-4 py-4 text-sm text-muted-foreground">
+                                  Select an installation to view its synced repositories.
+                                </div>
+                              ) : githubRepositoriesQuery.isLoading ? (
+                                <div className="px-4 py-4 text-sm text-muted-foreground">
+                                  Loading synced repositories...
+                                </div>
+                              ) : githubRepositoriesQuery.isError ? (
+                                <div className="px-4 py-4 text-sm text-destructive">
+                                  {resolveErrorMessage(githubRepositoriesQuery.error)}
+                                </div>
+                              ) : filteredGitHubRepositories.length === 0 ? (
+                                <div className="px-4 py-4 text-sm text-muted-foreground">
+                                  No synced repositories matched this filter.
+                                </div>
+                              ) : (
+                                <div className="max-h-72 overflow-auto">
+                                  {filteredGitHubRepositories.map((repository) => {
+                                    const isActive =
+                                      repository.installationRepositoryId ===
+                                      form.githubInstallationRepositoryId;
+
+                                    return (
+                                      <button
+                                        key={repository.installationRepositoryId}
+                                        type="button"
+                                        onClick={() => {
+                                          setField(
+                                            "githubInstallationRepositoryId",
+                                            repository.installationRepositoryId,
+                                          );
+                                          if (normalizeOptionalValue(form.branch).length === 0) {
+                                            setField("branch", repository.defaultBranch);
+                                          }
+                                        }}
+                                        className={
+                                          isActive
+                                            ? "grid w-full gap-2 border-b border-border bg-primary/10 px-4 py-4 text-left last:border-b-0"
+                                            : "grid w-full gap-2 border-b border-border bg-card px-4 py-4 text-left transition-colors hover:bg-muted/40 last:border-b-0"
+                                        }
+                                      >
+                                        <div className="flex items-center justify-between gap-3">
+                                          <p className="font-mono text-[0.72rem] text-foreground">
+                                            {repository.fullName}
+                                          </p>
+                                          <span className="font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+                                            {repository.isPrivate ? "PRIVATE" : "PUBLIC"}
+                                          </span>
+                                        </div>
+                                        <p className="font-mono text-[0.58rem] tracking-[0.11em] text-muted-foreground">
+                                          DEFAULT {repository.defaultBranch.toUpperCase()}
+                                          {repository.isArchived ? " // ARCHIVED" : ""}
+                                        </p>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </LabeledField>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               }
             />
@@ -730,11 +1060,15 @@ function NewSandboxPage() {
               </p>
               <div className="mt-3 space-y-2">
                 <HealthRow
-                  ok={hasValidRepositoryUrl}
+                  ok={form.sourceMode === "github" ? githubSourceReady : hasValidRepositoryUrl}
                   text={
-                    hasValidRepositoryUrl
-                      ? "Repository source validated"
-                      : "Repository source is invalid"
+                    form.sourceMode === "github"
+                      ? githubSourceReady
+                        ? "GitHub installation and repository selected"
+                        : "Select a GitHub installation and repository"
+                      : hasValidRepositoryUrl
+                        ? "Repository source validated"
+                        : "Repository source is invalid"
                   }
                 />
                 <HealthRow
@@ -864,8 +1198,11 @@ function HealthRow(props: { readonly ok: boolean; readonly text: string }) {
 
 function createInitialFormState(registryId: string): NewSandboxFormState {
   return {
+    sourceMode: "git",
     workspaceSource: "https://github.com/sealant-ops/core",
     branch: "main",
+    githubInstallationId: "",
+    githubInstallationRepositoryId: "",
     harness: "opencode",
     targetOs: "fedora",
     registryId,
@@ -879,6 +1216,10 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
 }
 
 function normalizeRequiredValue(value: string): string {
+  return value.trim();
+}
+
+function normalizeOptionalValue(value: string): string {
   return value.trim();
 }
 
@@ -912,6 +1253,10 @@ function normalizeRepositoryUrl(value: string): string {
   return `https://${trimmed}`;
 }
 
+function buildGitHubRepositoryUrl(fullName: string): string {
+  return `https://github.com/${fullName}.git`;
+}
+
 function isValidUrl(value: string): boolean {
   try {
     new URL(value);
@@ -928,13 +1273,23 @@ function validateForm(
 ): readonly string[] {
   const errors: string[] = [];
 
-  const repositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
-  if (!isValidUrl(repositoryUrl)) {
-    errors.push("Repository URL must be a valid URL.");
-  }
+  if (form.sourceMode === "git") {
+    const repositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
+    if (!isValidUrl(repositoryUrl)) {
+      errors.push("Repository URL must be a valid URL.");
+    }
 
-  if (normalizeRequiredValue(form.branch).length === 0) {
-    errors.push("Branch or commit is required.");
+    if (normalizeRequiredValue(form.branch).length === 0) {
+      errors.push("Branch or commit is required.");
+    }
+  } else {
+    if (normalizeRequiredValue(form.githubInstallationId).length === 0) {
+      errors.push("Choose a GitHub installation.");
+    }
+
+    if (normalizeRequiredValue(form.githubInstallationRepositoryId).length === 0) {
+      errors.push("Choose a GitHub repository.");
+    }
   }
 
   if (normalizeRequiredValue(registryId).length === 0) {

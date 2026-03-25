@@ -1,8 +1,12 @@
 import {
+  createGitHubInstallationRepository,
+  createGitHubInstallationRepositoryCacheRepository,
   createSandboxAttemptRepository,
   createSandboxRuntimeInstanceRepository,
   createWorkspaceBuildJobRepository,
   workspaceBuildJobRequestPayloadSchema,
+  type GitHubInstallationRepository,
+  type GitHubInstallationRepositoryCacheRepository,
   type WorkspaceBuildJobRequestPayload,
   type WorkspaceBuildJobResultPayload,
   type DatabaseClient,
@@ -13,7 +17,12 @@ import {
   type PublishedImage,
   type RuntimeAdapter,
   type RuntimeAdapterId,
+  type WorkspaceCloneAuth,
 } from "@sealant/runtime-adapters-api";
+import {
+  parseGitHubInstallationRepositoryAuthRef,
+  type GitHubSourceIntegration,
+} from "@sealant/source-integrations";
 import type {
   OciImageBuildArtifact,
   OsExecutor,
@@ -35,6 +44,7 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly defaultSshEnabled: boolean;
   readonly defaultSshListenPort: number;
   readonly registryClient: RegistryClient;
+  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
 }
 
 const createWorkerError = (code: string, message: string) => {
@@ -125,6 +135,7 @@ const launchPublishedImage = async (input: {
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
+  readonly workspaceCloneAuth?: WorkspaceCloneAuth;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.blueprint,
@@ -135,6 +146,9 @@ const launchPublishedImage = async (input: {
   return selectedAdapter.adapter.launch({
     blueprint: input.blueprint,
     publishedImage: input.publishedImage,
+    ...(input.workspaceCloneAuth === undefined
+      ? {}
+      : { workspaceCloneAuth: input.workspaceCloneAuth }),
   });
 };
 
@@ -186,6 +200,76 @@ const applyRuntimeDefaults = (
   }
 
   return workspaceBuildJobRequestPayloadSchema.parse(nextPayload);
+};
+
+const resolveWorkspaceCloneAuth = async (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly dbClient: DatabaseClient;
+  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
+}): Promise<WorkspaceCloneAuth | undefined> => {
+  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
+    input.blueprint.sources.workspace.authRef,
+  );
+
+  if (installationRepositoryId === undefined) {
+    return undefined;
+  }
+
+  if (
+    input.gitHubSourceIntegration === undefined ||
+    !input.gitHubSourceIntegration.isConfigured()
+  ) {
+    throw createWorkerError(
+      "github-integration-unavailable",
+      "GitHub source integration is not configured for GitHub-backed sandbox launches.",
+    );
+  }
+
+  const installationRepositoryCache: GitHubInstallationRepositoryCacheRepository =
+    createGitHubInstallationRepositoryCacheRepository(input.dbClient);
+  const installationRepository: GitHubInstallationRepository = createGitHubInstallationRepository(
+    input.dbClient,
+  );
+  const installationRepositoryRecord =
+    await installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId);
+
+  if (
+    installationRepositoryRecord === undefined ||
+    installationRepositoryRecord.removedAt !== null
+  ) {
+    throw createWorkerError(
+      "github-installation-repository-unavailable",
+      `GitHub installation repository '${installationRepositoryId}' is not available for clone auth resolution.`,
+    );
+  }
+
+  const installation = await installationRepository.getInstallationById(
+    installationRepositoryRecord.installationId,
+  );
+
+  if (installation === undefined) {
+    throw createWorkerError(
+      "github-installation-missing",
+      `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for clone auth.`,
+    );
+  }
+
+  if (installation.status !== "active") {
+    throw createWorkerError(
+      "github-installation-inactive",
+      `GitHub installation '${installation.id}' is not active for clone auth resolution.`,
+    );
+  }
+
+  const accessToken = await input.gitHubSourceIntegration.createInstallationAccessToken(
+    installation.externalInstallationId,
+  );
+
+  return {
+    type: "http-token",
+    username: "x-access-token",
+    token: accessToken.token,
+  };
 };
 
 export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJobOptions) => {
@@ -242,11 +326,18 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
       });
     }
 
+    const workspaceCloneAuth = await resolveWorkspaceCloneAuth({
+      blueprint,
+      dbClient: options.dbClient,
+      gitHubSourceIntegration: options.gitHubSourceIntegration,
+    });
+
     const runtimeLaunchResult = await launchPublishedImage({
       blueprint,
       runtimeAdapters: options.runtimeAdapters,
       defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
       publishedImage,
+      ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
     });
 
     if (job.runId !== null) {

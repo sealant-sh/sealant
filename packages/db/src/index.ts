@@ -8,6 +8,30 @@ export {
 export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./env.js";
 
 export {
+  createGitHubInstallationRepository,
+  type GitHubInstallationRepository,
+  type GrantGitHubInstallationToUserInput,
+  type ListGitHubInstallationsForUserInput,
+  type RevokeGitHubInstallationGrantInput,
+  type SetGitHubInstallationStatusInput,
+  type UpsertGitHubInstallationInput,
+} from "./repositories/github-installations.js";
+
+export {
+  createGitHubInstallationRepositoryCacheRepository,
+  type GitHubInstallationRepositoryCacheRepository,
+  type ListGitHubInstallationRepositoriesInput,
+  type ListGitHubRepositoriesForUserInput,
+  type UpsertGitHubInstallationRepositoryInput,
+} from "./repositories/github-installation-repositories.js";
+
+export {
+  createGitHubWebhookDeliveryRepository,
+  type CreateGitHubWebhookDeliveryInput,
+  type GitHubWebhookDeliveryRepository,
+} from "./repositories/github-webhook-deliveries.js";
+
+export {
   createIssueWorkflowRepository,
   type CreateIssueWorkflowExecutionInput,
   type CreateIssueWorkflowInput,
@@ -111,6 +135,14 @@ export {
 } from "./payloads.js";
 
 export {
+  githubAppInstallations,
+  githubInstallationAccountTypeValues,
+  githubInstallationRepositories,
+  githubInstallationRepositorySelectionValues,
+  githubInstallationStatusValues,
+  githubInstallationUserGrants,
+  githubWebhookDeliveries,
+  githubWebhookDeliveryStatusValues,
   issueWorkflowExecutionArtifactKindValues,
   issueWorkflowExecutionArtifactStorageBackendValues,
   issueWorkflowExecutionArtifacts,
@@ -147,10 +179,22 @@ export {
   type AuthSession,
   type AuthUser,
   type AuthVerification,
+  type GitHubAppInstallation,
+  type GitHubInstallationAccountType,
+  type GitHubInstallationRepository as GitHubInstallationRepositoryRecord,
+  type GitHubInstallationRepositorySelection,
+  type GitHubInstallationStatus,
+  type GitHubInstallationUserGrant,
+  type GitHubWebhookDelivery,
+  type GitHubWebhookDeliveryStatus,
   type NewAuthAccount,
   type NewAuthSession,
   type NewAuthUser,
   type NewAuthVerification,
+  type NewGitHubAppInstallation,
+  type NewGitHubInstallationRepository,
+  type NewGitHubInstallationUserGrant,
+  type NewGitHubWebhookDelivery,
   type NewIssueWorkflow,
   type NewIssueWorkflowExecution,
   type NewIssueWorkflowExecutionArtifact,

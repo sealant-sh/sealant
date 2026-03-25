@@ -43,6 +43,14 @@ export const createApp = (config: AppRuntimeConfig) => {
     c.set("registryClient", config.registryClient);
     c.set("workspaceBuildJobPublisher", config.workspaceBuildJobPublisher);
     c.set("workspaceBuildJobRepository", config.workspaceBuildJobRepository);
+    c.set("gitHubSourceIntegration", config.gitHubSourceIntegration);
+    c.set("gitHubInstallationRepository", config.gitHubInstallationRepository);
+    c.set(
+      "gitHubInstallationRepositoryCacheRepository",
+      config.gitHubInstallationRepositoryCacheRepository,
+    );
+    c.set("gitHubWebhookDeliveryRepository", config.gitHubWebhookDeliveryRepository);
+    c.set("repositoryProfileRepository", config.repositoryProfileRepository);
     c.set(
       "packageStandardizer",
       config.packageStandardizer ?? createPassthroughPackageStandardizer(),

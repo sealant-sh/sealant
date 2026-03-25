@@ -1,5 +1,16 @@
 import { messageResponseSchema } from "../../../../api/src/lib/schemas";
 import {
+  githubInstallationIdParamsSchema,
+  githubInstallationRepositoriesQuerySchema,
+  githubInstallationsQuerySchema,
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
+  listGitHubInstallationRepositoriesResponseSchema,
+  listGitHubInstallationsResponseSchema,
+  syncGitHubInstallationQuerySchema,
+  syncGitHubInstallationResponseSchema,
+} from "../../../../api/src/routes/github/github.schemas";
+import {
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
 } from "../../../../api/src/routes/packages/packages.schemas";
@@ -80,6 +91,23 @@ const parseWithSchema = <TOutput>(schema: JsonSchema<TOutput>, input: unknown): 
 };
 
 export interface CoreApiClient {
+  readonly github: {
+    importInstallation(
+      input: InferSchema<typeof importGitHubInstallationRequestSchema>,
+    ): Promise<InferSchema<typeof importGitHubInstallationResponseSchema>>;
+    installations(
+      input: InferSchema<typeof githubInstallationsQuerySchema>,
+    ): Promise<InferSchema<typeof listGitHubInstallationsResponseSchema>>;
+    installationRepositories(input: {
+      readonly installationId: string;
+      readonly userId: string;
+      readonly search?: string;
+    }): Promise<InferSchema<typeof listGitHubInstallationRepositoriesResponseSchema>>;
+    syncInstallation(input: {
+      readonly installationId: string;
+      readonly userId: string;
+    }): Promise<InferSchema<typeof syncGitHubInstallationResponseSchema>>;
+  };
   readonly packages: {
     resolve(
       input: InferSchema<typeof resolvePackageQuerySchema>,
@@ -119,6 +147,7 @@ class CoreApiClientImpl implements CoreApiClient {
 
   public readonly sandboxes: CoreApiClient["sandboxes"];
   public readonly packages: CoreApiClient["packages"];
+  public readonly github: CoreApiClient["github"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -134,6 +163,72 @@ class CoreApiClientImpl implements CoreApiClient {
     this.packages = {
       resolve: (input) => this.resolvePackage(input),
     };
+    this.github = {
+      importInstallation: (input) => this.importGitHubInstallation(input),
+      installations: (input) => this.listGitHubInstallations(input),
+      installationRepositories: (input) => this.listGitHubInstallationRepositories(input),
+      syncInstallation: (input) => this.syncGitHubInstallation(input),
+    };
+  }
+
+  private async importGitHubInstallation(
+    input: InferSchema<typeof importGitHubInstallationRequestSchema>,
+  ): Promise<InferSchema<typeof importGitHubInstallationResponseSchema>> {
+    const payload = importGitHubInstallationRequestSchema.parse(input);
+
+    return this.requestJson({
+      method: "POST",
+      path: "/v1/github/installations/import",
+      schema: importGitHubInstallationResponseSchema,
+      body: payload,
+    });
+  }
+
+  private async listGitHubInstallations(
+    input: InferSchema<typeof githubInstallationsQuerySchema>,
+  ): Promise<InferSchema<typeof listGitHubInstallationsResponseSchema>> {
+    const query = githubInstallationsQuerySchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/github/installations",
+      schema: listGitHubInstallationsResponseSchema,
+      query,
+    });
+  }
+
+  private async listGitHubInstallationRepositories(input: {
+    readonly installationId: string;
+    readonly userId: string;
+    readonly search?: string;
+  }): Promise<InferSchema<typeof listGitHubInstallationRepositoriesResponseSchema>> {
+    const params = githubInstallationIdParamsSchema.parse({ installationId: input.installationId });
+    const query = githubInstallationRepositoriesQuerySchema.parse({
+      userId: input.userId,
+      search: input.search,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/github/installations/${encodeURIComponent(params.installationId)}/repositories`,
+      schema: listGitHubInstallationRepositoriesResponseSchema,
+      query,
+    });
+  }
+
+  private async syncGitHubInstallation(input: {
+    readonly installationId: string;
+    readonly userId: string;
+  }): Promise<InferSchema<typeof syncGitHubInstallationResponseSchema>> {
+    const params = githubInstallationIdParamsSchema.parse({ installationId: input.installationId });
+    const query = syncGitHubInstallationQuerySchema.parse({ userId: input.userId });
+
+    return this.requestJson({
+      method: "POST",
+      path: `/v1/github/installations/${encodeURIComponent(params.installationId)}/sync`,
+      schema: syncGitHubInstallationResponseSchema,
+      query,
+    });
   }
 
   private async resolvePackage(

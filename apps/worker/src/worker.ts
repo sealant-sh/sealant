@@ -5,6 +5,7 @@ import {
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
 } from "@sealant/runtime-adapters-api";
+import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import { closeRabbitMqSingleton, consumeWorkspaceBuildJobs } from "@sealant/workspace-build-queue";
 
 import { createRegistryClient } from "./create-registry-client.js";
@@ -14,6 +15,11 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 export const startWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
   const registryClient = createRegistryClient(env);
+  const gitHubSourceIntegration = createGitHubSourceIntegration({
+    apiBaseUrl: env.GITHUB_API_BASE_URL,
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY,
+  });
   const executors = [
     createBuildkitOsExecutor("fedora"),
     createBuildkitOsExecutor("arch"),
@@ -45,6 +51,7 @@ export const startWorker = async (env: WorkerEnv) => {
           defaultIdleCommand: env.DEFAULT_WORKSPACE_IDLE_COMMAND,
           defaultSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
           defaultSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
+          gitHubSourceIntegration,
           registryClient,
         });
         ack();

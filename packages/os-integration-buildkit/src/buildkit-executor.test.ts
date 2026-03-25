@@ -46,6 +46,42 @@ describe("BuildkitDistroOsExecutor", () => {
     });
   });
 
+  it("includes npm when Node.js-backed harness tooling is requested on Linux distros", () => {
+    const fedoraPlan = mapBlueprintToBuildkitImagePlan(
+      normalizeUserWorkspaceSpec({
+        source: "https://github.com/example/repo.git",
+        harness: "opencode",
+        os: "fedora",
+      }),
+      "fedora",
+    );
+    const archPlan = mapBlueprintToBuildkitImagePlan(
+      normalizeUserWorkspaceSpec({
+        source: "https://github.com/example/repo.git",
+        harness: "codex",
+        os: "arch",
+      }),
+      "arch",
+    );
+
+    expect(fedoraPlan.packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "nodejs",
+          installPackages: ["nodejs", "npm"],
+        }),
+      ]),
+    );
+    expect(archPlan.packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "nodejs",
+          installPackages: ["nodejs", "npm"],
+        }),
+      ]),
+    );
+  });
+
   it("renders a build context and invokes docker build plus docker save", async () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
@@ -89,6 +125,9 @@ describe("BuildkitDistroOsExecutor", () => {
     expect(entrypoint).toContain("cat > /usr/local/bin/workspace-ssh-shell <<'EOF'");
     expect(entrypoint).toContain("ForceCommand /usr/local/bin/workspace-ssh-shell");
     expect(entrypoint).toContain('exec "$LOGIN_SHELL" -i');
+    expect(entrypoint).toContain("cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'");
+    expect(entrypoint).toContain('export GIT_ASKPASS="$REPO_GIT_ASKPASS_PATH"');
+    expect(entrypoint).toContain("cleanup_workspace_clone_auth");
     expect(entrypoint).toContain('git clone --branch "$WORKSPACE_REPO_REF"');
     expect(entrypoint).toContain("exec /bin/bash -lc 'pnpm dev'");
   });
@@ -200,7 +239,7 @@ describe("BuildkitDistroOsExecutor", () => {
         },
         {
           requestId: "nodejs",
-          installPackages: ["nodejs"],
+          installPackages: ["nodejs", "npm"],
         },
       ]),
     );

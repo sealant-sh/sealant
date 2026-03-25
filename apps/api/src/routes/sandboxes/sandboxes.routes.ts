@@ -47,6 +47,14 @@ export const createSandboxRoute = describeRoute({
         },
       },
     },
+    403: {
+      description: "User is not allowed to launch the selected GitHub repository",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
     400: {
       description: "Invalid package resolution or unsupported package request",
       content: {

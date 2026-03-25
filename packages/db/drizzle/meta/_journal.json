@@ -64,6 +64,13 @@
       "when": 1775000003000,
       "tag": "0008_sandbox_names",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1775000004000,
+      "tag": "0009_github_app_integration",
+      "breakpoints": true
     }
   ]
 }

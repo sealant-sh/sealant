@@ -2,5 +2,9 @@
   "name": "@sealant/source-integrations",
   "version": "0.0.0",
   "private": true,
-  "description": "Source-provider integrations for repository selection, ref resolution, and access flows"
+  "description": "Source-provider integrations for repository selection, ref resolution, and access flows",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
 }

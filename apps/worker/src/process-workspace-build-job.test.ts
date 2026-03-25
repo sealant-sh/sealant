@@ -1,6 +1,7 @@
 import type { DatabaseClient } from "@sealant/db";
 import type { RegistryClient } from "@sealant/registry-integration";
 import type { RuntimeAdapter } from "@sealant/runtime-adapters-api";
+import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { OsExecutor } from "@sealant/workspace-composition";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +9,8 @@ import { processWorkspaceBuildJob } from "./process-workspace-build-job.js";
 
 vi.mock("@sealant/db", () => {
   return {
+    createGitHubInstallationRepository: vi.fn(),
+    createGitHubInstallationRepositoryCacheRepository: vi.fn(),
     createSandboxAttemptRepository: vi.fn(),
     createSandboxRuntimeInstanceRepository: vi.fn(),
     createWorkspaceBuildJobRepository: vi.fn(),
@@ -18,6 +21,8 @@ vi.mock("@sealant/db", () => {
 });
 
 const {
+  createGitHubInstallationRepository,
+  createGitHubInstallationRepositoryCacheRepository,
   createSandboxAttemptRepository,
   createSandboxRuntimeInstanceRepository,
   createWorkspaceBuildJobRepository,
@@ -35,6 +40,79 @@ const createSandboxRuntimeInstanceRepositoryStub = () => {
   return {
     upsertRuntimeInstance: vi.fn(async () => null),
   };
+};
+
+const createGitHubInstallationRepositoryStub = () => {
+  return {
+    getInstallationById: vi.fn(async (installationId: string) => {
+      if (installationId !== "gh_installation_1") {
+        return undefined;
+      }
+
+      return {
+        id: "gh_installation_1",
+        provider: "github",
+        externalInstallationId: "1001",
+        externalAccountId: "2001",
+        accountLogin: "sealant-ops",
+        accountType: "organization",
+        targetType: "organization",
+        status: "active",
+        permissions: { contents: "read", metadata: "read" },
+        repositorySelection: "all",
+        installedAt: new Date("2026-03-20T12:00:00.000Z"),
+        suspendedAt: null,
+        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+        createdAt: new Date("2026-03-20T12:00:00.000Z"),
+        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+      };
+    }),
+  };
+};
+
+const createGitHubInstallationRepositoryCacheStub = () => {
+  return {
+    getInstallationRepositoryById: vi.fn(async (installationRepositoryId: string) => {
+      if (installationRepositoryId !== "gh_installation_repo_1") {
+        return undefined;
+      }
+
+      return {
+        id: "gh_installation_repo_1",
+        installationId: "gh_installation_1",
+        repositoryId: "repo_core",
+        externalRepositoryId: "3001",
+        owner: "sealant-ops",
+        name: "core",
+        fullName: "sealant-ops/core",
+        defaultBranch: "main",
+        isPrivate: true,
+        isArchived: false,
+        pushedAt: null,
+        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+        createdAt: new Date("2026-03-20T12:00:00.000Z"),
+        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+        removedAt: null,
+      };
+    }),
+  };
+};
+
+const createGitHubSourceIntegrationStub = (): GitHubSourceIntegration => {
+  return {
+    isConfigured: () => true,
+    createAppJwt: () => "jwt",
+    isWebhookVerificationConfigured: () => false,
+    verifyWebhookSignature: () => false,
+    createInstallationAccessToken: vi.fn(async () => ({
+      token: "github-installation-token",
+      expiresAt: new Date("2026-03-26T12:00:00.000Z"),
+    })),
+    getInstallation: vi.fn(async () => {
+      throw new Error("not implemented");
+    }),
+    listInstallationRepositories: vi.fn(async () => []),
+  } as unknown as GitHubSourceIntegration;
 };
 
 const createRuntimeAdapterStub = (
@@ -59,6 +137,104 @@ const createRuntimeAdapterStub = (
 };
 
 describe("processWorkspaceBuildJob", () => {
+  it("mints GitHub installation token auth right before runtime launch", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_github_runtime_auth",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: {
+            kind: "git",
+            provider: "github",
+            url: "https://github.com/sealant-ops/core.git",
+            ref: "main",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+          },
+          harness: "opencode",
+          os: "nix",
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
+    vi.mocked(createGitHubInstallationRepository).mockReturnValue(
+      createGitHubInstallationRepositoryStub() as never,
+    );
+    vi.mocked(createGitHubInstallationRepositoryCacheRepository).mockReturnValue(
+      createGitHubInstallationRepositoryCacheStub() as never,
+    );
+
+    const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+    const gitHubSourceIntegration = createGitHubSourceIntegrationStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    await processWorkspaceBuildJob({
+      jobId: "job_github_runtime_auth",
+      workerId: "worker-test",
+      leaseDurationMs: 60000,
+      dbClient: {} as DatabaseClient,
+      executors: [executor],
+      runtimeAdapters: [runtimeAdapter],
+      defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
+      gitHubSourceIntegration,
+      registryClient,
+    });
+
+    expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
+    expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceCloneAuth: {
+          type: "http-token",
+          username: "x-access-token",
+          token: "github-installation-token",
+        },
+      }),
+    );
+  });
+
   it("applies idle startup and SSH defaults when spec omits them", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({

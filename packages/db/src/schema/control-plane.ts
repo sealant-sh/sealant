@@ -121,6 +121,24 @@ export type IssueWorkflowExecutionPullRequestLinkRelation =
 export const issuePullRequestLinkRelationValues = ["fixes", "relates_to"] as const;
 export type IssuePullRequestLinkRelation = (typeof issuePullRequestLinkRelationValues)[number];
 
+export const githubInstallationAccountTypeValues = ["organization", "user"] as const;
+export type GitHubInstallationAccountType = (typeof githubInstallationAccountTypeValues)[number];
+
+export const githubInstallationStatusValues = ["active", "suspended", "deleted"] as const;
+export type GitHubInstallationStatus = (typeof githubInstallationStatusValues)[number];
+
+export const githubInstallationRepositorySelectionValues = ["all", "selected"] as const;
+export type GitHubInstallationRepositorySelection =
+  (typeof githubInstallationRepositorySelectionValues)[number];
+
+export const githubWebhookDeliveryStatusValues = [
+  "received",
+  "processed",
+  "failed",
+  "ignored",
+] as const;
+export type GitHubWebhookDeliveryStatus = (typeof githubWebhookDeliveryStatusValues)[number];
+
 export const repositories = sqliteTable(
   "repositories",
   {
@@ -146,6 +164,144 @@ export const repositories = sqliteTable(
     uniqueIndex("repositories_provider_external_id_idx").on(table.provider, table.externalId),
     index("repositories_owner_name_idx").on(table.owner, table.name),
     index("repositories_last_synced_at_idx").on(table.lastSyncedAt),
+  ],
+);
+
+export const githubAppInstallations = sqliteTable(
+  "github_app_installations",
+  {
+    id: text().primaryKey(),
+    provider: text({ enum: sourceProviderValues }).notNull().default("github"),
+    externalInstallationId: text("external_installation_id").notNull(),
+    externalAccountId: text("external_account_id"),
+    accountLogin: text("account_login").notNull(),
+    accountType: text("account_type", { enum: githubInstallationAccountTypeValues }).notNull(),
+    targetType: text("target_type", { enum: githubInstallationAccountTypeValues }),
+    status: text({ enum: githubInstallationStatusValues }).notNull().default("active"),
+    permissions: text({ mode: "json" })
+      .$type<Record<string, string>>()
+      .notNull()
+      .$defaultFn(() => ({})),
+    repositorySelection: text("repository_selection", {
+      enum: githubInstallationRepositorySelectionValues,
+    })
+      .notNull()
+      .default("all"),
+    installedAt: integer("installed_at", { mode: "timestamp_ms" }),
+    suspendedAt: integer("suspended_at", { mode: "timestamp_ms" }),
+    lastSyncedAt: integer("last_synced_at", { mode: "timestamp_ms" }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("github_app_installations_external_installation_id_idx").on(
+      table.externalInstallationId,
+    ),
+    index("github_app_installations_account_login_idx").on(table.accountLogin),
+    index("github_app_installations_status_idx").on(table.status),
+    index("github_app_installations_last_synced_at_idx").on(table.lastSyncedAt),
+  ],
+);
+
+export const githubInstallationRepositories = sqliteTable(
+  "github_installation_repositories",
+  {
+    id: text().primaryKey(),
+    installationId: text("installation_id")
+      .notNull()
+      .references(() => githubAppInstallations.id, { onDelete: "cascade" }),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    externalRepositoryId: text("external_repository_id").notNull(),
+    owner: text().notNull(),
+    name: text().notNull(),
+    fullName: text("full_name").notNull(),
+    defaultBranch: text("default_branch").notNull().default("main"),
+    isPrivate: integer("is_private", { mode: "boolean" }).notNull().default(true),
+    isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
+    pushedAt: integer("pushed_at", { mode: "timestamp_ms" }),
+    lastSyncedAt: integer("last_synced_at", { mode: "timestamp_ms" }),
+    createdAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer({ mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    removedAt: integer("removed_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    uniqueIndex("github_installation_repositories_installation_external_repo_idx").on(
+      table.installationId,
+      table.externalRepositoryId,
+    ),
+    uniqueIndex("github_installation_repositories_installation_repository_id_idx").on(
+      table.installationId,
+      table.repositoryId,
+    ),
+    index("github_installation_repositories_full_name_idx").on(table.fullName),
+    index("github_installation_repositories_removed_at_idx").on(table.removedAt),
+    index("github_installation_repositories_last_synced_at_idx").on(table.lastSyncedAt),
+  ],
+);
+
+export const githubInstallationUserGrants = sqliteTable(
+  "github_installation_user_grants",
+  {
+    installationId: text("installation_id")
+      .notNull()
+      .references(() => githubAppInstallations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    grantedByUserId: text("granted_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    grantedAt: integer("granted_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.installationId, table.userId] }),
+    index("github_installation_user_grants_user_id_revoked_at_idx").on(
+      table.userId,
+      table.revokedAt,
+    ),
+    index("github_installation_user_grants_installation_id_revoked_at_idx").on(
+      table.installationId,
+      table.revokedAt,
+    ),
+  ],
+);
+
+export const githubWebhookDeliveries = sqliteTable(
+  "github_webhook_deliveries",
+  {
+    id: text().primaryKey(),
+    deliveryId: text("delivery_id").notNull(),
+    eventType: text("event_type").notNull(),
+    action: text(),
+    installationExternalId: text("installation_external_id"),
+    payload: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    receivedAt: integer("received_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    processedAt: integer("processed_at", { mode: "timestamp_ms" }),
+    status: text({ enum: githubWebhookDeliveryStatusValues }).notNull().default("received"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [
+    uniqueIndex("github_webhook_deliveries_delivery_id_idx").on(table.deliveryId),
+    index("github_webhook_deliveries_event_type_received_at_idx").on(
+      table.eventType,
+      table.receivedAt,
+    ),
+    index("github_webhook_deliveries_status_received_at_idx").on(table.status, table.receivedAt),
   ],
 );
 
@@ -991,6 +1147,18 @@ export const issuePullRequestLinks = sqliteTable(
 
 export type Repository = typeof repositories.$inferSelect;
 export type NewRepository = typeof repositories.$inferInsert;
+
+export type GitHubAppInstallation = typeof githubAppInstallations.$inferSelect;
+export type NewGitHubAppInstallation = typeof githubAppInstallations.$inferInsert;
+
+export type GitHubInstallationRepository = typeof githubInstallationRepositories.$inferSelect;
+export type NewGitHubInstallationRepository = typeof githubInstallationRepositories.$inferInsert;
+
+export type GitHubInstallationUserGrant = typeof githubInstallationUserGrants.$inferSelect;
+export type NewGitHubInstallationUserGrant = typeof githubInstallationUserGrants.$inferInsert;
+
+export type GitHubWebhookDelivery = typeof githubWebhookDeliveries.$inferSelect;
+export type NewGitHubWebhookDelivery = typeof githubWebhookDeliveries.$inferInsert;
 
 export type Profile = typeof profiles.$inferSelect;
 export type NewProfile = typeof profiles.$inferInsert;

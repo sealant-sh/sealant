@@ -11,12 +11,20 @@ export const sandboxIdParamsSchema = z.object({
   sandboxId: z.string().trim().min(1),
 });
 
+export const githubSandboxSourceSelectionSchema = z.strictObject({
+  provider: z.literal("github"),
+  installationId: z.string().trim().min(1),
+  installationRepositoryId: z.string().trim().min(1),
+  ref: z.string().trim().min(1).optional(),
+});
+
 export const createSandboxRequestSchema = z.object({
   ownerUserId: z.string().trim().min(1),
   registryId: z.string().trim().min(1),
   repository: z.string().trim().min(1),
   tag: z.string().trim().min(1),
   name: z.string().trim().min(1).max(120).optional(),
+  sourceSelection: githubSandboxSourceSelectionSchema.optional(),
   spec: workspaceBuildJobRequestPayloadSchema,
 });
 
