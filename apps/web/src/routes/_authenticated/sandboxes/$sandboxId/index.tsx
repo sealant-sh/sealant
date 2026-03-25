@@ -517,19 +517,55 @@ function SandboxSummaryPage() {
                 Spec details are not available for this sandbox.
               </p>
             ) : (
-              <div className="mt-5 grid gap-px border border-border bg-border sm:grid-cols-2">
-                <RuntimeCell label="Repository" value={workspaceSpecDetails.repositoryUrl} />
-                <RuntimeCell label="Branch" value={workspaceSpecDetails.branch} />
-                <RuntimeCell label="Provider" value={workspaceSpecDetails.provider} />
-                <RuntimeCell label="Harness" value={workspaceSpecDetails.harness} />
-                <RuntimeCell label="Runtime target" value={workspaceSpecDetails.runtimeTarget} />
-                <RuntimeCell label="OS target" value={workspaceSpecDetails.osTarget} />
-                <RuntimeCell
-                  label="Working directory"
-                  value={workspaceSpecDetails.workingDirectory}
-                />
-                <RuntimeCell label="SSH" value={workspaceSpecDetails.ssh} />
-              </div>
+              <>
+                <div className="mt-5 grid gap-px border border-border bg-border sm:grid-cols-2">
+                  <RuntimeCell
+                    label="Repository"
+                    value={
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="break-all">{workspaceSpecDetails.repositoryUrl}</span>
+                        {workspaceSpecDetails.isGitHubSource ? (
+                          <Badge className="rounded-none border border-border bg-card font-mono text-[0.56rem] tracking-[0.11em] text-foreground">
+                            GITHUB
+                          </Badge>
+                        ) : null}
+                      </span>
+                    }
+                  />
+                  <RuntimeCell label="Branch" value={workspaceSpecDetails.branch} />
+                  <RuntimeCell label="Provider" value={workspaceSpecDetails.provider} />
+                  <RuntimeCell label="Harness" value={workspaceSpecDetails.harness} />
+                  <RuntimeCell label="Runtime target" value={workspaceSpecDetails.runtimeTarget} />
+                  <RuntimeCell label="OS target" value={workspaceSpecDetails.osTarget} />
+                  <RuntimeCell
+                    label="Working directory"
+                    value={workspaceSpecDetails.workingDirectory}
+                  />
+                  <RuntimeCell label="SSH" value={workspaceSpecDetails.ssh} />
+                </div>
+
+                <div className="mt-5 border border-border px-4 py-4">
+                  <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
+                    Selected packages
+                  </p>
+                  {workspaceSpecDetails.selectedPackages.length === 0 ? (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      No packages selected during sandbox creation.
+                    </p>
+                  ) : (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {workspaceSpecDetails.selectedPackages.map((pkg) => (
+                        <span
+                          key={pkg}
+                          className="inline-flex h-8 items-center border border-border bg-card px-2.5 font-mono text-[0.62rem] tracking-[0.1em] text-foreground"
+                        >
+                          {pkg}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </section>
         </div>
@@ -595,7 +631,7 @@ function MetricCell({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function RuntimeCell({ label, value }: { label: string; value: string }) {
+function RuntimeCell({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="bg-card px-4 py-4">
       <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">{label}</p>
@@ -666,15 +702,21 @@ function buildSshCommand(endpoint: string | undefined): string | null {
 interface WorkspaceSpecDetails {
   readonly repositoryUrl: string;
   readonly branch: string;
+  readonly isGitHubSource: boolean;
   readonly provider: string;
   readonly harness: string;
   readonly runtimeTarget: string;
   readonly osTarget: string;
   readonly workingDirectory: string;
   readonly ssh: string;
+  readonly selectedPackages: readonly string[];
 }
 
 function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDetails | null {
+  const workspaceSource = resolveWorkspaceSourceReference(sandbox.spec);
+  const isGitHubSource = resolveIsGitHubSource(workspaceSource);
+  const selectedPackages = sandbox.spec === undefined ? [] : resolveSelectedPackages(sandbox.spec);
+
   if (sandbox.blueprint !== undefined) {
     const ssh = resolveSshState({
       spec: sandbox.spec,
@@ -684,12 +726,14 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     return {
       repositoryUrl: sandbox.blueprint.sources.workspace.url,
       branch: sandbox.blueprint.sources.workspace.ref,
+      isGitHubSource,
       provider: sandbox.blueprint.sources.workspace.provider,
       harness: sandbox.blueprint.harness.id,
       runtimeTarget: sandbox.blueprint.target.runtime.family,
       osTarget: sandbox.blueprint.target.os.family,
       workingDirectory: sandbox.blueprint.runtime.workingDirectory,
       ssh,
+      selectedPackages,
     };
   }
 
@@ -699,7 +743,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     return null;
   }
 
-  const source = spec.sources?.workspace ?? spec.source ?? spec.repo;
+  const source = workspaceSource;
   const harness = typeof spec.harness === "string" ? spec.harness : spec.harness.id;
   const osTarget = resolveOsTarget(spec);
   const runtimeTarget = resolveRuntimeTarget(spec);
@@ -710,12 +754,14 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     return {
       repositoryUrl: "unknown",
       branch: "not specified",
+      isGitHubSource,
       provider: "unknown",
       harness,
       runtimeTarget,
       osTarget,
       workingDirectory,
       ssh,
+      selectedPackages,
     };
   }
 
@@ -723,25 +769,84 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     return {
       repositoryUrl: source,
       branch: "not specified",
+      isGitHubSource,
       provider: inferSourceProvider(source),
       harness,
       runtimeTarget,
       osTarget,
       workingDirectory,
       ssh,
+      selectedPackages,
     };
   }
 
   return {
     repositoryUrl: source.url,
     branch: source.ref ?? "not specified",
+    isGitHubSource,
     provider: source.provider ?? inferSourceProvider(source.url),
     harness,
     runtimeTarget,
     osTarget,
     workingDirectory,
     ssh,
+    selectedPackages,
   };
+}
+
+function resolveWorkspaceSourceReference(
+  spec: WorkspaceBuildJobRequestPayload | undefined,
+): WorkspaceBuildJobRequestPayload["source"] | WorkspaceBuildJobRequestPayload["repo"] | undefined {
+  return spec?.sources?.workspace ?? spec?.source ?? spec?.repo;
+}
+
+function resolveIsGitHubSource(
+  source:
+    | WorkspaceBuildJobRequestPayload["source"]
+    | WorkspaceBuildJobRequestPayload["repo"]
+    | undefined,
+): boolean {
+  return (
+    source !== undefined &&
+    typeof source !== "string" &&
+    typeof source.authRef === "string" &&
+    source.authRef.startsWith("github-installation-repository:")
+  );
+}
+
+function resolveSelectedPackages(spec: WorkspaceBuildJobRequestPayload): readonly string[] {
+  const packages = spec.tooling?.packages ?? spec.packages ?? [];
+  const selectedPackages = new Set<string>();
+
+  for (const pkg of packages) {
+    if (typeof pkg === "string") {
+      const packageId = pkg.trim();
+
+      if (packageId.length > 0) {
+        selectedPackages.add(packageId);
+      }
+
+      continue;
+    }
+
+    const packageId = pkg.id.trim();
+
+    if (packageId.length === 0) {
+      continue;
+    }
+
+    if (pkg.version === undefined) {
+      selectedPackages.add(packageId);
+      continue;
+    }
+
+    const packageVersion = pkg.version.trim();
+    selectedPackages.add(
+      packageVersion.length === 0 ? packageId : `${packageId}@${packageVersion}`,
+    );
+  }
+
+  return [...selectedPackages];
 }
 
 function resolveOsTarget(spec: WorkspaceBuildJobRequestPayload): string {
