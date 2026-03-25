@@ -613,9 +613,6 @@ function getSidebarGroups({
         label: "Sandbox Navigation",
         links: [
           { href: sandboxBase, label: "Summary", exact: true },
-          { href: `${sandboxBase}/diff`, label: "Diff", exact: true },
-          { href: `${sandboxBase}/validation`, label: "Validation", exact: true },
-          { href: `${sandboxBase}/trace`, label: "Trace", exact: true },
           { href: `${sandboxBase}/spec`, label: "Spec", exact: true },
         ],
       },

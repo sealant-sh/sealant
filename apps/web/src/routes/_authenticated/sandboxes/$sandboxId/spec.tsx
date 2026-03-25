@@ -33,25 +33,21 @@ function SandboxSpecPage() {
     <SandboxDetailSection
       sandbox={sandbox}
       section="Spec"
-      description="Read the applied sandbox specification so the team can verify environment, package, and runtime intent."
+      description="Inspect the exact sandbox spec payload submitted during creation."
     >
-      <div className="border border-border bg-muted/20 p-4">
-        <pre className="overflow-x-auto font-mono text-[0.68rem] leading-6 text-foreground">
-          {`sandboxId: ${sandbox.sandboxId}
-repo: ${sandbox.repository ?? "unknown"}
-tag: ${sandbox.tag ?? "unknown"}
-runtime:
- node: "22"
- packageManager: "pnpm"
-checks:
-  - lint
-  - typecheck
-  - validation
-
-rawSpec:
-${JSON.stringify(sandbox.spec ?? {}, null, 2)}`}
-        </pre>
-      </div>
+      {sandbox.spec === undefined ? (
+        <div className="border border-border px-4 py-4">
+          <p className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+            Spec payload is not available for this sandbox.
+          </p>
+        </div>
+      ) : (
+        <div className="border border-border bg-muted/20 p-4">
+          <pre className="overflow-x-auto font-mono text-[0.68rem] leading-6 text-foreground">
+            {JSON.stringify(sandbox.spec, null, 2)}
+          </pre>
+        </div>
+      )}
     </SandboxDetailSection>
   );
 }
