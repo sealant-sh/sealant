@@ -8,16 +8,18 @@ import {
   type ReactNode,
 } from "react";
 
-export type UserTheme = "light" | "dark" | "system";
+import {
+  accentStorageKey,
+  defaultAccent,
+  getAccentForeground,
+  isUserTheme,
+  resolveAccent,
+  themeStorageKey,
+  type UserTheme,
+} from "@/lib/theme/appearance";
+
+export type { UserTheme };
 export type ResolvedTheme = "light" | "dark";
-
-const themeStorageKey = "ui-theme";
-
-const userThemes: readonly UserTheme[] = ["light", "dark", "system"] as const;
-
-function isUserTheme(value: string): value is UserTheme {
-  return userThemes.includes(value as UserTheme);
-}
 
 function getSystemTheme(): ResolvedTheme {
   if (typeof window === "undefined") {
@@ -25,6 +27,16 @@ function getSystemTheme(): ResolvedTheme {
   }
 
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyAccentToDocument(accent: string): string {
+  const root = document.documentElement;
+  const resolvedAccent = resolveAccent(accent);
+
+  root.style.setProperty("--sw-accent", resolvedAccent);
+  root.style.setProperty("--sw-accent-foreground", getAccentForeground(resolvedAccent));
+
+  return resolvedAccent;
 }
 
 function applyThemeToDocument(theme: UserTheme): ResolvedTheme {
@@ -46,7 +58,10 @@ function applyThemeToDocument(theme: UserTheme): ResolvedTheme {
 type ThemeContextValue = {
   userTheme: UserTheme;
   resolvedTheme: ResolvedTheme;
+  accent: string;
   setTheme: (theme: UserTheme) => void;
+  setAccent: (accent: string) => void;
+  resetAccent: () => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -54,12 +69,16 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [userTheme, setUserTheme] = useState<UserTheme>("system");
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
+  const [accent, setAccentState] = useState(defaultAccent);
 
   useEffect(() => {
     const storedTheme = localStorage.getItem(themeStorageKey);
     const initialTheme = storedTheme !== null && isUserTheme(storedTheme) ? storedTheme : "system";
+    const initialAccent = resolveAccent(localStorage.getItem(accentStorageKey));
 
     setUserTheme(initialTheme);
+    setAccentState(initialAccent);
+    applyAccentToDocument(initialAccent);
     setResolvedTheme(applyThemeToDocument(initialTheme));
   }, []);
 
@@ -85,9 +104,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setResolvedTheme(applyThemeToDocument(theme));
   }, []);
 
+  const setAccent = useCallback((accentValue: string) => {
+    const nextAccent = resolveAccent(accentValue);
+
+    setAccentState(nextAccent);
+    localStorage.setItem(accentStorageKey, nextAccent);
+    applyAccentToDocument(nextAccent);
+  }, []);
+
+  const resetAccent = useCallback(() => {
+    setAccentState(defaultAccent);
+    localStorage.removeItem(accentStorageKey);
+    applyAccentToDocument(defaultAccent);
+  }, []);
+
   const contextValue = useMemo(
-    () => ({ userTheme, resolvedTheme, setTheme }),
-    [resolvedTheme, setTheme, userTheme],
+    () => ({ accent, resetAccent, resolvedTheme, setAccent, setTheme, userTheme }),
+    [accent, resetAccent, resolvedTheme, setAccent, setTheme, userTheme],
   );
 
   return <ThemeContext value={contextValue}>{children}</ThemeContext>;
