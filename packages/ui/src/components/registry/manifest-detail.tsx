@@ -1,9 +1,8 @@
+import { Badge } from "@sealant/ui/components/ui/badge";
+import { Button } from "@sealant/ui/components/ui/button";
+import { cn } from "@sealant/ui/lib/utils";
 import { Copy, Check } from "lucide-react";
 import * as React from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 export interface OciLayer {
   mediaType: string;

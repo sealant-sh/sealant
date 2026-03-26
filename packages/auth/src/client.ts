@@ -5,7 +5,5 @@ export interface CreateSealantAuthClientOptions {
 }
 
 export const createSealantAuthClient = (options: CreateSealantAuthClientOptions = {}) => {
-  return createAuthClient({
-    ...(options.baseURL === undefined ? {} : { baseURL: options.baseURL }),
-  });
+  return createAuthClient(options.baseURL === undefined ? {} : { baseURL: options.baseURL });
 };

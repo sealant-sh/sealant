@@ -1,7 +1,6 @@
-import { Link } from "@tanstack/react-router";
+import { cn } from "@sealant/ui/lib/utils";
+import { Link, linkOptions } from "@tanstack/react-router";
 import * as React from "react";
-
-import { cn } from "@/lib/utils";
 
 export type SystemStatus = "online" | "degraded" | "offline";
 
@@ -54,14 +53,16 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
 }
 
 interface TopNavLinkProps {
-  to: string;
+  to: "/registry";
   children: React.ReactNode;
 }
 
 function TopNavLink({ to, children }: TopNavLinkProps) {
+  const options = linkOptions({ to });
+
   return (
     <Link
-      to={to}
+      {...options}
       className="px-3 py-1.5 font-semibold text-[0.68rem] tracking-[0.12em] uppercase text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
       activeProps={{
         className:

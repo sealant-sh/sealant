@@ -1,7 +1,6 @@
+import { cn } from "@sealant/ui/lib/utils";
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
-
-import { cn } from "@/lib/utils";
 
 const THEMES = { light: "", dark: "" } as const;
 
@@ -63,7 +62,9 @@ function ChartContainer({
 }
 
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
-  const colorConfig = Object.entries(config).filter(([, config]) => config.theme || config.color);
+  const colorConfig = Object.entries(config).filter(([, itemConfig]) => {
+    return itemConfig.theme || itemConfig.color;
+  });
 
   if (!colorConfig.length) {
     return null;

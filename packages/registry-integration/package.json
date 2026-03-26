@@ -8,6 +8,11 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "vitest run"
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

@@ -95,6 +95,10 @@ importers:
       zod-openapi:
         specifier: ^4.2.4
         version: 4.2.4(zod@3.25.76)
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   apps/docs:
     dependencies:
@@ -153,6 +157,9 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
       '@tailwindcss/typography':
         specifier: ^0.5.16
         version: 0.5.19(tailwindcss@4.2.2)
@@ -193,9 +200,17 @@ importers:
         specifier: ^3.0.5
         version: 3.2.4(@types/node@22.19.15)(jiti@2.6.1)(jsdom@28.1.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.12.13(@types/node@22.19.15)(typescript@5.9.3))(tsx@4.21.0)
 
-  apps/electron: {}
+  apps/electron:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
-  apps/marketing: {}
+  apps/marketing:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   apps/web:
     dependencies:
@@ -272,6 +287,9 @@ importers:
         specifier: ^4.1.12
         version: 4.3.6
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
       '@tailwindcss/typography':
         specifier: ^0.5.16
         version: 0.5.19(tailwindcss@4.2.2)
@@ -338,8 +356,16 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
-  packages/ai-harness-integrations: {}
+  packages/ai-harness-integrations:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/auth:
     dependencies:
@@ -352,6 +378,10 @@ importers:
       zod:
         specifier: ^4.1.12
         version: 4.3.6
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/db:
     dependencies:
@@ -371,6 +401,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
       drizzle-kit:
         specifier: ^0.31.5
         version: 0.31.10
@@ -386,22 +419,42 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/package-standardization:
     dependencies:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
-  packages/registry-integration: {}
+  packages/registry-integration:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/runtime-adapters-api:
     dependencies:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
-  packages/source-integrations: {}
+  packages/source-integrations:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/ui:
     dependencies:
@@ -469,6 +522,9 @@ importers:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.14
@@ -488,6 +544,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
       '@types/amqplib':
         specifier: ^0.10.7
         version: 0.10.8
@@ -497,6 +556,12 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+
+  tooling/typescript: {}
 
 packages:
 

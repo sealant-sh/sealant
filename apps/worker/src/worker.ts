@@ -17,8 +17,8 @@ export const startWorker = async (env: WorkerEnv) => {
   const registryClient = createRegistryClient(env);
   const gitHubSourceIntegration = createGitHubSourceIntegration({
     apiBaseUrl: env.GITHUB_API_BASE_URL,
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
+    ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
+    ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
   });
   const executors = [
     createBuildkitOsExecutor("fedora"),

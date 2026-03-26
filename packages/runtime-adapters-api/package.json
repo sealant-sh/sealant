@@ -8,9 +8,14 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "vitest run"
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

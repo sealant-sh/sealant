@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "test": "vitest run"
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@sealant/db": "workspace:*",
@@ -17,5 +19,8 @@
     "@sealant/workspace-build-queue": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

@@ -62,10 +62,12 @@ const app = createApiApp({
   workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
   packageStandardizer,
   gitHubSourceIntegration: createGitHubSourceIntegration({
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
-    webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET,
     apiBaseUrl: env.GITHUB_API_BASE_URL,
+    ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
+    ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
+    ...(env.GITHUB_APP_WEBHOOK_SECRET === undefined
+      ? {}
+      : { webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET }),
   }),
   gitHubInstallationRepository,
   gitHubInstallationRepositoryCacheRepository,

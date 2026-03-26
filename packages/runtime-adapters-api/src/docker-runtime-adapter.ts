@@ -127,9 +127,10 @@ const loadRuntimeCatalogFromDockerSocket = async (
     info !== undefined && typeof info.Runtimes === "object" && info.Runtimes !== null
       ? new Set(Object.keys(info.Runtimes as Record<string, unknown>))
       : new Set<string>();
+  const defaultRuntime = typeof info?.DefaultRuntime === "string" ? info.DefaultRuntime : undefined;
 
   return {
-    defaultRuntime: typeof info?.DefaultRuntime === "string" ? info.DefaultRuntime : undefined,
+    ...(defaultRuntime === undefined ? {} : { defaultRuntime }),
     runtimes,
   };
 };
@@ -235,7 +236,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
     const catalog = await this.runtimeCatalogLoader();
-    const availableRuntimes = [...catalog.runtimes].sort();
+    const availableRuntimes = [...catalog.runtimes].toSorted();
 
     if (catalog.runtimes.has(runtime)) {
       return;

@@ -1,25 +1,24 @@
-import { createFormHook, createFormHookContexts } from "@tanstack/react-form";
-import * as React from "react";
-
-import { Checkbox } from "@/components/ui/checkbox";
+import { Checkbox } from "@sealant/ui/components/ui/checkbox";
 import {
   Field,
   FieldContent,
   FieldDescription,
   FieldError,
   FieldLabel,
-} from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+} from "@sealant/ui/components/ui/field";
+import { Input } from "@sealant/ui/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
+} from "@sealant/ui/components/ui/select";
+import { Switch } from "@sealant/ui/components/ui/switch";
+import { Textarea } from "@sealant/ui/components/ui/textarea";
+import { cn } from "@sealant/ui/lib/utils";
+import { createFormHook, createFormHookContexts } from "@tanstack/react-form";
+import * as React from "react";
 
 export type SelectFieldOption = {
   value: string;

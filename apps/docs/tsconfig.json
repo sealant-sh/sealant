@@ -1,8 +1,7 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "@sealant/typescript/web.json",
   "include": ["**/*.ts", "**/*.tsx"],
   "compilerOptions": {
-    "baseUrl": ".",
     "target": "ES2022",
     "jsx": "react-jsx",
     "module": "ESNext",

@@ -1,10 +1,9 @@
+import { Badge } from "@sealant/ui/components/ui/badge";
+import { Button } from "@sealant/ui/components/ui/button";
+import { cn } from "@sealant/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Lock, LockOpen } from "lucide-react";
 import * as React from "react";
-
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 
 export interface RegistryCardProps {
   id: string;

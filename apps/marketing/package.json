@@ -2,5 +2,12 @@
   "name": "@sealant/marketing",
   "version": "0.0.0",
   "private": true,
-  "description": "Public-facing website and launch surfaces"
+  "description": "Public-facing website and launch surfaces",
+  "scripts": {
+    "lint": "oxlint .",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
+  }
 }

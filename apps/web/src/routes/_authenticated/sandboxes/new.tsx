@@ -89,6 +89,8 @@ const OCI_RUNTIME_OPTIONS: ReadonlyArray<{
     label: "runsc",
     detail: "gVisor-isolated Docker runtime for stronger sandbox boundaries.",
   },
+];
+
 const SHELL_OPTIONS: ReadonlyArray<{ readonly value: LoginShell; readonly label: string }> = [
   { value: "bash", label: "Bash" },
   { value: "zsh", label: "Zsh" },
@@ -2060,8 +2062,8 @@ function buildGitHubRepositoryUrl(fullName: string): string {
 
 function isValidUrl(value: string): boolean {
   try {
-    new URL(value);
-    return true;
+    const parsedUrl = new URL(value);
+    return parsedUrl.href.length > 0;
   } catch {
     return false;
   }

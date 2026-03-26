@@ -251,7 +251,7 @@ const syncInstallationRepositories = async (
       defaultBranch: remoteRepository.defaultBranch,
       isPrivate: remoteRepository.isPrivate,
       isArchived: remoteRepository.isArchived,
-      pushedAt: remoteRepository.pushedAt,
+      ...(remoteRepository.pushedAt === undefined ? {} : { pushedAt: remoteRepository.pushedAt }),
       lastSyncedAt: syncedAt,
       removedAt: null,
     });
@@ -372,7 +372,7 @@ export const listInstallationRepositories = async (c: Context<AppBindings>) => {
   const repositories = await installationRepositoryCache.listRepositoriesForUser({
     userId: query.userId,
     installationId: params.installationId,
-    search: query.search,
+    ...(query.search === undefined ? {} : { search: query.search }),
   });
   const items: Array<typeof githubInstallationRepositorySummarySchema._type> = repositories.map(
     (repository) => {
@@ -558,6 +558,7 @@ export const handleWebhook = async (c: Context<AppBindings>) => {
 
   const payload = parseWebhookPayload(payloadText);
   const action = typeof payload.action === "string" ? payload.action : undefined;
+  const installationExternalId = getWebhookInstallationExternalId(payload);
   const existingDelivery = await webhookRepository.getWebhookDeliveryByDeliveryId(deliveryId);
 
   if (existingDelivery !== undefined && existingDelivery.status !== "received") {
@@ -574,8 +575,8 @@ export const handleWebhook = async (c: Context<AppBindings>) => {
     id: existingDelivery?.id ?? randomUUID(),
     deliveryId,
     eventType,
-    action,
-    installationExternalId: getWebhookInstallationExternalId(payload),
+    ...(action === undefined ? {} : { action }),
+    ...(installationExternalId === undefined ? {} : { installationExternalId }),
     payload,
   });
 
