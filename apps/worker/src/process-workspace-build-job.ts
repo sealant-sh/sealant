@@ -272,6 +272,78 @@ const resolveWorkspaceCloneAuth = async (input: {
   };
 };
 
+const resolveDotfilesRuntimeEnv = async (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly dbClient: DatabaseClient;
+  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
+}): Promise<Record<string, string>> => {
+  const dotfilesSource = input.blueprint.sources.inputs.find(
+    (source) => source.purpose === "dotfiles",
+  );
+  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
+    dotfilesSource?.authRef,
+  );
+
+  if (installationRepositoryId === undefined) {
+    return {};
+  }
+
+  if (
+    input.gitHubSourceIntegration === undefined ||
+    !input.gitHubSourceIntegration.isConfigured()
+  ) {
+    throw createWorkerError(
+      "github-integration-unavailable",
+      "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
+    );
+  }
+
+  const installationRepositoryCache: GitHubInstallationRepositoryCacheRepository =
+    createGitHubInstallationRepositoryCacheRepository(input.dbClient);
+  const installationRepository: GitHubInstallationRepository = createGitHubInstallationRepository(
+    input.dbClient,
+  );
+  const installationRepositoryRecord =
+    await installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId);
+
+  if (
+    installationRepositoryRecord === undefined ||
+    installationRepositoryRecord.removedAt !== null
+  ) {
+    throw createWorkerError(
+      "github-installation-repository-unavailable",
+      `GitHub installation repository '${installationRepositoryId}' is not available for dotfiles auth resolution.`,
+    );
+  }
+
+  const installation = await installationRepository.getInstallationById(
+    installationRepositoryRecord.installationId,
+  );
+
+  if (installation === undefined) {
+    throw createWorkerError(
+      "github-installation-missing",
+      `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for dotfiles auth.`,
+    );
+  }
+
+  if (installation.status !== "active") {
+    throw createWorkerError(
+      "github-installation-inactive",
+      `GitHub installation '${installation.id}' is not active for dotfiles auth resolution.`,
+    );
+  }
+
+  const accessToken = await input.gitHubSourceIntegration.createInstallationAccessToken(
+    installation.externalInstallationId,
+  );
+
+  return {
+    SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
+    SEALANT_DOTFILES_HTTP_TOKEN: accessToken.token,
+  };
+};
+
 export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJobOptions) => {
   const jobs = createWorkspaceBuildJobRepository(options.dbClient);
   const runtimeInstances = createSandboxRuntimeInstanceRepository(options.dbClient);
@@ -331,9 +403,27 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
       dbClient: options.dbClient,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
+    const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
+      blueprint,
+      dbClient: options.dbClient,
+      gitHubSourceIntegration: options.gitHubSourceIntegration,
+    });
+    const runtimeBlueprint: WorkspaceBlueprint =
+      Object.keys(dotfilesRuntimeEnv).length === 0
+        ? blueprint
+        : {
+            ...blueprint,
+            runtime: {
+              ...blueprint.runtime,
+              env: {
+                ...blueprint.runtime.env,
+                ...dotfilesRuntimeEnv,
+              },
+            },
+          };
 
     const runtimeLaunchResult = await launchPublishedImage({
-      blueprint,
+      blueprint: runtimeBlueprint,
       runtimeAdapters: options.runtimeAdapters,
       defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
       publishedImage,

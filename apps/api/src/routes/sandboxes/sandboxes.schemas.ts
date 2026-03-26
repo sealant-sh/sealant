@@ -25,6 +25,7 @@ export const createSandboxRequestSchema = z.object({
   tag: z.string().trim().min(1),
   name: z.string().trim().min(1).max(120).optional(),
   sourceSelection: githubSandboxSourceSelectionSchema.optional(),
+  dotfilesSelection: githubSandboxSourceSelectionSchema.optional(),
   spec: workspaceBuildJobRequestPayloadSchema,
 });
 

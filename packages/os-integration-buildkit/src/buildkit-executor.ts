@@ -118,6 +118,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       nodejs: { installPackages: ["nodejs", "npm"] },
       pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
+      stow: { installPackages: ["stow"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -150,6 +151,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       nodejs: { installPackages: ["nodejs", "npm"] },
       pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
+      stow: { installPackages: ["stow"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -174,6 +176,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       nodejs: { installPackages: ["nodejs"] },
       pnpm: { installPackages: ["nodejs", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
+      stow: { installPackages: ["stow"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -196,6 +199,22 @@ const defaultImageNameForBlueprint = (
 
 const shellQuote = (value: string): string => {
   return `'${value.split("'").join(`'"'"'`)}'`;
+};
+
+const gitHubInstallationRepositoryAuthRefPrefix = "github-installation-repository:";
+
+const parseGitHubInstallationRepositoryAuthRef = (
+  authRef: string | undefined,
+): string | undefined => {
+  if (
+    authRef === undefined ||
+    !authRef.startsWith(gitHubInstallationRepositoryAuthRefPrefix) ||
+    authRef.length <= gitHubInstallationRepositoryAuthRefPrefix.length
+  ) {
+    return undefined;
+  }
+
+  return authRef.slice(gitHubInstallationRepositoryAuthRefPrefix.length);
 };
 
 const normalizeInstallPackages = (packages: Iterable<string>): string[] => {
@@ -300,6 +319,19 @@ const resolvePackages = (
 
   if (blueprint.customization.applyDotfiles && getDotfilesSource(blueprint) !== undefined) {
     requests.push({ id: "git" });
+
+    if (blueprint.customization.dotfilesManager === "auto") {
+      requests.push({ id: "chezmoi" });
+      requests.push({ id: "stow" });
+    }
+
+    if (blueprint.customization.dotfilesManager === "chezmoi") {
+      requests.push({ id: "chezmoi" });
+    }
+
+    if (blueprint.customization.dotfilesManager === "stow") {
+      requests.push({ id: "stow" });
+    }
   }
 
   return requests.map((request) => {
@@ -322,8 +354,11 @@ const mapBlueprintToResolvedImagePlan = (
   }
 
   const dotfiles = getDotfilesSource(blueprint);
+  const dotfilesGitHubInstallationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
+    dotfiles?.authRef,
+  );
   const buildSecrets =
-    dotfiles?.authRef === undefined
+    dotfiles?.authRef === undefined || dotfilesGitHubInstallationRepositoryId !== undefined
       ? []
       : [
           {
@@ -357,10 +392,20 @@ const mapBlueprintToResolvedImagePlan = (
       : {
           dotfiles: {
             sourceId: dotfiles.id,
-            manager: blueprint.customization.dotfilesManager ?? "chezmoi",
+            manager: blueprint.customization.dotfilesManager,
             url: dotfiles.url,
             ref: dotfiles.ref,
-            ...(dotfiles.authRef === undefined ? {} : { authSecretId: "dotfiles_git_key" }),
+            target: blueprint.customization.dotfilesTarget,
+            bootstrap: blueprint.customization.dotfilesBootstrap,
+            ...(blueprint.customization.dotfilesBootstrapCommand === undefined
+              ? {}
+              : { bootstrapCommand: blueprint.customization.dotfilesBootstrapCommand }),
+            applyAt: dotfilesGitHubInstallationRepositoryId === undefined ? "build" : "runtime",
+            ...(dotfilesGitHubInstallationRepositoryId === undefined
+              ? dotfiles.authRef === undefined
+                ? {}
+                : { authSecretId: "dotfiles_git_key" }
+              : { githubInstallationRepositoryId: dotfilesGitHubInstallationRepositoryId }),
           },
         }),
     buildSecrets,
@@ -377,7 +422,6 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
-    ...(plan.dotfiles === undefined ? [] : ["chezmoi"]),
   ]);
 
   if (plan.packageManager === "dnf") {
@@ -576,15 +620,22 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "set -euo pipefail",
     `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
     `LOGIN_SHELL=${shellQuote(loginShellPath)}`,
+    `COMMAND_SHELL=${shellQuote(bashShellPath)}`,
     'export PATH="/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:$PATH"',
     'if [ ! -x "$LOGIN_SHELL" ]; then',
     `  LOGIN_SHELL=${shellQuote(bashShellPath)}`,
+    "fi",
+    'if [ ! -x "$COMMAND_SHELL" ]; then',
+    '  COMMAND_SHELL="$LOGIN_SHELL"',
     "fi",
     'if [ -d "$WORKING_DIRECTORY" ]; then',
     '  cd "$WORKING_DIRECTORY"',
     "fi",
     'if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then',
-    '  exec "$LOGIN_SHELL" -lc "$SSH_ORIGINAL_COMMAND"',
+    '  exec "$COMMAND_SHELL" -c "$SSH_ORIGINAL_COMMAND"',
+    "fi",
+    "if [ ! -t 0 ] || [ ! -t 1 ]; then",
+    '  exec "$COMMAND_SHELL" --noprofile --norc -s',
     "fi",
     'exec "$LOGIN_SHELL" -i',
     "EOF",
@@ -623,6 +674,88 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "fi",
     "cleanup_workspace_clone_auth",
     "",
+    ...(plan.dotfiles === undefined || plan.dotfiles.applyAt !== "runtime"
+      ? []
+      : [
+          `DOTFILES_REPO_URL=${shellQuote(plan.dotfiles.url)}`,
+          `DOTFILES_REPO_REF=${shellQuote(plan.dotfiles.ref)}`,
+          `DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID=${shellQuote(plan.dotfiles.githubInstallationRepositoryId ?? "")}`,
+          `DOTFILES_MANAGER=${shellQuote(plan.dotfiles.manager)}`,
+          `DOTFILES_TARGET=${shellQuote(plan.dotfiles.target)}`,
+          `DOTFILES_BOOTSTRAP=${shellQuote(plan.dotfiles.bootstrap ? "1" : "0")}`,
+          `DOTFILES_BOOTSTRAP_COMMAND=${shellQuote(plan.dotfiles.bootstrapCommand ?? "./install.sh")}`,
+          'DOTFILES_SOURCE_DIR="/root/.local/share/chezmoi"',
+          'DOTFILES_TARGET_DIR="$HOME"',
+          'DOTFILES_GIT_ASKPASS_PATH="$SSH_RUNTIME_DIR/dotfiles-git-askpass"',
+          'if [ "$DOTFILES_TARGET" = "config" ]; then',
+          '  DOTFILES_TARGET_DIR="$HOME/.config"',
+          "fi",
+          'if [ -n "$DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID" ] && [ -z "${SEALANT_DOTFILES_HTTP_TOKEN:-}" ]; then',
+          `  printf '%s\n' "Dotfiles repo auth token is missing for GitHub installation repository $DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID." >&2`,
+          "  exit 1",
+          "fi",
+          'if [ -n "${SEALANT_DOTFILES_HTTP_TOKEN:-}" ]; then',
+          "  cat > \"$DOTFILES_GIT_ASKPASS_PATH\" <<'EOF'",
+          "#!/bin/sh",
+          'case "$1" in',
+          '  *Username*) printf "%s\\n" "${SEALANT_DOTFILES_HTTP_USERNAME:-x-access-token}" ;;',
+          '  *Password*) printf "%s\\n" "$SEALANT_DOTFILES_HTTP_TOKEN" ;;',
+          '  *) printf "\\n" ;;',
+          "esac",
+          "EOF",
+          '  chmod 700 "$DOTFILES_GIT_ASKPASS_PATH"',
+          '  export GIT_ASKPASS="$DOTFILES_GIT_ASKPASS_PATH"',
+          "  export GIT_TERMINAL_PROMPT=0",
+          "fi",
+          'mkdir -p "$(dirname "$DOTFILES_SOURCE_DIR")"',
+          'rm -rf "$DOTFILES_SOURCE_DIR"',
+          'git clone --depth=1 --branch "$DOTFILES_REPO_REF" "$DOTFILES_REPO_URL" "$DOTFILES_SOURCE_DIR"',
+          'if [ "$DOTFILES_MANAGER" = "auto" ]; then',
+          '  if [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.toml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.yaml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.json" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoiexternal.toml" ] || ls "$DOTFILES_SOURCE_DIR"/dot_* >/dev/null 2>&1; then',
+          '    DOTFILES_MANAGER="chezmoi"',
+          '  elif [ -f "$DOTFILES_SOURCE_DIR/.stow-global-ignore" ] || [ -f "$DOTFILES_SOURCE_DIR/install.sh" ]; then',
+          '    DOTFILES_MANAGER="stow"',
+          "  else",
+          '    DOTFILES_MANAGER="copy"',
+          "  fi",
+          "fi",
+          'if [ "$DOTFILES_MANAGER" != "copy" ]; then',
+          '  DOTFILES_TARGET_DIR="$HOME"',
+          "fi",
+          'case "$DOTFILES_MANAGER" in',
+          "  chezmoi)",
+          '    HOME=/root chezmoi init --source="$DOTFILES_SOURCE_DIR"',
+          "    HOME=/root chezmoi apply",
+          "    ;;",
+          "  stow)",
+          '    if [ "$DOTFILES_BOOTSTRAP" = "1" ]; then',
+          '      ( cd "$DOTFILES_SOURCE_DIR" && /bin/bash -lc "$DOTFILES_BOOTSTRAP_COMMAND" )',
+          "    else",
+          '      DOTFILES_STOW_PACKAGES=""',
+          '      for package_dir in "$DOTFILES_SOURCE_DIR"/*; do',
+          '        [ -d "$package_dir" ] || continue',
+          '        package_name="$(basename "$package_dir")"',
+          '        case "$package_name" in .* ) continue ;; esac',
+          '        DOTFILES_STOW_PACKAGES="$DOTFILES_STOW_PACKAGES $package_name"',
+          "      done",
+          '      if [ -n "$DOTFILES_STOW_PACKAGES" ]; then',
+          '        ( cd "$DOTFILES_SOURCE_DIR" && stow -t "$DOTFILES_TARGET_DIR" $DOTFILES_STOW_PACKAGES )',
+          "      fi",
+          "    fi",
+          "    ;;",
+          "  copy)",
+          '    mkdir -p "$DOTFILES_TARGET_DIR"',
+          '    ( cd "$DOTFILES_SOURCE_DIR" && tar --exclude=.git -cf - . ) | ( cd "$DOTFILES_TARGET_DIR" && tar -xf - )',
+          "    ;;",
+          "  *)",
+          '    printf "%s\\n" "Unsupported dotfiles manager: $DOTFILES_MANAGER" >&2',
+          "    exit 1",
+          "    ;;",
+          "esac",
+          'rm -f "$DOTFILES_GIT_ASKPASS_PATH"',
+          "unset GIT_ASKPASS GIT_TERMINAL_PROMPT SEALANT_DOTFILES_HTTP_USERNAME SEALANT_DOTFILES_HTTP_TOKEN DOTFILES_MANAGER DOTFILES_TARGET DOTFILES_BOOTSTRAP DOTFILES_BOOTSTRAP_COMMAND DOTFILES_TARGET_DIR",
+          "",
+        ]),
     ...(setupSteps.length === 0 ? [] : [setupSteps, ""]),
     ...(startupSteps.length === 0 ? [] : [startupSteps, ""]),
     'if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then',
@@ -635,22 +768,84 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
 };
 
 const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
-  if (plan.dotfiles === undefined) {
+  if (plan.dotfiles === undefined || plan.dotfiles.applyAt !== "build") {
     return undefined;
   }
 
+  const sourceParentDirectory = "/root/.local/share";
+  const sourceDirectory = "/root/.local/share/chezmoi";
+  const targetDirectory = plan.dotfiles.target === "config" ? "/root/.config" : "/root";
+  const applyCommand = [
+    `DOTFILES_MANAGER=${shellQuote(plan.dotfiles.manager)}`,
+    `DOTFILES_TARGET=${shellQuote(plan.dotfiles.target)}`,
+    `DOTFILES_BOOTSTRAP=${shellQuote(plan.dotfiles.bootstrap ? "1" : "0")}`,
+    `DOTFILES_BOOTSTRAP_COMMAND=${shellQuote(plan.dotfiles.bootstrapCommand ?? "./install.sh")}`,
+    `DOTFILES_SOURCE_DIR=${shellQuote(sourceDirectory)}`,
+    `DOTFILES_TARGET_DIR=${shellQuote(targetDirectory)}`,
+    'if [ "$DOTFILES_MANAGER" = "auto" ]; then',
+    '  if [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.toml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.yaml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.json" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoiexternal.toml" ] || ls "$DOTFILES_SOURCE_DIR"/dot_* >/dev/null 2>&1; then',
+    '    DOTFILES_MANAGER="chezmoi"',
+    '  elif [ -f "$DOTFILES_SOURCE_DIR/.stow-global-ignore" ] || [ -f "$DOTFILES_SOURCE_DIR/install.sh" ]; then',
+    '    DOTFILES_MANAGER="stow"',
+    "  else",
+    '    DOTFILES_MANAGER="copy"',
+    "  fi",
+    "fi",
+    'if [ "$DOTFILES_MANAGER" != "copy" ]; then',
+    '  DOTFILES_TARGET_DIR="/root"',
+    "fi",
+    'case "$DOTFILES_MANAGER" in',
+    "  chezmoi)",
+    '    HOME=/root chezmoi init --source="$DOTFILES_SOURCE_DIR"',
+    "    HOME=/root chezmoi apply",
+    "    ;;",
+    "  stow)",
+    '    if [ "$DOTFILES_BOOTSTRAP" = "1" ]; then',
+    '      ( cd "$DOTFILES_SOURCE_DIR" && /bin/bash -lc "$DOTFILES_BOOTSTRAP_COMMAND" )',
+    "    else",
+    '      DOTFILES_STOW_PACKAGES=""',
+    '      for package_dir in "$DOTFILES_SOURCE_DIR"/*; do',
+    '        [ -d "$package_dir" ] || continue',
+    '        package_name="$(basename "$package_dir")"',
+    '        case "$package_name" in .* ) continue ;; esac',
+    '        DOTFILES_STOW_PACKAGES="$DOTFILES_STOW_PACKAGES $package_name"',
+    "      done",
+    '      if [ -n "$DOTFILES_STOW_PACKAGES" ]; then',
+    '        ( cd "$DOTFILES_SOURCE_DIR" && stow -t "$DOTFILES_TARGET_DIR" $DOTFILES_STOW_PACKAGES )',
+    "      fi",
+    "    fi",
+    "    ;;",
+    "  copy)",
+    '    mkdir -p "$DOTFILES_TARGET_DIR"',
+    '    ( cd "$DOTFILES_SOURCE_DIR" && tar --exclude=.git -cf - . ) | ( cd "$DOTFILES_TARGET_DIR" && tar -xf - )',
+    "    ;;",
+    "  *)",
+    '    printf "%s\\n" "Unsupported dotfiles manager: $DOTFILES_MANAGER" >&2',
+    "    exit 1",
+    "    ;;",
+    "esac",
+  ].join("\n");
+
   const cloneCommand =
     plan.dotfiles.authSecretId === undefined
-      ? `git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} /tmp/sealant-dotfiles`
-      : `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} /tmp/sealant-dotfiles`;
+      ? [
+          `mkdir -p ${shellQuote(sourceParentDirectory)}`,
+          `rm -rf ${shellQuote(sourceDirectory)}`,
+          `git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
+          `/bin/bash -lc ${shellQuote(applyCommand)}`,
+        ].join(" && ")
+      : [
+          `mkdir -p ${shellQuote(sourceParentDirectory)}`,
+          `rm -rf ${shellQuote(sourceDirectory)}`,
+          `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
+          `/bin/bash -lc ${shellQuote(applyCommand)}`,
+        ].join(" && ");
   const mountPrefix =
     plan.dotfiles.authSecretId === undefined
       ? "RUN "
       : "RUN --mount=type=secret,id=dotfiles_git_key,target=/run/sealant/dotfiles_key,required=true \\\n    ";
 
-  return [
-    `${mountPrefix}${cloneCommand} && \\\n    HOME=/root chezmoi init --apply --source=/tmp/sealant-dotfiles && \\\n    rm -rf /tmp/sealant-dotfiles`,
-  ].join("\n");
+  return `${mountPrefix}${cloneCommand}`;
 };
 
 const renderContainerfile = (plan: ResolvedImagePlan): string => {
