@@ -4,6 +4,7 @@
   "private": true,
   "description": "Public-facing website and launch surfaces",
   "scripts": {
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "devDependencies": {

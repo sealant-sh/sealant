@@ -4,6 +4,7 @@
   "private": true,
   "description": "Desktop application surface for Sealant",
   "scripts": {
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "devDependencies": {

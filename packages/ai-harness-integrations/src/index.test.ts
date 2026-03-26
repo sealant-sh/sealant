@@ -36,7 +36,7 @@ describe("ai harness integrations", () => {
   it("lists all registered harnesses", () => {
     const ids = listHarnessIntegrations()
       .map((integration) => integration.id)
-      .sort();
+      .toSorted();
 
     expect(ids).toEqual(["claude-code", "codex", "opencode"]);
   });

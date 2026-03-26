@@ -12,6 +12,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/run-migrations.ts",
     "dev": "exec drizzle-kit studio --config drizzle.config.ts",
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {

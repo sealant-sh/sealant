@@ -57,6 +57,31 @@ type SandboxAttemptSnapshotRecord = Awaited<
 type SandboxRecord = Awaited<ReturnType<SandboxRepository["createSandbox"]>>;
 type RepositoryRecord = Awaited<ReturnType<RepositoryProfileRepository["upsertRepository"]>>;
 
+const workspaceBuildJobByCreatedAtDesc = (left: WorkspaceBuildJob, right: WorkspaceBuildJob) => {
+  return right.createdAt.getTime() - left.createdAt.getTime();
+};
+
+const withWorkspaceBuildJobUpdatedAt = (job: WorkspaceBuildJob): WorkspaceBuildJob => {
+  return {
+    ...job,
+    updatedAt: new Date(),
+  };
+};
+
+const withSandboxUpdatedAt = (sandbox: SandboxRecord): SandboxRecord => {
+  return {
+    ...sandbox,
+    updatedAt: new Date(),
+  };
+};
+
+const withSandboxAttemptUpdatedAt = (run: SandboxAttemptRecord): SandboxAttemptRecord => {
+  return {
+    ...run,
+    updatedAt: new Date(),
+  };
+};
+
 const createRegistryClientStub = (): RegistryClient => {
   return {
     ping: async () => undefined,
@@ -89,17 +114,6 @@ const createRegistryClientStub = (): RegistryClient => {
 const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository => {
   const jobs = new Map<string, WorkspaceBuildJob>();
 
-  const byCreatedAtDesc = (left: WorkspaceBuildJob, right: WorkspaceBuildJob) => {
-    return right.createdAt.getTime() - left.createdAt.getTime();
-  };
-
-  const touchUpdatedAt = (job: WorkspaceBuildJob): WorkspaceBuildJob => {
-    return {
-      ...job,
-      updatedAt: new Date(),
-    };
-  };
-
   return {
     claimJobById: async () => null,
     claimNextQueuedJob: async () => null,
@@ -108,7 +122,9 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       return [...jobs.values()].find((job) => job.idempotencyKey === idempotencyKey);
     },
     getLatestJobByRunId: async (runId) => {
-      return [...jobs.values()].filter((job) => job.runId === runId).sort(byCreatedAtDesc)[0];
+      return [...jobs.values()]
+        .filter((job) => job.runId === runId)
+        .toSorted(workspaceBuildJobByCreatedAtDesc)[0];
     },
     insertQueuedJob: async (input) => {
       const now = new Date();
@@ -153,7 +169,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       for (const runId of runIds) {
         const latestJob = [...jobs.values()]
           .filter((job) => job.runId === runId)
-          .sort(byCreatedAtDesc)[0];
+          .toSorted(workspaceBuildJobByCreatedAtDesc)[0];
 
         if (latestJob !== undefined) {
           latestJobsByRunId.set(runId, latestJob);
@@ -169,7 +185,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
         return null;
       }
 
-      const next = touchUpdatedAt({
+      const next = withWorkspaceBuildJobUpdatedAt({
         ...existing,
         status: "failed",
         errorCode: input.errorCode ?? null,
@@ -189,7 +205,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       }
 
       const now = input.now ?? new Date();
-      const next = touchUpdatedAt({
+      const next = withWorkspaceBuildJobUpdatedAt({
         ...existing,
         status: "running",
         workerId: input.workerId,
@@ -208,7 +224,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
         return null;
       }
 
-      const next = touchUpdatedAt({
+      const next = withWorkspaceBuildJobUpdatedAt({
         ...existing,
         status: "succeeded",
         executorId: input.executorId,
@@ -236,13 +252,6 @@ const createSandboxRepositoryStub = (
   const sandboxes = new Map<string, SandboxRecord>();
   const links = new Map<string, { sandboxId: string; runId: string; linkedAt: Date }>();
   const knownUserIds = new Set(options.knownUserIds ?? [testUserId]);
-
-  const touchUpdatedAt = (sandbox: SandboxRecord): SandboxRecord => {
-    return {
-      ...sandbox,
-      updatedAt: new Date(),
-    };
-  };
 
   return {
     createSandbox: async (input) => {
@@ -298,7 +307,7 @@ const createSandboxRepositoryStub = (
 
       sandboxes.set(
         sandbox.id,
-        touchUpdatedAt({
+        withSandboxUpdatedAt({
           ...sandbox,
           latestRunId: input.attemptId,
         }),
@@ -314,7 +323,7 @@ const createSandboxRepositoryStub = (
     listSandboxAttemptLinks: async (sandboxId, limit = 100) => {
       return [...links.values()]
         .filter((link) => link.sandboxId === sandboxId)
-        .sort((a, b) => b.linkedAt.getTime() - a.linkedAt.getTime())
+        .toSorted((a, b) => b.linkedAt.getTime() - a.linkedAt.getTime())
         .slice(0, limit)
         .map((link) => {
           return {
@@ -338,7 +347,7 @@ const createSandboxRepositoryStub = (
             ? true
             : input.statuses.includes(sandbox.status),
         )
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
         .slice(0, input.limit ?? 100);
     },
     setSandboxStatus: async (input) => {
@@ -348,7 +357,7 @@ const createSandboxRepositoryStub = (
         return null;
       }
 
-      const next = touchUpdatedAt({
+      const next = withSandboxUpdatedAt({
         ...existing,
         status: input.status,
       });
@@ -362,7 +371,7 @@ const createSandboxRepositoryStub = (
         return null;
       }
 
-      const next = touchUpdatedAt({
+      const next = withSandboxUpdatedAt({
         ...existing,
         name: input.name,
       });
@@ -381,13 +390,6 @@ const createSandboxAttemptRepositoryStub = (
   const snapshots = new Map<string, SandboxAttemptSnapshotRecord>();
   const knownUserIds = new Set(options.knownUserIds ?? [testUserId]);
 
-  const touchUpdatedAt = (run: SandboxAttemptRecord): SandboxAttemptRecord => {
-    return {
-      ...run,
-      updatedAt: new Date(),
-    };
-  };
-
   const finalizeRun = (
     run: SandboxAttemptRecord,
     status: SandboxAttemptRecord["status"],
@@ -396,7 +398,7 @@ const createSandboxAttemptRepositoryStub = (
     const durationMs =
       run.startedAt === null ? null : Math.max(0, finishedAt.getTime() - run.startedAt.getTime());
 
-    return touchUpdatedAt({
+    return withSandboxAttemptUpdatedAt({
       ...run,
       status,
       finishedAt,
@@ -455,7 +457,7 @@ const createSandboxAttemptRepositoryStub = (
             ? true
             : input.statuses.includes(run.status),
         )
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
       return allRuns.slice(0, input.limit ?? 100);
     },
@@ -493,7 +495,7 @@ const createSandboxAttemptRepositoryStub = (
         return null;
       }
 
-      const next = touchUpdatedAt({
+      const next = withSandboxAttemptUpdatedAt({
         ...existing,
         status: "running",
         startedAt: input.startedAt ?? new Date(),
@@ -809,7 +811,7 @@ const createGitHubInstallationRepositoryCacheStub = (
         .filter((row) => row.installationId === input.installationId)
         .filter((row) => (input.includeRemoved ? true : row.removedAt === null))
         .filter((row) => (input.search === undefined ? true : row.fullName.includes(input.search)))
-        .sort((left, right) => left.fullName.localeCompare(right.fullName));
+        .toSorted((left, right) => left.fullName.localeCompare(right.fullName));
     },
     listRepositoriesForUser: async (input) => {
       return [...repositories.values()]
@@ -818,7 +820,7 @@ const createGitHubInstallationRepositoryCacheStub = (
         )
         .filter((row) => row.removedAt === null)
         .filter((row) => (input.search === undefined ? true : row.fullName.includes(input.search)))
-        .sort((left, right) => left.fullName.localeCompare(right.fullName));
+        .toSorted((left, right) => left.fullName.localeCompare(right.fullName));
     },
     markInstallationRepositoriesRemoved: async (input) => {
       let updated = 0;

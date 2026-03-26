@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "lint": "oxlint .",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },

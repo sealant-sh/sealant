@@ -414,8 +414,14 @@ describe("processWorkspaceBuildJob", () => {
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
-    const lifecycle = (launchCall?.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
-    expect(launchCall?.blueprint.access.ssh).toEqual({
+    expect(launchCall).toBeDefined();
+
+    if (launchCall === undefined) {
+      throw new Error("Runtime adapter launch call was not captured.");
+    }
+
+    const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+    expect(launchCall.blueprint.access.ssh).toEqual({
       enabled: true,
       listenPort: 2222,
     });
@@ -506,8 +512,14 @@ describe("processWorkspaceBuildJob", () => {
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
-    const lifecycle = (launchCall?.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
-    expect(launchCall?.blueprint.access.ssh.enabled).toBe(false);
+    expect(launchCall).toBeDefined();
+
+    if (launchCall === undefined) {
+      throw new Error("Runtime adapter launch call was not captured.");
+    }
+
+    const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+    expect(launchCall.blueprint.access.ssh.enabled).toBe(false);
     expect(lifecycle).toMatchObject({
       startup: {
         foreground: {

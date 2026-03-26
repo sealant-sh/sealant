@@ -236,7 +236,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
     const catalog = await this.runtimeCatalogLoader();
-    const availableRuntimes = [...catalog.runtimes].sort();
+    const availableRuntimes = [...catalog.runtimes].toSorted();
 
     if (catalog.runtimes.has(runtime)) {
       return;

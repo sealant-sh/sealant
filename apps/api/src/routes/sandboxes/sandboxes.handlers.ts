@@ -1374,7 +1374,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
   }
 
   const items = [...events]
-    .sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
+    .toSorted((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime())
     .slice(0, query.limit)
     .map(toEventResponse);
 

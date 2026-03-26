@@ -2062,8 +2062,8 @@ function buildGitHubRepositoryUrl(fullName: string): string {
 
 function isValidUrl(value: string): boolean {
   try {
-    new URL(value);
-    return true;
+    const parsedUrl = new URL(value);
+    return parsedUrl.href.length > 0;
   } catch {
     return false;
   }

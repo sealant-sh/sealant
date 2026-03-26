@@ -269,11 +269,46 @@ const getBestRepoEntry = (
   repo: string,
   normalizedQuery: string,
 ): RepologyProjectResponseEntry | undefined => {
-  return entries
-    .filter((entry) => entry.repo === repo)
-    .sort(
-      (left, right) => scoreEntry(right, normalizedQuery) - scoreEntry(left, normalizedQuery),
-    )[0];
+  let bestEntry: RepologyProjectResponseEntry | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const entry of entries) {
+    if (entry.repo !== repo) {
+      continue;
+    }
+
+    const currentScore = scoreEntry(entry, normalizedQuery);
+    if (currentScore > bestScore) {
+      bestEntry = entry;
+      bestScore = currentScore;
+    }
+  }
+
+  return bestEntry;
+};
+
+const insertCandidateByScoreDesc = (
+  candidates: Array<{
+    projectName: string;
+    entries: readonly RepologyProjectResponseEntry[];
+    score: number;
+  }>,
+  candidate: {
+    projectName: string;
+    entries: readonly RepologyProjectResponseEntry[];
+    score: number;
+  },
+): void => {
+  let insertIndex = 0;
+
+  while (
+    insertIndex < candidates.length &&
+    (candidates[insertIndex]?.score ?? Number.NEGATIVE_INFINITY) >= candidate.score
+  ) {
+    insertIndex += 1;
+  }
+
+  candidates.splice(insertIndex, 0, candidate);
 };
 
 const emptyOsSupport = {
@@ -430,24 +465,28 @@ const bestProjectFromSearch = (
   entries: readonly RepologyProjectResponseEntry[];
   alternatives: string[];
 } | null => {
-  const candidates = Object.entries(searchResult)
-    .map(([projectName, entries]) => {
-      const lower = projectName.toLowerCase();
-      const targetHits = [
-        getBestRepoEntry(entries, repologyRepoByTargetOs.arch, normalizedQuery),
-        getBestRepoEntry(entries, repologyRepoByTargetOs.fedora, normalizedQuery),
-        getBestRepoEntry(entries, repologyRepoByTargetOs.nix, normalizedQuery),
-      ].filter((entry) => entry !== undefined).length;
+  const candidates: Array<{
+    projectName: string;
+    entries: readonly RepologyProjectResponseEntry[];
+    score: number;
+  }> = [];
 
-      const exact = lower === normalizedQuery ? 10 : 0;
+  for (const [projectName, entries] of Object.entries(searchResult)) {
+    const lower = projectName.toLowerCase();
+    const targetHits = [
+      getBestRepoEntry(entries, repologyRepoByTargetOs.arch, normalizedQuery),
+      getBestRepoEntry(entries, repologyRepoByTargetOs.fedora, normalizedQuery),
+      getBestRepoEntry(entries, repologyRepoByTargetOs.nix, normalizedQuery),
+    ].filter((entry) => entry !== undefined).length;
 
-      return {
-        projectName,
-        entries,
-        score: exact + targetHits * 3,
-      };
-    })
-    .sort((left, right) => right.score - left.score);
+    const exact = lower === normalizedQuery ? 10 : 0;
+
+    insertCandidateByScoreDesc(candidates, {
+      projectName,
+      entries,
+      score: exact + targetHits * 3,
+    });
+  }
 
   if (candidates.length === 0) {
     return null;
@@ -553,7 +592,7 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
       return (await response.json()) as T;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      throw new Error(`Repology API request failed for ${path}. ${message}`);
+      throw new Error(`Repology API request failed for ${path}. ${message}`, { cause: error });
     }
   };
 

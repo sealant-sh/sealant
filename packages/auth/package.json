@@ -12,6 +12,7 @@
     "./session": "./src/session.ts"
   },
   "scripts": {
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {

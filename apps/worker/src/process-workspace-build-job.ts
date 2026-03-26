@@ -61,7 +61,7 @@ const selectExecutorForBlueprint = (
 
   const candidates =
     requestedOsFamily === "auto"
-      ? [...executors].sort((left, right) => {
+      ? [...executors].toSorted((left, right) => {
           if (left.osFamily === right.osFamily) {
             return 0;
           }

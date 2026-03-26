@@ -10,6 +10,7 @@
     "./web.json": "./web.json"
   },
   "scripts": {
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   }
 }

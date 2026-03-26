@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "lint": "oxlint .",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },

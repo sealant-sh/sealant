@@ -11,6 +11,7 @@
     "./styles/globals.css": "./src/styles/globals.css"
   },
   "scripts": {
+    "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {

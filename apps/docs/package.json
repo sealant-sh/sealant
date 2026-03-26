@@ -8,6 +8,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite dev --port 3000",
+    "lint": "oxlint .",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
