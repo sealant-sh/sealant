@@ -1651,6 +1651,109 @@ describe("createApiApp", () => {
     });
   });
 
+  it("attaches a GitHub-selected dotfiles config repo to spec inputs", async () => {
+    const repository = createWorkspaceBuildJobRepositoryStub();
+    const sandboxRepository = createSandboxRepositoryStub();
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: repository,
+      gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
+        installations: [
+          {
+            id: "gh_installation_1",
+            provider: "github",
+            externalInstallationId: "1001",
+            externalAccountId: "2001",
+            accountLogin: "sealant-ops",
+            accountType: "organization",
+            targetType: "organization",
+            status: "active",
+            permissions: { contents: "read", metadata: "read" },
+            repositorySelection: "all",
+            installedAt: new Date("2026-03-20T12:00:00.000Z"),
+            suspendedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-20T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+          },
+        ],
+        grants: [
+          {
+            installationId: "gh_installation_1",
+            userId: testUserId,
+            grantedByUserId: testUserId,
+            grantedAt: new Date("2026-03-20T12:05:00.000Z"),
+            revokedAt: null,
+          },
+        ],
+      }),
+      gitHubInstallationRepositoryCacheRepository: createGitHubInstallationRepositoryCacheStub({
+        repositories: [
+          {
+            id: "gh_installation_repo_1",
+            installationId: "gh_installation_1",
+            repositoryId: "repo_core",
+            externalRepositoryId: "3001",
+            owner: "sealant-ops",
+            name: "core",
+            fullName: "sealant-ops/core",
+            defaultBranch: "main",
+            isPrivate: true,
+            isArchived: false,
+            pushedAt: null,
+            lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+            createdAt: new Date("2026-03-24T12:00:00.000Z"),
+            updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+            removedAt: null,
+          },
+        ],
+      }),
+      sandboxRepository,
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/sandboxes", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ownerUserId: testUserId,
+        registryId: "default",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        dotfilesSelection: {
+          provider: "github",
+          installationId: "gh_installation_1",
+          installationRepositoryId: "gh_installation_repo_1",
+          ref: "main",
+        },
+        spec: {
+          source: "https://github.com/example/repo",
+          harness: "opencode",
+          os: "nix",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+
+    const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
+    expect(savedJob?.requestPayload.sources?.inputs).toEqual([
+      {
+        kind: "git",
+        purpose: "dotfiles",
+        provider: "github",
+        url: "https://github.com/sealant-ops/core.git",
+        ref: "main",
+        authRef: "github-installation-repository:gh_installation_repo_1",
+      },
+    ]);
+  });
+
   it("renames sandboxes via the sandbox route", async () => {
     const sandboxRepository = createSandboxRepositoryStub();
     const app = createApiApp({

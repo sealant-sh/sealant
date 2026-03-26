@@ -40,10 +40,15 @@ export const resolvedImagePackageSchema = z.strictObject({
 
 export const resolvedDotfilesPlanSchema = z.strictObject({
   sourceId: nonEmptyStringSchema,
-  manager: z.literal("chezmoi"),
+  manager: z.enum(["auto", "chezmoi", "stow", "copy"]),
   url: z.string().url(),
   ref: nonEmptyStringSchema,
+  target: z.enum(["home", "config"]).default("home"),
+  bootstrap: z.boolean().default(true),
+  bootstrapCommand: nonEmptyStringSchema.optional(),
+  applyAt: z.enum(["build", "runtime"]).default("build"),
   authSecretId: nonEmptyStringSchema.optional(),
+  githubInstallationRepositoryId: nonEmptyStringSchema.optional(),
 });
 
 // `ResolvedImagePlan` is the bridge between an OS-agnostic workspace blueprint

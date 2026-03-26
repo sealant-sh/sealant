@@ -235,6 +235,111 @@ describe("processWorkspaceBuildJob", () => {
     );
   });
 
+  it("injects dotfiles GitHub token env for runtime-applied config repos", async () => {
+    const repository = {
+      claimJobById: vi.fn(async () => ({
+        id: "job_dotfiles_runtime_auth",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: {
+          source: "https://github.com/example/repo.git",
+          harness: "opencode",
+          os: "nix",
+          inputs: [
+            {
+              kind: "git",
+              purpose: "dotfiles",
+              provider: "github",
+              url: "https://github.com/sealant-ops/core.git",
+              ref: "main",
+              authRef: "github-installation-repository:gh_installation_repo_1",
+            },
+          ],
+        },
+      })),
+      markJobSucceeded: vi.fn(async () => ({})),
+      markJobFailed: vi.fn(async () => ({})),
+    };
+
+    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
+      createSandboxAttemptRepositoryStub() as never,
+    );
+    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
+      createSandboxRuntimeInstanceRepositoryStub() as never,
+    );
+    vi.mocked(createGitHubInstallationRepository).mockReturnValue(
+      createGitHubInstallationRepositoryStub() as never,
+    );
+    vi.mocked(createGitHubInstallationRepositoryCacheRepository).mockReturnValue(
+      createGitHubInstallationRepositoryCacheStub() as never,
+    );
+
+    const executor = {
+      id: "nix",
+      osFamily: "nix",
+      supports: vi.fn(() => ({ supported: true as const })),
+      compile: vi.fn(async () => ({
+        executor: {
+          id: "nix",
+          osFamily: "nix",
+        },
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "demo",
+            path: "/tmp/demo.tar",
+            reference: "demo:opencode",
+            loader: "docker-load",
+          },
+        ],
+      })),
+    } as unknown as OsExecutor;
+
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        digest: "sha256:test",
+      })),
+    } as unknown as RegistryClient;
+    const gitHubSourceIntegration = createGitHubSourceIntegrationStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    await processWorkspaceBuildJob({
+      jobId: "job_dotfiles_runtime_auth",
+      workerId: "worker-test",
+      leaseDurationMs: 60000,
+      dbClient: {} as DatabaseClient,
+      executors: [executor],
+      runtimeAdapters: [runtimeAdapter],
+      defaultRuntimeAdapterId: "docker",
+      defaultStartupMode: "idle",
+      defaultIdleCommand: "while :; do sleep 30; done",
+      defaultSshEnabled: true,
+      defaultSshListenPort: 2222,
+      gitHubSourceIntegration,
+      registryClient,
+    });
+
+    expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
+    expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        blueprint: expect.objectContaining({
+          runtime: expect.objectContaining({
+            env: expect.objectContaining({
+              SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
+              SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("applies idle startup and SSH defaults when spec omits them", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({

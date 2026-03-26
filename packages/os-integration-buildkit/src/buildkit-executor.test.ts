@@ -42,8 +42,79 @@ describe("BuildkitDistroOsExecutor", () => {
     ]);
     expect(plan.dotfiles).toMatchObject({
       manager: "chezmoi",
+      applyAt: "build",
       authSecretId: "dotfiles_git_key",
     });
+  });
+
+  it("defers GitHub-authenticated dotfiles to runtime apply", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const executor = new BuildkitDistroOsExecutor({
+      osFamily: "fedora",
+      commandRunner,
+    });
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: "https://github.com/example/repo.git",
+      inputs: [
+        {
+          purpose: "dotfiles",
+          provider: "github",
+          url: "https://github.com/example/dotfiles.git",
+          ref: "main",
+          authRef: "github-installation-repository:gh_installation_repo_1",
+        },
+      ],
+      harness: "opencode",
+      os: "fedora",
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    expect(plan.dotfiles).toMatchObject({
+      applyAt: "runtime",
+      githubInstallationRepositoryId: "gh_installation_repo_1",
+    });
+    expect(plan.buildSecrets).toEqual([]);
+
+    const result = await executor.compile({ blueprint });
+    const entrypointPath = result.buildkit.spec.containerfilePath.replace(
+      /Containerfile$/,
+      "entrypoint.sh",
+    );
+    const entrypoint = await readFile(entrypointPath, "utf8");
+
+    expect(entrypoint).toContain("SEALANT_DOTFILES_HTTP_TOKEN");
+    expect(entrypoint).toContain("DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID");
+    expect(entrypoint).toContain('DOTFILES_SOURCE_DIR="/root/.local/share/chezmoi"');
+    expect(entrypoint).toContain('HOME=/root chezmoi init --source="$DOTFILES_SOURCE_DIR"');
+    expect(entrypoint).toContain('case "$DOTFILES_MANAGER" in');
+  });
+
+  it("installs stow when the dotfiles manager is stow", () => {
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: "https://github.com/example/repo.git",
+      inputs: [
+        {
+          purpose: "dotfiles",
+          url: "https://github.com/example/dotfiles.git",
+        },
+      ],
+      harness: "opencode",
+      customization: {
+        dotfilesManager: "stow",
+      },
+      os: "fedora",
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    expect(plan.packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          installPackages: expect.arrayContaining(["stow"]),
+        }),
+      ]),
+    );
   });
 
   it("includes npm when Node.js-backed harness tooling is requested on Linux distros", () => {

@@ -51,6 +51,7 @@ type SandboxRunLinkRecord = Awaited<
 >[number];
 type SandboxEventType = z.infer<typeof sandboxEventSchema>["type"];
 type GitHubSourceSelection = z.infer<typeof createSandboxRequestSchema>["sourceSelection"];
+type GitHubDotfilesSelection = z.infer<typeof createSandboxRequestSchema>["dotfilesSelection"];
 
 interface SandboxEventDraft {
   readonly sandboxId: string;
@@ -116,6 +117,42 @@ const buildGitHubWorkspaceSource = (input: {
     ref: input.ref,
     authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
   };
+};
+
+const buildGitHubDotfilesInput = (input: {
+  readonly installationRepositoryId: string;
+  readonly fullName: string;
+  readonly ref: string;
+}) => {
+  return {
+    kind: "git" as const,
+    purpose: "dotfiles" as const,
+    provider: "github" as const,
+    url: `https://github.com/${input.fullName}.git`,
+    ref: input.ref,
+    authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
+  };
+};
+
+const upsertDotfilesSourceInput = (
+  spec: WorkspaceBuildJobRequestPayload,
+  dotfilesInput: ReturnType<typeof buildGitHubDotfilesInput>,
+): WorkspaceBuildJobRequestPayload => {
+  const nextSpec = structuredClone(spec);
+  const existingInputs = nextSpec.sources?.inputs ?? nextSpec.inputs ?? [];
+  const nextInputs = existingInputs
+    .filter((input) => {
+      return input.purpose !== "dotfiles";
+    })
+    .concat(dotfilesInput);
+
+  delete nextSpec.inputs;
+  nextSpec.sources = {
+    ...nextSpec.sources,
+    inputs: nextInputs,
+  };
+
+  return workspaceBuildJobRequestPayloadSchema.parse(nextSpec);
 };
 
 const resolveGitHubSourceSelection = async (
@@ -251,6 +288,130 @@ const resolveGitHubSourceSelection = async (
   return {
     repositoryId: installationRepositoryRecord.repositoryId,
     spec: effectiveSpec,
+  };
+};
+
+const resolveGitHubDotfilesSelection = async (
+  c: Context<AppBindings>,
+  input: {
+    readonly ownerUserId: string;
+    readonly spec: WorkspaceBuildJobRequestPayload;
+    readonly dotfilesSelection: GitHubDotfilesSelection;
+  },
+): Promise<
+  | {
+      readonly spec: WorkspaceBuildJobRequestPayload;
+    }
+  | { readonly response: Response }
+> => {
+  const dotfilesSelection = input.dotfilesSelection;
+
+  if (dotfilesSelection === undefined) {
+    return {
+      spec: input.spec,
+    };
+  }
+
+  const gitHubInstallationRepository = c.get("gitHubInstallationRepository");
+  const gitHubInstallationRepositoryCacheRepository = c.get(
+    "gitHubInstallationRepositoryCacheRepository",
+  );
+
+  if (
+    gitHubInstallationRepository === undefined ||
+    gitHubInstallationRepositoryCacheRepository === undefined
+  ) {
+    return { response: gitHubUnavailableResponse(c) };
+  }
+
+  const installationRepositoryRecord =
+    await gitHubInstallationRepositoryCacheRepository.getInstallationRepositoryById(
+      dotfilesSelection.installationRepositoryId,
+    );
+
+  if (installationRepositoryRecord === undefined) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation repository not found: ${dotfilesSelection.installationRepositoryId}`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installationRepositoryRecord.removedAt !== null) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation repository ${dotfilesSelection.installationRepositoryId} is no longer available.`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installationRepositoryRecord.installationId !== dotfilesSelection.installationId) {
+    return {
+      response: c.json(
+        {
+          message: "Dotfiles GitHub selection did not match the selected installation.",
+        },
+        400,
+      ),
+    };
+  }
+
+  const installation = await gitHubInstallationRepository.getInstallationById(
+    dotfilesSelection.installationId,
+  );
+
+  if (installation === undefined) {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation not found: ${dotfilesSelection.installationId}`,
+        },
+        404,
+      ),
+    };
+  }
+
+  if (installation.status !== "active") {
+    return {
+      response: c.json(
+        {
+          message: `GitHub installation ${installation.id} is not active.`,
+        },
+        403,
+      ),
+    };
+  }
+
+  const hasGrant = await gitHubInstallationRepository.userHasInstallationGrant({
+    installationId: installation.id,
+    userId: input.ownerUserId,
+  });
+
+  if (!hasGrant) {
+    return {
+      response: c.json(
+        {
+          message: `User ${input.ownerUserId} does not have access to GitHub installation ${installation.id}.`,
+        },
+        403,
+      ),
+    };
+  }
+
+  const dotfilesInput = buildGitHubDotfilesInput({
+    installationRepositoryId: installationRepositoryRecord.id,
+    fullName: installationRepositoryRecord.fullName,
+    ref: dotfilesSelection.ref ?? installationRepositoryRecord.defaultBranch,
+  });
+
+  return {
+    spec: upsertDotfilesSourceInput(input.spec, dotfilesInput),
   };
 };
 
@@ -708,18 +869,31 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     return sourceSelectionResult.response;
   }
 
+  const dotfilesSelectionResult = await resolveGitHubDotfilesSelection(c, {
+    ownerUserId: body.ownerUserId,
+    spec: sourceSelectionResult.spec,
+    dotfilesSelection: body.dotfilesSelection,
+  });
+
+  if ("response" in dotfilesSelectionResult) {
+    return dotfilesSelectionResult.response;
+  }
+
   const sandboxId = randomUUID();
   const runId = randomUUID();
   const jobId = randomUUID();
-  const packageStandardization = await standardizeRequestedPackages(c, sourceSelectionResult.spec);
+  const packageStandardization = await standardizeRequestedPackages(
+    c,
+    dotfilesSelectionResult.spec,
+  );
 
   if (packageStandardization.errors.length > 0) {
     console.error("[sandboxes.create] package standardization failed", {
       sandboxId,
       ownerUserId: body.ownerUserId,
       errors: packageStandardization.errors,
-      requestedPackages: parseRequestedPackageIds(body.spec),
-      targetOs: parseRequestedOsFamily(body.spec),
+      requestedPackages: parseRequestedPackageIds(dotfilesSelectionResult.spec),
+      targetOs: parseRequestedOsFamily(dotfilesSelectionResult.spec),
     });
 
     return c.json(
@@ -772,7 +946,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
     await sandboxAttempts.setAttemptSnapshot({
       runId: attempt.id,
-      userSpecPayload: sourceSelectionResult.spec,
+      userSpecPayload: dotfilesSelectionResult.spec,
       resolvedSpecPayload: resolvedSpec,
       blueprintPayload,
     });

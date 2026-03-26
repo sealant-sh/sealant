@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   parseWorkspaceBlueprint,
   workspaceBlueprintVersion,
+  workspaceDotfilesManagerSchema,
+  workspaceDotfilesTargetSchema,
   workspaceHarnessIdSchema,
   workspaceInputPurposeSchema,
   workspaceLoginShellSchema,
@@ -144,8 +146,11 @@ const userWorkspaceRuntimeSchema = z.strictObject({
 // ad hoc setup scripts.
 const userWorkspaceCustomizationSchema = z.strictObject({
   defaultShell: workspaceLoginShellSchema.optional(),
-  dotfilesManager: z.enum(["chezmoi"]).optional(),
+  dotfilesManager: workspaceDotfilesManagerSchema.optional(),
+  dotfilesTarget: workspaceDotfilesTargetSchema.optional(),
   applyDotfiles: z.boolean().optional(),
+  dotfilesBootstrap: z.boolean().optional(),
+  dotfilesBootstrapCommand: nonEmptyStringSchema.optional(),
 });
 
 // OS intent also supports shorthand because users usually think in terms like
@@ -558,10 +563,13 @@ const normalizeCustomization = (
 ): WorkspaceBlueprint["customization"] => {
   return {
     defaultShell: customization?.defaultShell ?? "bash",
-    ...(customization?.dotfilesManager !== undefined
-      ? { dotfilesManager: customization.dotfilesManager }
-      : {}),
+    dotfilesManager: customization?.dotfilesManager ?? "auto",
+    dotfilesTarget: customization?.dotfilesTarget ?? "home",
     applyDotfiles: customization?.applyDotfiles ?? true,
+    dotfilesBootstrap: customization?.dotfilesBootstrap ?? true,
+    ...(customization?.dotfilesBootstrapCommand !== undefined
+      ? { dotfilesBootstrapCommand: customization.dotfilesBootstrapCommand }
+      : {}),
   };
 };
 
