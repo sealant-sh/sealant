@@ -591,7 +591,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     '  exec "$LOGIN_SHELL" -lc "$SSH_ORIGINAL_COMMAND"',
     "fi",
     'if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then',
-    '  exec "$BASH_SHELL" -il',
+    '  exec "$BASH_SHELL" -i',
     "fi",
     'exec "$LOGIN_SHELL" -i',
     "EOF",
