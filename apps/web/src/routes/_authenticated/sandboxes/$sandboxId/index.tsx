@@ -61,6 +61,7 @@ interface SandboxSummary {
     };
     readonly runtime: {
       readonly workingDirectory: string;
+      readonly ociRuntime: string;
     };
     readonly target: {
       readonly os: {
@@ -162,6 +163,7 @@ function toSandboxSummary(input: {
     typeof input.blueprint.access.ssh.listenPort === "number" &&
     isRecord(input.blueprint.runtime) &&
     typeof input.blueprint.runtime.workingDirectory === "string" &&
+    typeof input.blueprint.runtime.ociRuntime === "string" &&
     isRecord(input.blueprint.target) &&
     isRecord(input.blueprint.target.os) &&
     typeof input.blueprint.target.os.family === "string" &&
@@ -187,6 +189,7 @@ function toSandboxSummary(input: {
             },
             runtime: {
               workingDirectory: input.blueprint.runtime.workingDirectory,
+              ociRuntime: input.blueprint.runtime.ociRuntime,
             },
             target: {
               os: {
@@ -584,6 +587,7 @@ function SandboxSummaryPage() {
                   <RuntimeCell label="Config repo" value={workspaceSpecDetails.configRepo} />
                   <RuntimeCell label="Harness" value={workspaceSpecDetails.harness} />
                   <RuntimeCell label="Runtime target" value={workspaceSpecDetails.runtimeTarget} />
+                  <RuntimeCell label="OCI runtime" value={workspaceSpecDetails.ociRuntime} />
                   <RuntimeCell label="OS target" value={workspaceSpecDetails.osTarget} />
                   <RuntimeCell
                     label="Working directory"
@@ -864,6 +868,7 @@ interface WorkspaceSpecDetails {
   readonly configRepo: string;
   readonly harness: string;
   readonly runtimeTarget: string;
+  readonly ociRuntime: string;
   readonly osTarget: string;
   readonly workingDirectory: string;
   readonly ssh: string;
@@ -893,6 +898,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       configRepo,
       harness: sandbox.blueprint.harness.id,
       runtimeTarget: sandbox.blueprint.target.runtime.family,
+      ociRuntime: sandbox.blueprint.runtime.ociRuntime,
       osTarget: sandbox.blueprint.target.os.family,
       workingDirectory: sandbox.blueprint.runtime.workingDirectory,
       ssh,
@@ -910,6 +916,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
   const harness = typeof spec.harness === "string" ? spec.harness : spec.harness.id;
   const osTarget = resolveOsTarget(spec);
   const runtimeTarget = resolveRuntimeTarget(spec);
+  const ociRuntime = resolveOciRuntime(spec);
   const workingDirectory = spec.runtime?.workingDirectory ?? "n/a";
   const ssh = resolveSshState({ spec });
 
@@ -922,6 +929,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       configRepo,
       harness,
       runtimeTarget,
+      ociRuntime,
       osTarget,
       workingDirectory,
       ssh,
@@ -938,6 +946,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       configRepo,
       harness,
       runtimeTarget,
+      ociRuntime,
       osTarget,
       workingDirectory,
       ssh,
@@ -953,6 +962,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     configRepo,
     harness,
     runtimeTarget,
+    ociRuntime,
     osTarget,
     workingDirectory,
     ssh,
@@ -1072,6 +1082,10 @@ function resolveRuntimeTarget(spec: WorkspaceBuildJobRequestPayload): string {
   }
 
   return runtimeTarget.family ?? "n/a";
+}
+
+function resolveOciRuntime(spec: WorkspaceBuildJobRequestPayload): string {
+  return spec.runtime?.ociRuntime ?? "runc";
 }
 
 function resolveSshState(input: {

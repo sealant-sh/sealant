@@ -19,7 +19,9 @@ export {
   DockerRuntimeAdapter,
   type DockerCommandResult,
   type DockerCommandRunner,
+  type DockerRuntimeCatalog,
   type DockerRuntimeAdapterOptions,
+  type DockerRuntimeCatalogLoader,
 } from "./docker-runtime-adapter.js";
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";

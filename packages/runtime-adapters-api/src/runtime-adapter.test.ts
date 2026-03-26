@@ -25,6 +25,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
         env: {},
         workingDirectory: "/workspace/repo",
         persistence: "ephemeral",
+        ociRuntime: "runc",
         network: {
           outbound: true,
         },

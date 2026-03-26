@@ -28,6 +28,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
         env: {},
         workingDirectory: "/workspace/repo",
         persistence: "ephemeral",
+        ociRuntime: "runc",
         network: {
           outbound: true,
         },
@@ -54,6 +55,13 @@ const createLaunchInput = (overrides: Record<string, unknown> = {}) => {
       digest: "sha256:test",
     },
   });
+};
+
+const createRuntimeCatalogLoader = (runtimes: ReadonlyArray<string> = ["runc", "runsc"]) => {
+  return vi.fn(async () => ({
+    defaultRuntime: "runc",
+    runtimes: new Set(runtimes),
+  }));
 };
 
 describe("DockerRuntimeAdapter", () => {
@@ -114,6 +122,7 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     const result = await adapter.launch(
@@ -130,6 +139,7 @@ describe("DockerRuntimeAdapter", () => {
           },
           workingDirectory: "/workspace/repo",
           persistence: "ephemeral",
+          ociRuntime: "runc",
           network: {
             outbound: true,
           },
@@ -143,9 +153,11 @@ describe("DockerRuntimeAdapter", () => {
     const args = firstCall?.[1];
     expect(command).toBe("docker");
     expect(args).toBeDefined();
-    expect(args?.slice(0, 6)).toEqual([
+    expect(args?.slice(0, 8)).toEqual([
       "run",
       "-d",
+      "--runtime",
+      "runc",
       "--name",
       expect.any(String),
       "-w",
@@ -156,9 +168,74 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("NODE_ENV=development");
     expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
     expect(args).toContain("SEALANT_WORKSPACE_REPO_REF=main");
+    expect(args).toContain("SEALANT_OCI_RUNTIME=runc");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
     expect(result.status).toBe("running");
+  });
+
+  it("uses runsc when the blueprint requests it", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-runsc\n",
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(["runc", "runsc"]),
+    });
+
+    await adapter.launch(
+      createLaunchInput({
+        runtime: {
+          env: {},
+          workingDirectory: "/workspace/repo",
+          persistence: "ephemeral",
+          ociRuntime: "runsc",
+          network: {
+            outbound: true,
+          },
+        },
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("--runtime");
+    expect(runArgs).toContain("runsc");
+    expect(runArgs).toContain("SEALANT_OCI_RUNTIME=runsc");
+  });
+
+  it("fails when runsc is requested but not configured on the Docker host", async () => {
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: vi.fn(async () => ({ stdout: "", stderr: "" })),
+      runtimeCatalogLoader: createRuntimeCatalogLoader(["runc"]),
+    });
+
+    await expect(
+      adapter.launch(
+        createLaunchInput({
+          runtime: {
+            env: {},
+            workingDirectory: "/workspace/repo",
+            persistence: "ephemeral",
+            ociRuntime: "runsc",
+            network: {
+              outbound: true,
+            },
+          },
+        }),
+      ),
+    ).rejects.toThrow("Docker runtime 'runsc' is not configured on this host.");
   });
 
   it("passes workspace clone auth when a workspace auth ref is configured", async () => {
@@ -185,6 +262,7 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     try {
@@ -228,6 +306,7 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     await adapter.launch(
@@ -272,6 +351,7 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     await expect(adapter.launch(createLaunchInput())).rejects.toThrow(
@@ -322,6 +402,7 @@ describe("DockerRuntimeAdapter", () => {
       commandRunner,
       containerNamePrefix: "sealant-test",
       defaultSshAuthorizedKeysFile: keyFile,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     try {
@@ -389,6 +470,7 @@ describe("DockerRuntimeAdapter", () => {
       commandRunner,
       containerNamePrefix: "sealant-test",
       defaultSshAuthorizedKeysFile: keyFile,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
     try {

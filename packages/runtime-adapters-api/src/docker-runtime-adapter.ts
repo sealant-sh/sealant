@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -28,23 +29,108 @@ export type DockerCommandRunner = (
   args: Array<string>,
 ) => Promise<DockerCommandResult>;
 
+export interface DockerRuntimeCatalog {
+  readonly defaultRuntime?: string;
+  readonly runtimes: ReadonlySet<string>;
+}
+
+export type DockerRuntimeCatalogLoader = () => Promise<DockerRuntimeCatalog>;
+
 export interface DockerRuntimeAdapterOptions {
   readonly commandRunner?: DockerCommandRunner;
+  readonly runtimeCatalogLoader?: DockerRuntimeCatalogLoader;
   readonly containerNamePrefix?: string;
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
   readonly defaultSshAuthorizedKeysFile?: string;
   readonly sshBindHost?: string;
+  readonly dockerSocketPath?: string;
 }
 
-const defaultCommandRunner: DockerCommandRunner = async (command, args) => {
-  const result = await execFileAsync(command, args, {
-    maxBuffer: 1024 * 1024 * 10,
+const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
+  return async (command, args) => {
+    const result = await execFileAsync(command, args, {
+      maxBuffer: 1024 * 1024 * 10,
+      env: {
+        ...process.env,
+        DOCKER_HOST: `unix://${dockerSocketPath}`,
+      },
+    });
+
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  };
+};
+
+const loadRuntimeCatalogFromDockerSocket = async (
+  dockerSocketPath: string,
+): Promise<DockerRuntimeCatalog> => {
+  const body = await new Promise<string>((resolve, reject) => {
+    const request = httpRequest(
+      {
+        socketPath: dockerSocketPath,
+        path: "/info",
+        method: "GET",
+      },
+      (response) => {
+        if (response.statusCode === undefined) {
+          reject(createAdapterError("adapter-unavailable", "Docker info returned no status code."));
+          return;
+        }
+
+        let responseBody = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          responseBody += chunk;
+        });
+        response.on("end", () => {
+          if (response.statusCode !== 200) {
+            reject(
+              createAdapterError(
+                "adapter-unavailable",
+                `Docker info request failed with status ${response.statusCode}.`,
+              ),
+            );
+            return;
+          }
+
+          resolve(responseBody);
+        });
+      },
+    );
+
+    request.on("error", (error) => {
+      reject(
+        createAdapterError(
+          "adapter-unavailable",
+          `Docker info request failed on socket '${dockerSocketPath}': ${error.message}`,
+        ),
+      );
+    });
+    request.end();
   });
 
+  let parsedInfo: unknown;
+  try {
+    parsedInfo = JSON.parse(body);
+  } catch {
+    throw createAdapterError("adapter-unavailable", "Docker info returned invalid JSON.");
+  }
+
+  const info =
+    typeof parsedInfo === "object" && parsedInfo !== null
+      ? (parsedInfo as { DefaultRuntime?: unknown; Runtimes?: unknown })
+      : undefined;
+  const runtimes =
+    info !== undefined && typeof info.Runtimes === "object" && info.Runtimes !== null
+      ? new Set(Object.keys(info.Runtimes as Record<string, unknown>))
+      : new Set<string>();
+
   return {
-    stdout: result.stdout,
-    stderr: result.stderr,
+    defaultRuntime: typeof info?.DefaultRuntime === "string" ? info.DefaultRuntime : undefined,
+    runtimes,
   };
 };
 
@@ -81,6 +167,8 @@ const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> =
     `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
     "-e",
     `SEALANT_WORKSPACE_REPO_REF=${input.blueprint.sources.workspace.ref}`,
+    "-e",
+    `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,
   ];
 };
@@ -120,6 +208,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly commandRunner: DockerCommandRunner;
 
+  private readonly runtimeCatalogLoader: DockerRuntimeCatalogLoader;
+
   private readonly containerNamePrefix: string;
 
   private readonly autoRemove: boolean;
@@ -131,12 +221,36 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly sshBindHost: string;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
-    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+    const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
+
+    this.commandRunner = options.commandRunner ?? createDefaultCommandRunner(dockerSocketPath);
+    this.runtimeCatalogLoader =
+      options.runtimeCatalogLoader ?? (() => loadRuntimeCatalogFromDockerSocket(dockerSocketPath));
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
+  }
+
+  private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
+    const catalog = await this.runtimeCatalogLoader();
+    const availableRuntimes = [...catalog.runtimes].sort();
+
+    if (catalog.runtimes.has(runtime)) {
+      return;
+    }
+
+    if (runtime === "runc" && catalog.defaultRuntime === "runc") {
+      return;
+    }
+
+    throw createAdapterError(
+      "adapter-unavailable",
+      `Docker runtime '${runtime}' is not configured on this host. Available runtimes: ${
+        availableRuntimes.length === 0 ? "none reported" : availableRuntimes.join(", ")
+      }`,
+    );
   }
 
   private async resolveAuthorizedKeysBase64(input: RuntimeAdapterLaunchInput): Promise<string> {
@@ -381,6 +495,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       throw createAdapterError(support.reason, support.message);
     }
 
+    await this.assertRuntimeConfigured(parsed.blueprint.runtime.ociRuntime);
+
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
     const imageReference = parsed.publishedImage.digestReference;
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
@@ -420,6 +536,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const args = [
       "run",
       "-d",
+      "--runtime",
+      parsed.blueprint.runtime.ociRuntime,
       "--name",
       containerName,
       "-w",

@@ -12,6 +12,7 @@ type LoginShell = "bash" | "zsh" | "fish";
 type DotfilesManager = "auto" | "chezmoi" | "stow" | "copy";
 type DotfilesTarget = "home" | "config";
 type TargetOs = "fedora" | "arch" | "nix";
+type OciRuntime = "runc" | "runsc";
 
 interface NewSandboxFormState {
   readonly sourceMode: SourceMode;
@@ -31,6 +32,7 @@ interface NewSandboxFormState {
   readonly harness: HarnessId;
   readonly defaultShell: LoginShell;
   readonly targetOs: TargetOs;
+  readonly ociRuntime: OciRuntime;
   readonly registryId: string;
   readonly artifactRepository: string;
   readonly artifactTag: string;
@@ -72,6 +74,21 @@ const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly labe
   { value: "nix", label: "NixOS" },
 ];
 
+const OCI_RUNTIME_OPTIONS: ReadonlyArray<{
+  readonly value: OciRuntime;
+  readonly label: string;
+  readonly detail: string;
+}> = [
+  {
+    value: "runc",
+    label: "runc",
+    detail: "Default Docker runtime for standard launches and widest compatibility.",
+  },
+  {
+    value: "runsc",
+    label: "runsc",
+    detail: "gVisor-isolated Docker runtime for stronger sandbox boundaries.",
+  },
 const SHELL_OPTIONS: ReadonlyArray<{ readonly value: LoginShell; readonly label: string }> = [
   { value: "bash", label: "Bash" },
   { value: "zsh", label: "Zsh" },
@@ -380,6 +397,9 @@ function NewSandboxPage() {
               }),
         },
         os: form.targetOs,
+        runtime: {
+          ociRuntime: form.ociRuntime,
+        },
         packages: form.packages,
         ssh: form.sshEnabled,
         ...(normalizedConfigRepoInput === undefined ? {} : { inputs: [normalizedConfigRepoInput] }),
@@ -583,6 +603,9 @@ function NewSandboxPage() {
                 }),
           },
           os: form.targetOs,
+          runtime: {
+            ociRuntime: form.ociRuntime,
+          },
           ssh: form.sshEnabled,
           ...(normalizedConfigRepoInput === undefined
             ? {}
@@ -1379,6 +1402,55 @@ function NewSandboxPage() {
                     </LabeledField>
                   </div>
 
+                  <LabeledField label="OCI Runtime">
+                    <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {OCI_RUNTIME_OPTIONS.map((option) => {
+                          const isActive = form.ociRuntime === option.value;
+
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => {
+                                setField("ociRuntime", option.value);
+                              }}
+                              className={
+                                isActive
+                                  ? "border border-primary bg-primary/10 px-4 py-4 text-left"
+                                  : "border border-border bg-background px-4 py-4 text-left transition-colors hover:border-foreground"
+                              }
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-display text-3xl leading-none text-foreground">
+                                    {option.label}
+                                  </p>
+                                  <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                                    {option.detail}
+                                  </p>
+                                </div>
+                                <span
+                                  className={
+                                    isActive
+                                      ? "border border-primary bg-primary px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-primary-foreground"
+                                      : "border border-border px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground"
+                                  }
+                                >
+                                  {isActive ? "ACTIVE" : "READY"}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="font-mono text-[0.62rem] leading-6 tracking-[0.11em] text-muted-foreground">
+                        `runsc` launches require the worker Docker host to have the gVisor runtime
+                        registered.
+                      </p>
+                    </div>
+                  </LabeledField>
+
                   <div className="grid gap-4 sm:grid-cols-3">
                     <LabeledField label="Registry ID">
                       <input
@@ -1681,7 +1753,10 @@ function NewSandboxPage() {
                 <SummaryRow label="Target" value={previewManifest.spec.source.url} highlighted />
                 <SummaryRow label="Harness" value={previewManifest.spec.harness.toUpperCase()} />
                 <SummaryRow label="Target OS" value={previewManifest.spec.os.toUpperCase()} />
-                <SummaryRow label="Shell" value={form.defaultShell.toUpperCase()} />
+                <SummaryRow
+                  label="OCI runtime"
+                  value={previewManifest.spec.runtime.ociRuntime.toUpperCase()}
+                />
                 <SummaryRow label="Packages" value={String(previewManifest.spec.packages.length)} />
                 <SummaryRow
                   label="Config repo"
@@ -1894,6 +1969,7 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
     harness: "opencode",
     defaultShell: "bash",
     targetOs: "fedora",
+    ociRuntime: "runc",
     registryId,
     artifactRepository: "sealant/workspaces/demo",
     artifactTag: "opencode",

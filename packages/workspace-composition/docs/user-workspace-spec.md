@@ -16,6 +16,7 @@ expanded during normalization.
 - `startup: "pnpm dev"` for a foreground startup command
 - `os: "fedora"` instead of `target.os.family: "fedora"`
 - `target.runtime: "docker"` to choose the runtime adapter family
+- `runtime.ociRuntime: "runsc"` to request the Docker OCI runtime for one sandbox launch
 
 ## Normalization rules
 

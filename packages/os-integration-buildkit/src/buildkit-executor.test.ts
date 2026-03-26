@@ -195,6 +195,9 @@ describe("BuildkitDistroOsExecutor", () => {
     expect(entrypoint).toContain('mkdir -p "$WORKSPACE_ROOT" "$WORKING_DIRECTORY"');
     expect(entrypoint).toContain("cat > /usr/local/bin/workspace-ssh-shell <<'EOF'");
     expect(entrypoint).toContain("ForceCommand /usr/local/bin/workspace-ssh-shell");
+    expect(entrypoint).toContain("BASH_SHELL='/bin/bash'");
+    expect(entrypoint).toContain('if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then');
+    expect(entrypoint).toContain('exec "$BASH_SHELL" -i');
     expect(entrypoint).toContain('exec "$LOGIN_SHELL" -i');
     expect(entrypoint).toContain("cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'");
     expect(entrypoint).toContain('export GIT_ASKPASS="$REPO_GIT_ASKPASS_PATH"');
@@ -289,6 +292,9 @@ describe("BuildkitDistroOsExecutor", () => {
     expect(entrypoint).toContain("if ! id -u sshd >/dev/null 2>&1; then");
     expect(entrypoint).toContain("sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/sh");
     expect(entrypoint).toContain("/root/.nix-profile/bin/sshd -f");
+    expect(entrypoint).toContain("BASH_SHELL='/root/.nix-profile/bin/bash'");
+    expect(entrypoint).toContain('if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then');
+    expect(entrypoint).toContain('exec "$BASH_SHELL" -i');
     expect(entrypoint).toContain("exec /root/.nix-profile/bin/zsh -lc 'codex'");
   });
 

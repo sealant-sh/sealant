@@ -53,6 +53,7 @@ describe("parseWorkspaceBlueprint", () => {
         workspaceRoot: "/workspace",
         workingDirectory: "/workspace/repo",
         persistence: "ephemeral",
+        ociRuntime: "runc",
         network: {
           outbound: true,
         },

@@ -108,6 +108,7 @@ describe("normalizeUserWorkspaceSpec", () => {
         workspaceRoot: "/workspace",
         workingDirectory: "/workspace/repo",
         persistence: "ephemeral",
+        ociRuntime: "runc",
         network: {
           outbound: true,
         },
@@ -191,6 +192,19 @@ describe("normalizeUserWorkspaceSpec", () => {
       family: "k3s",
       mode: "prefer",
     });
+    expect(blueprint.runtime.ociRuntime).toBe("runc");
+  });
+
+  it("carries an explicit OCI runtime preference into the blueprint", () => {
+    const blueprint = normalizeUserWorkspaceSpec({
+      source: "https://github.com/example/project.git",
+      harness: "opencode",
+      runtime: {
+        ociRuntime: "runsc",
+      },
+    });
+
+    expect(blueprint.runtime.ociRuntime).toBe("runsc");
   });
 
   it("carries source auth refs and customization into the blueprint", () => {

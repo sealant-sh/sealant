@@ -46,6 +46,7 @@ export {
   workspaceInputPurposeSchema,
   workspaceInputSourceSchema,
   workspaceLoginShellSchema,
+  workspaceOciRuntimeSchema,
   workspaceLifecycleSchema,
   workspacePackageRequestSchema,
   workspacePersistenceSchema,

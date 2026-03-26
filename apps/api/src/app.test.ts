@@ -1350,6 +1350,9 @@ describe("createApiApp", () => {
           source: "https://github.com/example/repo",
           harness: "opencode",
           os: "nix",
+          runtime: {
+            ociRuntime: "runsc",
+          },
         },
       }),
     });
@@ -1401,6 +1404,9 @@ describe("createApiApp", () => {
           source: "https://github.com/example/repo",
           harness: "opencode",
           os: "nix",
+          runtime: {
+            ociRuntime: "runsc",
+          },
         },
       }),
     });
@@ -1504,6 +1510,9 @@ describe("createApiApp", () => {
           source: "https://github.com/example/repo",
           harness: "opencode",
           os: "nix",
+          runtime: {
+            ociRuntime: "runsc",
+          },
         },
       }),
     });
@@ -1527,6 +1536,7 @@ describe("createApiApp", () => {
 
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
     expect(savedJob?.runId).toBe(savedSandbox?.latestRunId ?? null);
+    expect(savedJob?.requestPayload.runtime?.ociRuntime).toBe("runsc");
   });
 
   it("creates sandboxes from a granted GitHub installation repository", async () => {

@@ -22,6 +22,7 @@ describe("K8sRuntimeAdapter", () => {
           env: {},
           workingDirectory: "/workspace/repo",
           persistence: "ephemeral",
+          ociRuntime: "runc",
           network: {
             outbound: true,
           },

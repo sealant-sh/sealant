@@ -45,6 +45,7 @@ Top-level sections:
 - `runtime.workspaceRoot`: `"/workspace"`
 - `runtime.workingDirectory`: `"/workspace/repo"`
 - `runtime.persistence`: `"ephemeral"`
+- `runtime.ociRuntime`: `"runc"`
 - `runtime.network.outbound`: `true`
 - `target.os.family`: `"auto"`
 - `target.os.mode`: `"prefer"`
@@ -57,7 +58,7 @@ This blueprint intentionally does not include:
 
 - Nix-specific config such as Home Manager modules or pinned config repos
 - distro-specific package names or package-manager details
-- image naming, registry publishing, or runtime-adapter deployment settings
+- image naming, registry publishing, or host-level runtime-adapter deployment settings
 
 Those belong in concrete OS integrations or runtime adapters, not in the shared composition
 contract.
