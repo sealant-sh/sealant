@@ -7,11 +7,15 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
   "dependencies": {
     "amqplib": "^0.10.9",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@sealant/typescript": "workspace:*",
     "@types/amqplib": "^0.10.7"
   }
 }

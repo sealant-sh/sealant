@@ -7,7 +7,13 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
   "dependencies": {
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

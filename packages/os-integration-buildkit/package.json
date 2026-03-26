@@ -8,11 +8,15 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@sealant/ai-harness-integrations": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

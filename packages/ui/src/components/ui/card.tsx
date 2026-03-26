@@ -1,6 +1,5 @@
+import { cn } from "@sealant/ui/lib/utils";
 import * as React from "react";
-
-import { cn } from "@/lib/utils";
 
 function Card({
   className,

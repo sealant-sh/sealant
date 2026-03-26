@@ -114,6 +114,7 @@ const parseInstallationResponse = (payload: unknown): GitHubRemoteInstallation =
   const parsed = assertObject(payload, "GitHub installation response must be an object.");
   const account = assertObject(parsed.account, "GitHub installation account must be an object.");
   const accountType = toGitHubInstallationAccountType(account.type);
+  const suspendedAt = toDate(parsed.suspended_at);
   const targetType =
     typeof parsed.target_type === "string"
       ? toGitHubInstallationAccountType(parsed.target_type)
@@ -129,9 +130,7 @@ const parseInstallationResponse = (payload: unknown): GitHubRemoteInstallation =
     targetType,
     permissions: parsePermissions(parsed.permissions),
     repositorySelection: parsed.repository_selection === "selected" ? "selected" : "all",
-    ...(toDate(parsed.suspended_at) === undefined
-      ? {}
-      : { suspendedAt: toDate(parsed.suspended_at) }),
+    ...(suspendedAt === undefined ? {} : { suspendedAt }),
   };
 };
 
@@ -156,6 +155,7 @@ const parseRepositoriesResponse = (
     );
     const ownerLogin = assertString(owner.login, `GitHub repository owner login is required.`);
     const name = assertString(parsedRepository.name, `GitHub repository name is required.`);
+    const pushedAt = toDate(parsedRepository.pushed_at);
 
     return {
       externalRepositoryId: String(parsedRepository.id),
@@ -177,7 +177,7 @@ const parseRepositoriesResponse = (
         parsedRepository.archived,
         "GitHub repository archived flag is required.",
       ),
-      pushedAt: toDate(parsedRepository.pushed_at),
+      ...(pushedAt === undefined ? {} : { pushedAt }),
       url: assertString(parsedRepository.clone_url, "GitHub repository clone_url is required."),
     };
   });

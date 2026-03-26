@@ -550,8 +550,8 @@ const mapSandboxAttemptSummary = (
     relation: link.relation,
     status: resolveSandboxStatus({
       attempt,
-      latestJob,
-      runtimeInstance,
+      ...(latestJob === undefined ? {} : { latestJob }),
+      ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
     }),
     triggerType: attempt.triggerType,
     ...(attempt.triggerRef === null ? {} : { triggerRef: attempt.triggerRef }),
@@ -649,8 +649,8 @@ const mapSandboxSummary = (
       ? mapStoredSandboxStatus(sandbox.status)
       : resolveSandboxStatus({
           attempt,
-          latestJob,
-          runtimeInstance,
+          ...(latestJob === undefined ? {} : { latestJob }),
+          ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
         });
 
   return {

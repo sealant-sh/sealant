@@ -1,10 +1,9 @@
+import { Button } from "@sealant/ui/components/ui/button";
+import { Input } from "@sealant/ui/components/ui/input";
+import { Textarea } from "@sealant/ui/components/ui/textarea";
+import { cn } from "@sealant/ui/lib/utils";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
-
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
 
 function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (

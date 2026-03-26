@@ -401,12 +401,16 @@ export const processWorkspaceBuildJob = async (options: ProcessWorkspaceBuildJob
     const workspaceCloneAuth = await resolveWorkspaceCloneAuth({
       blueprint,
       dbClient: options.dbClient,
-      gitHubSourceIntegration: options.gitHubSourceIntegration,
+      ...(options.gitHubSourceIntegration === undefined
+        ? {}
+        : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
     });
     const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
       blueprint,
       dbClient: options.dbClient,
-      gitHubSourceIntegration: options.gitHubSourceIntegration,
+      ...(options.gitHubSourceIntegration === undefined
+        ? {}
+        : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
     });
     const runtimeBlueprint: WorkspaceBlueprint =
       Object.keys(dotfilesRuntimeEnv).length === 0

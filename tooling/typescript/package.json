@@ -1,0 +1,15 @@
+{
+  "name": "@sealant/typescript",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "*.json"
+  ],
+  "exports": {
+    "./core.json": "./core.json",
+    "./web.json": "./web.json"
+  },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  }
+}

@@ -11,9 +11,15 @@
     "./server": "./src/server.ts",
     "./session": "./src/session.ts"
   },
+  "scripts": {
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
   "dependencies": {
     "@sealant/db": "workspace:*",
     "better-auth": "^1.4.13",
     "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }

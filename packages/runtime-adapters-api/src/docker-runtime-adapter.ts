@@ -127,9 +127,10 @@ const loadRuntimeCatalogFromDockerSocket = async (
     info !== undefined && typeof info.Runtimes === "object" && info.Runtimes !== null
       ? new Set(Object.keys(info.Runtimes as Record<string, unknown>))
       : new Set<string>();
+  const defaultRuntime = typeof info?.DefaultRuntime === "string" ? info.DefaultRuntime : undefined;
 
   return {
-    defaultRuntime: typeof info?.DefaultRuntime === "string" ? info.DefaultRuntime : undefined,
+    ...(defaultRuntime === undefined ? {} : { defaultRuntime }),
     runtimes,
   };
 };

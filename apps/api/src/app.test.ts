@@ -616,7 +616,7 @@ const createGitHubSourceIntegrationStub = (
 
       return installation;
     },
-    listInstallationRepositories: async (externalInstallationId) => {
+    listInstallationRepositories: async (externalInstallationId: string) => {
       return options.repositoriesByInstallationExternalId?.[externalInstallationId] ?? [];
     },
   };
@@ -870,7 +870,10 @@ const createPackageStandardizerStub = (
     resolvePackage: async ({ query, targetOs }) => {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);
-      calls.push({ query, targetOs });
+      calls.push({
+        query,
+        ...(targetOs === undefined ? {} : { targetOs }),
+      });
 
       return packageResolutionSchema.parse({
         requested: query,

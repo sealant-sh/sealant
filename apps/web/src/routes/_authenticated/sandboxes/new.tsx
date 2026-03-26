@@ -89,6 +89,8 @@ const OCI_RUNTIME_OPTIONS: ReadonlyArray<{
     label: "runsc",
     detail: "gVisor-isolated Docker runtime for stronger sandbox boundaries.",
   },
+];
+
 const SHELL_OPTIONS: ReadonlyArray<{ readonly value: LoginShell; readonly label: string }> = [
   { value: "bash", label: "Bash" },
   { value: "zsh", label: "Zsh" },

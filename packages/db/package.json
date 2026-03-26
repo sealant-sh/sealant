@@ -11,7 +11,8 @@
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/run-migrations.ts",
-    "dev": "exec drizzle-kit studio --config drizzle.config.ts"
+    "dev": "exec drizzle-kit studio --config drizzle.config.ts",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
@@ -21,6 +22,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@sealant/typescript": "workspace:*",
     "drizzle-kit": "^0.31.5"
   }
 }

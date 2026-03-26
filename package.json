@@ -3,11 +3,13 @@
   "private": true,
   "scripts": {
     "build": "turbo build",
+    "build:tui": "turbo build --ui=tui",
     "clean": "turbo clean",
     "clean:workspaces": "node tooling/scripts/clean-workspaces.mjs",
     "db:migrate": "pnpm --filter @sealant/db db:migrate",
     "db:studio": "pnpm --filter @sealant/db exec drizzle-kit studio --config drizzle.config.ts",
     "dev": "turbo dev",
+    "dev:tui": "turbo dev --ui=tui",
     "format": "oxfmt . --check",
     "format:check": "oxfmt . --check",
     "format:fix": "oxfmt .",
@@ -18,9 +20,11 @@
     "test": "turbo test",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "test:tui": "turbo test --ui=tui",
     "test:watch": "vitest",
-    "typecheck": "tsgo -p tsconfig.json --noEmit",
-    "typecheck:tsc": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "turbo typecheck",
+    "typecheck:tsc": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tui": "turbo typecheck --ui=tui"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

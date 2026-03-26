@@ -304,19 +304,23 @@ Run common workspace tasks from the repo root:
 
 ```bash
 pnpm dev
+pnpm dev:tui
 pnpm build
+pnpm build:tui
 pnpm format
 pnpm format:check
 pnpm lint
 pnpm lint:fix
 pnpm lint:types
 pnpm typecheck
+pnpm typecheck:tui
 pnpm typecheck:tsc
 pnpm test
+pnpm test:tui
 ```
 
-`pnpm build`, `pnpm dev`, and `pnpm test` are wired through Turbo. The lint, format, and typecheck
-commands run from the repo root so the baseline tooling works before app packages exist.
+`pnpm build`, `pnpm dev`, `pnpm test`, and `pnpm typecheck` are wired through Turbo. Use the `*:tui`
+variants to force Turbo's terminal UI.
 
 ## Contributor notes
 

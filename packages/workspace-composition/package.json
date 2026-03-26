@@ -11,9 +11,13 @@
     "./executor": "./src/executor.ts"
   },
   "scripts": {
-    "test": "vitest run src/*.test.ts"
+    "test": "vitest run src/*.test.ts",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*"
   }
 }
