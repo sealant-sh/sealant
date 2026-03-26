@@ -29,6 +29,10 @@ export const workspaceShellSchema = z.enum(["sh", "bash"]);
 // particular lifecycle command executes.
 export const workspaceLoginShellSchema = z.enum(["bash", "zsh", "fish"]);
 
+export const workspaceDotfilesManagerSchema = z.enum(["auto", "chezmoi", "stow", "copy"]);
+
+export const workspaceDotfilesTargetSchema = z.enum(["home", "config"]);
+
 // Persistence belongs in the shared blueprint because it is a user/runtime
 // expectation, not an implementation detail of a specific executor.
 export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
@@ -116,8 +120,11 @@ export const workspaceToolingSchema = z
 export const workspaceCustomizationSchema = z
   .strictObject({
     defaultShell: workspaceLoginShellSchema.default("bash"),
-    dotfilesManager: z.enum(["chezmoi"]).optional(),
+    dotfilesManager: workspaceDotfilesManagerSchema.default("auto"),
+    dotfilesTarget: workspaceDotfilesTargetSchema.default("home"),
     applyDotfiles: z.boolean().default(true),
+    dotfilesBootstrap: z.boolean().default(true),
+    dotfilesBootstrapCommand: nonEmptyStringSchema.optional(),
   })
   .default({});
 

@@ -80,7 +80,10 @@ describe("normalizeUserWorkspaceSpec", () => {
       },
       customization: {
         defaultShell: "bash",
+        dotfilesManager: "auto",
+        dotfilesTarget: "home",
         applyDotfiles: true,
+        dotfilesBootstrap: true,
       },
       lifecycle: {
         setup: [
@@ -219,7 +222,9 @@ describe("normalizeUserWorkspaceSpec", () => {
     expect(blueprint.customization).toEqual({
       defaultShell: "zsh",
       dotfilesManager: "chezmoi",
+      dotfilesTarget: "home",
       applyDotfiles: true,
+      dotfilesBootstrap: true,
     });
   });
 });

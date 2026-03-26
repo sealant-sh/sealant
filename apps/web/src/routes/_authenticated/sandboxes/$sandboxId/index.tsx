@@ -44,6 +44,11 @@ interface SandboxSummary {
         readonly url: string;
         readonly ref: string;
       };
+      readonly inputs?: Array<{
+        readonly purpose: "config" | "dotfiles" | "bootstrap";
+        readonly url: string;
+        readonly ref: string;
+      }>;
     };
     readonly harness: {
       readonly id: string;
@@ -237,6 +242,14 @@ function SandboxSummaryPage() {
   const [rerunMutationError, setRerunMutationError] = useState<string | null>(null);
   const sshCommand = buildSshCommand(sandbox.runtime?.endpoint);
   const workspaceSpecDetails = resolveWorkspaceSpecDetails(sandbox);
+  const vscodeOpenUri = buildVsCodeOpenUri({
+    endpoint: sandbox.runtime?.endpoint,
+    workingDirectory: workspaceSpecDetails?.workingDirectory,
+  });
+  const cursorOpenUri = buildCursorOpenUri({
+    endpoint: sandbox.runtime?.endpoint,
+    workingDirectory: workspaceSpecDetails?.workingDirectory,
+  });
   const nameSuggestions = suggestSandboxNames(sandbox);
   const canRerunSandbox =
     sandbox.registryId !== undefined &&
@@ -289,6 +302,22 @@ function SandboxSummaryPage() {
     } catch (error) {
       setNameMutationError(resolveMutationErrorMessage(error));
     }
+  };
+
+  const openSandboxInVsCode = () => {
+    if (vscodeOpenUri === null || typeof window === "undefined") {
+      return;
+    }
+
+    window.location.assign(vscodeOpenUri);
+  };
+
+  const openSandboxInCursor = () => {
+    if (cursorOpenUri === null || typeof window === "undefined") {
+      return;
+    }
+
+    window.location.assign(cursorOpenUri);
   };
 
   const rerunSandbox = async () => {
@@ -384,7 +413,25 @@ function SandboxSummaryPage() {
         </div>
 
         <div className="flex flex-col gap-3 border-t border-border p-6 sm:flex-row sm:border-l sm:border-t-0 sm:p-8 lg:flex-col">
-          <Button className="h-11 px-5">Open Sandbox</Button>
+          <Button
+            className="h-11 px-5"
+            onClick={() => {
+              openSandboxInVsCode();
+            }}
+            disabled={vscodeOpenUri === null}
+          >
+            Open in VS Code
+          </Button>
+          <Button
+            variant="outline"
+            className="h-11 px-5"
+            onClick={() => {
+              openSandboxInCursor();
+            }}
+            disabled={cursorOpenUri === null}
+          >
+            Open in Cursor
+          </Button>
           <Button
             variant="outline"
             className="h-11 px-5"
@@ -534,6 +581,7 @@ function SandboxSummaryPage() {
                   />
                   <RuntimeCell label="Branch" value={workspaceSpecDetails.branch} />
                   <RuntimeCell label="Provider" value={workspaceSpecDetails.provider} />
+                  <RuntimeCell label="Config repo" value={workspaceSpecDetails.configRepo} />
                   <RuntimeCell label="Harness" value={workspaceSpecDetails.harness} />
                   <RuntimeCell label="Runtime target" value={workspaceSpecDetails.runtimeTarget} />
                   <RuntimeCell label="OS target" value={workspaceSpecDetails.osTarget} />
@@ -667,29 +715,138 @@ function toShortDateTime(value: string): string {
   });
 }
 
-function buildSshCommand(endpoint: string | undefined): string | null {
-  if (endpoint === undefined || endpoint.length === 0) {
+interface ParsedSshEndpoint {
+  readonly user: string;
+  readonly host: string;
+  readonly port?: string;
+}
+
+function normalizeSshHost(host: string): string {
+  const normalized = host.trim();
+
+  if (normalized === "127.0.0.1" || normalized === "::1") {
+    return "localhost";
+  }
+
+  return normalized;
+}
+
+function parseSshEndpoint(endpoint: string | undefined): ParsedSshEndpoint | null {
+  if (endpoint === undefined || endpoint.trim().length === 0) {
     return null;
   }
 
   if (endpoint.startsWith("ssh://")) {
     try {
       const parsed = new URL(endpoint);
-      const user = parsed.username.length > 0 ? parsed.username : "root";
       const host = parsed.hostname;
 
       if (host.length === 0) {
         return null;
       }
 
-      if (parsed.port.length > 0) {
-        return `ssh ${user}@${host} -p ${parsed.port}`;
-      }
-
-      return `ssh ${user}@${host}`;
+      return {
+        user: parsed.username.length > 0 ? parsed.username : "root",
+        host: normalizeSshHost(host),
+        ...(parsed.port.length === 0 ? {} : { port: parsed.port }),
+      };
     } catch {
       return null;
     }
+  }
+
+  if (endpoint.startsWith("ssh ")) {
+    return null;
+  }
+
+  const raw = endpoint.trim();
+  const atIndex = raw.lastIndexOf("@");
+  const user = atIndex >= 0 ? raw.slice(0, atIndex) : "root";
+  const hostPort = atIndex >= 0 ? raw.slice(atIndex + 1) : raw;
+
+  if (hostPort.length === 0) {
+    return null;
+  }
+
+  const bracketedMatch = /^\[(?<host>[^\]]+)\](?::(?<port>\d+))?$/.exec(hostPort);
+  if (bracketedMatch?.groups?.host !== undefined) {
+    return {
+      user,
+      host: normalizeSshHost(bracketedMatch.groups.host),
+      ...(bracketedMatch.groups.port === undefined ? {} : { port: bracketedMatch.groups.port }),
+    };
+  }
+
+  const hostPortMatch = /^(?<host>[^:]+)(?::(?<port>\d+))?$/.exec(hostPort);
+  if (hostPortMatch?.groups?.host === undefined) {
+    return null;
+  }
+
+  return {
+    user,
+    host: normalizeSshHost(hostPortMatch.groups.host),
+    ...(hostPortMatch.groups.port === undefined ? {} : { port: hostPortMatch.groups.port }),
+  };
+}
+
+function normalizeVsCodePath(value: string | undefined): string {
+  const fallback = "/workspace/repo";
+  const raw = (value ?? fallback).trim();
+  const normalized = raw.length === 0 ? fallback : raw;
+  const withLeadingSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  const segments = withLeadingSlash.split("/").filter((segment) => segment.length > 0);
+
+  if (segments.length === 0) {
+    return "/";
+  }
+
+  return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+}
+
+function buildVsCodeOpenUri(input: {
+  endpoint: string | undefined;
+  workingDirectory: string | undefined;
+}): string | null {
+  const parsed = parseSshEndpoint(input.endpoint);
+  if (parsed === null) {
+    return null;
+  }
+
+  const authority = `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
+  const encodedAuthority = encodeURIComponent(authority);
+  const path = normalizeVsCodePath(input.workingDirectory);
+
+  return `vscode://vscode-remote/ssh-remote+${encodedAuthority}${path}`;
+}
+
+function buildCursorOpenUri(input: {
+  endpoint: string | undefined;
+  workingDirectory: string | undefined;
+}): string | null {
+  const parsed = parseSshEndpoint(input.endpoint);
+  if (parsed === null) {
+    return null;
+  }
+
+  const authority = `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
+  const encodedAuthority = encodeURIComponent(authority);
+  const path = normalizeVsCodePath(input.workingDirectory);
+
+  return `cursor://vscode-remote/ssh-remote+${encodedAuthority}${path}`;
+}
+
+function buildSshCommand(endpoint: string | undefined): string | null {
+  const parsed = parseSshEndpoint(endpoint);
+  if (parsed !== null) {
+    if (parsed.port !== undefined) {
+      return `ssh ${parsed.user}@${parsed.host} -p ${parsed.port}`;
+    }
+
+    return `ssh ${parsed.user}@${parsed.host}`;
+  }
+
+  if (endpoint === undefined || endpoint.length === 0) {
+    return null;
   }
 
   if (endpoint.startsWith("ssh ")) {
@@ -704,6 +861,7 @@ interface WorkspaceSpecDetails {
   readonly branch: string;
   readonly isGitHubSource: boolean;
   readonly provider: string;
+  readonly configRepo: string;
   readonly harness: string;
   readonly runtimeTarget: string;
   readonly osTarget: string;
@@ -716,6 +874,10 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
   const workspaceSource = resolveWorkspaceSourceReference(sandbox.spec);
   const isGitHubSource = resolveIsGitHubSource(workspaceSource);
   const selectedPackages = sandbox.spec === undefined ? [] : resolveSelectedPackages(sandbox.spec);
+  const configRepo = resolveConfigRepoReference({
+    spec: sandbox.spec,
+    blueprint: sandbox.blueprint,
+  });
 
   if (sandbox.blueprint !== undefined) {
     const ssh = resolveSshState({
@@ -728,6 +890,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       branch: sandbox.blueprint.sources.workspace.ref,
       isGitHubSource,
       provider: sandbox.blueprint.sources.workspace.provider,
+      configRepo,
       harness: sandbox.blueprint.harness.id,
       runtimeTarget: sandbox.blueprint.target.runtime.family,
       osTarget: sandbox.blueprint.target.os.family,
@@ -756,6 +919,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       branch: "not specified",
       isGitHubSource,
       provider: "unknown",
+      configRepo,
       harness,
       runtimeTarget,
       osTarget,
@@ -771,6 +935,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
       branch: "not specified",
       isGitHubSource,
       provider: inferSourceProvider(source),
+      configRepo,
       harness,
       runtimeTarget,
       osTarget,
@@ -785,6 +950,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     branch: source.ref ?? "not specified",
     isGitHubSource,
     provider: source.provider ?? inferSourceProvider(source.url),
+    configRepo,
     harness,
     runtimeTarget,
     osTarget,
@@ -792,6 +958,37 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     ssh,
     selectedPackages,
   };
+}
+
+function resolveConfigRepoReference(input: {
+  spec: WorkspaceBuildJobRequestPayload | undefined;
+  blueprint:
+    | {
+        sources: {
+          inputs?: Array<{
+            purpose: "config" | "dotfiles" | "bootstrap";
+            url: string;
+            ref: string;
+          }>;
+        };
+      }
+    | undefined;
+}): string {
+  const blueprintDotfiles = input.blueprint?.sources.inputs?.find(
+    (source) => source.purpose === "dotfiles",
+  );
+  if (blueprintDotfiles !== undefined) {
+    return `${blueprintDotfiles.url} @ ${blueprintDotfiles.ref}`;
+  }
+
+  const sourceInputs = input.spec?.sources?.inputs ?? input.spec?.inputs ?? [];
+  const dotfilesSource = sourceInputs.find((source) => source.purpose === "dotfiles");
+
+  if (dotfilesSource === undefined) {
+    return "none";
+  }
+
+  return `${dotfilesSource.url} @ ${dotfilesSource.ref ?? "main"}`;
 }
 
 function resolveWorkspaceSourceReference(
