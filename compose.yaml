@@ -45,11 +45,37 @@ services:
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
       DATABASE_FILE_PATH: /app/packages/db/.data/sealant-control-plane.sqlite
       DEFAULT_SSH_AUTHORIZED_KEYS_FILE: /app/.secrets/authorized_keys
+      DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
       GITHUB_APP_ID: ${GITHUB_APP_ID}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY}
 
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  ssh-gateway:
+    build:
+      context: .
+      dockerfile: apps/ssh-gateway/Dockerfile
+    profiles:
+      - apps
+    depends_on:
+      worker:
+        condition: service_started
+    network_mode: host
+    volumes:
+      - ./.secrets:/app/.secrets:ro
+    env_file:
+      - ./.env.local
+    environment:
+      SSH_GATEWAY_HOST: 0.0.0.0
+      SSH_GATEWAY_PORT: 2222
+      SSH_GATEWAY_HOST_KEY_PATH: /app/.secrets/ssh_gateway_host_key
+      SSH_GATEWAY_ALLOWED_KEYS_FILE: /app/.secrets/gateway_allowed_keys
+      SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
+      CORE_API_BASE_URL: http://127.0.0.1:4000
+      SSH_UPSTREAM_PRIVATE_KEY_PATH: /app/.secrets/gateway_upstream_key
+      SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING: "false"
     restart: unless-stopped
 
 volumes:

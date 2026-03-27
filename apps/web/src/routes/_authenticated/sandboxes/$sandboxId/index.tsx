@@ -725,6 +725,53 @@ interface ParsedSshEndpoint {
   readonly port?: string;
 }
 
+const DEFAULT_SANDBOX_SSH_USERNAME_PREFIX = "sbx";
+const DEFAULT_SANDBOX_SSH_IDENTITY_FILE = ".secrets/dev_client_key";
+
+function quoteShellToken(value: string): string {
+  if (/^[A-Za-z0-9_./-]+$/.test(value)) {
+    return value;
+  }
+
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function resolveSandboxSshUsernamePrefixToken(): string {
+  const configuredPrefix =
+    typeof import.meta.env.VITE_SANDBOX_SSH_USERNAME_PREFIX === "string"
+      ? import.meta.env.VITE_SANDBOX_SSH_USERNAME_PREFIX.trim()
+      : "";
+  const rawPrefix =
+    configuredPrefix.length > 0 ? configuredPrefix : DEFAULT_SANDBOX_SSH_USERNAME_PREFIX;
+
+  return rawPrefix.endsWith("-") ? rawPrefix : `${rawPrefix}-`;
+}
+
+function resolveSandboxSshIdentityFile(): string {
+  const configuredIdentity =
+    typeof import.meta.env.VITE_SANDBOX_SSH_IDENTITY_FILE === "string"
+      ? import.meta.env.VITE_SANDBOX_SSH_IDENTITY_FILE.trim()
+      : "";
+
+  return configuredIdentity.length > 0 ? configuredIdentity : DEFAULT_SANDBOX_SSH_IDENTITY_FILE;
+}
+
+function shouldIncludeSandboxSshIdentityFlag(parsed: ParsedSshEndpoint): boolean {
+  if (parsed.user.startsWith(resolveSandboxSshUsernamePrefixToken())) {
+    return true;
+  }
+
+  return parsed.user !== "root";
+}
+
+function buildEditorSshAuthority(parsed: ParsedSshEndpoint): string {
+  if (shouldIncludeSandboxSshIdentityFlag(parsed)) {
+    return parsed.user;
+  }
+
+  return `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
+}
+
 function normalizeSshHost(host: string): string {
   const normalized = host.trim();
 
@@ -816,7 +863,7 @@ function buildVsCodeOpenUri(input: {
     return null;
   }
 
-  const authority = `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
+  const authority = buildEditorSshAuthority(parsed);
   const encodedAuthority = encodeURIComponent(authority);
   const path = normalizeVsCodePath(input.workingDirectory);
 
@@ -832,7 +879,7 @@ function buildCursorOpenUri(input: {
     return null;
   }
 
-  const authority = `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
+  const authority = buildEditorSshAuthority(parsed);
   const encodedAuthority = encodeURIComponent(authority);
   const path = normalizeVsCodePath(input.workingDirectory);
 
@@ -842,11 +889,15 @@ function buildCursorOpenUri(input: {
 function buildSshCommand(endpoint: string | undefined): string | null {
   const parsed = parseSshEndpoint(endpoint);
   if (parsed !== null) {
+    const identityFlags = shouldIncludeSandboxSshIdentityFlag(parsed)
+      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes`
+      : "";
+
     if (parsed.port !== undefined) {
-      return `ssh ${parsed.user}@${parsed.host} -p ${parsed.port}`;
+      return `ssh${identityFlags} ${parsed.user}@${parsed.host} -p ${parsed.port}`;
     }
 
-    return `ssh ${parsed.user}@${parsed.host}`;
+    return `ssh${identityFlags} ${parsed.user}@${parsed.host}`;
   }
 
   if (endpoint === undefined || endpoint.length === 0) {
