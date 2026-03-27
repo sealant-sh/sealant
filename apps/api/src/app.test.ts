@@ -2043,6 +2043,117 @@ describe("createApiApp", () => {
     expect(eventsBody.items.some((event) => event.type === "attempt.succeeded")).toBe(true);
   });
 
+  it("rewrites runtime SSH endpoints through a configured SSH gateway", async () => {
+    const sandboxRepository = createSandboxRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
+    const now = new Date("2026-03-25T08:00:00.000Z");
+
+    const sandbox = await sandboxRepository.createSandbox({
+      id: "sandbox-gateway",
+      name: "Gateway Sandbox",
+      ownerUserId: testUserId,
+      requestedByUserId: testUserId,
+      status: "queued",
+    });
+    const run = await runs.createQueuedAttempt({
+      id: "run-gateway",
+      ownerUserId: testUserId,
+      triggerType: "api",
+      requestedByUserId: testUserId,
+      queuedAt: now,
+    });
+
+    await sandboxRepository.linkSandboxAttempt({
+      sandboxId: sandbox.id,
+      attemptId: run.id,
+      relation: "launch",
+    });
+    await runs.markAttemptRunning({ id: run.id, startedAt: new Date(now.getTime() + 1_000) });
+
+    const runtimeInstances = createSandboxRuntimeInstanceRepositoryStub({
+      byRunId: new Map([
+        [
+          run.id,
+          {
+            runId: run.id,
+            status: "running",
+            adapter: "docker",
+            resourceId: "container_gateway",
+            reference: "sealant-gateway",
+            endpoint: "ssh://root@127.0.0.1:40222",
+            errorCode: null,
+            errorMessage: null,
+            launchedAt: new Date(now.getTime() + 2_000),
+            finishedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      ]),
+    });
+
+    const app = createApiApp({
+      env: {
+        ...testEnv,
+        SANDBOX_SSH_GATEWAY_HOST: "ssh.sealant.dev",
+        SANDBOX_SSH_GATEWAY_PORT: 2222,
+        SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: "sandbox",
+      },
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: runtimeInstances,
+    });
+
+    const expectedEndpoint = "ssh://sandbox-sandbox-gateway@ssh.sealant.dev:2222";
+
+    const listResponse = await app.request(`/v1/sandboxes?ownerUserId=${testUserId}&limit=10`);
+    expect(listResponse.status).toBe(200);
+    const listBody = (await listResponse.json()) as {
+      items: Array<{
+        runtime?: {
+          endpoint?: string;
+        };
+      }>;
+    };
+    expect(listBody.items[0]?.runtime?.endpoint).toBe(expectedEndpoint);
+
+    const detailResponse = await app.request("/v1/sandboxes/sandbox-gateway");
+    expect(detailResponse.status).toBe(200);
+    const detailBody = (await detailResponse.json()) as {
+      runtime?: {
+        endpoint?: string;
+      };
+    };
+    expect(detailBody.runtime?.endpoint).toBe(expectedEndpoint);
+
+    const attemptsResponse = await app.request("/v1/sandboxes/sandbox-gateway/attempts?limit=10");
+    expect(attemptsResponse.status).toBe(200);
+    const attemptsBody = (await attemptsResponse.json()) as {
+      items: Array<{
+        runtime?: {
+          endpoint?: string;
+        };
+      }>;
+    };
+    expect(attemptsBody.items[0]?.runtime?.endpoint).toBe(expectedEndpoint);
+
+    const eventsResponse = await app.request("/v1/sandboxes/sandbox-gateway/events?limit=20");
+    expect(eventsResponse.status).toBe(200);
+    const eventsBody = (await eventsResponse.json()) as {
+      items: Array<{
+        type: string;
+        data?: {
+          endpoint?: string;
+        };
+      }>;
+    };
+    const runtimeRunningEvent = eventsBody.items.find((event) => event.type === "runtime.running");
+    expect(runtimeRunningEvent?.data?.endpoint).toBe(expectedEndpoint);
+  });
+
   it("returns 404 for attempts and events when sandbox does not exist", async () => {
     const app = createApiApp({
       env: testEnv,

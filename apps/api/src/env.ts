@@ -39,6 +39,9 @@ export const appEnvSchema = databaseEnvSchema
       GITHUB_APP_CLIENT_ID: z.string().trim().min(1).optional(),
       GITHUB_APP_CLIENT_SECRET: z.string().min(1).optional(),
       GITHUB_APP_SLUG: z.string().trim().min(1).optional(),
+      SANDBOX_SSH_GATEWAY_HOST: z.string().trim().min(1).optional(),
+      SANDBOX_SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+      SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: z.string().trim().min(1).optional(),
     }),
   )
   .superRefine((input, ctx) => {

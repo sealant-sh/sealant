@@ -22,6 +22,7 @@ export {
   type DockerRuntimeCatalog,
   type DockerRuntimeAdapterOptions,
   type DockerRuntimeCatalogLoader,
+  type DockerSshEndpointExposureStrategy,
 } from "./docker-runtime-adapter.js";
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";

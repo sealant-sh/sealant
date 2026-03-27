@@ -491,4 +491,71 @@ describe("DockerRuntimeAdapter", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("resolves container-network SSH endpoints when gateway exposure is enabled", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
+    const keyFile = join(tempDir, "authorized_keys");
+    await writeFile(
+      keyFile,
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
+      "utf8",
+    );
+
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-gateway\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect" && args[2]?.includes(".State")) {
+        return {
+          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect" && args[2]?.includes("NetworkSettings.Networks")) {
+        return {
+          stdout: '{"bridge":{"IPAddress":"172.18.0.4"}}\n',
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: "",
+        stderr: "",
+      };
+    });
+
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      defaultSshAuthorizedKeysFile: keyFile,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      sshEndpointExposureStrategy: "container-network",
+    });
+
+    try {
+      const result = await adapter.launch(
+        createLaunchInput({
+          access: {
+            ssh: {
+              enabled: true,
+              listenPort: 2222,
+            },
+          },
+        }),
+      );
+
+      const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+      expect(runArgs).not.toContain("-p");
+      expect(result.endpoint).toBe("ssh://root@172.18.0.4:2222");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -13,11 +13,13 @@ import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import type { Context } from "hono";
 import type { z } from "zod";
 
+import type { AppEnv } from "../../env.js";
 import {
   resolveSandboxError,
   resolveSandboxPublishedImage,
   resolveSandboxRuntime,
   resolveSandboxStatus,
+  type SandboxSshGatewayConfig,
 } from "../../lib/sandbox.js";
 import type { AppBindings } from "../../lib/types.js";
 import type {
@@ -80,6 +82,22 @@ const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
 
 const toQueuePublishErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : "Failed to enqueue workspace build job.";
+};
+
+const resolveSandboxSshGatewayConfig = (env: AppEnv): SandboxSshGatewayConfig | undefined => {
+  const host = env.SANDBOX_SSH_GATEWAY_HOST?.trim();
+
+  if (host === undefined || host.length === 0) {
+    return undefined;
+  }
+
+  return {
+    host,
+    ...(env.SANDBOX_SSH_GATEWAY_PORT === undefined ? {} : { port: env.SANDBOX_SSH_GATEWAY_PORT }),
+    ...(env.SANDBOX_SSH_GATEWAY_USERNAME_PREFIX === undefined
+      ? {}
+      : { usernamePrefix: env.SANDBOX_SSH_GATEWAY_USERNAME_PREFIX }),
+  };
 };
 
 const isForeignKeyConstraintError = (error: unknown): boolean => {
@@ -538,8 +556,12 @@ const mapSandboxAttemptSummary = (
   attempt: SandboxAttemptRecord,
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
+  sshGatewayConfig: SandboxSshGatewayConfig | undefined,
 ): z.infer<typeof sandboxAttemptSummarySchema> => {
-  const runtime = resolveSandboxRuntime(runtimeInstance);
+  const runtime = resolveSandboxRuntime(runtimeInstance, {
+    sandboxId: link.sandboxId,
+    ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+  });
   const publishedImage = resolveSandboxPublishedImage(latestJob);
   const error = resolveSandboxError(latestJob);
   const startedAt = attempt.startedAt ?? latestJob?.startedAt;
@@ -632,8 +654,12 @@ const mapSandboxSummary = (
   attempt: SandboxAttemptRecord | undefined,
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
+  sshGatewayConfig: SandboxSshGatewayConfig | undefined,
 ): z.infer<typeof sandboxSummarySchema> => {
-  const runtime = resolveSandboxRuntime(runtimeInstance);
+  const runtime = resolveSandboxRuntime(runtimeInstance, {
+    sandboxId: sandbox.id,
+    ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+  });
   const publishedImage = resolveSandboxPublishedImage(latestJob);
   const error = resolveSandboxError(latestJob);
   const updatedAt = latestDate(
@@ -681,8 +707,9 @@ const mapSandboxDetails = (
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
   attemptSnapshot: SandboxAttemptSnapshotRecord,
+  sshGatewayConfig: SandboxSshGatewayConfig | undefined,
 ): z.infer<typeof sandboxDetailsSchema> => {
-  const summary = mapSandboxSummary(sandbox, attempt, latestJob, runtimeInstance);
+  const summary = mapSandboxSummary(sandbox, attempt, latestJob, runtimeInstance, sshGatewayConfig);
   const userSpec = attemptSnapshot?.userSpecPayload ?? latestJob?.requestPayload;
 
   return {
@@ -1098,6 +1125,7 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
     .listRuntimeInstancesByRunIds(latestRunIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
 
   const items = sandboxes
     .map((sandbox) => {
@@ -1108,6 +1136,7 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
         runId === undefined ? undefined : attemptsByRunId.get(runId),
         runId === undefined ? undefined : latestJobsByRunId.get(runId),
         runId === undefined ? undefined : runtimeInstancesByRunId.get(runId),
+        sshGatewayConfig,
       );
     })
     .filter((item) => (query.status === undefined ? true : item.status === query.status))
@@ -1133,8 +1162,12 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     );
   }
 
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
+
   if (sandbox.latestRunId === null) {
-    return c.json(mapSandboxDetails(sandbox, undefined, undefined, undefined, undefined));
+    return c.json(
+      mapSandboxDetails(sandbox, undefined, undefined, undefined, undefined, sshGatewayConfig),
+    );
   }
 
   const attempt = await c.get("sandboxAttemptRepository").getAttemptById(sandbox.latestRunId);
@@ -1148,7 +1181,16 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     .get("sandboxRuntimeInstanceRepository")
     .getRuntimeInstanceByRunId(sandbox.latestRunId);
 
-  return c.json(mapSandboxDetails(sandbox, attempt, latestJob, runtimeInstance, attemptSnapshot));
+  return c.json(
+    mapSandboxDetails(
+      sandbox,
+      attempt,
+      latestJob,
+      runtimeInstance,
+      attemptSnapshot,
+      sshGatewayConfig,
+    ),
+  );
 };
 
 export const listSandboxAttempts = async (c: Context<AppBindings>) => {
@@ -1189,6 +1231,7 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
     .listRuntimeInstancesByRunIds(runIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
 
   const items = links.flatMap((link) => {
     const attempt = attemptsByRunId.get(link.runId);
@@ -1203,6 +1246,7 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
         attempt,
         latestJobsByRunId.get(link.runId),
         runtimeInstancesByRunId.get(link.runId),
+        sshGatewayConfig,
       ),
     ];
   });
@@ -1250,6 +1294,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
     .listRuntimeInstancesByRunIds(runIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
 
   const events: SandboxEventDraft[] = [
     {
@@ -1269,6 +1314,10 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
 
     const latestJob = latestJobsByRunId.get(link.runId);
     const runtimeInstance = runtimeInstancesByRunId.get(link.runId);
+    const runtimeEndpoint = resolveSandboxRuntime(runtimeInstance, {
+      sandboxId: sandbox.id,
+      ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+    })?.endpoint;
 
     events.push({
       sandboxId: sandbox.id,
@@ -1332,7 +1381,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
             ? {}
             : { resourceId: runtimeInstance.resourceId }),
           ...(runtimeInstance.reference === null ? {} : { reference: runtimeInstance.reference }),
-          ...(runtimeInstance.endpoint === null ? {} : { endpoint: runtimeInstance.endpoint }),
+          ...(runtimeEndpoint === undefined ? {} : { endpoint: runtimeEndpoint }),
           ...(runtimeInstance.errorCode === null ? {} : { errorCode: runtimeInstance.errorCode }),
           ...(runtimeInstance.errorMessage === null
             ? {}
