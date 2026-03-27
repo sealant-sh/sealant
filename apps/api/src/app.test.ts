@@ -1092,6 +1092,7 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/sandboxes/{sandboxId}/name"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
+    expect(body.paths["/v1/sandboxes/{sandboxId}/ssh-target"]).toBeDefined();
     expect(body.paths["/v1/github/installations"]).toBeDefined();
     expect(body.paths["/v1/github/installations/import"]).toBeDefined();
     expect(body.paths["/v1/github/installations/{installationId}/repositories"]).toBeDefined();
@@ -2152,6 +2153,93 @@ describe("createApiApp", () => {
     };
     const runtimeRunningEvent = eventsBody.items.find((event) => event.type === "runtime.running");
     expect(runtimeRunningEvent?.data?.endpoint).toBe(expectedEndpoint);
+  });
+
+  it("resolves internal sandbox SSH targets for the gateway when token auth succeeds", async () => {
+    const sandboxRepository = createSandboxRepositoryStub();
+    const runs = createSandboxAttemptRepositoryStub();
+    const now = new Date("2026-03-25T09:00:00.000Z");
+
+    const sandbox = await sandboxRepository.createSandbox({
+      id: "sandbox-ssh-target",
+      name: "SSH Target Sandbox",
+      ownerUserId: testUserId,
+      requestedByUserId: testUserId,
+      status: "queued",
+    });
+    const run = await runs.createQueuedAttempt({
+      id: "run-ssh-target",
+      ownerUserId: testUserId,
+      triggerType: "api",
+      requestedByUserId: testUserId,
+      queuedAt: now,
+    });
+
+    await sandboxRepository.linkSandboxAttempt({
+      sandboxId: sandbox.id,
+      attemptId: run.id,
+      relation: "launch",
+    });
+
+    const runtimeInstances = createSandboxRuntimeInstanceRepositoryStub({
+      byRunId: new Map([
+        [
+          run.id,
+          {
+            runId: run.id,
+            status: "running",
+            adapter: "docker",
+            resourceId: "container_target",
+            reference: "sealant-target",
+            endpoint: "ssh://root@172.18.0.10:2222",
+            errorCode: null,
+            errorMessage: null,
+            launchedAt: new Date(now.getTime() + 2_000),
+            finishedAt: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      ]),
+    });
+
+    const app = createApiApp({
+      env: {
+        ...testEnv,
+        SANDBOX_SSH_GATEWAY_TOKEN: "gateway-secret",
+      },
+      registryClient: createRegistryClientStub(),
+      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
+      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxRepository,
+      sandboxAttemptRepository: runs,
+      sandboxRuntimeInstanceRepository: runtimeInstances,
+    });
+
+    const unauthorizedResponse = await app.request("/v1/sandboxes/sandbox-ssh-target/ssh-target", {
+      headers: {
+        "x-sealant-gateway-token": "bad-token",
+      },
+    });
+    expect(unauthorizedResponse.status).toBe(401);
+
+    const response = await app.request("/v1/sandboxes/sandbox-ssh-target/ssh-target", {
+      headers: {
+        "x-sealant-gateway-token": "gateway-secret",
+      },
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      sandboxId: "sandbox-ssh-target",
+      attemptId: "run-ssh-target",
+      runtime: {
+        adapter: "docker",
+        resourceId: "container_target",
+        reference: "sealant-target",
+        status: "running",
+        endpoint: "ssh://root@172.18.0.10:2222",
+      },
+    });
   });
 
   it("returns 404 for attempts and events when sandbox does not exist", async () => {

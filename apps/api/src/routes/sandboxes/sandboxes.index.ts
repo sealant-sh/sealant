@@ -32,6 +32,12 @@ router.get(
   routes.listSandboxEventsQueryValidator,
   handlers.listSandboxEvents,
 );
+router.get(
+  "/:sandboxId/ssh-target",
+  routes.getSandboxSshTargetRoute,
+  routes.sandboxIdValidator,
+  handlers.getSandboxSshTarget,
+);
 router.get("/:sandboxId", routes.getSandboxRoute, routes.sandboxIdValidator, handlers.getSandbox);
 
 export default router;

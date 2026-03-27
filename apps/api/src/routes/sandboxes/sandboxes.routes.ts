@@ -14,6 +14,7 @@ import {
   listSandboxesResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
+  sandboxSshTargetSchema,
 } from "./sandboxes.schemas.js";
 
 const tags = ["Sandboxes"];
@@ -103,6 +104,54 @@ export const getSandboxRoute = describeRoute({
     },
     404: {
       description: "Sandbox not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+  },
+});
+
+export const getSandboxSshTargetRoute = describeRoute({
+  tags,
+  description:
+    "Resolve the internal SSH runtime target for a sandbox. Intended for the SSH gateway service.",
+  responses: {
+    200: {
+      description: "Sandbox SSH runtime target",
+      content: {
+        "application/json": {
+          schema: resolver(sandboxSshTargetSchema),
+        },
+      },
+    },
+    401: {
+      description: "Gateway token is missing or invalid",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+    404: {
+      description: "Sandbox not found",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+    409: {
+      description: "Sandbox runtime has no SSH endpoint",
+      content: {
+        "application/json": {
+          schema: resolver(messageResponseSchema),
+        },
+      },
+    },
+    503: {
+      description: "Gateway integration is not configured",
       content: {
         "application/json": {
           schema: resolver(messageResponseSchema),

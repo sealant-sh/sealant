@@ -29,6 +29,7 @@ import type {
   listSandboxesQuerySchema,
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
+  sandboxSshTargetSchema,
   sandboxAttemptSummarySchema,
   sandboxDetailsSchema,
   sandboxEventSchema,
@@ -82,6 +83,16 @@ const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
 
 const toQueuePublishErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : "Failed to enqueue workspace build job.";
+};
+
+const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
+  const token = c.req.header("x-sealant-gateway-token")?.trim();
+
+  if (token === undefined || token.length === 0) {
+    return undefined;
+  }
+
+  return token;
 };
 
 const resolveSandboxSshGatewayConfig = (env: AppEnv): SandboxSshGatewayConfig | undefined => {
@@ -1191,6 +1202,85 @@ export const getSandbox = async (c: Context<AppBindings>) => {
       sshGatewayConfig,
     ),
   );
+};
+
+export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
+  const { sandboxId } = c.req.param() as {
+    sandboxId: string;
+  };
+  const expectedGatewayToken = c.get("env").SANDBOX_SSH_GATEWAY_TOKEN?.trim();
+
+  if (expectedGatewayToken === undefined || expectedGatewayToken.length === 0) {
+    return c.json(
+      {
+        message: "Sandbox SSH gateway token is not configured.",
+      },
+      503,
+    );
+  }
+
+  if (readGatewayToken(c) !== expectedGatewayToken) {
+    return c.json(
+      {
+        message: "Invalid sandbox SSH gateway token.",
+      },
+      401,
+    );
+  }
+
+  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
+
+  if (sandbox === undefined) {
+    return c.json(
+      {
+        message: `Sandbox not found: ${sandboxId}`,
+      },
+      404,
+    );
+  }
+
+  if (sandbox.latestRunId === null) {
+    return c.json(
+      {
+        message: `Sandbox ${sandboxId} has no active attempt with runtime metadata.`,
+      },
+      409,
+    );
+  }
+
+  const runtimeInstance = await c
+    .get("sandboxRuntimeInstanceRepository")
+    .getRuntimeInstanceByRunId(sandbox.latestRunId);
+
+  if (
+    runtimeInstance === undefined ||
+    runtimeInstance.endpoint === null ||
+    runtimeInstance.adapter === null ||
+    runtimeInstance.resourceId === null ||
+    runtimeInstance.reference === null ||
+    runtimeInstance.status !== "running"
+  ) {
+    return c.json(
+      {
+        message: `Sandbox ${sandboxId} runtime SSH target is not available.`,
+      },
+      409,
+    );
+  }
+
+  const response: z.infer<typeof sandboxSshTargetSchema> = {
+    sandboxId: sandbox.id,
+    attemptId: sandbox.latestRunId,
+    runtime: {
+      adapter: runtimeInstance.adapter,
+      resourceId: runtimeInstance.resourceId,
+      reference: runtimeInstance.reference,
+      status: runtimeInstance.status,
+      endpoint: runtimeInstance.endpoint,
+    },
+  };
+
+  return c.json(response);
 };
 
 export const listSandboxAttempts = async (c: Context<AppBindings>) => {

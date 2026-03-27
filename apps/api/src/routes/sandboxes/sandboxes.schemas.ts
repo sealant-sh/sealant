@@ -41,6 +41,18 @@ export const sandboxRuntimeSchema = z.object({
   endpoint: z.string().optional(),
 });
 
+export const sandboxSshTargetSchema = z.object({
+  sandboxId: z.string(),
+  attemptId: z.string(),
+  runtime: z.object({
+    adapter: z.enum(["docker", "k8s", "k3s"]),
+    resourceId: z.string(),
+    reference: z.string(),
+    status: z.enum(["pending", "running", "failed", "stopped"]),
+    endpoint: z.string(),
+  }),
+});
+
 export const sandboxPublishedImageSchema = z.object({
   reference: z.string(),
   digestReference: z.string(),
