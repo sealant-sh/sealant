@@ -725,6 +725,7 @@ interface ParsedSshEndpoint {
   readonly port?: string;
 }
 
+// Defaults are intentionally dev-friendly and match tooling/scripts/setup-ssh-gateway-dev.mjs.
 const DEFAULT_SANDBOX_SSH_USERNAME_PREFIX = "sbx";
 const DEFAULT_SANDBOX_SSH_IDENTITY_FILE = ".secrets/dev_client_key";
 
@@ -757,6 +758,8 @@ function resolveSandboxSshIdentityFile(): string {
 }
 
 function shouldIncludeSandboxSshIdentityFlag(parsed: ParsedSshEndpoint): boolean {
+  // Gateway-style usernames look like sbx-<sandboxId>. For those, we want command
+  // snippets to include an explicit identity file so users can connect immediately.
   if (parsed.user.startsWith(resolveSandboxSshUsernamePrefixToken())) {
     return true;
   }
@@ -766,12 +769,15 @@ function shouldIncludeSandboxSshIdentityFlag(parsed: ParsedSshEndpoint): boolean
 
 function buildEditorSshAuthority(parsed: ParsedSshEndpoint): string {
   if (shouldIncludeSandboxSshIdentityFlag(parsed)) {
+    // VS Code remote authority should use host alias only for gateway flow.
+    // The actual host/port/identity are provided by SSH config.
     return parsed.user;
   }
 
   return `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
 }
 
+// Keep localhost forms consistent so copy/open actions look predictable.
 function normalizeSshHost(host: string): string {
   const normalized = host.trim();
 
@@ -782,6 +788,12 @@ function normalizeSshHost(host: string): string {
   return normalized;
 }
 
+// Parse several endpoint shapes we may encounter in older/newer payloads:
+// - ssh://user@host:port
+// - user@host:port
+// - host:port
+// If endpoint is already a full command (`ssh ...`) we intentionally return null so
+// command builders can preserve it as-is.
 function parseSshEndpoint(endpoint: string | undefined): ParsedSshEndpoint | null {
   if (endpoint === undefined || endpoint.trim().length === 0) {
     return null;
@@ -889,8 +901,10 @@ function buildCursorOpenUri(input: {
 function buildSshCommand(endpoint: string | undefined): string | null {
   const parsed = parseSshEndpoint(endpoint);
   if (parsed !== null) {
+    // Copy command behavior differs between direct runtime SSH and gateway SSH.
+    // Gateway commands include an identity key to reduce setup friction.
     const identityFlags = shouldIncludeSandboxSshIdentityFlag(parsed)
-      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes`
+      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes -o WarnWeakCrypto=no`
       : "";
 
     if (parsed.port !== undefined) {

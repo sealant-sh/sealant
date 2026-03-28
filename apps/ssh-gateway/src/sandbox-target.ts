@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+// Exact response contract from API route GET /v1/sandboxes/{sandboxId}/ssh-target.
+// Keeping this local schema means gateway fails loudly if API shape drifts.
 const sandboxSshTargetSchema = z.object({
   sandboxId: z.string().trim().min(1),
   attemptId: z.string().trim().min(1),
@@ -24,6 +26,9 @@ export interface ParsedSshEndpoint {
   readonly port: number;
 }
 
+// We route users to sandboxes through usernames such as `sbx-<sandboxId>`.
+// This parser extracts the sandbox id and applies a conservative character policy
+// to avoid passing unexpected strings into downstream routing.
 export const parseSandboxIdFromUsername = (
   username: string,
   prefix: string,
@@ -42,6 +47,8 @@ export const parseSandboxIdFromUsername = (
 
   const sandboxId = normalizedUsername.slice(prefixToken.length).trim();
 
+  // Tight character allowlist to avoid weird routing edge cases.
+  // Sandbox IDs in this system are UUID-like so this is intentionally restrictive.
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(sandboxId)) {
     return undefined;
   }
@@ -49,6 +56,8 @@ export const parseSandboxIdFromUsername = (
   return sandboxId;
 };
 
+// Runtime metadata stores endpoints as URIs so we parse once here and hand typed
+// connection parameters to the gateway SSH client.
 export const parseSshEndpoint = (endpoint: string): ParsedSshEndpoint => {
   const normalized = endpoint.trim();
 
@@ -69,12 +78,15 @@ export const parseSshEndpoint = (endpoint: string): ParsedSshEndpoint => {
   }
 
   return {
+    // Runtime metadata can omit user/port; default to OpenSSH conventions.
     user: parsed.username.length === 0 ? "root" : parsed.username,
     host: parsed.hostname,
     port: parsed.port.length === 0 ? 22 : Number(parsed.port),
   };
 };
 
+// Ask the API for the current internal SSH target for a sandbox.
+// The gateway token keeps this route private to trusted gateway callers.
 export const resolveSandboxSshTarget = async (input: {
   readonly apiBaseUrl: string;
   readonly gatewayToken: string;
@@ -87,12 +99,14 @@ export const resolveSandboxSshTarget = async (input: {
 
   const response = await fetch(url, {
     headers: {
+      // Shared secret between gateway and API for this internal endpoint.
       "x-sealant-gateway-token": input.gatewayToken,
     },
   });
   const payload = await response.json().catch(() => null);
 
   if (!response.ok) {
+    // Prefer API-provided human-readable error messages to simplify operator debugging.
     const parsedError = messageResponseSchema.safeParse(payload);
     throw new Error(
       parsedError.success

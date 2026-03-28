@@ -1,9 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
-import { createRequire } from "node:module";
-import { resolve } from "node:path";
 
-const cjsRequire = createRequire(resolve(process.cwd(), "package.json"));
-const ssh2 = cjsRequire("ssh2") as typeof import("ssh2");
+import ssh2 from "ssh2";
 
 const { utils } = ssh2;
 
@@ -15,6 +12,7 @@ export interface AuthorizedKeyEntry {
   readonly verify: VerifyFunction;
 }
 
+// Parse a single authorized_keys line into a structure we can compare quickly at auth time.
 const toAuthorizedKeyEntry = (line: string): AuthorizedKeyEntry | undefined => {
   const trimmed = line.trim();
 
@@ -49,6 +47,7 @@ const toAuthorizedKeyEntry = (line: string): AuthorizedKeyEntry | undefined => {
 };
 
 export const parseAuthorizedKeys = (input: string): ReadonlyArray<AuthorizedKeyEntry> => {
+  // Ignore blanks/comments so operators can annotate key files.
   return input
     .split("\n")
     .map((line) => toAuthorizedKeyEntry(line))
@@ -59,6 +58,7 @@ export const findAuthorizedKey = (
   entries: ReadonlyArray<AuthorizedKeyEntry>,
   input: { algo: string; data: Buffer },
 ): AuthorizedKeyEntry | undefined => {
+  // timingSafeEqual avoids leaking key-match details through timing side channels.
   return entries.find((entry) => {
     if (entry.algo !== input.algo || entry.data.length !== input.data.length) {
       return false;

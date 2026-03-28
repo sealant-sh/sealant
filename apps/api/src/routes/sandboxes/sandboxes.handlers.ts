@@ -86,6 +86,7 @@ const toQueuePublishErrorMessage = (error: unknown) => {
 };
 
 const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
+  // Dedicated header used only for gateway -> API internal calls.
   const token = c.req.header("x-sealant-gateway-token")?.trim();
 
   if (token === undefined || token.length === 0) {
@@ -96,6 +97,8 @@ const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
 };
 
 const resolveSandboxSshGatewayConfig = (env: AppEnv): SandboxSshGatewayConfig | undefined => {
+  // Optional user-facing endpoint rewrite configuration.
+  // When unset, clients receive raw runtime endpoint values.
   const host = env.SANDBOX_SSH_GATEWAY_HOST?.trim();
 
   if (host === undefined || host.length === 0) {
@@ -1210,6 +1213,8 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
   };
   const expectedGatewayToken = c.get("env").SANDBOX_SSH_GATEWAY_TOKEN?.trim();
 
+  // The ssh-target route is intentionally private. It should only be callable by
+  // a trusted gateway process, not by regular browser/API clients.
   if (expectedGatewayToken === undefined || expectedGatewayToken.length === 0) {
     return c.json(
       {
@@ -1260,6 +1265,7 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
     runtimeInstance.reference === null ||
     runtimeInstance.status !== "running"
   ) {
+    // Gateway can only route to running runtimes with full endpoint metadata.
     return c.json(
       {
         message: `Sandbox ${sandboxId} runtime SSH target is not available.`,
@@ -1269,6 +1275,8 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
   }
 
   const response: z.infer<typeof sandboxSshTargetSchema> = {
+    // Return raw internal runtime endpoint here; gateway performs the final SSH hop.
+    // User-facing API routes can still expose rewritten public gateway endpoints.
     sandboxId: sandbox.id,
     attemptId: sandbox.latestRunId,
     runtime: {

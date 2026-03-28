@@ -70,6 +70,7 @@ export const resolveSandboxRuntime = (
     readonly sshGateway?: SandboxSshGatewayConfig;
   } = {},
 ): SandboxRuntimeDetails | undefined => {
+  // If runtime metadata is incomplete we omit runtime from API response.
   if (
     runtimeInstance === undefined ||
     runtimeInstance.adapter === null ||
@@ -80,6 +81,9 @@ export const resolveSandboxRuntime = (
   }
 
   const gatewayHost = options.sshGateway?.host.trim();
+  // If gateway config is present, we intentionally mask the raw runtime endpoint and
+  // return a stable gateway address instead. This avoids exposing per-sandbox IP/port
+  // details and gives clients a consistent connection target.
   const shouldUseGateway =
     runtimeInstance.endpoint !== null &&
     options.sandboxId !== undefined &&

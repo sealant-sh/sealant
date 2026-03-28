@@ -5,6 +5,14 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/*
+This script bootstraps a local dev environment for gateway-based SSH:
+- generates key material if missing,
+- updates .env.local with gateway vars,
+- wires SSH host aliases so `ssh sbx-<sandboxId>` works,
+- avoids clobbering user-managed config by writing managed blocks only.
+*/
+
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const secretsDirectory = resolve(repoRoot, ".secrets");
 const envLocalPath = resolve(repoRoot, ".env.local");
@@ -26,6 +34,7 @@ const removeManagedBlock = (
   content,
   markers = { start: managedBlockStart, end: managedBlockEnd },
 ) => {
+  // We only rewrite the block that this script owns, so user-managed content stays intact.
   const pattern = new RegExp(
     `\\n?${escapeForRegExp(markers.start)}[\\s\\S]*?${escapeForRegExp(markers.end)}\\n?`,
     "g",
@@ -70,6 +79,7 @@ const runSshKeygen = (args) => {
 };
 
 const ensureSshKeyPair = (input) => {
+  // Idempotent key creation: if keys already exist, we keep them stable.
   const privateKeyPath = input.privateKeyPath;
   const publicKeyPath = `${privateKeyPath}.pub`;
   const hasPrivate = existsSync(privateKeyPath);
@@ -80,6 +90,7 @@ const ensureSshKeyPair = (input) => {
   }
 
   if (hasPrivate && !hasPublic) {
+    // Recover a missing public key from an existing private key.
     const result = spawnSync("ssh-keygen", ["-y", "-f", privateKeyPath], { encoding: "utf8" });
 
     if (result.error !== undefined) {
@@ -101,6 +112,7 @@ const ensureSshKeyPair = (input) => {
 };
 
 const ensureAuthorizedKeyLine = (filePath, keyLine) => {
+  // Append-only behavior keeps existing authorized keys valid while adding Sealant keys.
   const currentLines = readTextFileIfExists(filePath)
     .split("\n")
     .map((line) => line.trim())
@@ -152,6 +164,7 @@ const ensureFileContainsLine = (filePath, line) => {
 };
 
 const main = () => {
+  // All generated material lives inside repo-local .secrets for dev convenience.
   mkdirSync(secretsDirectory, { recursive: true });
 
   const gatewayHostKeyPath = resolve(secretsDirectory, "ssh_gateway_host_key");
@@ -176,7 +189,9 @@ const main = () => {
   const gatewayClientPublicKey = readFileSync(`${gatewayClientKeyPath}.pub`, "utf8").trim();
   const gatewayUpstreamPublicKey = readFileSync(`${gatewayUpstreamKeyPath}.pub`, "utf8").trim();
 
+  // gateway_allowed_keys controls who can SSH into the gateway.
   ensureAuthorizedKeyLine(gatewayAllowedKeysPath, gatewayClientPublicKey);
+  // authorized_keys controls what key the gateway can use against sandbox runtimes.
   ensureAuthorizedKeyLine(sandboxAuthorizedKeysPath, gatewayUpstreamPublicKey);
 
   const existingEnvLocal = readTextFileIfExists(envLocalPath);
@@ -218,13 +233,17 @@ const main = () => {
       unmanagedSshConfig,
       [
         `Host ${normalizedPrefix}-*`,
+        // We keep HostName stable at gateway host and route by SSH username alias.
         `  HostName ${host}`,
         `  Port ${port}`,
         "  User %n",
+        // %n keeps original alias (sbx-<id>) instead of resolved host (127.0.0.1).
+        // This is required because gateway extracts sandbox id from SSH username.
         `  IdentityFile ${gatewayClientKeyPath}`,
         "  IdentitiesOnly yes",
         `  UserKnownHostsFile ${knownHostsPath}`,
         "  StrictHostKeyChecking accept-new",
+        "  WarnWeakCrypto no",
       ],
       {
         start: sshConfigManagedBlockStart,
@@ -242,9 +261,11 @@ const main = () => {
   let includeDirective = "Include ~/.config/sealant/ssh_config";
 
   try {
+    // Preferred path: user-scoped config under ~/.config/sealant.
     mkdirSync(sealantConfigDirectory, { recursive: true });
     writeManagedSshConfig(sealantSshConfigPath, sealantKnownHostsPath);
   } catch {
+    // Fallback when home is managed/read-only (common in Nix setups).
     effectiveSshConfigPath = resolve(secretsDirectory, "ssh_config");
     effectiveKnownHostsPath = resolve(secretsDirectory, "known_hosts");
     writeManagedSshConfig(effectiveSshConfigPath, effectiveKnownHostsPath);
@@ -254,11 +275,13 @@ const main = () => {
   let includeDirectiveConfigured = false;
 
   try {
+    // If possible, automatically include the generated config from ~/.ssh/config.
     mkdirSync(userSshDirectory, { recursive: true });
     ensureFileContainsLine(userSshConfigPath, includeDirective);
     chmodSync(userSshConfigPath, 0o600);
     includeDirectiveConfigured = true;
   } catch {
+    // If this fails, we print exact manual instructions below.
     includeDirectiveConfigured = false;
   }
 
