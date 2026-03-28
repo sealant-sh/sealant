@@ -233,7 +233,7 @@ html {
 
 .hero-poster-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   min-height: min(860px, calc(100svh - 4.2rem));
   padding-inline: 0;
   background:
@@ -247,7 +247,7 @@ html {
 }
 
 .hero-main-panel {
-  padding: clamp(2rem, 4vw, 3.3rem) clamp(1.25rem, 2.5vw, 2.5rem) clamp(2rem, 3.4vw, 3rem);
+  padding: clamp(2.4rem, 4.6vw, 4rem) clamp(1.5rem, 2.8vw, 2.8rem) clamp(2.4rem, 3.8vw, 3.3rem);
   border-right: 1px solid var(--sw-rule);
   display: flex;
   flex-direction: column;
@@ -269,7 +269,10 @@ html {
 }
 
 .hero-main-panel h1 {
-  max-width: 6.8ch;
+  margin-top: 1.25rem;
+  max-width: 7.1ch;
+  font-size: clamp(4rem, 7.25vw, 7.4rem);
+  line-height: 0.9;
   color: var(--sw-ink);
 }
 
@@ -300,9 +303,9 @@ p {
 }
 
 .hero-copy {
-  margin-top: 1rem;
+  margin-top: 1.5rem;
   font-size: clamp(1rem, 1.7vw, 1.1rem);
-  max-width: 46ch;
+  max-width: 47ch;
   color: color-mix(in oklab, var(--sw-ink) 84%, transparent);
 }
 
@@ -311,7 +314,7 @@ p {
   display: flex;
   gap: 0.72rem;
   flex-wrap: wrap;
-  margin-top: 1.2rem;
+  margin-top: 1.7rem;
 }
 
 .hero .secondary-cta {
@@ -334,7 +337,7 @@ p {
 .hero-capability-card {
   display: flex;
   flex-direction: column;
-  padding: 1.1rem 1rem 1rem;
+  padding: 1.4rem 1.3rem 1.35rem;
   border-right: 1px solid var(--sw-rule);
   border-bottom: 1px solid var(--sw-rule);
 }
@@ -344,6 +347,7 @@ p {
   height: 0.56rem;
   border: 1px solid color-mix(in oklab, var(--sw-accent) 90%, black);
   background: color-mix(in oklab, var(--sw-accent) 84%, black);
+  margin-bottom: 0.65rem;
 }
 
 .hero-capability-card:nth-child(2n) {
@@ -355,7 +359,7 @@ p {
 }
 
 .hero-capability-index {
-  margin: -0.5rem 0 0;
+  margin: 0 0 1.25rem;
   align-self: flex-end;
   font-family: var(--font-mono);
   font-size: 0.64rem;
@@ -365,22 +369,22 @@ p {
 }
 
 .hero-capability-title {
-  margin: 2rem 0 0;
-  max-width: 6.8ch;
+  margin: 0;
+  max-width: 7.3ch;
   color: var(--sw-ink);
   font-family: var(--font-display);
-  font-size: clamp(2rem, 3vw, 2.9rem);
+  font-size: clamp(1.95rem, 2.8vw, 2.7rem);
   line-height: 0.9;
   letter-spacing: 0.01em;
   text-transform: uppercase;
 }
 
 .hero-capability-copy {
-  margin-top: 0.45rem;
+  margin-top: 0.75rem;
   color: color-mix(in oklab, var(--sw-ink) 82%, transparent);
-  font-size: 0.83rem;
-  line-height: 1.48;
-  max-width: 26ch;
+  font-size: 0.88rem;
+  line-height: 1.56;
+  max-width: 29ch;
 }
 
 .section-stack {
@@ -491,7 +495,7 @@ p {
   }
 
   .hero-main-panel h1 {
-    font-size: clamp(3rem, 18vw, 5.1rem);
+    font-size: clamp(2.9rem, 17vw, 4.9rem);
     max-width: 7.1ch;
   }
 
@@ -518,9 +522,9 @@ p {
   }
 
   .hero-capability-title {
-    font-size: clamp(1.8rem, 10.5vw, 2.6rem);
+    font-size: clamp(1.8rem, 10.5vw, 2.55rem);
     max-width: 9ch;
-    margin-top: 1.15rem;
+    margin-top: 0;
   }
 
   .hero-capability-copy {

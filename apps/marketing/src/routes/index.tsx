@@ -14,21 +14,26 @@ function MarketingPage() {
             <h1>
               Issue
               <br />
-              workflows.
+              workflows
               <br />
-              Sandboxed
+              in tailored
               <br />
-              execution.
+              sandboxes
               <br />
-              Review-ready.
+              for review
             </h1>
             <p className="hero-copy">
               Run each issue workflow in an isolated sandbox and keep prompts, tool traces, checks,
               and diffs attached from issue intake through pull request handoff.
             </p>
             <div className="hero-actions">
-              <a className="primary-cta" href="#details">
-                Explore issue workflows
+              <a
+                className="primary-cta"
+                href="https://docs.sealant.dev"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Read installation docs
               </a>
               <a
                 className="secondary-cta"
