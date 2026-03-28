@@ -247,10 +247,12 @@ function SandboxSummaryPage() {
   const workspaceSpecDetails = resolveWorkspaceSpecDetails(sandbox);
   const vscodeOpenUri = buildVsCodeOpenUri({
     endpoint: sandbox.runtime?.endpoint,
+    sandboxId: sandbox.sandboxId,
     workingDirectory: workspaceSpecDetails?.workingDirectory,
   });
   const cursorOpenUri = buildCursorOpenUri({
     endpoint: sandbox.runtime?.endpoint,
+    sandboxId: sandbox.sandboxId,
     workingDirectory: workspaceSpecDetails?.workingDirectory,
   });
   const nameSuggestions = suggestSandboxNames(sandbox);
@@ -777,6 +779,82 @@ function buildEditorSshAuthority(parsed: ParsedSshEndpoint): string {
   return `${parsed.user}@${parsed.host}${parsed.port === undefined ? "" : `:${parsed.port}`}`;
 }
 
+function isPrivateOrLocalSshHost(host: string): boolean {
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    return true;
+  }
+
+  const parts = host.split(".");
+
+  if (parts.length !== 4 || parts.some((part) => /^\d+$/.test(part) === false)) {
+    return false;
+  }
+
+  const octets = parts.map((part) => Number(part));
+
+  if (octets.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  const first = octets[0] ?? -1;
+  const second = octets[1] ?? -1;
+
+  if (first === 10 || first === 127) {
+    return true;
+  }
+
+  if (first === 192 && second === 168) {
+    return true;
+  }
+
+  return first === 172 && second >= 16 && second <= 31;
+}
+
+function buildSandboxSshAlias(sandboxId: string): string {
+  const prefixWithDash = resolveSandboxSshUsernamePrefixToken();
+
+  return `${prefixWithDash}${sandboxId}`;
+}
+
+function shouldUseSandboxAliasForEditor(input: {
+  parsed: ParsedSshEndpoint;
+  sandboxId: string | undefined;
+}): boolean {
+  if (input.sandboxId === undefined) {
+    return false;
+  }
+
+  if (shouldIncludeSandboxSshIdentityFlag(input.parsed)) {
+    return true;
+  }
+
+  // Safety fallback: if API still returns an internal container address, prefer the
+  // stable sbx-* alias so VS Code resolves via local SSH config instead of direct runtime IP.
+  return input.parsed.user === "root" && isPrivateOrLocalSshHost(input.parsed.host);
+}
+
+function buildEditorSshAuthorityFromEndpoint(input: {
+  endpoint: string | undefined;
+  sandboxId: string | undefined;
+}): string | null {
+  const parsed = parseSshEndpoint(input.endpoint);
+  if (parsed === null) {
+    return null;
+  }
+
+  if (shouldUseSandboxAliasForEditor({ parsed, sandboxId: input.sandboxId })) {
+    const sandboxId = input.sandboxId;
+
+    if (sandboxId === undefined) {
+      return buildEditorSshAuthority(parsed);
+    }
+
+    return buildSandboxSshAlias(sandboxId);
+  }
+
+  return buildEditorSshAuthority(parsed);
+}
+
 // Keep localhost forms consistent so copy/open actions look predictable.
 function normalizeSshHost(host: string): string {
   const normalized = host.trim();
@@ -868,14 +946,18 @@ function normalizeVsCodePath(value: string | undefined): string {
 
 function buildVsCodeOpenUri(input: {
   endpoint: string | undefined;
+  sandboxId: string | undefined;
   workingDirectory: string | undefined;
 }): string | null {
-  const parsed = parseSshEndpoint(input.endpoint);
-  if (parsed === null) {
+  const authority = buildEditorSshAuthorityFromEndpoint({
+    endpoint: input.endpoint,
+    sandboxId: input.sandboxId,
+  });
+
+  if (authority === null) {
     return null;
   }
 
-  const authority = buildEditorSshAuthority(parsed);
   const encodedAuthority = encodeURIComponent(authority);
   const path = normalizeVsCodePath(input.workingDirectory);
 
@@ -884,14 +966,18 @@ function buildVsCodeOpenUri(input: {
 
 function buildCursorOpenUri(input: {
   endpoint: string | undefined;
+  sandboxId: string | undefined;
   workingDirectory: string | undefined;
 }): string | null {
-  const parsed = parseSshEndpoint(input.endpoint);
-  if (parsed === null) {
+  const authority = buildEditorSshAuthorityFromEndpoint({
+    endpoint: input.endpoint,
+    sandboxId: input.sandboxId,
+  });
+
+  if (authority === null) {
     return null;
   }
 
-  const authority = buildEditorSshAuthority(parsed);
   const encodedAuthority = encodeURIComponent(authority);
   const path = normalizeVsCodePath(input.workingDirectory);
 

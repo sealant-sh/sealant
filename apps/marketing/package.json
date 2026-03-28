@@ -1,13 +1,50 @@
 {
   "name": "@sealant/marketing",
-  "version": "0.0.0",
   "private": true,
   "description": "Public-facing website and launch surfaces",
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
   "scripts": {
+    "build": "vite build",
+    "cf-typegen": "wrangler types",
+    "deploy": "vite build && wrangler deploy",
+    "dev": "vite dev --port 3002",
     "lint": "oxlint .",
+    "preview": "vite preview",
+    "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "@fontsource/bebas-neue": "^5.2.7",
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
+    "@fontsource/space-grotesk": "^5.2.8",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/react-devtools": "latest",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-router-devtools": "latest",
+    "@tanstack/react-router-ssr-query": "latest",
+    "@tanstack/react-start": "latest",
+    "@tanstack/router-plugin": "^1.132.0",
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.18"
+  },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@cloudflare/vite-plugin": "^1.30.2",
+    "@sealant/typescript": "workspace:*",
+    "@tanstack/devtools-vite": "latest",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "jsdom": "^28.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.0.5",
+    "wrangler": "^4.78.0"
   }
 }
