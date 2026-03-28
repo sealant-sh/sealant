@@ -18,6 +18,7 @@
     "lint:tui": "turbo lint --ui=tui",
     "lint:types": "oxlint . --type-aware --type-check",
     "playwright:open-google": "node tooling/playwright/open-google.mjs",
+    "ssh:setup:dev": "node tooling/scripts/setup-ssh-gateway-dev.mjs",
     "test": "turbo test",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

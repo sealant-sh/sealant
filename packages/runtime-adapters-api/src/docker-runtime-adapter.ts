@@ -34,6 +34,8 @@ export interface DockerRuntimeCatalog {
   readonly runtimes: ReadonlySet<string>;
 }
 
+export type DockerSshEndpointExposureStrategy = "host-published" | "container-network";
+
 export type DockerRuntimeCatalogLoader = () => Promise<DockerRuntimeCatalog>;
 
 export interface DockerRuntimeAdapterOptions {
@@ -44,6 +46,7 @@ export interface DockerRuntimeAdapterOptions {
   readonly verifyRunning?: boolean;
   readonly defaultSshAuthorizedKeysFile?: string;
   readonly sshBindHost?: string;
+  readonly sshEndpointExposureStrategy?: DockerSshEndpointExposureStrategy;
   readonly dockerSocketPath?: string;
 }
 
@@ -221,6 +224,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly sshBindHost: string;
 
+  private readonly sshEndpointExposureStrategy: DockerSshEndpointExposureStrategy;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
@@ -232,6 +237,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.verifyRunning = options.verifyRunning ?? true;
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
+    this.sshEndpointExposureStrategy = options.sshEndpointExposureStrategy ?? "host-published";
   }
 
   private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
@@ -382,6 +388,58 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return undefined;
   }
 
+  private async resolveContainerNetworkSshEndpoint(
+    containerId: string,
+    containerSshPort: number,
+  ): Promise<string | undefined> {
+    const inspectResult = await this.commandRunner("docker", [
+      "inspect",
+      "--format",
+      "{{json .NetworkSettings.Networks}}",
+      containerId,
+    ]);
+    const rawNetworks = inspectResult.stdout.trim();
+
+    if (rawNetworks.length === 0 || rawNetworks === "null") {
+      return undefined;
+    }
+
+    let parsedNetworks: unknown;
+
+    try {
+      parsedNetworks = JSON.parse(rawNetworks);
+    } catch {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker inspect returned an unparseable network payload for '${containerId}'.`,
+      );
+    }
+
+    if (typeof parsedNetworks !== "object" || parsedNetworks === null) {
+      return undefined;
+    }
+
+    const networkEntries = Object.values(parsedNetworks);
+
+    for (const entry of networkEntries) {
+      if (typeof entry !== "object" || entry === null) {
+        continue;
+      }
+
+      const ipAddress =
+        "IPAddress" in entry && typeof entry.IPAddress === "string" ? entry.IPAddress.trim() : "";
+
+      if (ipAddress.length === 0) {
+        continue;
+      }
+
+      const endpointHost = ipAddress.includes(":") ? `[${ipAddress}]` : ipAddress;
+      return `ssh://root@${endpointHost}:${containerSshPort}`;
+    }
+
+    return undefined;
+  }
+
   private async inspectContainerState(containerId: string): Promise<{
     status: string;
     running: boolean;
@@ -507,7 +565,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       workspaceCloneAuth?.type === "file-ref"
         ? await this.resolveWorkspaceAuthKeyBase64(workspaceCloneAuth)
         : undefined;
-    const sshArgs = sshEnabled === true ? ["-p", `${this.sshBindHost}::${containerSshPort}`] : [];
+    const sshArgs =
+      sshEnabled === true && this.sshEndpointExposureStrategy === "host-published"
+        ? ["-p", `${this.sshBindHost}::${containerSshPort}`]
+        : [];
     const sshEnvArgs =
       sshEnabled === true
         ? [
@@ -566,7 +627,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     const endpoint =
       sshEnabled === true
-        ? await this.resolvePublishedSshEndpoint(containerId, containerSshPort)
+        ? this.sshEndpointExposureStrategy === "host-published"
+          ? await this.resolvePublishedSshEndpoint(containerId, containerSshPort)
+          : await this.resolveContainerNetworkSshEndpoint(containerId, containerSshPort)
         : undefined;
 
     if (sshEnabled && endpoint === undefined) {

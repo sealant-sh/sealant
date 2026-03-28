@@ -32,7 +32,7 @@ export const createApp = (config: AppRuntimeConfig) => {
         return "";
       },
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowHeaders: ["content-type", "authorization", "idempotency-key"],
+      allowHeaders: ["content-type", "authorization", "idempotency-key", "x-sealant-gateway-token"],
       exposeHeaders: ["location"],
       maxAge: 86_400,
     }),

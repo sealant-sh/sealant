@@ -10,6 +10,12 @@ export interface SandboxRuntimeDetails {
   readonly endpoint?: string;
 }
 
+export interface SandboxSshGatewayConfig {
+  readonly host: string;
+  readonly port?: number;
+  readonly usernamePrefix?: string;
+}
+
 export interface SandboxPublishedImage {
   readonly reference: string;
   readonly digestReference: string;
@@ -59,7 +65,12 @@ export const resolveSandboxStatus = (input: {
 
 export const resolveSandboxRuntime = (
   runtimeInstance: SandboxRuntimeInstance | undefined,
+  options: {
+    readonly sandboxId?: string;
+    readonly sshGateway?: SandboxSshGatewayConfig;
+  } = {},
 ): SandboxRuntimeDetails | undefined => {
+  // If runtime metadata is incomplete we omit runtime from API response.
   if (
     runtimeInstance === undefined ||
     runtimeInstance.adapter === null ||
@@ -69,12 +80,32 @@ export const resolveSandboxRuntime = (
     return undefined;
   }
 
+  const gatewayHost = options.sshGateway?.host.trim();
+  // If gateway config is present, we intentionally mask the raw runtime endpoint and
+  // return a stable gateway address instead. This avoids exposing per-sandbox IP/port
+  // details and gives clients a consistent connection target.
+  const shouldUseGateway =
+    runtimeInstance.endpoint !== null &&
+    options.sandboxId !== undefined &&
+    gatewayHost !== undefined &&
+    gatewayHost.length > 0;
+  const gatewayPort = options.sshGateway?.port ?? 22;
+  const gatewayUsernamePrefix = options.sshGateway?.usernamePrefix?.trim() || "sbx";
+  const gatewayUsername =
+    options.sandboxId === undefined ? undefined : `${gatewayUsernamePrefix}-${options.sandboxId}`;
+  const formattedGatewayHost =
+    gatewayHost === undefined || !gatewayHost.includes(":") ? gatewayHost : `[${gatewayHost}]`;
+  const endpoint =
+    shouldUseGateway && gatewayUsername !== undefined && formattedGatewayHost !== undefined
+      ? `ssh://${gatewayUsername}@${formattedGatewayHost}:${gatewayPort}`
+      : runtimeInstance.endpoint;
+
   return {
     adapter: runtimeInstance.adapter,
     resourceId: runtimeInstance.resourceId,
     reference: runtimeInstance.reference,
     status: runtimeInstance.status,
-    ...(runtimeInstance.endpoint === null ? {} : { endpoint: runtimeInstance.endpoint }),
+    ...(endpoint === null || endpoint === undefined ? {} : { endpoint }),
   };
 };
 

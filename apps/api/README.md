@@ -24,6 +24,7 @@ It currently provides:
 - `GET /v1/sandboxes/{sandboxId}`
 - `GET /v1/sandboxes/{sandboxId}/attempts?limit=...`
 - `GET /v1/sandboxes/{sandboxId}/events?limit=...`
+- `GET /v1/sandboxes/{sandboxId}/ssh-target` (internal gateway route)
 - `GET /v1/registries/{registryId}`
 - `GET /v1/registries/{registryId}/ping`
 - `GET /v1/registries/{registryId}/extensions`
@@ -49,6 +50,16 @@ By default, CORS is enabled for:
 - `http://localhost:3001`
 
 Override with `CORS_ALLOWED_ORIGINS` as a comma-separated list.
+
+To expose sandbox SSH access through a gateway endpoint instead of direct runtime endpoints, set:
+
+- `SANDBOX_SSH_GATEWAY_TOKEN` (required for internal gateway target lookups)
+- `SANDBOX_SSH_GATEWAY_HOST` (for example `ssh.sealant.dev`)
+- `SANDBOX_SSH_GATEWAY_PORT` (optional, defaults to `22`)
+- `SANDBOX_SSH_GATEWAY_USERNAME_PREFIX` (optional, defaults to `sbx`)
+
+When configured, sandbox runtime endpoints returned by the API are rewritten to:
+`ssh://<prefix>-<sandboxId>@<gateway-host>:<gateway-port>`.
 
 The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
 and the shared SQLite database from `@sealant/db`.

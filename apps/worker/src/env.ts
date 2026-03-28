@@ -7,6 +7,8 @@ import { runtimeAdapterIdSchema } from "@sealant/runtime-adapters-api";
 import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
 import { z } from "zod";
 
+const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);
+
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
 const booleanFromEnvSchema = z.union([
@@ -37,6 +39,8 @@ export const workerEnvSchema = databaseEnvSchema
       .min(1)
       .default("/app/.secrets/authorized_keys"),
     DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
+    DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
+      sshEndpointExposureStrategySchema.default("host-published"),
     WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
     WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
   })

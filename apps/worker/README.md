@@ -59,6 +59,7 @@ The worker now applies runtime defaults when requests omit startup/SSH fields:
 - `DEFAULT_WORKSPACE_SSH_LISTEN_PORT=2222`
 - `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
+- `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY=host-published` (`container-network` is gateway-ready)
 
 For local Docker Compose usage, create `./.secrets/authorized_keys` in the repo with one or more
 public keys. When SSH is enabled the Docker runtime adapter injects that key material into the
