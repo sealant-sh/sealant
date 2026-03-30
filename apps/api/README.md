@@ -7,10 +7,10 @@ It currently provides:
 - a Node-based Hono server entrypoint
 - OpenAPI generation with `hono-openapi`
 - interactive docs at `/docs` backed by Scalar
-- a route layout split into `system`, `sandboxes`, `registries`, and `workspace-build-jobs` groups
-- initial read-only registry endpoints backed by `@sealant/registry-integration`
-- sandbox-first lifecycle routes backed by `@sealant/db` and `@sealant/workspace-build-queue`
-- internal low-level image composition job routes for diagnostics and operator workflows
+- a route layout split into `system`, `sandboxes`, `registries`, `packages`, and `github` groups
+- registry endpoints backed by `@sealant/sandboxes`
+- sandbox-first lifecycle routes backed by `@sealant/db`, `@sealant/sandboxes`, and
+  `@sealant/rabbitmq`
 
 ## Current routes
 
@@ -30,8 +30,6 @@ It currently provides:
 - `GET /v1/registries/{registryId}/extensions`
 - `GET /v1/registries/{registryId}/tags?repository=...`
 - `GET /v1/registries/{registryId}/manifest?repository=...&reference=...`
-- `POST /v1/workspace-build-jobs` (lower-level orchestration route)
-- `GET /v1/workspace-build-jobs/{jobId}` (lower-level orchestration route)
 
 ## Development
 
@@ -72,10 +70,9 @@ This API is the control-plane entrypoint for workspace image builds.
 
 1. `POST /v1/sandboxes` stores a durable sandbox plus internal execution records in SQLite and
    publishes a queue message to RabbitMQ.
-2. `@sealant/worker` consumes the job, compiles via the active OS integration, and publishes the OCI
-   image to Zot via `@sealant/registry-integration`.
-3. `GET /v1/sandboxes/{sandboxId}` exposes the UI-facing sandbox lifecycle surface, while
-   `GET /v1/workspace-build-jobs/{jobId}` remains available for lower-level queue-job inspection.
+2. `@sealant/worker` consumes the job through `@sealant/sandboxes`, compiles via BuildKit, and
+   publishes the OCI image to Zot.
+3. `GET /v1/sandboxes/{sandboxId}` exposes the UI-facing sandbox lifecycle surface.
 
 ### Prerequisites
 
@@ -147,17 +144,10 @@ Expected response: `202` with `sandboxId`.
 
 ### Poll job status
 
-````bash
+```bash
 curl "http://localhost:4000/v1/sandboxes?ownerUserId=<userId>"
 curl http://localhost:4000/v1/sandboxes/<sandboxId>
-
-Optional lower-level queue view:
-
-```bash
-curl http://localhost:4000/v1/workspace-build-jobs/<jobId>
-````
-
-````
+```
 
 Terminal states: `queued`, `running`, `succeeded`, `failed`.
 
@@ -174,7 +164,7 @@ On success, the response includes:
 
 ```bash
 curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/workspaces/demo"
-````
+```
 
 ### Common failure cases
 
@@ -194,7 +184,6 @@ Schema validators over time.
 - `src/lib/`: shared app setup and OpenAPI wiring
 - `src/routes/system/`: liveness and API index routes
 - `src/routes/sandboxes/`: UI-facing sandbox lifecycle routes
-- `src/routes/workspace-build-jobs/`: lower-level queued image composition job routes (internal)
 - `src/routes/registries/`: first registry-backed API routes
 
 ## Proposed API Roadmap
@@ -212,13 +201,12 @@ This roadmap aligns the API with the two primary product domains:
 - Command endpoints should be asynchronous (`202` + `Location`) when work is delegated to workers.
 - Query endpoints should return screen-shaped data so the UI does not stitch low-level records.
 
-### Phase 1: Sandbox-first core (in progress)
+### Phase 1: Sandbox-first core (current)
 
 - Keep `POST /v1/sandboxes`, `GET /v1/sandboxes`, and `GET /v1/sandboxes/{sandboxId}` as the primary
   sandbox lifecycle surface.
 - Move runtime launch state to dedicated persistence (`sandbox_runtime_instances`) so runtime
   details are no longer inferred from build-job payloads.
-- Keep lower-level job endpoints available for operator/debug workflows.
 
 ### Phase 2: Sandbox launch dependencies
 

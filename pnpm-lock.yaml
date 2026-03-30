@@ -56,15 +56,18 @@ importers:
       '@sealant/package-standardization':
         specifier: workspace:*
         version: link:../../packages/package-standardization
-      '@sealant/registry-integration':
+      '@sealant/rabbitmq':
         specifier: workspace:*
-        version: link:../../packages/registry-integration
+        version: link:../../packages/rabbitmq
+      '@sealant/sandboxes':
+        specifier: workspace:*
+        version: link:../../packages/sandboxes
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
-      '@sealant/workspace-build-queue':
+      '@sealant/validators':
         specifier: workspace:*
-        version: link:../../packages/workspace-build-queue
+        version: link:../../packages/validators
       '@sealant/workspace-composition':
         specifier: workspace:*
         version: link:../../packages/workspace-composition
@@ -430,24 +433,15 @@ importers:
       '@sealant/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@sealant/os-integration-buildkit':
+      '@sealant/rabbitmq':
         specifier: workspace:*
-        version: link:../../packages/os-integration-buildkit
-      '@sealant/registry-integration':
+        version: link:../../packages/rabbitmq
+      '@sealant/sandboxes':
         specifier: workspace:*
-        version: link:../../packages/registry-integration
-      '@sealant/runtime-adapters-api':
-        specifier: workspace:*
-        version: link:../../packages/runtime-adapters-api
+        version: link:../../packages/sandboxes
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
-      '@sealant/workspace-build-queue':
-        specifier: workspace:*
-        version: link:../../packages/workspace-build-queue
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../../packages/workspace-composition
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -483,6 +477,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../validators
       '@sealant/workspace-composition':
         specifier: workspace:*
         version: link:../workspace-composition
@@ -503,22 +500,6 @@ importers:
         specifier: ^0.31.5
         version: 0.31.10
 
-  packages/os-integration-buildkit:
-    dependencies:
-      '@sealant/ai-harness-integrations':
-        specifier: workspace:*
-        version: link:../ai-harness-integrations
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../workspace-composition
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      '@sealant/typescript':
-        specifier: workspace:*
-        version: link:../../tooling/typescript
-
   packages/package-standardization:
     dependencies:
       zod:
@@ -529,14 +510,11 @@ importers:
         specifier: workspace:*
         version: link:../../tooling/typescript
 
-  packages/registry-integration:
-    devDependencies:
-      '@sealant/typescript':
-        specifier: workspace:*
-        version: link:../../tooling/typescript
-
-  packages/runtime-adapters-api:
+  packages/rabbitmq:
     dependencies:
+      amqplib:
+        specifier: ^0.10.9
+        version: 0.10.9
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -544,6 +522,43 @@ importers:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
+      '@types/amqplib':
+        specifier: ^0.10.7
+        version: 0.10.8
+
+  packages/sandboxes:
+    dependencies:
+      '@sealant/ai-harness-integrations':
+        specifier: workspace:*
+        version: link:../ai-harness-integrations
+      '@sealant/db':
+        specifier: workspace:*
+        version: link:../db
+      '@sealant/rabbitmq':
+        specifier: workspace:*
+        version: link:../rabbitmq
+      '@sealant/source-integrations':
+        specifier: workspace:*
+        version: link:../source-integrations
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../validators
+      '@sealant/workspace-composition':
+        specifier: workspace:*
+        version: link:../workspace-composition
+      amqplib:
+        specifier: ^0.10.9
+        version: 0.10.9
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+      '@types/amqplib':
+        specifier: ^0.10.7
+        version: 0.10.8
 
   packages/source-integrations:
     devDependencies:
@@ -630,11 +645,14 @@ importers:
         specifier: ^4.1.18
         version: 4.2.2
 
-  packages/workspace-build-queue:
+  packages/validators:
     dependencies:
-      amqplib:
-        specifier: ^0.10.9
-        version: 0.10.9
+      '@sealant/package-standardization':
+        specifier: workspace:*
+        version: link:../package-standardization
+      '@sealant/workspace-composition':
+        specifier: workspace:*
+        version: link:../workspace-composition
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -642,9 +660,6 @@ importers:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
-      '@types/amqplib':
-        specifier: ^0.10.7
-        version: 0.10.8
 
   packages/workspace-composition:
     dependencies:

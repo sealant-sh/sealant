@@ -21,7 +21,7 @@ services:
       - "127.0.0.1:5000:5000"
     restart: unless-stopped
     volumes:
-      - ./packages/registry-integration/dev/zot/config.json:/etc/zot/config.json:ro
+      - ./packages/sandboxes/dev/zot/config.json:/etc/zot/config.json:ro
       - zot-data:/var/lib/registry
 
   worker:

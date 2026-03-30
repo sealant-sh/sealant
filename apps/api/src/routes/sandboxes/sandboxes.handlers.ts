@@ -7,20 +7,20 @@ import type {
   WorkspaceBuildJobRequestPayload,
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
-import { workspaceBuildJobRequestPayloadSchema } from "@sealant/db";
-import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
-import type { Context } from "hono";
-import type { z } from "zod";
-
-import type { AppEnv } from "../../env.js";
 import {
   resolveSandboxError,
   resolveSandboxPublishedImage,
   resolveSandboxRuntime,
   resolveSandboxStatus,
   type SandboxSshGatewayConfig,
-} from "../../lib/sandbox.js";
+} from "@sealant/sandboxes";
+import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
+import { workspaceBuildJobRequestPayloadSchema } from "@sealant/validators";
+import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
+import type { Context } from "hono";
+import type { z } from "zod";
+
+import type { AppEnv } from "../../env.js";
 import type { AppBindings } from "../../lib/types.js";
 import type {
   createSandboxRequestSchema,

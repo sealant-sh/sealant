@@ -17,7 +17,7 @@ import {
   type PackageStandardizer,
   type PackageTargetOs,
 } from "@sealant/package-standardization";
-import type { RegistryClient } from "@sealant/registry-integration";
+import type { RegistryClient } from "@sealant/sandboxes";
 import type {
   GitHubRemoteInstallation,
   GitHubRemoteInstallationRepository,
@@ -1086,7 +1086,7 @@ describe("createApiApp", () => {
     expect(body.info.title).toBe("Sealant Control Plane API");
     expect(body.paths["/v1/registries/{registryId}/ping"]).toBeDefined();
     expect(body.paths["/healthz"]).toBeDefined();
-    expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
+    expect(body.paths["/v1/workspace-build-jobs"]).toBeUndefined();
     expect(body.paths["/v1/sandboxes"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/name"]).toBeDefined();
@@ -1328,165 +1328,6 @@ describe("createApiApp", () => {
     await expect(response.json()).resolves.toEqual({
       message: `User ${testUserId} does not have access to GitHub installation gh_installation_1.`,
     });
-  });
-
-  it("creates and queues a workspace build job", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
-      sandboxRepository: createSandboxRepositoryStub(),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        ownerUserId: testUserId,
-        registryId: "default",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
-      }),
-    });
-
-    expect(response.status).toBe(202);
-
-    const body = (await response.json()) as {
-      jobId: string;
-      runId: string;
-      status: string;
-      repository: string;
-    };
-
-    expect(body.runId).toBeDefined();
-    expect(body.status).toBe("queued");
-    expect(body.repository).toBe("sealant/workspaces/demo");
-
-    const savedJob = await repository.getJobById(body.jobId);
-    expect(savedJob?.status).toBe("queued");
-    expect(savedJob?.runId).toBe(body.runId);
-  });
-
-  it("returns 404 when owner user does not exist", async () => {
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      sandboxRepository: createSandboxRepositoryStub({
-        knownUserIds: [testUserId],
-      }),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub({
-        knownUserIds: [testUserId],
-      }),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        ownerUserId: "missing-user",
-        registryId: "default",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
-      }),
-    });
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({
-      message: "Unknown owner user: missing-user",
-    });
-  });
-
-  it("returns durable workspace build job details", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
-    const queuedJob = await repository.insertQueuedJob({
-      id: "job_test",
-      registryId: "default",
-      repository: "sealant/workspaces/demo",
-      tag: "opencode",
-      requestPayload: {
-        source: "https://github.com/example/repo",
-        harness: "opencode",
-        os: "nix",
-      },
-    });
-
-    await repository.markJobSucceeded({
-      id: queuedJob.id,
-      executorId: "nix",
-      resultPayload: {
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      },
-      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
-      publishedDigest: "sha256:test",
-    });
-
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
-      sandboxRepository: createSandboxRepositoryStub(),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs/job_test");
-
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as {
-      jobId: string;
-      status: string;
-      publishedImage?: {
-        digest: string;
-      };
-      executorId?: string;
-    };
-
-    expect(body.jobId).toBe("job_test");
-    expect(body.status).toBe("succeeded");
-    expect(body.executorId).toBe("nix");
-    expect(body.publishedImage?.digest).toBe("sha256:test");
   });
 
   it("creates sandboxes via the sandbox route", async () => {

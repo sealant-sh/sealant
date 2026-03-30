@@ -3,8 +3,8 @@ import { hostname } from "node:os";
 import { homedir } from "node:os";
 
 import { databaseEnvSchema } from "@sealant/db";
-import { runtimeAdapterIdSchema } from "@sealant/runtime-adapters-api";
-import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
+import { rabbitMqEnvSchema } from "@sealant/rabbitmq";
+import { runtimeAdapterIdSchema } from "@sealant/sandboxes";
 import { z } from "zod";
 
 const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);

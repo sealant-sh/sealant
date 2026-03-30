@@ -24,7 +24,6 @@ import packages from "./routes/packages/packages.index.js";
 import registries from "./routes/registries/registries.index.js";
 import sandboxes from "./routes/sandboxes/sandboxes.index.js";
 import system from "./routes/system/system.index.js";
-import workspaceBuildJobs from "./routes/workspace-build-jobs/workspace-build-jobs.index.js";
 
 export const createApiApp = (config: AppRuntimeConfig) => {
   const app = createApp(config);
@@ -35,7 +34,6 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   routes.route("/v1/sandboxes", sandboxes);
   routes.route("/v1/registries", registries);
   routes.route("/v1/github", github);
-  routes.route("/v1/workspace-build-jobs", workspaceBuildJobs);
 
   app.route("/", routes);
   configureOpenAPI(app, routes, config.env);

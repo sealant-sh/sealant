@@ -12,8 +12,7 @@ concrete OS integration is selected.
 - `docs/user-workspace-spec.md`: user-facing input contract and normalization rules
 - `docs/workspace-blueprint.md`: normalized workspace blueprint contract and defaults
 - normalization, selection, and contract code as it lands in this package
-- integration-specific build logic now lives in sibling packages such as
-  `packages/os-integration-buildkit/`
+- integration-specific build logic now lives in `packages/sandboxes/`
 
 ## Target Boundary
 

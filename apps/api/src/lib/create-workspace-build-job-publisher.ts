@@ -1,7 +1,7 @@
 import {
   publishWorkspaceBuildJobRequested,
   workspaceBuildJobRequestedMessageKind,
-} from "@sealant/workspace-build-queue";
+} from "@sealant/sandboxes";
 
 import type { AppEnv } from "../env.js";
 import type { WorkspaceBuildJobPublisher } from "./types.js";

@@ -9,12 +9,13 @@
   `src/user-workspace-spec.ts`
 - `WorkspaceBlueprint`: normalized, defaulted, OS-agnostic internal model used for executor
   selection; its first concrete schema now lives in `src/blueprint.ts`
-- `OsIntegration`: package-level category for OS backends such as `os-integration-buildkit`; the
-  concrete runtime contract they implement is `OsExecutor` from `src/executor.ts`
+- `OsIntegration`: package-level category for OS backends such as the BuildKit executors in
+  `@sealant/sandboxes`; the concrete runtime contract they implement is `OsExecutor` from
+  `src/executor.ts`
 - `BuildArtifact`: the concrete result produced by an OS integration, such as an image, closure,
   manifest, metadata bundle, or another launchable artifact; its first standardized schema now lives
   in `src/executor.ts`
-- `RuntimeAdapter`: contract implemented by concrete adapters exported from `runtime-adapters-api`
+- `RuntimeAdapter`: contract implemented by concrete adapters exported from `@sealant/sandboxes`
   that can launch a build artifact on a specific runtime target
 
 ## Ownership Boundaries
@@ -28,14 +29,14 @@
 - shared executor contracts
 - shared build artifact definitions
 
-`os-integration-*` packages own:
+`sandboxes` owns:
 
 - OS-specific compilation and build behavior
 - OS-specific package resolution
 - OS-specific startup and bootstrap wiring
 - concrete build artifacts for that integration
 
-`runtime-adapters-api` owns:
+`sandboxes` also owns:
 
 - the launch contract between the control plane and runtime adapter implementations
 - concrete launch, stop, inspect, and lifecycle behavior for built-in runtime backends
@@ -48,7 +49,7 @@
 
 - harness metadata, package requirements, and startup orchestration inputs
 
-`registry-integration` owns:
+`sandboxes` also owns:
 
 - artifact publishing, tagging, lookup, and retrieval
 
@@ -63,6 +64,6 @@
 
 ## Current Implementation Note
 
-The current concrete distro-backed build path lives in `@sealant/os-integration-buildkit` for Arch,
-Fedora, and Nix. This package stays focused on the shared composition contracts, normalization, and
-executor-selection boundary that feed concrete OS integrations.
+The current concrete distro-backed build path lives in `@sealant/sandboxes` for Arch, Fedora, and
+Nix. This package stays focused on the shared composition contracts, normalization, and
+executor-selection boundary that feed concrete sandbox integrations.

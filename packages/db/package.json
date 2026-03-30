@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
+    "@sealant/validators": "workspace:*",
     "@sealant/workspace-composition": "workspace:*",
     "drizzle-orm": "^0.44.7",
     "drizzle-zod": "^0.8.2",

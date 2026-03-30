@@ -1,5 +1,5 @@
 import { env } from "./env.js";
-import { startWorker } from "./worker.js";
+import { startWorkers } from "./workers/index.js";
 
 const retryDelayMs = 2000;
 
@@ -23,7 +23,7 @@ const wait = async (ms: number) => {
 let worker = await (async () => {
   while (true) {
     try {
-      return await startWorker(env);
+      return await startWorkers(env);
     } catch (error) {
       console.error("Sealant worker failed to start; retrying", {
         error,

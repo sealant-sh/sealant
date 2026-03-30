@@ -65,11 +65,11 @@ every implementation lands.
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
 │   ├── ai-harness-integrations/
-│   ├── os-integration-buildkit/
 │   ├── package-standardization/
-│   ├── registry-integration/
-│   ├── runtime-adapters-api/
+│   ├── rabbitmq/
+│   ├── sandboxes/
 │   ├── source-integrations/
+│   ├── validators/
 │   └── workspace-composition/
 ├── tooling/              # shared config packages and developer tooling
 │   └── README.md
@@ -134,13 +134,11 @@ Supporting integrations feed into both flows without owning either flow:
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
-  running BuildKit executors for Fedora, Arch, and Nix, and publishing images to the registry
-- `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image
-  build requests and dead-letter handling
-- `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry
-  compose/config; today it publishes the current BuildKit-produced OCI image archive through a
-  Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image
-  for later runtime adapters
+  with worker-kind modules under `src/workers/`
+- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package
+- `packages/sandboxes/`: sandbox domain package for BuildKit compile, registry publish, runtime
+  launch, queue wiring, and lifecycle orchestration
+- `packages/validators/`: shared API and worker message contracts
 - the other package and app workspaces are scaffolded so the intended architecture is explicit
   before each implementation is filled in
 
@@ -196,21 +194,19 @@ over time.
   migrations, and repositories for build-job processing
 - `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session
   helpers across product apps
-- `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts,
-  publishers, consumers, and dev broker setup
+- `packages/validators/`: shared contract schemas used by API routes and worker messaging
+- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package for connection lifecycle,
+  generic JSON publish/consume helpers, and topology assertion
+- `packages/sandboxes/`: sandbox domain package for BuildKit image creation, registry publishing,
+  runtime adapters, queue topology, and worker orchestration
 - `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
   `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
   artifact definitions
-- `packages/os-integration-buildkit/`: BuildKit-based OS integration for Fedora, Arch, and Nix image
-  compilation
 - `packages/package-standardization/`: Repology-backed package resolution and normalized package
   contract utilities
-- `packages/runtime-adapters-api/`: shared launch contracts and built-in runtime adapter
-  implementations (Docker, plus Kubernetes/K3s scaffolds)
 - `packages/source-integrations/`: source-provider integration package for repository selection, ref
   resolution, and provider-specific access flows; GitHub will be the first provider here
 - `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
-- `packages/registry-integration/`: artifact and registry publishing, tagging, lookup, and retrieval
 
 ## Defined app architecture
 
@@ -240,15 +236,14 @@ over time.
 ## Workspace composition
 
 The composition contracts now live in `packages/workspace-composition/`, and the concrete BuildKit
-OS execution path now lives in `packages/os-integration-buildkit/`.
+OS execution path now lives in `packages/sandboxes/`.
 
 That package contains:
 
 - `UserWorkspaceSpec` and `WorkspaceBlueprint` documentation
 - normalization and defaulting helpers
 - executor and artifact contract definitions
-- shared composition contracts that feed concrete OS integrations such as
-  `packages/os-integration-buildkit/`
+- shared composition contracts that feed concrete sandbox integrations such as `packages/sandboxes/`
 
 Composition documentation lives in `packages/workspace-composition/docs/`.
 

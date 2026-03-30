@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { databaseEnvSchema } from "@sealant/db";
-import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
+import { rabbitMqEnvSchema } from "@sealant/rabbitmq";
 import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 
