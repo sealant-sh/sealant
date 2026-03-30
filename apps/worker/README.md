@@ -1,15 +1,14 @@
 # Worker App
 
-`@sealant/worker` is the first background worker for Sealant workspace image build jobs.
+`@sealant/worker` is the first background worker for Sealant sandbox image build jobs.
 
 It currently provides:
 
 - a Node worker entrypoint
-- RabbitMQ consumption via `@sealant/workspace-build-queue`
-- durable job state updates through `@sealant/db`
-- BuildKit-backed Fedora, Arch, and Nix image compilation through `@sealant/os-integration-buildkit`
-- image publishing through `@sealant/registry-integration`
-- runtime launch selection through `@sealant/runtime-adapters-api`
+- one worker-kind module per domain workload under `src/workers/`
+- RabbitMQ transport via `@sealant/rabbitmq`
+- sandbox lifecycle processing through `@sealant/sandboxes`
+- durable state updates through `@sealant/db`
 
 ## Development
 
@@ -45,18 +44,14 @@ The worker expects:
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.
 
-Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
+Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized sandbox
 spec leaves `target.runtime.family` as `auto`.
 
 Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
 `runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
 
-The worker now applies runtime defaults when requests omit startup/SSH fields:
+Sandbox startup and SSH behavior are spec-authoritative. Worker defaults only cover host SSH wiring:
 
-- `DEFAULT_WORKSPACE_STARTUP_MODE=idle` (or `harness`)
-- `DEFAULT_WORKSPACE_IDLE_COMMAND="while :; do sleep 30; done"`
-- `DEFAULT_WORKSPACE_SSH_ENABLED=true`
-- `DEFAULT_WORKSPACE_SSH_LISTEN_PORT=2222`
 - `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY=host-published` (`container-network` is gateway-ready)

@@ -1,4 +1,0 @@
-{
-  "extends": "@sealant/typescript/core.json",
-  "include": ["**/*.ts", "**/*.tsx", "package.json"]
-}

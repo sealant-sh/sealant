@@ -1,7 +1,7 @@
 import { Badge } from "@sealant/ui";
 import { Link } from "@tanstack/react-router";
 
-import type { RunRecord } from "@/lib/navigation/workspace-data";
+import type { RunRecord } from "@/lib/navigation/sandbox-data";
 
 interface RunRowsProps {
   readonly runs: readonly RunRecord[];

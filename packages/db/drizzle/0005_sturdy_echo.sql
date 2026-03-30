@@ -1,18 +1,18 @@
-ALTER TABLE `workspace_runs` RENAME TO `sandbox_attempts`;
+ALTER TABLE `sandbox_runs` RENAME TO `sandbox_attempts`;
 --> statement-breakpoint
 ALTER TABLE `run_input_snapshots` RENAME TO `sandbox_attempt_snapshots`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_owner_user_id_status_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_owner_user_id_status_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_repository_id_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_repository_id_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_profile_revision_id_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_profile_revision_id_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_repository_profile_revision_id_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_repository_profile_revision_id_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_issue_id_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_issue_id_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_runs_status_started_at_idx`;
+DROP INDEX IF EXISTS `sandbox_runs_status_started_at_idx`;
 --> statement-breakpoint
 CREATE INDEX `sandbox_attempts_owner_user_id_status_created_at_idx` ON `sandbox_attempts` (`owner_user_id`,`status`,`created_at`);
 --> statement-breakpoint

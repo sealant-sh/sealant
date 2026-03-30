@@ -19,7 +19,7 @@ Implemented in this pass:
 - new GitHub API routes added under `apps/api/src/routes/github/`
 - `createApiApp` now mounts `/v1/github`
 - sandbox creation now accepts a GitHub-backed `sourceSelection`, verifies installation grants
-  server-side, resolves the selected repository, links `repositoryId`, and rewrites the workspace
+  server-side, resolves the selected repository, links `repositoryId`, and rewrites the sandbox
   source to a GitHub auth-ref based clone descriptor
 - API tests added for granted installation listing and GitHub-backed sandbox creation
 - GitHub source integration now supports fetching a single installation directly from the GitHub App
@@ -116,7 +116,7 @@ Verified in this pass:
 - [x] Introduce an ephemeral token auth descriptor for source clone auth
 - [x] Update runtime adapter contract to support token auth
 - [x] Update Docker runtime adapter to inject token auth safely
-- [x] Update buildkit executor clone bootstrapping to consume token auth safely
+- [x] Update buildkit builder clone bootstrapping to consume token auth safely
 - [x] Add worker and runtime tests for token-based clone auth
 
 ### Web
@@ -148,8 +148,8 @@ Verified in this pass:
 
 - The current sandbox API path uses a new top-level `sourceSelection` field for GitHub-backed
   launches while keeping the existing raw `spec` path intact.
-- The GitHub-backed sandbox path currently rewrites the workspace source to a GitHub clone URL plus
-  an installation-repository auth ref sentinel. That gives us durable repository linkage now without
+- The GitHub-backed sandbox path currently rewrites the sandbox source to a GitHub clone URL plus an
+  installation-repository auth ref sentinel. That gives us durable repository linkage now without
   storing tokens.
 - The worker now resolves the auth-ref sentinel into a short-lived GitHub installation token right
   before runtime launch, and the runtime uses ephemeral HTTP token auth for clone without storing

@@ -466,11 +466,11 @@
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
-        "issue_run_links_run_id_workspace_runs_id_fk": {
-          "name": "issue_run_links_run_id_workspace_runs_id_fk",
+        "issue_run_links_run_id_sandbox_runs_id_fk": {
+          "name": "issue_run_links_run_id_sandbox_runs_id_fk",
           "tableFrom": "issue_run_links",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -1857,11 +1857,11 @@
         }
       },
       "foreignKeys": {
-        "run_artifacts_run_id_workspace_runs_id_fk": {
-          "name": "run_artifacts_run_id_workspace_runs_id_fk",
+        "run_artifacts_run_id_sandbox_runs_id_fk": {
+          "name": "run_artifacts_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_artifacts",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -1961,11 +1961,11 @@
         }
       },
       "foreignKeys": {
-        "run_diff_files_run_id_workspace_runs_id_fk": {
-          "name": "run_diff_files_run_id_workspace_runs_id_fk",
+        "run_diff_files_run_id_sandbox_runs_id_fk": {
+          "name": "run_diff_files_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_diff_files",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2070,11 +2070,11 @@
         }
       },
       "foreignKeys": {
-        "run_events_run_id_workspace_runs_id_fk": {
-          "name": "run_events_run_id_workspace_runs_id_fk",
+        "run_events_run_id_sandbox_runs_id_fk": {
+          "name": "run_events_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_events",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2139,11 +2139,11 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "run_input_snapshots_run_id_workspace_runs_id_fk": {
-          "name": "run_input_snapshots_run_id_workspace_runs_id_fk",
+        "run_input_snapshots_run_id_sandbox_runs_id_fk": {
+          "name": "run_input_snapshots_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_input_snapshots",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2194,11 +2194,11 @@
         }
       },
       "foreignKeys": {
-        "run_pull_request_links_run_id_workspace_runs_id_fk": {
-          "name": "run_pull_request_links_run_id_workspace_runs_id_fk",
+        "run_pull_request_links_run_id_sandbox_runs_id_fk": {
+          "name": "run_pull_request_links_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_pull_request_links",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2308,11 +2308,11 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "run_summaries_run_id_workspace_runs_id_fk": {
-          "name": "run_summaries_run_id_workspace_runs_id_fk",
+        "run_summaries_run_id_sandbox_runs_id_fk": {
+          "name": "run_summaries_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_summaries",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2395,11 +2395,11 @@
         }
       },
       "foreignKeys": {
-        "run_validation_results_run_id_workspace_runs_id_fk": {
-          "name": "run_validation_results_run_id_workspace_runs_id_fk",
+        "run_validation_results_run_id_sandbox_runs_id_fk": {
+          "name": "run_validation_results_run_id_sandbox_runs_id_fk",
           "tableFrom": "run_validation_results",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2464,11 +2464,11 @@
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
-        "sandbox_run_links_run_id_workspace_runs_id_fk": {
-          "name": "sandbox_run_links_run_id_workspace_runs_id_fk",
+        "sandbox_run_links_run_id_sandbox_runs_id_fk": {
+          "name": "sandbox_run_links_run_id_sandbox_runs_id_fk",
           "tableFrom": "sandbox_run_links",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
@@ -2628,11 +2628,11 @@
           "onUpdate": "no action",
           "onDelete": "set null"
         },
-        "sandboxes_latest_run_id_workspace_runs_id_fk": {
-          "name": "sandboxes_latest_run_id_workspace_runs_id_fk",
+        "sandboxes_latest_run_id_sandbox_runs_id_fk": {
+          "name": "sandboxes_latest_run_id_sandbox_runs_id_fk",
           "tableFrom": "sandboxes",
           "columnsFrom": ["latest_run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
@@ -2942,8 +2942,8 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "workspace_runs": {
-      "name": "workspace_runs",
+    "sandbox_runs": {
+      "name": "sandbox_runs",
       "columns": {
         "id": {
           "name": "id",
@@ -3075,86 +3075,86 @@
         }
       },
       "indexes": {
-        "workspace_runs_owner_user_id_status_created_at_idx": {
-          "name": "workspace_runs_owner_user_id_status_created_at_idx",
+        "sandbox_runs_owner_user_id_status_created_at_idx": {
+          "name": "sandbox_runs_owner_user_id_status_created_at_idx",
           "columns": ["owner_user_id", "status", "created_at"],
           "isUnique": false
         },
-        "workspace_runs_repository_id_created_at_idx": {
-          "name": "workspace_runs_repository_id_created_at_idx",
+        "sandbox_runs_repository_id_created_at_idx": {
+          "name": "sandbox_runs_repository_id_created_at_idx",
           "columns": ["repository_id", "created_at"],
           "isUnique": false
         },
-        "workspace_runs_profile_revision_id_created_at_idx": {
-          "name": "workspace_runs_profile_revision_id_created_at_idx",
+        "sandbox_runs_profile_revision_id_created_at_idx": {
+          "name": "sandbox_runs_profile_revision_id_created_at_idx",
           "columns": ["profile_revision_id", "created_at"],
           "isUnique": false
         },
-        "workspace_runs_repository_profile_revision_id_created_at_idx": {
-          "name": "workspace_runs_repository_profile_revision_id_created_at_idx",
+        "sandbox_runs_repository_profile_revision_id_created_at_idx": {
+          "name": "sandbox_runs_repository_profile_revision_id_created_at_idx",
           "columns": ["repository_profile_revision_id", "created_at"],
           "isUnique": false
         },
-        "workspace_runs_issue_id_created_at_idx": {
-          "name": "workspace_runs_issue_id_created_at_idx",
+        "sandbox_runs_issue_id_created_at_idx": {
+          "name": "sandbox_runs_issue_id_created_at_idx",
           "columns": ["issue_id", "created_at"],
           "isUnique": false
         },
-        "workspace_runs_status_started_at_idx": {
-          "name": "workspace_runs_status_started_at_idx",
+        "sandbox_runs_status_started_at_idx": {
+          "name": "sandbox_runs_status_started_at_idx",
           "columns": ["status", "started_at"],
           "isUnique": false
         }
       },
       "foreignKeys": {
-        "workspace_runs_owner_user_id_user_id_fk": {
-          "name": "workspace_runs_owner_user_id_user_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_owner_user_id_user_id_fk": {
+          "name": "sandbox_runs_owner_user_id_user_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["owner_user_id"],
           "tableTo": "user",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
-        "workspace_runs_repository_id_repositories_id_fk": {
-          "name": "workspace_runs_repository_id_repositories_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_repository_id_repositories_id_fk": {
+          "name": "sandbox_runs_repository_id_repositories_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
-        "workspace_runs_repository_profile_revision_id_repository_profile_revisions_id_fk": {
-          "name": "workspace_runs_repository_profile_revision_id_repository_profile_revisions_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_repository_profile_revision_id_repository_profile_revisions_id_fk": {
+          "name": "sandbox_runs_repository_profile_revision_id_repository_profile_revisions_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["repository_profile_revision_id"],
           "tableTo": "repository_profile_revisions",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
-        "workspace_runs_profile_revision_id_profile_revisions_id_fk": {
-          "name": "workspace_runs_profile_revision_id_profile_revisions_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_profile_revision_id_profile_revisions_id_fk": {
+          "name": "sandbox_runs_profile_revision_id_profile_revisions_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["profile_revision_id"],
           "tableTo": "profile_revisions",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
-        "workspace_runs_issue_id_issues_id_fk": {
-          "name": "workspace_runs_issue_id_issues_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_issue_id_issues_id_fk": {
+          "name": "sandbox_runs_issue_id_issues_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["issue_id"],
           "tableTo": "issues",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
-        "workspace_runs_requested_by_user_id_user_id_fk": {
-          "name": "workspace_runs_requested_by_user_id_user_id_fk",
-          "tableFrom": "workspace_runs",
+        "sandbox_runs_requested_by_user_id_user_id_fk": {
+          "name": "sandbox_runs_requested_by_user_id_user_id_fk",
+          "tableFrom": "sandbox_runs",
           "columnsFrom": ["requested_by_user_id"],
           "tableTo": "user",
           "columnsTo": ["id"],
@@ -3166,8 +3166,8 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "workspace_build_jobs": {
-      "name": "workspace_build_jobs",
+    "sandbox_build_jobs": {
+      "name": "sandbox_build_jobs",
       "columns": {
         "id": {
           "name": "id",
@@ -3284,8 +3284,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "executor_id": {
-          "name": "executor_id",
+        "builder_id": {
+          "name": "builder_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -3349,38 +3349,38 @@
         }
       },
       "indexes": {
-        "workspace_build_jobs_status_available_at_idx": {
-          "name": "workspace_build_jobs_status_available_at_idx",
+        "sandbox_build_jobs_status_available_at_idx": {
+          "name": "sandbox_build_jobs_status_available_at_idx",
           "columns": ["status", "available_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_status_claimed_at_idx": {
-          "name": "workspace_build_jobs_status_claimed_at_idx",
+        "sandbox_build_jobs_status_claimed_at_idx": {
+          "name": "sandbox_build_jobs_status_claimed_at_idx",
           "columns": ["status", "claimed_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_created_at_idx": {
-          "name": "workspace_build_jobs_created_at_idx",
+        "sandbox_build_jobs_created_at_idx": {
+          "name": "sandbox_build_jobs_created_at_idx",
           "columns": ["created_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_run_id_idx": {
-          "name": "workspace_build_jobs_run_id_idx",
+        "sandbox_build_jobs_run_id_idx": {
+          "name": "sandbox_build_jobs_run_id_idx",
           "columns": ["run_id"],
           "isUnique": false
         },
-        "workspace_build_jobs_idempotency_key_idx": {
-          "name": "workspace_build_jobs_idempotency_key_idx",
+        "sandbox_build_jobs_idempotency_key_idx": {
+          "name": "sandbox_build_jobs_idempotency_key_idx",
           "columns": ["idempotency_key"],
           "isUnique": true
         }
       },
       "foreignKeys": {
-        "workspace_build_jobs_run_id_workspace_runs_id_fk": {
-          "name": "workspace_build_jobs_run_id_workspace_runs_id_fk",
-          "tableFrom": "workspace_build_jobs",
+        "sandbox_build_jobs_run_id_sandbox_runs_id_fk": {
+          "name": "sandbox_build_jobs_run_id_sandbox_runs_id_fk",
+          "tableFrom": "sandbox_build_jobs",
           "columnsFrom": ["run_id"],
-          "tableTo": "workspace_runs",
+          "tableTo": "sandbox_runs",
           "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"

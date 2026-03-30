@@ -17,14 +17,14 @@ boundaries are still blurry.
   server-side resource wiring in apps/web/src/lib/trpc/context.ts.
 - The real sandbox flow is: web UI -> web tRPC router in apps/web/src/lib/trpc/router.ts -> HTTP
   client in apps/web/src/lib/api/core-api-client.ts -> Hono API in apps/api/src/app.ts -> RabbitMQ
-  -> worker in apps/worker/src/process-workspace-build-job.ts.
+  -> worker in apps/worker/src/process-sandbox-build-job.ts.
 - apps/api is the real orchestration center, but its handlers are still doing too much directly
   against repositories and integrations.
 - apps/worker is already the cleanest candidate for a real workflow runtime;
-  apps/worker/src/process-workspace-build-job.ts is basically an imperative program waiting to
-  become an Effect pipeline.
-- Shared packages are valuable and mostly sensible: packages/db, packages/workspace-build-queue,
-  packages/source-integrations, packages/runtime-adapters-api, packages/workspace-composition.
+  apps/worker/src/process-sandbox-build-job.ts is basically an imperative program waiting to become
+  an Effect pipeline.
+- Shared packages are valuable and mostly sensible: packages/db, packages/sandbox-build-queue,
+  packages/source-integrations, packages/runtime-adapters-api, packages/sandbox-composition.
 
 # Where It’s Messy
 
@@ -34,9 +34,9 @@ boundaries are still blurry.
 - The registry UI is still fake: apps/web/src/lib/api/registry-service.ts is explicit mock data,
   while apps/api/src/routes/registries/registries.index.ts already has real endpoints.
 - Large parts of the product UI are still static/demo data from
-  apps/web/src/lib/navigation/workspace-data.ts, especially profiles, repositories, and issues.
+  apps/web/src/lib/navigation/sandbox-data.ts, especially profiles, repositories, and issues.
 - There is duplicated orchestration between apps/api/src/routes/sandboxes/sandboxes.handlers.ts and
-  apps/api/src/routes/workspace-build-jobs/workspace-build-jobs.handlers.ts.
+  apps/api/src/routes/sandbox-build-jobs/sandbox-build-jobs.handlers.ts.
 - apps/api/src/routes/sandboxes/sandboxes.handlers.ts is over 1,200 lines; that is a strong signal
   that use-case logic needs extraction.
 - The web app owns DB/auth concerns directly through @sealant/db and @sealant/auth, so “frontend,”
@@ -72,8 +72,8 @@ boundaries are still blurry.
 
 # Why EffectTS Fits
 
-- The worker pipeline in apps/worker/src/process-workspace-build-job.ts is the best first seam: it
-  is a linear, side-effect-heavy program with retries, cleanup, state transitions, and external
+- The worker pipeline in apps/worker/src/process-sandbox-build-job.ts is the best first seam: it is
+  a linear, side-effect-heavy program with retries, cleanup, state transitions, and external
   services.
 - The API already has proto-DI in apps/api/src/lib/types.ts and apps/api/src/lib/create-app.ts; that
   maps naturally to Effect Layer.
@@ -93,11 +93,11 @@ boundaries are still blurry.
 
 # Recommended Order
 
-- 1. Start with the worker in apps/worker/src/process-workspace-build-job.ts; it gives the biggest
+- 1. Start with the worker in apps/worker/src/process-sandbox-build-job.ts; it gives the biggest
      Effect payoff with the smallest blast radius.
 - 2. Extract sandbox/job use-case services out of
      apps/api/src/routes/sandboxes/sandboxes.handlers.ts and
-     apps/api/src/routes/workspace-build-jobs/workspace-build-jobs.handlers.ts.
+     apps/api/src/routes/sandbox-build-jobs/sandbox-build-jobs.handlers.ts.
 - 3. Create a shared contract package so apps/web stops importing apps/api/src/... and stops
      mirroring types by hand.
 - 4. Introduce one env/config story per app, then remove import-time env singletons where possible.

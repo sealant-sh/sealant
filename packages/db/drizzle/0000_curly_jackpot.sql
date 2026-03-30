@@ -1,4 +1,4 @@
-CREATE TABLE `workspace_build_jobs` (
+CREATE TABLE `sandbox_build_jobs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`status` text DEFAULT 'queued' NOT NULL,
 	`registry_id` text NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE `workspace_build_jobs` (
 	`worker_id` text,
 	`started_at` integer,
 	`finished_at` integer,
-	`executor_id` text,
+	`builder_id` text,
 	`result_payload` text,
 	`published_reference` text,
 	`published_digest_reference` text,
@@ -25,7 +25,7 @@ CREATE TABLE `workspace_build_jobs` (
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `workspace_build_jobs_status_available_at_idx` ON `workspace_build_jobs` (`status`,`available_at`);--> statement-breakpoint
-CREATE INDEX `workspace_build_jobs_status_claimed_at_idx` ON `workspace_build_jobs` (`status`,`claimed_at`);--> statement-breakpoint
-CREATE INDEX `workspace_build_jobs_created_at_idx` ON `workspace_build_jobs` (`created_at`);--> statement-breakpoint
-CREATE UNIQUE INDEX `workspace_build_jobs_idempotency_key_idx` ON `workspace_build_jobs` (`idempotency_key`);
+CREATE INDEX `sandbox_build_jobs_status_available_at_idx` ON `sandbox_build_jobs` (`status`,`available_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_build_jobs_status_claimed_at_idx` ON `sandbox_build_jobs` (`status`,`claimed_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_build_jobs_created_at_idx` ON `sandbox_build_jobs` (`created_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `sandbox_build_jobs_idempotency_key_idx` ON `sandbox_build_jobs` (`idempotency_key`);

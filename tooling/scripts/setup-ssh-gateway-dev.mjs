@@ -243,7 +243,6 @@ const main = () => {
         "  IdentitiesOnly yes",
         `  UserKnownHostsFile ${knownHostsPath}`,
         "  StrictHostKeyChecking accept-new",
-        "  WarnWeakCrypto no",
       ],
       {
         start: sshConfigManagedBlockStart,

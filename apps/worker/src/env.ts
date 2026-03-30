@@ -3,18 +3,13 @@ import { hostname } from "node:os";
 import { homedir } from "node:os";
 
 import { databaseEnvSchema } from "@sealant/db";
-import { runtimeAdapterIdSchema } from "@sealant/runtime-adapters-api";
-import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
+import { rabbitMqEnvSchema } from "@sealant/rabbitmq";
+import { runtimeAdapterIdSchema } from "@sealant/sandboxes";
 import { z } from "zod";
 
 const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);
 
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
-
-const booleanFromEnvSchema = z.union([
-  z.boolean(),
-  z.enum(["true", "false", "1", "0"]).transform((value) => value === "true" || value === "1"),
-]);
 
 export const workerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
@@ -29,10 +24,6 @@ export const workerEnvSchema = databaseEnvSchema
     GITHUB_APP_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
     DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
     DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
-    DEFAULT_WORKSPACE_STARTUP_MODE: z.enum(["idle", "harness"]).default("idle"),
-    DEFAULT_WORKSPACE_IDLE_COMMAND: z.string().trim().min(1).default("while :; do sleep 30; done"),
-    DEFAULT_WORKSPACE_SSH_ENABLED: booleanFromEnvSchema.default(true),
-    DEFAULT_WORKSPACE_SSH_LISTEN_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
     DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
       .string()
       .trim()
@@ -42,7 +33,7 @@ export const workerEnvSchema = databaseEnvSchema
     DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
       sshEndpointExposureStrategySchema.default("host-published"),
     WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
-    WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+    SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
   })
   .superRefine((input, ctx) => {
     const hasGitHubPrivateKey =

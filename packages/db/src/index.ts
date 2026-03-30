@@ -115,23 +115,23 @@ export {
 } from "./repositories/sandbox-attempts.js";
 
 export {
-  createWorkspaceBuildJobRepository,
-  type ClaimWorkspaceBuildJobByIdInput,
-  type ClaimNextWorkspaceBuildJobInput,
-  type EnqueueWorkspaceBuildJobInput,
-  type MarkWorkspaceBuildJobFailedInput,
-  type MarkWorkspaceBuildJobRunningInput,
-  type MarkWorkspaceBuildJobSucceededInput,
-  type WorkspaceBuildJobRepository,
-} from "./repositories/workspace-build-jobs.js";
+  createSandboxBuildJobRepository,
+  type ClaimSandboxBuildJobByIdInput,
+  type ClaimNextSandboxBuildJobInput,
+  type EnqueueSandboxBuildJobInput,
+  type MarkSandboxBuildJobFailedInput,
+  type MarkSandboxBuildJobRunningInput,
+  type MarkSandboxBuildJobSucceededInput,
+  type SandboxBuildJobRepository,
+} from "./repositories/sandbox-build-jobs.js";
 
 export {
-  workspaceBuildJobRequestPayloadSchema,
-  workspaceBuildJobResultPayloadSchema,
-  workspaceBuildJobRuntimeResultPayloadSchema,
-  type WorkspaceBuildJobRequestPayload,
-  type WorkspaceBuildJobResultPayload,
-  type WorkspaceBuildJobRuntimeResultPayload,
+  newSandboxSchema,
+  sandboxBuildSchema,
+  sandboxLaunchSchema,
+  type NewSandbox,
+  type SandboxBuild,
+  type SandboxLaunch,
 } from "./payloads.js";
 
 export {
@@ -169,8 +169,8 @@ export {
   ociImageBuildJobStatusValues,
   sandboxRuntimeInstances,
   sandboxRuntimeInstanceStatusValues,
-  workspaceBuildJobs,
-  workspaceBuildJobStatusValues,
+  sandboxBuildJobs,
+  sandboxBuildJobStatusValues,
   account,
   session,
   user,
@@ -208,7 +208,7 @@ export {
   type NewSandboxAttemptSnapshot,
   type NewOciImageBuildJob,
   type NewSandboxRuntimeInstance,
-  type NewWorkspaceBuildJob,
+  type NewSandboxBuildJob,
   type OciImageBuildJob,
   type OciImageBuildJobStatus,
   type IssueWorkflow,
@@ -235,8 +235,8 @@ export {
   type SandboxAttemptTriggerType,
   type SandboxRuntimeInstance,
   type SandboxRuntimeInstanceStatus,
-  type WorkspaceBuildJob,
-  type WorkspaceBuildJobStatus,
+  type SandboxBuildJob,
+  type SandboxBuildJobStatus,
 } from "./schema.js";
 
 export * as schema from "./schema/index.js";
@@ -261,9 +261,9 @@ export {
   sandboxAttemptTriggerTypeSchema,
   sandboxSelectSchema,
   sandboxStatusSchema,
-  workspaceBuildJobInsertSchema,
-  workspaceBuildJobSelectSchema,
-  workspaceBuildJobStatusSchema,
+  sandboxBuildJobInsertSchema,
+  sandboxBuildJobSelectSchema,
+  sandboxBuildJobStatusSchema,
 } from "./validation.js";
 
 export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";

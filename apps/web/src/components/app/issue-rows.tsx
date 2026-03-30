@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import type { IssueRecord } from "@/lib/navigation/workspace-data";
+import type { IssueRecord } from "@/lib/navigation/sandbox-data";
 
 interface IssueRowsProps {
   readonly issues: readonly IssueRecord[];

@@ -5,7 +5,7 @@
     "build": "turbo build",
     "build:tui": "turbo build --ui=tui",
     "clean": "turbo clean",
-    "clean:workspaces": "node tooling/scripts/clean-workspaces.mjs",
+    "clean:sandboxes": "node tooling/scripts/clean-sandboxes.mjs",
     "db:migrate": "pnpm --filter @sealant/db db:migrate",
     "db:studio": "pnpm --filter @sealant/db exec drizzle-kit studio --config drizzle.config.ts",
     "dev": "turbo dev --ui=tui",

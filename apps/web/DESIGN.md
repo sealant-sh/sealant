@@ -1,6 +1,6 @@
 # Swiss Operational Poster Design Language
 
-Version: 1.1 Owner: Product Design + Frontend Applies to: auth flows, workspace surfaces, component
+Version: 1.1 Owner: Product Design + Frontend Applies to: auth flows, sandbox surfaces, component
 library, content style
 
 ## 1) Design Intent
@@ -262,7 +262,7 @@ This section defines how components should be structured visually and behavioral
 
 - Overpopulate with too many primary actions
 
-## 6.1A Workspace App Shell
+## 6.1A Sandbox App Shell
 
 This is the default pattern for authenticated product surfaces.
 
@@ -475,7 +475,7 @@ This is the default pattern for authenticated product surfaces.
 
 - Let metadata compete with core content hierarchy
 
-## 6.9 Workspace Page Header Block
+## 6.9 Sandbox Page Header Block
 
 ### Structure
 
@@ -494,7 +494,7 @@ This is the default pattern for authenticated product surfaces.
 
 ### Do not
 
-- Add decorative hero treatments to routine workspace pages
+- Add decorative hero treatments to routine sandbox pages
 
 ---
 
@@ -554,7 +554,7 @@ Tone: direct, practical, credible.
 
 ### Good examples
 
-- "Inspect the full run trace without leaving the current workspace view."
+- "Inspect the full run trace without leaving the current sandbox view."
 - "Switch profiles and compare setup details without losing context."
 
 ### Bad examples

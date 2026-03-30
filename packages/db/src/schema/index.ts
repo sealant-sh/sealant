@@ -16,7 +16,7 @@ export {
 export {
   type NewOciImageBuildJob,
   type NewSandboxRuntimeInstance,
-  type NewWorkspaceBuildJob,
+  type NewSandboxBuildJob,
   type OciImageBuildJob,
   type OciImageBuildJobStatus,
   ociImageBuildJobs,
@@ -25,11 +25,11 @@ export {
   type SandboxRuntimeInstance,
   type SandboxRuntimeInstanceStatus,
   sandboxRuntimeInstanceStatusValues,
-  type WorkspaceBuildJob,
-  workspaceBuildJobs,
-  type WorkspaceBuildJobStatus,
-  workspaceBuildJobStatusValues,
-} from "./workspace-build-jobs.js";
+  type SandboxBuildJob,
+  sandboxBuildJobs,
+  type SandboxBuildJobStatus,
+  sandboxBuildJobStatusValues,
+} from "./sandbox-build-jobs.js";
 
 export {
   githubAppInstallations,

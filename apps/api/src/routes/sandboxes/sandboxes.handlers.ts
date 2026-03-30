@@ -4,23 +4,22 @@ import type {
   SandboxAttemptRepository,
   SandboxRepository,
   SandboxRuntimeInstanceRepository,
-  WorkspaceBuildJobRequestPayload,
-  WorkspaceBuildJobRepository,
+  NewSandbox,
+  SandboxBuildJobRepository,
 } from "@sealant/db";
-import { workspaceBuildJobRequestPayloadSchema } from "@sealant/db";
-import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
-import type { Context } from "hono";
-import type { z } from "zod";
-
-import type { AppEnv } from "../../env.js";
 import {
   resolveSandboxError,
   resolveSandboxPublishedImage,
   resolveSandboxRuntime,
   resolveSandboxStatus,
   type SandboxSshGatewayConfig,
-} from "../../lib/sandbox.js";
+} from "@sealant/sandboxes";
+import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
+import { newSandboxSchema } from "@sealant/validators";
+import type { Context } from "hono";
+import type { z } from "zod";
+
+import type { AppEnv } from "../../env.js";
 import type { AppBindings } from "../../lib/types.js";
 import type {
   createSandboxRequestSchema,
@@ -40,9 +39,7 @@ type SandboxAttemptRecord = NonNullable<
   Awaited<ReturnType<SandboxAttemptRepository["getAttemptById"]>>
 >;
 type SandboxRecord = NonNullable<Awaited<ReturnType<SandboxRepository["getSandboxById"]>>>;
-type WorkspaceBuildJobRecord = Awaited<
-  ReturnType<WorkspaceBuildJobRepository["getLatestJobByRunId"]>
->;
+type SandboxBuildJobRecord = Awaited<ReturnType<SandboxBuildJobRepository["getLatestJobByRunId"]>>;
 type SandboxRuntimeInstanceRecord = Awaited<
   ReturnType<SandboxRuntimeInstanceRepository["getRuntimeInstanceByRunId"]>
 >;
@@ -82,7 +79,7 @@ const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
 };
 
 const toQueuePublishErrorMessage = (error: unknown) => {
-  return error instanceof Error ? error.message : "Failed to enqueue workspace build job.";
+  return error instanceof Error ? error.message : "Failed to enqueue sandbox build job.";
 };
 
 const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
@@ -131,17 +128,15 @@ const gitHubUnavailableResponse = (c: Context<AppBindings>) => {
   );
 };
 
-const cloneSpecForSourceSelection = (
-  spec: WorkspaceBuildJobRequestPayload,
-): WorkspaceBuildJobRequestPayload => {
+const cloneSpecForSourceSelection = (spec: NewSandbox): NewSandbox => {
   return structuredClone(spec);
 };
 
-const buildGitHubWorkspaceSource = (input: {
+const buildGitHubSandboxSource = (input: {
   readonly installationRepositoryId: string;
   readonly fullName: string;
   readonly ref: string;
-}): NonNullable<WorkspaceBuildJobRequestPayload["source"]> => {
+}): NewSandbox["sources"]["sandbox"] => {
   return {
     kind: "git",
     provider: "github",
@@ -157,6 +152,7 @@ const buildGitHubDotfilesInput = (input: {
   readonly ref: string;
 }) => {
   return {
+    id: `dotfiles-${input.installationRepositoryId}`,
     kind: "git" as const,
     purpose: "dotfiles" as const,
     provider: "github" as const,
@@ -167,37 +163,36 @@ const buildGitHubDotfilesInput = (input: {
 };
 
 const upsertDotfilesSourceInput = (
-  spec: WorkspaceBuildJobRequestPayload,
+  spec: NewSandbox,
   dotfilesInput: ReturnType<typeof buildGitHubDotfilesInput>,
-): WorkspaceBuildJobRequestPayload => {
+): NewSandbox => {
   const nextSpec = structuredClone(spec);
-  const existingInputs = nextSpec.sources?.inputs ?? nextSpec.inputs ?? [];
+  const existingInputs = nextSpec.sources.inputs;
   const nextInputs = existingInputs
     .filter((input) => {
       return input.purpose !== "dotfiles";
     })
     .concat(dotfilesInput);
 
-  delete nextSpec.inputs;
   nextSpec.sources = {
     ...nextSpec.sources,
     inputs: nextInputs,
   };
 
-  return workspaceBuildJobRequestPayloadSchema.parse(nextSpec);
+  return newSandboxSchema.parse(nextSpec);
 };
 
 const resolveGitHubSourceSelection = async (
   c: Context<AppBindings>,
   input: {
     readonly ownerUserId: string;
-    readonly spec: WorkspaceBuildJobRequestPayload;
+    readonly spec: NewSandbox;
     readonly sourceSelection: GitHubSourceSelection;
   },
 ): Promise<
   | {
       readonly repositoryId?: string;
-      readonly spec: WorkspaceBuildJobRequestPayload;
+      readonly spec: NewSandbox;
     }
   | { readonly response: Response }
 > => {
@@ -302,24 +297,20 @@ const resolveGitHubSourceSelection = async (
   }
 
   const effectiveSpec = cloneSpecForSourceSelection(input.spec);
-  const workspaceSource = buildGitHubWorkspaceSource({
+  const sandboxSource = buildGitHubSandboxSource({
     installationRepositoryId: installationRepositoryRecord.id,
     fullName: installationRepositoryRecord.fullName,
     ref: sourceSelection.ref ?? installationRepositoryRecord.defaultBranch,
   });
 
-  delete effectiveSpec.repo;
-  if (effectiveSpec.sources !== undefined) {
-    effectiveSpec.sources = {
-      ...effectiveSpec.sources,
-      workspace: undefined,
-    };
-  }
-  effectiveSpec.source = workspaceSource;
+  effectiveSpec.sources = {
+    ...effectiveSpec.sources,
+    sandbox: sandboxSource,
+  };
 
   return {
     repositoryId: installationRepositoryRecord.repositoryId,
-    spec: effectiveSpec,
+    spec: newSandboxSchema.parse(effectiveSpec),
   };
 };
 
@@ -327,12 +318,12 @@ const resolveGitHubDotfilesSelection = async (
   c: Context<AppBindings>,
   input: {
     readonly ownerUserId: string;
-    readonly spec: WorkspaceBuildJobRequestPayload;
+    readonly spec: NewSandbox;
     readonly dotfilesSelection: GitHubDotfilesSelection;
   },
 ): Promise<
   | {
-      readonly spec: WorkspaceBuildJobRequestPayload;
+      readonly spec: NewSandbox;
     }
   | { readonly response: Response }
 > => {
@@ -484,16 +475,10 @@ const deriveRepositoryNameToken = (repository: string): string => {
   return "Sandbox";
 };
 
-const deriveSourceRef = (spec: WorkspaceBuildJobRequestPayload): string | undefined => {
-  const source = spec.sources?.workspace ?? spec.source ?? spec.repo;
+const deriveSourceRef = (spec: NewSandbox): string | undefined => {
+  const ref = spec.sources.sandbox.ref.trim();
 
-  if (typeof source === "string" || source === undefined) {
-    return undefined;
-  }
-
-  const ref = source.ref?.trim();
-
-  if (ref === undefined || ref.length === 0) {
+  if (ref.length === 0) {
     return undefined;
   }
 
@@ -503,7 +488,7 @@ const deriveSourceRef = (spec: WorkspaceBuildJobRequestPayload): string | undefi
 const inferSandboxName = (input: {
   readonly repository: string;
   readonly tag: string;
-  readonly spec: WorkspaceBuildJobRequestPayload;
+  readonly spec: NewSandbox;
   readonly fallbackId: string;
 }): string => {
   const repositoryToken = deriveRepositoryNameToken(input.repository);
@@ -568,7 +553,7 @@ const mapAttemptStatusToSandboxStatus = (
 const mapSandboxAttemptSummary = (
   link: SandboxRunLinkRecord,
   attempt: SandboxAttemptRecord,
-  latestJob: WorkspaceBuildJobRecord,
+  latestJob: SandboxBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
   sshGatewayConfig: SandboxSshGatewayConfig | undefined,
 ): z.infer<typeof sandboxAttemptSummarySchema> => {
@@ -666,7 +651,7 @@ const ensureSandboxForAttempt = async (
 const mapSandboxSummary = (
   sandbox: SandboxRecord,
   attempt: SandboxAttemptRecord | undefined,
-  latestJob: WorkspaceBuildJobRecord,
+  latestJob: SandboxBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
   sshGatewayConfig: SandboxSshGatewayConfig | undefined,
 ): z.infer<typeof sandboxSummarySchema> => {
@@ -718,7 +703,7 @@ const mapSandboxSummary = (
 const mapSandboxDetails = (
   sandbox: SandboxRecord,
   attempt: SandboxAttemptRecord | undefined,
-  latestJob: WorkspaceBuildJobRecord,
+  latestJob: SandboxBuildJobRecord,
   runtimeInstance: SandboxRuntimeInstanceRecord,
   attemptSnapshot: SandboxAttemptSnapshotRecord,
   sshGatewayConfig: SandboxSshGatewayConfig | undefined,
@@ -729,7 +714,6 @@ const mapSandboxDetails = (
   return {
     ...summary,
     ...(userSpec === undefined ? {} : { spec: userSpec }),
-    ...(attemptSnapshot === undefined ? {} : { blueprint: attemptSnapshot.blueprintPayload }),
   };
 };
 
@@ -752,28 +736,16 @@ const acceptedSandboxResponse = (
   };
 };
 
-const parseRequestedPackageIds = (spec: WorkspaceBuildJobRequestPayload): string[] => {
-  const requests = spec.tooling?.packages ?? spec.packages ?? [];
+const parseRequestedPackageIds = (spec: NewSandbox): string[] => {
+  const requests = spec.tooling.packages;
 
   return requests.map((pkg) => {
-    return typeof pkg === "string" ? pkg : pkg.id;
+    return pkg.id;
   });
 };
 
-const parseRequestedOsFamily = (
-  spec: WorkspaceBuildJobRequestPayload,
-): "auto" | "arch" | "fedora" | "nix" => {
-  const targetOs = spec.target?.os ?? spec.os;
-
-  if (targetOs === undefined) {
-    return "auto";
-  }
-
-  if (typeof targetOs === "string") {
-    return targetOs;
-  }
-
-  return targetOs.family ?? "auto";
+const parseRequestedOsFamily = (spec: NewSandbox): "auto" | "arch" | "fedora" | "nix" => {
+  return spec.target.os.family;
 };
 
 const dedupePackageNames = (input: readonly string[]): string[] => {
@@ -794,8 +766,8 @@ const dedupePackageNames = (input: readonly string[]): string[] => {
 
 const standardizeRequestedPackages = async (
   c: Context<AppBindings>,
-  spec: WorkspaceBuildJobRequestPayload,
-): Promise<{ spec: WorkspaceBuildJobRequestPayload; errors: readonly string[] }> => {
+  spec: NewSandbox,
+): Promise<{ spec: NewSandbox; errors: readonly string[] }> => {
   const requestedPackages = parseRequestedPackageIds(spec);
 
   if (requestedPackages.length === 0) {
@@ -811,7 +783,7 @@ const standardizeRequestedPackages = async (
     return {
       spec,
       errors: [
-        "Package validation requires an explicit target OS. Set spec.os to arch, fedora, or nix for this request.",
+        "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, or nix for this request.",
       ],
     };
   }
@@ -843,15 +815,16 @@ const standardizeRequestedPackages = async (
     };
   }
 
-  const nextSpec: Record<string, unknown> = {
+  const nextSpec: NewSandbox = {
     ...spec,
-    packages: dedupePackageNames(standardizedPackageNames),
+    tooling: {
+      ...spec.tooling,
+      packages: dedupePackageNames(standardizedPackageNames).map((id) => ({ id })),
+    },
   };
 
-  delete nextSpec.tooling;
-
   return {
-    spec: workspaceBuildJobRequestPayloadSchema.parse(nextSpec),
+    spec: newSandboxSchema.parse(nextSpec),
     errors: [],
   };
 };
@@ -875,11 +848,11 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
   const idempotencyKey = readIdempotencyKey(c);
   const sandboxes = c.get("sandboxRepository");
-  const workspaceBuildJobs = c.get("workspaceBuildJobRepository");
+  const sandboxBuildJobs = c.get("sandboxBuildJobRepository");
   const sandboxAttempts = c.get("sandboxAttemptRepository");
 
   if (idempotencyKey !== undefined) {
-    const existingJob = await workspaceBuildJobs.getJobByIdempotencyKey(idempotencyKey);
+    const existingJob = await sandboxBuildJobs.getJobByIdempotencyKey(idempotencyKey);
 
     if (existingJob !== undefined && existingJob.runId !== null) {
       const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
@@ -946,7 +919,6 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   const resolvedSpec = packageStandardization.spec;
-  const blueprintPayload = normalizeUserWorkspaceSpec(resolvedSpec);
   const sandboxName =
     body.name === undefined
       ? inferSandboxName({
@@ -987,12 +959,10 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
     await sandboxAttempts.setAttemptSnapshot({
       runId: attempt.id,
-      userSpecPayload: dotfilesSelectionResult.spec,
-      resolvedSpecPayload: resolvedSpec,
-      blueprintPayload,
+      specPayload: resolvedSpec,
     });
 
-    await workspaceBuildJobs.insertQueuedJob({
+    await sandboxBuildJobs.insertQueuedJob({
       id: jobId,
       runId: attempt.id,
       registryId: body.registryId,
@@ -1012,7 +982,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     }
 
     if (idempotencyKey !== undefined && isUniqueConstraintError(error)) {
-      const existingJob = await workspaceBuildJobs.getJobByIdempotencyKey(idempotencyKey);
+      const existingJob = await sandboxBuildJobs.getJobByIdempotencyKey(idempotencyKey);
 
       if (existingJob !== undefined && existingJob.runId !== null) {
         const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
@@ -1037,12 +1007,12 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   try {
-    await c.get("workspaceBuildJobPublisher").publishRequested({
+    await c.get("sandboxBuildJobPublisher").publishRequested({
       jobId,
     });
   } catch (error) {
     await Promise.all([
-      workspaceBuildJobs.markJobFailed({
+      sandboxBuildJobs.markJobFailed({
         id: jobId,
         errorCode: "queue_publish_failed",
         errorMessage: toQueuePublishErrorMessage(error),
@@ -1134,7 +1104,7 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
     }),
   );
   const latestJobsByRunId = await c
-    .get("workspaceBuildJobRepository")
+    .get("sandboxBuildJobRepository")
     .listLatestJobsByRunIds(latestRunIds);
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
@@ -1189,7 +1159,7 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     .get("sandboxAttemptRepository")
     .getAttemptSnapshotByRunId(sandbox.latestRunId);
   const latestJob = await c
-    .get("workspaceBuildJobRepository")
+    .get("sandboxBuildJobRepository")
     .getLatestJobByRunId(sandbox.latestRunId);
   const runtimeInstance = await c
     .get("sandboxRuntimeInstanceRepository")
@@ -1323,9 +1293,7 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
       return attempt === undefined ? [] : [[runId, attempt] as const];
     }),
   );
-  const latestJobsByRunId = await c
-    .get("workspaceBuildJobRepository")
-    .listLatestJobsByRunIds(runIds);
+  const latestJobsByRunId = await c.get("sandboxBuildJobRepository").listLatestJobsByRunIds(runIds);
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
     .listRuntimeInstancesByRunIds(runIds);
@@ -1386,9 +1354,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
       return attempt === undefined ? [] : [[runId, attempt] as const];
     }),
   );
-  const latestJobsByRunId = await c
-    .get("workspaceBuildJobRepository")
-    .listLatestJobsByRunIds(runIds);
+  const latestJobsByRunId = await c.get("sandboxBuildJobRepository").listLatestJobsByRunIds(runIds);
   const runtimeInstancesByRunId = await c
     .get("sandboxRuntimeInstanceRepository")
     .listRuntimeInstancesByRunIds(runIds);
@@ -1450,7 +1416,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
         attemptId: attempt.id,
         type: "image.published",
         occurredAt: latestJob.finishedAt ?? latestJob.updatedAt,
-        message: "Workspace image published.",
+        message: "Sandbox image published.",
         data: {
           reference: latestJob.publishedReference,
           digestReference: latestJob.publishedDigestReference,

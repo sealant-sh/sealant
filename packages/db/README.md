@@ -58,12 +58,12 @@ For a per-table purpose summary, see `packages/db/src/schema/README.md`.
 import {
   createDatabaseClientFromEnv,
   createSandboxAttemptRepository,
-  createWorkspaceBuildJobRepository,
+  createSandboxBuildJobRepository,
 } from "@sealant/db";
 
 const client = await createDatabaseClientFromEnv();
 const attempts = createSandboxAttemptRepository(client);
-const jobs = createWorkspaceBuildJobRepository(client);
+const jobs = createSandboxBuildJobRepository(client);
 
 const attempt = await attempts.createQueuedAttempt({
   id: "attempt_123",
@@ -75,7 +75,7 @@ await jobs.insertQueuedJob({
   id: "job_123",
   runId: attempt.id,
   registryId: "default",
-  repository: "sealant/workspaces/demo",
+  repository: "sealant/sandboxes/demo",
   tag: "opencode",
   requestPayload: {
     source: "https://github.com/example/repo",
