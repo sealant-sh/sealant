@@ -21,30 +21,60 @@ import {
   type WorkspaceBlueprint,
 } from "@sealant/workspace-composition";
 
+/**
+ * This module contains the full BuildKit-backed executor implementation used by worker-side build
+ * orchestration.
+ *
+ * Design notes:
+ * - We keep all BuildKit and distro-specific logic in this package to avoid leaking container build
+ *   concerns into `@sealant/workspace-composition` contracts.
+ * - We return parsed/validated contract objects at boundaries so downstream consumers receive a
+ *   stable shape even if internals evolve.
+ * - We generate script and Dockerfile content as strings rather than template files so compile
+ *   behavior can remain deterministic and easy to test with snapshot-like string assertions.
+ */
+
+/** Captured output from a command invocation used during image build/save steps. */
 export interface BuildkitCommandResult {
   readonly stdout: string;
   readonly stderr: string;
 }
 
+/** Optional execution settings passed to the command runner. */
 export interface BuildkitCommandOptions {
   readonly cwd?: string;
 }
 
+/**
+ * Injectable command runner abstraction.
+ *
+ * We keep this injectable for two reasons:
+ * - deterministic tests can avoid spawning Docker by stubbing this function
+ * - production callers can still rely on the default runner with BuildKit enabled
+ */
 export type BuildkitCommandRunner = (
   command: string,
   args: string[],
   options?: BuildkitCommandOptions,
 ) => Promise<BuildkitCommandResult>;
 
+/** Constructor options for the concrete distro executor. */
 export interface BuildkitOsExecutorOptions {
   readonly osFamily: BuildkitTargetOsFamily;
   readonly commandRunner?: BuildkitCommandRunner;
 }
 
+/** Maps a logical package request id to concrete distro packages to install. */
 interface PackageMapping {
   readonly installPackages: readonly string[];
 }
 
+/**
+ * Per-distro behavior contract used by planning and rendering.
+ *
+ * `shellPaths` and `sshdPath` are explicit so entrypoint and SSH templates do not rely on
+ * assumptions that only hold for one distro family.
+ */
 interface DistroDefinition {
   readonly baseImage: string;
   readonly packageManager: BuildkitPackageManager;
@@ -54,6 +84,15 @@ interface DistroDefinition {
   readonly sshdPath: string;
 }
 
+/**
+ * Default process runner for Docker commands.
+ *
+ * Behavior invariants:
+ * - forces `DOCKER_BUILDKIT=1` to activate BuildKit features (including secret mounts)
+ * - buffers stdout/stderr for diagnostics and testing
+ * - throws with a stable `code` (`buildkit-command-failed`) on non-zero exit or signal so callers
+ *   can classify failures consistently
+ */
 const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -104,6 +143,17 @@ const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => 
   });
 };
 
+/**
+ * Central distro catalog.
+ *
+ * This table controls almost all platform-specific differences in compile output:
+ * - base image selection
+ * - package manager command style
+ * - symbolic package id mapping
+ * - shell and sshd binary paths used by rendered scripts
+ *
+ * When adding a new distro, this object is the first place to update.
+ */
 const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
   fedora: {
     baseImage: "fedora:41",
@@ -190,6 +240,12 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
   },
 };
 
+/**
+ * Computes artifact/image naming used across metadata and OCI artifacts.
+ *
+ * Keeping this naming centralized prevents subtle drift between the image reference, default
+ * artifact name, and metadata artifact names.
+ */
 const defaultImageNameForBlueprint = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
@@ -197,12 +253,28 @@ const defaultImageNameForBlueprint = (
   return `sealant-workspace-${osFamily}-${blueprint.harness.id}`;
 };
 
+/**
+ * Shell-quotes arbitrary values for safe interpolation into generated shell scripts.
+ *
+ * We prefer this dedicated helper over ad-hoc quoting to reduce the chance of malformed commands
+ * when user-provided values include spaces or quotes.
+ */
 const shellQuote = (value: string): string => {
   return `'${value.split("'").join(`'"'"'`)}'`;
 };
 
+/**
+ * Special authRef namespace indicating that dotfiles auth should be deferred to runtime and resolved
+ * through a GitHub installation repository token path.
+ */
 const gitHubInstallationRepositoryAuthRefPrefix = "github-installation-repository:";
 
+/**
+ * Parses the installation repository id out of a special authRef.
+ *
+ * Returns `undefined` for any non-matching or empty payload value to keep downstream branching
+ * simple (`undefined` means "treat as regular/non-installation auth").
+ */
 const parseGitHubInstallationRepositoryAuthRef = (
   authRef: string | undefined,
 ): string | undefined => {
@@ -217,6 +289,12 @@ const parseGitHubInstallationRepositoryAuthRef = (
   return authRef.slice(gitHubInstallationRepositoryAuthRefPrefix.length);
 };
 
+/**
+ * Removes duplicates while preserving first-seen order.
+ *
+ * We preserve order intentionally so package install commands remain deterministic and easy to debug
+ * (and test) while still eliminating redundant package names.
+ */
 const normalizeInstallPackages = (packages: Iterable<string>): string[] => {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -233,10 +311,17 @@ const normalizeInstallPackages = (packages: Iterable<string>): string[] => {
   return normalized;
 };
 
+/** Returns the first dotfiles input source from the blueprint, if present. */
 const getDotfilesSource = (blueprint: WorkspaceBlueprint) => {
   return blueprint.sources.inputs.find((input) => input.purpose === "dotfiles");
 };
 
+/**
+ * Support gate shared by `supports(...)` and `compile(...)`.
+ *
+ * The goal is to fail fast with a normalized reason/message before any expensive build context or
+ * Docker work begins.
+ */
 const getBuildkitExecutorSupport = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
@@ -300,6 +385,18 @@ const resolveHarnessIntegration = (blueprint: WorkspaceBlueprint): HarnessIntegr
   return integration;
 };
 
+/**
+ * Resolves all package requests into concrete install package names.
+ *
+ * Resolution order is important:
+ * 1) user-requested tooling packages
+ * 2) harness-required packages
+ * 3) shell package for non-bash default shells
+ * 4) dotfiles helper packages (`git` + manager-specific helpers)
+ *
+ * The returned list is not de-duplicated yet; de-duplication is performed later right before
+ * renderer emission so all request intent remains visible in plan metadata.
+ */
 const resolvePackages = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
@@ -344,6 +441,17 @@ const resolvePackages = (
   });
 };
 
+/**
+ * Core compile planning step.
+ *
+ * Produces a fully concrete `ResolvedImagePlan` that renderers can consume without additional policy
+ * decisions.
+ *
+ * Security-sensitive decisions encoded here:
+ * - build vs runtime secret phase assignment
+ * - dotfiles apply phase (`build` vs `runtime`)
+ * - GitHub installation repository routing for runtime dotfiles auth
+ */
 const mapBlueprintToResolvedImagePlan = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
@@ -417,6 +525,12 @@ const mapBlueprintToResolvedImagePlan = (
   };
 };
 
+/**
+ * Renders distro-specific package installation commands.
+ *
+ * Output is a single Dockerfile `RUN` block per package manager family so cache behavior is easy to
+ * reason about. Internal packages are always merged with resolved package requests.
+ */
 const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const packageList = normalizeInstallPackages([
@@ -450,6 +564,12 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
+/**
+ * Renders the harness install layer.
+ *
+ * Nix images rewrite plain `npm install -g ...` commands to include `--prefix /usr/local` to avoid
+ * relying on npm global locations that can be awkward in nix-based containers.
+ */
 const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
   const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
   if (plan.osFamily === "nix") {
@@ -463,6 +583,12 @@ const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
   return `RUN ${harnessIntegration.installCommand}`;
 };
 
+/**
+ * Renders one lifecycle step as an isolated subshell block.
+ *
+ * We intentionally execute each step in a subshell so one step's `cd` or env mutations do not leak
+ * into the next step unless explicitly encoded by the user command itself.
+ */
 const renderRuntimeStep = (
   step: WorkspaceBlueprint["lifecycle"]["setup"][number],
   defaultWorkingDirectory: string,
@@ -478,6 +604,13 @@ const renderRuntimeStep = (
   ].join("\n");
 };
 
+/**
+ * Resolves the final foreground process command for the entrypoint script.
+ *
+ * If blueprint startup selects a literal command, it is executed with the requested shell.
+ * Otherwise we launch the selected harness's canonical launch command in the configured default
+ * shell.
+ */
 const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
   const foreground = plan.blueprint.lifecycle.startup.foreground;
   if (foreground.kind === "command") {
@@ -499,6 +632,20 @@ const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
+/**
+ * Generates the runtime entrypoint shell script.
+ *
+ * This script is the runtime control plane for workspace containers and handles:
+ * - base environment bootstrap
+ * - optional SSH daemon setup + forced shell wrapper
+ * - workspace repository clone with SSH key or HTTP token auth
+ * - runtime dotfiles apply flow when configured
+ * - lifecycle setup/startup command execution
+ * - foreground process selection and exec
+ *
+ * The script is assembled as a string array to keep ordering explicit and to make test assertions on
+ * specific emitted lines straightforward.
+ */
 const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
   const loginShellPath =
     distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
@@ -677,6 +824,9 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "fi",
     "cleanup_workspace_clone_auth",
     "",
+    // Runtime dotfiles apply block is only injected when planning decided on `applyAt: runtime`.
+    // This keeps build-time images free of dynamic runtime token requirements unless explicitly
+    // needed for GitHub installation-backed dotfiles auth.
     ...(plan.dotfiles === undefined || plan.dotfiles.applyAt !== "runtime"
       ? []
       : [
@@ -770,6 +920,12 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
+/**
+ * Renders the optional Dockerfile layer that applies dotfiles during image build.
+ *
+ * This is used only when `plan.dotfiles.applyAt === "build"`. Runtime apply uses entrypoint logic
+ * instead so auth can be supplied at launch time.
+ */
 const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
   if (plan.dotfiles === undefined || plan.dotfiles.applyAt !== "build") {
     return undefined;
@@ -851,6 +1007,14 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
   return `${mountPrefix}${cloneCommand}`;
 };
 
+/**
+ * Renders the full Containerfile used for Docker build.
+ *
+ * Ordering is intentional:
+ * - package and harness installs before entrypoint copy to maximize layer cache reuse
+ * - shell configuration before runtime start
+ * - optional dotfiles build step near the end because it can be highly variable
+ */
 const renderContainerfile = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const shellPath = distro.shellPaths[plan.customization.defaultShell];
@@ -879,6 +1043,12 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
+/**
+ * Materializes a temporary BuildKit context directory and writes all generated inputs.
+ *
+ * Artifacts written here are both build inputs (`Containerfile`, `entrypoint.sh`) and metadata
+ * outputs (`resolved-image-plan.json`, `buildkit-spec.json`) consumed by downstream systems.
+ */
 const writeBuildContext = async (plan: ResolvedImagePlan) => {
   const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
   const containerfilePath = join(contextDirectory, "Containerfile");
@@ -915,6 +1085,12 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
   };
 };
 
+/**
+ * Executes Docker build + save for the compiled BuildKit spec.
+ *
+ * We call `docker save` immediately after build so consumers can move a single OCI tarball artifact
+ * across process boundaries without requiring local image state persistence.
+ */
 const buildImageTarball = async (
   spec: BuildkitBuildSpec,
   imageTarPath: string,
@@ -940,6 +1116,12 @@ const buildImageTarball = async (
   });
 };
 
+/**
+ * Concrete BuildKit-backed OS executor implementation.
+ *
+ * One executor instance is bound to one target distro family (`fedora`, `arch`, `nix`) and can be
+ * reused across multiple compile calls.
+ */
 export class BuildkitDistroOsExecutor implements BuildkitOsExecutor {
   public readonly buildTool = "buildkit" as const;
 
@@ -955,11 +1137,23 @@ export class BuildkitDistroOsExecutor implements BuildkitOsExecutor {
     this.commandRunner = options.commandRunner ?? defaultCommandRunner;
   }
 
+  /**
+   * Fast support check used by orchestration layers to route blueprints to an appropriate executor.
+   */
   public supports(input: OsExecutorCompileInput): OsExecutorSupport {
     const parsed = parseBuildkitOsExecutorCompileInput(input);
     return getBuildkitExecutorSupport(parsed.blueprint, this.osFamily);
   }
 
+  /**
+   * Full compile path:
+   * 1) validate input
+   * 2) verify support
+   * 3) generate concrete image plan
+   * 4) render/write build context
+   * 5) execute Docker build and save
+   * 6) return normalized compile result contract
+   */
   public async compile(input: OsExecutorCompileInput): Promise<BuildkitOsExecutorCompileResult> {
     const parsed = parseBuildkitOsExecutorCompileInput(input);
     const support = this.supports(parsed);
@@ -1010,6 +1204,7 @@ export class BuildkitDistroOsExecutor implements BuildkitOsExecutor {
   }
 }
 
+/** Convenience factory for constructing a distro-bound BuildKit executor. */
 export const createBuildkitOsExecutor = (
   osFamily: BuildkitTargetOsFamily,
   options: Omit<BuildkitOsExecutorOptions, "osFamily"> = {},
@@ -1020,6 +1215,7 @@ export const createBuildkitOsExecutor = (
   });
 };
 
+/** Public helper used by callers/tests that only need planning (without running Docker). */
 export const mapBlueprintToBuildkitImagePlan = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,

@@ -20,6 +20,8 @@ At the moment, it serves two responsibilities:
 ## Current status
 
 - Stack: TanStack Start + TanStack Router
+- Deployment tooling: Cloudflare via `wrangler`
+- Custom domain target: `docs.sealant.dev`
 - Existing route shell is still minimal starter content
 - Canonical authored docs now live under:
   - `apps/docs/contents/packages`
@@ -39,3 +41,4 @@ This keeps source content stable if the presentation layer changes later.
 - `pnpm --filter @sealant/docs build`
 - `pnpm --filter @sealant/docs test`
 - `pnpm --filter @sealant/docs typecheck`
+- `pnpm --filter @sealant/docs deploy`
