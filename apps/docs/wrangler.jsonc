@@ -1,12 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "sealant-marketing",
+  "name": "sealant-docs",
   "compatibility_date": "2026-03-28",
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
   "routes": [
     {
-      "pattern": "sealant.dev",
+      "pattern": "docs.sealant.dev",
       "custom_domain": true,
     },
   ],

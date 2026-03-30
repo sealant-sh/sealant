@@ -1,15 +1,10 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
+import { useRouterState } from "@tanstack/react-router";
 import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-
-import { ThemeProvider } from "#/lib/ThemeProvider";
-
-import Footer from "../components/Footer";
-import Header from "../components/Header";
+import { RootProvider } from "fumadocs-ui/provider/tanstack";
 
 import appCss from "../styles.css?url";
-
-const THEME_INIT_SCRIPT = `(function(){try{var stored=window.localStorage.getItem('theme');var mode=(stored==='light'||stored==='dark'||stored==='auto')?stored:'auto';var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;var resolved=mode==='auto'?(prefersDark?'dark':'light'):mode;var root=document.documentElement;root.classList.remove('light','dark');root.classList.add(resolved);if(mode==='auto'){root.removeAttribute('data-theme')}else{root.setAttribute('data-theme',mode)}root.style.colorScheme=resolved;}catch(e){}})();`;
 
 export const Route = createRootRoute({
   head: () => ({
@@ -35,18 +30,61 @@ export const Route = createRootRoute({
   shellComponent: RootDocument,
 });
 
+const DOC_EXTENSION_RE = /\.md(?=([?#].*)?$)/;
+const INDEX_SEGMENT_RE = /\/index(?=([?#].*)?$)/;
+const EXTERNAL_HREF_RE = /^(?:[a-z][a-z\d+.-]*:|\/\/)/i;
+
+type FrameworkLinkProps = React.ComponentProps<"a"> & {
+  prefetch?: boolean;
+};
+
+function normalizeDocsHref(href: string): string {
+  return href.replace(DOC_EXTENSION_RE, "").replace(INDEX_SEGMENT_RE, "");
+}
+
+function resolveDocsHref(pathname: string, href: string): string {
+  if (EXTERNAL_HREF_RE.test(href) || href.startsWith("#")) {
+    return href;
+  }
+
+  if (href.startsWith("/")) {
+    return href;
+  }
+
+  if (!href.startsWith("./") && !href.startsWith("../")) {
+    return href;
+  }
+
+  const basePath = pathname.endsWith("/") ? pathname : `${pathname}/`;
+  const resolved = new URL(href, `https://docs.local${basePath}`).pathname;
+
+  if (resolved.length > 1 && resolved.endsWith("/")) {
+    return resolved.slice(0, -1);
+  }
+
+  return resolved;
+}
+
+function DocsFrameworkLink({ href, prefetch: _prefetch = true, ...props }: FrameworkLinkProps) {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  const hrefValue = href ?? "";
+  const normalizedHref = normalizeDocsHref(hrefValue);
+  const resolvedHref = resolveDocsHref(pathname, normalizedHref);
+
+  return <a href={resolvedHref} {...props} />;
+}
+
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />
       </head>
-      <body className="font-sans antialiased [overflow-wrap:anywhere] selection:bg-[rgba(79,184,178,0.24)]">
-        <ThemeProvider>
-          <Header />
+      <body className="min-h-screen font-sans antialiased">
+        <RootProvider components={{ Link: DocsFrameworkLink }}>
           {children}
-          <Footer />
           <TanStackDevtools
             config={{
               position: "bottom-right",
@@ -58,7 +96,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               },
             ]}
           />
-        </ThemeProvider>
+        </RootProvider>
         <Scripts />
       </body>
     </html>
