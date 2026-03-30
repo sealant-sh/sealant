@@ -10,7 +10,10 @@
     "cf-typegen": "wrangler types",
     "deploy": "vite build && wrangler deploy",
     "dev": "vite dev --port 3000",
+    "docs:generate": "fumadocs-mdx source.config.ts .source",
     "lint": "oxlint .",
+    "prebuild": "pnpm run docs:generate",
+    "pretypecheck": "pnpm run docs:generate",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
