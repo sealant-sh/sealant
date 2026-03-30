@@ -3,7 +3,6 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { getHarnessIntegration, type HarnessIntegration } from "@sealant/ai-harness-integrations";
 import {
   parseWorkspaceBlueprint,
   parseBuildkitOsExecutorCompileInput,
@@ -18,6 +17,8 @@ import {
   type ResolvedImagePlan,
   type WorkspaceBlueprint,
 } from "@sealant/validators";
+
+import { getHarnessIntegration, type HarnessIntegration } from "../harness/integrations.js";
 
 export interface BuildkitCommandResult {
   readonly stdout: string;

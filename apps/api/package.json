@@ -15,7 +15,6 @@
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",
     "@sealant/db": "workspace:*",
-    "@sealant/package-standardization": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/sandboxes": "workspace:*",
     "@sealant/source-integrations": "workspace:*",

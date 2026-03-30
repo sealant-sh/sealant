@@ -64,8 +64,6 @@ every implementation lands.
 │   └── web/
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
-│   ├── ai-harness-integrations/
-│   ├── package-standardization/
 │   ├── rabbitmq/
 │   ├── sandboxes/
 │   ├── source-integrations/
@@ -196,12 +194,10 @@ over time.
 - `packages/rabbitmq/`: business-agnostic RabbitMQ transport package for connection lifecycle,
   generic JSON publish/consume helpers, and topology assertion
 - `packages/sandboxes/`: sandbox domain package for BuildKit image creation, registry publishing,
-  runtime adapters, queue topology, and worker orchestration
-- `packages/package-standardization/`: Repology-backed package resolution and normalized package
-  contract utilities
+  runtime adapters, queue topology, worker orchestration, harness integrations, and package
+  resolution utilities
 - `packages/source-integrations/`: source-provider integration package for repository selection, ref
   resolution, and provider-specific access flows; GitHub will be the first provider here
-- `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
 
 ## Defined app architecture
 

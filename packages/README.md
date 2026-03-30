@@ -11,9 +11,6 @@ The current package architecture is:
   API-to-worker messaging payloads
 - `rabbitmq`: business-agnostic RabbitMQ transport utilities
 - `sandboxes`: sandbox domain package covering build, publish, deploy, queue wiring, and lifecycle
-  mapping
-- `package-standardization`: Repology-backed package resolution and normalization layer with
-  cache-first lookups
+  mapping, including harness integrations and package resolution/standardization
 - `source-integrations`: source-provider integration logic such as GitHub repository selection, ref
   resolution, and access-related flows
-- `ai-harness-integrations`: shared AI harness contracts and orchestration

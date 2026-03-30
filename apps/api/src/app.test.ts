@@ -13,17 +13,16 @@ import type {
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
 import {
-  packageResolutionSchema,
+  type RegistryClient,
   type PackageStandardizer,
   type PackageTargetOs,
-} from "@sealant/package-standardization";
-import type { RegistryClient } from "@sealant/sandboxes";
+} from "@sealant/sandboxes";
 import type {
   GitHubRemoteInstallation,
   GitHubRemoteInstallationRepository,
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
-import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
+import { packageResolutionSchema, type WorkspaceBuildJobRequestPayload } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";

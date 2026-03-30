@@ -8,8 +8,7 @@ import type {
   SandboxRuntimeInstanceRepository,
   WorkspaceBuildJobRepository,
 } from "@sealant/db";
-import type { PackageStandardizer } from "@sealant/package-standardization";
-import type { RegistryClient } from "@sealant/sandboxes";
+import type { PackageStandardizer, RegistryClient } from "@sealant/sandboxes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 
 import type { AppEnv } from "../env.js";

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { getHarnessIntegration, isHarnessId, listHarnessIntegrations } from "./index.js";
+import { getHarnessIntegration, isHarnessId, listHarnessIntegrations } from "./integrations.js";
 
-describe("ai harness integrations", () => {
+describe("harness integrations", () => {
   it("returns install and launch details for known harness ids", () => {
     const opencode = getHarnessIntegration("opencode");
     const codex = getHarnessIntegration("codex");
