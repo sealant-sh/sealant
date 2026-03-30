@@ -964,13 +964,16 @@ const buildImageTarball = async (
   spec: BuildkitBuildSpec,
   imageTarPath: string,
   commandRunner: BuildkitCommandRunner,
+  osFamily: BuildkitTargetOsFamily,
 ) => {
+  const platformArgs = osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   const buildArgs = [
     "build",
     "--file",
     spec.containerfilePath,
     ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
     ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
+    ...platformArgs,
     "--tag",
     spec.imageReference,
     spec.contextDirectory,
@@ -1002,7 +1005,7 @@ export const compileSandboxBuildSpec = async (input: {
   const buildContext = await writeBuildContext(imagePlan);
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
 
-  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner);
+  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, osFamily);
 
   return parseBuildkitOsBuilderCompileResult({
     builder: {

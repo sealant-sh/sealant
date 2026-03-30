@@ -498,9 +498,12 @@ describe("compileSandboxBuildSpec", () => {
     const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
     const containerfile = await readFile(containerfilePath, "utf8");
     const entrypoint = await readFile(entrypointPath, "utf8");
+    const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
 
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
     expect(entrypoint).toContain("exec /usr/bin/zsh -lc 'codex'");
+    expect(buildCommandArgs).toContain("--platform");
+    expect(buildCommandArgs).toContain("linux/amd64");
   });
 
   it("renders nix build contexts with nix package installs", async () => {
