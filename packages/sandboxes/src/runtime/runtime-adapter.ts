@@ -1,54 +1,7 @@
+import { workspaceBuildJobRequestPayloadSchema } from "@sealant/validators";
 import { z } from "zod";
 
-export const runtimeAdapterBlueprintSchema = z
-  .object({
-    sources: z
-      .object({
-        workspace: z
-          .object({
-            url: z.string().trim().min(1),
-            ref: z.string().trim().min(1),
-            authRef: z.string().trim().min(1).optional(),
-          })
-          .passthrough(),
-      })
-      .passthrough(),
-    access: z
-      .object({
-        ssh: z
-          .object({
-            enabled: z.boolean(),
-            listenPort: z.number().int().min(1).max(65535).optional(),
-            authorizedKeysRef: z.string().trim().min(1).optional(),
-          })
-          .passthrough(),
-      })
-      .passthrough(),
-    runtime: z
-      .object({
-        env: z.record(z.string()),
-        workingDirectory: z.string().trim().min(1),
-        persistence: z.enum(["ephemeral", "persistent"]),
-        ociRuntime: z.enum(["runc", "runsc"]),
-        network: z
-          .object({
-            outbound: z.boolean(),
-          })
-          .passthrough(),
-      })
-      .passthrough(),
-    target: z
-      .object({
-        runtime: z
-          .object({
-            family: z.enum(["auto", "docker", "k8s", "k3s"]),
-            mode: z.enum(["prefer", "require"]),
-          })
-          .passthrough(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
+export const runtimeAdapterBlueprintSchema = workspaceBuildJobRequestPayloadSchema;
 
 export const runtimeAdapterIdSchema = z.enum(["docker", "k8s", "k3s"]);
 

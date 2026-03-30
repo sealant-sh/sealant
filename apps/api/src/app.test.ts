@@ -23,7 +23,7 @@ import type {
   GitHubRemoteInstallationRepository,
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
+import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
@@ -49,6 +49,81 @@ const testEnv: AppEnv = {
 };
 
 const testUserId = "user_test";
+
+const createSandboxBuildSpec = (
+  input: {
+    readonly url?: string;
+    readonly ref?: string;
+    readonly authRef?: string;
+    readonly osFamily?: "auto" | "nix" | "fedora" | "arch";
+    readonly runtimeFamily?: "auto" | "docker" | "k8s" | "k3s";
+    readonly runtimeMode?: "prefer" | "require";
+    readonly ociRuntime?: "runc" | "runsc";
+    readonly inputSources?: WorkspaceBuildJobRequestPayload["sources"]["inputs"];
+  } = {},
+): WorkspaceBuildJobRequestPayload => {
+  return {
+    version: "1",
+    sources: {
+      workspace: {
+        kind: "git",
+        provider: "generic",
+        url: input.url ?? "https://github.com/example/repo",
+        ref: input.ref ?? "main",
+        ...(input.authRef === undefined ? {} : { authRef: input.authRef }),
+      },
+      inputs: input.inputSources ?? [],
+    },
+    harness: {
+      id: "opencode",
+    },
+    access: {
+      ssh: {
+        enabled: false,
+        listenPort: 2222,
+      },
+    },
+    tooling: {
+      packages: [],
+    },
+    customization: {
+      defaultShell: "bash",
+      dotfilesManager: "auto",
+      dotfilesTarget: "home",
+      applyDotfiles: true,
+      dotfilesBootstrap: true,
+    },
+    lifecycle: {
+      setup: [],
+      startup: {
+        steps: [],
+        foreground: {
+          kind: "harness",
+        },
+      },
+    },
+    runtime: {
+      env: {},
+      workspaceRoot: "/workspace",
+      workingDirectory: "/workspace/repo",
+      persistence: "ephemeral",
+      ociRuntime: input.ociRuntime ?? "runc",
+      network: {
+        outbound: true,
+      },
+    },
+    target: {
+      os: {
+        family: input.osFamily ?? "auto",
+        mode: "prefer",
+      },
+      runtime: {
+        family: input.runtimeFamily ?? "auto",
+        mode: input.runtimeMode ?? "prefer",
+      },
+    },
+  };
+};
 
 type SandboxAttemptRecord = Awaited<ReturnType<SandboxAttemptRepository["createQueuedAttempt"]>>;
 type SandboxAttemptSnapshotRecord = Awaited<
@@ -519,9 +594,9 @@ const createSandboxAttemptRepositoryStub = (
       const existing = snapshots.get(input.runId);
       const snapshot: SandboxAttemptSnapshotRecord = {
         runId: input.runId,
-        userSpecPayload: input.userSpecPayload,
-        resolvedSpecPayload: input.resolvedSpecPayload,
-        blueprintPayload: input.blueprintPayload,
+        userSpecPayload: input.specPayload,
+        resolvedSpecPayload: input.specPayload,
+        blueprintPayload: input.specPayload,
         profileConfigSnapshot: input.profileConfigSnapshot ?? null,
         repositoryProfileConfigSnapshot: input.repositoryProfileConfigSnapshot ?? null,
         createdAt: existing?.createdAt ?? new Date(),
@@ -1353,14 +1428,10 @@ describe("createApiApp", () => {
         registryId: "default",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+          ociRuntime: "runsc",
+        }),
       }),
     });
 
@@ -1467,11 +1538,9 @@ describe("createApiApp", () => {
           installationRepositoryId: "gh_installation_repo_1",
           ref: "main",
         },
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       }),
     });
 
@@ -1489,7 +1558,7 @@ describe("createApiApp", () => {
     expect(savedAttempt?.repositoryId).toBe("repo_core");
 
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
-    expect(savedJob?.requestPayload.source).toEqual({
+    expect(savedJob?.requestPayload.sources.workspace).toEqual({
       kind: "git",
       provider: "github",
       url: "https://github.com/sealant-ops/core.git",
@@ -1578,11 +1647,9 @@ describe("createApiApp", () => {
           installationRepositoryId: "gh_installation_repo_1",
           ref: "main",
         },
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       }),
     });
 
@@ -1591,6 +1658,7 @@ describe("createApiApp", () => {
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
     expect(savedJob?.requestPayload.sources?.inputs).toEqual([
       {
+        id: "dotfiles-gh_installation_repo_1",
         kind: "git",
         purpose: "dotfiles",
         provider: "github",
@@ -1665,11 +1733,9 @@ describe("createApiApp", () => {
       registryId: "default",
       repository: "sealant/workspaces/demo",
       tag: "opencode",
-      spec: {
-        source: "https://github.com/example/repo",
-        harness: "opencode",
-        os: "nix",
-      },
+      spec: createSandboxBuildSpec({
+        osFamily: "nix",
+      }),
     });
 
     const firstResponse = await app.request("/v1/sandboxes", {
@@ -1716,17 +1782,13 @@ describe("createApiApp", () => {
       requestedByUserId: testUserId,
       queuedAt: now,
     });
-    const requestSpec = {
-      source: "https://github.com/example/repo",
-      harness: "opencode",
-      os: "nix",
-    } as const;
+    const requestSpec = createSandboxBuildSpec({
+      osFamily: "nix",
+    });
 
     await runs.setAttemptSnapshot({
       runId: run.id,
-      userSpecPayload: requestSpec,
-      resolvedSpecPayload: requestSpec,
-      blueprintPayload: normalizeUserWorkspaceSpec(requestSpec),
+      specPayload: requestSpec,
     });
 
     await sandboxRepository.linkSandboxAttempt({
@@ -1829,9 +1891,9 @@ describe("createApiApp", () => {
       sandboxId: string;
       status: string;
       spec?: {
-        harness: string;
-      };
-      blueprint?: {
+        harness?: {
+          id: string;
+        };
         sources?: {
           workspace?: {
             url: string;
@@ -1843,9 +1905,9 @@ describe("createApiApp", () => {
 
     expect(detailBody.sandboxId).toBe("sandbox_ready");
     expect(detailBody.status).toBe("ready");
-    expect(detailBody.spec?.harness).toBe("opencode");
-    expect(detailBody.blueprint?.sources?.workspace?.url).toBe("https://github.com/example/repo");
-    expect(detailBody.blueprint?.sources?.workspace?.ref).toBe("main");
+    expect(detailBody.spec?.harness?.id).toBe("opencode");
+    expect(detailBody.spec?.sources?.workspace?.url).toBe("https://github.com/example/repo");
+    expect(detailBody.spec?.sources?.workspace?.ref).toBe("main");
 
     const attemptsResponse = await app.request("/v1/sandboxes/sandbox_ready/attempts?limit=10");
     expect(attemptsResponse.status).toBe(200);
@@ -1856,7 +1918,9 @@ describe("createApiApp", () => {
         relation: string;
         status: string;
         spec?: {
-          harness: string;
+          harness?: {
+            id: string;
+          };
         };
       }>;
     };
@@ -1865,7 +1929,7 @@ describe("createApiApp", () => {
     expect(attemptsBody.items[0]?.attemptId).toBe("run_ready");
     expect(attemptsBody.items[0]?.relation).toBe("launch");
     expect(attemptsBody.items[0]?.status).toBe("ready");
-    expect(attemptsBody.items[0]?.spec?.harness).toBe("opencode");
+    expect(attemptsBody.items[0]?.spec?.harness?.id).toBe("opencode");
 
     const eventsResponse = await app.request("/v1/sandboxes/sandbox_ready/events?limit=20");
     expect(eventsResponse.status).toBe(200);

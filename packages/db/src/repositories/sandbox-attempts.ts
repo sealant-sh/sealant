@@ -28,9 +28,7 @@ export interface CreateQueuedSandboxAttemptInput {
 
 export interface SetSandboxAttemptSnapshotInput {
   readonly runId: string;
-  readonly userSpecPayload: SandboxAttemptSnapshot["userSpecPayload"];
-  readonly resolvedSpecPayload: SandboxAttemptSnapshot["resolvedSpecPayload"];
-  readonly blueprintPayload: SandboxAttemptSnapshot["blueprintPayload"];
+  readonly specPayload: SandboxAttemptSnapshot["userSpecPayload"];
   readonly profileConfigSnapshot?: SandboxAttemptSnapshot["profileConfigSnapshot"];
   readonly repositoryProfileConfigSnapshot?: SandboxAttemptSnapshot["repositoryProfileConfigSnapshot"];
 }
@@ -133,9 +131,9 @@ export const createSandboxAttemptRepository = (client: DatabaseClient) => {
       .insert(sandboxAttemptSnapshots)
       .values({
         runId: input.runId,
-        userSpecPayload: input.userSpecPayload,
-        resolvedSpecPayload: input.resolvedSpecPayload,
-        blueprintPayload: input.blueprintPayload,
+        userSpecPayload: input.specPayload,
+        resolvedSpecPayload: input.specPayload,
+        blueprintPayload: input.specPayload,
         ...(input.profileConfigSnapshot === undefined
           ? {}
           : { profileConfigSnapshot: input.profileConfigSnapshot }),
@@ -146,9 +144,9 @@ export const createSandboxAttemptRepository = (client: DatabaseClient) => {
       .onConflictDoUpdate({
         target: sandboxAttemptSnapshots.runId,
         set: {
-          userSpecPayload: input.userSpecPayload,
-          resolvedSpecPayload: input.resolvedSpecPayload,
-          blueprintPayload: input.blueprintPayload,
+          userSpecPayload: input.specPayload,
+          resolvedSpecPayload: input.specPayload,
+          blueprintPayload: input.specPayload,
           ...(input.profileConfigSnapshot === undefined
             ? {}
             : { profileConfigSnapshot: input.profileConfigSnapshot }),

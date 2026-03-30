@@ -337,6 +337,9 @@ function NewSandboxPage() {
       : normalizeOptionalValue(form.configRepoRef) || "main";
 
   const previewManifest = useMemo(() => {
+    const normalizedPackages = form.packages
+      .map(normalizePackageIdentifier)
+      .filter((value) => value.length > 0);
     const normalizedSetupSteps = form.setupSteps
       .map(normalizeCommandStep)
       .filter((value) => value.length > 0);
@@ -345,9 +348,10 @@ function NewSandboxPage() {
       form.configRepoMode === "none"
         ? undefined
         : {
+            id: "dotfiles",
             kind: "git" as const,
             purpose: "dotfiles" as const,
-            ...(form.configRepoMode === "github" ? { provider: "github" as const } : {}),
+            provider: form.configRepoMode === "github" ? ("github" as const) : ("generic" as const),
             url: effectiveConfigRepoUrl,
             ref: effectiveConfigRepoRef,
           };
@@ -381,11 +385,28 @@ function NewSandboxPage() {
           }
         : {}),
       spec: {
-        source: {
-          url: effectiveWorkspaceSourceUrl,
-          ref: effectiveWorkspaceRef,
+        version: "1",
+        sources: {
+          workspace: {
+            kind: "git",
+            provider: form.sourceMode === "github" ? "github" : "generic",
+            url: effectiveWorkspaceSourceUrl,
+            ref: effectiveWorkspaceRef,
+          },
+          inputs: normalizedConfigRepoInput === undefined ? [] : [normalizedConfigRepoInput],
         },
-        harness: form.harness,
+        harness: {
+          id: form.harness,
+        },
+        access: {
+          ssh: {
+            enabled: form.sshEnabled,
+            listenPort: 2222,
+          },
+        },
+        tooling: {
+          packages: normalizedPackages.map((id) => ({ id })),
+        },
         customization: {
           defaultShell: form.defaultShell,
           dotfilesManager: form.configRepoManager,
@@ -398,15 +419,46 @@ function NewSandboxPage() {
                 dotfilesBootstrapCommand: normalizeOptionalValue(form.configRepoBootstrapCommand),
               }),
         },
-        os: form.targetOs,
-        runtime: {
-          ociRuntime: form.ociRuntime,
+        lifecycle: {
+          setup: normalizedSetupSteps.map((run, index) => ({
+            id: `setup-${index + 1}`,
+            run,
+            shell: "bash" as const,
+          })),
+          startup: {
+            steps: [],
+            foreground:
+              normalizedEntrypoint.length === 0
+                ? {
+                    kind: "harness" as const,
+                  }
+                : {
+                    kind: "command" as const,
+                    run: normalizedEntrypoint,
+                    shell: "bash" as const,
+                  },
+          },
         },
-        packages: form.packages,
-        ssh: form.sshEnabled,
-        ...(normalizedConfigRepoInput === undefined ? {} : { inputs: [normalizedConfigRepoInput] }),
-        ...(normalizedSetupSteps.length === 0 ? {} : { setup: normalizedSetupSteps }),
-        ...(normalizedEntrypoint.length === 0 ? {} : { startup: normalizedEntrypoint }),
+        runtime: {
+          env: {},
+          workspaceRoot: "/workspace",
+          workingDirectory: "/workspace/repo",
+          persistence: "ephemeral" as const,
+          ociRuntime: form.ociRuntime,
+          network: {
+            outbound: true,
+          },
+        },
+        target: {
+          os: {
+            family: form.targetOs,
+            mode: "prefer" as const,
+          },
+          runtime: {
+            family: "auto" as const,
+            mode: "prefer" as const,
+          },
+        },
       },
     };
   }, [
@@ -550,9 +602,10 @@ function NewSandboxPage() {
       form.configRepoMode === "none"
         ? undefined
         : {
+            id: "dotfiles",
             kind: "git" as const,
             purpose: "dotfiles" as const,
-            ...(form.configRepoMode === "github" ? { provider: "github" as const } : {}),
+            provider: form.configRepoMode === "github" ? ("github" as const) : ("generic" as const),
             url: effectiveConfigRepoUrl,
             ref: effectiveConfigRepoRef,
           };
@@ -587,11 +640,28 @@ function NewSandboxPage() {
             }
           : {}),
         spec: {
-          source: {
-            url: effectiveWorkspaceSourceUrl,
-            ref: effectiveWorkspaceRef,
+          version: "1",
+          sources: {
+            workspace: {
+              kind: "git",
+              provider: form.sourceMode === "github" ? "github" : "generic",
+              url: effectiveWorkspaceSourceUrl,
+              ref: effectiveWorkspaceRef,
+            },
+            inputs: normalizedConfigRepoInput === undefined ? [] : [normalizedConfigRepoInput],
           },
-          harness: form.harness,
+          harness: {
+            id: form.harness,
+          },
+          access: {
+            ssh: {
+              enabled: form.sshEnabled,
+              listenPort: 2222,
+            },
+          },
+          tooling: {
+            packages: packages.map((id) => ({ id })),
+          },
           customization: {
             defaultShell: form.defaultShell,
             dotfilesManager: form.configRepoManager,
@@ -604,17 +674,46 @@ function NewSandboxPage() {
                   dotfilesBootstrapCommand: normalizeOptionalValue(form.configRepoBootstrapCommand),
                 }),
           },
-          os: form.targetOs,
-          runtime: {
-            ociRuntime: form.ociRuntime,
+          lifecycle: {
+            setup: setup.map((run, index) => ({
+              id: `setup-${index + 1}`,
+              run,
+              shell: "bash" as const,
+            })),
+            startup: {
+              steps: [],
+              foreground:
+                startup.length === 0
+                  ? {
+                      kind: "harness" as const,
+                    }
+                  : {
+                      kind: "command" as const,
+                      run: startup,
+                      shell: "bash" as const,
+                    },
+            },
           },
-          ssh: form.sshEnabled,
-          ...(normalizedConfigRepoInput === undefined
-            ? {}
-            : { inputs: [normalizedConfigRepoInput] }),
-          ...(packages.length === 0 ? {} : { packages }),
-          ...(setup.length === 0 ? {} : { setup }),
-          ...(startup.length === 0 ? {} : { startup }),
+          runtime: {
+            env: {},
+            workspaceRoot: "/workspace",
+            workingDirectory: "/workspace/repo",
+            persistence: "ephemeral" as const,
+            ociRuntime: form.ociRuntime,
+            network: {
+              outbound: true,
+            },
+          },
+          target: {
+            os: {
+              family: form.targetOs,
+              mode: "prefer" as const,
+            },
+            runtime: {
+              family: "auto" as const,
+              mode: "prefer" as const,
+            },
+          },
         },
       });
 
@@ -625,7 +724,7 @@ function NewSandboxPage() {
     }
   };
 
-  const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.source.url);
+  const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.sources.workspace.url);
   const githubSourceReady =
     normalizeRequiredValue(form.githubInstallationId).length > 0 &&
     normalizeRequiredValue(form.githubInstallationRepositoryId).length > 0;
@@ -1752,20 +1851,30 @@ function NewSandboxPage() {
               </p>
 
               <dl className="mt-4 space-y-2.5 text-sm">
-                <SummaryRow label="Target" value={previewManifest.spec.source.url} highlighted />
-                <SummaryRow label="Harness" value={previewManifest.spec.harness.toUpperCase()} />
-                <SummaryRow label="Target OS" value={previewManifest.spec.os.toUpperCase()} />
+                <SummaryRow
+                  label="Target"
+                  value={previewManifest.spec.sources.workspace.url}
+                  highlighted
+                />
+                <SummaryRow label="Harness" value={previewManifest.spec.harness.id.toUpperCase()} />
+                <SummaryRow
+                  label="Target OS"
+                  value={previewManifest.spec.target.os.family.toUpperCase()}
+                />
                 <SummaryRow
                   label="OCI runtime"
                   value={previewManifest.spec.runtime.ociRuntime.toUpperCase()}
                 />
-                <SummaryRow label="Packages" value={String(previewManifest.spec.packages.length)} />
+                <SummaryRow
+                  label="Packages"
+                  value={String(previewManifest.spec.tooling.packages.length)}
+                />
                 <SummaryRow
                   label="Config repo"
                   value={
                     form.configRepoMode === "none"
                       ? "DISABLED"
-                      : (previewManifest.spec.inputs?.[0]?.url ?? "PENDING SELECTION")
+                      : (previewManifest.spec.sources.inputs[0]?.url ?? "PENDING SELECTION")
                   }
                   highlighted={form.configRepoMode !== "none"}
                 />
@@ -1779,8 +1888,8 @@ function NewSandboxPage() {
                 />
                 <SummaryRow
                   label="SSH state"
-                  value={previewManifest.spec.ssh ? "ACTIVE" : "DISABLED"}
-                  highlighted={previewManifest.spec.ssh}
+                  value={previewManifest.spec.access.ssh.enabled ? "ACTIVE" : "DISABLED"}
+                  highlighted={previewManifest.spec.access.ssh.enabled}
                 />
               </dl>
             </div>
@@ -1812,9 +1921,9 @@ function NewSandboxPage() {
                   }
                 />
                 <HealthRow
-                  ok={previewManifest.spec.harness.length > 0}
+                  ok={previewManifest.spec.harness.id.length > 0}
                   text={
-                    previewManifest.spec.harness.length > 0
+                    previewManifest.spec.harness.id.length > 0
                       ? "Harness profile allocated"
                       : "Harness profile is missing"
                   }

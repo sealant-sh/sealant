@@ -20,7 +20,6 @@
     "@sealant/sandboxes": "workspace:*",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
-    "@sealant/workspace-composition": "workspace:*",
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
     "@types/json-schema": "^7.0.15",

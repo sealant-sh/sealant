@@ -8,35 +8,113 @@ import {
 } from "./runtime-adapter.js";
 
 const createBlueprint = (overrides: Record<string, unknown> = {}) => {
-  return parseRuntimeAdapterSupportInput({
-    blueprint: {
-      sources: {
-        workspace: {
-          url: "https://github.com/example/repo.git",
-          ref: "main",
+  const base = {
+    version: "1",
+    sources: {
+      workspace: {
+        kind: "git" as const,
+        provider: "generic" as const,
+        url: "https://github.com/example/repo.git",
+        ref: "main",
+      },
+      inputs: [] as const,
+    },
+    harness: {
+      id: "opencode" as const,
+    },
+    access: {
+      ssh: {
+        enabled: false,
+        listenPort: 2222,
+      },
+    },
+    tooling: {
+      packages: [] as const,
+    },
+    customization: {
+      defaultShell: "bash" as const,
+      dotfilesManager: "auto" as const,
+      dotfilesTarget: "home" as const,
+      applyDotfiles: true,
+      dotfilesBootstrap: true,
+    },
+    lifecycle: {
+      setup: [] as const,
+      startup: {
+        steps: [] as const,
+        foreground: {
+          kind: "harness" as const,
         },
       },
+    },
+    runtime: {
+      env: {} as Record<string, string>,
+      workspaceRoot: "/workspace",
+      workingDirectory: "/workspace/repo",
+      persistence: "ephemeral" as const,
+      ociRuntime: "runc" as const,
+      network: {
+        outbound: true,
+      },
+    },
+    target: {
+      os: {
+        family: "nix" as const,
+        mode: "prefer" as const,
+      },
+      runtime: {
+        family: "auto" as const,
+        mode: "prefer" as const,
+      },
+    },
+  };
+  const override = overrides as any;
+
+  return parseRuntimeAdapterSupportInput({
+    blueprint: {
+      ...base,
+      ...override,
+      sources: {
+        ...base.sources,
+        ...override.sources,
+        workspace: {
+          ...base.sources.workspace,
+          ...override.sources?.workspace,
+        },
+        inputs: override.sources?.inputs ?? base.sources.inputs,
+      },
       access: {
+        ...base.access,
+        ...override.access,
         ssh: {
-          enabled: false,
+          ...base.access.ssh,
+          ...override.access?.ssh,
         },
       },
       runtime: {
-        env: {},
-        workingDirectory: "/workspace/repo",
-        persistence: "ephemeral",
-        ociRuntime: "runc",
+        ...base.runtime,
+        ...override.runtime,
+        env: {
+          ...base.runtime.env,
+          ...override.runtime?.env,
+        },
         network: {
-          outbound: true,
+          ...base.runtime.network,
+          ...override.runtime?.network,
         },
       },
       target: {
+        ...base.target,
+        ...override.target,
+        os: {
+          ...base.target.os,
+          ...override.target?.os,
+        },
         runtime: {
-          family: "auto",
-          mode: "prefer",
+          ...base.target.runtime,
+          ...override.target?.runtime,
         },
       },
-      ...overrides,
     },
   }).blueprint;
 };

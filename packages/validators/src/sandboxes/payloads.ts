@@ -1,8 +1,8 @@
 import {
   osExecutorCompileResultSchema,
-  userWorkspaceSpecSchema,
+  workspaceBlueprintSchema,
   type OsExecutorCompileResult,
-  type UserWorkspaceSpec,
+  type WorkspaceBlueprint,
 } from "@sealant/workspace-composition";
 import { z } from "zod";
 
@@ -14,7 +14,11 @@ const runtimeAdapterLaunchResultSchema = z.strictObject({
   endpoint: z.string().trim().min(1).optional(),
 });
 
-export const workspaceBuildJobRequestPayloadSchema = userWorkspaceSpecSchema;
+export const sandboxBuildSpecSchema = workspaceBlueprintSchema;
+
+export type SandboxBuildSpec = WorkspaceBlueprint;
+
+export const workspaceBuildJobRequestPayloadSchema = sandboxBuildSpecSchema;
 
 export const workspaceBuildJobRuntimeResultPayloadSchema = z.strictObject({
   compile: osExecutorCompileResultSchema,
@@ -23,7 +27,7 @@ export const workspaceBuildJobRuntimeResultPayloadSchema = z.strictObject({
 
 export const workspaceBuildJobResultPayloadSchema = osExecutorCompileResultSchema;
 
-export type WorkspaceBuildJobRequestPayload = UserWorkspaceSpec;
+export type WorkspaceBuildJobRequestPayload = SandboxBuildSpec;
 
 export type WorkspaceBuildJobRuntimeResultPayload = {
   compile: OsExecutorCompileResult;

@@ -1,4 +1,3 @@
-import type { UserWorkspaceSpec, WorkspaceBlueprint } from "@sealant/workspace-composition";
 import {
   index,
   integer,
@@ -8,6 +7,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import type { WorkspaceBuildJobRequestPayload } from "../payloads.js";
 import { user } from "./auth.js";
 
 export const sourceProviderValues = ["github", "gitlab", "generic"] as const;
@@ -345,7 +345,7 @@ export const profileRevisions = sqliteTable(
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
     configPatch: text("config_patch", { mode: "json" })
-      .$type<Partial<UserWorkspaceSpec>>()
+      .$type<Partial<WorkspaceBuildJobRequestPayload>>()
       .notNull(),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
@@ -571,7 +571,7 @@ export const repositoryProfileRevisions = sqliteTable(
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
     runTemplate: text("run_template", { mode: "json" })
-      .$type<Partial<UserWorkspaceSpec>>()
+      .$type<Partial<WorkspaceBuildJobRequestPayload>>()
       .notNull(),
     policyConfig: text("policy_config", { mode: "json" }).$type<Record<string, unknown>>(),
     createdAt: integer({ mode: "timestamp_ms" })
@@ -822,12 +822,14 @@ export const sandboxAttemptSnapshots = sqliteTable("sandbox_attempt_snapshots", 
   runId: text("run_id")
     .primaryKey()
     .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-  userSpecPayload: text("user_spec_payload", { mode: "json" }).$type<UserWorkspaceSpec>().notNull(),
+  userSpecPayload: text("user_spec_payload", { mode: "json" })
+    .$type<WorkspaceBuildJobRequestPayload>()
+    .notNull(),
   resolvedSpecPayload: text("resolved_spec_payload", { mode: "json" })
-    .$type<UserWorkspaceSpec>()
+    .$type<WorkspaceBuildJobRequestPayload>()
     .notNull(),
   blueprintPayload: text("blueprint_payload", { mode: "json" })
-    .$type<WorkspaceBlueprint>()
+    .$type<WorkspaceBuildJobRequestPayload>()
     .notNull(),
   profileConfigSnapshot: text("profile_config_snapshot", { mode: "json" }).$type<
     Record<string, unknown>

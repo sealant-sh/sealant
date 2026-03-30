@@ -1032,30 +1032,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
   const selectedPackages = sandbox.spec === undefined ? [] : resolveSelectedPackages(sandbox.spec);
   const configRepo = resolveConfigRepoReference({
     spec: sandbox.spec,
-    blueprint: sandbox.blueprint,
   });
-
-  if (sandbox.blueprint !== undefined) {
-    const ssh = resolveSshState({
-      spec: sandbox.spec,
-      blueprintSsh: sandbox.blueprint.access.ssh,
-    });
-
-    return {
-      repositoryUrl: sandbox.blueprint.sources.workspace.url,
-      branch: sandbox.blueprint.sources.workspace.ref,
-      isGitHubSource,
-      provider: sandbox.blueprint.sources.workspace.provider,
-      configRepo,
-      harness: sandbox.blueprint.harness.id,
-      runtimeTarget: sandbox.blueprint.target.runtime.family,
-      ociRuntime: sandbox.blueprint.runtime.ociRuntime,
-      osTarget: sandbox.blueprint.target.os.family,
-      workingDirectory: sandbox.blueprint.runtime.workingDirectory,
-      ssh,
-      selectedPackages,
-    };
-  }
 
   const spec = sandbox.spec;
 
@@ -1064,11 +1041,11 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
   }
 
   const source = workspaceSource;
-  const harness = typeof spec.harness === "string" ? spec.harness : spec.harness.id;
+  const harness = spec.harness.id;
   const osTarget = resolveOsTarget(spec);
   const runtimeTarget = resolveRuntimeTarget(spec);
   const ociRuntime = resolveOciRuntime(spec);
-  const workingDirectory = spec.runtime?.workingDirectory ?? "n/a";
+  const workingDirectory = spec.runtime.workingDirectory;
   const ssh = resolveSshState({ spec });
 
   if (source === undefined) {
@@ -1088,28 +1065,11 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     };
   }
 
-  if (typeof source === "string") {
-    return {
-      repositoryUrl: source,
-      branch: "not specified",
-      isGitHubSource,
-      provider: inferSourceProvider(source),
-      configRepo,
-      harness,
-      runtimeTarget,
-      ociRuntime,
-      osTarget,
-      workingDirectory,
-      ssh,
-      selectedPackages,
-    };
-  }
-
   return {
     repositoryUrl: source.url,
-    branch: source.ref ?? "not specified",
+    branch: source.ref,
     isGitHubSource,
-    provider: source.provider ?? inferSourceProvider(source.url),
+    provider: source.provider,
     configRepo,
     harness,
     runtimeTarget,
@@ -1123,26 +1083,9 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
 
 function resolveConfigRepoReference(input: {
   spec: WorkspaceBuildJobRequestPayload | undefined;
-  blueprint:
-    | {
-        sources: {
-          inputs?: Array<{
-            purpose: "config" | "dotfiles" | "bootstrap";
-            url: string;
-            ref: string;
-          }>;
-        };
-      }
-    | undefined;
 }): string {
-  const blueprintDotfiles = input.blueprint?.sources.inputs?.find(
-    (source) => source.purpose === "dotfiles",
-  );
-  if (blueprintDotfiles !== undefined) {
-    return `${blueprintDotfiles.url} @ ${blueprintDotfiles.ref}`;
-  }
-
-  const sourceInputs = input.spec?.sources?.inputs ?? input.spec?.inputs ?? [];
+  const sourceInputs =
+    input.spec?.sources.inputs ?? ([] as WorkspaceBuildJobRequestPayload["sources"]["inputs"]);
   const dotfilesSource = sourceInputs.find((source) => source.purpose === "dotfiles");
 
   if (dotfilesSource === undefined) {
@@ -1154,39 +1097,25 @@ function resolveConfigRepoReference(input: {
 
 function resolveWorkspaceSourceReference(
   spec: WorkspaceBuildJobRequestPayload | undefined,
-): WorkspaceBuildJobRequestPayload["source"] | WorkspaceBuildJobRequestPayload["repo"] | undefined {
-  return spec?.sources?.workspace ?? spec?.source ?? spec?.repo;
+): WorkspaceBuildJobRequestPayload["sources"]["workspace"] | undefined {
+  return spec?.sources.workspace;
 }
 
 function resolveIsGitHubSource(
-  source:
-    | WorkspaceBuildJobRequestPayload["source"]
-    | WorkspaceBuildJobRequestPayload["repo"]
-    | undefined,
+  source: WorkspaceBuildJobRequestPayload["sources"]["workspace"] | undefined,
 ): boolean {
   return (
     source !== undefined &&
-    typeof source !== "string" &&
     typeof source.authRef === "string" &&
     source.authRef.startsWith("github-installation-repository:")
   );
 }
 
 function resolveSelectedPackages(spec: WorkspaceBuildJobRequestPayload): readonly string[] {
-  const packages = spec.tooling?.packages ?? spec.packages ?? [];
+  const packages = spec.tooling.packages;
   const selectedPackages = new Set<string>();
 
   for (const pkg of packages) {
-    if (typeof pkg === "string") {
-      const packageId = pkg.trim();
-
-      if (packageId.length > 0) {
-        selectedPackages.add(packageId);
-      }
-
-      continue;
-    }
-
     const packageId = pkg.id.trim();
 
     if (packageId.length === 0) {
@@ -1208,80 +1137,38 @@ function resolveSelectedPackages(spec: WorkspaceBuildJobRequestPayload): readonl
 }
 
 function resolveOsTarget(spec: WorkspaceBuildJobRequestPayload): string {
-  const osTarget = spec.target?.os ?? spec.os;
-
-  if (osTarget === undefined) {
-    return "n/a";
-  }
-
-  if (typeof osTarget === "string") {
-    return osTarget;
-  }
-
-  return osTarget.family ?? "n/a";
+  return spec.target.os.family;
 }
 
 function resolveRuntimeTarget(spec: WorkspaceBuildJobRequestPayload): string {
-  const runtimeTarget = spec.target?.runtime;
-
-  if (runtimeTarget === undefined) {
-    return "n/a";
-  }
-
-  if (typeof runtimeTarget === "string") {
-    return runtimeTarget;
-  }
-
-  return runtimeTarget.family ?? "n/a";
+  return spec.target.runtime.family;
 }
 
 function resolveOciRuntime(spec: WorkspaceBuildJobRequestPayload): string {
-  return spec.runtime?.ociRuntime ?? "runc";
+  return spec.runtime.ociRuntime;
 }
 
 function resolveSshState(input: {
   spec?: WorkspaceBuildJobRequestPayload | undefined;
   blueprintSsh?: { enabled: boolean; listenPort: number };
 }): string {
-  const ssh = input.spec?.access?.ssh ?? input.spec?.ssh;
+  const ssh = input.spec?.access.ssh;
 
   if (ssh === undefined) {
     if (input.blueprintSsh?.enabled === true) {
       return `enabled (port ${input.blueprintSsh.listenPort})`;
     }
 
-    return "enabled (port 2222)";
+    return "disabled";
   }
 
-  if (typeof ssh === "boolean") {
-    return ssh ? "enabled" : "disabled";
-  }
-
-  const enabled = ssh.enabled ?? true;
+  const enabled = ssh.enabled;
 
   if (!enabled) {
     return "disabled";
   }
 
-  return `enabled (port ${ssh.listenPort ?? 2222})`;
-}
-
-function inferSourceProvider(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-
-    if (hostname === "github.com" || hostname.endsWith(".github.com")) {
-      return "github";
-    }
-
-    if (hostname === "gitlab.com" || hostname.endsWith(".gitlab.com")) {
-      return "gitlab";
-    }
-
-    return "generic";
-  } catch {
-    return "unknown";
-  }
+  return `enabled (port ${ssh.listenPort})`;
 }
 
 function suggestSandboxNames(sandbox: {
@@ -1315,15 +1202,13 @@ function suggestSandboxNames(sandbox: {
 }
 
 function resolveSourceRef(spec: WorkspaceBuildJobRequestPayload | undefined): string | undefined {
-  const source = spec?.sources?.workspace ?? spec?.source ?? spec?.repo;
-
-  if (source === undefined || typeof source === "string") {
+  if (spec === undefined) {
     return undefined;
   }
 
-  const ref = source.ref?.trim();
+  const ref = spec.sources.workspace.ref.trim();
 
-  if (ref === undefined || ref.length === 0) {
+  if (ref.length === 0) {
     return undefined;
   }
 

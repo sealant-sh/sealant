@@ -1,4 +1,3 @@
-import { workspaceBlueprintSchema } from "@sealant/workspace-composition";
 import { z } from "zod";
 
 import { workspaceBuildJobRequestPayloadSchema } from "../sandboxes/payloads.js";
@@ -104,7 +103,6 @@ export const sandboxSummarySchema = z.object({
 
 export const sandboxDetailsSchema = sandboxSummarySchema.extend({
   spec: workspaceBuildJobRequestPayloadSchema.optional(),
-  blueprint: workspaceBlueprintSchema.optional(),
 });
 
 export const listSandboxesQuerySchema = z.object({

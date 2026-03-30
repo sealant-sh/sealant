@@ -16,7 +16,6 @@ import {
 } from "@sealant/sandboxes";
 import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
 import { workspaceBuildJobRequestPayloadSchema } from "@sealant/validators";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 import type { Context } from "hono";
 import type { z } from "zod";
 
@@ -141,7 +140,7 @@ const buildGitHubWorkspaceSource = (input: {
   readonly installationRepositoryId: string;
   readonly fullName: string;
   readonly ref: string;
-}): NonNullable<WorkspaceBuildJobRequestPayload["source"]> => {
+}): WorkspaceBuildJobRequestPayload["sources"]["workspace"] => {
   return {
     kind: "git",
     provider: "github",
@@ -157,6 +156,7 @@ const buildGitHubDotfilesInput = (input: {
   readonly ref: string;
 }) => {
   return {
+    id: `dotfiles-${input.installationRepositoryId}`,
     kind: "git" as const,
     purpose: "dotfiles" as const,
     provider: "github" as const,
@@ -171,14 +171,13 @@ const upsertDotfilesSourceInput = (
   dotfilesInput: ReturnType<typeof buildGitHubDotfilesInput>,
 ): WorkspaceBuildJobRequestPayload => {
   const nextSpec = structuredClone(spec);
-  const existingInputs = nextSpec.sources?.inputs ?? nextSpec.inputs ?? [];
+  const existingInputs = nextSpec.sources.inputs;
   const nextInputs = existingInputs
     .filter((input) => {
       return input.purpose !== "dotfiles";
     })
     .concat(dotfilesInput);
 
-  delete nextSpec.inputs;
   nextSpec.sources = {
     ...nextSpec.sources,
     inputs: nextInputs,
@@ -308,18 +307,14 @@ const resolveGitHubSourceSelection = async (
     ref: sourceSelection.ref ?? installationRepositoryRecord.defaultBranch,
   });
 
-  delete effectiveSpec.repo;
-  if (effectiveSpec.sources !== undefined) {
-    effectiveSpec.sources = {
-      ...effectiveSpec.sources,
-      workspace: undefined,
-    };
-  }
-  effectiveSpec.source = workspaceSource;
+  effectiveSpec.sources = {
+    ...effectiveSpec.sources,
+    workspace: workspaceSource,
+  };
 
   return {
     repositoryId: installationRepositoryRecord.repositoryId,
-    spec: effectiveSpec,
+    spec: workspaceBuildJobRequestPayloadSchema.parse(effectiveSpec),
   };
 };
 
@@ -485,15 +480,9 @@ const deriveRepositoryNameToken = (repository: string): string => {
 };
 
 const deriveSourceRef = (spec: WorkspaceBuildJobRequestPayload): string | undefined => {
-  const source = spec.sources?.workspace ?? spec.source ?? spec.repo;
+  const ref = spec.sources.workspace.ref.trim();
 
-  if (typeof source === "string" || source === undefined) {
-    return undefined;
-  }
-
-  const ref = source.ref?.trim();
-
-  if (ref === undefined || ref.length === 0) {
+  if (ref.length === 0) {
     return undefined;
   }
 
@@ -729,7 +718,6 @@ const mapSandboxDetails = (
   return {
     ...summary,
     ...(userSpec === undefined ? {} : { spec: userSpec }),
-    ...(attemptSnapshot === undefined ? {} : { blueprint: attemptSnapshot.blueprintPayload }),
   };
 };
 
@@ -753,27 +741,17 @@ const acceptedSandboxResponse = (
 };
 
 const parseRequestedPackageIds = (spec: WorkspaceBuildJobRequestPayload): string[] => {
-  const requests = spec.tooling?.packages ?? spec.packages ?? [];
+  const requests = spec.tooling.packages;
 
   return requests.map((pkg) => {
-    return typeof pkg === "string" ? pkg : pkg.id;
+    return pkg.id;
   });
 };
 
 const parseRequestedOsFamily = (
   spec: WorkspaceBuildJobRequestPayload,
 ): "auto" | "arch" | "fedora" | "nix" => {
-  const targetOs = spec.target?.os ?? spec.os;
-
-  if (targetOs === undefined) {
-    return "auto";
-  }
-
-  if (typeof targetOs === "string") {
-    return targetOs;
-  }
-
-  return targetOs.family ?? "auto";
+  return spec.target.os.family;
 };
 
 const dedupePackageNames = (input: readonly string[]): string[] => {
@@ -811,7 +789,7 @@ const standardizeRequestedPackages = async (
     return {
       spec,
       errors: [
-        "Package validation requires an explicit target OS. Set spec.os to arch, fedora, or nix for this request.",
+        "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, or nix for this request.",
       ],
     };
   }
@@ -843,12 +821,13 @@ const standardizeRequestedPackages = async (
     };
   }
 
-  const nextSpec: Record<string, unknown> = {
+  const nextSpec: WorkspaceBuildJobRequestPayload = {
     ...spec,
-    packages: dedupePackageNames(standardizedPackageNames),
+    tooling: {
+      ...spec.tooling,
+      packages: dedupePackageNames(standardizedPackageNames).map((id) => ({ id })),
+    },
   };
-
-  delete nextSpec.tooling;
 
   return {
     spec: workspaceBuildJobRequestPayloadSchema.parse(nextSpec),
@@ -946,7 +925,6 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   const resolvedSpec = packageStandardization.spec;
-  const blueprintPayload = normalizeUserWorkspaceSpec(resolvedSpec);
   const sandboxName =
     body.name === undefined
       ? inferSandboxName({
@@ -987,9 +965,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 
     await sandboxAttempts.setAttemptSnapshot({
       runId: attempt.id,
-      userSpecPayload: dotfilesSelectionResult.spec,
-      resolvedSpecPayload: resolvedSpec,
-      blueprintPayload,
+      specPayload: resolvedSpec,
     });
 
     await workspaceBuildJobs.insertQueuedJob({

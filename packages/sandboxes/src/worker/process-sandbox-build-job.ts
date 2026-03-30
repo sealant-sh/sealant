@@ -21,9 +21,7 @@ import type {
   OciImageBuildArtifact,
   OsExecutor,
   OsExecutorCompileResult,
-  WorkspaceBlueprint,
 } from "@sealant/workspace-composition";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
 
 import type { RegistryClient } from "../registry/index.js";
 import {
@@ -56,11 +54,11 @@ const createWorkerError = (code: string, message: string) => {
   return error;
 };
 
-const selectExecutorForBlueprint = (
-  blueprint: WorkspaceBlueprint,
+const selectExecutorForSpec = (
+  spec: WorkspaceBuildJobRequestPayload,
   executors: readonly OsExecutor[],
 ): OsExecutor => {
-  const requestedOsFamily = blueprint.target.os.family;
+  const requestedOsFamily = spec.target.os.family;
 
   const candidates =
     requestedOsFamily === "auto"
@@ -93,7 +91,7 @@ const selectExecutorForBlueprint = (
     | undefined;
 
   for (const executor of candidates) {
-    const support = executor.supports({ blueprint });
+    const support = executor.supports({ blueprint: spec });
     if (support.supported) {
       return executor;
     }
@@ -134,20 +132,20 @@ const selectPublishableImageArtifact = (compileResult: OsExecutorCompileResult) 
 };
 
 const launchPublishedImage = async (input: {
-  readonly blueprint: WorkspaceBlueprint;
+  readonly spec: WorkspaceBuildJobRequestPayload;
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
   readonly workspaceCloneAuth?: WorkspaceCloneAuth;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
-    blueprint: input.blueprint,
+    blueprint: input.spec,
     adapters: input.runtimeAdapters,
     defaultAdapterId: input.defaultRuntimeAdapterId,
   });
 
   return selectedAdapter.adapter.launch({
-    blueprint: input.blueprint,
+    blueprint: input.spec,
     publishedImage: input.publishedImage,
     ...(input.workspaceCloneAuth === undefined
       ? {}
@@ -172,46 +170,13 @@ const toErrorCode = (error: unknown) => {
   return undefined;
 };
 
-const hasExplicitStartup = (requestPayload: WorkspaceBuildJobRequestPayload): boolean => {
-  return requestPayload.startup !== undefined || requestPayload.lifecycle?.startup !== undefined;
-};
-
-const hasExplicitSsh = (requestPayload: WorkspaceBuildJobRequestPayload): boolean => {
-  return requestPayload.ssh !== undefined || requestPayload.access?.ssh !== undefined;
-};
-
-const applyRuntimeDefaults = (
-  requestPayload: WorkspaceBuildJobRequestPayload,
-  options: Pick<
-    ProcessSandboxBuildJobOptions,
-    "defaultStartupMode" | "defaultIdleCommand" | "defaultSshEnabled" | "defaultSshListenPort"
-  >,
-): WorkspaceBuildJobRequestPayload => {
-  const nextPayload: Record<string, unknown> = {
-    ...requestPayload,
-  };
-
-  if (!hasExplicitStartup(requestPayload) && options.defaultStartupMode === "idle") {
-    nextPayload.startup = options.defaultIdleCommand;
-  }
-
-  if (!hasExplicitSsh(requestPayload) && options.defaultSshEnabled) {
-    nextPayload.ssh = {
-      enabled: true,
-      listenPort: options.defaultSshListenPort,
-    };
-  }
-
-  return workspaceBuildJobRequestPayloadSchema.parse(nextPayload);
-};
-
 const resolveWorkspaceCloneAuth = async (input: {
-  readonly blueprint: WorkspaceBlueprint;
+  readonly spec: WorkspaceBuildJobRequestPayload;
   readonly dbClient: DatabaseClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
 }): Promise<WorkspaceCloneAuth | undefined> => {
   const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
-    input.blueprint.sources.workspace.authRef,
+    input.spec.sources.workspace.authRef,
   );
 
   if (installationRepositoryId === undefined) {
@@ -276,13 +241,11 @@ const resolveWorkspaceCloneAuth = async (input: {
 };
 
 const resolveDotfilesRuntimeEnv = async (input: {
-  readonly blueprint: WorkspaceBlueprint;
+  readonly spec: WorkspaceBuildJobRequestPayload;
   readonly dbClient: DatabaseClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
 }): Promise<Record<string, string>> => {
-  const dotfilesSource = input.blueprint.sources.inputs.find(
-    (source) => source.purpose === "dotfiles",
-  );
+  const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
   const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
     dotfilesSource?.authRef,
   );
@@ -368,11 +331,9 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       await attempts.markAttemptRunning({ id: job.runId }).catch(() => null);
     }
 
-    const parsedRequestPayload = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
-    const requestPayload = applyRuntimeDefaults(parsedRequestPayload, options);
-    const blueprint = normalizeUserWorkspaceSpec(requestPayload);
-    const executor = selectExecutorForBlueprint(blueprint, options.executors);
-    const compileResult = await executor.compile({ blueprint });
+    const spec = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
+    const executor = selectExecutorForSpec(spec, options.executors);
+    const compileResult = await executor.compile({ blueprint: spec });
     const imageArtifact = selectPublishableImageArtifact(compileResult);
     const publishedImage = await options.registryClient.publishOciImage({
       artifactPath: imageArtifact.path,
@@ -402,35 +363,35 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     }
 
     const workspaceCloneAuth = await resolveWorkspaceCloneAuth({
-      blueprint,
+      spec,
       dbClient: options.dbClient,
       ...(options.gitHubSourceIntegration === undefined
         ? {}
         : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
     });
     const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
-      blueprint,
+      spec,
       dbClient: options.dbClient,
       ...(options.gitHubSourceIntegration === undefined
         ? {}
         : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
     });
-    const runtimeBlueprint: WorkspaceBlueprint =
+    const runtimeSpec: WorkspaceBuildJobRequestPayload =
       Object.keys(dotfilesRuntimeEnv).length === 0
-        ? blueprint
+        ? spec
         : {
-            ...blueprint,
+            ...spec,
             runtime: {
-              ...blueprint.runtime,
+              ...spec.runtime,
               env: {
-                ...blueprint.runtime.env,
+                ...spec.runtime.env,
                 ...dotfilesRuntimeEnv,
               },
             },
           };
 
     const runtimeLaunchResult = await launchPublishedImage({
-      blueprint: runtimeBlueprint,
+      spec: runtimeSpec,
       runtimeAdapters: options.runtimeAdapters,
       defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
       publishedImage,

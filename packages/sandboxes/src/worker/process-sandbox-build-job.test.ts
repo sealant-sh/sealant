@@ -1,5 +1,6 @@
 import type { DatabaseClient } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
+import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
 import type { OsExecutor } from "@sealant/workspace-composition";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,14 +15,6 @@ vi.mock("@sealant/db", () => {
     createSandboxAttemptRepository: vi.fn(),
     createSandboxRuntimeInstanceRepository: vi.fn(),
     createWorkspaceBuildJobRepository: vi.fn(),
-  };
-});
-
-vi.mock("@sealant/validators", () => {
-  return {
-    workspaceBuildJobRequestPayloadSchema: {
-      parse: vi.fn((input: unknown) => input),
-    },
   };
 });
 
@@ -141,6 +134,89 @@ const createRuntimeAdapterStub = (
   };
 };
 
+const createSandboxBuildSpec = (
+  input: {
+    readonly url?: string;
+    readonly ref?: string;
+    readonly authRef?: string;
+    readonly osFamily?: "auto" | "nix" | "fedora" | "arch";
+    readonly runtimeFamily?: "auto" | "docker" | "k8s" | "k3s";
+    readonly runtimeMode?: "prefer" | "require";
+    readonly startupCommand?: string;
+    readonly sshEnabled?: boolean;
+    readonly inputSources?: WorkspaceBuildJobRequestPayload["sources"]["inputs"];
+  } = {},
+): WorkspaceBuildJobRequestPayload => {
+  return {
+    version: "1",
+    sources: {
+      workspace: {
+        kind: "git",
+        provider: "generic",
+        url: input.url ?? "https://github.com/example/repo",
+        ref: input.ref ?? "main",
+        ...(input.authRef === undefined ? {} : { authRef: input.authRef }),
+      },
+      inputs: input.inputSources ?? [],
+    },
+    harness: {
+      id: "opencode",
+    },
+    access: {
+      ssh: {
+        enabled: input.sshEnabled ?? false,
+        listenPort: 2222,
+      },
+    },
+    tooling: {
+      packages: [],
+    },
+    customization: {
+      defaultShell: "bash",
+      dotfilesManager: "auto",
+      dotfilesTarget: "home",
+      applyDotfiles: true,
+      dotfilesBootstrap: true,
+    },
+    lifecycle: {
+      setup: [],
+      startup: {
+        steps: [],
+        foreground:
+          input.startupCommand === undefined
+            ? {
+                kind: "harness",
+              }
+            : {
+                kind: "command",
+                run: input.startupCommand,
+                shell: "bash",
+              },
+      },
+    },
+    runtime: {
+      env: {},
+      workspaceRoot: "/workspace",
+      workingDirectory: "/workspace/repo",
+      persistence: "ephemeral",
+      ociRuntime: "runc",
+      network: {
+        outbound: true,
+      },
+    },
+    target: {
+      os: {
+        family: input.osFamily ?? "nix",
+        mode: "prefer",
+      },
+      runtime: {
+        family: input.runtimeFamily ?? "auto",
+        mode: input.runtimeMode ?? "prefer",
+      },
+    },
+  };
+};
+
 describe("processSandboxBuildJob", () => {
   it("mints GitHub installation token auth right before runtime launch", async () => {
     const repository = {
@@ -149,17 +225,11 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: {
-            kind: "git",
-            provider: "github",
-            url: "https://github.com/sealant-ops/core.git",
-            ref: "main",
-            authRef: "github-installation-repository:gh_installation_repo_1",
-          },
-          harness: "opencode",
-          os: "nix",
-        },
+        requestPayload: createSandboxBuildSpec({
+          url: "https://github.com/sealant-ops/core.git",
+          authRef: "github-installation-repository:gh_installation_repo_1",
+          osFamily: "nix",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -247,12 +317,12 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo.git",
-          harness: "opencode",
-          os: "nix",
-          inputs: [
+        requestPayload: createSandboxBuildSpec({
+          url: "https://github.com/example/repo.git",
+          osFamily: "nix",
+          inputSources: [
             {
+              id: "dotfiles",
               kind: "git",
               purpose: "dotfiles",
               provider: "github",
@@ -261,7 +331,7 @@ describe("processSandboxBuildJob", () => {
               authRef: "github-installation-repository:gh_installation_repo_1",
             },
           ],
-        },
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -345,18 +415,16 @@ describe("processSandboxBuildJob", () => {
     );
   });
 
-  it("applies idle startup and SSH defaults when spec omits them", async () => {
+  it("uses startup and SSH values from the request spec", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_defaults",
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -427,15 +495,13 @@ describe("processSandboxBuildJob", () => {
 
     const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
     expect(launchCall.blueprint.access.ssh).toEqual({
-      enabled: true,
+      enabled: false,
       listenPort: 2222,
     });
     expect(lifecycle).toMatchObject({
       startup: {
         foreground: {
-          kind: "command",
-          run: "while :; do sleep 30; done",
-          shell: "bash",
+          kind: "harness",
         },
       },
     });
@@ -448,13 +514,11 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          ssh: false,
-          startup: "pnpm dev",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+          sshEnabled: false,
+          startupCommand: "pnpm dev",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -543,11 +607,9 @@ describe("processSandboxBuildJob", () => {
         runId: "run_123",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -636,11 +698,9 @@ describe("processSandboxBuildJob", () => {
         runId: "run_123",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -694,11 +754,9 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "fedora",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "fedora",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -753,10 +811,9 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-        },
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "auto",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),
@@ -848,16 +905,10 @@ describe("processSandboxBuildJob", () => {
         runId: null,
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          target: {
-            runtime: {
-              family: "k8s",
-              mode: "require",
-            },
-          },
-        },
+        requestPayload: createSandboxBuildSpec({
+          runtimeFamily: "k8s",
+          runtimeMode: "require",
+        }),
       })),
       markJobSucceeded: vi.fn(async () => ({})),
       markJobFailed: vi.fn(async () => ({})),

@@ -7,19 +7,47 @@ describe("K8sRuntimeAdapter", () => {
     const adapter = new K8sRuntimeAdapter();
     const support = adapter.supports({
       blueprint: {
+        version: "1",
         sources: {
           workspace: {
+            kind: "git",
+            provider: "generic",
             url: "https://github.com/example/repo.git",
             ref: "main",
           },
+          inputs: [],
+        },
+        harness: {
+          id: "opencode",
         },
         access: {
           ssh: {
             enabled: false,
+            listenPort: 2222,
+          },
+        },
+        tooling: {
+          packages: [],
+        },
+        customization: {
+          defaultShell: "bash",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: true,
+          dotfilesBootstrap: true,
+        },
+        lifecycle: {
+          setup: [],
+          startup: {
+            steps: [],
+            foreground: {
+              kind: "harness",
+            },
           },
         },
         runtime: {
           env: {},
+          workspaceRoot: "/workspace",
           workingDirectory: "/workspace/repo",
           persistence: "ephemeral",
           ociRuntime: "runc",
@@ -28,6 +56,10 @@ describe("K8sRuntimeAdapter", () => {
           },
         },
         target: {
+          os: {
+            family: "nix",
+            mode: "prefer",
+          },
           runtime: {
             family: "k8s",
             mode: "require",
