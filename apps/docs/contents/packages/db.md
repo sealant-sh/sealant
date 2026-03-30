@@ -3,60 +3,35 @@ title: "@sealant/db"
 slug: /packages/db
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# @sealant/db
 
 ## Purpose
 
 `@sealant/db` is the shared SQLite + Drizzle package for control-plane persistence.
 
-It stores lifecycle state for the two product domains:
+It stores durable state for Sealant's two core product domains:
 
 - sandboxes
 - issue workflows
 
 ## Why this package exists
 
-- Keep data contracts and repository access patterns centralized.
-- Ensure API, workers, and other services share the same schema and typed data access.
-- Provide migration and validation primitives for control-plane state.
+- Keep schema and repositories centralized.
+- Ensure API and worker use one typed persistence contract.
+- Provide migration and env parsing utilities in one place.
 
 ## What it provides
 
-- database client creation helpers
-- schema exports and generated types
-- repository constructors for major domains, including:
-  - sandbox lifecycle and attempts
-  - workspace build jobs and runtime instances
-  - issue workflows and workflow executions
-  - profile and repository profile state
-  - GitHub installations and webhook deliveries
-  - package resolution cache
-- Zod validation schemas derived from table definitions
-- migration entrypoints
+- database client creation and lifecycle helpers
+- Drizzle schema exports and inferred table types
+- domain repositories for sandbox lifecycle, issue workflows, source integrations, and profiles
+- payload schema re-exports from `@sealant/validators`
+- migration entrypoints and helper scripts
 
 Core exports are defined in `packages/db/src/index.ts`.
 
-## Module map
-
-- `src/client.ts`
-  - SQLite/libSQL client creation and lifecycle helpers
-- `src/env.ts`
-  - database env parsing and default path resolution
-- `src/schema.ts` and `src/schema/*`
-  - Drizzle table definitions and value enums
-- `src/repositories/*`
-  - typed repository constructors per domain
-- `src/payloads.ts`
-  - workspace build job request/result payload schemas
-- `src/validation.ts`
-  - Drizzle-derived insert/select schemas and enum schemas
-- `src/migrate.ts` / `src/run-migrations.ts`
-  - migration entrypoints
-
-## Data domains
+## Key schema groups
 
 ### Auth
 
@@ -73,10 +48,12 @@ Core exports are defined in `packages/db/src/index.ts`.
 - `sandbox_runtime_instances`
 - `sandbox_run_links`
 
-### Workspace build jobs
+### Sandbox build jobs
 
-- `workspace_build_jobs`
 - `oci_image_build_jobs`
+
+Note: repository and type exports still include compatibility aliases such as `sandboxBuildJobs`
+while migration to the `oci_image_build_jobs` table name is completed.
 
 ### Issue workflows
 
@@ -121,45 +98,17 @@ Core exports are defined in `packages/db/src/index.ts`.
 
 ## Payload contracts
 
-- `workspaceBuildJobRequestPayloadSchema`: raw `UserWorkspaceSpec` payload
-- `workspaceBuildJobRuntimeResultPayloadSchema`: compile result + runtime adapter launch result
-- `workspaceBuildJobResultPayloadSchema`: compile result payload
+`packages/db/src/payloads.ts` re-exports shared sandbox payload schemas and types from
+`@sealant/validators`:
 
-## Repository surfaces
-
-- sandbox lifecycle: repositories for sandboxes, attempts, runtime instances, and snapshots
-- issue workflow lifecycle: repositories for workflow state, executions, events, artifacts, and
-  validation
-- source/provider sync: repositories for GitHub installations, repositories, and webhook delivery
-  records
-- profile management: repositories for profiles and repository-scoped templates
-- job orchestration: repositories for workspace build job queues and status transitions
+- `newSandboxSchema` / `NewSandbox`
+- `sandboxBuildSchema` / `SandboxBuild`
+- `sandboxLaunchSchema` / `SandboxLaunch`
 
 ## Environment
 
 - `DATABASE_FILE_PATH` (default: `packages/db/.data/sealant-control-plane.sqlite`)
 - `DATABASE_BUSY_TIMEOUT_MS` (default: `5000`)
-
-## Schema docs
-
-- package overview: `packages/db/README.md`
-- per-table purpose notes: `packages/db/src/schema/README.md`
-
-## Internal dependencies
-
-- Internal package dependencies: `@sealant/workspace-composition`
-- External runtime dependencies: `@libsql/client`, `drizzle-orm`, `drizzle-zod`, `zod`
-
-## Schema docs
-
-- `packages/db/README.md`
-- `packages/db/src/schema/README.md`
-
-## Typical call flow
-
-1. Control plane validates request and creates/updates records.
-2. Worker claims jobs and writes execution state transitions.
-3. API/UI surfaces read typed records for sandbox and issue workflow reporting.
 
 ## Scripts
 

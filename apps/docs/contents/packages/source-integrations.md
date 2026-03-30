@@ -3,10 +3,8 @@ title: "@sealant/source-integrations"
 slug: /packages/source-integrations
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# @sealant/source-integrations
 
 ## Purpose
 
@@ -82,7 +80,7 @@ These helpers let composition and build flows carry provider access as opaque re
 ## Cross-package dependency
 
 - Used by `@sealant/api` for GitHub app and repository integrations.
-- Used by `@sealant/worker` when workspace execution needs provider access.
+- Used by `@sealant/worker` when sandbox execution needs provider access.
 - Used indirectly by `@sealant/db` through GitHub installation persistence.
 
 ## Internal dependencies

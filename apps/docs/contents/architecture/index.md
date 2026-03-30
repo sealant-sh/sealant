@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# Architecture Docs Index
-
 This section documents cross-package behavior for Sealant's two core product loops.
 
 ## Core loops

@@ -3,35 +3,29 @@ title: "@sealant/worker"
 slug: /apps/worker
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# @sealant/worker
 
 ## Purpose
 
-`@sealant/worker` is the background execution worker for workspace image build jobs and runtime
-launch handoff.
+`@sealant/worker` is the background execution worker for sandbox image build jobs and runtime launch
+handoff.
 
 It consumes queued build jobs, compiles/publishes artifacts, and updates durable lifecycle state.
 
 ## Current capabilities
 
-- RabbitMQ job consumption via `@sealant/workspace-build-queue`
+- RabbitMQ transport via `@sealant/rabbitmq`
 - durable build/job state updates via `@sealant/db`
-- BuildKit compile path via `@sealant/os-integration-buildkit`
-- registry publication via `@sealant/registry-integration`
-- runtime selection/launch via `@sealant/runtime-adapters-api`
+- BuildKit compile, registry publication, and runtime launch via `@sealant/sandboxes`
+- source-provider resolution via `@sealant/source-integrations`
 
 ## Key dependencies
 
 - `@sealant/db`
-- `@sealant/os-integration-buildkit`
-- `@sealant/registry-integration`
-- `@sealant/runtime-adapters-api`
+- `@sealant/rabbitmq`
+- `@sealant/sandboxes`
 - `@sealant/source-integrations`
-- `@sealant/workspace-build-queue`
-- `@sealant/workspace-composition`
 
 ## Environment highlights
 

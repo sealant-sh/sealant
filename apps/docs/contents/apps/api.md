@@ -3,10 +3,8 @@ title: "@sealant/api"
 slug: /apps/api
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# @sealant/api
 
 ## Purpose
 
@@ -14,27 +12,26 @@ updated: 2026-03-28
 stateful read models.
 
 Product-facing contracts should model around `sandboxes` and `issue workflows`, while lower-level
-orchestration endpoints remain internal/operator-facing.
+execution details remain internal/operator-facing.
 
 ## Current capabilities
 
 - Node-based Hono server
 - OpenAPI generation (`/openapi.json`)
 - Scalar docs UI (`/docs`)
-- route groups for system, sandboxes, registries, and workspace-build-jobs
-- sandbox lifecycle routes backed by `@sealant/db` and `@sealant/workspace-build-queue`
-- registry inspection routes backed by `@sealant/registry-integration`
+- route groups for system, sandboxes, registries, packages, and github
+- sandbox lifecycle routes backed by `@sealant/db`, `@sealant/rabbitmq`, and `@sealant/sandboxes`
+- schema-first route contracts powered by `@sealant/validators`
 
 Primary route details are documented in `apps/api/README.md`.
 
 ## Key dependencies
 
 - `@sealant/db`
-- `@sealant/package-standardization`
-- `@sealant/registry-integration`
+- `@sealant/rabbitmq`
+- `@sealant/sandboxes`
 - `@sealant/source-integrations`
-- `@sealant/workspace-build-queue`
-- `@sealant/workspace-composition`
+- `@sealant/validators`
 
 ## Environment highlights
 

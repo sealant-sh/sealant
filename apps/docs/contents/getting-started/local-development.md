@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# Local Development Setup
-
 This guide bootstraps the monorepo and starts local infrastructure for sandbox and issue workflow
 development.
 

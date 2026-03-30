@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/ssh-gateway
-
 ## Purpose
 
 `@sealant/ssh-gateway` is the SSH routing gateway for sandbox access.

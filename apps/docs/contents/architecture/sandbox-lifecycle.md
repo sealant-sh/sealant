@@ -3,10 +3,8 @@ title: Sandbox Lifecycle
 slug: /architecture/sandbox-lifecycle
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# Sandbox Lifecycle
 
 This page describes how a sandbox request moves through the current Sealant architecture.
 
@@ -17,9 +15,9 @@ Turn user intent into an isolated, reproducible coding sandbox with clear lifecy
 ## High-level flow
 
 1. A product surface submits a sandbox request.
-2. The control plane normalizes request inputs into a workspace blueprint.
-3. An OS integration compiles the blueprint into build artifacts.
-4. Registry integration publishes the image artifact and returns canonical references.
+2. The control plane validates and normalizes request inputs into a sandbox blueprint.
+3. A sandbox build job is enqueued and claimed by a worker.
+4. BuildKit compiles the blueprint, and the image is published to the registry.
 5. A runtime adapter launches the sandbox runtime.
 6. Lifecycle state is persisted and surfaced back to product UI/reporting.
 
@@ -27,46 +25,36 @@ Turn user intent into an isolated, reproducible coding sandbox with clear lifecy
 
 ### 1) Input normalization
 
-- `@sealant/workspace-composition`
-  - parses/normalizes input (`UserWorkspaceSpec` -> `WorkspaceBlueprint`)
-  - defines target/runtime/customization contracts used downstream
+- `@sealant/validators`
+  - defines request/response schemas and sandbox blueprint contracts
+- `@sealant/api`
+  - validates request payloads and persists initial sandbox records
 
-### 2) Build compile
+### 2) Queue orchestration
 
-- `@sealant/os-integration-buildkit`
-  - checks support for target OS and harness constraints
-  - resolves package/tooling/install plans
-  - compiles to BuildKit artifacts (`oci-image` + metadata)
+- `@sealant/rabbitmq`
+  - provides shared transport primitives and queue prefetch/env contract
+- `@sealant/sandboxes`
+  - defines sandbox queue topology and message helpers
 
-- `@sealant/ai-harness-integrations`
-  - provides harness install/launch metadata consumed during build planning
+### 3) Build and publish
 
-- `@sealant/package-standardization` (when integrated in request prep)
-  - resolves package naming differences across Arch/Fedora/Nix
+- `@sealant/sandboxes`
+  - compiles a sandbox blueprint with BuildKit
+  - resolves harness/package/runtime planning
+  - publishes OCI image artifacts and returns canonical references
 
-### 3) Build-job orchestration
+### 4) Runtime launch
 
-- `@sealant/workspace-build-queue`
-  - queues durable `workspace-build-job.requested` messages
-  - gives API/worker a shared topology + message contract
+- `@sealant/sandboxes`
+  - selects runtime adapter and launches sandbox runtime
+  - maps launch results into persisted lifecycle state
 
 - `@sealant/db`
-  - persists build-job records and state transitions
-  - persists sandbox and attempt lifecycle records
+  - persists sandbox build jobs and status transitions
+  - persists sandbox, attempt, runtime, and publish state
 
-### 4) Artifact publish
-
-- `@sealant/registry-integration`
-  - publishes image artifacts into Zot
-  - returns stable tag/digest references for launch
-
-### 5) Runtime launch
-
-- `@sealant/runtime-adapters-api`
-  - selects concrete runtime adapter
-  - executes launch via Docker adapter (current) or scaffolded k8s/k3s adapters
-
-### 6) Source access
+### 5) Source access
 
 - `@sealant/source-integrations`
   - manages provider-specific source auth and repository metadata (GitHub today)
@@ -78,22 +66,20 @@ Primary persisted entities live in `@sealant/db`:
 
 - sandbox records
 - sandbox attempts and snapshots
-- workspace build jobs
+- sandbox build jobs
 - sandbox runtime instances
 
 This allows clear status reporting and reproducible audit trails.
 
-## Current constraints (important)
+## Current constraints
 
-- BuildKit executor currently supports only dotfiles as additional input sources.
-- BuildKit executor currently does not support package version pinning.
-- Docker-assisted image publish is an implementation bridge in current registry flow.
+- BuildKit compile currently supports only dotfiles as additional input sources.
+- BuildKit compile currently does not support package version pinning.
+- Docker runtime is the default adapter when runtime target family is `auto`.
 
 ## Related docs
 
-- `apps/docs/contents/packages/workspace-composition.md`
-- `apps/docs/contents/packages/os-integration-buildkit.md`
-- `apps/docs/contents/packages/registry-integration.md`
-- `apps/docs/contents/packages/runtime-adapters-api.md`
-- `apps/docs/contents/packages/workspace-build-queue.md`
+- `apps/docs/contents/packages/sandboxes.md`
+- `apps/docs/contents/packages/rabbitmq.md`
+- `apps/docs/contents/packages/validators.md`
 - `apps/docs/contents/packages/db.md`

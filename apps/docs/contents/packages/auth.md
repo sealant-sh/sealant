@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/auth
-
 ## Purpose
 
 `@sealant/auth` is the shared Better Auth package for Sealant product apps.

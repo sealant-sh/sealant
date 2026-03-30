@@ -3,10 +3,8 @@ title: Environment Variables
 slug: /getting-started/environment-variables
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# Environment Variables
 
 This page lists the highest-impact environment variables for local development.
 
@@ -16,7 +14,7 @@ For complete contracts, see each app/package env module:
 - `apps/worker/src/env.ts`
 - `apps/ssh-gateway/src/env.ts`
 - `packages/db/src/env.ts`
-- `packages/workspace-build-queue/src/env.ts`
+- `packages/rabbitmq/src/env.ts`
 - `packages/auth/src/env.ts`
 
 ## Shared infrastructure
@@ -24,7 +22,7 @@ For complete contracts, see each app/package env module:
 - `DATABASE_FILE_PATH` (SQLite path)
 - `DATABASE_BUSY_TIMEOUT_MS`
 - `RABBITMQ_URL`
-- `WORKSPACE_BUILD_QUEUE_PREFETCH`
+- `SANDBOX_BUILD_QUEUE_PREFETCH`
 - `REGISTRY_BASE_URL`
 - `REGISTRY_PUSH_REGISTRY`
 - `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` (optional pair)
@@ -45,14 +43,11 @@ For complete contracts, see each app/package env module:
 
 - `DEFAULT_RUNTIME_ADAPTER` (default `docker`)
 - `DOCKER_SOCKET_PATH`
-- `DEFAULT_WORKSPACE_STARTUP_MODE`
-- `DEFAULT_WORKSPACE_IDLE_COMMAND`
-- `DEFAULT_WORKSPACE_SSH_ENABLED`
-- `DEFAULT_WORKSPACE_SSH_LISTEN_PORT`
 - `DEFAULT_SSH_AUTHORIZED_KEYS_FILE`
 - `DEFAULT_SSH_BIND_HOST`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY`
 - `WORKER_ID`
+- `SANDBOX_BUILD_JOB_LEASE_DURATION_MS`
 
 ## SSH Gateway (`@sealant/ssh-gateway`)
 

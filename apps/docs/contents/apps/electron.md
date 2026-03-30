@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/electron
-
 ## Purpose
 
 `@sealant/electron` is the desktop application workspace for Sealant.

@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/docs
-
 ## Purpose
 
 `@sealant/docs` is the documentation site app.

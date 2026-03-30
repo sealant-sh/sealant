@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# Getting Started
-
 Use this section to bootstrap a local Sealant development environment and run the core sandbox flow.
 
 ## Guides

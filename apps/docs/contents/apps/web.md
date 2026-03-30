@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/web
-
 ## Purpose
 
 `@sealant/web` is the main product app for user-facing sandbox and issue workflow surfaces.

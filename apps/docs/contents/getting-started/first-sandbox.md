@@ -3,10 +3,8 @@ title: Run Your First Sandbox
 slug: /getting-started/first-sandbox
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# Run Your First Sandbox
 
 This walkthrough runs the minimal local sandbox lifecycle through API + worker.
 
@@ -21,15 +19,23 @@ This walkthrough runs the minimal local sandbox lifecycle through API + worker.
 curl -X POST http://localhost:4000/v1/sandboxes \
   -H 'content-type: application/json' \
   -d '{
+    "ownerUserId": "<userId>",
     "registryId": "default",
-    "repository": "sealant/workspaces/demo",
+    "repository": "sealant/sandboxes/demo",
     "tag": "opencode",
     "spec": {
-      "source": "https://github.com/example/repo",
-      "harness": "opencode",
-      "os": "nix",
-      "target": {
-        "runtime": "docker"
+      "version": "1",
+      "sources": {
+        "sandbox": {
+          "kind": "git",
+          "provider": "generic",
+          "url": "https://github.com/example/repo",
+          "ref": "main"
+        },
+        "inputs": []
+      },
+      "harness": {
+        "id": "opencode"
       }
     }
   }'
@@ -46,23 +52,13 @@ curl "http://localhost:4000/v1/sandboxes/<sandboxId>"
 
 Common statuses include `queued`, `running`, `succeeded`, and `failed`.
 
-## 3) Optional low-level job inspection
-
-If you have a job id:
+## 3) Verify image in registry
 
 ```bash
-curl "http://localhost:4000/v1/workspace-build-jobs/<jobId>"
+curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/sandboxes/demo"
 ```
 
-This route is internal/operator-oriented compared to the primary sandbox lifecycle routes.
-
-## 4) Verify image in registry
-
-```bash
-curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/workspaces/demo"
-```
-
-## 5) Troubleshoot quick checks
+## 4) Troubleshoot quick checks
 
 - `404 Unknown registry`: verify `registryId` matches `REGISTRY_NAME` (default `default`).
 - `502` from create sandbox: check RabbitMQ reachability/config.

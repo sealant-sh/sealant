@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/ui
-
 ## Purpose
 
 `@sealant/ui` is the shared React UI package for Sealant product surfaces.

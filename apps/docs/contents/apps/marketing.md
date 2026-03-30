@@ -6,8 +6,6 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-# @sealant/marketing
-
 ## Purpose
 
 `@sealant/marketing` is the public-facing site and launch surface.

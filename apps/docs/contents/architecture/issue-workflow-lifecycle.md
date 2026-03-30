@@ -3,10 +3,8 @@ title: Issue Workflow Lifecycle
 slug: /architecture/issue-workflow-lifecycle
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-03-31
 ---
-
-# Issue Workflow Lifecycle
 
 This page describes how issue workflow execution is modeled and processed in Sealant.
 
@@ -40,21 +38,17 @@ reporting reproducible.
 
 ### 3) Environment composition and build
 
-- `@sealant/workspace-composition`
-  - normalizes execution environment intent
-- `@sealant/os-integration-buildkit`
-  - compiles environment image artifacts
-- `@sealant/workspace-build-queue`
-  - queues build jobs when an execution requires image build orchestration
-- `@sealant/registry-integration`
-  - publishes resulting OCI images
-- `@sealant/runtime-adapters-api`
-  - launches isolated runtime sessions for workflow execution
+- `@sealant/validators`
+  - defines shared execution environment contracts
+- `@sealant/rabbitmq`
+  - provides queue transport primitives for execution orchestration
+- `@sealant/sandboxes`
+  - provides compile/publish/runtime infrastructure reused by issue workflow execution
 
 ### 4) Harness and execution tooling
 
-- `@sealant/ai-harness-integrations`
-  - provides harness install/launch contracts used when execution runs in a harness-driven sandbox
+- `@sealant/sandboxes`
+  - contains harness integration logic used by sandbox and issue workflow execution paths
 
 ## Persisted execution reporting
 
@@ -79,8 +73,7 @@ This is the core of auditability and reproducibility for issue workflows.
 ## Related docs
 
 - `apps/docs/contents/packages/db.md`
-- `apps/docs/contents/packages/workspace-composition.md`
+- `apps/docs/contents/packages/validators.md`
 - `apps/docs/contents/packages/source-integrations.md`
-- `apps/docs/contents/packages/workspace-build-queue.md`
-- `apps/docs/contents/packages/registry-integration.md`
-- `apps/docs/contents/packages/runtime-adapters-api.md`
+- `apps/docs/contents/packages/rabbitmq.md`
+- `apps/docs/contents/packages/sandboxes.md`
