@@ -62,9 +62,12 @@ services:
     depends_on:
       worker:
         condition: service_started
-    network_mode: host
+    ports:
+      - "127.0.0.1:2222:2222"
     volumes:
       - ./.secrets:/app/.secrets:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - ./.env.local
     environment:
@@ -73,7 +76,7 @@ services:
       SSH_GATEWAY_HOST_KEY_PATH: /app/.secrets/ssh_gateway_host_key
       SSH_GATEWAY_ALLOWED_KEYS_FILE: /app/.secrets/gateway_allowed_keys
       SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
-      CORE_API_BASE_URL: http://127.0.0.1:4000
+      CORE_API_BASE_URL: http://host.docker.internal:4000
       SSH_UPSTREAM_PRIVATE_KEY_PATH: /app/.secrets/gateway_upstream_key
       SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING: "false"
     restart: unless-stopped
