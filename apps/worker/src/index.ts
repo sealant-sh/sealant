@@ -9,9 +9,6 @@ console.log("Sealant worker starting", {
   registryBaseUrl: env.REGISTRY_BASE_URL,
   databaseFilePath: env.DATABASE_FILE_PATH,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
-  defaultWorkspaceStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
-  defaultWorkspaceSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
-  defaultWorkspaceSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
   defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
   defaultSshBindHost: env.DEFAULT_SSH_BIND_HOST,
 });

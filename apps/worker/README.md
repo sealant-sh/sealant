@@ -50,12 +50,8 @@ spec leaves `target.runtime.family` as `auto`.
 Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
 `runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
 
-The worker now applies runtime defaults when requests omit startup/SSH fields:
+Sandbox startup and SSH behavior are spec-authoritative. Worker defaults only cover host SSH wiring:
 
-- `DEFAULT_WORKSPACE_STARTUP_MODE=idle` (or `harness`)
-- `DEFAULT_WORKSPACE_IDLE_COMMAND="while :; do sleep 30; done"`
-- `DEFAULT_WORKSPACE_SSH_ENABLED=true`
-- `DEFAULT_WORKSPACE_SSH_LISTEN_PORT=2222`
 - `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY=host-published` (`container-network` is gateway-ready)

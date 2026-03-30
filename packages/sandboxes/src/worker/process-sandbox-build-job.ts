@@ -17,12 +17,8 @@ import {
   type WorkspaceBuildJobRequestPayload,
   type WorkspaceBuildJobResultPayload,
 } from "@sealant/validators";
-import type {
-  OciImageBuildArtifact,
-  OsExecutor,
-  OsExecutorCompileResult,
-} from "@sealant/workspace-composition";
 
+import { compileSandboxBuildSpec } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
@@ -37,15 +33,13 @@ export interface ProcessSandboxBuildJobOptions {
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly dbClient: DatabaseClient;
-  readonly executors: readonly OsExecutor[];
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
-  readonly defaultStartupMode: "idle" | "harness";
-  readonly defaultIdleCommand: string;
-  readonly defaultSshEnabled: boolean;
-  readonly defaultSshListenPort: number;
   readonly registryClient: RegistryClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
+  readonly compileSandboxSpec?: (
+    spec: WorkspaceBuildJobRequestPayload,
+  ) => Promise<WorkspaceBuildJobResultPayload>;
 }
 
 const createWorkerError = (code: string, message: string) => {
@@ -54,66 +48,13 @@ const createWorkerError = (code: string, message: string) => {
   return error;
 };
 
-const selectExecutorForSpec = (
-  spec: WorkspaceBuildJobRequestPayload,
-  executors: readonly OsExecutor[],
-): OsExecutor => {
-  const requestedOsFamily = spec.target.os.family;
-
-  const candidates =
-    requestedOsFamily === "auto"
-      ? [...executors].toSorted((left, right) => {
-          if (left.osFamily === right.osFamily) {
-            return 0;
-          }
-
-          if (left.osFamily === "nix") {
-            return 1;
-          }
-
-          if (right.osFamily === "nix") {
-            return -1;
-          }
-
-          return 0;
-        })
-      : executors.filter((candidate) => candidate.osFamily === requestedOsFamily);
-
-  if (candidates.length === 0) {
-    throw createWorkerError(
-      "unsupported-os",
-      `No executor is registered for target.os.family '${requestedOsFamily}'.`,
-    );
-  }
-
-  let firstSupportFailure:
-    | Exclude<ReturnType<OsExecutor["supports"]>, { supported: true }>
-    | undefined;
-
-  for (const executor of candidates) {
-    const support = executor.supports({ blueprint: spec });
-    if (support.supported) {
-      return executor;
-    }
-
-    if (firstSupportFailure === undefined) {
-      firstSupportFailure = support;
-    }
-  }
-
-  if (firstSupportFailure !== undefined) {
-    throw createWorkerError(firstSupportFailure.reason, firstSupportFailure.message);
-  }
-
-  throw createWorkerError(
-    "unsupported-os",
-    `No executor can compile target.os.family '${requestedOsFamily}'.`,
-  );
-};
-
 const isPublishableOciImageArtifact = (
-  artifact: OsExecutorCompileResult["artifacts"][number],
-): artifact is OciImageBuildArtifact & { path: string; loader: "docker-load" } => {
+  artifact: WorkspaceBuildJobResultPayload["artifacts"][number],
+): artifact is WorkspaceBuildJobResultPayload["artifacts"][number] & {
+  kind: "oci-image";
+  path: string;
+  loader: "docker-load";
+} => {
   return (
     artifact.kind === "oci-image" &&
     artifact.path !== undefined &&
@@ -121,11 +62,11 @@ const isPublishableOciImageArtifact = (
   );
 };
 
-const selectPublishableImageArtifact = (compileResult: OsExecutorCompileResult) => {
+const selectPublishableImageArtifact = (compileResult: WorkspaceBuildJobResultPayload) => {
   const artifact = compileResult.artifacts.find(isPublishableOciImageArtifact);
 
   if (artifact === undefined) {
-    throw new Error("The executor did not return a publishable OCI image artifact.");
+    throw new Error("The compiler did not return a publishable OCI image artifact.");
   }
 
   return artifact;
@@ -332,8 +273,14 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     }
 
     const spec = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
-    const executor = selectExecutorForSpec(spec, options.executors);
-    const compileResult = await executor.compile({ blueprint: spec });
+    const compileSpec =
+      options.compileSandboxSpec ??
+      (async (
+        inputSpec: WorkspaceBuildJobRequestPayload,
+      ): Promise<WorkspaceBuildJobResultPayload> => {
+        return compileSandboxBuildSpec({ blueprint: inputSpec });
+      });
+    const compileResult = await compileSpec(spec);
     const imageArtifact = selectPublishableImageArtifact(compileResult);
     const publishedImage = await options.registryClient.publishOciImage({
       artifactPath: imageArtifact.path,

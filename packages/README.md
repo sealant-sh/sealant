@@ -12,8 +12,6 @@ The current package architecture is:
 - `rabbitmq`: business-agnostic RabbitMQ transport utilities
 - `sandboxes`: sandbox domain package covering build, publish, deploy, queue wiring, and lifecycle
   mapping
-- `workspace-composition`: core composition system with `UserWorkspaceSpec`, `WorkspaceBlueprint`,
-  normalization/defaulting, executor contracts, executor selection, and build artifact definitions
 - `package-standardization`: Repology-backed package resolution and normalization layer with
   cache-first lookups
 - `source-integrations`: source-provider integration logic such as GitHub repository selection, ref

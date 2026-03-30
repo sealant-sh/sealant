@@ -11,11 +11,6 @@ const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-n
 
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
-const booleanFromEnvSchema = z.union([
-  z.boolean(),
-  z.enum(["true", "false", "1", "0"]).transform((value) => value === "true" || value === "1"),
-]);
-
 export const workerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .extend({
@@ -29,10 +24,6 @@ export const workerEnvSchema = databaseEnvSchema
     GITHUB_APP_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
     DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
     DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
-    DEFAULT_WORKSPACE_STARTUP_MODE: z.enum(["idle", "harness"]).default("idle"),
-    DEFAULT_WORKSPACE_IDLE_COMMAND: z.string().trim().min(1).default("while :; do sleep 30; done"),
-    DEFAULT_WORKSPACE_SSH_ENABLED: booleanFromEnvSchema.default(true),
-    DEFAULT_WORKSPACE_SSH_LISTEN_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
     DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
       .string()
       .trim()

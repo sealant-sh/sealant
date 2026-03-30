@@ -68,9 +68,6 @@ importers:
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../../packages/workspace-composition
       '@standard-community/standard-json':
         specifier: ^0.3.5
         version: 0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76)
@@ -480,9 +477,6 @@ importers:
       '@sealant/validators':
         specifier: workspace:*
         version: link:../validators
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../workspace-composition
       drizzle-orm:
         specifier: ^0.44.7
         version: 0.44.7(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)(kysely@0.28.13)
@@ -543,9 +537,6 @@ importers:
       '@sealant/validators':
         specifier: workspace:*
         version: link:../validators
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../workspace-composition
       amqplib:
         specifier: ^0.10.9
         version: 0.10.9
@@ -650,19 +641,6 @@ importers:
       '@sealant/package-standardization':
         specifier: workspace:*
         version: link:../package-standardization
-      '@sealant/workspace-composition':
-        specifier: workspace:*
-        version: link:../workspace-composition
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      '@sealant/typescript':
-        specifier: workspace:*
-        version: link:../../tooling/typescript
-
-  packages/workspace-composition:
-    dependencies:
       zod:
         specifier: ^3.24.1
         version: 3.25.76

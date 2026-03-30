@@ -1,31 +1,192 @@
 import { readFile } from "node:fs/promises";
 
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
+import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
-import { BuildkitDistroOsExecutor, mapBlueprintToBuildkitImagePlan } from "./buildkit-executor.js";
+import {
+  compileSandboxBuildSpec,
+  mapBlueprintToBuildkitImagePlan,
+  selectBuildkitOsFamily,
+} from "./buildkit-executor.js";
 
-describe("BuildkitDistroOsExecutor", () => {
-  it("maps a blueprint into a resolved BuildKit image plan", () => {
-    const blueprint = normalizeUserWorkspaceSpec({
-      source: {
+const createSandboxBuildSpec = (
+  overrides: Partial<WorkspaceBuildJobRequestPayload> = {},
+): WorkspaceBuildJobRequestPayload => {
+  const base: WorkspaceBuildJobRequestPayload = {
+    version: "1",
+    sources: {
+      workspace: {
+        kind: "git",
+        provider: "generic",
         url: "https://github.com/example/repo.git",
-        authRef: "/workspace/.secrets/workspace_repo_key",
+        ref: "main",
       },
-      inputs: [
-        {
-          purpose: "dotfiles",
-          url: "https://github.com/example/dotfiles.git",
-          authRef: "/workspace/.secrets/dotfiles_key",
+      inputs: [],
+    },
+    harness: {
+      id: "opencode",
+    },
+    access: {
+      ssh: {
+        enabled: false,
+        listenPort: 2222,
+      },
+    },
+    tooling: {
+      packages: [],
+    },
+    customization: {
+      defaultShell: "bash",
+      dotfilesManager: "auto",
+      dotfilesTarget: "home",
+      applyDotfiles: true,
+      dotfilesBootstrap: true,
+    },
+    lifecycle: {
+      setup: [],
+      startup: {
+        steps: [],
+        foreground: {
+          kind: "harness",
         },
-      ],
-      harness: "opencode",
-      packages: ["nodejs", "pnpm", "tmux"],
+      },
+    },
+    runtime: {
+      env: {},
+      workspaceRoot: "/workspace",
+      workingDirectory: "/workspace/repo",
+      persistence: "ephemeral",
+      ociRuntime: "runc",
+      network: {
+        outbound: true,
+      },
+    },
+    target: {
+      os: {
+        family: "fedora",
+        mode: "prefer",
+      },
+      runtime: {
+        family: "auto",
+        mode: "prefer",
+      },
+    },
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    sources: {
+      ...base.sources,
+      ...overrides.sources,
+      workspace: {
+        ...base.sources.workspace,
+        ...overrides.sources?.workspace,
+      },
+      inputs: overrides.sources?.inputs ?? base.sources.inputs,
+    },
+    harness: {
+      ...base.harness,
+      ...overrides.harness,
+    },
+    access: {
+      ...base.access,
+      ...overrides.access,
+      ssh: {
+        ...base.access.ssh,
+        ...overrides.access?.ssh,
+      },
+    },
+    tooling: {
+      ...base.tooling,
+      ...overrides.tooling,
+      packages: overrides.tooling?.packages ?? base.tooling.packages,
+    },
+    customization: {
+      ...base.customization,
+      ...overrides.customization,
+    },
+    lifecycle: {
+      ...base.lifecycle,
+      ...overrides.lifecycle,
+      setup: overrides.lifecycle?.setup ?? base.lifecycle.setup,
+      startup: {
+        ...base.lifecycle.startup,
+        ...overrides.lifecycle?.startup,
+        steps: overrides.lifecycle?.startup?.steps ?? base.lifecycle.startup.steps,
+        foreground: overrides.lifecycle?.startup?.foreground ?? base.lifecycle.startup.foreground,
+      },
+    },
+    runtime: {
+      ...base.runtime,
+      ...overrides.runtime,
+      env: {
+        ...base.runtime.env,
+        ...overrides.runtime?.env,
+      },
+      network: {
+        ...base.runtime.network,
+        ...overrides.runtime?.network,
+      },
+    },
+    target: {
+      ...base.target,
+      ...overrides.target,
+      os: {
+        ...base.target.os,
+        ...overrides.target?.os,
+      },
+      runtime: {
+        ...base.target.runtime,
+        ...overrides.target?.runtime,
+      },
+    },
+  };
+};
+
+describe("compileSandboxBuildSpec", () => {
+  it("maps a blueprint into a resolved BuildKit image plan", () => {
+    const blueprint = createSandboxBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+          authRef: "/workspace/.secrets/workspace_repo_key",
+        },
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "generic",
+            url: "https://github.com/example/dotfiles.git",
+            ref: "main",
+            authRef: "/workspace/.secrets/dotfiles_key",
+          },
+        ],
+      },
+      tooling: {
+        packages: [{ id: "nodejs" }, { id: "pnpm" }, { id: "tmux" }],
+      },
       customization: {
         defaultShell: "zsh",
         dotfilesManager: "chezmoi",
+        dotfilesTarget: "home",
+        applyDotfiles: true,
+        dotfilesBootstrap: true,
       },
-      os: "fedora",
+      target: {
+        os: {
+          family: "fedora",
+          mode: "prefer",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
     });
 
     const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
@@ -51,23 +212,36 @@ describe("BuildkitDistroOsExecutor", () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
-    const executor = new BuildkitDistroOsExecutor({
-      osFamily: "fedora",
-      commandRunner,
-    });
-    const blueprint = normalizeUserWorkspaceSpec({
-      source: "https://github.com/example/repo.git",
-      inputs: [
-        {
-          purpose: "dotfiles",
-          provider: "github",
-          url: "https://github.com/example/dotfiles.git",
+    const blueprint = createSandboxBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
           ref: "main",
-          authRef: "github-installation-repository:gh_installation_repo_1",
         },
-      ],
-      harness: "opencode",
-      os: "fedora",
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "github",
+            url: "https://github.com/example/dotfiles.git",
+            ref: "main",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+          },
+        ],
+      },
+      target: {
+        os: {
+          family: "fedora",
+          mode: "prefer",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
     });
 
     const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
@@ -77,7 +251,12 @@ describe("BuildkitDistroOsExecutor", () => {
     });
     expect(plan.buildSecrets).toEqual([]);
 
-    const result = await executor.compile({ blueprint });
+    const result = await compileSandboxBuildSpec({
+      blueprint,
+      options: {
+        commandRunner,
+      },
+    });
     const entrypointPath = result.buildkit.spec.containerfilePath.replace(
       /Containerfile$/,
       "entrypoint.sh",
@@ -92,19 +271,42 @@ describe("BuildkitDistroOsExecutor", () => {
   });
 
   it("installs stow when the dotfiles manager is stow", () => {
-    const blueprint = normalizeUserWorkspaceSpec({
-      source: "https://github.com/example/repo.git",
-      inputs: [
-        {
-          purpose: "dotfiles",
-          url: "https://github.com/example/dotfiles.git",
+    const blueprint = createSandboxBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
         },
-      ],
-      harness: "opencode",
-      customization: {
-        dotfilesManager: "stow",
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "generic",
+            url: "https://github.com/example/dotfiles.git",
+            ref: "main",
+          },
+        ],
       },
-      os: "fedora",
+      customization: {
+        defaultShell: "bash",
+        dotfilesManager: "stow",
+        dotfilesTarget: "home",
+        applyDotfiles: true,
+        dotfilesBootstrap: true,
+      },
+      target: {
+        os: {
+          family: "fedora",
+          mode: "prefer",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
     });
 
     const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
@@ -119,18 +321,38 @@ describe("BuildkitDistroOsExecutor", () => {
 
   it("includes npm when Node.js-backed harness tooling is requested on Linux distros", () => {
     const fedoraPlan = mapBlueprintToBuildkitImagePlan(
-      normalizeUserWorkspaceSpec({
-        source: "https://github.com/example/repo.git",
-        harness: "opencode",
-        os: "fedora",
+      createSandboxBuildSpec({
+        harness: {
+          id: "opencode",
+        },
+        target: {
+          os: {
+            family: "fedora",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
       }),
       "fedora",
     );
     const archPlan = mapBlueprintToBuildkitImagePlan(
-      normalizeUserWorkspaceSpec({
-        source: "https://github.com/example/repo.git",
-        harness: "codex",
-        os: "arch",
+      createSandboxBuildSpec({
+        harness: {
+          id: "codex",
+        },
+        target: {
+          os: {
+            family: "arch",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
       }),
       "arch",
     );
@@ -153,23 +375,59 @@ describe("BuildkitDistroOsExecutor", () => {
     );
   });
 
+  it("prefers fedora when target.os.family is auto", () => {
+    const osFamily = selectBuildkitOsFamily({
+      blueprint: createSandboxBuildSpec({
+        target: {
+          os: {
+            family: "auto",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
+      }),
+    });
+
+    expect(osFamily).toBe("fedora");
+  });
+
   it("renders a build context and invokes docker build plus docker save", async () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
-    const executor = new BuildkitDistroOsExecutor({
-      osFamily: "fedora",
-      commandRunner,
-    });
-
-    const result = await executor.compile({
-      blueprint: normalizeUserWorkspaceSpec({
-        source: "https://github.com/example/repo.git",
-        harness: "opencode",
-        packages: ["git", "ripgrep"],
-        startup: "pnpm dev",
-        os: "fedora",
+    const result = await compileSandboxBuildSpec({
+      blueprint: createSandboxBuildSpec({
+        tooling: {
+          packages: [{ id: "git" }, { id: "ripgrep" }],
+        },
+        lifecycle: {
+          setup: [],
+          startup: {
+            steps: [],
+            foreground: {
+              kind: "command",
+              run: "pnpm dev",
+              shell: "bash",
+            },
+          },
+        },
+        target: {
+          os: {
+            family: "fedora",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
       }),
+      options: {
+        commandRunner,
+      },
     });
 
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
@@ -210,20 +468,32 @@ describe("BuildkitDistroOsExecutor", () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
-    const executor = new BuildkitDistroOsExecutor({
-      osFamily: "arch",
-      commandRunner,
-    });
-
-    const result = await executor.compile({
-      blueprint: normalizeUserWorkspaceSpec({
-        source: "https://github.com/example/repo.git",
-        harness: "codex",
+    const result = await compileSandboxBuildSpec({
+      blueprint: createSandboxBuildSpec({
+        harness: {
+          id: "codex",
+        },
         customization: {
           defaultShell: "zsh",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: true,
+          dotfilesBootstrap: true,
         },
-        os: "arch",
+        target: {
+          os: {
+            family: "arch",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
       }),
+      options: {
+        commandRunner,
+      },
     });
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
@@ -239,20 +509,32 @@ describe("BuildkitDistroOsExecutor", () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
-    const executor = new BuildkitDistroOsExecutor({
-      osFamily: "nix",
-      commandRunner,
-    });
-
-    const result = await executor.compile({
-      blueprint: normalizeUserWorkspaceSpec({
-        source: "https://github.com/example/repo.git",
-        harness: "codex",
+    const result = await compileSandboxBuildSpec({
+      blueprint: createSandboxBuildSpec({
+        harness: {
+          id: "codex",
+        },
         customization: {
           defaultShell: "zsh",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: true,
+          dotfilesBootstrap: true,
         },
-        os: "nix",
+        target: {
+          os: {
+            family: "nix",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
       }),
+      options: {
+        commandRunner,
+      },
     });
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
@@ -299,11 +581,20 @@ describe("BuildkitDistroOsExecutor", () => {
   });
 
   it("supports distro package passthrough for unmapped package ids", () => {
-    const blueprint = normalizeUserWorkspaceSpec({
-      source: "https://github.com/example/repo.git",
-      harness: "opencode",
-      packages: ["htop"],
-      os: "arch",
+    const blueprint = createSandboxBuildSpec({
+      tooling: {
+        packages: [{ id: "htop" }],
+      },
+      target: {
+        os: {
+          family: "arch",
+          mode: "prefer",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
     });
 
     const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch");

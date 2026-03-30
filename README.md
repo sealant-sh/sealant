@@ -70,7 +70,7 @@ every implementation lands.
 │   ├── sandboxes/
 │   ├── source-integrations/
 │   ├── validators/
-│   └── workspace-composition/
+│   └── ...
 ├── tooling/              # shared config packages and developer tooling
 │   └── README.md
 ├── .envrc                # direnv entrypoint for the Nix dev shell
@@ -129,8 +129,6 @@ Supporting integrations feed into both flows without owning either flow:
   repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job coordination
 - `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
   shared SQLite database package
-- `packages/workspace-composition/`: core composition package that owns the shared workspace
-  contracts and OS-agnostic composition model
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
@@ -199,9 +197,6 @@ over time.
   generic JSON publish/consume helpers, and topology assertion
 - `packages/sandboxes/`: sandbox domain package for BuildKit image creation, registry publishing,
   runtime adapters, queue topology, and worker orchestration
-- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
-  `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
-  artifact definitions
 - `packages/package-standardization/`: Repology-backed package resolution and normalized package
   contract utilities
 - `packages/source-integrations/`: source-provider integration package for repository selection, ref
@@ -233,19 +228,10 @@ over time.
 - `oxfmt` handles repo-wide formatting
 - `@typescript/native-preview` provides the `tsgo` CLI at the root alongside regular `typescript`
 
-## Workspace composition
+## Sandbox contracts
 
-The composition contracts now live in `packages/workspace-composition/`, and the concrete BuildKit
-OS execution path now lives in `packages/sandboxes/`.
-
-That package contains:
-
-- `UserWorkspaceSpec` and `WorkspaceBlueprint` documentation
-- normalization and defaulting helpers
-- executor and artifact contract definitions
-- shared composition contracts that feed concrete sandbox integrations such as `packages/sandboxes/`
-
-Composition documentation lives in `packages/workspace-composition/docs/`.
+The canonical sandbox build contract now lives in `packages/validators/`, and the concrete BuildKit
+compile/publish/launch path lives in `packages/sandboxes/`.
 
 ## Getting started
 

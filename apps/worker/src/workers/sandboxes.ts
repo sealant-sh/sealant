@@ -2,7 +2,6 @@ import { closeDatabaseClient, createDatabaseClientFromEnv } from "@sealant/db";
 import { closeRabbitMqSingleton } from "@sealant/rabbitmq";
 import {
   consumeWorkspaceBuildJobs,
-  createBuildkitOsExecutor,
   createZotRegistryClient,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
@@ -26,11 +25,6 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
     ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
   });
-  const executors = [
-    createBuildkitOsExecutor("fedora"),
-    createBuildkitOsExecutor("arch"),
-    createBuildkitOsExecutor("nix"),
-  ];
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       dockerSocketPath: env.DOCKER_SOCKET_PATH,
@@ -52,13 +46,8 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
           dbClient,
-          executors,
           runtimeAdapters,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
-          defaultStartupMode: env.DEFAULT_WORKSPACE_STARTUP_MODE,
-          defaultIdleCommand: env.DEFAULT_WORKSPACE_IDLE_COMMAND,
-          defaultSshEnabled: env.DEFAULT_WORKSPACE_SSH_ENABLED,
-          defaultSshListenPort: env.DEFAULT_WORKSPACE_SSH_LISTEN_PORT,
           gitHubSourceIntegration,
           registryClient,
         });

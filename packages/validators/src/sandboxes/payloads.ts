@@ -1,10 +1,7 @@
-import {
-  osExecutorCompileResultSchema,
-  workspaceBlueprintSchema,
-  type OsExecutorCompileResult,
-  type WorkspaceBlueprint,
-} from "@sealant/workspace-composition";
 import { z } from "zod";
+
+import { osExecutorCompileResultSchema, type OsExecutorCompileResult } from "./executor.js";
+import { workspaceBlueprintSchema, type WorkspaceBlueprint } from "./workspace-blueprint.js";
 
 const runtimeAdapterLaunchResultSchema = z.strictObject({
   adapter: z.enum(["docker", "k8s", "k3s"]),

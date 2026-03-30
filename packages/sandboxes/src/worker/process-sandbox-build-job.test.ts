@@ -1,7 +1,9 @@
 import type { DatabaseClient } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
-import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
-import type { OsExecutor } from "@sealant/workspace-composition";
+import type {
+  WorkspaceBuildJobRequestPayload,
+  WorkspaceBuildJobResultPayload,
+} from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RegistryClient } from "../registry/index.js";
@@ -134,6 +136,33 @@ const createRuntimeAdapterStub = (
   };
 };
 
+const createCompileResult = (
+  input: {
+    readonly id?: "nix" | "fedora" | "arch";
+    readonly path?: string;
+    readonly reference?: string;
+    readonly name?: string;
+  } = {},
+): WorkspaceBuildJobResultPayload => {
+  const id = input.id ?? "nix";
+
+  return {
+    executor: {
+      id,
+      osFamily: id,
+    },
+    artifacts: [
+      {
+        kind: "oci-image",
+        name: input.name ?? "demo",
+        path: input.path ?? "/tmp/demo.tar",
+        reference: input.reference ?? "demo:opencode",
+        loader: "docker-load",
+      },
+    ],
+  };
+};
+
 const createSandboxBuildSpec = (
   input: {
     readonly url?: string;
@@ -249,26 +278,7 @@ describe("processSandboxBuildJob", () => {
       createGitHubInstallationRepositoryCacheStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -287,15 +297,11 @@ describe("processSandboxBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
       gitHubSourceIntegration,
       registryClient,
+      compileSandboxSpec,
     });
 
     expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
@@ -351,26 +357,7 @@ describe("processSandboxBuildJob", () => {
       createGitHubInstallationRepositoryCacheStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -389,15 +376,11 @@ describe("processSandboxBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
       gitHubSourceIntegration,
       registryClient,
+      compileSandboxSpec,
     });
 
     expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
@@ -438,26 +421,7 @@ describe("processSandboxBuildJob", () => {
       createSandboxRuntimeInstanceRepositoryStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -476,14 +440,10 @@ describe("processSandboxBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
       registryClient,
+      compileSandboxSpec,
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
@@ -532,26 +492,7 @@ describe("processSandboxBuildJob", () => {
       createSandboxRuntimeInstanceRepositoryStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -570,14 +511,10 @@ describe("processSandboxBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
       registryClient,
+      compileSandboxSpec,
     });
 
     const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
@@ -622,26 +559,7 @@ describe("processSandboxBuildJob", () => {
     const runtimeRepository = createSandboxRuntimeInstanceRepositoryStub();
     vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(runtimeRepository as never);
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -659,14 +577,10 @@ describe("processSandboxBuildJob", () => {
       workerId: "worker-test",
       leaseDurationMs: 60000,
       dbClient: {} as DatabaseClient,
-      executors: [executor],
       runtimeAdapters: [runtimeAdapter],
       defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
       registryClient,
+      compileSandboxSpec,
     });
 
     expect(result?.digest).toBe("sha256:test");
@@ -714,14 +628,9 @@ describe("processSandboxBuildJob", () => {
       createSandboxRuntimeInstanceRepositoryStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => {
-        throw new Error("compile exploded");
-      }),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => {
+      throw new Error("compile exploded");
+    });
 
     await expect(
       processSandboxBuildJob({
@@ -729,14 +638,10 @@ describe("processSandboxBuildJob", () => {
         workerId: "worker-test",
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
-        executors: [executor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
-        defaultStartupMode: "idle",
-        defaultIdleCommand: "while :; do sleep 30; done",
-        defaultSshEnabled: true,
-        defaultSshListenPort: 2222,
         registryClient: {} as RegistryClient,
+        compileSandboxSpec,
       }),
     ).rejects.toThrow("compile exploded");
 
@@ -747,7 +652,7 @@ describe("processSandboxBuildJob", () => {
     expect(runRepository.markAttemptFailed).toHaveBeenCalledWith({ id: "run_123" });
   });
 
-  it("marks a job as failed when no executor is registered for the requested OS", async () => {
+  it("marks a job as failed when compilation rejects unsupported target OS", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
@@ -770,14 +675,15 @@ describe("processSandboxBuildJob", () => {
       createSandboxRuntimeInstanceRepositoryStub() as never,
     );
 
-    const nixExecutor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => {
-        throw new Error("should not run");
-      }),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => {
+      const error = new Error(
+        "No compiler is available for target.os.family 'fedora'.",
+      ) as Error & {
+        code: string;
+      };
+      error.code = "unsupported-os";
+      throw error;
+    });
 
     await expect(
       processSandboxBuildJob({
@@ -785,117 +691,19 @@ describe("processSandboxBuildJob", () => {
         workerId: "worker-test",
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
-        executors: [nixExecutor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
-        defaultStartupMode: "idle",
-        defaultIdleCommand: "while :; do sleep 30; done",
-        defaultSshEnabled: true,
-        defaultSshListenPort: 2222,
         registryClient: {} as RegistryClient,
+        compileSandboxSpec,
       }),
-    ).rejects.toThrow("No executor is registered for target.os.family 'fedora'.");
+    ).rejects.toThrow("No compiler is available for target.os.family 'fedora'.");
 
     expect(repository.markJobFailed).toHaveBeenCalledWith({
       id: "job_123",
       errorCode: "unsupported-os",
-      errorMessage: "No executor is registered for target.os.family 'fedora'.",
+      errorMessage: "No compiler is available for target.os.family 'fedora'.",
     });
     expect(repository.markJobSucceeded).not.toHaveBeenCalled();
-  });
-
-  it("prefers a non-nix executor when target.os.family is auto", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
-        id: "job_auto",
-        runId: null,
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        requestPayload: createSandboxBuildSpec({
-          osFamily: "auto",
-        }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-
-    const fedoraExecutor = {
-      id: "fedora",
-      osFamily: "fedora",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "fedora",
-          osFamily: "fedora",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo-fedora",
-            path: "/tmp/demo-fedora.tar",
-            reference: "demo-fedora:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
-
-    const nixExecutor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo-nix",
-            path: "/tmp/demo-nix.tar",
-            reference: "demo-nix:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-
-    await processSandboxBuildJob({
-      jobId: "job_auto",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      dbClient: {} as DatabaseClient,
-      executors: [fedoraExecutor, nixExecutor],
-      runtimeAdapters: [createRuntimeAdapterStub("docker")],
-      defaultRuntimeAdapterId: "docker",
-      defaultStartupMode: "idle",
-      defaultIdleCommand: "while :; do sleep 30; done",
-      defaultSshEnabled: true,
-      defaultSshListenPort: 2222,
-      registryClient,
-    });
-
-    expect(vi.mocked(fedoraExecutor.compile)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(nixExecutor.compile)).not.toHaveBeenCalled();
   });
 
   it("keeps build succeeded when runtime launch selection fails", async () => {
@@ -922,26 +730,7 @@ describe("processSandboxBuildJob", () => {
       createSandboxRuntimeInstanceRepositoryStub() as never,
     );
 
-    const executor = {
-      id: "nix",
-      osFamily: "nix",
-      supports: vi.fn(() => ({ supported: true as const })),
-      compile: vi.fn(async () => ({
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      })),
-    } as unknown as OsExecutor;
+    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
@@ -959,14 +748,10 @@ describe("processSandboxBuildJob", () => {
         workerId: "worker-test",
         leaseDurationMs: 60000,
         dbClient: {} as DatabaseClient,
-        executors: [executor],
         runtimeAdapters: [createRuntimeAdapterStub("docker")],
         defaultRuntimeAdapterId: "docker",
-        defaultStartupMode: "idle",
-        defaultIdleCommand: "while :; do sleep 30; done",
-        defaultSshEnabled: true,
-        defaultSshListenPort: 2222,
         registryClient,
+        compileSandboxSpec,
       }),
     ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");
 

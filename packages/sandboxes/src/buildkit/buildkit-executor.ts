@@ -5,21 +5,19 @@ import { dirname, join } from "node:path";
 
 import { getHarnessIntegration, type HarnessIntegration } from "@sealant/ai-harness-integrations";
 import {
+  parseWorkspaceBlueprint,
   parseBuildkitOsExecutorCompileInput,
   parseBuildkitOsExecutorCompileResult,
   parseOsExecutorSupport,
   type BuildkitBuildSpec,
-  type BuildkitOsExecutor,
   type BuildkitOsExecutorCompileResult,
   type BuildkitPackageManager,
   type BuildkitTargetOsFamily,
-  type ConcreteWorkspaceTargetOsFamily,
-  type OsExecutorCompileInput,
   type OsExecutorSupport,
   type ResolvedImagePackage,
   type ResolvedImagePlan,
   type WorkspaceBlueprint,
-} from "@sealant/workspace-composition";
+} from "@sealant/validators";
 
 export interface BuildkitCommandResult {
   readonly stdout: string;
@@ -36,9 +34,9 @@ export type BuildkitCommandRunner = (
   options?: BuildkitCommandOptions,
 ) => Promise<BuildkitCommandResult>;
 
-export interface BuildkitOsExecutorOptions {
-  readonly osFamily: BuildkitTargetOsFamily;
+export interface BuildkitCompilerOptions {
   readonly commandRunner?: BuildkitCommandRunner;
+  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
 }
 
 interface PackageMapping {
@@ -237,7 +235,13 @@ const getDotfilesSource = (blueprint: WorkspaceBlueprint) => {
   return blueprint.sources.inputs.find((input) => input.purpose === "dotfiles");
 };
 
-const getBuildkitExecutorSupport = (
+const createBuildkitCompilerError = (code: string, message: string) => {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  return error;
+};
+
+const getBuildkitSupportForOs = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): OsExecutorSupport => {
@@ -246,7 +250,7 @@ const getBuildkitExecutorSupport = (
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-os",
-      message: `The ${osFamily} BuildKit executor only supports target.os.family of auto or ${osFamily}.`,
+      message: `The ${osFamily} BuildKit compiler only supports target.os.family of auto or ${osFamily}.`,
     });
   }
 
@@ -264,7 +268,7 @@ const getBuildkitExecutorSupport = (
       return parseOsExecutorSupport({
         supported: false,
         reason: "unsupported-package",
-        message: `The ${osFamily} BuildKit executor does not support package version pinning yet: ${pkg.id}.`,
+        message: `The ${osFamily} BuildKit compiler does not support package version pinning yet: ${pkg.id}.`,
       });
     }
   }
@@ -274,7 +278,7 @@ const getBuildkitExecutorSupport = (
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: `The ${osFamily} BuildKit executor currently supports only dotfiles input sources, received '${unsupportedInput.purpose}'.`,
+      message: `The ${osFamily} BuildKit compiler currently supports only dotfiles input sources, received '${unsupportedInput.purpose}'.`,
     });
   }
 
@@ -283,11 +287,51 @@ const getBuildkitExecutorSupport = (
     return parseOsExecutorSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: `The ${osFamily} BuildKit executor currently supports only one dotfiles input source.`,
+      message: `The ${osFamily} BuildKit compiler currently supports only one dotfiles input source.`,
     });
   }
 
   return parseOsExecutorSupport({ supported: true });
+};
+
+const defaultAutoOsFamilyOrder: readonly BuildkitTargetOsFamily[] = ["fedora", "arch", "nix"];
+
+const resolveCandidateOsFamilies = (
+  blueprint: WorkspaceBlueprint,
+  autoOsFamilyOrder: readonly BuildkitTargetOsFamily[],
+): readonly BuildkitTargetOsFamily[] => {
+  if (blueprint.target.os.family === "auto") {
+    return autoOsFamilyOrder;
+  }
+
+  return [blueprint.target.os.family];
+};
+
+export const selectBuildkitOsFamily = (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+}): BuildkitTargetOsFamily => {
+  const autoOsFamilyOrder = input.autoOsFamilyOrder ?? defaultAutoOsFamilyOrder;
+  const candidates = resolveCandidateOsFamilies(input.blueprint, autoOsFamilyOrder);
+
+  let firstFailure: Exclude<OsExecutorSupport, { supported: true }> | undefined;
+
+  for (const candidate of candidates) {
+    const support = getBuildkitSupportForOs(input.blueprint, candidate);
+    if (support.supported) {
+      return candidate;
+    }
+
+    if (firstFailure === undefined) {
+      firstFailure = support;
+    }
+  }
+
+  if (firstFailure !== undefined) {
+    throw createBuildkitCompilerError(firstFailure.reason, firstFailure.message);
+  }
+
+  throw createBuildkitCompilerError("unsupported-os", "No BuildKit target OS is available.");
 };
 
 const resolveHarnessIntegration = (blueprint: WorkspaceBlueprint): HarnessIntegration => {
@@ -348,7 +392,7 @@ const mapBlueprintToResolvedImagePlan = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePlan => {
-  const support = getBuildkitExecutorSupport(blueprint, osFamily);
+  const support = getBuildkitSupportForOs(blueprint, osFamily);
   if (!support.supported) {
     throw new Error(support.message);
   }
@@ -940,83 +984,59 @@ const buildImageTarball = async (
   });
 };
 
-export class BuildkitDistroOsExecutor implements BuildkitOsExecutor {
-  public readonly buildTool = "buildkit" as const;
+export const compileSandboxBuildSpec = async (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly options?: BuildkitCompilerOptions;
+}): Promise<BuildkitOsExecutorCompileResult> => {
+  const parsed = parseBuildkitOsExecutorCompileInput({
+    blueprint: parseWorkspaceBlueprint(input.blueprint),
+  });
+  const osFamily = selectBuildkitOsFamily({
+    blueprint: parsed.blueprint,
+    ...(input.options?.autoOsFamilyOrder === undefined
+      ? {}
+      : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
+  });
+  const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily);
+  const buildContext = await writeBuildContext(imagePlan);
+  const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
 
-  public readonly id: ConcreteWorkspaceTargetOsFamily;
+  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner);
 
-  public readonly osFamily: BuildkitTargetOsFamily;
-
-  private readonly commandRunner: BuildkitCommandRunner;
-
-  public constructor(options: BuildkitOsExecutorOptions) {
-    this.osFamily = options.osFamily;
-    this.id = options.osFamily;
-    this.commandRunner = options.commandRunner ?? defaultCommandRunner;
-  }
-
-  public supports(input: OsExecutorCompileInput): OsExecutorSupport {
-    const parsed = parseBuildkitOsExecutorCompileInput(input);
-    return getBuildkitExecutorSupport(parsed.blueprint, this.osFamily);
-  }
-
-  public async compile(input: OsExecutorCompileInput): Promise<BuildkitOsExecutorCompileResult> {
-    const parsed = parseBuildkitOsExecutorCompileInput(input);
-    const support = this.supports(parsed);
-
-    if (!support.supported) {
-      throw new Error(support.message);
-    }
-
-    const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, this.osFamily);
-    const buildContext = await writeBuildContext(imagePlan);
-    await buildImageTarball(buildContext.spec, buildContext.imageTarPath, this.commandRunner);
-
-    return parseBuildkitOsExecutorCompileResult({
-      executor: {
-        id: this.id,
-        osFamily: this.osFamily,
+  return parseBuildkitOsExecutorCompileResult({
+    executor: {
+      id: osFamily,
+      osFamily,
+    },
+    artifacts: [
+      {
+        kind: "oci-image",
+        name: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+        path: buildContext.imageTarPath,
+        reference: buildContext.spec.imageReference,
+        loader: "docker-load",
       },
-      artifacts: [
-        {
-          kind: "oci-image",
-          name: defaultImageNameForBlueprint(parsed.blueprint, this.osFamily),
-          path: buildContext.imageTarPath,
-          reference: buildContext.spec.imageReference,
-          loader: "docker-load",
-        },
-        {
-          kind: "metadata",
-          name: `${defaultImageNameForBlueprint(parsed.blueprint, this.osFamily)}-image-plan`,
-          path: buildContext.imagePlanPath,
-          format: "json",
-        },
-        {
-          kind: "metadata",
-          name: `${defaultImageNameForBlueprint(parsed.blueprint, this.osFamily)}-buildkit-spec`,
-          path: buildContext.buildSpecPath,
-          format: "json",
-        },
-      ],
-      metadata: {
-        defaultArtifactName: defaultImageNameForBlueprint(parsed.blueprint, this.osFamily),
-        notes: [`Compiled by the ${this.osFamily} BuildKit OS executor.`],
+      {
+        kind: "metadata",
+        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-image-plan`,
+        path: buildContext.imagePlanPath,
+        format: "json",
       },
-      buildkit: {
-        imagePlan,
-        spec: buildContext.spec,
+      {
+        kind: "metadata",
+        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-buildkit-spec`,
+        path: buildContext.buildSpecPath,
+        format: "json",
       },
-    });
-  }
-}
-
-export const createBuildkitOsExecutor = (
-  osFamily: BuildkitTargetOsFamily,
-  options: Omit<BuildkitOsExecutorOptions, "osFamily"> = {},
-) => {
-  return new BuildkitDistroOsExecutor({
-    osFamily,
-    ...options,
+    ],
+    metadata: {
+      defaultArtifactName: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+      notes: [`Compiled by the ${osFamily} BuildKit compiler.`],
+    },
+    buildkit: {
+      imagePlan,
+      spec: buildContext.spec,
+    },
   });
 };
 
