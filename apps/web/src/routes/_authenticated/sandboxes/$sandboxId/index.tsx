@@ -987,7 +987,7 @@ function buildSshCommand(endpoint: string | undefined): string | null {
     // Copy command behavior differs between direct runtime SSH and gateway SSH.
     // Gateway commands include an identity key to reduce setup friction.
     const identityFlags = shouldIncludeSandboxSshIdentityFlag(parsed)
-      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes -o WarnWeakCrypto=no`
+      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes`
       : "";
 
     if (parsed.port !== undefined) {
