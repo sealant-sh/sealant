@@ -6,15 +6,14 @@ import type {
   SandboxAttemptRepository,
   SandboxRepository,
   SandboxRuntimeInstanceRepository,
-  WorkspaceBuildJobRepository,
+  SandboxBuildJobRepository,
 } from "@sealant/db";
-import type { PackageStandardizer } from "@sealant/package-standardization";
-import type { RegistryClient } from "@sealant/registry-integration";
+import type { PackageStandardizer, RegistryClient } from "@sealant/sandboxes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 
 import type { AppEnv } from "../env.js";
 
-export interface WorkspaceBuildJobPublisher {
+export interface SandboxBuildJobPublisher {
   publishRequested(input: { jobId: string }): Promise<void>;
 }
 
@@ -22,8 +21,8 @@ export interface AppBindings {
   Variables: {
     env: AppEnv;
     registryClient: RegistryClient;
-    workspaceBuildJobPublisher: WorkspaceBuildJobPublisher;
-    workspaceBuildJobRepository: WorkspaceBuildJobRepository;
+    sandboxBuildJobPublisher: SandboxBuildJobPublisher;
+    sandboxBuildJobRepository: SandboxBuildJobRepository;
     packageStandardizer: PackageStandardizer;
     gitHubSourceIntegration?: GitHubSourceIntegration;
     gitHubInstallationRepository?: GitHubInstallationRepository;
@@ -39,8 +38,8 @@ export interface AppBindings {
 export interface AppRuntimeConfig {
   readonly env: AppEnv;
   readonly registryClient: RegistryClient;
-  readonly workspaceBuildJobPublisher: WorkspaceBuildJobPublisher;
-  readonly workspaceBuildJobRepository: WorkspaceBuildJobRepository;
+  readonly sandboxBuildJobPublisher: SandboxBuildJobPublisher;
+  readonly sandboxBuildJobRepository: SandboxBuildJobRepository;
   readonly packageStandardizer?: PackageStandardizer;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
   readonly gitHubInstallationRepository?: GitHubInstallationRepository;

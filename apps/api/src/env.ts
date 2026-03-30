@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import { databaseEnvSchema } from "@sealant/db";
-import { rabbitMqEnvSchema } from "@sealant/workspace-build-queue";
+import { rabbitMqEnvSchema } from "@sealant/rabbitmq";
 import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 
@@ -119,9 +119,9 @@ const loadAppDotenvFiles = (processEnv: NodeJS.ProcessEnv): void => {
   };
   const protectedKeys = new Set(Object.keys(processEnv));
   const apiDirectory = fileURLToPath(new URL("..", import.meta.url));
-  const workspaceRoot = fileURLToPath(new URL("../../..", import.meta.url));
+  const sandboxRoot = fileURLToPath(new URL("../../..", import.meta.url));
   const workingDirectory = runtimeProcess.process?.cwd?.();
-  const candidateDirectories = [workspaceRoot, apiDirectory];
+  const candidateDirectories = [sandboxRoot, apiDirectory];
 
   if (workingDirectory !== undefined && !candidateDirectories.includes(workingDirectory)) {
     candidateDirectories.push(workingDirectory);

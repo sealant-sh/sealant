@@ -15,14 +15,14 @@ import {
   sandboxAttemptTriggerTypeValues,
   sandboxes,
   sandboxStatusValues,
-  workspaceBuildJobs,
+  sandboxBuildJobs,
 } from "./schema.js";
 
-export const workspaceBuildJobSelectSchema = createSelectSchema(workspaceBuildJobs);
+export const sandboxBuildJobSelectSchema = createSelectSchema(sandboxBuildJobs);
 
-export const workspaceBuildJobInsertSchema = createInsertSchema(workspaceBuildJobs);
+export const sandboxBuildJobInsertSchema = createInsertSchema(sandboxBuildJobs);
 
-export const workspaceBuildJobStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
+export const sandboxBuildJobStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
 
 export const sandboxAttemptSelectSchema = createSelectSchema(sandboxAttempts);
 

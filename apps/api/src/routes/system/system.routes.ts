@@ -1,18 +1,7 @@
+import { healthResponseSchema, indexResponseSchema } from "@sealant/validators";
 import { describeRoute, resolver } from "hono-openapi";
-import { z } from "zod";
 
 const tags = ["System"];
-
-export const indexResponseSchema = z.object({
-  name: z.string(),
-  version: z.string(),
-  docsPath: z.string(),
-  openApiPath: z.string(),
-});
-
-export const healthResponseSchema = z.object({
-  status: z.literal("ok"),
-});
 
 export const indexRoute = describeRoute({
   tags,

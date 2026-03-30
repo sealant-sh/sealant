@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { ProfileRows } from "@/components/app/profile-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
-import { PROFILES } from "@/lib/navigation/workspace-data";
+import { SandboxPage } from "@/components/app/sandbox-page";
+import { PROFILES } from "@/lib/navigation/sandbox-data";
 
 export const Route = createFileRoute("/_authenticated/profiles/" as never)({
   component: ProfilesPage,
@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_authenticated/profiles/" as never)({
 
 function ProfilesPage() {
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Profiles"
       title="Reusable environments"
       description="Profiles define repeatable runtime context so runs and issue delegation stay deterministic across teams."
@@ -27,6 +27,6 @@ function ProfilesPage() {
       ]}
     >
       <ProfileRows profiles={PROFILES} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

@@ -9,26 +9,25 @@ import type {
   SandboxRepository,
   SandboxRuntimeInstance,
   SandboxRuntimeInstanceRepository,
-  WorkspaceBuildJob,
-  WorkspaceBuildJobRepository,
+  SandboxBuildJob,
+  SandboxBuildJobRepository,
 } from "@sealant/db";
 import {
-  packageResolutionSchema,
+  type RegistryClient,
   type PackageStandardizer,
   type PackageTargetOs,
-} from "@sealant/package-standardization";
-import type { RegistryClient } from "@sealant/registry-integration";
+} from "@sealant/sandboxes";
 import type {
   GitHubRemoteInstallation,
   GitHubRemoteInstallationRepository,
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
-import { normalizeUserWorkspaceSpec } from "@sealant/workspace-composition";
+import { packageResolutionSchema, type NewSandbox } from "@sealant/validators";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
 import type { AppEnv } from "./env.js";
-import type { WorkspaceBuildJobPublisher } from "./lib/types.js";
+import type { SandboxBuildJobPublisher } from "./lib/types.js";
 
 const testEnv: AppEnv = {
   DATABASE_BUSY_TIMEOUT_MS: 5000,
@@ -45,10 +44,85 @@ const testEnv: AppEnv = {
   REPOLOGY_REQUEST_TIMEOUT_MS: 10_000,
   REPOLOGY_MINIMUM_INTERVAL_MS: 1_000,
   GITHUB_API_BASE_URL: "https://api.github.com",
-  WORKSPACE_BUILD_QUEUE_PREFETCH: 1,
+  SANDBOX_BUILD_QUEUE_PREFETCH: 1,
 };
 
 const testUserId = "user_test";
+
+const createSandboxBuildSpec = (
+  input: {
+    readonly url?: string;
+    readonly ref?: string;
+    readonly authRef?: string;
+    readonly osFamily?: "auto" | "nix" | "fedora" | "arch";
+    readonly runtimeFamily?: "auto" | "docker" | "k8s" | "k3s";
+    readonly runtimeMode?: "prefer" | "require";
+    readonly ociRuntime?: "runc" | "runsc";
+    readonly inputSources?: NewSandbox["sources"]["inputs"];
+  } = {},
+): NewSandbox => {
+  return {
+    version: "1",
+    sources: {
+      sandbox: {
+        kind: "git",
+        provider: "generic",
+        url: input.url ?? "https://github.com/example/repo",
+        ref: input.ref ?? "main",
+        ...(input.authRef === undefined ? {} : { authRef: input.authRef }),
+      },
+      inputs: input.inputSources ?? [],
+    },
+    harness: {
+      id: "opencode",
+    },
+    access: {
+      ssh: {
+        enabled: false,
+        listenPort: 2222,
+      },
+    },
+    tooling: {
+      packages: [],
+    },
+    customization: {
+      defaultShell: "bash",
+      dotfilesManager: "auto",
+      dotfilesTarget: "home",
+      applyDotfiles: true,
+      dotfilesBootstrap: true,
+    },
+    lifecycle: {
+      setup: [],
+      startup: {
+        steps: [],
+        foreground: {
+          kind: "harness",
+        },
+      },
+    },
+    runtime: {
+      env: {},
+      sandboxRoot: "/sandbox",
+      workingDirectory: "/sandbox/repo",
+      persistence: "ephemeral",
+      ociRuntime: input.ociRuntime ?? "runc",
+      network: {
+        outbound: true,
+      },
+    },
+    target: {
+      os: {
+        family: input.osFamily ?? "auto",
+        mode: "prefer",
+      },
+      runtime: {
+        family: input.runtimeFamily ?? "auto",
+        mode: input.runtimeMode ?? "prefer",
+      },
+    },
+  };
+};
 
 type SandboxAttemptRecord = Awaited<ReturnType<SandboxAttemptRepository["createQueuedAttempt"]>>;
 type SandboxAttemptSnapshotRecord = Awaited<
@@ -57,11 +131,11 @@ type SandboxAttemptSnapshotRecord = Awaited<
 type SandboxRecord = Awaited<ReturnType<SandboxRepository["createSandbox"]>>;
 type RepositoryRecord = Awaited<ReturnType<RepositoryProfileRepository["upsertRepository"]>>;
 
-const workspaceBuildJobByCreatedAtDesc = (left: WorkspaceBuildJob, right: WorkspaceBuildJob) => {
+const sandboxBuildJobByCreatedAtDesc = (left: SandboxBuildJob, right: SandboxBuildJob) => {
   return right.createdAt.getTime() - left.createdAt.getTime();
 };
 
-const withWorkspaceBuildJobUpdatedAt = (job: WorkspaceBuildJob): WorkspaceBuildJob => {
+const withSandboxBuildJobUpdatedAt = (job: SandboxBuildJob): SandboxBuildJob => {
   return {
     ...job,
     updatedAt: new Date(),
@@ -102,17 +176,17 @@ const createRegistryClientStub = (): RegistryClient => {
       },
     ],
     publishOciImage: async () => ({
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tag: "opencode",
-      reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+      digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
       digest: "sha256:test",
     }),
   };
 };
 
-const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository => {
-  const jobs = new Map<string, WorkspaceBuildJob>();
+const createSandboxBuildJobRepositoryStub = (): SandboxBuildJobRepository => {
+  const jobs = new Map<string, SandboxBuildJob>();
 
   return {
     claimJobById: async () => null,
@@ -124,11 +198,11 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
     getLatestJobByRunId: async (runId) => {
       return [...jobs.values()]
         .filter((job) => job.runId === runId)
-        .toSorted(workspaceBuildJobByCreatedAtDesc)[0];
+        .toSorted(sandboxBuildJobByCreatedAtDesc)[0];
     },
     insertQueuedJob: async (input) => {
       const now = new Date();
-      const job: WorkspaceBuildJob = {
+      const job: SandboxBuildJob = {
         id: input.id,
         runId: input.runId ?? null,
         status: "queued",
@@ -145,7 +219,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
         workerId: null,
         startedAt: null,
         finishedAt: null,
-        executorId: null,
+        builderId: null,
         resultPayload: null,
         publishedReference: null,
         publishedDigestReference: null,
@@ -164,12 +238,12 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       return [...jobs.values()].filter((job) => job.status === status);
     },
     listLatestJobsByRunIds: async (runIds) => {
-      const latestJobsByRunId = new Map<string, WorkspaceBuildJob>();
+      const latestJobsByRunId = new Map<string, SandboxBuildJob>();
 
       for (const runId of runIds) {
         const latestJob = [...jobs.values()]
           .filter((job) => job.runId === runId)
-          .toSorted(workspaceBuildJobByCreatedAtDesc)[0];
+          .toSorted(sandboxBuildJobByCreatedAtDesc)[0];
 
         if (latestJob !== undefined) {
           latestJobsByRunId.set(runId, latestJob);
@@ -185,7 +259,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
         return null;
       }
 
-      const next = withWorkspaceBuildJobUpdatedAt({
+      const next = withSandboxBuildJobUpdatedAt({
         ...existing,
         status: "failed",
         errorCode: input.errorCode ?? null,
@@ -205,7 +279,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       }
 
       const now = input.now ?? new Date();
-      const next = withWorkspaceBuildJobUpdatedAt({
+      const next = withSandboxBuildJobUpdatedAt({
         ...existing,
         status: "running",
         workerId: input.workerId,
@@ -224,10 +298,10 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
         return null;
       }
 
-      const next = withWorkspaceBuildJobUpdatedAt({
+      const next = withSandboxBuildJobUpdatedAt({
         ...existing,
         status: "succeeded",
-        executorId: input.executorId,
+        builderId: input.builderId,
         resultPayload: input.resultPayload ?? null,
         publishedReference: input.publishedReference,
         publishedDigestReference: input.publishedDigestReference,
@@ -241,7 +315,7 @@ const createWorkspaceBuildJobRepositoryStub = (): WorkspaceBuildJobRepository =>
       jobs.set(next.id, next);
       return next;
     },
-  } satisfies WorkspaceBuildJobRepository;
+  } satisfies SandboxBuildJobRepository;
 };
 
 const createSandboxRepositoryStub = (
@@ -519,9 +593,9 @@ const createSandboxAttemptRepositoryStub = (
       const existing = snapshots.get(input.runId);
       const snapshot: SandboxAttemptSnapshotRecord = {
         runId: input.runId,
-        userSpecPayload: input.userSpecPayload,
-        resolvedSpecPayload: input.resolvedSpecPayload,
-        blueprintPayload: input.blueprintPayload,
+        userSpecPayload: input.specPayload,
+        resolvedSpecPayload: input.specPayload,
+        blueprintPayload: input.specPayload,
         profileConfigSnapshot: input.profileConfigSnapshot ?? null,
         repositoryProfileConfigSnapshot: input.repositoryProfileConfigSnapshot ?? null,
         createdAt: existing?.createdAt ?? new Date(),
@@ -578,7 +652,7 @@ const createSandboxRuntimeInstanceRepositoryStub = (
   } satisfies SandboxRuntimeInstanceRepository;
 };
 
-const createWorkspaceBuildJobPublisherStub = (): WorkspaceBuildJobPublisher => {
+const createSandboxBuildJobPublisherStub = (): SandboxBuildJobPublisher => {
   return {
     publishRequested: async () => undefined,
   };
@@ -911,8 +985,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -930,20 +1004,20 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
     });
 
     const response = await app.request(
-      "/v1/registries/default/tags?repository=sealant/workspaces/demo",
+      "/v1/registries/default/tags?repository=sealant/sandboxes/demo",
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tags: ["latest", "opencode"],
     });
   });
@@ -952,8 +1026,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -980,8 +1054,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       packageStandardizer: createPackageStandardizerStub(calls),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
@@ -1002,8 +1076,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       packageStandardizer: createPackageStandardizerStub(calls),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
@@ -1023,8 +1097,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1044,8 +1118,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1065,8 +1139,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1086,7 +1160,7 @@ describe("createApiApp", () => {
     expect(body.info.title).toBe("Sealant Control Plane API");
     expect(body.paths["/v1/registries/{registryId}/ping"]).toBeDefined();
     expect(body.paths["/healthz"]).toBeDefined();
-    expect(body.paths["/v1/workspace-build-jobs"]).toBeDefined();
+    expect(body.paths["/v1/sandbox-build-jobs"]).toBeUndefined();
     expect(body.paths["/v1/sandboxes"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/name"]).toBeDefined();
@@ -1104,8 +1178,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
         installations: [
           {
@@ -1166,8 +1240,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       gitHubSourceIntegration: createGitHubSourceIntegrationStub({
         installations: [
           {
@@ -1282,8 +1356,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       gitHubSourceIntegration: createGitHubSourceIntegrationStub({
         repositoriesByInstallationExternalId: {
           "1001": [],
@@ -1330,173 +1404,14 @@ describe("createApiApp", () => {
     });
   });
 
-  it("creates and queues a workspace build job", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
-      sandboxRepository: createSandboxRepositoryStub(),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        ownerUserId: testUserId,
-        registryId: "default",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
-      }),
-    });
-
-    expect(response.status).toBe(202);
-
-    const body = (await response.json()) as {
-      jobId: string;
-      runId: string;
-      status: string;
-      repository: string;
-    };
-
-    expect(body.runId).toBeDefined();
-    expect(body.status).toBe("queued");
-    expect(body.repository).toBe("sealant/workspaces/demo");
-
-    const savedJob = await repository.getJobById(body.jobId);
-    expect(savedJob?.status).toBe("queued");
-    expect(savedJob?.runId).toBe(body.runId);
-  });
-
-  it("returns 404 when owner user does not exist", async () => {
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
-      sandboxRepository: createSandboxRepositoryStub({
-        knownUserIds: [testUserId],
-      }),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub({
-        knownUserIds: [testUserId],
-      }),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        ownerUserId: "missing-user",
-        registryId: "default",
-        repository: "sealant/workspaces/demo",
-        tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
-      }),
-    });
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({
-      message: "Unknown owner user: missing-user",
-    });
-  });
-
-  it("returns durable workspace build job details", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
-    const queuedJob = await repository.insertQueuedJob({
-      id: "job_test",
-      registryId: "default",
-      repository: "sealant/workspaces/demo",
-      tag: "opencode",
-      requestPayload: {
-        source: "https://github.com/example/repo",
-        harness: "opencode",
-        os: "nix",
-      },
-    });
-
-    await repository.markJobSucceeded({
-      id: queuedJob.id,
-      executorId: "nix",
-      resultPayload: {
-        executor: {
-          id: "nix",
-          osFamily: "nix",
-        },
-        artifacts: [
-          {
-            kind: "oci-image",
-            name: "demo",
-            path: "/tmp/demo.tar",
-            reference: "demo:opencode",
-            loader: "docker-load",
-          },
-        ],
-      },
-      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
-      publishedDigest: "sha256:test",
-    });
-
-    const app = createApiApp({
-      env: testEnv,
-      registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
-      sandboxRepository: createSandboxRepositoryStub(),
-      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
-      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
-    });
-
-    const response = await app.request("/v1/workspace-build-jobs/job_test");
-
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as {
-      jobId: string;
-      status: string;
-      publishedImage?: {
-        digest: string;
-      };
-      executorId?: string;
-    };
-
-    expect(body.jobId).toBe("job_test");
-    expect(body.status).toBe("succeeded");
-    expect(body.executorId).toBe("nix");
-    expect(body.publishedImage?.digest).toBe("sha256:test");
-  });
-
   it("creates sandboxes via the sandbox route", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
+    const repository = createSandboxBuildJobRepositoryStub();
     const sandboxRepository = createSandboxRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: repository,
       sandboxRepository,
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1510,16 +1425,12 @@ describe("createApiApp", () => {
       body: JSON.stringify({
         ownerUserId: testUserId,
         registryId: "default",
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-          runtime: {
-            ociRuntime: "runsc",
-          },
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+          ociRuntime: "runsc",
+        }),
       }),
     });
 
@@ -1546,14 +1457,14 @@ describe("createApiApp", () => {
   });
 
   it("creates sandboxes from a granted GitHub installation repository", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
+    const repository = createSandboxBuildJobRepositoryStub();
     const sandboxRepository = createSandboxRepositoryStub();
     const attemptRepository = createSandboxAttemptRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: repository,
       gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
         installations: [
           {
@@ -1618,7 +1529,7 @@ describe("createApiApp", () => {
       body: JSON.stringify({
         ownerUserId: testUserId,
         registryId: "default",
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         sourceSelection: {
           provider: "github",
@@ -1626,11 +1537,9 @@ describe("createApiApp", () => {
           installationRepositoryId: "gh_installation_repo_1",
           ref: "main",
         },
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       }),
     });
 
@@ -1648,7 +1557,7 @@ describe("createApiApp", () => {
     expect(savedAttempt?.repositoryId).toBe("repo_core");
 
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
-    expect(savedJob?.requestPayload.source).toEqual({
+    expect(savedJob?.requestPayload.sources.sandbox).toEqual({
       kind: "git",
       provider: "github",
       url: "https://github.com/sealant-ops/core.git",
@@ -1658,13 +1567,13 @@ describe("createApiApp", () => {
   });
 
   it("attaches a GitHub-selected dotfiles config repo to spec inputs", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
+    const repository = createSandboxBuildJobRepositoryStub();
     const sandboxRepository = createSandboxRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: repository,
       gitHubInstallationRepository: createGitHubInstallationRepositoryStub({
         installations: [
           {
@@ -1729,7 +1638,7 @@ describe("createApiApp", () => {
       body: JSON.stringify({
         ownerUserId: testUserId,
         registryId: "default",
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         dotfilesSelection: {
           provider: "github",
@@ -1737,11 +1646,9 @@ describe("createApiApp", () => {
           installationRepositoryId: "gh_installation_repo_1",
           ref: "main",
         },
-        spec: {
-          source: "https://github.com/example/repo",
-          harness: "opencode",
-          os: "nix",
-        },
+        spec: createSandboxBuildSpec({
+          osFamily: "nix",
+        }),
       }),
     });
 
@@ -1750,6 +1657,7 @@ describe("createApiApp", () => {
     const savedJob = [...(await repository.listJobsByStatus("queued"))][0];
     expect(savedJob?.requestPayload.sources?.inputs).toEqual([
       {
+        id: "dotfiles-gh_installation_repo_1",
         kind: "git",
         purpose: "dotfiles",
         provider: "github",
@@ -1765,8 +1673,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository,
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1807,13 +1715,13 @@ describe("createApiApp", () => {
   });
 
   it("replays idempotent sandbox create with the same sandbox id", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
+    const repository = createSandboxBuildJobRepositoryStub();
     const sandboxRepository = createSandboxRepositoryStub();
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: repository,
       sandboxRepository,
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -1822,13 +1730,11 @@ describe("createApiApp", () => {
     const requestBody = JSON.stringify({
       ownerUserId: testUserId,
       registryId: "default",
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tag: "opencode",
-      spec: {
-        source: "https://github.com/example/repo",
-        harness: "opencode",
-        os: "nix",
-      },
+      spec: createSandboxBuildSpec({
+        osFamily: "nix",
+      }),
     });
 
     const firstResponse = await app.request("/v1/sandboxes", {
@@ -1857,7 +1763,7 @@ describe("createApiApp", () => {
   });
 
   it("lists and fetches sandbox lifecycle details by sandbox id", async () => {
-    const repository = createWorkspaceBuildJobRepositoryStub();
+    const repository = createSandboxBuildJobRepositoryStub();
     const sandboxRepository = createSandboxRepositoryStub();
     const runs = createSandboxAttemptRepositoryStub();
     const now = new Date();
@@ -1875,17 +1781,13 @@ describe("createApiApp", () => {
       requestedByUserId: testUserId,
       queuedAt: now,
     });
-    const requestSpec = {
-      source: "https://github.com/example/repo",
-      harness: "opencode",
-      os: "nix",
-    } as const;
+    const requestSpec = createSandboxBuildSpec({
+      osFamily: "nix",
+    });
 
     await runs.setAttemptSnapshot({
       runId: run.id,
-      userSpecPayload: requestSpec,
-      resolvedSpecPayload: requestSpec,
-      blueprintPayload: normalizeUserWorkspaceSpec(requestSpec),
+      specPayload: requestSpec,
     });
 
     await sandboxRepository.linkSandboxAttempt({
@@ -1901,7 +1803,7 @@ describe("createApiApp", () => {
       id: "job_ready",
       runId: run.id,
       registryId: "default",
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tag: "opencode",
       requestPayload: {
         ...requestSpec,
@@ -1910,9 +1812,9 @@ describe("createApiApp", () => {
 
     await repository.markJobSucceeded({
       id: queuedJob.id,
-      executorId: "nix",
+      builderId: "nix",
       resultPayload: {
-        executor: {
+        builder: {
           id: "nix",
           osFamily: "nix",
         },
@@ -1926,8 +1828,8 @@ describe("createApiApp", () => {
           },
         ],
       },
-      publishedReference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      publishedDigestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      publishedReference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+      publishedDigestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
       publishedDigest: "sha256:test",
     });
 
@@ -1956,8 +1858,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: repository,
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: repository,
       sandboxRepository,
       sandboxAttemptRepository: runs,
       sandboxRuntimeInstanceRepository: runtimeInstances,
@@ -1988,11 +1890,11 @@ describe("createApiApp", () => {
       sandboxId: string;
       status: string;
       spec?: {
-        harness: string;
-      };
-      blueprint?: {
+        harness?: {
+          id: string;
+        };
         sources?: {
-          workspace?: {
+          sandbox?: {
             url: string;
             ref: string;
           };
@@ -2002,9 +1904,9 @@ describe("createApiApp", () => {
 
     expect(detailBody.sandboxId).toBe("sandbox_ready");
     expect(detailBody.status).toBe("ready");
-    expect(detailBody.spec?.harness).toBe("opencode");
-    expect(detailBody.blueprint?.sources?.workspace?.url).toBe("https://github.com/example/repo");
-    expect(detailBody.blueprint?.sources?.workspace?.ref).toBe("main");
+    expect(detailBody.spec?.harness?.id).toBe("opencode");
+    expect(detailBody.spec?.sources?.sandbox?.url).toBe("https://github.com/example/repo");
+    expect(detailBody.spec?.sources?.sandbox?.ref).toBe("main");
 
     const attemptsResponse = await app.request("/v1/sandboxes/sandbox_ready/attempts?limit=10");
     expect(attemptsResponse.status).toBe(200);
@@ -2015,7 +1917,9 @@ describe("createApiApp", () => {
         relation: string;
         status: string;
         spec?: {
-          harness: string;
+          harness?: {
+            id: string;
+          };
         };
       }>;
     };
@@ -2024,7 +1928,7 @@ describe("createApiApp", () => {
     expect(attemptsBody.items[0]?.attemptId).toBe("run_ready");
     expect(attemptsBody.items[0]?.relation).toBe("launch");
     expect(attemptsBody.items[0]?.status).toBe("ready");
-    expect(attemptsBody.items[0]?.spec?.harness).toBe("opencode");
+    expect(attemptsBody.items[0]?.spec?.harness?.id).toBe("opencode");
 
     const eventsResponse = await app.request("/v1/sandboxes/sandbox_ready/events?limit=20");
     expect(eventsResponse.status).toBe(200);
@@ -2101,8 +2005,8 @@ describe("createApiApp", () => {
         SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: "sandbox",
       },
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository,
       sandboxAttemptRepository: runs,
       sandboxRuntimeInstanceRepository: runtimeInstances,
@@ -2209,8 +2113,8 @@ describe("createApiApp", () => {
         SANDBOX_SSH_GATEWAY_TOKEN: "gateway-secret",
       },
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository,
       sandboxAttemptRepository: runs,
       sandboxRuntimeInstanceRepository: runtimeInstances,
@@ -2246,8 +2150,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
@@ -2270,8 +2174,8 @@ describe("createApiApp", () => {
     const app = createApiApp({
       env: testEnv,
       registryClient: createRegistryClientStub(),
-      workspaceBuildJobPublisher: createWorkspaceBuildJobPublisherStub(),
-      workspaceBuildJobRepository: createWorkspaceBuildJobRepositoryStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
       sandboxRepository: createSandboxRepositoryStub(),
       sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
       sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),

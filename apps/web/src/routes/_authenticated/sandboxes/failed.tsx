@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { SandboxPage } from "@/components/app/sandbox-page";
 import { SandboxRows } from "@/components/app/sandbox-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
 import { failedSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
 export const Route = createFileRoute("/_authenticated/sandboxes/failed")({
@@ -15,7 +15,7 @@ function FailedSandboxesPage() {
   const failedSandboxes = Route.useLoaderData().items;
 
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Sandboxes"
       title="Failed sandboxes"
       description="Review failed builds, inspect traces, and rerun sandboxes with full execution context in one place."
@@ -32,6 +32,6 @@ function FailedSandboxesPage() {
       ]}
     >
       <SandboxRows sandboxes={failedSandboxes} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

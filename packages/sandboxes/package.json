@@ -1,0 +1,27 @@
+{
+  "name": "@sealant/sandboxes",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sandbox image lifecycle package: build, publish, deploy, and orchestration",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sealant/db": "link:../db",
+    "@sealant/rabbitmq": "link:../rabbitmq",
+    "@sealant/source-integrations": "link:../source-integrations",
+    "@sealant/validators": "link:../validators",
+    "amqplib": "^0.10.9",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "link:../../tooling/typescript",
+    "@types/amqplib": "^0.10.7"
+  }
+}

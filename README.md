@@ -17,8 +17,8 @@ surfaces and API contracts:
 
 Implementation terms are still valid internally, but are not primary product nouns:
 
-- `workspace run`: internal execution record
-- `workspace build job`: internal queue/worker build task
+- `sandbox run`: internal execution record
+- `sandbox build job`: internal queue/worker build task
 
 If an API endpoint serves product UI, prefer naming and resource modeling around `sandboxes` and
 `issue-workflows`.
@@ -42,14 +42,13 @@ what the system did from issue intake through code changes and pull request outp
 
 ## Status
 
-This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix
+This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` sandboxes, with a root Nix
 flake for a reproducible `direnv`-powered development shell.
 
-Today the repo contains the initial workspace layout, the first workspace composition
-implementation, and the target architecture for splitting composition, OS integrations, runtime
-adapters, and app surfaces into separate workspaces. Several of the workspaces below are
-intentionally lightweight placeholders so the intended boundaries are visible in the repo before
-every implementation lands.
+Today the repo contains the initial sandbox layout, the first sandbox composition implementation,
+and the target architecture for splitting composition, OS integrations, runtime adapters, and app
+surfaces into separate sandboxes. Several of the sandboxes below are intentionally lightweight
+placeholders so the intended boundaries are visible in the repo before every implementation lands.
 
 ## Monorepo layout
 
@@ -64,13 +63,11 @@ every implementation lands.
 │   └── web/
 ├── packages/             # shared libraries, domain modules, and reusable code
 │   ├── README.md
-│   ├── ai-harness-integrations/
-│   ├── os-integration-buildkit/
-│   ├── package-standardization/
-│   ├── registry-integration/
-│   ├── runtime-adapters-api/
+│   ├── rabbitmq/
+│   ├── sandboxes/
 │   ├── source-integrations/
-│   └── workspace-composition/
+│   ├── validators/
+│   └── ...
 ├── tooling/              # shared config packages and developer tooling
 │   └── README.md
 ├── .envrc                # direnv entrypoint for the Nix dev shell
@@ -80,13 +77,13 @@ every implementation lands.
 ├── flake.nix             # Nix development shell definition
 ├── flake.lock            # pinned flake inputs
 ├── package.json          # root scripts and Turbo dependency
-├── pnpm-workspace.yaml   # workspace discovery
+├── pnpm-sandbox.yaml   # sandbox discovery
 ├── tsconfig.json         # root TypeScript and tsgo config
 ├── turbo.json            # task graph and caching config
 └── README.md
 ```
 
-### Workspace roles
+### Sandbox roles
 
 - `apps/`: user-facing and deployable surfaces such as the website, API, docs, and desktop clients
 - `packages/`: shared code such as composition models, OS integrations, runtime adapters, source
@@ -101,9 +98,9 @@ both core loops.
 
 Sandbox flow:
 
-1. The product surfaces submit a `UserWorkspaceSpec`.
-2. The control plane normalizes that into a `WorkspaceBlueprint`.
-3. Workspace composition selects an OS integration and produces a concrete build plan.
+1. The product surfaces submit a `UserSandboxSpec`.
+2. The control plane normalizes that into a `SandboxBlueprint`.
+3. Sandbox composition selects an OS integration and produces a concrete build plan.
 4. The selected OS integration produces one or more build artifacts.
 5. Runtime adapters launch those artifacts on Docker, Kubernetes, K3s, or future targets.
 
@@ -129,20 +126,16 @@ Supporting integrations feed into both flows without owning either flow:
   repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job coordination
 - `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
   shared SQLite database package
-- `packages/workspace-composition/`: core composition package that owns the shared workspace
-  contracts and OS-agnostic composition model
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
-- `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
-  running BuildKit executors for Fedora, Arch, and Nix, and publishing images to the registry
-- `packages/workspace-build-queue/`: RabbitMQ queue transport package for durable workspace image
-  build requests and dead-letter handling
-- `packages/registry-integration/`: initial Zot-backed registry client plus local dev registry
-  compose/config; today it publishes the current BuildKit-produced OCI image archive through a
-  Docker-assisted upload flow into Zot, while keeping the stored artifact as a standard OCI image
-  for later runtime adapters
-- the other package and app workspaces are scaffolded so the intended architecture is explicit
-  before each implementation is filled in
+- `apps/worker/`: first background worker scaffold for consuming queued sandbox image build jobs,
+  with worker-kind modules under `src/workers/`
+- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package
+- `packages/sandboxes/`: sandbox domain package for BuildKit compile, registry publish, runtime
+  launch, queue wiring, and lifecycle orchestration
+- `packages/validators/`: shared API and worker message contracts
+- the other package and app sandboxes are scaffolded so the intended architecture is explicit before
+  each implementation is filled in
 
 ## Planned product shape
 
@@ -169,7 +162,7 @@ The backend turns user intent into sandbox sessions and issue workflows.
 Core responsibilities:
 
 - validate and normalize sandbox and issue-to-PR inputs
-- produce `WorkspaceBlueprint` values from validated requests
+- produce `SandboxBlueprint` values from validated requests
 - resolve repos and configuration sources
 - select OS integrations and runtime adapters
 - compose final build and execution requests
@@ -196,27 +189,20 @@ over time.
   migrations, and repositories for build-job processing
 - `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session
   helpers across product apps
-- `packages/workspace-build-queue/`: RabbitMQ transport package for queue names, message contracts,
-  publishers, consumers, and dev broker setup
-- `packages/workspace-composition/`: core composition system for `UserWorkspaceSpec`,
-  `WorkspaceBlueprint`, normalization/defaulting, executor contracts, executor selection, and build
-  artifact definitions
-- `packages/os-integration-buildkit/`: BuildKit-based OS integration for Fedora, Arch, and Nix image
-  compilation
-- `packages/package-standardization/`: Repology-backed package resolution and normalized package
-  contract utilities
-- `packages/runtime-adapters-api/`: shared launch contracts and built-in runtime adapter
-  implementations (Docker, plus Kubernetes/K3s scaffolds)
+- `packages/validators/`: shared contract schemas used by API routes and worker messaging
+- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package for connection lifecycle,
+  generic JSON publish/consume helpers, and topology assertion
+- `packages/sandboxes/`: sandbox domain package for BuildKit image creation, registry publishing,
+  runtime adapters, queue topology, worker orchestration, harness integrations, and package
+  resolution utilities
 - `packages/source-integrations/`: source-provider integration package for repository selection, ref
   resolution, and provider-specific access flows; GitHub will be the first provider here
-- `packages/ai-harness-integrations/`: shared contracts and orchestration for AI coding harnesses
-- `packages/registry-integration/`: artifact and registry publishing, tagging, lookup, and retrieval
 
 ## Defined app architecture
 
-- `apps/web/`: main product web app for creating and managing workspaces
+- `apps/web/`: main product web app for creating and managing sandboxes
 - `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
-- `apps/worker/`: background worker for consuming queued workspace image build jobs and driving
+- `apps/worker/`: background worker for consuming queued sandbox image build jobs and driving
   compile/publish work
 - `apps/docs/`: user and contributor documentation site
 - `apps/marketing/`: public website and launch surfaces
@@ -224,7 +210,7 @@ over time.
 
 ## Why the monorepo uses Turbo + pnpm
 
-- `pnpm` workspaces keep dependency management fast, strict, and centralized
+- `pnpm` sandboxes keep dependency management fast, strict, and centralized
 - `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and
   shared packages
 - shared tooling in `tooling/` keeps config consistent without copy-pasting setup across apps
@@ -237,20 +223,10 @@ over time.
 - `oxfmt` handles repo-wide formatting
 - `@typescript/native-preview` provides the `tsgo` CLI at the root alongside regular `typescript`
 
-## Workspace composition
+## Sandbox contracts
 
-The composition contracts now live in `packages/workspace-composition/`, and the concrete BuildKit
-OS execution path now lives in `packages/os-integration-buildkit/`.
-
-That package contains:
-
-- `UserWorkspaceSpec` and `WorkspaceBlueprint` documentation
-- normalization and defaulting helpers
-- executor and artifact contract definitions
-- shared composition contracts that feed concrete OS integrations such as
-  `packages/os-integration-buildkit/`
-
-Composition documentation lives in `packages/workspace-composition/docs/`.
+The canonical sandbox build contract now lives in `packages/validators/`, and the concrete BuildKit
+compile/publish/launch path lives in `packages/sandboxes/`.
 
 ## Getting started
 
@@ -300,7 +276,7 @@ for 30 seconds.
 
 Place end-to-end specs in `tests/e2e/`.
 
-Run common workspace tasks from the repo root:
+Run common sandbox tasks from the repo root:
 
 ```bash
 pnpm dev
@@ -335,7 +311,7 @@ variants to force Turbo's terminal UI.
 
 ### Early engineering priorities
 
-- stand up the first app workspaces under `apps/`
+- stand up the first app sandboxes under `apps/`
 - define shared domain packages under `packages/`
 - centralize config and standards under `tooling/`
 - extract the first OS integration boundary from the current Nix implementation

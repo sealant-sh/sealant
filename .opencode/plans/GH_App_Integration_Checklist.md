@@ -50,14 +50,14 @@ Not included:
 
 ### Worker and runtime
 
-- `apps/worker/src/process-workspace-build-job.ts`
-- `packages/os-integration-buildkit/src/buildkit-executor.ts`
+- `apps/worker/src/process-sandbox-build-job.ts`
+- `packages/os-integration-buildkit/src/buildkit-builder.ts`
 - `packages/runtime-adapters-api/src/docker-runtime-adapter.ts`
 
 ### Source integration boundary
 
 - `packages/source-integrations/package.json`
-- `packages/workspace-composition/docs/contracts.md`
+- `packages/sandbox-composition/docs/contracts.md`
 
 ### Web sandbox entrypoint
 
@@ -401,7 +401,7 @@ Update `apps/api/src/routes/sandboxes/sandboxes.handlers.ts` create flow to:
 3. verify user has active installation grant
 4. verify installation status is active
 5. upsert or refresh the durable `repositories` row if needed
-6. transform GitHub source selection into the normalized workspace source used by worker
+6. transform GitHub source selection into the normalized sandbox source used by worker
 7. create sandbox with `repositoryId`
 8. create sandbox attempt with `repositoryId`
 9. snapshot source metadata without snapshotting any installation token
@@ -437,7 +437,7 @@ Recommended module responsibilities:
 
 ### Worker integration
 
-Update `apps/worker/src/process-workspace-build-job.ts` so that when a sandbox job contains a
+Update `apps/worker/src/process-sandbox-build-job.ts` so that when a sandbox job contains a
 GitHub-backed source:
 
 - worker resolves installation metadata from DB
@@ -471,7 +471,7 @@ So runtime launch can inject temporary token auth for clone without exposing it 
 
 ### Build and entrypoint tasks
 
-Update `packages/os-integration-buildkit/src/buildkit-executor.ts` clone bootstrapping so that:
+Update `packages/os-integration-buildkit/src/buildkit-builder.ts` clone bootstrapping so that:
 
 - GitHub token auth is consumed via env or mounted secret
 - token is not printed
@@ -578,7 +578,7 @@ endpoints and submit the new source shape.
 - [x] Introduce an ephemeral token auth descriptor for source clone auth
 - [x] Update runtime adapter contract to support token auth
 - [x] Update Docker runtime adapter to inject token auth safely
-- [x] Update buildkit executor clone bootstrapping to consume token auth safely
+- [x] Update buildkit builder clone bootstrapping to consume token auth safely
 - [x] Add worker and runtime tests for token-based clone auth
 
 ## Web

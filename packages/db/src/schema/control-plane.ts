@@ -1,4 +1,3 @@
-import type { UserWorkspaceSpec, WorkspaceBlueprint } from "@sealant/workspace-composition";
 import {
   index,
   integer,
@@ -8,6 +7,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import type { NewSandbox as NewSandboxSpec } from "../payloads.js";
 import { user } from "./auth.js";
 
 export const sourceProviderValues = ["github", "gitlab", "generic"] as const;
@@ -344,9 +344,7 @@ export const profileRevisions = sqliteTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    configPatch: text("config_patch", { mode: "json" })
-      .$type<Partial<UserWorkspaceSpec>>()
-      .notNull(),
+    configPatch: text("config_patch", { mode: "json" }).$type<Partial<NewSandboxSpec>>().notNull(),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -570,9 +568,7 @@ export const repositoryProfileRevisions = sqliteTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    runTemplate: text("run_template", { mode: "json" })
-      .$type<Partial<UserWorkspaceSpec>>()
-      .notNull(),
+    runTemplate: text("run_template", { mode: "json" }).$type<Partial<NewSandboxSpec>>().notNull(),
     policyConfig: text("policy_config", { mode: "json" }).$type<Record<string, unknown>>(),
     createdAt: integer({ mode: "timestamp_ms" })
       .notNull()
@@ -822,13 +818,11 @@ export const sandboxAttemptSnapshots = sqliteTable("sandbox_attempt_snapshots", 
   runId: text("run_id")
     .primaryKey()
     .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-  userSpecPayload: text("user_spec_payload", { mode: "json" }).$type<UserWorkspaceSpec>().notNull(),
+  userSpecPayload: text("user_spec_payload", { mode: "json" }).$type<NewSandboxSpec>().notNull(),
   resolvedSpecPayload: text("resolved_spec_payload", { mode: "json" })
-    .$type<UserWorkspaceSpec>()
+    .$type<NewSandboxSpec>()
     .notNull(),
-  blueprintPayload: text("blueprint_payload", { mode: "json" })
-    .$type<WorkspaceBlueprint>()
-    .notNull(),
+  blueprintPayload: text("blueprint_payload", { mode: "json" }).$type<NewSandboxSpec>().notNull(),
   profileConfigSnapshot: text("profile_config_snapshot", { mode: "json" }).$type<
     Record<string, unknown>
   >(),

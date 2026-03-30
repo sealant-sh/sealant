@@ -1,4 +1,4 @@
-import { createZotRegistryClient } from "@sealant/registry-integration";
+import { createZotRegistryClient } from "@sealant/sandboxes";
 
 import type { AppEnv } from "../env.js";
 

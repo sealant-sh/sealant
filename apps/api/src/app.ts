@@ -8,7 +8,7 @@ import {
   createDatabaseClientFromEnv,
   createSandboxRepository,
   createSandboxRuntimeInstanceRepository,
-  createWorkspaceBuildJobRepository,
+  createSandboxBuildJobRepository,
 } from "@sealant/db";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 
@@ -17,14 +17,13 @@ import { configureOpenAPI } from "./lib/configure-openapi.js";
 import { createApp, createRouter } from "./lib/create-app.js";
 import { createApiPackageStandardizer } from "./lib/create-package-standardizer.js";
 import { createRegistryClient } from "./lib/create-registry-client.js";
-import { createWorkspaceBuildJobPublisher } from "./lib/create-workspace-build-job-publisher.js";
+import { createSandboxBuildJobPublisher } from "./lib/create-sandbox-build-job-publisher.js";
 import type { AppRuntimeConfig } from "./lib/types.js";
 import github from "./routes/github/github.index.js";
 import packages from "./routes/packages/packages.index.js";
 import registries from "./routes/registries/registries.index.js";
 import sandboxes from "./routes/sandboxes/sandboxes.index.js";
 import system from "./routes/system/system.index.js";
-import workspaceBuildJobs from "./routes/workspace-build-jobs/workspace-build-jobs.index.js";
 
 export const createApiApp = (config: AppRuntimeConfig) => {
   const app = createApp(config);
@@ -35,7 +34,6 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   routes.route("/v1/sandboxes", sandboxes);
   routes.route("/v1/registries", registries);
   routes.route("/v1/github", github);
-  routes.route("/v1/workspace-build-jobs", workspaceBuildJobs);
 
   app.route("/", routes);
   configureOpenAPI(app, routes, config.env);
@@ -58,8 +56,8 @@ const packageStandardizer = createApiPackageStandardizer({
 const app = createApiApp({
   env,
   registryClient: createRegistryClient(env),
-  workspaceBuildJobPublisher: createWorkspaceBuildJobPublisher(env),
-  workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
+  sandboxBuildJobPublisher: createSandboxBuildJobPublisher(env),
+  sandboxBuildJobRepository: createSandboxBuildJobRepository(databaseClient),
   packageStandardizer,
   gitHubSourceIntegration: createGitHubSourceIntegration({
     apiBaseUrl: env.GITHUB_API_BASE_URL,

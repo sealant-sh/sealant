@@ -2,10 +2,10 @@ import type { PackageResolutionCacheRepository } from "@sealant/db";
 import {
   createPackageStandardizer,
   createRepologyClient,
-  packageResolutionSchema,
   type PackageResolutionCacheStore,
   type PackageStandardizer,
-} from "@sealant/package-standardization";
+} from "@sealant/sandboxes";
+import { packageResolutionSchema } from "@sealant/validators";
 
 import type { AppEnv } from "../env.js";
 

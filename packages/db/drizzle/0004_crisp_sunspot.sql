@@ -1,14 +1,14 @@
-ALTER TABLE `workspace_build_jobs` RENAME TO `oci_image_build_jobs`;
+ALTER TABLE `sandbox_build_jobs` RENAME TO `oci_image_build_jobs`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_build_jobs_status_available_at_idx`;
+DROP INDEX IF EXISTS `sandbox_build_jobs_status_available_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_build_jobs_status_claimed_at_idx`;
+DROP INDEX IF EXISTS `sandbox_build_jobs_status_claimed_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_build_jobs_created_at_idx`;
+DROP INDEX IF EXISTS `sandbox_build_jobs_created_at_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_build_jobs_run_id_idx`;
+DROP INDEX IF EXISTS `sandbox_build_jobs_run_id_idx`;
 --> statement-breakpoint
-DROP INDEX IF EXISTS `workspace_build_jobs_idempotency_key_idx`;
+DROP INDEX IF EXISTS `sandbox_build_jobs_idempotency_key_idx`;
 --> statement-breakpoint
 CREATE INDEX `oci_image_build_jobs_status_available_at_idx` ON `oci_image_build_jobs` (`status`,`available_at`);
 --> statement-breakpoint
@@ -33,7 +33,7 @@ CREATE TABLE `sandbox_runtime_instances` (
 	`finished_at` integer,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `sandbox_runtime_instances_status_updated_at_idx` ON `sandbox_runtime_instances` (`status`,`updated_at`);

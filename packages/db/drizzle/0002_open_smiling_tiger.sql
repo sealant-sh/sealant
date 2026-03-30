@@ -16,7 +16,7 @@ CREATE TABLE `issue_run_links` (
 	`linked_at` integer NOT NULL,
 	PRIMARY KEY(`issue_id`, `run_id`),
 	FOREIGN KEY (`issue_id`) REFERENCES `issues`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `issue_run_links_run_id_relation_idx` ON `issue_run_links` (`run_id`,`relation`);--> statement-breakpoint
@@ -232,7 +232,7 @@ CREATE TABLE `run_artifacts` (
 	`checksum` text,
 	`inline_json` text,
 	`created_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `run_artifacts_run_id_kind_idx` ON `run_artifacts` (`run_id`,`kind`);--> statement-breakpoint
@@ -248,7 +248,7 @@ CREATE TABLE `run_diff_files` (
 	`is_binary` integer DEFAULT false NOT NULL,
 	`patch_artifact_id` text,
 	`created_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`patch_artifact_id`) REFERENCES `run_artifacts`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
@@ -264,7 +264,7 @@ CREATE TABLE `run_events` (
 	`message` text NOT NULL,
 	`payload` text,
 	`occurred_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `run_events_run_id_sequence_idx` ON `run_events` (`run_id`,`sequence`);--> statement-breakpoint
@@ -278,7 +278,7 @@ CREATE TABLE `run_input_snapshots` (
 	`profile_config_snapshot` text,
 	`repository_profile_config_snapshot` text,
 	`created_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE TABLE `run_pull_request_links` (
@@ -287,7 +287,7 @@ CREATE TABLE `run_pull_request_links` (
 	`relation` text DEFAULT 'created' NOT NULL,
 	`linked_at` integer NOT NULL,
 	PRIMARY KEY(`run_id`, `pull_request_id`),
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`pull_request_id`) REFERENCES `pull_requests`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
@@ -304,7 +304,7 @@ CREATE TABLE `run_summaries` (
 	`summary_markdown` text,
 	`generated_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE TABLE `run_validation_results` (
@@ -316,7 +316,7 @@ CREATE TABLE `run_validation_results` (
 	`message` text,
 	`details` text,
 	`created_at` integer NOT NULL,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `run_validation_results_run_id_check_key_idx` ON `run_validation_results` (`run_id`,`check_key`);--> statement-breakpoint
@@ -368,7 +368,7 @@ CREATE TABLE `ssh_keys` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `ssh_keys_owner_user_id_fingerprint_idx` ON `ssh_keys` (`owner_user_id`,`fingerprint`);--> statement-breakpoint
 CREATE INDEX `ssh_keys_owner_user_id_name_idx` ON `ssh_keys` (`owner_user_id`,`name`);--> statement-breakpoint
-CREATE TABLE `workspace_runs` (
+CREATE TABLE `sandbox_runs` (
 	`id` text PRIMARY KEY NOT NULL,
 	`owner_user_id` text NOT NULL,
 	`repository_id` text,
@@ -395,11 +395,11 @@ CREATE TABLE `workspace_runs` (
 	FOREIGN KEY (`requested_by_user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
-CREATE INDEX `workspace_runs_owner_user_id_status_created_at_idx` ON `workspace_runs` (`owner_user_id`,`status`,`created_at`);--> statement-breakpoint
-CREATE INDEX `workspace_runs_repository_id_created_at_idx` ON `workspace_runs` (`repository_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `workspace_runs_profile_revision_id_created_at_idx` ON `workspace_runs` (`profile_revision_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `workspace_runs_repository_profile_revision_id_created_at_idx` ON `workspace_runs` (`repository_profile_revision_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `workspace_runs_issue_id_created_at_idx` ON `workspace_runs` (`issue_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `workspace_runs_status_started_at_idx` ON `workspace_runs` (`status`,`started_at`);--> statement-breakpoint
-ALTER TABLE `workspace_build_jobs` ADD `run_id` text REFERENCES workspace_runs(id);--> statement-breakpoint
-CREATE INDEX `workspace_build_jobs_run_id_idx` ON `workspace_build_jobs` (`run_id`);
+CREATE INDEX `sandbox_runs_owner_user_id_status_created_at_idx` ON `sandbox_runs` (`owner_user_id`,`status`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_runs_repository_id_created_at_idx` ON `sandbox_runs` (`repository_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_runs_profile_revision_id_created_at_idx` ON `sandbox_runs` (`profile_revision_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_runs_repository_profile_revision_id_created_at_idx` ON `sandbox_runs` (`repository_profile_revision_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_runs_issue_id_created_at_idx` ON `sandbox_runs` (`issue_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sandbox_runs_status_started_at_idx` ON `sandbox_runs` (`status`,`started_at`);--> statement-breakpoint
+ALTER TABLE `sandbox_build_jobs` ADD `run_id` text REFERENCES sandbox_runs(id);--> statement-breakpoint
+CREATE INDEX `sandbox_build_jobs_run_id_idx` ON `sandbox_build_jobs` (`run_id`);

@@ -30,7 +30,7 @@ export const listSandboxEventsQueryValidator = validator("query", listSandboxEve
 
 export const createSandboxRoute = describeRoute({
   tags,
-  description: "Create and queue a sandbox launch request for a user workspace spec.",
+  description: "Create and queue a sandbox launch request for a user sandbox spec.",
   responses: {
     202: {
       description: "Sandbox creation accepted and queued",
