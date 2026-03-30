@@ -1,9 +1,6 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-import type {
-  WorkspaceBuildJobRequestPayload,
-  WorkspaceBuildJobResultPayload,
-} from "../payloads.js";
+import type { NewSandbox, SandboxBuild } from "../payloads.js";
 import { sandboxAttempts } from "./control-plane.js";
 
 export const ociImageBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;
@@ -28,9 +25,7 @@ export const ociImageBuildJobs = sqliteTable(
     registryId: text().notNull(),
     repository: text().notNull(),
     tag: text().notNull(),
-    requestPayload: text("request_payload", { mode: "json" })
-      .$type<WorkspaceBuildJobRequestPayload>()
-      .notNull(),
+    requestPayload: text("request_payload", { mode: "json" }).$type<NewSandbox>().notNull(),
     idempotencyKey: text(),
     attemptCount: integer({ mode: "number" }).notNull().default(0),
     maxAttempts: integer({ mode: "number" }).notNull().default(3),
@@ -42,8 +37,8 @@ export const ociImageBuildJobs = sqliteTable(
     workerId: text(),
     startedAt: integer({ mode: "timestamp_ms" }),
     finishedAt: integer({ mode: "timestamp_ms" }),
-    executorId: text(),
-    resultPayload: text("result_payload", { mode: "json" }).$type<WorkspaceBuildJobResultPayload>(),
+    builderId: text(),
+    resultPayload: text("result_payload", { mode: "json" }).$type<SandboxBuild>(),
     publishedReference: text(),
     publishedDigestReference: text(),
     publishedDigest: text(),
@@ -102,12 +97,12 @@ export type SandboxRuntimeInstance = typeof sandboxRuntimeInstances.$inferSelect
 export type NewSandboxRuntimeInstance = typeof sandboxRuntimeInstances.$inferInsert;
 
 // Compatibility exports while the rest of the codebase migrates away from
-// workspace_build_jobs naming.
-export const workspaceBuildJobStatusValues = ociImageBuildJobStatusValues;
+// sandbox_build_jobs naming.
+export const sandboxBuildJobStatusValues = ociImageBuildJobStatusValues;
 
-export type WorkspaceBuildJobStatus = OciImageBuildJobStatus;
+export type SandboxBuildJobStatus = OciImageBuildJobStatus;
 
-export const workspaceBuildJobs = ociImageBuildJobs;
+export const sandboxBuildJobs = ociImageBuildJobs;
 
-export type WorkspaceBuildJob = OciImageBuildJob;
-export type NewWorkspaceBuildJob = NewOciImageBuildJob;
+export type SandboxBuildJob = OciImageBuildJob;
+export type NewSandboxBuildJob = NewOciImageBuildJob;

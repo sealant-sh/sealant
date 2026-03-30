@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { IssueRows } from "@/components/app/issue-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
-import { ISSUES } from "@/lib/navigation/workspace-data";
+import { SandboxPage } from "@/components/app/sandbox-page";
+import { ISSUES } from "@/lib/navigation/sandbox-data";
 
 export const Route = createFileRoute("/_authenticated/issues/" as never)({
   component: IssuesPage,
@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_authenticated/issues/" as never)({
 
 function IssuesPage() {
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Issues"
       title="Delegation queue"
       description="Start here when triaging incoming issues and routing each one into the right run and profile context."
@@ -27,6 +27,6 @@ function IssuesPage() {
       ]}
     >
       <IssueRows issues={ISSUES} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

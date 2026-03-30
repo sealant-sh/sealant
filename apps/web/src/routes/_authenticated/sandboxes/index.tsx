@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { SandboxPage } from "@/components/app/sandbox-page";
 import { SandboxRows } from "@/components/app/sandbox-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
 import { allSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
 export const Route = createFileRoute("/_authenticated/sandboxes/")({
@@ -17,10 +17,10 @@ function SandboxesPage() {
   const failedCount = sandboxes.filter((sandbox) => sandbox.status === "failed").length;
 
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Sandboxes"
       title="Sandbox Fleet"
-      description="Track sandbox lifecycle, isolate failed builds quickly, and open detailed traces without leaving this workspace."
+      description="Track sandbox lifecycle, isolate failed builds quickly, and open detailed traces without leaving this sandbox."
       metrics={[
         { label: "Total sandboxes", value: String(sandboxes.length) },
         { label: "Running", value: String(runningCount) },
@@ -28,6 +28,6 @@ function SandboxesPage() {
       ]}
     >
       <SandboxRows sandboxes={sandboxes} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

@@ -8,7 +8,7 @@ import {
   createDatabaseClientFromEnv,
   createSandboxRepository,
   createSandboxRuntimeInstanceRepository,
-  createWorkspaceBuildJobRepository,
+  createSandboxBuildJobRepository,
 } from "@sealant/db";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 
@@ -17,7 +17,7 @@ import { configureOpenAPI } from "./lib/configure-openapi.js";
 import { createApp, createRouter } from "./lib/create-app.js";
 import { createApiPackageStandardizer } from "./lib/create-package-standardizer.js";
 import { createRegistryClient } from "./lib/create-registry-client.js";
-import { createWorkspaceBuildJobPublisher } from "./lib/create-workspace-build-job-publisher.js";
+import { createSandboxBuildJobPublisher } from "./lib/create-sandbox-build-job-publisher.js";
 import type { AppRuntimeConfig } from "./lib/types.js";
 import github from "./routes/github/github.index.js";
 import packages from "./routes/packages/packages.index.js";
@@ -56,8 +56,8 @@ const packageStandardizer = createApiPackageStandardizer({
 const app = createApiApp({
   env,
   registryClient: createRegistryClient(env),
-  workspaceBuildJobPublisher: createWorkspaceBuildJobPublisher(env),
-  workspaceBuildJobRepository: createWorkspaceBuildJobRepository(databaseClient),
+  sandboxBuildJobPublisher: createSandboxBuildJobPublisher(env),
+  sandboxBuildJobRepository: createSandboxBuildJobRepository(databaseClient),
   packageStandardizer,
   gitHubSourceIntegration: createGitHubSourceIntegration({
     apiBaseUrl: env.GITHUB_API_BASE_URL,

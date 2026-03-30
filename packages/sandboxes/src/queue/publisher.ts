@@ -1,26 +1,26 @@
 import { publishRabbitMqJsonMessage } from "@sealant/rabbitmq";
 
 import {
-  parseWorkspaceBuildJobRequestedMessage,
-  workspaceBuildJobRequestedMessageKind,
-  type WorkspaceBuildJobRequestedMessage,
+  parseSandboxBuildJobRequestedMessage,
+  sandboxBuildJobRequestedMessageKind,
+  type SandboxBuildJobRequestedMessage,
 } from "./messages.js";
-import { ensureWorkspaceBuildQueueTopology, workspaceBuildQueueName } from "./topology.js";
+import { ensureSandboxBuildQueueTopology, sandboxBuildQueueName } from "./topology.js";
 
-export const publishWorkspaceBuildJobRequested = async (
+export const publishSandboxBuildJobRequested = async (
   connectionUrl: string,
-  input: WorkspaceBuildJobRequestedMessage,
+  input: SandboxBuildJobRequestedMessage,
 ) => {
-  const message = parseWorkspaceBuildJobRequestedMessage(input);
+  const message = parseSandboxBuildJobRequestedMessage(input);
 
-  await ensureWorkspaceBuildQueueTopology(connectionUrl);
+  await ensureSandboxBuildQueueTopology(connectionUrl);
   await publishRabbitMqJsonMessage({
     connectionUrl,
-    queueName: workspaceBuildQueueName,
+    queueName: sandboxBuildQueueName,
     message,
     properties: {
       messageId: message.jobId,
-      type: workspaceBuildJobRequestedMessageKind,
+      type: sandboxBuildJobRequestedMessageKind,
     },
   });
 };

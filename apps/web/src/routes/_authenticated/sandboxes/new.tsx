@@ -16,7 +16,7 @@ type OciRuntime = "runc" | "runsc";
 
 interface NewSandboxFormState {
   readonly sourceMode: SourceMode;
-  readonly workspaceSource: string;
+  readonly sandboxSource: string;
   readonly branch: string;
   readonly githubInstallationId: string;
   readonly githubInstallationRepositoryId: string;
@@ -313,13 +313,13 @@ function NewSandboxPage() {
         repository.installationRepositoryId === form.configRepoGitHubInstallationRepositoryId,
     );
   }, [form.configRepoGitHubInstallationRepositoryId, configGithubRepositories]);
-  const effectiveWorkspaceSourceUrl =
+  const effectiveSandboxSourceUrl =
     form.sourceMode === "github"
       ? selectedGitHubRepository === undefined
         ? "https://github.com/owner/repository.git"
         : buildGitHubRepositoryUrl(selectedGitHubRepository.fullName)
-      : normalizeRepositoryUrl(form.workspaceSource);
-  const effectiveWorkspaceRef =
+      : normalizeRepositoryUrl(form.sandboxSource);
+  const effectiveSandboxRef =
     form.sourceMode === "github"
       ? normalizeOptionalValue(form.branch) || selectedGitHubRepository?.defaultBranch || "main"
       : normalizeRequiredValue(form.branch);
@@ -387,11 +387,11 @@ function NewSandboxPage() {
       spec: {
         version: "1",
         sources: {
-          workspace: {
+          sandbox: {
             kind: "git",
             provider: form.sourceMode === "github" ? "github" : "generic",
-            url: effectiveWorkspaceSourceUrl,
-            ref: effectiveWorkspaceRef,
+            url: effectiveSandboxSourceUrl,
+            ref: effectiveSandboxRef,
           },
           inputs: normalizedConfigRepoInput === undefined ? [] : [normalizedConfigRepoInput],
         },
@@ -441,8 +441,8 @@ function NewSandboxPage() {
         },
         runtime: {
           env: {},
-          workspaceRoot: "/workspace",
-          workingDirectory: "/workspace/repo",
+          sandboxRoot: "/sandbox",
+          workingDirectory: "/sandbox/repo",
           persistence: "ephemeral" as const,
           ociRuntime: form.ociRuntime,
           network: {
@@ -464,8 +464,8 @@ function NewSandboxPage() {
   }, [
     effectiveConfigRepoRef,
     effectiveConfigRepoUrl,
-    effectiveWorkspaceRef,
-    effectiveWorkspaceSourceUrl,
+    effectiveSandboxRef,
+    effectiveSandboxSourceUrl,
     form,
     selectedConfigGitHubRepository,
     selectedGitHubRepository,
@@ -642,11 +642,11 @@ function NewSandboxPage() {
         spec: {
           version: "1",
           sources: {
-            workspace: {
+            sandbox: {
               kind: "git",
               provider: form.sourceMode === "github" ? "github" : "generic",
-              url: effectiveWorkspaceSourceUrl,
-              ref: effectiveWorkspaceRef,
+              url: effectiveSandboxSourceUrl,
+              ref: effectiveSandboxRef,
             },
             inputs: normalizedConfigRepoInput === undefined ? [] : [normalizedConfigRepoInput],
           },
@@ -696,8 +696,8 @@ function NewSandboxPage() {
           },
           runtime: {
             env: {},
-            workspaceRoot: "/workspace",
-            workingDirectory: "/workspace/repo",
+            sandboxRoot: "/sandbox",
+            workingDirectory: "/sandbox/repo",
             persistence: "ephemeral" as const,
             ociRuntime: form.ociRuntime,
             network: {
@@ -724,7 +724,7 @@ function NewSandboxPage() {
     }
   };
 
-  const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.sources.workspace.url);
+  const hasValidRepositoryUrl = isValidUrl(previewManifest.spec.sources.sandbox.url);
   const githubSourceReady =
     normalizeRequiredValue(form.githubInstallationId).length > 0 &&
     normalizeRequiredValue(form.githubInstallationRepositoryId).length > 0;
@@ -781,7 +781,7 @@ function NewSandboxPage() {
           <div className="space-y-0">
             <FormSection
               index="01"
-              title="Workspace Source"
+              title="Sandbox Source"
               content={
                 <div className="space-y-5">
                   <LabeledField label="Source Mode">
@@ -832,9 +832,9 @@ function NewSandboxPage() {
                     <div className="grid gap-4 sm:grid-cols-2">
                       <LabeledField label="Repository URL">
                         <input
-                          value={form.workspaceSource}
+                          value={form.sandboxSource}
                           onChange={(event) => {
-                            setField("workspaceSource", event.target.value);
+                            setField("sandboxSource", event.target.value);
                           }}
                           placeholder="github.com/sealant-ops/core"
                           className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
@@ -1573,7 +1573,7 @@ function NewSandboxPage() {
                           setField("artifactRepository", event.target.value);
                         }}
                         className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
-                        placeholder="sealant/workspaces/demo"
+                        placeholder="sealant/sandboxes/demo"
                         autoComplete="off"
                         spellCheck={false}
                       />
@@ -1853,7 +1853,7 @@ function NewSandboxPage() {
               <dl className="mt-4 space-y-2.5 text-sm">
                 <SummaryRow
                   label="Target"
-                  value={previewManifest.spec.sources.workspace.url}
+                  value={previewManifest.spec.sources.sandbox.url}
                   highlighted
                 />
                 <SummaryRow label="Harness" value={previewManifest.spec.harness.id.toUpperCase()} />
@@ -2064,7 +2064,7 @@ function HealthRow(props: { readonly ok: boolean; readonly text: string }) {
 function createInitialFormState(registryId: string): NewSandboxFormState {
   return {
     sourceMode: "git",
-    workspaceSource: "https://github.com/sealant-ops/core",
+    sandboxSource: "https://github.com/sealant-ops/core",
     branch: "main",
     githubInstallationId: "",
     githubInstallationRepositoryId: "",
@@ -2082,7 +2082,7 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
     targetOs: "fedora",
     ociRuntime: "runc",
     registryId,
-    artifactRepository: "sealant/workspaces/demo",
+    artifactRepository: "sealant/sandboxes/demo",
     artifactTag: "opencode",
     packages: [],
     setupSteps: [],
@@ -2186,7 +2186,7 @@ function validateForm(
   const errors: string[] = [];
 
   if (form.sourceMode === "git") {
-    const repositoryUrl = normalizeRepositoryUrl(form.workspaceSource);
+    const repositoryUrl = normalizeRepositoryUrl(form.sandboxSource);
     if (!isValidUrl(repositoryUrl)) {
       errors.push("Repository URL must be a valid URL.");
     }

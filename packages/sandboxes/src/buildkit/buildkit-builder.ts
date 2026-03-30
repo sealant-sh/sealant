@@ -4,18 +4,18 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
-  parseWorkspaceBlueprint,
-  parseBuildkitOsExecutorCompileInput,
-  parseBuildkitOsExecutorCompileResult,
-  parseOsExecutorSupport,
+  parseSandboxBlueprint,
+  parseBuildkitOsBuilderCompileInput,
+  parseBuildkitOsBuilderCompileResult,
+  parseOsBuilderSupport,
   type BuildkitBuildSpec,
-  type BuildkitOsExecutorCompileResult,
+  type BuildkitOsBuilderCompileResult,
   type BuildkitPackageManager,
   type BuildkitTargetOsFamily,
-  type OsExecutorSupport,
+  type OsBuilderSupport,
   type ResolvedImagePackage,
   type ResolvedImagePlan,
-  type WorkspaceBlueprint,
+  type SandboxBlueprint,
 } from "@sealant/validators";
 
 import { getHarnessIntegration, type HarnessIntegration } from "../harness/integrations.js";
@@ -190,10 +190,10 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
 };
 
 const defaultImageNameForBlueprint = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): string => {
-  return `sealant-workspace-${osFamily}-${blueprint.harness.id}`;
+  return `sealant-sandbox-${osFamily}-${blueprint.harness.id}`;
 };
 
 const shellQuote = (value: string): string => {
@@ -232,7 +232,7 @@ const normalizeInstallPackages = (packages: Iterable<string>): string[] => {
   return normalized;
 };
 
-const getDotfilesSource = (blueprint: WorkspaceBlueprint) => {
+const getDotfilesSource = (blueprint: SandboxBlueprint) => {
   return blueprint.sources.inputs.find((input) => input.purpose === "dotfiles");
 };
 
@@ -243,12 +243,12 @@ const createBuildkitCompilerError = (code: string, message: string) => {
 };
 
 const getBuildkitSupportForOs = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   osFamily: BuildkitTargetOsFamily,
-): OsExecutorSupport => {
+): OsBuilderSupport => {
   const requestedOsFamily = blueprint.target.os.family;
   if (requestedOsFamily !== "auto" && requestedOsFamily !== osFamily) {
-    return parseOsExecutorSupport({
+    return parseOsBuilderSupport({
       supported: false,
       reason: "unsupported-os",
       message: `The ${osFamily} BuildKit compiler only supports target.os.family of auto or ${osFamily}.`,
@@ -257,7 +257,7 @@ const getBuildkitSupportForOs = (
 
   const harnessIntegration = getHarnessIntegration(blueprint.harness.id);
   if (harnessIntegration === undefined) {
-    return parseOsExecutorSupport({
+    return parseOsBuilderSupport({
       supported: false,
       reason: "unsupported-harness",
       message: `No AI harness integration is registered for '${blueprint.harness.id}'.`,
@@ -266,7 +266,7 @@ const getBuildkitSupportForOs = (
 
   for (const pkg of blueprint.tooling.packages) {
     if (pkg.version !== undefined) {
-      return parseOsExecutorSupport({
+      return parseOsBuilderSupport({
         supported: false,
         reason: "unsupported-package",
         message: `The ${osFamily} BuildKit compiler does not support package version pinning yet: ${pkg.id}.`,
@@ -276,7 +276,7 @@ const getBuildkitSupportForOs = (
 
   const unsupportedInput = blueprint.sources.inputs.find((input) => input.purpose !== "dotfiles");
   if (unsupportedInput !== undefined) {
-    return parseOsExecutorSupport({
+    return parseOsBuilderSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
       message: `The ${osFamily} BuildKit compiler currently supports only dotfiles input sources, received '${unsupportedInput.purpose}'.`,
@@ -285,20 +285,20 @@ const getBuildkitSupportForOs = (
 
   const dotfilesInputs = blueprint.sources.inputs.filter((input) => input.purpose === "dotfiles");
   if (dotfilesInputs.length > 1) {
-    return parseOsExecutorSupport({
+    return parseOsBuilderSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
       message: `The ${osFamily} BuildKit compiler currently supports only one dotfiles input source.`,
     });
   }
 
-  return parseOsExecutorSupport({ supported: true });
+  return parseOsBuilderSupport({ supported: true });
 };
 
 const defaultAutoOsFamilyOrder: readonly BuildkitTargetOsFamily[] = ["fedora", "arch", "nix"];
 
 const resolveCandidateOsFamilies = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   autoOsFamilyOrder: readonly BuildkitTargetOsFamily[],
 ): readonly BuildkitTargetOsFamily[] => {
   if (blueprint.target.os.family === "auto") {
@@ -309,13 +309,13 @@ const resolveCandidateOsFamilies = (
 };
 
 export const selectBuildkitOsFamily = (input: {
-  readonly blueprint: WorkspaceBlueprint;
+  readonly blueprint: SandboxBlueprint;
   readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
 }): BuildkitTargetOsFamily => {
   const autoOsFamilyOrder = input.autoOsFamilyOrder ?? defaultAutoOsFamilyOrder;
   const candidates = resolveCandidateOsFamilies(input.blueprint, autoOsFamilyOrder);
 
-  let firstFailure: Exclude<OsExecutorSupport, { supported: true }> | undefined;
+  let firstFailure: Exclude<OsBuilderSupport, { supported: true }> | undefined;
 
   for (const candidate of candidates) {
     const support = getBuildkitSupportForOs(input.blueprint, candidate);
@@ -335,7 +335,7 @@ export const selectBuildkitOsFamily = (input: {
   throw createBuildkitCompilerError("unsupported-os", "No BuildKit target OS is available.");
 };
 
-const resolveHarnessIntegration = (blueprint: WorkspaceBlueprint): HarnessIntegration => {
+const resolveHarnessIntegration = (blueprint: SandboxBlueprint): HarnessIntegration => {
   const integration = getHarnessIntegration(blueprint.harness.id);
 
   if (integration === undefined) {
@@ -346,14 +346,14 @@ const resolveHarnessIntegration = (blueprint: WorkspaceBlueprint): HarnessIntegr
 };
 
 const resolvePackages = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePackage[] => {
   const distro = distroDefinitions[osFamily];
   const harnessIntegration = resolveHarnessIntegration(blueprint);
-  const harnessPackageRequests: WorkspaceBlueprint["tooling"]["packages"] =
+  const harnessPackageRequests: SandboxBlueprint["tooling"]["packages"] =
     harnessIntegration.installPackages.map((id) => ({ id }));
-  const requests: Array<WorkspaceBlueprint["tooling"]["packages"][number]> = [
+  const requests: Array<SandboxBlueprint["tooling"]["packages"][number]> = [
     ...blueprint.tooling.packages,
     ...harnessPackageRequests,
   ];
@@ -390,7 +390,7 @@ const resolvePackages = (
 };
 
 const mapBlueprintToResolvedImagePlan = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePlan => {
   const support = getBuildkitSupportForOs(blueprint, osFamily);
@@ -414,14 +414,14 @@ const mapBlueprintToResolvedImagePlan = (
           },
         ];
   const runtimeSecrets =
-    blueprint.sources.workspace.authRef === undefined
+    blueprint.sources.sandbox.authRef === undefined
       ? []
       : [
           {
-            id: "workspace_git_key",
+            id: "sandbox_git_key",
             kind: "ssh-key" as const,
             phase: "runtime" as const,
-            sourceRef: blueprint.sources.workspace.authRef,
+            sourceRef: blueprint.sources.sandbox.authRef,
           },
         ];
 
@@ -509,7 +509,7 @@ const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
 };
 
 const renderRuntimeStep = (
-  step: WorkspaceBlueprint["lifecycle"]["setup"][number],
+  step: SandboxBlueprint["lifecycle"]["setup"][number],
   defaultWorkingDirectory: string,
   bashShellPath: string,
 ): string => {
@@ -544,7 +544,7 @@ const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
   ].join("\n");
 };
 
-const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
+const renderSandboxEntrypoint = (plan: ResolvedImagePlan): string => {
   const loginShellPath =
     distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
   const bashShellPath = distroDefinitions[plan.osFamily].shellPaths.bash;
@@ -560,21 +560,21 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     `#!${bashShellPath}`,
     "set -euo pipefail",
     "",
-    `WORKSPACE_ROOT=${shellQuote(plan.blueprint.runtime.workspaceRoot)}`,
+    `SANDBOX_ROOT=${shellQuote(plan.blueprint.runtime.sandboxRoot)}`,
     `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
-    `WORKSPACE_REPO_URL=${shellQuote(plan.blueprint.sources.workspace.url)}`,
-    `WORKSPACE_REPO_REF=${shellQuote(plan.blueprint.sources.workspace.ref)}`,
-    `HARNESS_BANNER=${shellQuote(`Starting ${plan.blueprint.harness.id} workspace`)}`,
-    "SSH_RUNTIME_DIR=/workspace/.ssh-runtime",
-    "REPO_SSH_KEY_PATH=$SSH_RUNTIME_DIR/workspace_repo_key",
+    `SANDBOX_REPO_URL=${shellQuote(plan.blueprint.sources.sandbox.url)}`,
+    `SANDBOX_REPO_REF=${shellQuote(plan.blueprint.sources.sandbox.ref)}`,
+    `HARNESS_BANNER=${shellQuote(`Starting ${plan.blueprint.harness.id} sandbox`)}`,
+    "SSH_RUNTIME_DIR=/sandbox/.ssh-runtime",
+    "REPO_SSH_KEY_PATH=$SSH_RUNTIME_DIR/sandbox_repo_key",
     "REPO_GIT_ASKPASS_PATH=$SSH_RUNTIME_DIR/git-askpass",
     "",
-    'mkdir -p "$WORKSPACE_ROOT" "$WORKING_DIRECTORY" "$SSH_RUNTIME_DIR" /root /tmp /var/empty /run/sshd',
+    'mkdir -p "$SANDBOX_ROOT" "$WORKING_DIRECTORY" "$SSH_RUNTIME_DIR" /root /tmp /var/empty /run/sshd',
     "export HOME=/root",
     "export USER=root",
     "export LOGNAME=root",
     'export PATH="/usr/local/bin:$PATH"',
-    'cd "$WORKSPACE_ROOT"',
+    'cd "$SANDBOX_ROOT"',
     "if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then",
     '  GLIBC_LOADER="$(ls /nix/store/*-glibc-*/lib/ld-linux-x86-64.so.2 2>/dev/null | head -n1 || true)"',
     '  if [ -n "$GLIBC_LOADER" ]; then',
@@ -583,18 +583,18 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "  fi",
     "fi",
     "",
-    'if [ -n "${SEALANT_WORKSPACE_AUTH_KEY_BASE64:-}" ]; then',
-    '  printf \'%s\' "$SEALANT_WORKSPACE_AUTH_KEY_BASE64" | base64 --decode > "$REPO_SSH_KEY_PATH"',
+    'if [ -n "${SEALANT_SANDBOX_AUTH_KEY_BASE64:-}" ]; then',
+    '  printf \'%s\' "$SEALANT_SANDBOX_AUTH_KEY_BASE64" | base64 --decode > "$REPO_SSH_KEY_PATH"',
     '  chmod 600 "$REPO_SSH_KEY_PATH"',
     '  export GIT_SSH_COMMAND="ssh -i $REPO_SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"',
     "fi",
     "",
-    'if [ -n "${SEALANT_WORKSPACE_HTTP_TOKEN:-}" ]; then',
+    'if [ -n "${SEALANT_SANDBOX_HTTP_TOKEN:-}" ]; then',
     "  cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'",
     "#!/bin/sh",
     'case "$1" in',
-    '  *Username*) printf "%s\\n" "${SEALANT_WORKSPACE_HTTP_USERNAME:-x-access-token}" ;;',
-    '  *Password*) printf "%s\\n" "$SEALANT_WORKSPACE_HTTP_TOKEN" ;;',
+    '  *Username*) printf "%s\\n" "${SEALANT_SANDBOX_HTTP_USERNAME:-x-access-token}" ;;',
+    '  *Password*) printf "%s\\n" "$SEALANT_SANDBOX_HTTP_TOKEN" ;;',
     '  *) printf "\\n" ;;',
     "esac",
     "EOF",
@@ -603,9 +603,9 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "  export GIT_TERMINAL_PROMPT=0",
     "fi",
     "",
-    "cleanup_workspace_clone_auth() {",
+    "cleanup_sandbox_clone_auth() {",
     '  rm -f "$REPO_SSH_KEY_PATH" "$REPO_GIT_ASKPASS_PATH"',
-    "  unset GIT_SSH_COMMAND GIT_ASKPASS GIT_TERMINAL_PROMPT SEALANT_WORKSPACE_HTTP_USERNAME SEALANT_WORKSPACE_HTTP_TOKEN SEALANT_WORKSPACE_AUTH_KEY_BASE64",
+    "  unset GIT_SSH_COMMAND GIT_ASKPASS GIT_TERMINAL_PROMPT SEALANT_SANDBOX_HTTP_USERNAME SEALANT_SANDBOX_HTTP_TOKEN SEALANT_SANDBOX_AUTH_KEY_BASE64",
     "}",
     "",
     'if [ "${SEALANT_ENABLE_SSH:-0}" = "1" ] || [ "${SEALANT_ENABLE_SSH:-}" = "true" ]; then',
@@ -660,7 +660,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     '    ssh-keygen -q -t ed25519 -N "" -f "$SSH_RUNTIME_DIR/ssh_host_ed25519_key"',
     "  fi",
     "",
-    "  cat > /usr/local/bin/workspace-ssh-shell <<'EOF'",
+    "  cat > /usr/local/bin/sandbox-ssh-shell <<'EOF'",
     `#!${bashShellPath}`,
     "set -euo pipefail",
     `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
@@ -688,7 +688,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     'exec "$LOGIN_SHELL" -i',
     "EOF",
     "",
-    "  chmod 755 /usr/local/bin/workspace-ssh-shell",
+    "  chmod 755 /usr/local/bin/sandbox-ssh-shell",
     "",
     '  cat > "$SSH_RUNTIME_DIR/sshd_config" <<EOF',
     "Port $SSH_PORT",
@@ -705,7 +705,7 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     "PidFile $SSH_RUNTIME_DIR/sshd.pid",
     "PrintMotd no",
     "StrictModes yes",
-    "ForceCommand /usr/local/bin/workspace-ssh-shell",
+    "ForceCommand /usr/local/bin/sandbox-ssh-shell",
     "Subsystem sftp internal-sftp",
     "EOF",
     "",
@@ -718,9 +718,9 @@ const renderWorkspaceEntrypoint = (plan: ResolvedImagePlan): string => {
     'mkdir -p "$(dirname "$WORKING_DIRECTORY")"',
     'if [ ! -d "$WORKING_DIRECTORY/.git" ]; then',
     '  rm -rf "$WORKING_DIRECTORY"',
-    '  git clone --branch "$WORKSPACE_REPO_REF" "$WORKSPACE_REPO_URL" "$WORKING_DIRECTORY"',
+    '  git clone --branch "$SANDBOX_REPO_REF" "$SANDBOX_REPO_URL" "$WORKING_DIRECTORY"',
     "fi",
-    "cleanup_workspace_clone_auth",
+    "cleanup_sandbox_clone_auth",
     "",
     ...(plan.dotfiles === undefined || plan.dotfiles.applyAt !== "runtime"
       ? []
@@ -914,12 +914,12 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
       ? `ENV SHELL=${shellQuote(shellPath)}`
       : `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",
-    "COPY entrypoint.sh /usr/local/bin/workspace-entrypoint",
-    "RUN chmod 755 /usr/local/bin/workspace-entrypoint",
+    "COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint",
+    "RUN chmod 755 /usr/local/bin/sandbox-entrypoint",
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
     "",
-    "WORKDIR /workspace",
-    'ENTRYPOINT ["/usr/local/bin/workspace-entrypoint"]',
+    "WORKDIR /sandbox",
+    'ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint"]',
     "",
   ].join("\n");
 };
@@ -930,7 +930,7 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
   const entrypointPath = join(contextDirectory, "entrypoint.sh");
   const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
   const buildSpecPath = join(contextDirectory, "buildkit-spec.json");
-  const imageTarPath = join(contextDirectory, "workspace-image.tar");
+  const imageTarPath = join(contextDirectory, "sandbox-image.tar");
   const imageReference = `${defaultImageNameForBlueprint(plan.blueprint, plan.osFamily)}:${plan.blueprint.harness.id}`;
   const spec: BuildkitBuildSpec = {
     contextDirectory,
@@ -946,7 +946,7 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
 
   await mkdir(dirname(containerfilePath), { recursive: true });
   await writeFile(containerfilePath, renderContainerfile(plan), "utf8");
-  await writeFile(entrypointPath, renderWorkspaceEntrypoint(plan), "utf8");
+  await writeFile(entrypointPath, renderSandboxEntrypoint(plan), "utf8");
   await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 
@@ -986,11 +986,11 @@ const buildImageTarball = async (
 };
 
 export const compileSandboxBuildSpec = async (input: {
-  readonly blueprint: WorkspaceBlueprint;
+  readonly blueprint: SandboxBlueprint;
   readonly options?: BuildkitCompilerOptions;
-}): Promise<BuildkitOsExecutorCompileResult> => {
-  const parsed = parseBuildkitOsExecutorCompileInput({
-    blueprint: parseWorkspaceBlueprint(input.blueprint),
+}): Promise<BuildkitOsBuilderCompileResult> => {
+  const parsed = parseBuildkitOsBuilderCompileInput({
+    blueprint: parseSandboxBlueprint(input.blueprint),
   });
   const osFamily = selectBuildkitOsFamily({
     blueprint: parsed.blueprint,
@@ -1004,8 +1004,8 @@ export const compileSandboxBuildSpec = async (input: {
 
   await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner);
 
-  return parseBuildkitOsExecutorCompileResult({
-    executor: {
+  return parseBuildkitOsBuilderCompileResult({
+    builder: {
       id: osFamily,
       osFamily,
     },
@@ -1042,7 +1042,7 @@ export const compileSandboxBuildSpec = async (input: {
 };
 
 export const mapBlueprintToBuildkitImagePlan = (
-  blueprint: WorkspaceBlueprint,
+  blueprint: SandboxBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ) => {
   return mapBlueprintToResolvedImagePlan(blueprint, osFamily);

@@ -1,7 +1,4 @@
-import {
-  workspaceBuildJobRequestPayloadSchema,
-  type WorkspaceBuildJobRequestPayload,
-} from "@sealant/db/payloads";
+import { newSandboxSchema, type NewSandbox } from "@sealant/db/payloads";
 import { Badge, Button } from "@sealant/ui";
 import {
   useMutation,
@@ -36,10 +33,10 @@ interface SandboxSummary {
     readonly reference: string;
     readonly digestReference: string;
   };
-  readonly spec?: WorkspaceBuildJobRequestPayload;
+  readonly spec?: NewSandbox;
   readonly blueprint?: {
     readonly sources: {
-      readonly workspace: {
+      readonly sandbox: {
         readonly provider: string;
         readonly url: string;
         readonly ref: string;
@@ -112,7 +109,7 @@ function toSandboxSummary(input: {
   readonly spec?: unknown;
   readonly blueprint?: unknown;
 }): SandboxSummary {
-  const parsedSpec = workspaceBuildJobRequestPayloadSchema.safeParse(input.spec);
+  const parsedSpec = newSandboxSchema.safeParse(input.spec);
 
   return {
     sandboxId: input.sandboxId,
@@ -151,10 +148,10 @@ function toSandboxSummary(input: {
     ...(parsedSpec.success ? { spec: parsedSpec.data } : {}),
     ...(isRecord(input.blueprint) &&
     isRecord(input.blueprint.sources) &&
-    isRecord(input.blueprint.sources.workspace) &&
-    typeof input.blueprint.sources.workspace.provider === "string" &&
-    typeof input.blueprint.sources.workspace.url === "string" &&
-    typeof input.blueprint.sources.workspace.ref === "string" &&
+    isRecord(input.blueprint.sources.sandbox) &&
+    typeof input.blueprint.sources.sandbox.provider === "string" &&
+    typeof input.blueprint.sources.sandbox.url === "string" &&
+    typeof input.blueprint.sources.sandbox.ref === "string" &&
     isRecord(input.blueprint.harness) &&
     typeof input.blueprint.harness.id === "string" &&
     isRecord(input.blueprint.access) &&
@@ -172,10 +169,10 @@ function toSandboxSummary(input: {
       ? {
           blueprint: {
             sources: {
-              workspace: {
-                provider: input.blueprint.sources.workspace.provider,
-                url: input.blueprint.sources.workspace.url,
-                ref: input.blueprint.sources.workspace.ref,
+              sandbox: {
+                provider: input.blueprint.sources.sandbox.provider,
+                url: input.blueprint.sources.sandbox.url,
+                ref: input.blueprint.sources.sandbox.ref,
               },
             },
             harness: {
@@ -244,16 +241,16 @@ function SandboxSummaryPage() {
   const [nameMutationError, setNameMutationError] = useState<string | null>(null);
   const [rerunMutationError, setRerunMutationError] = useState<string | null>(null);
   const sshCommand = buildSshCommand(sandbox.runtime?.endpoint);
-  const workspaceSpecDetails = resolveWorkspaceSpecDetails(sandbox);
+  const sandboxSpecDetails = resolveSandboxSpecDetails(sandbox);
   const vscodeOpenUri = buildVsCodeOpenUri({
     endpoint: sandbox.runtime?.endpoint,
     sandboxId: sandbox.sandboxId,
-    workingDirectory: workspaceSpecDetails?.workingDirectory,
+    workingDirectory: sandboxSpecDetails?.workingDirectory,
   });
   const cursorOpenUri = buildCursorOpenUri({
     endpoint: sandbox.runtime?.endpoint,
     sandboxId: sandbox.sandboxId,
-    workingDirectory: workspaceSpecDetails?.workingDirectory,
+    workingDirectory: sandboxSpecDetails?.workingDirectory,
   });
   const nameSuggestions = suggestSandboxNames(sandbox);
   const canRerunSandbox =
@@ -562,9 +559,9 @@ function SandboxSummaryPage() {
 
           <section className="border-t border-border px-6 py-6 sm:px-8">
             <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">
-              03 // Workspace Spec
+              03 // Sandbox Spec
             </p>
-            {workspaceSpecDetails === null ? (
+            {sandboxSpecDetails === null ? (
               <p className="mt-5 border border-border px-4 py-4 font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
                 Spec details are not available for this sandbox.
               </p>
@@ -575,8 +572,8 @@ function SandboxSummaryPage() {
                     label="Repository"
                     value={
                       <span className="flex flex-wrap items-center gap-2">
-                        <span className="break-all">{workspaceSpecDetails.repositoryUrl}</span>
-                        {workspaceSpecDetails.isGitHubSource ? (
+                        <span className="break-all">{sandboxSpecDetails.repositoryUrl}</span>
+                        {sandboxSpecDetails.isGitHubSource ? (
                           <Badge className="rounded-none border border-border bg-card font-mono text-[0.56rem] tracking-[0.11em] text-foreground">
                             GITHUB
                           </Badge>
@@ -584,31 +581,31 @@ function SandboxSummaryPage() {
                       </span>
                     }
                   />
-                  <RuntimeCell label="Branch" value={workspaceSpecDetails.branch} />
-                  <RuntimeCell label="Provider" value={workspaceSpecDetails.provider} />
-                  <RuntimeCell label="Config repo" value={workspaceSpecDetails.configRepo} />
-                  <RuntimeCell label="Harness" value={workspaceSpecDetails.harness} />
-                  <RuntimeCell label="Runtime target" value={workspaceSpecDetails.runtimeTarget} />
-                  <RuntimeCell label="OCI runtime" value={workspaceSpecDetails.ociRuntime} />
-                  <RuntimeCell label="OS target" value={workspaceSpecDetails.osTarget} />
+                  <RuntimeCell label="Branch" value={sandboxSpecDetails.branch} />
+                  <RuntimeCell label="Provider" value={sandboxSpecDetails.provider} />
+                  <RuntimeCell label="Config repo" value={sandboxSpecDetails.configRepo} />
+                  <RuntimeCell label="Harness" value={sandboxSpecDetails.harness} />
+                  <RuntimeCell label="Runtime target" value={sandboxSpecDetails.runtimeTarget} />
+                  <RuntimeCell label="OCI runtime" value={sandboxSpecDetails.ociRuntime} />
+                  <RuntimeCell label="OS target" value={sandboxSpecDetails.osTarget} />
                   <RuntimeCell
                     label="Working directory"
-                    value={workspaceSpecDetails.workingDirectory}
+                    value={sandboxSpecDetails.workingDirectory}
                   />
-                  <RuntimeCell label="SSH" value={workspaceSpecDetails.ssh} />
+                  <RuntimeCell label="SSH" value={sandboxSpecDetails.ssh} />
                 </div>
 
                 <div className="mt-5 border border-border px-4 py-4">
                   <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
                     Selected packages
                   </p>
-                  {workspaceSpecDetails.selectedPackages.length === 0 ? (
+                  {sandboxSpecDetails.selectedPackages.length === 0 ? (
                     <p className="mt-2 text-sm text-muted-foreground">
                       No packages selected during sandbox creation.
                     </p>
                   ) : (
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {workspaceSpecDetails.selectedPackages.map((pkg) => (
+                      {sandboxSpecDetails.selectedPackages.map((pkg) => (
                         <span
                           key={pkg}
                           className="inline-flex h-8 items-center border border-border bg-card px-2.5 font-mono text-[0.62rem] tracking-[0.1em] text-foreground"
@@ -931,7 +928,7 @@ function parseSshEndpoint(endpoint: string | undefined): ParsedSshEndpoint | nul
 }
 
 function normalizeVsCodePath(value: string | undefined): string {
-  const fallback = "/workspace/repo";
+  const fallback = "/sandbox/repo";
   const raw = (value ?? fallback).trim();
   const normalized = raw.length === 0 ? fallback : raw;
   const withLeadingSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
@@ -1011,7 +1008,7 @@ function buildSshCommand(endpoint: string | undefined): string | null {
   return `ssh ${endpoint}`;
 }
 
-interface WorkspaceSpecDetails {
+interface SandboxSpecDetails {
   readonly repositoryUrl: string;
   readonly branch: string;
   readonly isGitHubSource: boolean;
@@ -1026,9 +1023,9 @@ interface WorkspaceSpecDetails {
   readonly selectedPackages: readonly string[];
 }
 
-function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDetails | null {
-  const workspaceSource = resolveWorkspaceSourceReference(sandbox.spec);
-  const isGitHubSource = resolveIsGitHubSource(workspaceSource);
+function resolveSandboxSpecDetails(sandbox: SandboxSummary): SandboxSpecDetails | null {
+  const sandboxSource = resolveSandboxSourceReference(sandbox.spec);
+  const isGitHubSource = resolveIsGitHubSource(sandboxSource);
   const selectedPackages = sandbox.spec === undefined ? [] : resolveSelectedPackages(sandbox.spec);
   const configRepo = resolveConfigRepoReference({
     spec: sandbox.spec,
@@ -1040,7 +1037,7 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
     return null;
   }
 
-  const source = workspaceSource;
+  const source = sandboxSource;
   const harness = spec.harness.id;
   const osTarget = resolveOsTarget(spec);
   const runtimeTarget = resolveRuntimeTarget(spec);
@@ -1081,11 +1078,8 @@ function resolveWorkspaceSpecDetails(sandbox: SandboxSummary): WorkspaceSpecDeta
   };
 }
 
-function resolveConfigRepoReference(input: {
-  spec: WorkspaceBuildJobRequestPayload | undefined;
-}): string {
-  const sourceInputs =
-    input.spec?.sources.inputs ?? ([] as WorkspaceBuildJobRequestPayload["sources"]["inputs"]);
+function resolveConfigRepoReference(input: { spec: NewSandbox | undefined }): string {
+  const sourceInputs = input.spec?.sources.inputs ?? ([] as NewSandbox["sources"]["inputs"]);
   const dotfilesSource = sourceInputs.find((source) => source.purpose === "dotfiles");
 
   if (dotfilesSource === undefined) {
@@ -1095,15 +1089,13 @@ function resolveConfigRepoReference(input: {
   return `${dotfilesSource.url} @ ${dotfilesSource.ref ?? "main"}`;
 }
 
-function resolveWorkspaceSourceReference(
-  spec: WorkspaceBuildJobRequestPayload | undefined,
-): WorkspaceBuildJobRequestPayload["sources"]["workspace"] | undefined {
-  return spec?.sources.workspace;
+function resolveSandboxSourceReference(
+  spec: NewSandbox | undefined,
+): NewSandbox["sources"]["sandbox"] | undefined {
+  return spec?.sources.sandbox;
 }
 
-function resolveIsGitHubSource(
-  source: WorkspaceBuildJobRequestPayload["sources"]["workspace"] | undefined,
-): boolean {
+function resolveIsGitHubSource(source: NewSandbox["sources"]["sandbox"] | undefined): boolean {
   return (
     source !== undefined &&
     typeof source.authRef === "string" &&
@@ -1111,7 +1103,7 @@ function resolveIsGitHubSource(
   );
 }
 
-function resolveSelectedPackages(spec: WorkspaceBuildJobRequestPayload): readonly string[] {
+function resolveSelectedPackages(spec: NewSandbox): readonly string[] {
   const packages = spec.tooling.packages;
   const selectedPackages = new Set<string>();
 
@@ -1136,20 +1128,20 @@ function resolveSelectedPackages(spec: WorkspaceBuildJobRequestPayload): readonl
   return [...selectedPackages];
 }
 
-function resolveOsTarget(spec: WorkspaceBuildJobRequestPayload): string {
+function resolveOsTarget(spec: NewSandbox): string {
   return spec.target.os.family;
 }
 
-function resolveRuntimeTarget(spec: WorkspaceBuildJobRequestPayload): string {
+function resolveRuntimeTarget(spec: NewSandbox): string {
   return spec.target.runtime.family;
 }
 
-function resolveOciRuntime(spec: WorkspaceBuildJobRequestPayload): string {
+function resolveOciRuntime(spec: NewSandbox): string {
   return spec.runtime.ociRuntime;
 }
 
 function resolveSshState(input: {
-  spec?: WorkspaceBuildJobRequestPayload | undefined;
+  spec?: NewSandbox | undefined;
   blueprintSsh?: { enabled: boolean; listenPort: number };
 }): string {
   const ssh = input.spec?.access.ssh;
@@ -1175,7 +1167,7 @@ function suggestSandboxNames(sandbox: {
   readonly sandboxId: string;
   readonly repository?: string | undefined;
   readonly tag?: string | undefined;
-  readonly spec?: WorkspaceBuildJobRequestPayload;
+  readonly spec?: NewSandbox;
 }): readonly string[] {
   const repository = sandbox.repository?.trim() ?? "";
   const repositoryTail =
@@ -1201,12 +1193,12 @@ function suggestSandboxNames(sandbox: {
   return [...new Set(suggestions)].slice(0, 3);
 }
 
-function resolveSourceRef(spec: WorkspaceBuildJobRequestPayload | undefined): string | undefined {
+function resolveSourceRef(spec: NewSandbox | undefined): string | undefined {
   if (spec === undefined) {
     return undefined;
   }
 
-  const ref = spec.sources.workspace.ref.trim();
+  const ref = spec.sources.sandbox.ref.trim();
 
   if (ref.length === 0) {
     return undefined;

@@ -18,9 +18,9 @@
     "@fontsource/inter": "^5.2.8",
     "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.8",
-    "@sealant/auth": "workspace:*",
-    "@sealant/db": "workspace:*",
-    "@sealant/ui": "workspace:*",
+    "@sealant/auth": "link:../../packages/auth",
+    "@sealant/db": "link:../../packages/db",
+    "@sealant/ui": "link:../../packages/ui",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
     "@tanstack/react-form": "latest",
@@ -41,7 +41,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*",
+    "@sealant/typescript": "link:../../tooling/typescript",
     "@tailwindcss/typography": "^0.5.16",
     "@tanstack/devtools-vite": "latest",
     "@testing-library/dom": "^10.4.1",

@@ -4,8 +4,8 @@
   "id": "5ca9fe0f-6d4e-4209-8db2-3276e3ad2570",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
-    "workspace_build_jobs": {
-      "name": "workspace_build_jobs",
+    "sandbox_build_jobs": {
+      "name": "sandbox_build_jobs",
       "columns": {
         "id": {
           "name": "id",
@@ -115,8 +115,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "executor_id": {
-          "name": "executor_id",
+        "builder_id": {
+          "name": "builder_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -180,23 +180,23 @@
         }
       },
       "indexes": {
-        "workspace_build_jobs_status_available_at_idx": {
-          "name": "workspace_build_jobs_status_available_at_idx",
+        "sandbox_build_jobs_status_available_at_idx": {
+          "name": "sandbox_build_jobs_status_available_at_idx",
           "columns": ["status", "available_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_status_claimed_at_idx": {
-          "name": "workspace_build_jobs_status_claimed_at_idx",
+        "sandbox_build_jobs_status_claimed_at_idx": {
+          "name": "sandbox_build_jobs_status_claimed_at_idx",
           "columns": ["status", "claimed_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_created_at_idx": {
-          "name": "workspace_build_jobs_created_at_idx",
+        "sandbox_build_jobs_created_at_idx": {
+          "name": "sandbox_build_jobs_created_at_idx",
           "columns": ["created_at"],
           "isUnique": false
         },
-        "workspace_build_jobs_idempotency_key_idx": {
-          "name": "workspace_build_jobs_idempotency_key_idx",
+        "sandbox_build_jobs_idempotency_key_idx": {
+          "name": "sandbox_build_jobs_idempotency_key_idx",
           "columns": ["idempotency_key"],
           "isUnique": true
         }

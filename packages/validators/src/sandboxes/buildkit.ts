@@ -1,17 +1,17 @@
 import { z } from "zod";
 
 import {
-  concreteWorkspaceTargetOsFamilySchema,
-  osExecutorCompileInputSchema,
-  osExecutorCompileResultSchema,
-  type OsExecutor,
-  type OsExecutorCompileInput,
-} from "./executor.js";
-import { workspaceBlueprintSchema, workspaceCustomizationSchema } from "./workspace-blueprint.js";
+  concreteSandboxTargetOsFamilySchema,
+  osBuilderCompileInputSchema,
+  osBuilderCompileResultSchema,
+  type OsBuilder,
+  type OsBuilderCompileInput,
+} from "./builder.js";
+import { sandboxBlueprintSchema, sandboxCustomizationSchema } from "./sandbox-blueprint.js";
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
-export const buildkitTargetOsFamilySchema = concreteWorkspaceTargetOsFamilySchema;
+export const buildkitTargetOsFamilySchema = concreteSandboxTargetOsFamilySchema;
 
 export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix"]);
 
@@ -45,12 +45,12 @@ export const resolvedDotfilesPlanSchema = z.strictObject({
 });
 
 export const resolvedImagePlanSchema = z.strictObject({
-  blueprint: workspaceBlueprintSchema,
+  blueprint: sandboxBlueprintSchema,
   osFamily: buildkitTargetOsFamilySchema,
   baseImage: nonEmptyStringSchema,
   packageManager: buildkitPackageManagerSchema,
   packages: z.array(resolvedImagePackageSchema).default([]),
-  customization: workspaceCustomizationSchema,
+  customization: sandboxCustomizationSchema,
   dotfiles: resolvedDotfilesPlanSchema.optional(),
   buildSecrets: z.array(buildkitSecretSchema).default([]),
   runtimeSecrets: z.array(buildkitSecretSchema).default([]),
@@ -74,9 +74,9 @@ export const buildkitBuildSpecSchema = z.strictObject({
   buildArgs: z.record(z.string()).default({}),
 });
 
-export const buildkitOsExecutorCompileInputSchema = osExecutorCompileInputSchema;
+export const buildkitOsBuilderCompileInputSchema = osBuilderCompileInputSchema;
 
-export const buildkitOsExecutorCompileResultSchema = osExecutorCompileResultSchema.extend({
+export const buildkitOsBuilderCompileResultSchema = osBuilderCompileResultSchema.extend({
   buildkit: z.strictObject({
     imagePlan: resolvedImagePlanSchema,
     spec: buildkitBuildSpecSchema,
@@ -91,16 +91,16 @@ export const parseResolvedImagePlan = (input: unknown): ResolvedImagePlan => {
   return resolvedImagePlanSchema.parse(input);
 };
 
-export const parseBuildkitOsExecutorCompileInput = (
+export const parseBuildkitOsBuilderCompileInput = (
   input: unknown,
-): BuildkitOsExecutorCompileInput => {
-  return buildkitOsExecutorCompileInputSchema.parse(input);
+): BuildkitOsBuilderCompileInput => {
+  return buildkitOsBuilderCompileInputSchema.parse(input);
 };
 
-export const parseBuildkitOsExecutorCompileResult = (
+export const parseBuildkitOsBuilderCompileResult = (
   input: unknown,
-): BuildkitOsExecutorCompileResult => {
-  return buildkitOsExecutorCompileResultSchema.parse(input);
+): BuildkitOsBuilderCompileResult => {
+  return buildkitOsBuilderCompileResultSchema.parse(input);
 };
 
 export type BuildkitTargetOsFamily = z.infer<typeof buildkitTargetOsFamilySchema>;
@@ -121,13 +121,13 @@ export type ResolvedImagePlan = z.infer<typeof resolvedImagePlanSchema>;
 
 export type BuildkitBuildSpec = z.infer<typeof buildkitBuildSpecSchema>;
 
-export type BuildkitOsExecutorCompileInput = z.infer<typeof buildkitOsExecutorCompileInputSchema>;
+export type BuildkitOsBuilderCompileInput = z.infer<typeof buildkitOsBuilderCompileInputSchema>;
 
-export type BuildkitOsExecutorCompileResult = z.infer<typeof buildkitOsExecutorCompileResultSchema>;
+export type BuildkitOsBuilderCompileResult = z.infer<typeof buildkitOsBuilderCompileResultSchema>;
 
-export interface BuildkitOsExecutor extends OsExecutor {
+export interface BuildkitOsBuilder extends OsBuilder {
   readonly buildTool: "buildkit";
   readonly osFamily: BuildkitTargetOsFamily;
 
-  compile(input: OsExecutorCompileInput): Promise<BuildkitOsExecutorCompileResult>;
+  compile(input: OsBuilderCompileInput): Promise<BuildkitOsBuilderCompileResult>;
 }

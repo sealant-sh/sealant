@@ -59,12 +59,12 @@ To expose sandbox SSH access through a gateway endpoint instead of direct runtim
 When configured, sandbox runtime endpoints returned by the API are rewritten to:
 `ssh://<prefix>-<sandboxId>@<gateway-host>:<gateway-port>`.
 
-The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
+The sandbox build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
 and the shared SQLite database from `@sealant/db`.
 
 ## Operations Runbook (Local Image Build Flow)
 
-This API is the control-plane entrypoint for workspace image builds.
+This API is the control-plane entrypoint for sandbox image builds.
 
 ### What this flow does
 
@@ -120,14 +120,14 @@ curl http://localhost:4000/healthz
 curl http://localhost:4000/v1/registries/default/ping
 ```
 
-### Queue a workspace image build
+### Queue a sandbox image build
 
 ```bash
 curl -X POST http://localhost:4000/v1/sandboxes \
   -H 'content-type: application/json' \
   -d '{
     "registryId": "default",
-    "repository": "sealant/workspaces/demo",
+    "repository": "sealant/sandboxes/demo",
     "tag": "opencode",
     "spec": {
       "source": "https://github.com/example/repo",
@@ -163,7 +163,7 @@ On success, the response includes:
 ### Confirm image exists in registry
 
 ```bash
-curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/workspaces/demo"
+curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/sandboxes/demo"
 ```
 
 ### Common failure cases

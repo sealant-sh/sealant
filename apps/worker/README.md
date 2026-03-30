@@ -1,6 +1,6 @@
 # Worker App
 
-`@sealant/worker` is the first background worker for Sealant workspace image build jobs.
+`@sealant/worker` is the first background worker for Sealant sandbox image build jobs.
 
 It currently provides:
 
@@ -44,7 +44,7 @@ The worker expects:
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.
 
-Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
+Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized sandbox
 spec leaves `target.runtime.family` as `auto`.
 
 Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to

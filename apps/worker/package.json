@@ -2,7 +2,7 @@
   "name": "@sealant/worker",
   "version": "0.0.0",
   "private": true,
-  "description": "Background worker for workspace image build jobs",
+  "description": "Background worker for sandbox image build jobs",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -11,13 +11,13 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/db": "workspace:*",
-    "@sealant/rabbitmq": "workspace:*",
-    "@sealant/sandboxes": "workspace:*",
-    "@sealant/source-integrations": "workspace:*",
+    "@sealant/db": "link:../../packages/db",
+    "@sealant/rabbitmq": "link:../../packages/rabbitmq",
+    "@sealant/sandboxes": "link:../../packages/sandboxes",
+    "@sealant/source-integrations": "link:../../packages/source-integrations",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "link:../../tooling/typescript"
   }
 }

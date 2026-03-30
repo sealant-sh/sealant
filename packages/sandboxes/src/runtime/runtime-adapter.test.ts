@@ -11,7 +11,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
   const base = {
     version: "1",
     sources: {
-      workspace: {
+      sandbox: {
         kind: "git" as const,
         provider: "generic" as const,
         url: "https://github.com/example/repo.git",
@@ -49,8 +49,8 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
     },
     runtime: {
       env: {} as Record<string, string>,
-      workspaceRoot: "/workspace",
-      workingDirectory: "/workspace/repo",
+      sandboxRoot: "/sandbox",
+      workingDirectory: "/sandbox/repo",
       persistence: "ephemeral" as const,
       ociRuntime: "runc" as const,
       network: {
@@ -77,9 +77,9 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
       sources: {
         ...base.sources,
         ...override.sources,
-        workspace: {
-          ...base.sources.workspace,
-          ...override.sources?.workspace,
+        sandbox: {
+          ...base.sources.sandbox,
+          ...override.sources?.sandbox,
         },
         inputs: override.sources?.inputs ?? base.sources.inputs,
       },

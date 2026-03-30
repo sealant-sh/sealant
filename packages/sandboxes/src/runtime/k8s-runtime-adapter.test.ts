@@ -9,7 +9,7 @@ describe("K8sRuntimeAdapter", () => {
       blueprint: {
         version: "1",
         sources: {
-          workspace: {
+          sandbox: {
             kind: "git",
             provider: "generic",
             url: "https://github.com/example/repo.git",
@@ -47,8 +47,8 @@ describe("K8sRuntimeAdapter", () => {
         },
         runtime: {
           env: {},
-          workspaceRoot: "/workspace",
-          workingDirectory: "/workspace/repo",
+          sandboxRoot: "/sandbox",
+          workingDirectory: "/sandbox/repo",
           persistence: "ephemeral",
           ociRuntime: "runc",
           network: {

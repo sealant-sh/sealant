@@ -5,7 +5,7 @@ CREATE TABLE `sandbox_run_links` (
 	`linked_at` integer NOT NULL,
 	PRIMARY KEY(`sandbox_id`, `run_id`),
 	FOREIGN KEY (`sandbox_id`) REFERENCES `sandboxes`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `sandbox_run_links_run_id_idx` ON `sandbox_run_links` (`run_id`);--> statement-breakpoint
@@ -27,7 +27,7 @@ CREATE TABLE `sandboxes` (
 	FOREIGN KEY (`repository_profile_revision_id`) REFERENCES `repository_profile_revisions`(`id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`profile_revision_id`) REFERENCES `profile_revisions`(`id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`requested_by_user_id`) REFERENCES `user`(`id`) ON UPDATE no action ON DELETE set null,
-	FOREIGN KEY (`latest_run_id`) REFERENCES `workspace_runs`(`id`) ON UPDATE no action ON DELETE set null
+	FOREIGN KEY (`latest_run_id`) REFERENCES `sandbox_runs`(`id`) ON UPDATE no action ON DELETE set null
 );
 --> statement-breakpoint
 CREATE INDEX `sandboxes_owner_user_id_status_created_at_idx` ON `sandboxes` (`owner_user_id`,`status`,`created_at`);--> statement-breakpoint

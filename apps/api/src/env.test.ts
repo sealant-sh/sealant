@@ -12,7 +12,7 @@ const createBaseEnv = () => {
     DATABASE_BUSY_TIMEOUT_MS: "5000",
     RABBITMQ_URL: "amqp://sealant:sealant@127.0.0.1:5673",
     PORT: "4000",
-    WORKSPACE_BUILD_QUEUE_PREFETCH: "1",
+    SANDBOX_BUILD_QUEUE_PREFETCH: "1",
   } satisfies NodeJS.ProcessEnv;
 };
 

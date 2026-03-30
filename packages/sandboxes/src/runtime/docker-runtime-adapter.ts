@@ -9,7 +9,7 @@ import {
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
-  type WorkspaceCloneAuth,
+  type SandboxCloneAuth,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapter,
   type RuntimeAdapterLaunchInput,
@@ -154,7 +154,7 @@ const normalizeContainerToken = (value: string): string => {
 };
 
 const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): string => {
-  const repositoryToken = normalizeContainerToken(input.publishedImage.repository) || "workspace";
+  const repositoryToken = normalizeContainerToken(input.publishedImage.repository) || "sandbox";
   const tagToken = normalizeContainerToken(input.publishedImage.tag) || "latest";
   const suffix = Date.now().toString(36);
   return `${prefix}-${repositoryToken}-${tagToken}-${suffix}`;
@@ -168,9 +168,9 @@ const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> =
 
   return [
     "-e",
-    `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
+    `SEALANT_SANDBOX_REPO_URL=${input.blueprint.sources.sandbox.url}`,
     "-e",
-    `SEALANT_WORKSPACE_REPO_REF=${input.blueprint.sources.workspace.ref}`,
+    `SEALANT_SANDBOX_REPO_REF=${input.blueprint.sources.sandbox.ref}`,
     "-e",
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,
@@ -192,7 +192,7 @@ const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSuppo
     return parseRuntimeAdapterSupport({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: "The Docker runtime adapter currently supports only ephemeral workspaces.",
+      message: "The Docker runtime adapter currently supports only ephemeral sandboxes.",
     });
   }
 
@@ -295,8 +295,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return Buffer.from(trimmed, "utf8").toString("base64");
   }
 
-  private async resolveWorkspaceAuthKeyBase64(
-    cloneAuth: Extract<WorkspaceCloneAuth, { type: "file-ref" }>,
+  private async resolveSandboxAuthKeyBase64(
+    cloneAuth: Extract<SandboxCloneAuth, { type: "file-ref" }>,
   ): Promise<string | undefined> {
     const configuredPath = cloneAuth.path;
 
@@ -311,10 +311,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const message =
         error instanceof Error
           ? error.message
-          : `Could not read workspace clone key file: ${configuredPath}`;
+          : `Could not read sandbox clone key file: ${configuredPath}`;
       throw createAdapterError(
         "unsupported-access-mode",
-        `Workspace clone key could not be read at '${configuredPath}': ${message}`,
+        `Sandbox clone key could not be read at '${configuredPath}': ${message}`,
       );
     }
 
@@ -322,21 +322,19 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (trimmed.length === 0) {
       throw createAdapterError(
         "unsupported-access-mode",
-        `Workspace clone key file is empty: ${configuredPath}`,
+        `Sandbox clone key file is empty: ${configuredPath}`,
       );
     }
 
     return Buffer.from(`${trimmed}\n`, "utf8").toString("base64");
   }
 
-  private resolveWorkspaceCloneAuth(
-    input: RuntimeAdapterLaunchInput,
-  ): WorkspaceCloneAuth | undefined {
-    if (input.workspaceCloneAuth !== undefined && input.workspaceCloneAuth.type !== "none") {
-      return input.workspaceCloneAuth;
+  private resolveSandboxCloneAuth(input: RuntimeAdapterLaunchInput): SandboxCloneAuth | undefined {
+    if (input.sandboxCloneAuth !== undefined && input.sandboxCloneAuth.type !== "none") {
+      return input.sandboxCloneAuth;
     }
 
-    const configuredPath = input.blueprint.sources.workspace.authRef;
+    const configuredPath = input.blueprint.sources.sandbox.authRef;
     if (configuredPath === undefined || configuredPath.length === 0) {
       return undefined;
     }
@@ -560,10 +558,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const imageReference = parsed.publishedImage.digestReference;
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
     const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
-    const workspaceCloneAuth = this.resolveWorkspaceCloneAuth(parsed);
-    const workspaceAuthKeyBase64 =
-      workspaceCloneAuth?.type === "file-ref"
-        ? await this.resolveWorkspaceAuthKeyBase64(workspaceCloneAuth)
+    const sandboxCloneAuth = this.resolveSandboxCloneAuth(parsed);
+    const sandboxAuthKeyBase64 =
+      sandboxCloneAuth?.type === "file-ref"
+        ? await this.resolveSandboxAuthKeyBase64(sandboxCloneAuth)
         : undefined;
     const sshArgs =
       sshEnabled === true && this.sshEndpointExposureStrategy === "host-published"
@@ -577,23 +575,23 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             "-e",
             `SEALANT_SSH_PORT=${containerSshPort}`,
             "-e",
-            "SEALANT_SSH_AUTHORIZED_KEYS_FILE=/workspace/.ssh-runtime/authorized_keys.input",
+            "SEALANT_SSH_AUTHORIZED_KEYS_FILE=/sandbox/.ssh-runtime/authorized_keys.input",
             "-e",
             `SEALANT_SSH_AUTHORIZED_KEYS_BASE64=${await this.resolveAuthorizedKeysBase64(parsed)}`,
           ]
         : [];
-    const workspaceAuthEnvArgs =
-      workspaceAuthKeyBase64 === undefined
+    const sandboxAuthEnvArgs =
+      sandboxAuthKeyBase64 === undefined
         ? []
-        : ["-e", `SEALANT_WORKSPACE_AUTH_KEY_BASE64=${workspaceAuthKeyBase64}`];
-    const workspaceHttpAuthEnvArgs =
-      workspaceCloneAuth?.type !== "http-token"
+        : ["-e", `SEALANT_SANDBOX_AUTH_KEY_BASE64=${sandboxAuthKeyBase64}`];
+    const sandboxHttpAuthEnvArgs =
+      sandboxCloneAuth?.type !== "http-token"
         ? []
         : [
             "-e",
-            `SEALANT_WORKSPACE_HTTP_USERNAME=${workspaceCloneAuth.username}`,
+            `SEALANT_SANDBOX_HTTP_USERNAME=${sandboxCloneAuth.username}`,
             "-e",
-            `SEALANT_WORKSPACE_HTTP_TOKEN=${workspaceCloneAuth.token}`,
+            `SEALANT_SANDBOX_HTTP_TOKEN=${sandboxCloneAuth.token}`,
           ];
     const args = [
       "run",
@@ -606,8 +604,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       parsed.blueprint.runtime.workingDirectory,
       ...sshArgs,
       ...sshEnvArgs,
-      ...workspaceAuthEnvArgs,
-      ...workspaceHttpAuthEnvArgs,
+      ...sandboxAuthEnvArgs,
+      ...sandboxHttpAuthEnvArgs,
       ...envArgsFromBlueprint(parsed),
       imageReference,
     ];

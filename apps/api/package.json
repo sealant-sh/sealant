@@ -14,11 +14,11 @@
     "@hono/node-server": "^1.18.1",
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",
-    "@sealant/db": "workspace:*",
-    "@sealant/rabbitmq": "workspace:*",
-    "@sealant/sandboxes": "workspace:*",
-    "@sealant/source-integrations": "workspace:*",
-    "@sealant/validators": "workspace:*",
+    "@sealant/db": "link:../../packages/db",
+    "@sealant/rabbitmq": "link:../../packages/rabbitmq",
+    "@sealant/sandboxes": "link:../../packages/sandboxes",
+    "@sealant/source-integrations": "link:../../packages/source-integrations",
+    "@sealant/validators": "link:../../packages/validators",
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
     "@types/json-schema": "^7.0.15",
@@ -30,6 +30,6 @@
     "zod-openapi": "^4.2.4"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "link:../../tooling/typescript"
   }
 }

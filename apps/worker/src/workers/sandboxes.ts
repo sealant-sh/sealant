@@ -1,7 +1,7 @@
 import { closeDatabaseClient, createDatabaseClientFromEnv } from "@sealant/db";
 import { closeRabbitMqSingleton } from "@sealant/rabbitmq";
 import {
-  consumeWorkspaceBuildJobs,
+  consumeSandboxBuildJobs,
   createZotRegistryClient,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
@@ -36,15 +36,15 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     new K3sRuntimeAdapter(),
   ];
 
-  const consumer = await consumeWorkspaceBuildJobs({
+  const consumer = await consumeSandboxBuildJobs({
     connectionUrl: env.RABBITMQ_URL,
-    prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    prefetch: env.SANDBOX_BUILD_QUEUE_PREFETCH,
     onMessage: async ({ message, ack, nack }) => {
       try {
         await processSandboxBuildJob({
           jobId: message.jobId,
           workerId: env.WORKER_ID,
-          leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+          leaseDurationMs: env.SANDBOX_BUILD_JOB_LEASE_DURATION_MS,
           dbClient,
           runtimeAdapters,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,

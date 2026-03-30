@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { RepositoryRows } from "@/components/app/repository-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
-import { REPOSITORIES } from "@/lib/navigation/workspace-data";
+import { SandboxPage } from "@/components/app/sandbox-page";
+import { REPOSITORIES } from "@/lib/navigation/sandbox-data";
 
 export const Route = createFileRoute("/_authenticated/repositories/" as never)({
   component: RepositoriesPage,
@@ -10,7 +10,7 @@ export const Route = createFileRoute("/_authenticated/repositories/" as never)({
 
 function RepositoriesPage() {
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Repositories"
       title="Repository setup"
       description="Configure repositories, verify ownership, and inspect run readiness from one rule-driven surface."
@@ -27,6 +27,6 @@ function RepositoriesPage() {
       ]}
     >
       <RepositoryRows repositories={REPOSITORIES} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

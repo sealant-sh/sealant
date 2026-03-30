@@ -2,11 +2,11 @@ export {
   compileSandboxBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   selectBuildkitOsFamily,
-} from "./buildkit-executor.js";
+} from "./buildkit-builder.js";
 
 export type {
   BuildkitCompilerOptions,
   BuildkitCommandOptions,
   BuildkitCommandResult,
   BuildkitCommandRunner,
-} from "./buildkit-executor.js";
+} from "./buildkit-builder.js";

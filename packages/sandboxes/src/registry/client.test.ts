@@ -46,7 +46,7 @@ describe("ZotRegistryClient", () => {
       ) as typeof fetch,
     });
 
-    await expect(client.listTags("sealant/workspace")).resolves.toEqual(["latest", "opencode"]);
+    await expect(client.listTags("sealant/sandbox")).resolves.toEqual(["latest", "opencode"]);
   });
 
   it("discovers enabled extensions", async () => {
@@ -105,7 +105,7 @@ describe("ZotRegistryClient", () => {
         stderr: "",
       }))
       .mockResolvedValueOnce({
-        stdout: "Loaded image: sealant-workspace-opencode:opencode\n",
+        stdout: "Loaded image: sealant-sandbox-opencode:opencode\n",
         stderr: "",
       })
       .mockResolvedValueOnce({
@@ -128,31 +128,31 @@ describe("ZotRegistryClient", () => {
 
     await expect(
       client.publishOciImage({
-        artifactPath: "/tmp/workspace-image.tar",
-        repository: "sealant/workspaces/demo",
+        artifactPath: "/tmp/sandbox-image.tar",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
       }),
     ).resolves.toEqual({
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tag: "opencode",
-      reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:published-digest",
+      reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+      digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:published-digest",
       digest: "sha256:published-digest",
     });
 
     expect(commandRunner).toHaveBeenNthCalledWith(1, "docker", [
       "load",
       "-i",
-      "/tmp/workspace-image.tar",
+      "/tmp/sandbox-image.tar",
     ]);
     expect(commandRunner).toHaveBeenNthCalledWith(2, "docker", [
       "tag",
-      "sealant-workspace-opencode:opencode",
-      "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      "sealant-sandbox-opencode:opencode",
+      "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
     ]);
     expect(commandRunner).toHaveBeenNthCalledWith(3, "docker", [
       "push",
-      "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
     ]);
   });
 

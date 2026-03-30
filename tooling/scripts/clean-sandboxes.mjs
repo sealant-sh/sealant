@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const workspaceGroups = ["apps", "packages", "tooling"];
+const sandboxGroups = ["apps", "packages", "tooling"];
 
 const candidates = [resolve(repoRoot, "node_modules")];
 
-for (const group of workspaceGroups) {
+for (const group of sandboxGroups) {
   const groupPath = resolve(repoRoot, group);
   let entries = [];
 

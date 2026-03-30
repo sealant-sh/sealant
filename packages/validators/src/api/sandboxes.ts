@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { workspaceBuildJobRequestPayloadSchema } from "../sandboxes/payloads.js";
+import { newSandboxSchema } from "../sandboxes/payloads.js";
 
 export const sandboxAttemptTriggerTypeValues = [
   "manual",
@@ -31,7 +31,7 @@ export const createSandboxRequestSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   sourceSelection: githubSandboxSourceSelectionSchema.optional(),
   dotfilesSelection: githubSandboxSourceSelectionSchema.optional(),
-  spec: workspaceBuildJobRequestPayloadSchema,
+  spec: newSandboxSchema,
 });
 
 export const renameSandboxRequestSchema = z.object({
@@ -102,7 +102,7 @@ export const sandboxSummarySchema = z.object({
 });
 
 export const sandboxDetailsSchema = sandboxSummarySchema.extend({
-  spec: workspaceBuildJobRequestPayloadSchema.optional(),
+  spec: newSandboxSchema.optional(),
 });
 
 export const listSandboxesQuerySchema = z.object({
@@ -130,7 +130,7 @@ export const sandboxAttemptSummarySchema = z.object({
   runtime: sandboxRuntimeSchema.optional(),
   publishedImage: sandboxPublishedImageSchema.optional(),
   error: sandboxErrorSchema.optional(),
-  spec: workspaceBuildJobRequestPayloadSchema.optional(),
+  spec: newSandboxSchema.optional(),
   queuedAt: z.string().datetime(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

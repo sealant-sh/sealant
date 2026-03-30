@@ -1,60 +1,57 @@
 import { and, asc, desc, eq, inArray, lte, or } from "drizzle-orm";
 
 import type { DatabaseClient } from "../client.js";
-import type {
-  WorkspaceBuildJobRequestPayload,
-  WorkspaceBuildJobResultPayload,
-} from "../payloads.js";
+import type { NewSandbox, SandboxBuild } from "../payloads.js";
 import {
-  workspaceBuildJobs,
-  type NewWorkspaceBuildJob,
-  type WorkspaceBuildJob,
-  type WorkspaceBuildJobStatus,
+  sandboxBuildJobs,
+  type NewSandboxBuildJob,
+  type SandboxBuildJob,
+  type SandboxBuildJobStatus,
 } from "../schema.js";
 
-export interface EnqueueWorkspaceBuildJobInput {
+export interface EnqueueSandboxBuildJobInput {
   readonly id: string;
   readonly runId?: string;
   readonly registryId: string;
   readonly repository: string;
   readonly tag: string;
-  readonly requestPayload: WorkspaceBuildJobRequestPayload;
+  readonly requestPayload: NewSandbox;
   readonly idempotencyKey?: string;
   readonly availableAt?: Date;
   readonly maxAttempts?: number;
 }
 
-export interface ClaimNextWorkspaceBuildJobInput {
+export interface ClaimNextSandboxBuildJobInput {
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly now?: Date;
 }
 
-export interface MarkWorkspaceBuildJobRunningInput {
+export interface MarkSandboxBuildJobRunningInput {
   readonly id: string;
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly now?: Date;
 }
 
-export interface ClaimWorkspaceBuildJobByIdInput {
+export interface ClaimSandboxBuildJobByIdInput {
   readonly id: string;
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly now?: Date;
 }
 
-export interface MarkWorkspaceBuildJobSucceededInput {
+export interface MarkSandboxBuildJobSucceededInput {
   readonly id: string;
-  readonly executorId: string;
-  readonly resultPayload?: WorkspaceBuildJobResultPayload;
+  readonly builderId: string;
+  readonly resultPayload?: SandboxBuild;
   readonly publishedReference: string;
   readonly publishedDigestReference: string;
   readonly publishedDigest: string;
   readonly finishedAt?: Date;
 }
 
-export interface MarkWorkspaceBuildJobFailedInput {
+export interface MarkSandboxBuildJobFailedInput {
   readonly id: string;
   readonly errorMessage: string;
   readonly errorCode?: string;
@@ -68,14 +65,12 @@ const requiredDate = (value: Date | undefined): Date => {
 // "Repository" here means a small database access layer, not a Git repository.
 // The API and worker can both call these functions instead of re-implementing
 // job queries and status transitions in multiple places.
-export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
+export const createSandboxBuildJobRepository = (client: DatabaseClient) => {
   const { db } = client;
 
-  const insertQueuedJob = async (
-    input: EnqueueWorkspaceBuildJobInput,
-  ): Promise<WorkspaceBuildJob> => {
+  const insertQueuedJob = async (input: EnqueueSandboxBuildJobInput): Promise<SandboxBuildJob> => {
     const [job] = await db
-      .insert(workspaceBuildJobs)
+      .insert(sandboxBuildJobs)
       .values({
         id: input.id,
         ...(input.runId === undefined ? {} : { runId: input.runId }),
@@ -87,43 +82,43 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
         ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
         ...(input.availableAt === undefined ? {} : { availableAt: input.availableAt }),
         ...(input.maxAttempts === undefined ? {} : { maxAttempts: input.maxAttempts }),
-      } satisfies NewWorkspaceBuildJob)
+      } satisfies NewSandboxBuildJob)
       .returning();
 
     if (job === undefined) {
-      throw new Error("Failed to insert workspace build job.");
+      throw new Error("Failed to insert sandbox build job.");
     }
 
     return job;
   };
 
-  const getJobById = async (id: string): Promise<WorkspaceBuildJob | undefined> => {
+  const getJobById = async (id: string): Promise<SandboxBuildJob | undefined> => {
     const [job] = await db
       .select()
-      .from(workspaceBuildJobs)
-      .where(eq(workspaceBuildJobs.id, id))
+      .from(sandboxBuildJobs)
+      .where(eq(sandboxBuildJobs.id, id))
       .limit(1);
     return job;
   };
 
   const getJobByIdempotencyKey = async (
     idempotencyKey: string,
-  ): Promise<WorkspaceBuildJob | undefined> => {
+  ): Promise<SandboxBuildJob | undefined> => {
     const [job] = await db
       .select()
-      .from(workspaceBuildJobs)
-      .where(eq(workspaceBuildJobs.idempotencyKey, idempotencyKey))
+      .from(sandboxBuildJobs)
+      .where(eq(sandboxBuildJobs.idempotencyKey, idempotencyKey))
       .limit(1);
 
     return job;
   };
 
-  const getLatestJobByRunId = async (runId: string): Promise<WorkspaceBuildJob | undefined> => {
+  const getLatestJobByRunId = async (runId: string): Promise<SandboxBuildJob | undefined> => {
     const [job] = await db
       .select()
-      .from(workspaceBuildJobs)
-      .where(eq(workspaceBuildJobs.runId, runId))
-      .orderBy(desc(workspaceBuildJobs.createdAt))
+      .from(sandboxBuildJobs)
+      .where(eq(sandboxBuildJobs.runId, runId))
+      .orderBy(desc(sandboxBuildJobs.createdAt))
       .limit(1);
 
     return job;
@@ -131,18 +126,18 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
 
   const listLatestJobsByRunIds = async (
     runIds: readonly string[],
-  ): Promise<ReadonlyMap<string, WorkspaceBuildJob>> => {
+  ): Promise<ReadonlyMap<string, SandboxBuildJob>> => {
     if (runIds.length === 0) {
       return new Map();
     }
 
     const jobs = await db
       .select()
-      .from(workspaceBuildJobs)
-      .where(inArray(workspaceBuildJobs.runId, [...runIds]))
-      .orderBy(desc(workspaceBuildJobs.createdAt));
+      .from(sandboxBuildJobs)
+      .where(inArray(sandboxBuildJobs.runId, [...runIds]))
+      .orderBy(desc(sandboxBuildJobs.createdAt));
 
-    const latestJobsByRunId = new Map<string, WorkspaceBuildJob>();
+    const latestJobsByRunId = new Map<string, SandboxBuildJob>();
 
     for (const job of jobs) {
       if (job.runId === null || latestJobsByRunId.has(job.runId)) {
@@ -156,20 +151,20 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
   };
 
   const listJobsByStatus = async (
-    status: WorkspaceBuildJobStatus,
+    status: SandboxBuildJobStatus,
     limit = 50,
-  ): Promise<Array<WorkspaceBuildJob>> => {
+  ): Promise<Array<SandboxBuildJob>> => {
     return db
       .select()
-      .from(workspaceBuildJobs)
-      .where(eq(workspaceBuildJobs.status, status))
-      .orderBy(asc(workspaceBuildJobs.createdAt))
+      .from(sandboxBuildJobs)
+      .where(eq(sandboxBuildJobs.status, status))
+      .orderBy(asc(sandboxBuildJobs.createdAt))
       .limit(limit);
   };
 
   const claimNextQueuedJob = async (
-    input: ClaimNextWorkspaceBuildJobInput,
-  ): Promise<WorkspaceBuildJob | null> => {
+    input: ClaimNextSandboxBuildJobInput,
+  ): Promise<SandboxBuildJob | null> => {
     const now = requiredDate(input.now);
     const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
 
@@ -179,17 +174,14 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
     return db.transaction(async (tx) => {
       const [candidate] = await tx
         .select()
-        .from(workspaceBuildJobs)
+        .from(sandboxBuildJobs)
         .where(
           or(
-            and(eq(workspaceBuildJobs.status, "queued"), lte(workspaceBuildJobs.availableAt, now)),
-            and(
-              eq(workspaceBuildJobs.status, "running"),
-              lte(workspaceBuildJobs.leaseExpiresAt, now),
-            ),
+            and(eq(sandboxBuildJobs.status, "queued"), lte(sandboxBuildJobs.availableAt, now)),
+            and(eq(sandboxBuildJobs.status, "running"), lte(sandboxBuildJobs.leaseExpiresAt, now)),
           ),
         )
-        .orderBy(asc(workspaceBuildJobs.availableAt), asc(workspaceBuildJobs.createdAt))
+        .orderBy(asc(sandboxBuildJobs.availableAt), asc(sandboxBuildJobs.createdAt))
         .limit(1);
 
       if (candidate === undefined) {
@@ -197,7 +189,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
       }
 
       const [claimed] = await tx
-        .update(workspaceBuildJobs)
+        .update(sandboxBuildJobs)
         .set({
           status: "running",
           workerId: input.workerId,
@@ -206,7 +198,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
           startedAt: candidate.startedAt ?? now,
           attemptCount: candidate.attemptCount + 1,
         })
-        .where(eq(workspaceBuildJobs.id, candidate.id))
+        .where(eq(sandboxBuildJobs.id, candidate.id))
         .returning();
 
       return claimed ?? null;
@@ -214,23 +206,23 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
   };
 
   const claimJobById = async (
-    input: ClaimWorkspaceBuildJobByIdInput,
-  ): Promise<WorkspaceBuildJob | null> => {
+    input: ClaimSandboxBuildJobByIdInput,
+  ): Promise<SandboxBuildJob | null> => {
     const now = requiredDate(input.now);
     const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
 
     return db.transaction(async (tx) => {
       const [candidate] = await tx
         .select()
-        .from(workspaceBuildJobs)
+        .from(sandboxBuildJobs)
         .where(
           and(
-            eq(workspaceBuildJobs.id, input.id),
+            eq(sandboxBuildJobs.id, input.id),
             or(
-              eq(workspaceBuildJobs.status, "queued"),
+              eq(sandboxBuildJobs.status, "queued"),
               and(
-                eq(workspaceBuildJobs.status, "running"),
-                lte(workspaceBuildJobs.leaseExpiresAt, now),
+                eq(sandboxBuildJobs.status, "running"),
+                lte(sandboxBuildJobs.leaseExpiresAt, now),
               ),
             ),
           ),
@@ -242,7 +234,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
       }
 
       const [claimed] = await tx
-        .update(workspaceBuildJobs)
+        .update(sandboxBuildJobs)
         .set({
           status: "running",
           workerId: input.workerId,
@@ -251,7 +243,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
           startedAt: candidate.startedAt ?? now,
           attemptCount: candidate.attemptCount + 1,
         })
-        .where(eq(workspaceBuildJobs.id, candidate.id))
+        .where(eq(sandboxBuildJobs.id, candidate.id))
         .returning();
 
       return claimed ?? null;
@@ -259,12 +251,12 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
   };
 
   const markJobRunning = async (
-    input: MarkWorkspaceBuildJobRunningInput,
-  ): Promise<WorkspaceBuildJob | null> => {
+    input: MarkSandboxBuildJobRunningInput,
+  ): Promise<SandboxBuildJob | null> => {
     const now = requiredDate(input.now);
     const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
     const [job] = await db
-      .update(workspaceBuildJobs)
+      .update(sandboxBuildJobs)
       .set({
         status: "running",
         workerId: input.workerId,
@@ -272,20 +264,20 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
         startedAt: now,
         leaseExpiresAt,
       })
-      .where(eq(workspaceBuildJobs.id, input.id))
+      .where(eq(sandboxBuildJobs.id, input.id))
       .returning();
 
     return job ?? null;
   };
 
   const markJobSucceeded = async (
-    input: MarkWorkspaceBuildJobSucceededInput,
-  ): Promise<WorkspaceBuildJob | null> => {
+    input: MarkSandboxBuildJobSucceededInput,
+  ): Promise<SandboxBuildJob | null> => {
     const [job] = await db
-      .update(workspaceBuildJobs)
+      .update(sandboxBuildJobs)
       .set({
         status: "succeeded",
-        executorId: input.executorId,
+        builderId: input.builderId,
         ...(input.resultPayload === undefined ? {} : { resultPayload: input.resultPayload }),
         publishedReference: input.publishedReference,
         publishedDigestReference: input.publishedDigestReference,
@@ -295,17 +287,17 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
         errorCode: null,
         errorMessage: null,
       })
-      .where(eq(workspaceBuildJobs.id, input.id))
+      .where(eq(sandboxBuildJobs.id, input.id))
       .returning();
 
     return job ?? null;
   };
 
   const markJobFailed = async (
-    input: MarkWorkspaceBuildJobFailedInput,
-  ): Promise<WorkspaceBuildJob | null> => {
+    input: MarkSandboxBuildJobFailedInput,
+  ): Promise<SandboxBuildJob | null> => {
     const [job] = await db
-      .update(workspaceBuildJobs)
+      .update(sandboxBuildJobs)
       .set({
         status: "failed",
         ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
@@ -313,7 +305,7 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
         finishedAt: input.finishedAt ?? new Date(),
         leaseExpiresAt: null,
       })
-      .where(eq(workspaceBuildJobs.id, input.id))
+      .where(eq(sandboxBuildJobs.id, input.id))
       .returning();
 
     return job ?? null;
@@ -334,4 +326,4 @@ export const createWorkspaceBuildJobRepository = (client: DatabaseClient) => {
   };
 };
 
-export type WorkspaceBuildJobRepository = ReturnType<typeof createWorkspaceBuildJobRepository>;
+export type SandboxBuildJobRepository = ReturnType<typeof createSandboxBuildJobRepository>;

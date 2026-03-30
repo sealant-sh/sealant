@@ -1,21 +1,19 @@
 import { readFile } from "node:fs/promises";
 
-import type { WorkspaceBuildJobRequestPayload } from "@sealant/validators";
+import type { NewSandbox } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   compileSandboxBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   selectBuildkitOsFamily,
-} from "./buildkit-executor.js";
+} from "./buildkit-builder.js";
 
-const createSandboxBuildSpec = (
-  overrides: Partial<WorkspaceBuildJobRequestPayload> = {},
-): WorkspaceBuildJobRequestPayload => {
-  const base: WorkspaceBuildJobRequestPayload = {
+const createSandboxBuildSpec = (overrides: Partial<NewSandbox> = {}): NewSandbox => {
+  const base: NewSandbox = {
     version: "1",
     sources: {
-      workspace: {
+      sandbox: {
         kind: "git",
         provider: "generic",
         url: "https://github.com/example/repo.git",
@@ -53,8 +51,8 @@ const createSandboxBuildSpec = (
     },
     runtime: {
       env: {},
-      workspaceRoot: "/workspace",
-      workingDirectory: "/workspace/repo",
+      sandboxRoot: "/sandbox",
+      workingDirectory: "/sandbox/repo",
       persistence: "ephemeral",
       ociRuntime: "runc",
       network: {
@@ -79,9 +77,9 @@ const createSandboxBuildSpec = (
     sources: {
       ...base.sources,
       ...overrides.sources,
-      workspace: {
-        ...base.sources.workspace,
-        ...overrides.sources?.workspace,
+      sandbox: {
+        ...base.sources.sandbox,
+        ...overrides.sources?.sandbox,
       },
       inputs: overrides.sources?.inputs ?? base.sources.inputs,
     },
@@ -148,12 +146,12 @@ describe("compileSandboxBuildSpec", () => {
   it("maps a blueprint into a resolved BuildKit image plan", () => {
     const blueprint = createSandboxBuildSpec({
       sources: {
-        workspace: {
+        sandbox: {
           kind: "git",
           provider: "generic",
           url: "https://github.com/example/repo.git",
           ref: "main",
-          authRef: "/workspace/.secrets/workspace_repo_key",
+          authRef: "/sandbox/.secrets/sandbox_repo_key",
         },
         inputs: [
           {
@@ -163,7 +161,7 @@ describe("compileSandboxBuildSpec", () => {
             provider: "generic",
             url: "https://github.com/example/dotfiles.git",
             ref: "main",
-            authRef: "/workspace/.secrets/dotfiles_key",
+            authRef: "/sandbox/.secrets/dotfiles_key",
           },
         ],
       },
@@ -195,10 +193,10 @@ describe("compileSandboxBuildSpec", () => {
     expect(plan.packageManager).toBe("dnf");
     expect(plan.runtimeSecrets).toEqual([
       {
-        id: "workspace_git_key",
+        id: "sandbox_git_key",
         kind: "ssh-key",
         phase: "runtime",
-        sourceRef: "/workspace/.secrets/workspace_repo_key",
+        sourceRef: "/sandbox/.secrets/sandbox_repo_key",
       },
     ]);
     expect(plan.dotfiles).toMatchObject({
@@ -214,7 +212,7 @@ describe("compileSandboxBuildSpec", () => {
     >(async () => ({ stdout: "", stderr: "" }));
     const blueprint = createSandboxBuildSpec({
       sources: {
-        workspace: {
+        sandbox: {
           kind: "git",
           provider: "generic",
           url: "https://github.com/example/repo.git",
@@ -273,7 +271,7 @@ describe("compileSandboxBuildSpec", () => {
   it("installs stow when the dotfiles manager is stow", () => {
     const blueprint = createSandboxBuildSpec({
       sources: {
-        workspace: {
+        sandbox: {
           kind: "git",
           provider: "generic",
           url: "https://github.com/example/repo.git",
@@ -435,8 +433,8 @@ describe("compileSandboxBuildSpec", () => {
     expect(commandRunner).toHaveBeenCalledTimes(2);
     expect(buildCommandArgs.slice(0, 4)).toEqual(["build", "--file", expect.any(String), "--tag"]);
     expect(saveCommandArgs.slice(0, 2)).toEqual(["save", "--output"]);
-    expect(saveCommandArgs[2]).toMatch(/workspace-image\.tar$/);
-    expect(result.executor).toEqual({
+    expect(saveCommandArgs[2]).toMatch(/sandbox-image\.tar$/);
+    expect(result.builder).toEqual({
       id: "fedora",
       osFamily: "fedora",
     });
@@ -449,18 +447,18 @@ describe("compileSandboxBuildSpec", () => {
 
     expect(containerfile).toContain("FROM fedora:41");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
-    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/workspace-entrypoint"]');
-    expect(entrypoint).toContain('mkdir -p "$WORKSPACE_ROOT" "$WORKING_DIRECTORY"');
-    expect(entrypoint).toContain("cat > /usr/local/bin/workspace-ssh-shell <<'EOF'");
-    expect(entrypoint).toContain("ForceCommand /usr/local/bin/workspace-ssh-shell");
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint"]');
+    expect(entrypoint).toContain('mkdir -p "$SANDBOX_ROOT" "$WORKING_DIRECTORY"');
+    expect(entrypoint).toContain("cat > /usr/local/bin/sandbox-ssh-shell <<'EOF'");
+    expect(entrypoint).toContain("ForceCommand /usr/local/bin/sandbox-ssh-shell");
     expect(entrypoint).toContain("BASH_SHELL='/bin/bash'");
     expect(entrypoint).toContain('if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then');
     expect(entrypoint).toContain('exec "$BASH_SHELL" -i');
     expect(entrypoint).toContain('exec "$LOGIN_SHELL" -i');
     expect(entrypoint).toContain("cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'");
     expect(entrypoint).toContain('export GIT_ASKPASS="$REPO_GIT_ASKPASS_PATH"');
-    expect(entrypoint).toContain("cleanup_workspace_clone_auth");
-    expect(entrypoint).toContain('git clone --branch "$WORKSPACE_REPO_REF"');
+    expect(entrypoint).toContain("cleanup_sandbox_clone_auth");
+    expect(entrypoint).toContain('git clone --branch "$SANDBOX_REPO_REF"');
     expect(entrypoint).toContain("exec /bin/bash -lc 'pnpm dev'");
   });
 
@@ -542,7 +540,7 @@ describe("compileSandboxBuildSpec", () => {
     const containerfile = await readFile(containerfilePath, "utf8");
     const entrypoint = await readFile(entrypointPath, "utf8");
 
-    expect(result.executor).toEqual({
+    expect(result.builder).toEqual({
       id: "nix",
       osFamily: "nix",
     });

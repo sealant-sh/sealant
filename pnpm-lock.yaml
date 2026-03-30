@@ -51,19 +51,19 @@ importers:
         specifier: ^0.9.13
         version: 0.9.48(hono@4.12.8)
       '@sealant/db':
-        specifier: workspace:*
+        specifier: link:../../packages/db
         version: link:../../packages/db
       '@sealant/rabbitmq':
-        specifier: workspace:*
+        specifier: link:../../packages/rabbitmq
         version: link:../../packages/rabbitmq
       '@sealant/sandboxes':
-        specifier: workspace:*
+        specifier: link:../../packages/sandboxes
         version: link:../../packages/sandboxes
       '@sealant/source-integrations':
-        specifier: workspace:*
+        specifier: link:../../packages/source-integrations
         version: link:../../packages/source-integrations
       '@sealant/validators':
-        specifier: workspace:*
+        specifier: link:../../packages/validators
         version: link:../../packages/validators
       '@standard-community/standard-json':
         specifier: ^0.3.5
@@ -94,7 +94,7 @@ importers:
         version: 4.2.4(zod@3.25.76)
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   apps/docs:
@@ -155,7 +155,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@tailwindcss/typography':
         specifier: ^0.5.16
@@ -200,7 +200,7 @@ importers:
   apps/electron:
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   apps/marketing:
@@ -252,7 +252,7 @@ importers:
         specifier: ^1.30.2
         version: 1.30.2(vite@7.3.1(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0))(workerd@1.20260317.1)(wrangler@4.78.0)
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@tanstack/devtools-vite':
         specifier: latest
@@ -298,7 +298,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@types/ssh2':
         specifier: ^1.15.5
@@ -316,13 +316,13 @@ importers:
         specifier: ^5.2.8
         version: 5.2.10
       '@sealant/auth':
-        specifier: workspace:*
+        specifier: link:../../packages/auth
         version: link:../../packages/auth
       '@sealant/db':
-        specifier: workspace:*
+        specifier: link:../../packages/db
         version: link:../../packages/db
       '@sealant/ui':
-        specifier: workspace:*
+        specifier: link:../../packages/ui
         version: link:../../packages/ui
       '@tailwindcss/vite':
         specifier: ^4.1.18
@@ -380,7 +380,7 @@ importers:
         version: 4.3.6
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@tailwindcss/typography':
         specifier: ^0.5.16
@@ -425,29 +425,29 @@ importers:
   apps/worker:
     dependencies:
       '@sealant/db':
-        specifier: workspace:*
+        specifier: link:../../packages/db
         version: link:../../packages/db
       '@sealant/rabbitmq':
-        specifier: workspace:*
+        specifier: link:../../packages/rabbitmq
         version: link:../../packages/rabbitmq
       '@sealant/sandboxes':
-        specifier: workspace:*
+        specifier: link:../../packages/sandboxes
         version: link:../../packages/sandboxes
       '@sealant/source-integrations':
-        specifier: workspace:*
+        specifier: link:../../packages/source-integrations
         version: link:../../packages/source-integrations
       zod:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   packages/auth:
     dependencies:
       '@sealant/db':
-        specifier: workspace:*
+        specifier: link:../db
         version: link:../db
       better-auth:
         specifier: ^1.4.13
@@ -457,7 +457,7 @@ importers:
         version: 4.3.6
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   packages/db:
@@ -466,7 +466,7 @@ importers:
         specifier: ^0.15.15
         version: 0.15.15
       '@sealant/validators':
-        specifier: workspace:*
+        specifier: link:../validators
         version: link:../validators
       drizzle-orm:
         specifier: ^0.44.7
@@ -479,7 +479,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       drizzle-kit:
         specifier: ^0.31.5
@@ -495,7 +495,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@types/amqplib':
         specifier: ^0.10.7
@@ -504,16 +504,16 @@ importers:
   packages/sandboxes:
     dependencies:
       '@sealant/db':
-        specifier: workspace:*
+        specifier: link:../db
         version: link:../db
       '@sealant/rabbitmq':
-        specifier: workspace:*
+        specifier: link:../rabbitmq
         version: link:../rabbitmq
       '@sealant/source-integrations':
-        specifier: workspace:*
+        specifier: link:../source-integrations
         version: link:../source-integrations
       '@sealant/validators':
-        specifier: workspace:*
+        specifier: link:../validators
         version: link:../validators
       amqplib:
         specifier: ^0.10.9
@@ -523,7 +523,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@types/amqplib':
         specifier: ^0.10.7
@@ -532,7 +532,7 @@ importers:
   packages/source-integrations:
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   packages/ui:
@@ -602,7 +602,7 @@ importers:
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
       '@types/react':
         specifier: ^19.0.0
@@ -621,7 +621,7 @@ importers:
         version: 3.25.76
     devDependencies:
       '@sealant/typescript':
-        specifier: workspace:*
+        specifier: link:../../tooling/typescript
         version: link:../../tooling/typescript
 
   tooling/typescript: {}

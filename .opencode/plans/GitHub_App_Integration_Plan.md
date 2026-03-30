@@ -25,12 +25,12 @@ This plan assumes:
   `apps/web/src/routes/_authenticated/sandboxes/new.tsx`.
 - Web tRPC injects the signed-in `ownerUserId` in `apps/web/src/lib/trpc/router.ts`.
 - Web calls `POST /v1/sandboxes` through `apps/web/src/lib/api/core-api-client.ts`.
-- API creates sandbox, sandbox attempt, snapshot, and workspace build job in
+- API creates sandbox, sandbox attempt, snapshot, and sandbox build job in
   `apps/api/src/routes/sandboxes/sandboxes.handlers.ts`.
-- Worker claims the job, normalizes the workspace spec, builds, publishes, and launches in
-  `apps/worker/src/process-workspace-build-job.ts`.
+- Worker claims the job, normalizes the sandbox spec, builds, publishes, and launches in
+  `apps/worker/src/process-sandbox-build-job.ts`.
 - The actual repository clone happens at sandbox startup in
-  `packages/os-integration-buildkit/src/buildkit-executor.ts`.
+  `packages/os-integration-buildkit/src/buildkit-builder.ts`.
 
 ### Existing schema and boundaries
 
@@ -45,7 +45,7 @@ This plan assumes:
 
 ## Guiding Principles
 
-- Keep `sandboxes` as the main product surface for repo-backed workspace creation.
+- Keep `sandboxes` as the main product surface for repo-backed sandbox creation.
 - Keep provider-specific logic in `packages/source-integrations`.
 - Never persist raw GitHub installation tokens in DB snapshots, job payloads, logs, or URLs.
 - Mint short-lived clone credentials as late as possible, ideally right before runtime launch.
@@ -120,7 +120,7 @@ The API should:
 - resolve the GitHub repo into a durable `repositories` row
 - populate `sandbox.repositoryId`
 - populate `sandbox_attempt.repositoryId`
-- normalize the workspace source for the worker
+- normalize the sandbox source for the worker
 - persist only repo identity and auth intent, never the installation token itself
 
 ## 4. Clone credential flow
@@ -409,7 +409,7 @@ draft package, even if PR creation is still manual.
 ## Security Considerations
 
 - Do not persist raw installation tokens.
-- Do not place tokens inside sandbox snapshots or workspace specs.
+- Do not place tokens inside sandbox snapshots or sandbox specs.
 - Do not put tokens in clone URLs.
 - Redact auth material from worker, runtime, and API logs.
 - Verify GitHub webhook signatures.

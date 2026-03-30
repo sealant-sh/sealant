@@ -14,7 +14,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
   const base = {
     version: "1",
     sources: {
-      workspace: {
+      sandbox: {
         kind: "git" as const,
         provider: "generic" as const,
         url: "https://github.com/example/repo.git",
@@ -52,8 +52,8 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
     },
     runtime: {
       env: {} as Record<string, string>,
-      workspaceRoot: "/workspace",
-      workingDirectory: "/workspace/repo",
+      sandboxRoot: "/sandbox",
+      workingDirectory: "/sandbox/repo",
       persistence: "ephemeral" as const,
       ociRuntime: "runc" as const,
       network: {
@@ -80,9 +80,9 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
       sources: {
         ...base.sources,
         ...override.sources,
-        workspace: {
-          ...base.sources.workspace,
-          ...override.sources?.workspace,
+        sandbox: {
+          ...base.sources.sandbox,
+          ...override.sources?.sandbox,
         },
         inputs: override.sources?.inputs ?? base.sources.inputs,
       },
@@ -126,10 +126,10 @@ const createLaunchInput = (overrides: Record<string, unknown> = {}) => {
   return parseRuntimeAdapterLaunchInput({
     blueprint: createBlueprint(overrides),
     publishedImage: {
-      repository: "sealant/workspaces/demo",
+      repository: "sealant/sandboxes/demo",
       tag: "opencode",
-      reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-      digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+      digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
       digest: "sha256:test",
     },
   });
@@ -151,7 +151,7 @@ describe("DockerRuntimeAdapter", () => {
           ssh: {
             enabled: true,
             listenPort: 2222,
-            authorizedKeysRef: "/workspace/.secrets/authorized_keys",
+            authorizedKeysRef: "/sandbox/.secrets/authorized_keys",
           },
         },
       }),
@@ -215,7 +215,7 @@ describe("DockerRuntimeAdapter", () => {
           env: {
             NODE_ENV: "development",
           },
-          workingDirectory: "/workspace/repo",
+          workingDirectory: "/sandbox/repo",
           persistence: "ephemeral",
           ociRuntime: "runc",
           network: {
@@ -239,13 +239,13 @@ describe("DockerRuntimeAdapter", () => {
       "--name",
       expect.any(String),
       "-w",
-      "/workspace/repo",
+      "/sandbox/repo",
     ]);
     expect(args).not.toContain("--rm");
-    expect(args).toContain("127.0.0.1:5000/sealant/workspaces/demo@sha256:test");
+    expect(args).toContain("127.0.0.1:5000/sealant/sandboxes/demo@sha256:test");
     expect(args).toContain("NODE_ENV=development");
-    expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
-    expect(args).toContain("SEALANT_WORKSPACE_REPO_REF=main");
+    expect(args).toContain("SEALANT_SANDBOX_REPO_URL=https://github.com/example/repo.git");
+    expect(args).toContain("SEALANT_SANDBOX_REPO_REF=main");
     expect(args).toContain("SEALANT_OCI_RUNTIME=runc");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
@@ -277,7 +277,7 @@ describe("DockerRuntimeAdapter", () => {
       createLaunchInput({
         runtime: {
           env: {},
-          workingDirectory: "/workspace/repo",
+          workingDirectory: "/sandbox/repo",
           persistence: "ephemeral",
           ociRuntime: "runsc",
           network: {
@@ -304,7 +304,7 @@ describe("DockerRuntimeAdapter", () => {
         createLaunchInput({
           runtime: {
             env: {},
-            workingDirectory: "/workspace/repo",
+            workingDirectory: "/sandbox/repo",
             persistence: "ephemeral",
             ociRuntime: "runsc",
             network: {
@@ -316,9 +316,9 @@ describe("DockerRuntimeAdapter", () => {
     ).rejects.toThrow("Docker runtime 'runsc' is not configured on this host.");
   });
 
-  it("passes workspace clone auth when a workspace auth ref is configured", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "sealant-workspace-key-"));
-    const keyFile = join(tempDir, "workspace_repo_key");
+  it("passes sandbox clone auth when a sandbox auth ref is configured", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-sandbox-key-"));
+    const keyFile = join(tempDir, "sandbox_repo_key");
     await writeFile(keyFile, "PRIVATE KEY CONTENT\n", "utf8");
 
     const commandRunner = vi.fn<
@@ -347,7 +347,7 @@ describe("DockerRuntimeAdapter", () => {
       await adapter.launch(
         createLaunchInput({
           sources: {
-            workspace: {
+            sandbox: {
               url: "https://github.com/example/repo.git",
               ref: "main",
               authRef: keyFile,
@@ -357,9 +357,7 @@ describe("DockerRuntimeAdapter", () => {
       );
 
       const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
-      expect(runArgs.some((arg) => arg.startsWith("SEALANT_WORKSPACE_AUTH_KEY_BASE64="))).toBe(
-        true,
-      );
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SANDBOX_AUTH_KEY_BASE64="))).toBe(true);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -390,7 +388,7 @@ describe("DockerRuntimeAdapter", () => {
     await adapter.launch(
       parseRuntimeAdapterLaunchInput({
         ...createLaunchInput(),
-        workspaceCloneAuth: {
+        sandboxCloneAuth: {
           type: "http-token",
           username: "x-access-token",
           token: "github-installation-token",
@@ -399,8 +397,8 @@ describe("DockerRuntimeAdapter", () => {
     );
 
     const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
-    expect(runArgs).toContain("SEALANT_WORKSPACE_HTTP_USERNAME=x-access-token");
-    expect(runArgs).toContain("SEALANT_WORKSPACE_HTTP_TOKEN=github-installation-token");
+    expect(runArgs).toContain("SEALANT_SANDBOX_HTTP_USERNAME=x-access-token");
+    expect(runArgs).toContain("SEALANT_SANDBOX_HTTP_TOKEN=github-installation-token");
   });
 
   it("fails launch when container exits immediately", async () => {

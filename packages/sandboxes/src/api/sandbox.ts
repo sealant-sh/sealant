@@ -1,4 +1,4 @@
-import type { SandboxRuntimeInstance, WorkspaceBuildJob } from "@sealant/db";
+import type { SandboxRuntimeInstance, SandboxBuildJob } from "@sealant/db";
 
 export type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
@@ -31,7 +31,7 @@ export const resolveSandboxStatus = (input: {
   readonly attempt: {
     readonly status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   };
-  readonly latestJob?: WorkspaceBuildJob;
+  readonly latestJob?: SandboxBuildJob;
   readonly runtimeInstance?: SandboxRuntimeInstance;
 }): SandboxStatus => {
   const { attempt, latestJob, runtimeInstance } = input;
@@ -110,7 +110,7 @@ export const resolveSandboxRuntime = (
 };
 
 export const resolveSandboxPublishedImage = (
-  latestJob: WorkspaceBuildJob | undefined,
+  latestJob: SandboxBuildJob | undefined,
 ): SandboxPublishedImage | undefined => {
   if (latestJob === undefined) {
     return undefined;
@@ -132,7 +132,7 @@ export const resolveSandboxPublishedImage = (
 };
 
 export const resolveSandboxError = (
-  latestJob: WorkspaceBuildJob | undefined,
+  latestJob: SandboxBuildJob | undefined,
 ): SandboxErrorDetails | undefined => {
   if (latestJob?.errorMessage === null || latestJob === undefined) {
     return undefined;

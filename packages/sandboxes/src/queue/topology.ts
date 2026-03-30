@@ -1,15 +1,15 @@
 import { assertRabbitMqTopology, getRabbitMqSingleton } from "@sealant/rabbitmq";
 import type { Channel } from "amqplib";
 
-export const workspaceBuildQueueName = "workspace-image-builds";
-export const workspaceBuildDeadLetterExchangeName = "workspace-image-builds.dlx";
-export const workspaceBuildDeadLetterQueueName = "workspace-image-builds.dlq";
+export const sandboxBuildQueueName = "sandbox-image-builds";
+export const sandboxBuildDeadLetterExchangeName = "sandbox-image-builds.dlx";
+export const sandboxBuildDeadLetterQueueName = "sandbox-image-builds.dlq";
 
-export const assertWorkspaceBuildQueueTopology = async (channel: Channel) => {
+export const assertSandboxBuildQueueTopology = async (channel: Channel) => {
   await assertRabbitMqTopology(channel, {
     exchanges: [
       {
-        name: workspaceBuildDeadLetterExchangeName,
+        name: sandboxBuildDeadLetterExchangeName,
         type: "direct",
         options: {
           durable: true,
@@ -18,7 +18,7 @@ export const assertWorkspaceBuildQueueTopology = async (channel: Channel) => {
     ],
     queues: [
       {
-        name: workspaceBuildDeadLetterQueueName,
+        name: sandboxBuildDeadLetterQueueName,
         options: {
           durable: true,
           arguments: {
@@ -27,12 +27,12 @@ export const assertWorkspaceBuildQueueTopology = async (channel: Channel) => {
         },
       },
       {
-        name: workspaceBuildQueueName,
+        name: sandboxBuildQueueName,
         options: {
           durable: true,
           arguments: {
-            "x-dead-letter-exchange": workspaceBuildDeadLetterExchangeName,
-            "x-dead-letter-routing-key": workspaceBuildDeadLetterQueueName,
+            "x-dead-letter-exchange": sandboxBuildDeadLetterExchangeName,
+            "x-dead-letter-routing-key": sandboxBuildDeadLetterQueueName,
             "x-queue-type": "quorum",
           },
         },
@@ -40,17 +40,17 @@ export const assertWorkspaceBuildQueueTopology = async (channel: Channel) => {
     ],
     bindings: [
       {
-        queueName: workspaceBuildDeadLetterQueueName,
-        exchangeName: workspaceBuildDeadLetterExchangeName,
-        routingKey: workspaceBuildDeadLetterQueueName,
+        queueName: sandboxBuildDeadLetterQueueName,
+        exchangeName: sandboxBuildDeadLetterExchangeName,
+        routingKey: sandboxBuildDeadLetterQueueName,
       },
     ],
   });
 };
 
-export const ensureWorkspaceBuildQueueTopology = async (connectionUrl: string) => {
+export const ensureSandboxBuildQueueTopology = async (connectionUrl: string) => {
   const singleton = await getRabbitMqSingleton(connectionUrl);
 
-  await assertWorkspaceBuildQueueTopology(singleton.publishChannel);
-  await assertWorkspaceBuildQueueTopology(singleton.consumeChannel);
+  await assertSandboxBuildQueueTopology(singleton.publishChannel);
+  await assertSandboxBuildQueueTopology(singleton.consumeChannel);
 };

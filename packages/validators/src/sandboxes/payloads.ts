@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { osExecutorCompileResultSchema, type OsExecutorCompileResult } from "./executor.js";
-import { workspaceBlueprintSchema, type WorkspaceBlueprint } from "./workspace-blueprint.js";
+import { osBuilderCompileResultSchema, type OsBuilderCompileResult } from "./builder.js";
+import { sandboxBlueprintSchema, type SandboxBlueprint } from "./sandbox-blueprint.js";
 
 const runtimeAdapterLaunchResultSchema = z.strictObject({
   adapter: z.enum(["docker", "k8s", "k3s"]),
@@ -11,24 +11,24 @@ const runtimeAdapterLaunchResultSchema = z.strictObject({
   endpoint: z.string().trim().min(1).optional(),
 });
 
-export const sandboxBuildSpecSchema = workspaceBlueprintSchema;
+export const sandboxBuildSpecSchema = sandboxBlueprintSchema;
 
-export type SandboxBuildSpec = WorkspaceBlueprint;
+export type SandboxBuildSpec = SandboxBlueprint;
 
-export const workspaceBuildJobRequestPayloadSchema = sandboxBuildSpecSchema;
+export const newSandboxSchema = sandboxBuildSpecSchema;
 
-export const workspaceBuildJobRuntimeResultPayloadSchema = z.strictObject({
-  compile: osExecutorCompileResultSchema,
+export const sandboxLaunchSchema = z.strictObject({
+  compile: osBuilderCompileResultSchema,
   runtime: runtimeAdapterLaunchResultSchema,
 });
 
-export const workspaceBuildJobResultPayloadSchema = osExecutorCompileResultSchema;
+export const sandboxBuildSchema = osBuilderCompileResultSchema;
 
-export type WorkspaceBuildJobRequestPayload = SandboxBuildSpec;
+export type NewSandbox = SandboxBuildSpec;
 
-export type WorkspaceBuildJobRuntimeResultPayload = {
-  compile: OsExecutorCompileResult;
+export type SandboxLaunch = {
+  compile: OsBuilderCompileResult;
   runtime: z.infer<typeof runtimeAdapterLaunchResultSchema>;
 };
 
-export type WorkspaceBuildJobResultPayload = OsExecutorCompileResult;
+export type SandboxBuild = OsBuilderCompileResult;

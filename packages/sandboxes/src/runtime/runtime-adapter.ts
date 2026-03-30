@@ -1,7 +1,7 @@
-import { workspaceBuildJobRequestPayloadSchema } from "@sealant/validators";
+import { newSandboxSchema } from "@sealant/validators";
 import { z } from "zod";
 
-export const runtimeAdapterBlueprintSchema = workspaceBuildJobRequestPayloadSchema;
+export const runtimeAdapterBlueprintSchema = newSandboxSchema;
 
 export const runtimeAdapterIdSchema = z.enum(["docker", "k8s", "k3s"]);
 
@@ -31,7 +31,7 @@ export const publishedImageSchema = z.strictObject({
   digest: z.string().trim().min(1),
 });
 
-export const workspaceCloneAuthSchema = z.discriminatedUnion("type", [
+export const sandboxCloneAuthSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("none"),
   }),
@@ -53,7 +53,7 @@ export const runtimeAdapterSupportInputSchema = z.strictObject({
 export const runtimeAdapterLaunchInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
   publishedImage: publishedImageSchema,
-  workspaceCloneAuth: workspaceCloneAuthSchema.optional(),
+  sandboxCloneAuth: sandboxCloneAuthSchema.optional(),
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({
@@ -94,7 +94,7 @@ export type RuntimeAdapterSupportInput = z.infer<typeof runtimeAdapterSupportInp
 
 export type PublishedImage = z.infer<typeof publishedImageSchema>;
 
-export type WorkspaceCloneAuth = z.infer<typeof workspaceCloneAuthSchema>;
+export type SandboxCloneAuth = z.infer<typeof sandboxCloneAuthSchema>;
 
 export type RuntimeAdapterLaunchInput = z.infer<typeof runtimeAdapterLaunchInputSchema>;
 

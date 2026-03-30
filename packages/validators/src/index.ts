@@ -6,7 +6,7 @@ export * from "./api/sandboxes.js";
 export * from "./api/system.js";
 
 export * from "./sandboxes/messages.js";
-export * from "./sandboxes/workspace-blueprint.js";
-export * from "./sandboxes/executor.js";
+export * from "./sandboxes/sandbox-blueprint.js";
+export * from "./sandboxes/builder.js";
 export * from "./sandboxes/buildkit.js";
 export * from "./sandboxes/payloads.js";

@@ -33,7 +33,7 @@ export const workerEnvSchema = databaseEnvSchema
     DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
       sshEndpointExposureStrategySchema.default("host-published"),
     WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
-    WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+    SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
   })
   .superRefine((input, ctx) => {
     const hasGitHubPrivateKey =

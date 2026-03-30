@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
+import { SandboxPage } from "@/components/app/sandbox-page";
 import { SandboxRows } from "@/components/app/sandbox-rows";
-import { WorkspacePage } from "@/components/app/workspace-page";
 import { runningSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
 
 export const Route = createFileRoute("/_authenticated/sandboxes/active")({
@@ -15,7 +15,7 @@ function ActiveSandboxesPage() {
   const activeSandboxes = Route.useLoaderData().items;
 
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Sandboxes"
       title="Running sandboxes"
       description="Monitor live sandbox builds and verify execution capacity across your active environments."
@@ -32,6 +32,6 @@ function ActiveSandboxesPage() {
       ]}
     >
       <SandboxRows sandboxes={activeSandboxes} />
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

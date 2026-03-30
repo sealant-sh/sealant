@@ -16,11 +16,11 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/db": "workspace:*",
+    "@sealant/db": "link:../db",
     "better-auth": "^1.4.13",
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "link:../../tooling/typescript"
   }
 }

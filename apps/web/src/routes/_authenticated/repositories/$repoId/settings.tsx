@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { RepositoryDetailSection } from "@/components/app/repository-detail-section";
-import { getRepositoryById } from "@/lib/navigation/workspace-data";
+import { getRepositoryById } from "@/lib/navigation/sandbox-data";
 
 export const Route = createFileRoute("/_authenticated/repositories/$repoId/settings" as never)({
   loader: ({ params }: { params: { repoId: string } }) => getRepositoryById(params.repoId),

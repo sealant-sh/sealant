@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { WorkspacePage } from "@/components/app/workspace-page";
+import { SandboxPage } from "@/components/app/sandbox-page";
 
 type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
@@ -27,16 +27,16 @@ export function SandboxDetailSection({
 }: SandboxDetailSectionProps) {
   if (sandbox === null) {
     return (
-      <WorkspacePage
+      <SandboxPage
         kicker="Sandboxes"
         title="Sandbox not found"
-        description="The selected sandbox does not exist in the current workspace view."
+        description="The selected sandbox does not exist in the current sandbox view."
       />
     );
   }
 
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Sandbox Detail"
       title={`${sandbox.name} ${section}`}
       description={description}
@@ -48,6 +48,6 @@ export function SandboxDetailSection({
       ]}
     >
       {children}
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

@@ -3,7 +3,7 @@ import {
   createGitHubInstallationRepositoryCacheRepository,
   createSandboxAttemptRepository,
   createSandboxRuntimeInstanceRepository,
-  createWorkspaceBuildJobRepository,
+  createSandboxBuildJobRepository,
   type GitHubInstallationRepository,
   type GitHubInstallationRepositoryCacheRepository,
   type DatabaseClient,
@@ -12,11 +12,7 @@ import {
   parseGitHubInstallationRepositoryAuthRef,
   type GitHubSourceIntegration,
 } from "@sealant/source-integrations";
-import {
-  workspaceBuildJobRequestPayloadSchema,
-  type WorkspaceBuildJobRequestPayload,
-  type WorkspaceBuildJobResultPayload,
-} from "@sealant/validators";
+import { newSandboxSchema, type NewSandbox, type SandboxBuild } from "@sealant/validators";
 
 import { compileSandboxBuildSpec } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
@@ -25,7 +21,7 @@ import {
   type PublishedImage,
   type RuntimeAdapter,
   type RuntimeAdapterId,
-  type WorkspaceCloneAuth,
+  type SandboxCloneAuth,
 } from "../runtime/index.js";
 
 export interface ProcessSandboxBuildJobOptions {
@@ -37,9 +33,7 @@ export interface ProcessSandboxBuildJobOptions {
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly registryClient: RegistryClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-  readonly compileSandboxSpec?: (
-    spec: WorkspaceBuildJobRequestPayload,
-  ) => Promise<WorkspaceBuildJobResultPayload>;
+  readonly compileSandboxSpec?: (spec: NewSandbox) => Promise<SandboxBuild>;
 }
 
 const createWorkerError = (code: string, message: string) => {
@@ -49,8 +43,8 @@ const createWorkerError = (code: string, message: string) => {
 };
 
 const isPublishableOciImageArtifact = (
-  artifact: WorkspaceBuildJobResultPayload["artifacts"][number],
-): artifact is WorkspaceBuildJobResultPayload["artifacts"][number] & {
+  artifact: SandboxBuild["artifacts"][number],
+): artifact is SandboxBuild["artifacts"][number] & {
   kind: "oci-image";
   path: string;
   loader: "docker-load";
@@ -62,7 +56,7 @@ const isPublishableOciImageArtifact = (
   );
 };
 
-const selectPublishableImageArtifact = (compileResult: WorkspaceBuildJobResultPayload) => {
+const selectPublishableImageArtifact = (compileResult: SandboxBuild) => {
   const artifact = compileResult.artifacts.find(isPublishableOciImageArtifact);
 
   if (artifact === undefined) {
@@ -73,11 +67,11 @@ const selectPublishableImageArtifact = (compileResult: WorkspaceBuildJobResultPa
 };
 
 const launchPublishedImage = async (input: {
-  readonly spec: WorkspaceBuildJobRequestPayload;
+  readonly spec: NewSandbox;
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
-  readonly workspaceCloneAuth?: WorkspaceCloneAuth;
+  readonly sandboxCloneAuth?: SandboxCloneAuth;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.spec,
@@ -88,14 +82,12 @@ const launchPublishedImage = async (input: {
   return selectedAdapter.adapter.launch({
     blueprint: input.spec,
     publishedImage: input.publishedImage,
-    ...(input.workspaceCloneAuth === undefined
-      ? {}
-      : { workspaceCloneAuth: input.workspaceCloneAuth }),
+    ...(input.sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth: input.sandboxCloneAuth }),
   });
 };
 
 const toErrorMessage = (error: unknown) => {
-  return error instanceof Error ? error.message : "Workspace build job failed.";
+  return error instanceof Error ? error.message : "Sandbox build job failed.";
 };
 
 const toErrorCode = (error: unknown) => {
@@ -111,13 +103,13 @@ const toErrorCode = (error: unknown) => {
   return undefined;
 };
 
-const resolveWorkspaceCloneAuth = async (input: {
-  readonly spec: WorkspaceBuildJobRequestPayload;
+const resolveSandboxCloneAuth = async (input: {
+  readonly spec: NewSandbox;
   readonly dbClient: DatabaseClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-}): Promise<WorkspaceCloneAuth | undefined> => {
+}): Promise<SandboxCloneAuth | undefined> => {
   const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
-    input.spec.sources.workspace.authRef,
+    input.spec.sources.sandbox.authRef,
   );
 
   if (installationRepositoryId === undefined) {
@@ -182,7 +174,7 @@ const resolveWorkspaceCloneAuth = async (input: {
 };
 
 const resolveDotfilesRuntimeEnv = async (input: {
-  readonly spec: WorkspaceBuildJobRequestPayload;
+  readonly spec: NewSandbox;
   readonly dbClient: DatabaseClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
 }): Promise<Record<string, string>> => {
@@ -252,7 +244,7 @@ const resolveDotfilesRuntimeEnv = async (input: {
 };
 
 export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOptions) => {
-  const jobs = createWorkspaceBuildJobRepository(options.dbClient);
+  const jobs = createSandboxBuildJobRepository(options.dbClient);
   const runtimeInstances = createSandboxRuntimeInstanceRepository(options.dbClient);
   const attempts = createSandboxAttemptRepository(options.dbClient);
   const job = await jobs.claimJobById({
@@ -272,12 +264,10 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       await attempts.markAttemptRunning({ id: job.runId }).catch(() => null);
     }
 
-    const spec = workspaceBuildJobRequestPayloadSchema.parse(job.requestPayload);
+    const spec = newSandboxSchema.parse(job.requestPayload);
     const compileSpec =
       options.compileSandboxSpec ??
-      (async (
-        inputSpec: WorkspaceBuildJobRequestPayload,
-      ): Promise<WorkspaceBuildJobResultPayload> => {
+      (async (inputSpec: NewSandbox): Promise<SandboxBuild> => {
         return compileSandboxBuildSpec({ blueprint: inputSpec });
       });
     const compileResult = await compileSpec(spec);
@@ -290,11 +280,11 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
         ? {}
         : { sourceReference: imageArtifact.reference }),
     });
-    const resultPayload: WorkspaceBuildJobResultPayload = compileResult;
+    const resultPayload: SandboxBuild = compileResult;
 
     await jobs.markJobSucceeded({
       id: job.id,
-      executorId: compileResult.executor.id,
+      builderId: compileResult.builder.id,
       resultPayload,
       publishedReference: publishedImage.reference,
       publishedDigestReference: publishedImage.digestReference,
@@ -309,7 +299,7 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       });
     }
 
-    const workspaceCloneAuth = await resolveWorkspaceCloneAuth({
+    const sandboxCloneAuth = await resolveSandboxCloneAuth({
       spec,
       dbClient: options.dbClient,
       ...(options.gitHubSourceIntegration === undefined
@@ -323,7 +313,7 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
         ? {}
         : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
     });
-    const runtimeSpec: WorkspaceBuildJobRequestPayload =
+    const runtimeSpec: NewSandbox =
       Object.keys(dotfilesRuntimeEnv).length === 0
         ? spec
         : {
@@ -342,7 +332,7 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       runtimeAdapters: options.runtimeAdapters,
       defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
       publishedImage,
-      ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
+      ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
     });
 
     if (job.runId !== null) {
@@ -393,5 +383,3 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     throw error;
   }
 };
-
-export const processWorkspaceBuildJob = processSandboxBuildJob;

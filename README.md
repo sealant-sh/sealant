@@ -17,8 +17,8 @@ surfaces and API contracts:
 
 Implementation terms are still valid internally, but are not primary product nouns:
 
-- `workspace run`: internal execution record
-- `workspace build job`: internal queue/worker build task
+- `sandbox run`: internal execution record
+- `sandbox build job`: internal queue/worker build task
 
 If an API endpoint serves product UI, prefer naming and resource modeling around `sandboxes` and
 `issue-workflows`.
@@ -42,14 +42,13 @@ what the system did from issue intake through code changes and pull request outp
 
 ## Status
 
-This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` workspaces, with a root Nix
+This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` sandboxes, with a root Nix
 flake for a reproducible `direnv`-powered development shell.
 
-Today the repo contains the initial workspace layout, the first workspace composition
-implementation, and the target architecture for splitting composition, OS integrations, runtime
-adapters, and app surfaces into separate workspaces. Several of the workspaces below are
-intentionally lightweight placeholders so the intended boundaries are visible in the repo before
-every implementation lands.
+Today the repo contains the initial sandbox layout, the first sandbox composition implementation,
+and the target architecture for splitting composition, OS integrations, runtime adapters, and app
+surfaces into separate sandboxes. Several of the sandboxes below are intentionally lightweight
+placeholders so the intended boundaries are visible in the repo before every implementation lands.
 
 ## Monorepo layout
 
@@ -78,13 +77,13 @@ every implementation lands.
 ├── flake.nix             # Nix development shell definition
 ├── flake.lock            # pinned flake inputs
 ├── package.json          # root scripts and Turbo dependency
-├── pnpm-workspace.yaml   # workspace discovery
+├── pnpm-sandbox.yaml   # sandbox discovery
 ├── tsconfig.json         # root TypeScript and tsgo config
 ├── turbo.json            # task graph and caching config
 └── README.md
 ```
 
-### Workspace roles
+### Sandbox roles
 
 - `apps/`: user-facing and deployable surfaces such as the website, API, docs, and desktop clients
 - `packages/`: shared code such as composition models, OS integrations, runtime adapters, source
@@ -99,9 +98,9 @@ both core loops.
 
 Sandbox flow:
 
-1. The product surfaces submit a `UserWorkspaceSpec`.
-2. The control plane normalizes that into a `WorkspaceBlueprint`.
-3. Workspace composition selects an OS integration and produces a concrete build plan.
+1. The product surfaces submit a `UserSandboxSpec`.
+2. The control plane normalizes that into a `SandboxBlueprint`.
+3. Sandbox composition selects an OS integration and produces a concrete build plan.
 4. The selected OS integration produces one or more build artifacts.
 5. Runtime adapters launch those artifacts on Docker, Kubernetes, K3s, or future targets.
 
@@ -129,14 +128,14 @@ Supporting integrations feed into both flows without owning either flow:
   shared SQLite database package
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
-- `apps/worker/`: first background worker scaffold for consuming queued workspace image build jobs,
+- `apps/worker/`: first background worker scaffold for consuming queued sandbox image build jobs,
   with worker-kind modules under `src/workers/`
 - `packages/rabbitmq/`: business-agnostic RabbitMQ transport package
 - `packages/sandboxes/`: sandbox domain package for BuildKit compile, registry publish, runtime
   launch, queue wiring, and lifecycle orchestration
 - `packages/validators/`: shared API and worker message contracts
-- the other package and app workspaces are scaffolded so the intended architecture is explicit
-  before each implementation is filled in
+- the other package and app sandboxes are scaffolded so the intended architecture is explicit before
+  each implementation is filled in
 
 ## Planned product shape
 
@@ -163,7 +162,7 @@ The backend turns user intent into sandbox sessions and issue workflows.
 Core responsibilities:
 
 - validate and normalize sandbox and issue-to-PR inputs
-- produce `WorkspaceBlueprint` values from validated requests
+- produce `SandboxBlueprint` values from validated requests
 - resolve repos and configuration sources
 - select OS integrations and runtime adapters
 - compose final build and execution requests
@@ -201,9 +200,9 @@ over time.
 
 ## Defined app architecture
 
-- `apps/web/`: main product web app for creating and managing workspaces
+- `apps/web/`: main product web app for creating and managing sandboxes
 - `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
-- `apps/worker/`: background worker for consuming queued workspace image build jobs and driving
+- `apps/worker/`: background worker for consuming queued sandbox image build jobs and driving
   compile/publish work
 - `apps/docs/`: user and contributor documentation site
 - `apps/marketing/`: public website and launch surfaces
@@ -211,7 +210,7 @@ over time.
 
 ## Why the monorepo uses Turbo + pnpm
 
-- `pnpm` workspaces keep dependency management fast, strict, and centralized
+- `pnpm` sandboxes keep dependency management fast, strict, and centralized
 - `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and
   shared packages
 - shared tooling in `tooling/` keeps config consistent without copy-pasting setup across apps
@@ -277,7 +276,7 @@ for 30 seconds.
 
 Place end-to-end specs in `tests/e2e/`.
 
-Run common workspace tasks from the repo root:
+Run common sandbox tasks from the repo root:
 
 ```bash
 pnpm dev
@@ -312,7 +311,7 @@ variants to force Turbo's terminal UI.
 
 ### Early engineering priorities
 
-- stand up the first app workspaces under `apps/`
+- stand up the first app sandboxes under `apps/`
 - define shared domain packages under `packages/`
 - centralize config and standards under `tooling/`
 - extract the first OS integration boundary from the current Nix implementation

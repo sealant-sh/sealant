@@ -49,7 +49,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
 import { authClient } from "@/lib/auth/auth-client";
-import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
+import { PROFILES, REPOSITORIES } from "@/lib/navigation/sandbox-data";
 import {
   accentPresets,
   defaultAccent,

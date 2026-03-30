@@ -12,7 +12,7 @@ export {
   runtimeAdapterSupportFailureReasonSchema,
   runtimeAdapterSupportSchema,
   selectRuntimeAdapter,
-  workspaceCloneAuthSchema,
+  sandboxCloneAuthSchema,
 } from "./runtime-adapter.js";
 
 export {
@@ -41,5 +41,5 @@ export type {
   RuntimeAdapterSupportInput,
   RuntimeAdapterSupportFailureReason,
   SelectRuntimeAdapterInput,
-  WorkspaceCloneAuth,
+  SandboxCloneAuth,
 } from "./runtime-adapter.js";

@@ -1,14 +1,12 @@
 import { z } from "zod";
 
-import { workspaceBlueprintSchema, workspaceTargetOsFamilySchema } from "./workspace-blueprint.js";
+import { sandboxBlueprintSchema, sandboxTargetOsFamilySchema } from "./sandbox-blueprint.js";
 
-export const osExecutorIdSchema = z.enum(["nix", "fedora", "arch"]);
+export const osBuilderIdSchema = z.enum(["nix", "fedora", "arch"]);
 
-export const concreteWorkspaceTargetOsFamilySchema = workspaceTargetOsFamilySchema.exclude([
-  "auto",
-]);
+export const concreteSandboxTargetOsFamilySchema = sandboxTargetOsFamilySchema.exclude(["auto"]);
 
-export const osExecutorSupportFailureReasonSchema = z.enum([
+export const osBuilderSupportFailureReasonSchema = z.enum([
   "unsupported-os",
   "unsupported-harness",
   "unsupported-package",
@@ -51,56 +49,56 @@ export const buildArtifactSchema = z.discriminatedUnion("kind", [
   metadataBuildArtifactSchema,
 ]);
 
-export const osExecutorSupportSchema = z.discriminatedUnion("supported", [
+export const osBuilderSupportSchema = z.discriminatedUnion("supported", [
   z.strictObject({
     supported: z.literal(true),
   }),
   z.strictObject({
     supported: z.literal(false),
-    reason: osExecutorSupportFailureReasonSchema,
+    reason: osBuilderSupportFailureReasonSchema,
     message: z.string().trim().min(1),
   }),
 ]);
 
-export const osExecutorCompileInputSchema = z.strictObject({
-  blueprint: workspaceBlueprintSchema,
+export const osBuilderCompileInputSchema = z.strictObject({
+  blueprint: sandboxBlueprintSchema,
 });
 
-export const osExecutorCompileMetadataSchema = z.strictObject({
+export const osBuilderCompileMetadataSchema = z.strictObject({
   defaultArtifactName: z.string().trim().min(1).optional(),
   notes: z.array(z.string().trim().min(1)).default([]),
 });
 
-export const osExecutorCompileResultSchema = z.strictObject({
-  executor: z.strictObject({
-    id: osExecutorIdSchema,
-    osFamily: concreteWorkspaceTargetOsFamilySchema,
+export const osBuilderCompileResultSchema = z.strictObject({
+  builder: z.strictObject({
+    id: osBuilderIdSchema,
+    osFamily: concreteSandboxTargetOsFamilySchema,
   }),
   artifacts: z.array(buildArtifactSchema).min(1),
-  metadata: osExecutorCompileMetadataSchema.optional(),
+  metadata: osBuilderCompileMetadataSchema.optional(),
 });
 
 export const parseBuildArtifact = (input: unknown): BuildArtifact => {
   return buildArtifactSchema.parse(input);
 };
 
-export const parseOsExecutorSupport = (input: unknown): OsExecutorSupport => {
-  return osExecutorSupportSchema.parse(input);
+export const parseOsBuilderSupport = (input: unknown): OsBuilderSupport => {
+  return osBuilderSupportSchema.parse(input);
 };
 
-export const parseOsExecutorCompileInput = (input: unknown): OsExecutorCompileInput => {
-  return osExecutorCompileInputSchema.parse(input);
+export const parseOsBuilderCompileInput = (input: unknown): OsBuilderCompileInput => {
+  return osBuilderCompileInputSchema.parse(input);
 };
 
-export const parseOsExecutorCompileResult = (input: unknown): OsExecutorCompileResult => {
-  return osExecutorCompileResultSchema.parse(input);
+export const parseOsBuilderCompileResult = (input: unknown): OsBuilderCompileResult => {
+  return osBuilderCompileResultSchema.parse(input);
 };
 
-export type OsExecutorId = z.infer<typeof osExecutorIdSchema>;
+export type OsBuilderId = z.infer<typeof osBuilderIdSchema>;
 
-export type ConcreteWorkspaceTargetOsFamily = z.infer<typeof concreteWorkspaceTargetOsFamilySchema>;
+export type ConcreteSandboxTargetOsFamily = z.infer<typeof concreteSandboxTargetOsFamilySchema>;
 
-export type OsExecutorSupportFailureReason = z.infer<typeof osExecutorSupportFailureReasonSchema>;
+export type OsBuilderSupportFailureReason = z.infer<typeof osBuilderSupportFailureReasonSchema>;
 
 export type OciImageBuildArtifact = z.infer<typeof ociImageBuildArtifactSchema>;
 
@@ -112,18 +110,18 @@ export type MetadataBuildArtifact = z.infer<typeof metadataBuildArtifactSchema>;
 
 export type BuildArtifact = z.infer<typeof buildArtifactSchema>;
 
-export type OsExecutorSupport = z.infer<typeof osExecutorSupportSchema>;
+export type OsBuilderSupport = z.infer<typeof osBuilderSupportSchema>;
 
-export type OsExecutorCompileInput = z.infer<typeof osExecutorCompileInputSchema>;
+export type OsBuilderCompileInput = z.infer<typeof osBuilderCompileInputSchema>;
 
-export type OsExecutorCompileMetadata = z.infer<typeof osExecutorCompileMetadataSchema>;
+export type OsBuilderCompileMetadata = z.infer<typeof osBuilderCompileMetadataSchema>;
 
-export type OsExecutorCompileResult = z.infer<typeof osExecutorCompileResultSchema>;
+export type OsBuilderCompileResult = z.infer<typeof osBuilderCompileResultSchema>;
 
-export interface OsExecutor {
-  readonly id: OsExecutorId;
-  readonly osFamily: ConcreteWorkspaceTargetOsFamily;
+export interface OsBuilder {
+  readonly id: OsBuilderId;
+  readonly osFamily: ConcreteSandboxTargetOsFamily;
 
-  supports(input: OsExecutorCompileInput): OsExecutorSupport;
-  compile(input: OsExecutorCompileInput): Promise<OsExecutorCompileResult>;
+  supports(input: OsBuilderCompileInput): OsBuilderSupport;
+  compile(input: OsBuilderCompileInput): Promise<OsBuilderCompileResult>;
 }

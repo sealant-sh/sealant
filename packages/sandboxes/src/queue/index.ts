@@ -1,19 +1,19 @@
 export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "@sealant/rabbitmq";
 
 export {
-  parseWorkspaceBuildJobRequestedMessage,
-  workspaceBuildJobRequestedMessageKind,
-  workspaceBuildJobRequestedMessageSchema,
-  type WorkspaceBuildJobRequestedMessage,
+  parseSandboxBuildJobRequestedMessage,
+  sandboxBuildJobRequestedMessageKind,
+  sandboxBuildJobRequestedMessageSchema,
+  type SandboxBuildJobRequestedMessage,
 } from "./messages.js";
 
 export {
-  consumeWorkspaceBuildJobs,
-  type ConsumeWorkspaceBuildJobsOptions,
-  type WorkspaceBuildJobConsumerMessage,
+  consumeSandboxBuildJobs,
+  type ConsumeSandboxBuildJobsOptions,
+  type SandboxBuildJobConsumerMessage,
 } from "./consumer.js";
 
-export { publishWorkspaceBuildJobRequested } from "./publisher.js";
+export { publishSandboxBuildJobRequested } from "./publisher.js";
 
 export {
   closeRabbitMqSingleton,
@@ -22,9 +22,9 @@ export {
 } from "@sealant/rabbitmq";
 
 export {
-  assertWorkspaceBuildQueueTopology,
-  ensureWorkspaceBuildQueueTopology,
-  workspaceBuildDeadLetterExchangeName,
-  workspaceBuildDeadLetterQueueName,
-  workspaceBuildQueueName,
+  assertSandboxBuildQueueTopology,
+  ensureSandboxBuildQueueTopology,
+  sandboxBuildDeadLetterExchangeName,
+  sandboxBuildDeadLetterQueueName,
+  sandboxBuildQueueName,
 } from "./topology.js";

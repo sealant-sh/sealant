@@ -1,28 +1,28 @@
 import { consumeRabbitMqJsonMessages, type RabbitMqConsumerMessage } from "@sealant/rabbitmq";
 
 import {
-  parseWorkspaceBuildJobRequestedMessage,
-  type WorkspaceBuildJobRequestedMessage,
+  parseSandboxBuildJobRequestedMessage,
+  type SandboxBuildJobRequestedMessage,
 } from "./messages.js";
-import { ensureWorkspaceBuildQueueTopology, workspaceBuildQueueName } from "./topology.js";
+import { ensureSandboxBuildQueueTopology, sandboxBuildQueueName } from "./topology.js";
 
-export type WorkspaceBuildJobConsumerMessage =
-  RabbitMqConsumerMessage<WorkspaceBuildJobRequestedMessage>;
+export type SandboxBuildJobConsumerMessage =
+  RabbitMqConsumerMessage<SandboxBuildJobRequestedMessage>;
 
-export interface ConsumeWorkspaceBuildJobsOptions {
+export interface ConsumeSandboxBuildJobsOptions {
   readonly connectionUrl: string;
   readonly prefetch?: number;
-  readonly onMessage: (message: WorkspaceBuildJobConsumerMessage) => Promise<void>;
+  readonly onMessage: (message: SandboxBuildJobConsumerMessage) => Promise<void>;
 }
 
-export const consumeWorkspaceBuildJobs = async (options: ConsumeWorkspaceBuildJobsOptions) => {
-  await ensureWorkspaceBuildQueueTopology(options.connectionUrl);
+export const consumeSandboxBuildJobs = async (options: ConsumeSandboxBuildJobsOptions) => {
+  await ensureSandboxBuildQueueTopology(options.connectionUrl);
 
   return consumeRabbitMqJsonMessages({
     connectionUrl: options.connectionUrl,
-    queueName: workspaceBuildQueueName,
+    queueName: sandboxBuildQueueName,
     ...(options.prefetch === undefined ? {} : { prefetch: options.prefetch }),
-    parseMessage: parseWorkspaceBuildJobRequestedMessage,
+    parseMessage: parseSandboxBuildJobRequestedMessage,
     onMessage: options.onMessage,
   });
 };

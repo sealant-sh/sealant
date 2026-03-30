@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
-import { WorkspacePage } from "@/components/app/workspace-page";
-import type { RepositoryRecord } from "@/lib/navigation/workspace-data";
+import { SandboxPage } from "@/components/app/sandbox-page";
+import type { RepositoryRecord } from "@/lib/navigation/sandbox-data";
 
 interface RepositoryDetailSectionProps {
   readonly repository: RepositoryRecord | null;
@@ -18,16 +18,16 @@ export function RepositoryDetailSection({
 }: RepositoryDetailSectionProps) {
   if (repository === null) {
     return (
-      <WorkspacePage
+      <SandboxPage
         kicker="Repositories"
         title="Repository not found"
-        description="The selected repository is not present in the current workspace catalog."
+        description="The selected repository is not present in the current sandbox catalog."
       />
     );
   }
 
   return (
-    <WorkspacePage
+    <SandboxPage
       kicker="Repository"
       title={`${repository.id} ${section}`}
       description={description}
@@ -38,6 +38,6 @@ export function RepositoryDetailSection({
       ]}
     >
       {children}
-    </WorkspacePage>
+    </SandboxPage>
   );
 }

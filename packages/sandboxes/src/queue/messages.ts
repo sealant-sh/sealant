@@ -1,6 +1,6 @@
 export {
-  parseWorkspaceBuildJobRequestedMessage,
-  workspaceBuildJobRequestedMessageKind,
-  workspaceBuildJobRequestedMessageSchema,
-  type WorkspaceBuildJobRequestedMessage,
+  parseSandboxBuildJobRequestedMessage,
+  sandboxBuildJobRequestedMessageKind,
+  sandboxBuildJobRequestedMessageSchema,
+  type SandboxBuildJobRequestedMessage,
 } from "@sealant/validators";

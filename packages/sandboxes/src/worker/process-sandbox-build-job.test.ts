@@ -1,9 +1,6 @@
 import type { DatabaseClient } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
-import type {
-  WorkspaceBuildJobRequestPayload,
-  WorkspaceBuildJobResultPayload,
-} from "@sealant/validators";
+import type { NewSandbox, SandboxBuild } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RegistryClient } from "../registry/index.js";
@@ -16,7 +13,7 @@ vi.mock("@sealant/db", () => {
     createGitHubInstallationRepositoryCacheRepository: vi.fn(),
     createSandboxAttemptRepository: vi.fn(),
     createSandboxRuntimeInstanceRepository: vi.fn(),
-    createWorkspaceBuildJobRepository: vi.fn(),
+    createSandboxBuildJobRepository: vi.fn(),
   };
 });
 
@@ -25,7 +22,7 @@ const {
   createGitHubInstallationRepositoryCacheRepository,
   createSandboxAttemptRepository,
   createSandboxRuntimeInstanceRepository,
-  createWorkspaceBuildJobRepository,
+  createSandboxBuildJobRepository,
 } = await import("@sealant/db");
 
 const createSandboxAttemptRepositoryStub = () => {
@@ -143,11 +140,11 @@ const createCompileResult = (
     readonly reference?: string;
     readonly name?: string;
   } = {},
-): WorkspaceBuildJobResultPayload => {
+): SandboxBuild => {
   const id = input.id ?? "nix";
 
   return {
-    executor: {
+    builder: {
       id,
       osFamily: id,
     },
@@ -173,13 +170,13 @@ const createSandboxBuildSpec = (
     readonly runtimeMode?: "prefer" | "require";
     readonly startupCommand?: string;
     readonly sshEnabled?: boolean;
-    readonly inputSources?: WorkspaceBuildJobRequestPayload["sources"]["inputs"];
+    readonly inputSources?: NewSandbox["sources"]["inputs"];
   } = {},
-): WorkspaceBuildJobRequestPayload => {
+): NewSandbox => {
   return {
     version: "1",
     sources: {
-      workspace: {
+      sandbox: {
         kind: "git",
         provider: "generic",
         url: input.url ?? "https://github.com/example/repo",
@@ -225,8 +222,8 @@ const createSandboxBuildSpec = (
     },
     runtime: {
       env: {},
-      workspaceRoot: "/workspace",
-      workingDirectory: "/workspace/repo",
+      sandboxRoot: "/sandbox",
+      workingDirectory: "/sandbox/repo",
       persistence: "ephemeral",
       ociRuntime: "runc",
       network: {
@@ -252,7 +249,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_github_runtime_auth",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           url: "https://github.com/sealant-ops/core.git",
@@ -264,7 +261,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -282,10 +279,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
@@ -307,7 +304,7 @@ describe("processSandboxBuildJob", () => {
     expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
     expect(runtimeAdapter.launch).toHaveBeenCalledWith(
       expect.objectContaining({
-        workspaceCloneAuth: {
+        sandboxCloneAuth: {
           type: "http-token",
           username: "x-access-token",
           token: "github-installation-token",
@@ -321,7 +318,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_dotfiles_runtime_auth",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           url: "https://github.com/example/repo.git",
@@ -343,7 +340,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -361,10 +358,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
@@ -403,7 +400,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_defaults",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           osFamily: "nix",
@@ -413,7 +410,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -425,10 +422,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
@@ -472,7 +469,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_explicit",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           osFamily: "nix",
@@ -484,7 +481,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -496,10 +493,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
@@ -542,7 +539,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
         runId: "run_123",
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           osFamily: "nix",
@@ -554,7 +551,7 @@ describe("processSandboxBuildJob", () => {
 
     const runRepository = createSandboxAttemptRepositoryStub();
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
     const runtimeRepository = createSandboxRuntimeInstanceRepositoryStub();
     vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(runtimeRepository as never);
@@ -563,10 +560,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;
@@ -599,7 +596,7 @@ describe("processSandboxBuildJob", () => {
     expect(repository.markJobSucceeded).toHaveBeenCalledWith(
       expect.objectContaining({
         resultPayload: expect.objectContaining({
-          executor: expect.any(Object),
+          builder: expect.any(Object),
         }),
       }),
     );
@@ -610,7 +607,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
         runId: "run_123",
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           osFamily: "nix",
@@ -622,7 +619,7 @@ describe("processSandboxBuildJob", () => {
 
     const runRepository = createSandboxAttemptRepositoryStub();
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
     vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
       createSandboxRuntimeInstanceRepositoryStub() as never,
@@ -657,7 +654,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           osFamily: "fedora",
@@ -667,7 +664,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -711,7 +708,7 @@ describe("processSandboxBuildJob", () => {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
         runId: null,
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
         requestPayload: createSandboxBuildSpec({
           runtimeFamily: "k8s",
@@ -722,7 +719,7 @@ describe("processSandboxBuildJob", () => {
       markJobFailed: vi.fn(async () => ({})),
     };
 
-    vi.mocked(createWorkspaceBuildJobRepository).mockReturnValue(repository as never);
+    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
     vi.mocked(createSandboxAttemptRepository).mockReturnValue(
       createSandboxAttemptRepositoryStub() as never,
     );
@@ -734,10 +731,10 @@ describe("processSandboxBuildJob", () => {
 
     const registryClient = {
       publishOciImage: vi.fn(async () => ({
-        repository: "sealant/workspaces/demo",
+        repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
         digest: "sha256:test",
       })),
     } as unknown as RegistryClient;

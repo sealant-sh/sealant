@@ -1,8 +1,8 @@
 export {
-  workspaceBuildJobRequestPayloadSchema,
-  workspaceBuildJobResultPayloadSchema,
-  workspaceBuildJobRuntimeResultPayloadSchema,
-  type WorkspaceBuildJobRequestPayload,
-  type WorkspaceBuildJobResultPayload,
-  type WorkspaceBuildJobRuntimeResultPayload,
+  newSandboxSchema,
+  sandboxBuildSchema,
+  sandboxLaunchSchema,
+  type NewSandbox,
+  type SandboxBuild,
+  type SandboxLaunch,
 } from "@sealant/validators";

@@ -5,7 +5,7 @@ interface MetricItem {
   readonly value: string;
 }
 
-interface WorkspacePageProps {
+interface SandboxPageProps {
   readonly kicker: string;
   readonly title: string;
   readonly description: string;
@@ -13,13 +13,13 @@ interface WorkspacePageProps {
   readonly children?: ReactNode;
 }
 
-export function WorkspacePage({
+export function SandboxPage({
   kicker: _kicker,
   title,
   description,
   metrics,
   children,
-}: WorkspacePageProps) {
+}: SandboxPageProps) {
   return (
     <section className="overflow-hidden border border-border bg-card">
       <div className="h-1 w-full bg-primary" />
