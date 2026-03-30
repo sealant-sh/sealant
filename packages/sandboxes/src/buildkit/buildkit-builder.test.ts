@@ -500,6 +500,7 @@ describe("compileSandboxBuildSpec", () => {
     const entrypoint = await readFile(entrypointPath, "utf8");
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
 
+    expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
     expect(entrypoint).toContain("exec /usr/bin/zsh -lc 'codex'");
     expect(buildCommandArgs).toContain("--platform");

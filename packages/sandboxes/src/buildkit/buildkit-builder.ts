@@ -480,6 +480,7 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
 
   if (plan.packageManager === "pacman") {
     return [
+      "RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf",
       "RUN --mount=type=cache,target=/var/cache/pacman/pkg \\",
       "    pacman -Syu --noconfirm && \\",
       `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
