@@ -7,7 +7,7 @@ import mdx from "fumadocs-mdx/vite";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
-import * as MdxConfig from "./source.config";
+import * as MdxConfig from "./source.config.ts";
 
 const config = defineConfig({
   plugins: [
