@@ -165,7 +165,7 @@ export const sandboxEventSchema = z.object({
   type: sandboxEventTypeSchema,
   occurredAt: z.string().datetime(),
   message: z.string().optional(),
-  data: z.record(z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const listSandboxEventsResponseSchema = z.object({
