@@ -11,13 +11,13 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/db": "link:../../packages/db",
-    "@sealant/rabbitmq": "link:../../packages/rabbitmq",
-    "@sealant/sandboxes": "link:../../packages/sandboxes",
-    "@sealant/source-integrations": "link:../../packages/source-integrations",
+    "@sealant/db": "workspace:*",
+    "@sealant/rabbitmq": "workspace:*",
+    "@sealant/sandboxes": "workspace:*",
+    "@sealant/source-integrations": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@sealant/typescript": "link:../../tooling/typescript"
+    "@sealant/typescript": "workspace:*"
   }
 }

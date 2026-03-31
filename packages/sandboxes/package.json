@@ -13,15 +13,15 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/db": "link:../db",
-    "@sealant/rabbitmq": "link:../rabbitmq",
-    "@sealant/source-integrations": "link:../source-integrations",
-    "@sealant/validators": "link:../validators",
+    "@sealant/db": "workspace:*",
+    "@sealant/rabbitmq": "workspace:*",
+    "@sealant/source-integrations": "workspace:*",
+    "@sealant/validators": "workspace:*",
     "amqplib": "^0.10.9",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@sealant/typescript": "link:../../tooling/typescript",
+    "@sealant/typescript": "workspace:*",
     "@types/amqplib": "^0.10.7"
   }
 }

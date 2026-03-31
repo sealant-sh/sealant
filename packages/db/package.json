@@ -17,13 +17,13 @@
   },
   "dependencies": {
     "@libsql/client": "^0.15.15",
-    "@sealant/validators": "link:../validators",
+    "@sealant/validators": "workspace:*",
     "drizzle-orm": "^0.44.7",
     "drizzle-zod": "^0.8.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@sealant/typescript": "link:../../tooling/typescript",
+    "@sealant/typescript": "workspace:*",
     "drizzle-kit": "^0.31.5"
   }
 }
