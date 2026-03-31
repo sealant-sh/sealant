@@ -33,11 +33,7 @@ export function normalizeAccent(value: string | null | undefined): string | null
   const shortHexMatch = /^#([0-9a-f]{3})$/i.exec(accent);
 
   if (shortHexMatch !== null) {
-    const [, rawHex] = shortHexMatch;
-
-    if (rawHex === undefined) {
-      return null;
-    }
+    const rawHex = shortHexMatch[1] ?? "";
 
     return `#${rawHex
       .split("")

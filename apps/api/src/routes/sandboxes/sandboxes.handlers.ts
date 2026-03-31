@@ -15,25 +15,25 @@ import {
   type SandboxSshGatewayConfig,
 } from "@sealant/sandboxes";
 import { createGitHubInstallationRepositoryAuthRef } from "@sealant/source-integrations";
-import { newSandboxSchema } from "@sealant/validators";
+import {
+  createSandboxRequestSchema,
+  listSandboxAttemptsQuerySchema,
+  listSandboxEventsQuerySchema,
+  listSandboxesQuerySchema,
+  newSandboxSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
+  sandboxAttemptSummarySchema,
+  sandboxDetailsSchema,
+  sandboxEventSchema,
+  sandboxSshTargetSchema,
+  sandboxSummarySchema,
+} from "@sealant/validators";
 import type { Context } from "hono";
 import type { z } from "zod";
 
 import type { AppEnv } from "../../env.js";
 import type { AppBindings } from "../../lib/types.js";
-import type {
-  createSandboxRequestSchema,
-  listSandboxAttemptsQuerySchema,
-  listSandboxEventsQuerySchema,
-  listSandboxesQuerySchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
-  sandboxSshTargetSchema,
-  sandboxAttemptSummarySchema,
-  sandboxDetailsSchema,
-  sandboxEventSchema,
-  sandboxSummarySchema,
-} from "./sandboxes.routes.js";
 
 type SandboxAttemptRecord = NonNullable<
   Awaited<ReturnType<SandboxAttemptRepository["getAttemptById"]>>

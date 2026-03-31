@@ -1,6 +1,8 @@
 import {
   manifestQuerySchema,
   manifestResponseSchema,
+  messageResponseSchema,
+  registryIdParamsSchema,
   registryExtensionsSchema,
   registryPingSchema,
   registrySummarySchema,
@@ -8,8 +10,6 @@ import {
   tagsResponseSchema,
 } from "@sealant/validators";
 import { describeRoute, resolver, validator } from "hono-openapi";
-
-import { messageResponseSchema, registryIdParamsSchema } from "../../lib/schemas.js";
 
 const tags = ["Registries"];
 

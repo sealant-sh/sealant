@@ -1,4 +1,4 @@
-import { messageResponseSchema } from "../../../../api/src/lib/schemas";
+import { messageResponseSchema } from "../../../../../packages/validators/src/api/common";
 import {
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
@@ -9,25 +9,25 @@ import {
   listGitHubInstallationsResponseSchema,
   syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
-} from "../../../../api/src/routes/github/github.schemas";
+} from "../../../../../packages/validators/src/api/github";
 import {
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
-} from "../../../../api/src/routes/packages/packages.schemas";
+} from "../../../../../packages/validators/src/api/packages";
 import {
   createSandboxRequestSchema,
   createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxAttemptsResponseSchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
   listSandboxEventsQuerySchema,
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
   listSandboxesResponseSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
-} from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
+} from "../../../../../packages/validators/src/api/sandboxes";
 
 const DEFAULT_CORE_API_URL = "http://localhost:4000";
 

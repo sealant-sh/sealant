@@ -1,22 +1,19 @@
-import { describeRoute, resolver, validator } from "hono-openapi";
-
-import { messageResponseSchema } from "../../lib/schemas.js";
 import {
-  importGitHubInstallationRequestSchema,
-  importGitHubInstallationResponseSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
-  githubWebhookResponseSchema,
   githubInstallationsQuerySchema,
+  githubWebhookResponseSchema,
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
   listGitHubInstallationRepositoriesResponseSchema,
   listGitHubInstallationsResponseSchema,
+  messageResponseSchema,
   syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
-} from "./github.schemas.js";
+} from "@sealant/validators";
+import { describeRoute, resolver, validator } from "hono-openapi";
 
 const tags = ["GitHub"];
-
-export * from "./github.schemas.js";
 
 export const githubInstallationIdValidator = validator("param", githubInstallationIdParamsSchema);
 export const githubInstallationsQueryValidator = validator("query", githubInstallationsQuerySchema);

@@ -18,11 +18,11 @@ import {
   listGitHubInstallationsResponseSchema,
   syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
-} from "../../../../api/src/routes/github/github.schemas";
+} from "../../../../../packages/validators/src/api/github";
 import {
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
-} from "../../../../api/src/routes/packages/packages.schemas";
+} from "../../../../../packages/validators/src/api/packages";
 import {
   createSandboxRequestSchema,
   listSandboxAttemptsQuerySchema,
@@ -31,7 +31,7 @@ import {
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
   sandboxIdParamsSchema,
-} from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
+} from "../../../../../packages/validators/src/api/sandboxes";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
 const registryIdSchema = z.object({

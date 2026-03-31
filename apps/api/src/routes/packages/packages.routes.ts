@@ -1,11 +1,11 @@
+import {
+  messageResponseSchema,
+  resolvePackageQuerySchema,
+  resolvePackageResponseSchema,
+} from "@sealant/validators";
 import { describeRoute, resolver, validator } from "hono-openapi";
 
-import { messageResponseSchema } from "../../lib/schemas.js";
-import { resolvePackageQuerySchema, resolvePackageResponseSchema } from "./packages.schemas.js";
-
 const tags = ["Packages"];
-
-export * from "./packages.schemas.js";
 
 export const resolvePackageQueryValidator = validator("query", resolvePackageQuerySchema);
 

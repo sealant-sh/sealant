@@ -2091,21 +2091,19 @@ function createInitialFormState(registryId: string): NewSandboxFormState {
   };
 }
 
-function normalizeRequiredValue(value: string): string {
+function trimValue(value: string): string {
   return value.trim();
 }
 
-function normalizeOptionalValue(value: string): string {
-  return value.trim();
-}
+const normalizeRequiredValue = trimValue;
+
+const normalizeOptionalValue = trimValue;
 
 function normalizePackageIdentifier(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function normalizeCommandStep(value: string): string {
-  return value.trim();
-}
+const normalizeCommandStep = trimValue;
 
 function parseHarnessId(value: string): HarnessId {
   if (value === "codex") {
