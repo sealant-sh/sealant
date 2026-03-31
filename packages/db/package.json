@@ -20,7 +20,7 @@
     "@sealant/validators": "workspace:*",
     "drizzle-orm": "^0.44.7",
     "drizzle-zod": "^0.8.2",
-    "zod": "^3.24.1"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
