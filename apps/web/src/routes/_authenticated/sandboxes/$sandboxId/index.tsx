@@ -1,4 +1,4 @@
-import { newSandboxSchema, type NewSandbox } from "@sealant/db/payloads";
+import { type NewSandbox } from "@sealant/db/payloads";
 import { Badge, Button } from "@sealant/ui";
 import {
   useMutation,
@@ -34,41 +34,6 @@ interface SandboxSummary {
     readonly digestReference: string;
   };
   readonly spec?: NewSandbox;
-  readonly blueprint?: {
-    readonly sources: {
-      readonly sandbox: {
-        readonly provider: string;
-        readonly url: string;
-        readonly ref: string;
-      };
-      readonly inputs?: Array<{
-        readonly purpose: "config" | "dotfiles" | "bootstrap";
-        readonly url: string;
-        readonly ref: string;
-      }>;
-    };
-    readonly harness: {
-      readonly id: string;
-    };
-    readonly access: {
-      readonly ssh: {
-        readonly enabled: boolean;
-        readonly listenPort: number;
-      };
-    };
-    readonly runtime: {
-      readonly workingDirectory: string;
-      readonly ociRuntime: string;
-    };
-    readonly target: {
-      readonly os: {
-        readonly family: string;
-      };
-      readonly runtime: {
-        readonly family: string;
-      };
-    };
-  };
 }
 
 interface SandboxAttemptSummary {
@@ -91,10 +56,6 @@ interface SandboxSummaryLoaderData {
   readonly events: readonly SandboxEvent[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function toSandboxSummary(input: {
   readonly sandboxId: string;
   readonly name: string;
@@ -104,13 +65,10 @@ function toSandboxSummary(input: {
   readonly tag?: string | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly runtime?: unknown;
-  readonly publishedImage?: unknown;
-  readonly spec?: unknown;
-  readonly blueprint?: unknown;
+  readonly runtime?: SandboxSummary["runtime"] | undefined;
+  readonly publishedImage?: SandboxSummary["publishedImage"] | undefined;
+  readonly spec?: NewSandbox | undefined;
 }): SandboxSummary {
-  const parsedSpec = newSandboxSchema.safeParse(input.spec);
-
   return {
     sandboxId: input.sandboxId,
     name: input.name,
@@ -120,85 +78,9 @@ function toSandboxSummary(input: {
     ...(input.tag === undefined ? {} : { tag: input.tag }),
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
-    ...(isRecord(input.runtime) &&
-    typeof input.runtime.adapter === "string" &&
-    typeof input.runtime.resourceId === "string" &&
-    typeof input.runtime.status === "string"
-      ? {
-          runtime: {
-            adapter: input.runtime.adapter,
-            resourceId: input.runtime.resourceId,
-            status: input.runtime.status,
-            ...(typeof input.runtime.endpoint === "string"
-              ? { endpoint: input.runtime.endpoint }
-              : {}),
-          },
-        }
-      : {}),
-    ...(isRecord(input.publishedImage) &&
-    typeof input.publishedImage.reference === "string" &&
-    typeof input.publishedImage.digestReference === "string"
-      ? {
-          publishedImage: {
-            reference: input.publishedImage.reference,
-            digestReference: input.publishedImage.digestReference,
-          },
-        }
-      : {}),
-    ...(parsedSpec.success ? { spec: parsedSpec.data } : {}),
-    ...(isRecord(input.blueprint) &&
-    isRecord(input.blueprint.sources) &&
-    isRecord(input.blueprint.sources.sandbox) &&
-    typeof input.blueprint.sources.sandbox.provider === "string" &&
-    typeof input.blueprint.sources.sandbox.url === "string" &&
-    typeof input.blueprint.sources.sandbox.ref === "string" &&
-    isRecord(input.blueprint.harness) &&
-    typeof input.blueprint.harness.id === "string" &&
-    isRecord(input.blueprint.access) &&
-    isRecord(input.blueprint.access.ssh) &&
-    typeof input.blueprint.access.ssh.enabled === "boolean" &&
-    typeof input.blueprint.access.ssh.listenPort === "number" &&
-    isRecord(input.blueprint.runtime) &&
-    typeof input.blueprint.runtime.workingDirectory === "string" &&
-    typeof input.blueprint.runtime.ociRuntime === "string" &&
-    isRecord(input.blueprint.target) &&
-    isRecord(input.blueprint.target.os) &&
-    typeof input.blueprint.target.os.family === "string" &&
-    isRecord(input.blueprint.target.runtime) &&
-    typeof input.blueprint.target.runtime.family === "string"
-      ? {
-          blueprint: {
-            sources: {
-              sandbox: {
-                provider: input.blueprint.sources.sandbox.provider,
-                url: input.blueprint.sources.sandbox.url,
-                ref: input.blueprint.sources.sandbox.ref,
-              },
-            },
-            harness: {
-              id: input.blueprint.harness.id,
-            },
-            access: {
-              ssh: {
-                enabled: input.blueprint.access.ssh.enabled,
-                listenPort: input.blueprint.access.ssh.listenPort,
-              },
-            },
-            runtime: {
-              workingDirectory: input.blueprint.runtime.workingDirectory,
-              ociRuntime: input.blueprint.runtime.ociRuntime,
-            },
-            target: {
-              os: {
-                family: input.blueprint.target.os.family,
-              },
-              runtime: {
-                family: input.blueprint.target.runtime.family,
-              },
-            },
-          },
-        }
-      : {}),
+    ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
+    ...(input.publishedImage === undefined ? {} : { publishedImage: input.publishedImage }),
+    ...(input.spec === undefined ? {} : { spec: input.spec }),
   };
 }
 
@@ -1140,17 +1022,10 @@ function resolveOciRuntime(spec: NewSandbox): string {
   return spec.runtime.ociRuntime;
 }
 
-function resolveSshState(input: {
-  spec?: NewSandbox | undefined;
-  blueprintSsh?: { enabled: boolean; listenPort: number };
-}): string {
+function resolveSshState(input: { spec?: NewSandbox | undefined }): string {
   const ssh = input.spec?.access.ssh;
 
   if (ssh === undefined) {
-    if (input.blueprintSsh?.enabled === true) {
-      return `enabled (port ${input.blueprintSsh.listenPort})`;
-    }
-
     return "disabled";
   }
 
