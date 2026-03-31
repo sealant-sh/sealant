@@ -1,3 +1,23 @@
+import {
+  createSandboxRequestSchema,
+  githubInstallationIdParamsSchema,
+  githubInstallationRepositoriesQuerySchema,
+  githubInstallationsQuerySchema,
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
+  listGitHubInstallationRepositoriesResponseSchema,
+  listGitHubInstallationsResponseSchema,
+  listSandboxAttemptsQuerySchema,
+  listSandboxEventsQuerySchema,
+  listSandboxesQuerySchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
+  resolvePackageQuerySchema,
+  resolvePackageResponseSchema,
+  sandboxIdParamsSchema,
+  syncGitHubInstallationQuerySchema,
+  syncGitHubInstallationResponseSchema,
+} from "@sealant/validators";
 import { z } from "zod";
 
 import {
@@ -8,30 +28,6 @@ import {
   listRepositories,
 } from "@/lib/api/registry-service";
 
-import {
-  githubInstallationIdParamsSchema,
-  githubInstallationRepositoriesQuerySchema,
-  githubInstallationsQuerySchema,
-  importGitHubInstallationRequestSchema,
-  importGitHubInstallationResponseSchema,
-  listGitHubInstallationRepositoriesResponseSchema,
-  listGitHubInstallationsResponseSchema,
-  syncGitHubInstallationQuerySchema,
-  syncGitHubInstallationResponseSchema,
-} from "../../../../api/src/routes/github/github.schemas";
-import {
-  resolvePackageQuerySchema,
-  resolvePackageResponseSchema,
-} from "../../../../api/src/routes/packages/packages.schemas";
-import {
-  createSandboxRequestSchema,
-  listSandboxAttemptsQuerySchema,
-  listSandboxEventsQuerySchema,
-  listSandboxesQuerySchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
-  sandboxIdParamsSchema,
-} from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
 const registryIdSchema = z.object({

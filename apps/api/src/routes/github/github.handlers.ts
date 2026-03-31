@@ -2,19 +2,19 @@ import { randomUUID } from "node:crypto";
 
 import type { GitHubAppInstallation } from "@sealant/db";
 import type { GitHubRemoteInstallation } from "@sealant/source-integrations";
+import {
+  githubInstallationRepositoriesQuerySchema,
+  githubInstallationRepositorySummarySchema,
+  githubInstallationsQuerySchema,
+  githubInstallationSummarySchema,
+  importGitHubInstallationRequestSchema,
+  importGitHubInstallationResponseSchema,
+  syncGitHubInstallationQuerySchema,
+  syncGitHubInstallationResponseSchema,
+} from "@sealant/validators";
 import type { Context } from "hono";
 
 import type { AppBindings } from "../../lib/types.js";
-import type {
-  importGitHubInstallationRequestSchema,
-  importGitHubInstallationResponseSchema,
-  githubInstallationRepositoriesQuerySchema,
-  githubInstallationsQuerySchema,
-  githubInstallationSummarySchema,
-  githubInstallationRepositorySummarySchema,
-  syncGitHubInstallationQuerySchema,
-  syncGitHubInstallationResponseSchema,
-} from "./github.routes.js";
 
 const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();

@@ -1,5 +1,6 @@
-import { messageResponseSchema } from "../../../../api/src/lib/schemas";
 import {
+  createSandboxRequestSchema,
+  createSandboxResponseSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
@@ -7,27 +8,22 @@ import {
   importGitHubInstallationResponseSchema,
   listGitHubInstallationRepositoriesResponseSchema,
   listGitHubInstallationsResponseSchema,
-  syncGitHubInstallationQuerySchema,
-  syncGitHubInstallationResponseSchema,
-} from "../../../../api/src/routes/github/github.schemas";
-import {
-  resolvePackageQuerySchema,
-  resolvePackageResponseSchema,
-} from "../../../../api/src/routes/packages/packages.schemas";
-import {
-  createSandboxRequestSchema,
-  createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxAttemptsResponseSchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
   listSandboxEventsQuerySchema,
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
   listSandboxesResponseSchema,
+  messageResponseSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
+  resolvePackageQuerySchema,
+  resolvePackageResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
-} from "../../../../api/src/routes/sandboxes/sandboxes.schemas";
+  syncGitHubInstallationQuerySchema,
+  syncGitHubInstallationResponseSchema,
+} from "@sealant/validators";
 
 const DEFAULT_CORE_API_URL = "http://localhost:4000";
 

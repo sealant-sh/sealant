@@ -16,7 +16,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@sealant/typescript": "link:../../tooling/typescript",
+    "@sealant/typescript": "workspace:*",
     "@types/amqplib": "^0.10.7"
   }
 }

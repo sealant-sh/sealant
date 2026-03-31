@@ -1,25 +1,22 @@
-import { describeRoute, resolver, validator } from "hono-openapi";
-
-import { messageResponseSchema } from "../../lib/schemas.js";
 import {
   createSandboxRequestSchema,
   createSandboxResponseSchema,
   listSandboxAttemptsQuerySchema,
   listSandboxAttemptsResponseSchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
   listSandboxEventsQuerySchema,
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
   listSandboxesResponseSchema,
+  messageResponseSchema,
+  renameSandboxRequestSchema,
+  renameSandboxResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
   sandboxSshTargetSchema,
-} from "./sandboxes.schemas.js";
+} from "@sealant/validators";
+import { describeRoute, resolver, validator } from "hono-openapi";
 
 const tags = ["Sandboxes"];
-
-export * from "./sandboxes.schemas.js";
 
 export const createSandboxValidator = validator("json", createSandboxRequestSchema);
 export const renameSandboxValidator = validator("json", renameSandboxRequestSchema);

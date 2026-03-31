@@ -9,7 +9,7 @@ const config = defineConfig({
   plugins: [
     devtools(),
     tsconfigPaths({
-      projects: ["./tsconfig.json", "../../packages/ui/tsconfig.json"],
+      projects: ["./tsconfig.json", "./node_modules/@sealant/ui/tsconfig.json"],
     }),
     tailwindcss(),
     tanstackStart(),

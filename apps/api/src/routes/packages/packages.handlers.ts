@@ -1,8 +1,8 @@
+import { resolvePackageQuerySchema } from "@sealant/validators";
 import type { Context } from "hono";
 import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
-import type { resolvePackageQuerySchema } from "./packages.routes.js";
 
 export const resolvePackage = async (c: Context<AppBindings>) => {
   const query = (

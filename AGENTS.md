@@ -20,6 +20,9 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 - After code changes, always run `pnpm format:fix`.
 - For type-checking, always use `tsgo` (`pnpm typecheck`) and do not use `tsc`.
+- Never touch `pnpm-lock.yaml` (no manual edits and no workflow steps that update it).
+- For internal dependencies, always use `workspace:*` in `package.json` and import via
+  `@sealant/<package-name>`; never import from `../packages/*` paths.
 - For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
   design source of truth.
 - Do not add `"use client"` anywhere; this repo is not Next.js.
