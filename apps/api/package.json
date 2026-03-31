@@ -5,7 +5,7 @@
   "description": "Control-plane API for validation, orchestration, lifecycle, and state",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "dotenv -e ./.env.local -e ./.env -e ../../.env.local -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
@@ -21,8 +21,8 @@
     "@sealant/validators": "workspace:*",
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
+    "@t3-oss/env-core": "catalog:",
     "@types/json-schema": "^7.0.15",
-    "dotenv": "^17.2.3",
     "hono": "^4.8.3",
     "hono-openapi": "^1.3.0",
     "openapi-types": "^12.1.3",
@@ -30,6 +30,7 @@
     "zod-openapi": "^4.2.4"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "workspace:*",
+    "dotenv-cli": "catalog:"
   }
 }

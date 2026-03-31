@@ -5,60 +5,62 @@ import { homedir } from "node:os";
 import { databaseEnvSchema } from "@sealant/db";
 import { rabbitMqEnvSchema } from "@sealant/rabbitmq";
 import { runtimeAdapterIdSchema } from "@sealant/sandboxes";
+import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
 const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);
 
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
-export const workerEnvSchema = databaseEnvSchema
-  .merge(rabbitMqEnvSchema)
-  .extend({
-    REGISTRY_BASE_URL: z.string().url().default("http://127.0.0.1:5000"),
-    REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),
-    REGISTRY_USERNAME: z.string().trim().min(1).optional(),
-    REGISTRY_PASSWORD: z.string().min(1).optional(),
-    GITHUB_API_BASE_URL: z.string().url().default("https://api.github.com"),
-    GITHUB_APP_ID: z.string().trim().min(1).optional(),
-    GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
-    GITHUB_APP_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
-    DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
-    DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
-    DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
-      .string()
-      .trim()
-      .min(1)
-      .default("/app/.secrets/authorized_keys"),
-    DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
-    DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
-      sshEndpointExposureStrategySchema.default("host-published"),
-    WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
-    SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
-  })
-  .superRefine((input, ctx) => {
-    const hasGitHubPrivateKey =
-      input.GITHUB_APP_PRIVATE_KEY !== undefined || input.GITHUB_APP_PRIVATE_KEY_PATH !== undefined;
+const workerServerEnvShape = {
+  ...databaseEnvSchema.shape,
+  ...rabbitMqEnvSchema.shape,
+  REGISTRY_BASE_URL: z.string().url().default("http://127.0.0.1:5000"),
+  REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),
+  REGISTRY_USERNAME: z.string().trim().min(1).optional(),
+  REGISTRY_PASSWORD: z.string().min(1).optional(),
+  GITHUB_API_BASE_URL: z.string().url().default("https://api.github.com"),
+  GITHUB_APP_ID: z.string().trim().min(1).optional(),
+  GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
+  GITHUB_APP_PRIVATE_KEY_PATH: z.string().trim().min(1).optional(),
+  DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
+  DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
+  DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
+    .string()
+    .trim()
+    .min(1)
+    .default("/app/.secrets/authorized_keys"),
+  DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
+  DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
+    sshEndpointExposureStrategySchema.default("host-published"),
+  WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
+  SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+};
 
-    if ((input.GITHUB_APP_ID === undefined) !== !hasGitHubPrivateKey) {
-      if (input.GITHUB_APP_ID === undefined) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["GITHUB_APP_ID"],
-          message:
-            "GITHUB_APP_ID must be provided when GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is set.",
-        });
-      }
+export const workerEnvSchema = z.object(workerServerEnvShape).superRefine((input, ctx) => {
+  const hasGitHubPrivateKey =
+    input.GITHUB_APP_PRIVATE_KEY !== undefined || input.GITHUB_APP_PRIVATE_KEY_PATH !== undefined;
 
-      if (!hasGitHubPrivateKey) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["GITHUB_APP_PRIVATE_KEY"],
-          message:
-            "GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH must be provided when GITHUB_APP_ID is set.",
-        });
-      }
+  if ((input.GITHUB_APP_ID === undefined) !== !hasGitHubPrivateKey) {
+    if (input.GITHUB_APP_ID === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GITHUB_APP_ID"],
+        message:
+          "GITHUB_APP_ID must be provided when GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is set.",
+      });
     }
-  });
+
+    if (!hasGitHubPrivateKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["GITHUB_APP_PRIVATE_KEY"],
+        message:
+          "GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH must be provided when GITHUB_APP_ID is set.",
+      });
+    }
+  }
+});
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
 
@@ -84,7 +86,13 @@ const resolveGitHubAppPrivateKey = (input: WorkerEnv): WorkerEnv => {
 };
 
 export const parseWorkerEnv = (input: NodeJS.ProcessEnv): WorkerEnv => {
-  return resolveGitHubAppPrivateKey(workerEnvSchema.parse(input));
+  const runtimeEnv = createEnv({
+    server: workerServerEnvShape,
+    runtimeEnv: input,
+    emptyStringAsUndefined: true,
+  });
+
+  return resolveGitHubAppPrivateKey(workerEnvSchema.parse(runtimeEnv));
 };
 
 const runtimeProcess = globalThis as typeof globalThis & {

@@ -23,6 +23,14 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 - Never touch `pnpm-lock.yaml` (no manual edits and no workflow steps that update it).
 - For internal dependencies, always use `workspace:*` in `package.json` and import via
   `@sealant/<package-name>`; never import from `../packages/*` paths.
+- For external dependencies used by more than one app/package, prefer `catalog:` versions in
+  `package.json` instead of inline semver.
+- If a shared external dependency is missing from the catalog, add it to the root
+  `pnpm-workspace.yaml` `catalog` and then reference it as `catalog:` from importers.
+- Do not duplicate shared external dependency version strings across apps/packages; keep version
+  authority in `pnpm-workspace.yaml`.
+- When installing new dependencies for agent work, do not update the lockfile (for example use
+  `pnpm add --lockfile=false ...` when needed).
 - For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
   design source of truth.
 - Do not add `"use client"` anywhere; this repo is not Next.js.

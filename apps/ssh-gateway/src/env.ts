@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
+import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
 const booleanFromEnvSchema = z.union([
@@ -11,7 +12,7 @@ const booleanFromEnvSchema = z.union([
 // Environment contract for the gateway process.
 // We keep string parsing strict here so runtime failures happen at startup,
 // not halfway through handling a user SSH session.
-export const sshGatewayEnvSchema = z.object({
+const sshGatewayServerEnvShape = {
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   SSH_GATEWAY_HOST: z.string().trim().min(1).default("0.0.0.0"),
   SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
@@ -32,7 +33,9 @@ export const sshGatewayEnvSchema = z.object({
   SSH_UPSTREAM_READY_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
   // false in dev for convenience; true in hardened environments.
   SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING: booleanFromEnvSchema.default(false),
-});
+};
+
+export const sshGatewayEnvSchema = z.object(sshGatewayServerEnvShape);
 
 export type SshGatewayEnv = z.infer<typeof sshGatewayEnvSchema>;
 
@@ -67,8 +70,14 @@ const hydrateFileContents = (
 };
 
 export const parseSshGatewayEnv = (input: NodeJS.ProcessEnv) => {
+  const runtimeEnv = createEnv({
+    server: sshGatewayServerEnvShape,
+    runtimeEnv: input,
+    emptyStringAsUndefined: true,
+  });
+
   // One parse call gives us validated scalars plus in-memory key material.
-  return hydrateFileContents(sshGatewayEnvSchema.parse(input));
+  return hydrateFileContents(sshGatewayEnvSchema.parse(runtimeEnv));
 };
 
 const runtimeProcess = globalThis as typeof globalThis & {

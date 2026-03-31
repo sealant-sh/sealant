@@ -1,17 +1,10 @@
 import {
-  createGitHubInstallationRepository,
-  createGitHubInstallationRepositoryCacheRepository,
   createSandboxAttemptRepository,
   createSandboxRuntimeInstanceRepository,
   createSandboxBuildJobRepository,
-  type GitHubInstallationRepository,
-  type GitHubInstallationRepositoryCacheRepository,
   type DatabaseClient,
 } from "@sealant/db";
-import {
-  parseGitHubInstallationRepositoryAuthRef,
-  type GitHubSourceIntegration,
-} from "@sealant/source-integrations";
+import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newSandboxSchema, type NewSandbox, type SandboxBuild } from "@sealant/validators";
 
 import { compileSandboxBuildSpec } from "../buildkit/index.js";
@@ -23,6 +16,10 @@ import {
   type RuntimeAdapterId,
   type SandboxCloneAuth,
 } from "../runtime/index.js";
+import {
+  resolveDotfilesRuntimeEnv,
+  resolveSandboxCloneAuth,
+} from "./github-installation-auth-resolver.js";
 
 export interface ProcessSandboxBuildJobOptions {
   readonly jobId: string;
@@ -35,12 +32,6 @@ export interface ProcessSandboxBuildJobOptions {
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
   readonly compileSandboxSpec?: (spec: NewSandbox) => Promise<SandboxBuild>;
 }
-
-const createWorkerError = (code: string, message: string) => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
-};
 
 const isPublishableOciImageArtifact = (
   artifact: SandboxBuild["artifacts"][number],
@@ -103,146 +94,6 @@ const toErrorCode = (error: unknown) => {
   return undefined;
 };
 
-const resolveSandboxCloneAuth = async (input: {
-  readonly spec: NewSandbox;
-  readonly dbClient: DatabaseClient;
-  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-}): Promise<SandboxCloneAuth | undefined> => {
-  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
-    input.spec.sources.sandbox.authRef,
-  );
-
-  if (installationRepositoryId === undefined) {
-    return undefined;
-  }
-
-  if (
-    input.gitHubSourceIntegration === undefined ||
-    !input.gitHubSourceIntegration.isConfigured()
-  ) {
-    throw createWorkerError(
-      "github-integration-unavailable",
-      "GitHub source integration is not configured for GitHub-backed sandbox launches.",
-    );
-  }
-
-  const installationRepositoryCache: GitHubInstallationRepositoryCacheRepository =
-    createGitHubInstallationRepositoryCacheRepository(input.dbClient);
-  const installationRepository: GitHubInstallationRepository = createGitHubInstallationRepository(
-    input.dbClient,
-  );
-  const installationRepositoryRecord =
-    await installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId);
-
-  if (
-    installationRepositoryRecord === undefined ||
-    installationRepositoryRecord.removedAt !== null
-  ) {
-    throw createWorkerError(
-      "github-installation-repository-unavailable",
-      `GitHub installation repository '${installationRepositoryId}' is not available for clone auth resolution.`,
-    );
-  }
-
-  const installation = await installationRepository.getInstallationById(
-    installationRepositoryRecord.installationId,
-  );
-
-  if (installation === undefined) {
-    throw createWorkerError(
-      "github-installation-missing",
-      `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for clone auth.`,
-    );
-  }
-
-  if (installation.status !== "active") {
-    throw createWorkerError(
-      "github-installation-inactive",
-      `GitHub installation '${installation.id}' is not active for clone auth resolution.`,
-    );
-  }
-
-  const accessToken = await input.gitHubSourceIntegration.createInstallationAccessToken(
-    installation.externalInstallationId,
-  );
-
-  return {
-    type: "http-token",
-    username: "x-access-token",
-    token: accessToken.token,
-  };
-};
-
-const resolveDotfilesRuntimeEnv = async (input: {
-  readonly spec: NewSandbox;
-  readonly dbClient: DatabaseClient;
-  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-}): Promise<Record<string, string>> => {
-  const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
-  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(
-    dotfilesSource?.authRef,
-  );
-
-  if (installationRepositoryId === undefined) {
-    return {};
-  }
-
-  if (
-    input.gitHubSourceIntegration === undefined ||
-    !input.gitHubSourceIntegration.isConfigured()
-  ) {
-    throw createWorkerError(
-      "github-integration-unavailable",
-      "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
-    );
-  }
-
-  const installationRepositoryCache: GitHubInstallationRepositoryCacheRepository =
-    createGitHubInstallationRepositoryCacheRepository(input.dbClient);
-  const installationRepository: GitHubInstallationRepository = createGitHubInstallationRepository(
-    input.dbClient,
-  );
-  const installationRepositoryRecord =
-    await installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId);
-
-  if (
-    installationRepositoryRecord === undefined ||
-    installationRepositoryRecord.removedAt !== null
-  ) {
-    throw createWorkerError(
-      "github-installation-repository-unavailable",
-      `GitHub installation repository '${installationRepositoryId}' is not available for dotfiles auth resolution.`,
-    );
-  }
-
-  const installation = await installationRepository.getInstallationById(
-    installationRepositoryRecord.installationId,
-  );
-
-  if (installation === undefined) {
-    throw createWorkerError(
-      "github-installation-missing",
-      `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for dotfiles auth.`,
-    );
-  }
-
-  if (installation.status !== "active") {
-    throw createWorkerError(
-      "github-installation-inactive",
-      `GitHub installation '${installation.id}' is not active for dotfiles auth resolution.`,
-    );
-  }
-
-  const accessToken = await input.gitHubSourceIntegration.createInstallationAccessToken(
-    installation.externalInstallationId,
-  );
-
-  return {
-    SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
-    SEALANT_DOTFILES_HTTP_TOKEN: accessToken.token,
-  };
-};
-
 export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOptions) => {
   const jobs = createSandboxBuildJobRepository(options.dbClient);
   const runtimeInstances = createSandboxRuntimeInstanceRepository(options.dbClient);
@@ -302,16 +153,12 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     const sandboxCloneAuth = await resolveSandboxCloneAuth({
       spec,
       dbClient: options.dbClient,
-      ...(options.gitHubSourceIntegration === undefined
-        ? {}
-        : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
+      gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
     const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
       spec,
       dbClient: options.dbClient,
-      ...(options.gitHubSourceIntegration === undefined
-        ? {}
-        : { gitHubSourceIntegration: options.gitHubSourceIntegration }),
+      gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
     const runtimeSpec: NewSandbox =
       Object.keys(dotfilesRuntimeEnv).length === 0
