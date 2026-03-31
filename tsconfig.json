@@ -1,6 +1,13 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig",
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/language-service/refs/heads/main/schema.json",
   "files": [],
+  "compilerOptions": {
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ]
+  },
   "references": [
     { "path": "./packages/ui/tsconfig.build.json" },
     { "path": "./apps/web" },
