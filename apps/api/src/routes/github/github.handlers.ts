@@ -13,6 +13,7 @@ import {
   syncGitHubInstallationResponseSchema,
 } from "@sealant/validators";
 import type { Context } from "hono";
+import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
 
@@ -67,7 +68,7 @@ const toInstallationStatus = (action: string | undefined): GitHubAppInstallation
 
 const toInstallationSummary = (
   installation: GitHubAppInstallation,
-): typeof githubInstallationSummarySchema._type => {
+): z.infer<typeof githubInstallationSummarySchema> => {
   return {
     installationId: installation.id,
     externalInstallationId: installation.externalInstallationId,
@@ -309,7 +310,7 @@ const importInstallationState = async (
 export const listInstallations = async (c: Context<AppBindings>) => {
   const query = (
     c.req as typeof c.req & {
-      valid(target: "query"): typeof githubInstallationsQuerySchema._type;
+      valid(target: "query"): z.infer<typeof githubInstallationsQuerySchema>;
     }
   ).valid("query");
   const installationRepository = c.get("gitHubInstallationRepository");
@@ -322,7 +323,7 @@ export const listInstallations = async (c: Context<AppBindings>) => {
     userId: query.userId,
     status: "active",
   });
-  const items: Array<typeof githubInstallationSummarySchema._type> =
+  const items: Array<z.infer<typeof githubInstallationSummarySchema>> =
     installations.map(toInstallationSummary);
 
   return c.json({ items });
@@ -336,7 +337,7 @@ export const listInstallationRepositories = async (c: Context<AppBindings>) => {
   ).valid("param");
   const query = (
     c.req as typeof c.req & {
-      valid(target: "query"): typeof githubInstallationRepositoriesQuerySchema._type;
+      valid(target: "query"): z.infer<typeof githubInstallationRepositoriesQuerySchema>;
     }
   ).valid("query");
   const installationRepository = c.get("gitHubInstallationRepository");
@@ -374,7 +375,7 @@ export const listInstallationRepositories = async (c: Context<AppBindings>) => {
     installationId: params.installationId,
     ...(query.search === undefined ? {} : { search: query.search }),
   });
-  const items: Array<typeof githubInstallationRepositorySummarySchema._type> = repositories.map(
+  const items: Array<z.infer<typeof githubInstallationRepositorySummarySchema>> = repositories.map(
     (repository) => {
       return {
         installationRepositoryId: repository.id,
@@ -405,7 +406,7 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
   ).valid("param");
   const query = (
     c.req as typeof c.req & {
-      valid(target: "query"): typeof syncGitHubInstallationQuerySchema._type;
+      valid(target: "query"): z.infer<typeof syncGitHubInstallationQuerySchema>;
     }
   ).valid("query");
   const installationRepository = c.get("gitHubInstallationRepository");
@@ -454,7 +455,7 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
 
   const syncedAt = new Date();
   const syncedRepositoryCount = await syncInstallationRepositories(c, installation);
-  const response: typeof syncGitHubInstallationResponseSchema._type = {
+  const response: z.infer<typeof syncGitHubInstallationResponseSchema> = {
     installationId: installation.id,
     syncedRepositoryCount,
     syncedAt: syncedAt.toISOString(),
@@ -466,7 +467,7 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
 export const importInstallation = async (c: Context<AppBindings>) => {
   const body = (
     c.req as typeof c.req & {
-      valid(target: "json"): typeof importGitHubInstallationRequestSchema._type;
+      valid(target: "json"): z.infer<typeof importGitHubInstallationRequestSchema>;
     }
   ).valid("json");
   const installationRepository = c.get("gitHubInstallationRepository");
@@ -492,7 +493,7 @@ export const importInstallation = async (c: Context<AppBindings>) => {
     const syncedAt = new Date();
     const syncedRepositoryCount =
       installation.status === "active" ? await syncInstallationRepositories(c, installation) : 0;
-    const response: typeof importGitHubInstallationResponseSchema._type = {
+    const response: z.infer<typeof importGitHubInstallationResponseSchema> = {
       installation: toInstallationSummary(
         syncedRepositoryCount === 0 && installation.status !== "active"
           ? installation

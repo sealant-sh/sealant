@@ -54,8 +54,8 @@ export const resolvedImagePlanSchema = z.strictObject({
   dotfiles: resolvedDotfilesPlanSchema.optional(),
   buildSecrets: z.array(buildkitSecretSchema).default([]),
   runtimeSecrets: z.array(buildkitSecretSchema).default([]),
-  imageEnv: z.record(z.string()).default({}),
-  runtimeEnv: z.record(z.string()).default({}),
+  imageEnv: z.record(z.string(), z.string()).default({}),
+  runtimeEnv: z.record(z.string(), z.string()).default({}),
 });
 
 export const buildkitBuildSpecSchema = z.strictObject({
@@ -71,7 +71,7 @@ export const buildkitBuildSpecSchema = z.strictObject({
       }),
     )
     .default([]),
-  buildArgs: z.record(z.string()).default({}),
+  buildArgs: z.record(z.string(), z.string()).default({}),
 });
 
 export const buildkitOsBuilderCompileInputSchema = osBuilderCompileInputSchema;

@@ -12,11 +12,11 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "amqplib": "^0.10.9",
-    "zod": "^3.24.1"
+    "amqplib": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
-    "@types/amqplib": "^0.10.7"
+    "@types/amqplib": "catalog:"
   }
 }

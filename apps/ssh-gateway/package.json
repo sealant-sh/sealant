@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "ssh2": "^1.17.0",
-    "zod": "^3.24.1"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",

@@ -56,13 +56,13 @@ export const sandboxSshAccessSchema = z
     listenPort: z.number().int().min(1).max(65535).default(2222),
     authorizedKeysRef: nonEmptyStringSchema.optional(),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxAccessSchema = z
   .strictObject({
-    ssh: sandboxSshAccessSchema.default({}),
+    ssh: sandboxSshAccessSchema.prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxPackageRequestSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -73,7 +73,7 @@ export const sandboxToolingSchema = z
   .strictObject({
     packages: z.array(sandboxPackageRequestSchema).default([]),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxCustomizationSchema = z
   .strictObject({
@@ -84,7 +84,7 @@ export const sandboxCustomizationSchema = z
     dotfilesBootstrap: z.boolean().default(true),
     dotfilesBootstrapCommand: nonEmptyStringSchema.optional(),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxCommandStepSchema = z.strictObject({
   id: nonEmptyStringSchema.optional(),
@@ -115,47 +115,47 @@ export const sandboxLifecycleSchema = z
         steps: z.array(sandboxCommandStepSchema).default([]),
         foreground: sandboxStartupForegroundSchema.default({ kind: "harness" }),
       })
-      .default({}),
+      .prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxSpecNetworkSchema = z
   .strictObject({
     outbound: z.boolean().default(true),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxSpecRuntimeSchema = z
   .strictObject({
-    env: z.record(z.string()).default({}),
+    env: z.record(z.string(), z.string()).default({}),
     sandboxRoot: nonEmptyStringSchema.default("/sandbox"),
     workingDirectory: nonEmptyStringSchema.default("/sandbox/repo"),
     persistence: sandboxPersistenceSchema.default("ephemeral"),
     ociRuntime: sandboxOciRuntimeSchema.default("runc"),
-    network: sandboxSpecNetworkSchema.default({}),
+    network: sandboxSpecNetworkSchema.prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxTargetOsSchema = z
   .strictObject({
     family: sandboxTargetOsFamilySchema.default("auto"),
     mode: sandboxTargetOsModeSchema.default("prefer"),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxTargetRuntimeSchema = z
   .strictObject({
     family: sandboxTargetRuntimeFamilySchema.default("auto"),
     mode: sandboxTargetRuntimeModeSchema.default("prefer"),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxTargetSchema = z
   .strictObject({
-    os: sandboxTargetOsSchema.default({}),
-    runtime: sandboxTargetRuntimeSchema.default({}),
+    os: sandboxTargetOsSchema.prefault({}),
+    runtime: sandboxTargetRuntimeSchema.prefault({}),
   })
-  .default({});
+  .prefault({});
 
 export const sandboxBlueprintSchema = z.strictObject({
   version: z.literal(sandboxBlueprintVersion).default(sandboxBlueprintVersion),
@@ -164,12 +164,12 @@ export const sandboxBlueprintSchema = z.strictObject({
     inputs: z.array(sandboxInputSourceSchema).default([]),
   }),
   harness: sandboxHarnessSchema,
-  access: sandboxAccessSchema.default({}),
-  tooling: sandboxToolingSchema.default({}),
-  customization: sandboxCustomizationSchema.default({}),
-  lifecycle: sandboxLifecycleSchema.default({}),
-  runtime: sandboxSpecRuntimeSchema.default({}),
-  target: sandboxTargetSchema.default({}),
+  access: sandboxAccessSchema.prefault({}),
+  tooling: sandboxToolingSchema.prefault({}),
+  customization: sandboxCustomizationSchema.prefault({}),
+  lifecycle: sandboxLifecycleSchema.prefault({}),
+  runtime: sandboxSpecRuntimeSchema.prefault({}),
+  target: sandboxTargetSchema.prefault({}),
 });
 
 export type SandboxBlueprint = z.infer<typeof sandboxBlueprintSchema>;
