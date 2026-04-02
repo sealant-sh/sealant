@@ -1,6 +1,6 @@
 export { createSealantAuthClient, type CreateSealantAuthClientOptions } from "./client.js";
 
-export { authEnv, authEnvSchema, parseAuthEnv, type AuthEnv } from "./env.js";
+export { authEnv, authEnvSchema, parseAuthEnv, type AuthEnv } from "./runtime-env.js";
 
 export {
   createSealantAuth,

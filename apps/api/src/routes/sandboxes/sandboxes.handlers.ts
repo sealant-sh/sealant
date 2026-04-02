@@ -29,10 +29,10 @@ import {
   sandboxSshTargetSchema,
   sandboxSummarySchema,
 } from "@sealant/validators";
+import type { AppEnv } from "@sealant/validators/env";
 import type { Context } from "hono";
 import type { z } from "zod";
 
-import type { AppEnv } from "../../env.js";
 import type { AppBindings } from "../../lib/types.js";
 
 type SandboxAttemptRecord = NonNullable<

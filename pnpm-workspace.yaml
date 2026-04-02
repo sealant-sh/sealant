@@ -9,6 +9,7 @@ catalog:
   "@fontsource/space-grotesk": ^5.2.8
   "@tailwindcss/typography": ^0.5.16
   "@tailwindcss/vite": ^4.1.18
+  "@t3-oss/env-core": ^0.13.11
   "@tanstack/devtools-vite": latest
   "@tanstack/react-devtools": latest
   "@tanstack/react-form": latest
@@ -27,6 +28,7 @@ catalog:
   amqplib: ^0.10.9
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
+  dotenv-cli: ^11.0.0
   jsdom: ^28.1.0
   lucide-react: ^0.545.0
   react: ^19.2.0

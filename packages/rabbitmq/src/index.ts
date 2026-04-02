@@ -1,4 +1,4 @@
-export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "./env.js";
+export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "@sealant/validators/env";
 
 export {
   consumeRabbitMqJsonMessages,

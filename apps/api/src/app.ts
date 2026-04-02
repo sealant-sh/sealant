@@ -12,7 +12,6 @@ import {
 } from "@sealant/db";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 
-import { env } from "./env.js";
 import { configureOpenAPI } from "./lib/configure-openapi.js";
 import { createApp, createRouter } from "./lib/create-app.js";
 import { createApiPackageStandardizer } from "./lib/create-package-standardizer.js";
@@ -24,6 +23,7 @@ import packages from "./routes/packages/packages.index.js";
 import registries from "./routes/registries/registries.index.js";
 import sandboxes from "./routes/sandboxes/sandboxes.index.js";
 import system from "./routes/system/system.index.js";
+import { env } from "./runtime-env.js";
 
 export const createApiApp = (config: AppRuntimeConfig) => {
   const app = createApp(config);

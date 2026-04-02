@@ -6,8 +6,7 @@ import {
   type PackageStandardizer,
 } from "@sealant/sandboxes";
 import { packageResolutionSchema } from "@sealant/validators";
-
-import type { AppEnv } from "../env.js";
+import type { AppEnv } from "@sealant/validators/env";
 
 const createCacheStore = (
   repository: PackageResolutionCacheRepository,

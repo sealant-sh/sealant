@@ -1,6 +1,5 @@
 import { createZotRegistryClient } from "@sealant/sandboxes";
-
-import type { AppEnv } from "../env.js";
+import type { AppEnv } from "@sealant/validators/env";
 
 export const createRegistryClient = (env: AppEnv) => {
   return createZotRegistryClient({

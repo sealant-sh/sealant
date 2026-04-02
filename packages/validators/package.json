@@ -5,13 +5,15 @@
   "description": "Shared API and worker validation contracts",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./env": "./src/env.ts"
   },
   "scripts": {
     "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@t3-oss/env-core": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

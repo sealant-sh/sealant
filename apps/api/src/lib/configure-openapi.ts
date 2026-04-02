@@ -1,9 +1,9 @@
 import { Scalar } from "@scalar/hono-api-reference";
+import type { AppEnv } from "@sealant/validators/env";
 import type { Hono } from "hono";
 import { openAPIRouteHandler } from "hono-openapi";
 
 import packageJson from "../../package.json" with { type: "json" };
-import type { AppEnv } from "../env.js";
 import type { AppBindings } from "./types.js";
 
 export const configureOpenAPI = (
