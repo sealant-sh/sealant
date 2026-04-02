@@ -53,13 +53,13 @@ Use concise tags so reviewers can grep quickly:
 
 ### CHG-2026-04-02-001 - Initial Effect Service Runtime Wiring
 
-| Field    | Value                                                                                                           |
-| -------- | --------------------------------------------------------------------------------------------------------------- |
-| `status` | `in_review`                                                                                                     |
-| `owners` | `engineering`                                                                                                   |
-| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs |
-| `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                         |
-| `links`  | PR: `TBD` (add when opened), commits: `8c69885` + `TBD`, audit: `TECH_DEBT_CLEANUP_AUDIT.md`                    |
+| Field    | Value                                                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `status` | `in_review`                                                                                                              |
+| `owners` | `engineering`                                                                                                            |
+| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs          |
+| `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                                  |
+| `links`  | PR: `https://github.com/get-sealant/sealant/pull/49`, commits: `8c69885`, `d3bed5d`, audit: `TECH_DEBT_CLEANUP_AUDIT.md` |
 
 **PR Description (copy-ready)**
 
@@ -178,4 +178,4 @@ All commands passed during implementation.
 
 - Continue queue/worker migration onto the RabbitMQ service boundary.
 - Add test-layer variants for runtime infrastructure services.
-- Replace `PR: TBD` with PR URL when opened.
+- Keep this entry in sync with PR/body changes until merge.
