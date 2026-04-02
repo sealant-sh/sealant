@@ -11,6 +11,9 @@ export type AppTheme = z.infer<typeof AppThemeSchema>;
 
 const themeStorageKey = "ui-theme";
 
+/**
+ * Parses persisted theme data into a validated user theme value.
+ */
 const parseUserTheme = (value: unknown): UserTheme => {
   return UserThemeSchema.parse(value);
 };
@@ -44,6 +47,9 @@ const handleThemeChange = createClientOnlyFn((userTheme: UserTheme) => {
   }
 });
 
+/**
+ * Subscribes to system theme preference updates while in `system` mode.
+ */
 const setupPreferredListener = createClientOnlyFn(() => {
   const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
   const handler = () => handleThemeChange("system");
@@ -52,6 +58,9 @@ const setupPreferredListener = createClientOnlyFn(() => {
 });
 
 const themeScript = (function () {
+  /**
+   * Applies theme classes before hydration to avoid flashes of incorrect theme.
+   */
   function themeFn() {
     try {
       const storedTheme = localStorage.getItem("ui-theme") || "system";
@@ -89,6 +98,10 @@ const ThemeContext = createContext<ThemeContextProps | undefined>(undefined);
 type ThemeProviderProps = {
   children: ReactNode;
 };
+
+/**
+ * Provides docs theme state and synchronizes user/system preferences.
+ */
 export function ThemeProvider({ children }: ThemeProviderProps) {
   const [userTheme, setUserTheme] = useState<UserTheme>(getStoredUserTheme);
 
@@ -114,6 +127,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   );
 }
 
+/**
+ * Accessor hook for the docs theme context.
+ */
 export const useTheme = () => {
   const context = use(ThemeContext);
   if (!context) {

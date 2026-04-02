@@ -7,6 +7,9 @@ import {
 } from "./messages.js";
 import { sandboxBuildQueueName, sandboxBuildQueueTopology } from "./topology.js";
 
+/**
+ * Publishes a validated sandbox build request message to RabbitMQ.
+ */
 export const publishSandboxBuildJobRequested = async (
   connectionUrl: string,
   input: SandboxBuildJobRequestedMessage,

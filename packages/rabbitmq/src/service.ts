@@ -12,6 +12,9 @@ import {
 } from "./singleton.js";
 import { assertRabbitMqTopology, type RabbitMqTopology } from "./topology.js";
 
+/**
+ * Connection configuration injected into the RabbitMQ service layer.
+ */
 export class RabbitMqConnectionConfig extends Context.Tag(
   "@sealant/rabbitmq/RabbitMqConnectionConfig",
 )<
@@ -21,6 +24,9 @@ export class RabbitMqConnectionConfig extends Context.Tag(
   }
 >() {}
 
+/**
+ * Service contract for RabbitMQ operations used across publishers/consumers.
+ */
 export class RabbitMqServiceTag extends Context.Tag("@sealant/rabbitmq/RabbitMqService")<
   RabbitMqServiceTag,
   {
@@ -39,8 +45,14 @@ export class RabbitMqServiceTag extends Context.Tag("@sealant/rabbitmq/RabbitMqS
   }
 >() {}
 
+/**
+ * Inferred service type from the RabbitMQ tag contract.
+ */
 export type RabbitMqService = Context.Tag.Service<typeof RabbitMqServiceTag>;
 
+/**
+ * Live RabbitMQ implementation built on top of existing singleton utilities.
+ */
 export const rabbitMqServiceLiveLayer = Layer.effect(
   RabbitMqServiceTag,
   Effect.gen(function* () {
@@ -69,6 +81,9 @@ export const rabbitMqServiceLiveLayer = Layer.effect(
   }),
 );
 
+/**
+ * Creates a configured RabbitMQ layer for a specific connection URL.
+ */
 export const rabbitMqServiceLayer = (connectionUrl: string) => {
   const configLayer = Layer.succeed(RabbitMqConnectionConfig, {
     connectionUrl,
@@ -77,6 +92,9 @@ export const rabbitMqServiceLayer = (connectionUrl: string) => {
   return rabbitMqServiceLiveLayer.pipe(Layer.provide(configLayer));
 };
 
+/**
+ * Materializes a synchronous service handle for imperative call sites.
+ */
 export const createRabbitMqService = (connectionUrl: string): RabbitMqService => {
   return Effect.runSync(
     RabbitMqServiceTag.pipe(Effect.provide(rabbitMqServiceLayer(connectionUrl))),

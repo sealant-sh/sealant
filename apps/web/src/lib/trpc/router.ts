@@ -167,6 +167,9 @@ export const appRouter = router({
     list: protectedProcedure
       .input(listOwnedSandboxesInputSchema.optional())
       .query(async ({ ctx, input }) => {
+        /**
+         * Keep a stable default limit when optional input is omitted.
+         */
         return ctx.coreApi.sandboxes.list({
           limit: input?.limit ?? 25,
           ...(input?.status === undefined ? {} : { status: input.status }),

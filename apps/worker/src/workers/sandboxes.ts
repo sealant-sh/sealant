@@ -11,6 +11,9 @@ import {
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
 
+/**
+ * Starts the sandbox worker loop and returns a graceful shutdown handle.
+ */
 export const startSandboxWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
   const rabbitMq = createRabbitMqService(env.RABBITMQ_URL);

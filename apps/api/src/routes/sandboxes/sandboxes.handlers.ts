@@ -33,6 +33,9 @@ import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
 
+/**
+ * Reads the composed API runtime from request context.
+ */
 const getRuntime = (c: Context<AppBindings>) => {
   return c.get("runtime");
 };
@@ -64,10 +67,16 @@ interface SandboxEventDraft {
   readonly data?: Record<string, unknown>;
 }
 
+/**
+ * Converts optional dates to ISO strings for API payload serialization.
+ */
 const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();
 };
 
+/**
+ * Returns the most recent date among non-undefined candidates.
+ */
 const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
   let latest = first;
 
@@ -80,10 +89,16 @@ const latestDate = (first: Date, ...rest: Array<Date | undefined>): Date => {
   return latest;
 };
 
+/**
+ * Maps queue publish errors to a stable client-facing message.
+ */
 const toQueuePublishErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : "Failed to enqueue sandbox build job.";
 };
 
+/**
+ * Reads internal SSH gateway token from request headers.
+ */
 const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
   // Dedicated header used only for gateway -> API internal calls.
   const token = c.req.header("x-sealant-gateway-token")?.trim();
@@ -95,6 +110,9 @@ const readGatewayToken = (c: Context<AppBindings>): string | undefined => {
   return token;
 };
 
+/**
+ * Resolves optional SSH gateway rewrite configuration from environment values.
+ */
 const resolveSandboxSshGatewayConfig = (env: AppEnv): SandboxSshGatewayConfig | undefined => {
   // Optional user-facing endpoint rewrite configuration.
   // When unset, clients receive raw runtime endpoint values.
@@ -113,14 +131,23 @@ const resolveSandboxSshGatewayConfig = (env: AppEnv): SandboxSshGatewayConfig | 
   };
 };
 
+/**
+ * Detects foreign-key constraint failures from repository operations.
+ */
 const isForeignKeyConstraintError = (error: unknown): boolean => {
   return error instanceof Error && error.message.includes("FOREIGN KEY constraint failed");
 };
 
+/**
+ * Detects unique constraint conflicts, commonly used for idempotency races.
+ */
 const isUniqueConstraintError = (error: unknown): boolean => {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 };
 
+/**
+ * Standard response returned when GitHub-dependent sandbox features are unavailable.
+ */
 const gitHubUnavailableResponse = (c: Context<AppBindings>) => {
   return c.json(
     {
@@ -130,10 +157,16 @@ const gitHubUnavailableResponse = (c: Context<AppBindings>) => {
   );
 };
 
+/**
+ * Creates a defensive clone of sandbox spec before source mutation.
+ */
 const cloneSpecForSourceSelection = (spec: NewSandbox): NewSandbox => {
   return structuredClone(spec);
 };
 
+/**
+ * Builds sandbox source configuration for a GitHub repository selection.
+ */
 const buildGitHubSandboxSource = (input: {
   readonly installationRepositoryId: string;
   readonly fullName: string;
@@ -148,6 +181,9 @@ const buildGitHubSandboxSource = (input: {
   };
 };
 
+/**
+ * Builds dotfiles source input from a selected GitHub installation repository.
+ */
 const buildGitHubDotfilesInput = (input: {
   readonly installationRepositoryId: string;
   readonly fullName: string;
@@ -164,6 +200,9 @@ const buildGitHubDotfilesInput = (input: {
   };
 };
 
+/**
+ * Replaces any existing dotfiles source input with the provided GitHub dotfiles input.
+ */
 const upsertDotfilesSourceInput = (
   spec: NewSandbox,
   dotfilesInput: ReturnType<typeof buildGitHubDotfilesInput>,
@@ -184,6 +223,9 @@ const upsertDotfilesSourceInput = (
   return newSandboxSchema.parse(nextSpec);
 };
 
+/**
+ * Resolves optional GitHub source selection into a validated sandbox spec.
+ */
 const resolveGitHubSourceSelection = async (
   c: Context<AppBindings>,
   input: {
@@ -316,6 +358,9 @@ const resolveGitHubSourceSelection = async (
   };
 };
 
+/**
+ * Resolves optional GitHub dotfiles selection into a validated sandbox spec.
+ */
 const resolveGitHubDotfilesSelection = async (
   c: Context<AppBindings>,
   input: {
@@ -440,6 +485,9 @@ const resolveGitHubDotfilesSelection = async (
   };
 };
 
+/**
+ * Reads idempotency key header used for sandbox create deduplication.
+ */
 const readIdempotencyKey = (c: Context<AppBindings>): string | undefined => {
   const key = c.req.header("Idempotency-Key")?.trim();
 
@@ -450,10 +498,16 @@ const readIdempotencyKey = (c: Context<AppBindings>): string | undefined => {
   return key;
 };
 
+/**
+ * Normalizes sandbox names to stable whitespace and length constraints.
+ */
 const sanitizeSandboxName = (name: string): string => {
   return name.trim().replace(/\s+/g, " ").slice(0, 120);
 };
 
+/**
+ * Converts token-like strings into title-cased label fragments.
+ */
 const toTitleToken = (value: string): string => {
   return value
     .trim()
@@ -465,6 +519,9 @@ const toTitleToken = (value: string): string => {
     .join(" ");
 };
 
+/**
+ * Derives a display-friendly token from a repository slug.
+ */
 const deriveRepositoryNameToken = (repository: string): string => {
   const segments = repository.split("/").filter((segment) => segment.length > 0);
   const tail = segments[segments.length - 1] ?? repository;
@@ -477,6 +534,9 @@ const deriveRepositoryNameToken = (repository: string): string => {
   return "Sandbox";
 };
 
+/**
+ * Extracts non-empty source ref from sandbox spec.
+ */
 const deriveSourceRef = (spec: NewSandbox): string | undefined => {
   const ref = spec.sources.sandbox.ref.trim();
 
@@ -487,6 +547,9 @@ const deriveSourceRef = (spec: NewSandbox): string | undefined => {
   return ref;
 };
 
+/**
+ * Infers a human-friendly sandbox name when the client does not provide one.
+ */
 const inferSandboxName = (input: {
   readonly repository: string;
   readonly tag: string;
@@ -508,6 +571,9 @@ const inferSandboxName = (input: {
   return `Sandbox ${input.fallbackId.slice(0, 8)}`;
 };
 
+/**
+ * Ensures persisted sandbox names always return a non-empty display string.
+ */
 const resolveStoredSandboxName = (sandbox: Pick<SandboxRecord, "id" | "name">): string => {
   const sanitized = sanitizeSandboxName(sandbox.name);
 
@@ -518,6 +584,9 @@ const resolveStoredSandboxName = (sandbox: Pick<SandboxRecord, "id" | "name">): 
   return `Sandbox ${sandbox.id.slice(0, 8)}`;
 };
 
+/**
+ * Maps persisted sandbox status values to API response status values.
+ */
 const mapStoredSandboxStatus = (
   status: SandboxRecord["status"],
 ): z.infer<typeof sandboxSummarySchema>["status"] => {
@@ -535,6 +604,9 @@ const mapStoredSandboxStatus = (
   }
 };
 
+/**
+ * Maps attempt lifecycle statuses to canonical sandbox status values.
+ */
 const mapAttemptStatusToSandboxStatus = (
   status: SandboxAttemptRecord["status"],
 ): SandboxRecord["status"] => {
@@ -552,6 +624,9 @@ const mapAttemptStatusToSandboxStatus = (
   }
 };
 
+/**
+ * Builds API attempt summaries by combining attempt/job/runtime records.
+ */
 const mapSandboxAttemptSummary = (
   link: SandboxRunLinkRecord,
   attempt: SandboxAttemptRecord,
@@ -592,6 +667,9 @@ const mapSandboxAttemptSummary = (
   };
 };
 
+/**
+ * Builds deterministic event ids from sandbox/attempt/type/time components.
+ */
 const toEventId = (input: {
   readonly sandboxId: string;
   readonly attemptId?: string;
@@ -606,6 +684,9 @@ const toEventId = (input: {
   ].join(":");
 };
 
+/**
+ * Maps internal event drafts to API event response payloads.
+ */
 const toEventResponse = (input: SandboxEventDraft): z.infer<typeof sandboxEventSchema> => {
   return {
     eventId: toEventId(input),
@@ -618,6 +699,9 @@ const toEventResponse = (input: SandboxEventDraft): z.infer<typeof sandboxEventS
   };
 };
 
+/**
+ * Ensures a sandbox record exists for an attempt and links it when missing.
+ */
 const ensureSandboxForAttempt = async (
   sandboxRepository: SandboxRepository,
   attempt: SandboxAttemptRecord,
@@ -651,6 +735,9 @@ const ensureSandboxForAttempt = async (
   return sandbox;
 };
 
+/**
+ * Builds sandbox summary payloads from sandbox and latest attempt/job/runtime data.
+ */
 const mapSandboxSummary = (
   sandbox: SandboxRecord,
   attempt: SandboxAttemptRecord | undefined,
@@ -703,6 +790,9 @@ const mapSandboxSummary = (
   };
 };
 
+/**
+ * Builds sandbox details payload by extending summary with latest user spec snapshot.
+ */
 const mapSandboxDetails = (
   sandbox: SandboxRecord,
   attempt: SandboxAttemptRecord | undefined,
@@ -720,6 +810,9 @@ const mapSandboxDetails = (
   };
 };
 
+/**
+ * Constructs the accepted sandbox response envelope for async queue processing.
+ */
 const acceptedSandboxResponse = (
   sandboxId: string,
   name: string,
@@ -739,6 +832,9 @@ const acceptedSandboxResponse = (
   };
 };
 
+/**
+ * Reads requested package identifiers from sandbox tooling spec.
+ */
 const parseRequestedPackageIds = (spec: NewSandbox): string[] => {
   const requests = spec.tooling.packages;
 
@@ -747,10 +843,16 @@ const parseRequestedPackageIds = (spec: NewSandbox): string[] => {
   });
 };
 
+/**
+ * Extracts target OS family used for package standardization.
+ */
 const parseRequestedOsFamily = (spec: NewSandbox): "auto" | "arch" | "fedora" | "nix" => {
   return spec.target.os.family;
 };
 
+/**
+ * Deduplicates package names while preserving first-seen order.
+ */
 const dedupePackageNames = (input: readonly string[]): string[] => {
   const deduped = new Set<string>();
 
@@ -767,6 +869,9 @@ const dedupePackageNames = (input: readonly string[]): string[] => {
   return [...deduped];
 };
 
+/**
+ * Resolves and validates requested packages against target OS support.
+ */
 const standardizeRequestedPackages = async (
   c: Context<AppBindings>,
   spec: NewSandbox,
@@ -833,6 +938,9 @@ const standardizeRequestedPackages = async (
   };
 };
 
+/**
+ * Creates a sandbox request, persists attempt/job state, and enqueues build execution.
+ */
 export const createSandbox = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const body = (
@@ -1059,6 +1167,9 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   );
 };
 
+/**
+ * Renames an existing sandbox and returns updated summary fields.
+ */
 export const renameSandbox = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
@@ -1092,6 +1203,9 @@ export const renameSandbox = async (c: Context<AppBindings>) => {
   return c.json(response);
 };
 
+/**
+ * Lists sandboxes for an owner with optional status filtering.
+ */
 export const listSandboxes = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const query = (
@@ -1144,6 +1258,9 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
   });
 };
 
+/**
+ * Returns sandbox details including latest attempt, runtime, and spec snapshot.
+ */
 export const getSandbox = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
@@ -1191,6 +1308,9 @@ export const getSandbox = async (c: Context<AppBindings>) => {
   );
 };
 
+/**
+ * Returns internal runtime SSH target metadata for trusted gateway callers.
+ */
 export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
@@ -1276,6 +1396,9 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
   return c.json(response);
 };
 
+/**
+ * Lists attempt history for a sandbox with derived runtime/build metadata.
+ */
 export const listSandboxAttempts = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const query = (
@@ -1337,6 +1460,9 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
   });
 };
 
+/**
+ * Builds a chronological event feed for sandbox lifecycle activity.
+ */
 export const listSandboxEvents = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const query = (

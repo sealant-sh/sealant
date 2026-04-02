@@ -15,14 +15,23 @@ import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
 
+/**
+ * Reads the composed API runtime from request context.
+ */
 const getRuntime = (c: Context<AppBindings>) => {
   return c.get("runtime");
 };
 
+/**
+ * Converts optional dates to ISO strings for API payloads.
+ */
 const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();
 };
 
+/**
+ * Standard 503 response used when GitHub dependencies are unavailable.
+ */
 const gitHubUnavailable = (c: Context<AppBindings>) => {
   return c.json(
     {
@@ -32,6 +41,9 @@ const gitHubUnavailable = (c: Context<AppBindings>) => {
   );
 };
 
+/**
+ * Parses and validates webhook JSON payload text into an object.
+ */
 const parseWebhookPayload = (payload: string): Record<string, unknown> => {
   const parsed = JSON.parse(payload) as unknown;
 
@@ -42,6 +54,9 @@ const parseWebhookPayload = (payload: string): Record<string, unknown> => {
   return parsed as Record<string, unknown>;
 };
 
+/**
+ * Extracts the installation external id from a webhook payload.
+ */
 const getWebhookInstallationExternalId = (payload: Record<string, unknown>): string | undefined => {
   const installation = payload.installation;
 
@@ -57,6 +72,9 @@ const getWebhookInstallationExternalId = (payload: Record<string, unknown>): str
   return String(externalId);
 };
 
+/**
+ * Maps GitHub webhook actions to persisted installation status.
+ */
 const toInstallationStatus = (action: string | undefined): GitHubAppInstallation["status"] => {
   switch (action) {
     case "deleted":
@@ -68,6 +86,9 @@ const toInstallationStatus = (action: string | undefined): GitHubAppInstallation
   }
 };
 
+/**
+ * Maps installation records to API response summary shape.
+ */
 const toInstallationSummary = (
   installation: GitHubAppInstallation,
 ): z.infer<typeof githubInstallationSummarySchema> => {
@@ -84,12 +105,18 @@ const toInstallationSummary = (
   };
 };
 
+/**
+ * Converts remote installation suspension state to internal status.
+ */
 const toInstallationStatusFromRemote = (
   installation: Pick<GitHubRemoteInstallation, "suspendedAt">,
 ): GitHubAppInstallation["status"] => {
   return installation.suspendedAt === undefined ? "active" : "suspended";
 };
 
+/**
+ * Upserts a GitHub installation record using repository-backed persistence.
+ */
 const upsertInstallationRecord = async (
   c: Context<AppBindings>,
   input: {
@@ -136,6 +163,9 @@ const upsertInstallationRecord = async (
   });
 };
 
+/**
+ * Applies webhook installation updates and persists normalized installation state.
+ */
 const upsertInstallationFromWebhook = async (
   c: Context<AppBindings>,
   payload: Record<string, unknown>,
@@ -198,6 +228,9 @@ const upsertInstallationFromWebhook = async (
   });
 };
 
+/**
+ * Syncs installation repositories from GitHub into local cache/profile stores.
+ */
 const syncInstallationRepositories = async (
   c: Context<AppBindings>,
   installation: GitHubAppInstallation,
@@ -279,6 +312,9 @@ const syncInstallationRepositories = async (
   return remoteRepositories.length;
 };
 
+/**
+ * Imports current installation state from GitHub into local persistence.
+ */
 const importInstallationState = async (
   c: Context<AppBindings>,
   externalInstallationId: string,
@@ -311,6 +347,9 @@ const importInstallationState = async (
   return installation;
 };
 
+/**
+ * Lists active GitHub installations granted to the requesting user.
+ */
 export const listInstallations = async (c: Context<AppBindings>) => {
   const query = (
     c.req as typeof c.req & {
@@ -333,6 +372,9 @@ export const listInstallations = async (c: Context<AppBindings>) => {
   return c.json({ items });
 };
 
+/**
+ * Lists repositories visible through a specific GitHub installation.
+ */
 export const listInstallationRepositories = async (c: Context<AppBindings>) => {
   const params = (
     c.req as typeof c.req & {
@@ -403,6 +445,9 @@ export const listInstallationRepositories = async (c: Context<AppBindings>) => {
   return c.json({ items });
 };
 
+/**
+ * Forces a repository sync for an active installation accessible to the user.
+ */
 export const syncInstallation = async (c: Context<AppBindings>) => {
   const params = (
     c.req as typeof c.req & {
@@ -470,6 +515,9 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
   return c.json(response);
 };
 
+/**
+ * Imports an installation by external id and grants it to the requesting user.
+ */
 export const importInstallation = async (c: Context<AppBindings>) => {
   const body = (
     c.req as typeof c.req & {
@@ -524,6 +572,9 @@ export const importInstallation = async (c: Context<AppBindings>) => {
   }
 };
 
+/**
+ * Verifies and processes incoming GitHub webhook deliveries.
+ */
 export const handleWebhook = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const gitHubSourceIntegration = runtime.gitHubSourceIntegration;

@@ -2,10 +2,16 @@ import type { Context } from "hono";
 
 import type { AppBindings } from "../../lib/types.js";
 
+/**
+ * Reads the composed API runtime from request context.
+ */
 const getRuntime = (c: Context<AppBindings>) => {
   return c.get("runtime");
 };
 
+/**
+ * Builds registry metadata summary from runtime configuration.
+ */
 const getRegistrySummary = (c: Context<AppBindings>) => {
   const env = getRuntime(c).env;
 
@@ -17,6 +23,9 @@ const getRegistrySummary = (c: Context<AppBindings>) => {
   };
 };
 
+/**
+ * Validates that the requested registry id maps to configured runtime registry.
+ */
 const ensureRegistry = (c: Context<AppBindings>) => {
   const env = getRuntime(c).env;
   const { registryId } = c.req.param() as {
@@ -35,6 +44,9 @@ const ensureRegistry = (c: Context<AppBindings>) => {
   return null;
 };
 
+/**
+ * Maps registry client failures to a consistent API response envelope.
+ */
 const registryFailureResponse = (c: Context<AppBindings>, error: unknown) => {
   if (
     typeof error === "object" &&
@@ -60,6 +72,9 @@ const registryFailureResponse = (c: Context<AppBindings>, error: unknown) => {
   );
 };
 
+/**
+ * Returns registry summary for the configured registry id.
+ */
 export const getRegistry = async (c: Context<AppBindings>) => {
   const missingRegistry = ensureRegistry(c);
 
@@ -70,6 +85,9 @@ export const getRegistry = async (c: Context<AppBindings>) => {
   return c.json(getRegistrySummary(c));
 };
 
+/**
+ * Performs a connectivity check against the configured registry.
+ */
 export const pingRegistry = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
@@ -90,6 +108,9 @@ export const pingRegistry = async (c: Context<AppBindings>) => {
   }
 };
 
+/**
+ * Lists registry extensions from the configured registry client.
+ */
 export const listExtensions = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
@@ -109,6 +130,9 @@ export const listExtensions = async (c: Context<AppBindings>) => {
   }
 };
 
+/**
+ * Lists tags for a given registry repository.
+ */
 export const listTags = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
@@ -133,6 +157,9 @@ export const listTags = async (c: Context<AppBindings>) => {
   }
 };
 
+/**
+ * Returns a repository manifest by repository/reference pair.
+ */
 export const getManifest = async (c: Context<AppBindings>) => {
   const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);

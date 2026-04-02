@@ -601,6 +601,9 @@ const invalidResolution = (requested: string, normalized: string, now: Date): Pa
   });
 };
 
+/**
+ * Parses cache payloads and returns typed resolutions when payload data is valid.
+ */
 const parseCachedResolution = (payload: unknown): PackageResolution | null => {
   const parsed = packageResolutionSchema.safeParse(payload);
   return parsed.success ? parsed.data : null;

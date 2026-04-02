@@ -4,10 +4,16 @@ import { cors } from "hono/cors";
 import { createApiRuntime } from "./create-api-runtime.js";
 import type { AppBindings, AppRuntimeConfig } from "./types.js";
 
+/**
+ * Creates a typed Hono router with Sealant API bindings.
+ */
 export const createRouter = () => {
   return new Hono<AppBindings>();
 };
 
+/**
+ * Creates the API application, wires middleware, and injects runtime dependencies.
+ */
 export const createApp = (config: AppRuntimeConfig) => {
   const app = createRouter();
   const runtime = createApiRuntime(config);
@@ -72,6 +78,9 @@ export const createApp = (config: AppRuntimeConfig) => {
   return app;
 };
 
+/**
+ * Parses a comma-separated CORS allow-list into a normalized lookup set.
+ */
 const parseAllowedOrigins = (value: string): Set<string> => {
   return new Set(
     value
