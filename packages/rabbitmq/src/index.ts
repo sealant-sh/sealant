@@ -21,3 +21,12 @@ export {
   getRabbitMqSingleton,
   type RabbitMqSingleton,
 } from "./singleton.js";
+
+export {
+  createRabbitMqService,
+  rabbitMqServiceLayer,
+  rabbitMqServiceLiveLayer,
+  RabbitMqServiceTag,
+  RabbitMqConnectionConfig,
+  type RabbitMqService,
+} from "./service.js";

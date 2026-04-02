@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type {
   SandboxAttemptRepository,
   SandboxRepository,
@@ -34,6 +32,10 @@ import type { Context } from "hono";
 import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
+
+const getRuntime = (c: Context<AppBindings>) => {
+  return c.get("runtime");
+};
 
 type SandboxAttemptRecord = NonNullable<
   Awaited<ReturnType<SandboxAttemptRepository["getAttemptById"]>>
@@ -196,6 +198,7 @@ const resolveGitHubSourceSelection = async (
     }
   | { readonly response: Response }
 > => {
+  const runtime = getRuntime(c);
   const sourceSelection = input.sourceSelection;
 
   if (sourceSelection === undefined) {
@@ -204,10 +207,9 @@ const resolveGitHubSourceSelection = async (
     };
   }
 
-  const gitHubInstallationRepository = c.get("gitHubInstallationRepository");
-  const gitHubInstallationRepositoryCacheRepository = c.get(
-    "gitHubInstallationRepositoryCacheRepository",
-  );
+  const gitHubInstallationRepository = runtime.gitHubInstallationRepository;
+  const gitHubInstallationRepositoryCacheRepository =
+    runtime.gitHubInstallationRepositoryCacheRepository;
 
   if (
     gitHubInstallationRepository === undefined ||
@@ -327,6 +329,7 @@ const resolveGitHubDotfilesSelection = async (
     }
   | { readonly response: Response }
 > => {
+  const runtime = getRuntime(c);
   const dotfilesSelection = input.dotfilesSelection;
 
   if (dotfilesSelection === undefined) {
@@ -335,10 +338,9 @@ const resolveGitHubDotfilesSelection = async (
     };
   }
 
-  const gitHubInstallationRepository = c.get("gitHubInstallationRepository");
-  const gitHubInstallationRepositoryCacheRepository = c.get(
-    "gitHubInstallationRepositoryCacheRepository",
-  );
+  const gitHubInstallationRepository = runtime.gitHubInstallationRepository;
+  const gitHubInstallationRepositoryCacheRepository =
+    runtime.gitHubInstallationRepositoryCacheRepository;
 
   if (
     gitHubInstallationRepository === undefined ||
@@ -619,6 +621,7 @@ const toEventResponse = (input: SandboxEventDraft): z.infer<typeof sandboxEventS
 const ensureSandboxForAttempt = async (
   sandboxRepository: SandboxRepository,
   attempt: SandboxAttemptRecord,
+  idGenerator: AppBindings["Variables"]["runtime"]["idGenerator"],
 ): Promise<SandboxRecord> => {
   const existing = await sandboxRepository.getSandboxByAttemptId(attempt.id);
 
@@ -627,7 +630,7 @@ const ensureSandboxForAttempt = async (
   }
 
   const sandbox = await sandboxRepository.createSandbox({
-    id: randomUUID(),
+    id: idGenerator.randomUuid(),
     name: `Sandbox ${attempt.id.slice(0, 8)}`,
     ownerUserId: attempt.ownerUserId,
     ...(attempt.repositoryId === null ? {} : { repositoryId: attempt.repositoryId }),
@@ -768,6 +771,7 @@ const standardizeRequestedPackages = async (
   c: Context<AppBindings>,
   spec: NewSandbox,
 ): Promise<{ spec: NewSandbox; errors: readonly string[] }> => {
+  const runtime = getRuntime(c);
   const requestedPackages = parseRequestedPackageIds(spec);
 
   if (requestedPackages.length === 0) {
@@ -792,7 +796,7 @@ const standardizeRequestedPackages = async (
   const errors: string[] = [];
 
   for (const requested of requestedPackages) {
-    const resolution = await c.get("packageStandardizer").resolvePackage({
+    const resolution = await runtime.packageStandardizer.resolvePackage({
       query: requested,
       targetOs,
     });
@@ -830,12 +834,13 @@ const standardizeRequestedPackages = async (
 };
 
 export const createSandbox = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const body = (
     c.req as typeof c.req & {
       valid(target: "json"): z.infer<typeof createSandboxRequestSchema>;
     }
   ).valid("json");
-  const env = c.get("env");
+  const env = runtime.env;
 
   if (body.registryId !== env.REGISTRY_NAME) {
     return c.json(
@@ -847,9 +852,9 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   const idempotencyKey = readIdempotencyKey(c);
-  const sandboxes = c.get("sandboxRepository");
-  const sandboxBuildJobs = c.get("sandboxBuildJobRepository");
-  const sandboxAttempts = c.get("sandboxAttemptRepository");
+  const sandboxes = runtime.sandboxRepository;
+  const sandboxBuildJobs = runtime.sandboxBuildJobRepository;
+  const sandboxAttempts = runtime.sandboxAttemptRepository;
 
   if (idempotencyKey !== undefined) {
     const existingJob = await sandboxBuildJobs.getJobByIdempotencyKey(idempotencyKey);
@@ -858,7 +863,11 @@ export const createSandbox = async (c: Context<AppBindings>) => {
       const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
 
       if (existingRun !== undefined) {
-        const existingSandbox = await ensureSandboxForAttempt(sandboxes, existingRun);
+        const existingSandbox = await ensureSandboxForAttempt(
+          sandboxes,
+          existingRun,
+          runtime.idGenerator,
+        );
 
         c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
         return c.json(
@@ -893,16 +902,16 @@ export const createSandbox = async (c: Context<AppBindings>) => {
     return dotfilesSelectionResult.response;
   }
 
-  const sandboxId = randomUUID();
-  const runId = randomUUID();
-  const jobId = randomUUID();
+  const sandboxId = runtime.idGenerator.randomUuid();
+  const runId = runtime.idGenerator.randomUuid();
+  const jobId = runtime.idGenerator.randomUuid();
   const packageStandardization = await standardizeRequestedPackages(
     c,
     dotfilesSelectionResult.spec,
   );
 
   if (packageStandardization.errors.length > 0) {
-    console.error("[sandboxes.create] package standardization failed", {
+    runtime.logger.error("[sandboxes.create] package standardization failed", {
       sandboxId,
       ownerUserId: body.ownerUserId,
       errors: packageStandardization.errors,
@@ -988,7 +997,11 @@ export const createSandbox = async (c: Context<AppBindings>) => {
         const existingRun = await sandboxAttempts.getAttemptById(existingJob.runId);
 
         if (existingRun !== undefined) {
-          const existingSandbox = await ensureSandboxForAttempt(sandboxes, existingRun);
+          const existingSandbox = await ensureSandboxForAttempt(
+            sandboxes,
+            existingRun,
+            runtime.idGenerator,
+          );
 
           c.header("Location", `/v1/sandboxes/${encodeURIComponent(existingSandbox.id)}`);
           return c.json(
@@ -1007,7 +1020,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
   }
 
   try {
-    await c.get("sandboxBuildJobPublisher").publishRequested({
+    await runtime.sandboxBuildJobPublisher.publishRequested({
       jobId,
     });
   } catch (error) {
@@ -1047,6 +1060,7 @@ export const createSandbox = async (c: Context<AppBindings>) => {
 };
 
 export const renameSandbox = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
@@ -1055,7 +1069,7 @@ export const renameSandbox = async (c: Context<AppBindings>) => {
       valid(target: "json"): z.infer<typeof renameSandboxRequestSchema>;
     }
   ).valid("json");
-  const sandbox = await c.get("sandboxRepository").setSandboxName({
+  const sandbox = await runtime.sandboxRepository.setSandboxName({
     id: sandboxId,
     name: sanitizeSandboxName(body.name),
   });
@@ -1079,6 +1093,7 @@ export const renameSandbox = async (c: Context<AppBindings>) => {
 };
 
 export const listSandboxes = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const query = (
     c.req as typeof c.req & {
       valid(target: "query"): z.infer<typeof listSandboxesQuerySchema>;
@@ -1086,7 +1101,7 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
   ).valid("query");
 
   const sandboxLimit = query.status === undefined ? query.limit : Math.min(query.limit * 4, 100);
-  const sandboxes = await c.get("sandboxRepository").listSandboxes({
+  const sandboxes = await runtime.sandboxRepository.listSandboxes({
     ownerUserId: query.ownerUserId,
     limit: sandboxLimit,
   });
@@ -1095,7 +1110,7 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
   });
   const attempts = await Promise.all(
     latestRunIds.map(async (runId) => {
-      return [runId, await c.get("sandboxAttemptRepository").getAttemptById(runId)] as const;
+      return [runId, await runtime.sandboxAttemptRepository.getAttemptById(runId)] as const;
     }),
   );
   const attemptsByRunId = new Map(
@@ -1103,13 +1118,11 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
       return attempt === undefined ? [] : [[runId, attempt] as const];
     }),
   );
-  const latestJobsByRunId = await c
-    .get("sandboxBuildJobRepository")
-    .listLatestJobsByRunIds(latestRunIds);
-  const runtimeInstancesByRunId = await c
-    .get("sandboxRuntimeInstanceRepository")
-    .listRuntimeInstancesByRunIds(latestRunIds);
-  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
+  const latestJobsByRunId =
+    await runtime.sandboxBuildJobRepository.listLatestJobsByRunIds(latestRunIds);
+  const runtimeInstancesByRunId =
+    await runtime.sandboxRuntimeInstanceRepository.listRuntimeInstancesByRunIds(latestRunIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(runtime.env);
 
   const items = sandboxes
     .map((sandbox) => {
@@ -1132,10 +1145,11 @@ export const listSandboxes = async (c: Context<AppBindings>) => {
 };
 
 export const getSandbox = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
-  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
+  const sandbox = await runtime.sandboxRepository.getSandboxById(sandboxId);
 
   if (sandbox === undefined) {
     return c.json(
@@ -1146,7 +1160,7 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     );
   }
 
-  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(runtime.env);
 
   if (sandbox.latestRunId === null) {
     return c.json(
@@ -1154,16 +1168,16 @@ export const getSandbox = async (c: Context<AppBindings>) => {
     );
   }
 
-  const attempt = await c.get("sandboxAttemptRepository").getAttemptById(sandbox.latestRunId);
-  const attemptSnapshot = await c
-    .get("sandboxAttemptRepository")
-    .getAttemptSnapshotByRunId(sandbox.latestRunId);
-  const latestJob = await c
-    .get("sandboxBuildJobRepository")
-    .getLatestJobByRunId(sandbox.latestRunId);
-  const runtimeInstance = await c
-    .get("sandboxRuntimeInstanceRepository")
-    .getRuntimeInstanceByRunId(sandbox.latestRunId);
+  const attempt = await runtime.sandboxAttemptRepository.getAttemptById(sandbox.latestRunId);
+  const attemptSnapshot = await runtime.sandboxAttemptRepository.getAttemptSnapshotByRunId(
+    sandbox.latestRunId,
+  );
+  const latestJob = await runtime.sandboxBuildJobRepository.getLatestJobByRunId(
+    sandbox.latestRunId,
+  );
+  const runtimeInstance = await runtime.sandboxRuntimeInstanceRepository.getRuntimeInstanceByRunId(
+    sandbox.latestRunId,
+  );
 
   return c.json(
     mapSandboxDetails(
@@ -1178,10 +1192,11 @@ export const getSandbox = async (c: Context<AppBindings>) => {
 };
 
 export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
-  const expectedGatewayToken = c.get("env").SANDBOX_SSH_GATEWAY_TOKEN?.trim();
+  const expectedGatewayToken = runtime.env.SANDBOX_SSH_GATEWAY_TOKEN?.trim();
 
   // The ssh-target route is intentionally private. It should only be callable by
   // a trusted gateway process, not by regular browser/API clients.
@@ -1203,7 +1218,7 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
     );
   }
 
-  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
+  const sandbox = await runtime.sandboxRepository.getSandboxById(sandboxId);
 
   if (sandbox === undefined) {
     return c.json(
@@ -1223,9 +1238,9 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
     );
   }
 
-  const runtimeInstance = await c
-    .get("sandboxRuntimeInstanceRepository")
-    .getRuntimeInstanceByRunId(sandbox.latestRunId);
+  const runtimeInstance = await runtime.sandboxRuntimeInstanceRepository.getRuntimeInstanceByRunId(
+    sandbox.latestRunId,
+  );
 
   if (
     runtimeInstance === undefined ||
@@ -1262,6 +1277,7 @@ export const getSandboxSshTarget = async (c: Context<AppBindings>) => {
 };
 
 export const listSandboxAttempts = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const query = (
     c.req as typeof c.req & {
       valid(target: "query"): z.infer<typeof listSandboxAttemptsQuerySchema>;
@@ -1270,7 +1286,7 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
-  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
+  const sandbox = await runtime.sandboxRepository.getSandboxById(sandboxId);
 
   if (sandbox === undefined) {
     return c.json(
@@ -1281,11 +1297,11 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
     );
   }
 
-  const links = await c.get("sandboxRepository").listSandboxAttemptLinks(sandbox.id, query.limit);
+  const links = await runtime.sandboxRepository.listSandboxAttemptLinks(sandbox.id, query.limit);
   const runIds = links.map((link) => link.runId);
   const attempts = await Promise.all(
     runIds.map(async (runId) => {
-      return [runId, await c.get("sandboxAttemptRepository").getAttemptById(runId)] as const;
+      return [runId, await runtime.sandboxAttemptRepository.getAttemptById(runId)] as const;
     }),
   );
   const attemptsByRunId = new Map(
@@ -1293,11 +1309,10 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
       return attempt === undefined ? [] : [[runId, attempt] as const];
     }),
   );
-  const latestJobsByRunId = await c.get("sandboxBuildJobRepository").listLatestJobsByRunIds(runIds);
-  const runtimeInstancesByRunId = await c
-    .get("sandboxRuntimeInstanceRepository")
-    .listRuntimeInstancesByRunIds(runIds);
-  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
+  const latestJobsByRunId = await runtime.sandboxBuildJobRepository.listLatestJobsByRunIds(runIds);
+  const runtimeInstancesByRunId =
+    await runtime.sandboxRuntimeInstanceRepository.listRuntimeInstancesByRunIds(runIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(runtime.env);
 
   const items = links.flatMap((link) => {
     const attempt = attemptsByRunId.get(link.runId);
@@ -1323,6 +1338,7 @@ export const listSandboxAttempts = async (c: Context<AppBindings>) => {
 };
 
 export const listSandboxEvents = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const query = (
     c.req as typeof c.req & {
       valid(target: "query"): z.infer<typeof listSandboxEventsQuerySchema>;
@@ -1331,7 +1347,7 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
   const { sandboxId } = c.req.param() as {
     sandboxId: string;
   };
-  const sandbox = await c.get("sandboxRepository").getSandboxById(sandboxId);
+  const sandbox = await runtime.sandboxRepository.getSandboxById(sandboxId);
 
   if (sandbox === undefined) {
     return c.json(
@@ -1342,11 +1358,11 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
     );
   }
 
-  const links = await c.get("sandboxRepository").listSandboxAttemptLinks(sandbox.id, query.limit);
+  const links = await runtime.sandboxRepository.listSandboxAttemptLinks(sandbox.id, query.limit);
   const runIds = links.map((link) => link.runId);
   const attempts = await Promise.all(
     runIds.map(async (runId) => {
-      return [runId, await c.get("sandboxAttemptRepository").getAttemptById(runId)] as const;
+      return [runId, await runtime.sandboxAttemptRepository.getAttemptById(runId)] as const;
     }),
   );
   const attemptsByRunId = new Map(
@@ -1354,11 +1370,10 @@ export const listSandboxEvents = async (c: Context<AppBindings>) => {
       return attempt === undefined ? [] : [[runId, attempt] as const];
     }),
   );
-  const latestJobsByRunId = await c.get("sandboxBuildJobRepository").listLatestJobsByRunIds(runIds);
-  const runtimeInstancesByRunId = await c
-    .get("sandboxRuntimeInstanceRepository")
-    .listRuntimeInstancesByRunIds(runIds);
-  const sshGatewayConfig = resolveSandboxSshGatewayConfig(c.get("env"));
+  const latestJobsByRunId = await runtime.sandboxBuildJobRepository.listLatestJobsByRunIds(runIds);
+  const runtimeInstancesByRunId =
+    await runtime.sandboxRuntimeInstanceRepository.listRuntimeInstancesByRunIds(runIds);
+  const sshGatewayConfig = resolveSandboxSshGatewayConfig(runtime.env);
 
   const events: SandboxEventDraft[] = [
     {

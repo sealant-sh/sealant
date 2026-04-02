@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-import { createPassthroughPackageStandardizer } from "./create-package-standardizer.js";
+import { createApiRuntime } from "./create-api-runtime.js";
 import type { AppBindings, AppRuntimeConfig } from "./types.js";
 
 export const createRouter = () => {
@@ -10,6 +10,7 @@ export const createRouter = () => {
 
 export const createApp = (config: AppRuntimeConfig) => {
   const app = createRouter();
+  const runtime = createApiRuntime(config);
   const allowAllOrigins = config.env.CORS_ALLOWED_ORIGINS.trim() === "*";
   const allowedOrigins = parseAllowedOrigins(config.env.CORS_ALLOWED_ORIGINS);
 
@@ -39,25 +40,23 @@ export const createApp = (config: AppRuntimeConfig) => {
   );
 
   app.use("*", async (c, next) => {
-    c.set("env", config.env);
-    c.set("registryClient", config.registryClient);
-    c.set("sandboxBuildJobPublisher", config.sandboxBuildJobPublisher);
-    c.set("sandboxBuildJobRepository", config.sandboxBuildJobRepository);
-    c.set("gitHubSourceIntegration", config.gitHubSourceIntegration);
-    c.set("gitHubInstallationRepository", config.gitHubInstallationRepository);
+    c.set("runtime", runtime);
+    c.set("env", runtime.env);
+    c.set("registryClient", runtime.registryClient);
+    c.set("sandboxBuildJobPublisher", runtime.sandboxBuildJobPublisher);
+    c.set("sandboxBuildJobRepository", runtime.sandboxBuildJobRepository);
+    c.set("gitHubSourceIntegration", runtime.gitHubSourceIntegration);
+    c.set("gitHubInstallationRepository", runtime.gitHubInstallationRepository);
     c.set(
       "gitHubInstallationRepositoryCacheRepository",
-      config.gitHubInstallationRepositoryCacheRepository,
+      runtime.gitHubInstallationRepositoryCacheRepository,
     );
-    c.set("gitHubWebhookDeliveryRepository", config.gitHubWebhookDeliveryRepository);
-    c.set("repositoryProfileRepository", config.repositoryProfileRepository);
-    c.set(
-      "packageStandardizer",
-      config.packageStandardizer ?? createPassthroughPackageStandardizer(),
-    );
-    c.set("sandboxRepository", config.sandboxRepository);
-    c.set("sandboxRuntimeInstanceRepository", config.sandboxRuntimeInstanceRepository);
-    c.set("sandboxAttemptRepository", config.sandboxAttemptRepository);
+    c.set("gitHubWebhookDeliveryRepository", runtime.gitHubWebhookDeliveryRepository);
+    c.set("repositoryProfileRepository", runtime.repositoryProfileRepository);
+    c.set("packageStandardizer", runtime.packageStandardizer);
+    c.set("sandboxRepository", runtime.sandboxRepository);
+    c.set("sandboxRuntimeInstanceRepository", runtime.sandboxRuntimeInstanceRepository);
+    c.set("sandboxAttemptRepository", runtime.sandboxAttemptRepository);
     await next();
   });
 

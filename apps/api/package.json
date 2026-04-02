@@ -22,6 +22,7 @@
     "@standard-community/standard-json": "^0.3.5",
     "@standard-community/standard-openapi": "^0.2.9",
     "@types/json-schema": "^7.0.15",
+    "effect": "catalog:",
     "hono": "^4.8.3",
     "hono-openapi": "^1.3.0",
     "openapi-types": "^12.1.3",

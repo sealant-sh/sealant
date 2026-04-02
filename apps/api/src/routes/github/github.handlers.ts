@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type { GitHubAppInstallation } from "@sealant/db";
 import type { GitHubRemoteInstallation } from "@sealant/source-integrations";
 import {
@@ -16,6 +14,10 @@ import type { Context } from "hono";
 import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
+
+const getRuntime = (c: Context<AppBindings>) => {
+  return c.get("runtime");
+};
 
 const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();
@@ -104,7 +106,8 @@ const upsertInstallationRecord = async (
     readonly installedAt?: Date;
   },
 ): Promise<GitHubAppInstallation | null> => {
-  const installationRepository = c.get("gitHubInstallationRepository");
+  const runtime = getRuntime(c);
+  const installationRepository = runtime.gitHubInstallationRepository;
 
   if (installationRepository === undefined) {
     return null;
@@ -113,10 +116,10 @@ const upsertInstallationRecord = async (
   const existing = await installationRepository.getInstallationByExternalId(
     input.externalInstallationId,
   );
-  const now = new Date();
+  const now = runtime.clock.now();
 
   return installationRepository.upsertInstallation({
-    id: existing?.id ?? randomUUID(),
+    id: existing?.id ?? runtime.idGenerator.randomUuid(),
     externalInstallationId: input.externalInstallationId,
     ...(input.externalAccountId === undefined
       ? {}
@@ -178,7 +181,7 @@ const upsertInstallationFromWebhook = async (
           ),
         )
       : undefined;
-  const now = new Date();
+  const now = getRuntime(c).clock.now();
 
   return upsertInstallationRecord(c, {
     externalInstallationId,
@@ -199,10 +202,11 @@ const syncInstallationRepositories = async (
   c: Context<AppBindings>,
   installation: GitHubAppInstallation,
 ): Promise<number> => {
-  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
-  const installationRepositoryCache = c.get("gitHubInstallationRepositoryCacheRepository");
-  const repositoryProfileRepository = c.get("repositoryProfileRepository");
-  const installationRepository = c.get("gitHubInstallationRepository");
+  const runtime = getRuntime(c);
+  const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
+  const installationRepositoryCache = runtime.gitHubInstallationRepositoryCacheRepository;
+  const repositoryProfileRepository = runtime.repositoryProfileRepository;
+  const installationRepository = runtime.gitHubInstallationRepository;
 
   if (
     gitHubSourceIntegration === undefined ||
@@ -213,7 +217,7 @@ const syncInstallationRepositories = async (
     throw new Error("GitHub sync dependencies are not configured.");
   }
 
-  const syncedAt = new Date();
+  const syncedAt = runtime.clock.now();
   const remoteRepositories = await gitHubSourceIntegration.listInstallationRepositories(
     installation.externalInstallationId,
   );
@@ -225,7 +229,7 @@ const syncInstallationRepositories = async (
       externalId: remoteRepository.externalRepositoryId,
     });
     const repository = await repositoryProfileRepository.upsertRepository({
-      id: existingRepository?.id ?? randomUUID(),
+      id: existingRepository?.id ?? runtime.idGenerator.randomUuid(),
       provider: "github",
       externalId: remoteRepository.externalRepositoryId,
       owner: remoteRepository.owner,
@@ -242,7 +246,7 @@ const syncInstallationRepositories = async (
       });
 
     await installationRepositoryCache.upsertInstallationRepository({
-      id: existingInstallationRepository?.id ?? randomUUID(),
+      id: existingInstallationRepository?.id ?? runtime.idGenerator.randomUuid(),
       installationId: installation.id,
       repositoryId: repository.id,
       externalRepositoryId: remoteRepository.externalRepositoryId,
@@ -279,7 +283,7 @@ const importInstallationState = async (
   c: Context<AppBindings>,
   externalInstallationId: string,
 ): Promise<GitHubAppInstallation> => {
-  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
+  const gitHubSourceIntegration = getRuntime(c).gitHubSourceIntegration;
 
   if (gitHubSourceIntegration === undefined || !gitHubSourceIntegration.isConfigured()) {
     throw new Error("GitHub integration is not configured.");
@@ -313,7 +317,7 @@ export const listInstallations = async (c: Context<AppBindings>) => {
       valid(target: "query"): z.infer<typeof githubInstallationsQuerySchema>;
     }
   ).valid("query");
-  const installationRepository = c.get("gitHubInstallationRepository");
+  const installationRepository = getRuntime(c).gitHubInstallationRepository;
 
   if (installationRepository === undefined) {
     return gitHubUnavailable(c);
@@ -340,8 +344,9 @@ export const listInstallationRepositories = async (c: Context<AppBindings>) => {
       valid(target: "query"): z.infer<typeof githubInstallationRepositoriesQuerySchema>;
     }
   ).valid("query");
-  const installationRepository = c.get("gitHubInstallationRepository");
-  const installationRepositoryCache = c.get("gitHubInstallationRepositoryCacheRepository");
+  const runtime = getRuntime(c);
+  const installationRepository = runtime.gitHubInstallationRepository;
+  const installationRepositoryCache = runtime.gitHubInstallationRepositoryCacheRepository;
 
   if (installationRepository === undefined || installationRepositoryCache === undefined) {
     return gitHubUnavailable(c);
@@ -409,8 +414,9 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
       valid(target: "query"): z.infer<typeof syncGitHubInstallationQuerySchema>;
     }
   ).valid("query");
-  const installationRepository = c.get("gitHubInstallationRepository");
-  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
+  const runtime = getRuntime(c);
+  const installationRepository = runtime.gitHubInstallationRepository;
+  const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
 
   if (
     installationRepository === undefined ||
@@ -453,7 +459,7 @@ export const syncInstallation = async (c: Context<AppBindings>) => {
     );
   }
 
-  const syncedAt = new Date();
+  const syncedAt = runtime.clock.now();
   const syncedRepositoryCount = await syncInstallationRepositories(c, installation);
   const response: z.infer<typeof syncGitHubInstallationResponseSchema> = {
     installationId: installation.id,
@@ -470,8 +476,9 @@ export const importInstallation = async (c: Context<AppBindings>) => {
       valid(target: "json"): z.infer<typeof importGitHubInstallationRequestSchema>;
     }
   ).valid("json");
-  const installationRepository = c.get("gitHubInstallationRepository");
-  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
+  const runtime = getRuntime(c);
+  const installationRepository = runtime.gitHubInstallationRepository;
+  const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
 
   if (
     installationRepository === undefined ||
@@ -490,7 +497,7 @@ export const importInstallation = async (c: Context<AppBindings>) => {
       grantedByUserId: body.userId,
     });
 
-    const syncedAt = new Date();
+    const syncedAt = runtime.clock.now();
     const syncedRepositoryCount =
       installation.status === "active" ? await syncInstallationRepositories(c, installation) : 0;
     const response: z.infer<typeof importGitHubInstallationResponseSchema> = {
@@ -518,8 +525,9 @@ export const importInstallation = async (c: Context<AppBindings>) => {
 };
 
 export const handleWebhook = async (c: Context<AppBindings>) => {
-  const gitHubSourceIntegration = c.get("gitHubSourceIntegration");
-  const webhookRepository = c.get("gitHubWebhookDeliveryRepository");
+  const runtime = getRuntime(c);
+  const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
+  const webhookRepository = runtime.gitHubWebhookDeliveryRepository;
 
   if (gitHubSourceIntegration === undefined || webhookRepository === undefined) {
     return gitHubUnavailable(c);
@@ -573,7 +581,7 @@ export const handleWebhook = async (c: Context<AppBindings>) => {
   }
 
   const delivery = await webhookRepository.createWebhookDelivery({
-    id: existingDelivery?.id ?? randomUUID(),
+    id: existingDelivery?.id ?? runtime.idGenerator.randomUuid(),
     deliveryId,
     eventType,
     ...(action === undefined ? {} : { action }),

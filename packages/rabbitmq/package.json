@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@sealant/validators": "workspace:*",
-    "amqplib": "catalog:"
+    "amqplib": "catalog:",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
