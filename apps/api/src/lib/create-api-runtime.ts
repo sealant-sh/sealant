@@ -1,59 +1,18 @@
 import { randomUUID } from "node:crypto";
 
-import { Context, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { createPassthroughPackageStandardizer } from "./create-package-standardizer.js";
-import type { ApiClock, ApiIdGenerator, ApiLogger, ApiRuntime, AppRuntimeConfig } from "./types.js";
-
-/**
- * Provides validated environment configuration to the API runtime graph.
- */
-export class ConfigService extends Context.Tag("@sealant/api/ConfigService")<
-  ConfigService,
-  {
-    readonly env: AppRuntimeConfig["env"];
-  }
->() {}
-
-/**
- * Provides external runtime dependencies assembled by API bootstrap.
- */
-export class DependenciesService extends Context.Tag("@sealant/api/DependenciesService")<
-  DependenciesService,
-  Omit<AppRuntimeConfig, "env">
->() {}
-
-/**
- * Clock abstraction used by handlers for deterministic time access.
- */
-export class ClockService extends Context.Tag("@sealant/api/ClockService")<
-  ClockService,
-  ApiClock
->() {}
-
-/**
- * UUID abstraction used by handlers to avoid direct global calls.
- */
-export class IdGeneratorService extends Context.Tag("@sealant/api/IdGeneratorService")<
-  IdGeneratorService,
-  ApiIdGenerator
->() {}
-
-/**
- * Logging abstraction for consistent request and error logging.
- */
-export class LoggerService extends Context.Tag("@sealant/api/LoggerService")<
-  LoggerService,
-  ApiLogger
->() {}
-
-/**
- * Unified runtime surface consumed by route handlers.
- */
-export class ApiRuntimeService extends Context.Tag("@sealant/api/ApiRuntimeService")<
+import {
   ApiRuntimeService,
-  ApiRuntime
->() {}
+  ClockService,
+  ConfigService,
+  DependenciesService,
+  IdGeneratorService,
+  LoggerService,
+  type ApiRuntime,
+  type AppRuntimeConfig,
+} from "./types.js";
 
 /**
  * Live clock implementation based on system time.
