@@ -41,6 +41,12 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   return app;
 };
 
+/**
+ * Creates the default API app with runtime infrastructure wiring.
+ *
+ * DB initialization is intentionally done here (instead of module top-level) so tests and tools
+ * can import the module without opening a database connection.
+ */
 export const createDefaultApiApp = async () => {
   const databaseClient = await createDatabaseClientFromEnv(env);
   const packageResolutionCacheRepository = createPackageResolutionCacheRepository(databaseClient);
