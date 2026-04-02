@@ -30,15 +30,8 @@ export function normalizeAccent(value: string | null | undefined): string | null
   }
 
   const accent = value.trim().toLowerCase();
-  const shortHexMatch = /^#([0-9a-f]{3})$/i.exec(accent);
-
-  if (shortHexMatch !== null) {
-    const rawHex = shortHexMatch[1] ?? "";
-
-    return `#${rawHex
-      .split("")
-      .map((channel) => `${channel}${channel}`)
-      .join("")}`;
+  if (/^#([0-9a-f]{3})$/i.test(accent)) {
+    return accent.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i, "#$1$1$2$2$3$3");
   }
 
   return /^#([0-9a-f]{6}|[0-9a-f]{8})$/i.test(accent) ? accent : null;

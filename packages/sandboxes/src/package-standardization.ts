@@ -627,10 +627,10 @@ export const createPackageStandardizer = (
           const parsed = parseCachedResolution(cached.payload);
 
           if (parsed !== null) {
-            return packageResolutionSchema.parse({
+            return {
               ...parsed,
               source: "cache",
-            });
+            };
           }
         }
       }

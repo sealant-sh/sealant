@@ -1,10 +1,10 @@
-import { consumeRabbitMqJsonMessages, type RabbitMqConsumerMessage } from "@sealant/rabbitmq";
+import { createRabbitMqService, type RabbitMqConsumerMessage } from "@sealant/rabbitmq";
 
 import {
   parseSandboxBuildJobRequestedMessage,
   type SandboxBuildJobRequestedMessage,
 } from "./messages.js";
-import { ensureSandboxBuildQueueTopology, sandboxBuildQueueName } from "./topology.js";
+import { sandboxBuildQueueName, sandboxBuildQueueTopology } from "./topology.js";
 
 export type SandboxBuildJobConsumerMessage =
   RabbitMqConsumerMessage<SandboxBuildJobRequestedMessage>;
@@ -16,10 +16,11 @@ export interface ConsumeSandboxBuildJobsOptions {
 }
 
 export const consumeSandboxBuildJobs = async (options: ConsumeSandboxBuildJobsOptions) => {
-  await ensureSandboxBuildQueueTopology(options.connectionUrl);
+  const rabbitMq = createRabbitMqService(options.connectionUrl);
 
-  return consumeRabbitMqJsonMessages({
-    connectionUrl: options.connectionUrl,
+  await rabbitMq.assertTopology(sandboxBuildQueueTopology);
+
+  return rabbitMq.consumeJsonMessages({
     queueName: sandboxBuildQueueName,
     ...(options.prefetch === undefined ? {} : { prefetch: options.prefetch }),
     parseMessage: parseSandboxBuildJobRequestedMessage,

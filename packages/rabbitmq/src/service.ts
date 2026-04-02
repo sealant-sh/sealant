@@ -39,6 +39,8 @@ export class RabbitMqServiceTag extends Context.Tag("@sealant/rabbitmq/RabbitMqS
   }
 >() {}
 
+export type RabbitMqService = Context.Tag.Service<typeof RabbitMqServiceTag>;
+
 export const rabbitMqServiceLiveLayer = Layer.effect(
   RabbitMqServiceTag,
   Effect.gen(function* () {
@@ -74,8 +76,6 @@ export const rabbitMqServiceLayer = (connectionUrl: string) => {
 
   return rabbitMqServiceLiveLayer.pipe(Layer.provide(configLayer));
 };
-
-export type RabbitMqService = Context.Tag.Service<typeof RabbitMqServiceTag>;
 
 export const createRabbitMqService = (connectionUrl: string): RabbitMqService => {
   return Effect.runSync(

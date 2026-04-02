@@ -1,5 +1,5 @@
 import { closeDatabaseClient, createDatabaseClientFromEnv } from "@sealant/db";
-import { closeRabbitMqSingleton } from "@sealant/rabbitmq";
+import { createRabbitMqService } from "@sealant/rabbitmq";
 import {
   consumeSandboxBuildJobs,
   createZotRegistryClient,
@@ -13,6 +13,7 @@ import type { WorkerEnv } from "@sealant/validators/env";
 
 export const startSandboxWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);
+  const rabbitMq = createRabbitMqService(env.RABBITMQ_URL);
   const registryClient = createZotRegistryClient({
     baseUrl: env.REGISTRY_BASE_URL,
     pushRegistry: env.REGISTRY_PUSH_REGISTRY,
@@ -64,7 +65,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
   return {
     stop: async () => {
       await consumer.cancel();
-      await closeRabbitMqSingleton();
+      await rabbitMq.close();
       closeDatabaseClient(dbClient);
     },
   };

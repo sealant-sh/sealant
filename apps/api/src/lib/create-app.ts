@@ -41,22 +41,6 @@ export const createApp = (config: AppRuntimeConfig) => {
 
   app.use("*", async (c, next) => {
     c.set("runtime", runtime);
-    c.set("env", runtime.env);
-    c.set("registryClient", runtime.registryClient);
-    c.set("sandboxBuildJobPublisher", runtime.sandboxBuildJobPublisher);
-    c.set("sandboxBuildJobRepository", runtime.sandboxBuildJobRepository);
-    c.set("gitHubSourceIntegration", runtime.gitHubSourceIntegration);
-    c.set("gitHubInstallationRepository", runtime.gitHubInstallationRepository);
-    c.set(
-      "gitHubInstallationRepositoryCacheRepository",
-      runtime.gitHubInstallationRepositoryCacheRepository,
-    );
-    c.set("gitHubWebhookDeliveryRepository", runtime.gitHubWebhookDeliveryRepository);
-    c.set("repositoryProfileRepository", runtime.repositoryProfileRepository);
-    c.set("packageStandardizer", runtime.packageStandardizer);
-    c.set("sandboxRepository", runtime.sandboxRepository);
-    c.set("sandboxRuntimeInstanceRepository", runtime.sandboxRuntimeInstanceRepository);
-    c.set("sandboxAttemptRepository", runtime.sandboxAttemptRepository);
     await next();
   });
 
@@ -70,7 +54,7 @@ export const createApp = (config: AppRuntimeConfig) => {
   });
 
   app.onError((error, c) => {
-    console.error("[api] request failed", {
+    c.get("runtime").logger.error("[api] request failed", {
       method: c.req.method,
       path: c.req.path,
       error: error.message,

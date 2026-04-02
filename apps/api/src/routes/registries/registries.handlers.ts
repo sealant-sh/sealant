@@ -2,8 +2,12 @@ import type { Context } from "hono";
 
 import type { AppBindings } from "../../lib/types.js";
 
+const getRuntime = (c: Context<AppBindings>) => {
+  return c.get("runtime");
+};
+
 const getRegistrySummary = (c: Context<AppBindings>) => {
-  const env = c.get("env");
+  const env = getRuntime(c).env;
 
   return {
     name: env.REGISTRY_NAME,
@@ -14,7 +18,7 @@ const getRegistrySummary = (c: Context<AppBindings>) => {
 };
 
 const ensureRegistry = (c: Context<AppBindings>) => {
-  const env = c.get("env");
+  const env = getRuntime(c).env;
   const { registryId } = c.req.param() as {
     registryId: string;
   };
@@ -67,6 +71,7 @@ export const getRegistry = async (c: Context<AppBindings>) => {
 };
 
 export const pingRegistry = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
 
   if (missingRegistry !== null) {
@@ -74,10 +79,10 @@ export const pingRegistry = async (c: Context<AppBindings>) => {
   }
 
   try {
-    await c.get("registryClient").ping();
+    await runtime.registryClient.ping();
 
     return c.json({
-      name: c.get("env").REGISTRY_NAME,
+      name: runtime.env.REGISTRY_NAME,
       reachable: true,
     });
   } catch (error) {
@@ -86,6 +91,7 @@ export const pingRegistry = async (c: Context<AppBindings>) => {
 };
 
 export const listExtensions = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
 
   if (missingRegistry !== null) {
@@ -93,7 +99,7 @@ export const listExtensions = async (c: Context<AppBindings>) => {
   }
 
   try {
-    const extensions = await c.get("registryClient").discoverExtensions();
+    const extensions = await runtime.registryClient.discoverExtensions();
 
     return c.json({
       extensions,
@@ -104,6 +110,7 @@ export const listExtensions = async (c: Context<AppBindings>) => {
 };
 
 export const listTags = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
 
   if (missingRegistry !== null) {
@@ -115,7 +122,7 @@ export const listTags = async (c: Context<AppBindings>) => {
   };
 
   try {
-    const tags = await c.get("registryClient").listTags(repository);
+    const tags = await runtime.registryClient.listTags(repository);
 
     return c.json({
       repository,
@@ -127,6 +134,7 @@ export const listTags = async (c: Context<AppBindings>) => {
 };
 
 export const getManifest = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const missingRegistry = ensureRegistry(c);
 
   if (missingRegistry !== null) {
@@ -139,7 +147,7 @@ export const getManifest = async (c: Context<AppBindings>) => {
   };
 
   try {
-    const manifest = await c.get("registryClient").getManifest(repository, reference);
+    const manifest = await runtime.registryClient.getManifest(repository, reference);
 
     if (manifest === null) {
       return c.json(

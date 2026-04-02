@@ -52,19 +52,6 @@ export interface ApiRuntime {
 export interface AppBindings {
   Variables: {
     runtime: ApiRuntime;
-    env: AppEnv;
-    registryClient: RegistryClient;
-    sandboxBuildJobPublisher: SandboxBuildJobPublisher;
-    sandboxBuildJobRepository: SandboxBuildJobRepository;
-    packageStandardizer: PackageStandardizer;
-    gitHubSourceIntegration?: GitHubSourceIntegration;
-    gitHubInstallationRepository?: GitHubInstallationRepository;
-    gitHubInstallationRepositoryCacheRepository?: GitHubInstallationRepositoryCacheRepository;
-    gitHubWebhookDeliveryRepository?: GitHubWebhookDeliveryRepository;
-    repositoryProfileRepository?: RepositoryProfileRepository;
-    sandboxRepository: SandboxRepository;
-    sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
-    sandboxAttemptRepository: SandboxAttemptRepository;
   };
 }
 

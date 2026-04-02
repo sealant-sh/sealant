@@ -11,16 +11,19 @@ export type AppTheme = z.infer<typeof AppThemeSchema>;
 
 const themeStorageKey = "ui-theme";
 
+const parseUserTheme = (value: unknown): UserTheme => {
+  return UserThemeSchema.parse(value);
+};
+
 const getStoredUserTheme = createIsomorphicFn()
   .server((): UserTheme => "system")
   .client((): UserTheme => {
     const stored = localStorage.getItem(themeStorageKey);
-    return UserThemeSchema.parse(stored);
+    return parseUserTheme(stored);
   });
 
 const setStoredTheme = createClientOnlyFn((theme: UserTheme) => {
-  const validatedTheme = UserThemeSchema.parse(theme);
-  localStorage.setItem(themeStorageKey, validatedTheme);
+  localStorage.setItem(themeStorageKey, theme);
 });
 
 const getSystemTheme = createIsomorphicFn()
@@ -30,16 +33,14 @@ const getSystemTheme = createIsomorphicFn()
   });
 
 const handleThemeChange = createClientOnlyFn((userTheme: UserTheme) => {
-  const validatedTheme = UserThemeSchema.parse(userTheme);
-
   const root = document.documentElement;
   root.classList.remove("light", "dark", "system");
 
-  if (validatedTheme === "system") {
+  if (userTheme === "system") {
     const systemTheme = getSystemTheme();
     root.classList.add(systemTheme, "system");
   } else {
-    root.classList.add(validatedTheme);
+    root.classList.add(userTheme);
   }
 });
 
@@ -99,10 +100,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const appTheme = userTheme === "system" ? getSystemTheme() : userTheme;
 
   const setTheme = (newUserTheme: UserTheme) => {
-    const validatedTheme = UserThemeSchema.parse(newUserTheme);
-    setUserTheme(validatedTheme);
-    setStoredTheme(validatedTheme);
-    handleThemeChange(validatedTheme);
+    setUserTheme(newUserTheme);
+    setStoredTheme(newUserTheme);
+    handleThemeChange(newUserTheme);
   };
 
   return (
