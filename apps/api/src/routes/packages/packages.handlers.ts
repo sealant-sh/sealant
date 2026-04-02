@@ -4,7 +4,18 @@ import type { z } from "zod";
 
 import type { AppBindings } from "../../lib/types.js";
 
+/**
+ * Reads the composed API runtime from request context.
+ */
+const getRuntime = (c: Context<AppBindings>) => {
+  return c.get("runtime");
+};
+
+/**
+ * Resolves package requests using the runtime package standardizer service.
+ */
 export const resolvePackage = async (c: Context<AppBindings>) => {
+  const runtime = getRuntime(c);
   const query = (
     c.req as typeof c.req & {
       valid(target: "query"): z.infer<typeof resolvePackageQuerySchema>;
@@ -12,7 +23,7 @@ export const resolvePackage = async (c: Context<AppBindings>) => {
   ).valid("query");
 
   try {
-    const resolution = await c.get("packageStandardizer").resolvePackage({
+    const resolution = await runtime.packageStandardizer.resolvePackage({
       query: query.query,
       targetOs: query.targetOs,
     });
@@ -21,7 +32,7 @@ export const resolvePackage = async (c: Context<AppBindings>) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Package resolution failed.";
 
-    console.error("[packages.resolve] package resolution failed", {
+    runtime.logger.error("[packages.resolve] package resolution failed", {
       query: query.query,
       error: message,
       stack: error instanceof Error ? error.stack : undefined,

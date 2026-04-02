@@ -20,34 +20,39 @@ export const accentPresets: readonly AccentPreset[] = [
   { label: "Amber", value: "#b45309" },
 ] as const;
 
+/**
+ * Type guard for persisted user theme values.
+ */
 export function isUserTheme(value: string): value is UserTheme {
   return userThemes.some((theme) => theme === value);
 }
 
+/**
+ * Normalizes user-provided accents to supported hex formats.
+ */
 export function normalizeAccent(value: string | null | undefined): string | null {
   if (value === null || value === undefined) {
     return null;
   }
 
   const accent = value.trim().toLowerCase();
-  const shortHexMatch = /^#([0-9a-f]{3})$/i.exec(accent);
-
-  if (shortHexMatch !== null) {
-    const rawHex = shortHexMatch[1] ?? "";
-
-    return `#${rawHex
-      .split("")
-      .map((channel) => `${channel}${channel}`)
-      .join("")}`;
+  if (/^#([0-9a-f]{3})$/i.test(accent)) {
+    return accent.replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i, "#$1$1$2$2$3$3");
   }
 
   return /^#([0-9a-f]{6}|[0-9a-f]{8})$/i.test(accent) ? accent : null;
 }
 
+/**
+ * Resolves accent values with fallback to the default accent color.
+ */
 export function resolveAccent(value: string | null | undefined): string {
   return normalizeAccent(value) ?? defaultAccent;
 }
 
+/**
+ * Chooses the highest-contrast foreground color for accent surfaces.
+ */
 export function getAccentForeground(accent: string): "#111111" | "#ffffff" {
   const resolvedAccent = resolveAccent(accent);
   const darkContrast = getContrastRatio(resolvedAccent, "#111111");
@@ -56,12 +61,18 @@ export function getAccentForeground(accent: string): "#111111" | "#ffffff" {
   return darkContrast >= lightContrast ? "#111111" : "#ffffff";
 }
 
+/**
+ * Returns a value safe for HTML color input controls.
+ */
 export function getAccentInputValue(accent: string): string {
   const resolvedAccent = resolveAccent(accent);
 
   return resolvedAccent.length === 9 ? resolvedAccent.slice(0, 7) : resolvedAccent;
 }
 
+/**
+ * Returns a preset label for a resolved accent, or `Custom` when no preset matches.
+ */
 export function getAccentLabel(accent: string): string {
   const resolvedAccent = resolveAccent(accent);
   const matchingPreset = accentPresets.find((preset) => preset.value === resolvedAccent);

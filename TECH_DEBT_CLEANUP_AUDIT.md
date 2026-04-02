@@ -13,6 +13,26 @@ indirection), and identify where Effect services can simplify dependency managem
 - Focused on concrete, actionable findings with file-level evidence.
 - Prioritized issues that reduce complexity without changing product behavior.
 
+## Execution Status (2026-04-03)
+
+- Phase 1 quick wins completed:
+  - API schema pass-through files removed and routes now import validators directly.
+  - Duplicate TRPC list input parse removed in web router.
+  - Theme parsing flow simplified to parse once at edge in docs app.
+  - Cached package resolution flow no longer re-parses already typed data.
+  - Impossible hex guard path removed in web appearance utilities.
+- Phase 2 targeted refactors completed:
+  - Worker GitHub installation auth resolution logic extracted to dedicated module.
+  - Runtime env loading normalized across API, worker, and ssh-gateway via validators env parsers.
+- Phase 3 Effect-first model completed for API + RabbitMQ boundaries:
+  - Introduced `ApiRuntime` composition with `Clock`, `IdGenerator`, `Logger`, and config/dependency
+    services.
+  - Migrated API handlers to runtime service consumption (GitHub, sandboxes, packages, registries).
+  - Introduced RabbitMQ service contract/layer boundary and migrated sandbox queue
+    publish/consume/topology orchestration to that service.
+
+Reference: `apps/docs/contents/changelog/index.md` (entry `CHG-2026-04-02-001`).
+
 ## Effect Services (What matters for this codebase)
 
 Based on the Effect requirements management/services guidance:
