@@ -64,7 +64,7 @@ export const createSealantAuth = async (options: CreateSealantAuthOptions = {}) 
           trustedOrigins,
         }),
     database: drizzleAdapter(resolvedDatabaseClient.db, {
-      provider: "sqlite",
+      provider: "pg",
       schema,
     }),
     emailAndPassword: {

@@ -7,11 +7,15 @@ import { parseDatabaseEnv } from "./src/runtime-env.js";
 const env = parseDatabaseEnv(process.env);
 
 export default defineConfig({
-  schema: ["./src/schema/*.ts"],
+  schema: [
+    "./src/schema/auth.ts",
+    "./src/schema/control-plane.ts",
+    "./src/schema/sandbox-build-jobs.ts",
+  ],
   out: "./drizzle",
-  dialect: "sqlite",
+  dialect: "postgresql",
   casing: "snake_case",
   dbCredentials: {
-    url: env.DATABASE_FILE_PATH,
+    url: env.DATABASE_URL,
   },
 });

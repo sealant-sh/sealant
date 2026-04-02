@@ -1,5 +1,5 @@
-import { createInsertSchema, createSelectSchema } from "drizzle-zod";
-import { z } from "zod";
+import { createInsertSchema, createSelectSchema } from "drizzle-orm/effect-schema";
+import { Schema } from "effect";
 
 import {
   issueStateValues,
@@ -22,40 +22,47 @@ export const sandboxBuildJobSelectSchema = createSelectSchema(sandboxBuildJobs);
 
 export const sandboxBuildJobInsertSchema = createInsertSchema(sandboxBuildJobs);
 
-export const sandboxBuildJobStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
+export const sandboxBuildJobStatusSchema = Schema.Literal(
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+);
 
 export const sandboxAttemptSelectSchema = createSelectSchema(sandboxAttempts);
 
 export const sandboxAttemptInsertSchema = createInsertSchema(sandboxAttempts);
 
-export const sandboxAttemptStatusSchema = z.enum(sandboxAttemptStatusValues);
+export const sandboxAttemptStatusSchema = Schema.Literal(...sandboxAttemptStatusValues);
 
-export const sandboxAttemptTriggerTypeSchema = z.enum(sandboxAttemptTriggerTypeValues);
+export const sandboxAttemptTriggerTypeSchema = Schema.Literal(...sandboxAttemptTriggerTypeValues);
 
 export const sandboxSelectSchema = createSelectSchema(sandboxes);
 
 export const sandboxInsertSchema = createInsertSchema(sandboxes);
 
-export const sandboxStatusSchema = z.enum(sandboxStatusValues);
+export const sandboxStatusSchema = Schema.Literal(...sandboxStatusValues);
 
 export const issueWorkflowSelectSchema = createSelectSchema(issueWorkflows);
 
 export const issueWorkflowInsertSchema = createInsertSchema(issueWorkflows);
 
-export const issueWorkflowStatusSchema = z.enum(issueWorkflowStatusValues);
+export const issueWorkflowStatusSchema = Schema.Literal(...issueWorkflowStatusValues);
 
 export const issueWorkflowExecutionSelectSchema = createSelectSchema(issueWorkflowExecutions);
 
 export const issueWorkflowExecutionInsertSchema = createInsertSchema(issueWorkflowExecutions);
 
-export const issueWorkflowExecutionStatusSchema = z.enum(issueWorkflowExecutionStatusValues);
-
-export const issueWorkflowExecutionTriggerTypeSchema = z.enum(
-  issueWorkflowExecutionTriggerTypeValues,
+export const issueWorkflowExecutionStatusSchema = Schema.Literal(
+  ...issueWorkflowExecutionStatusValues,
 );
 
-export const profileStatusSchema = z.enum(profileStatusValues);
+export const issueWorkflowExecutionTriggerTypeSchema = Schema.Literal(
+  ...issueWorkflowExecutionTriggerTypeValues,
+);
 
-export const issueStateSchema = z.enum(issueStateValues);
+export const profileStatusSchema = Schema.Literal(...profileStatusValues);
 
-export const pullRequestStateSchema = z.enum(pullRequestStateValues);
+export const issueStateSchema = Schema.Literal(...issueStateValues);
+
+export const pullRequestStateSchema = Schema.Literal(...pullRequestStateValues);

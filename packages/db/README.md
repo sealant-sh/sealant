@@ -1,6 +1,6 @@
 # DB Package
 
-`@sealant/db` is the shared SQLite package for Sealant control-plane state.
+`@sealant/db` is the shared PostgreSQL package for Sealant control-plane state.
 
 It models two primary product domains:
 
@@ -14,15 +14,14 @@ It models two primary product domains:
   execution reporting
 - typed repositories for sandbox attempts, build jobs, runtime instances, profiles, repository
   profiles, and issue workflow data
-- generated Zod schemas from Drizzle tables
+- generated Effect schemas from Drizzle tables
 - payload schemas for job request/result JSON
-- a local SQLite client with `WAL` and `busy_timeout` enabled
+- PostgreSQL client creation and lifecycle helpers
 
 ## Environment
 
-- `DATABASE_FILE_PATH`: SQLite database file path; defaults to
-  `packages/db/.data/sealant-control-plane.sqlite`
-- `DATABASE_BUSY_TIMEOUT_MS`: SQLite busy timeout in milliseconds; defaults to `5000`
+- `DATABASE_URL`: PostgreSQL connection URL; defaults to
+  `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane`
 
 ## Package scripts
 

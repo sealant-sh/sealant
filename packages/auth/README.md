@@ -4,7 +4,7 @@
 
 It currently provides:
 
-- Better Auth server creation backed by the shared `@sealant/db` SQLite database
+- Better Auth server creation backed by the shared `@sealant/db` PostgreSQL database
 - a small env parser for Better Auth runtime settings
 - a generic client factory for app-side Better Auth usage
 - server-side helpers for reading and requiring the current session

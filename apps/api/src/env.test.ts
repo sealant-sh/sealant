@@ -7,8 +7,7 @@ import { describe, expect, it } from "vitest";
 
 const createBaseEnv = () => {
   return {
-    DATABASE_FILE_PATH: ":memory:",
-    DATABASE_BUSY_TIMEOUT_MS: "5000",
+    DATABASE_URL: "postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane_test",
     RABBITMQ_URL: "amqp://sealant:sealant@127.0.0.1:5673",
     PORT: "4000",
     SANDBOX_BUILD_QUEUE_PREFETCH: "1",

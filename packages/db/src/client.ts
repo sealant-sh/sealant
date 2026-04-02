@@ -1,73 +1,59 @@
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-
-import { createClient, type Client as LibsqlClient } from "@libsql/client";
-import { drizzle } from "drizzle-orm/libsql";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool, type PoolConfig } from "pg";
 
 import { databaseEnv, type DatabaseEnv } from "./runtime-env.js";
 import * as schema from "./schema.js";
 
 export interface DatabaseClientOptions {
-  readonly filePath: string;
-  readonly busyTimeoutMs?: number;
+  readonly connectionString: string;
+  readonly maxConnections?: number;
+  readonly idleTimeoutMs?: number;
+  readonly connectionTimeoutMs?: number;
 }
 
-export type SqliteDatabaseConnection = LibsqlClient;
+export type PostgresDatabaseConnection = Pool;
 
 export type SealantDatabase = ReturnType<typeof drizzle<typeof schema>>;
 
 export interface DatabaseClient {
-  readonly connection: SqliteDatabaseConnection;
+  readonly connection: PostgresDatabaseConnection;
   readonly db: SealantDatabase;
 }
 
-const ensureDatabaseDirectoryExists = (filePath: string) => {
-  if (filePath === ":memory:" || filePath === "file::memory:") {
-    return;
-  }
-
-  mkdirSync(dirname(filePath), {
-    recursive: true,
-  });
+const toPoolConfig = (options: DatabaseClientOptions): PoolConfig => {
+  return {
+    connectionString: options.connectionString,
+    ...(options.maxConnections === undefined ? {} : { max: options.maxConnections }),
+    ...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMillis: options.idleTimeoutMs }),
+    ...(options.connectionTimeoutMs === undefined
+      ? {}
+      : { connectionTimeoutMillis: options.connectionTimeoutMs }),
+  };
 };
 
-const toLibsqlUrl = (filePath: string): string => {
-  if (filePath === ":memory:" || filePath === "file::memory:") {
-    return "file::memory:";
-  }
-
-  if (filePath.startsWith("file:")) {
-    return filePath;
-  }
-
-  return pathToFileURL(resolve(filePath)).toString();
-};
-
-export const createSqliteConnection = async (
+export const createPostgresConnection = async (
   options: DatabaseClientOptions,
-): Promise<SqliteDatabaseConnection> => {
-  ensureDatabaseDirectoryExists(options.filePath);
+): Promise<PostgresDatabaseConnection> => {
+  const connection = new Pool(toPoolConfig(options));
 
-  const connection = createClient({
-    url: toLibsqlUrl(options.filePath),
-  });
-
-  await connection.execute("PRAGMA journal_mode = WAL");
-  await connection.execute("PRAGMA foreign_keys = ON");
-  await connection.execute(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5000}`);
-
-  return connection;
+  try {
+    await connection.query("select 1");
+    return connection;
+  } catch (error) {
+    await connection.end();
+    throw error;
+  }
 };
 
 export const createDatabaseClient = async (
   options: DatabaseClientOptions,
 ): Promise<DatabaseClient> => {
-  const connection = await createSqliteConnection(options);
+  const connection = await createPostgresConnection(options);
 
   return {
     connection,
-    db: drizzle(connection, {
+    db: drizzle({
+      client: connection,
       schema,
       casing: "snake_case",
     }),
@@ -78,11 +64,10 @@ export const createDatabaseClientFromEnv = async (
   env: DatabaseEnv = databaseEnv,
 ): Promise<DatabaseClient> => {
   return createDatabaseClient({
-    filePath: env.DATABASE_FILE_PATH,
-    busyTimeoutMs: env.DATABASE_BUSY_TIMEOUT_MS,
+    connectionString: env.DATABASE_URL,
   });
 };
 
-export const closeDatabaseClient = (client: DatabaseClient) => {
-  client.connection.close();
+export const closeDatabaseClient = async (client: DatabaseClient) => {
+  await client.connection.end();
 };

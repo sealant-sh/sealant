@@ -69,7 +69,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     stop: async () => {
       await consumer.cancel();
       await rabbitMq.close();
-      closeDatabaseClient(dbClient);
+      await closeDatabaseClient(dbClient);
     },
   };
 };
