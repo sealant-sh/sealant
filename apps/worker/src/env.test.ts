@@ -2,9 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { parseWorkerEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
-
-import { parseWorkerEnv } from "./env.js";
 
 describe("parseWorkerEnv", () => {
   it("loads the GitHub App private key from GITHUB_APP_PRIVATE_KEY_PATH", () => {

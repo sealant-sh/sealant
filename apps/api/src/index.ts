@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 
 import app from "./app.js";
-import { env } from "./env.js";
+import { env } from "./runtime-env.js";
 
 console.log(`Sealant API listening on http://localhost:${env.PORT}`);
 console.log(`[api] database file: ${env.DATABASE_FILE_PATH}`);

@@ -10,8 +10,7 @@ import type {
 } from "@sealant/db";
 import type { PackageStandardizer, RegistryClient } from "@sealant/sandboxes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
-
-import type { AppEnv } from "../env.js";
+import type { AppEnv } from "@sealant/validators/env";
 
 export interface SandboxBuildJobPublisher {
   publishRequested(input: { jobId: string }): Promise<void>;

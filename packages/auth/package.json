@@ -7,7 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./env": "./src/env.ts",
+    "./env": "./src/runtime-env.ts",
     "./server": "./src/server.ts",
     "./session": "./src/session.ts"
   },
@@ -17,8 +17,8 @@
   },
   "dependencies": {
     "@sealant/db": "workspace:*",
-    "better-auth": "^1.4.13",
-    "zod": "catalog:"
+    "@sealant/validators": "workspace:*",
+    "better-auth": "^1.4.13"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*"

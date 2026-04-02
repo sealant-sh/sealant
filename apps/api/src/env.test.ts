@@ -2,9 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { parseAppEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
-
-import { parseAppEnv } from "./env.js";
 
 const createBaseEnv = () => {
   return {

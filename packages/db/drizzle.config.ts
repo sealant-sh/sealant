@@ -2,7 +2,7 @@ import process from "node:process";
 
 import { defineConfig } from "drizzle-kit";
 
-import { parseDatabaseEnv } from "./src/env.js";
+import { parseDatabaseEnv } from "./src/runtime-env.js";
 
 const env = parseDatabaseEnv(process.env);
 

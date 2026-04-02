@@ -5,7 +5,7 @@ export {
   createSqliteConnection,
 } from "./client.js";
 
-export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./env.js";
+export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./runtime-env.js";
 
 export {
   createGitHubInstallationRepository,
@@ -268,4 +268,4 @@ export {
 
 export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";
 
-export type { DatabaseEnv } from "./env.js";
+export type { DatabaseEnv } from "./runtime-env.js";

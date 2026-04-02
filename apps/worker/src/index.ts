@@ -1,4 +1,4 @@
-import { env } from "./env.js";
+import { env } from "./runtime-env.js";
 import { startWorkers } from "./workers/index.js";
 
 const retryDelayMs = 2000;

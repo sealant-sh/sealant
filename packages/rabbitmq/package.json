@@ -12,8 +12,8 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "amqplib": "catalog:",
-    "zod": "catalog:"
+    "@sealant/validators": "workspace:*",
+    "amqplib": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",

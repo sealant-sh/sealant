@@ -9,8 +9,7 @@ import {
   processSandboxBuildJob,
 } from "@sealant/sandboxes";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
-
-import type { WorkerEnv } from "../env.js";
+import type { WorkerEnv } from "@sealant/validators/env";
 
 export const startSandboxWorker = async (env: WorkerEnv) => {
   const dbClient = await createDatabaseClientFromEnv(env);

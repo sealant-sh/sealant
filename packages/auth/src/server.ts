@@ -8,7 +8,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
-import { authEnv, type AuthEnv } from "./env.js";
+import { authEnv, type AuthEnv } from "./runtime-env.js";
 
 export interface CreateSealantAuthOptions {
   readonly databaseClient?: DatabaseClient;

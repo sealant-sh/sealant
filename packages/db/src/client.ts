@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createClient, type Client as LibsqlClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 
-import { databaseEnv, type DatabaseEnv } from "./env.js";
+import { databaseEnv, type DatabaseEnv } from "./runtime-env.js";
 import * as schema from "./schema.js";
 
 export interface DatabaseClientOptions {

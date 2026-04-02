@@ -28,7 +28,7 @@ process.env.SSH_GATEWAY_ALLOWED_KEYS_FILE =
 process.env.SSH_UPSTREAM_PRIVATE_KEY_PATH =
   process.env.SSH_UPSTREAM_PRIVATE_KEY_PATH ?? bootstrapUpstreamPrivateKeyPath;
 
-const { parseSshGatewayEnv } = await import("./env.js");
+const { parseSshGatewayEnv } = await import("@sealant/validators/env");
 
 afterAll(() => {
   if (previousBootstrapEnv.SANDBOX_SSH_GATEWAY_TOKEN === undefined) {

@@ -23,10 +23,10 @@ import type {
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
 import { packageResolutionSchema, type NewSandbox } from "@sealant/validators";
+import type { AppEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
-import type { AppEnv } from "./env.js";
 import type { SandboxBuildJobPublisher } from "./lib/types.js";
 
 const testEnv: AppEnv = {
