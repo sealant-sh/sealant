@@ -1,7 +1,5 @@
 import { readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
@@ -17,12 +15,11 @@ export const parseRabbitMqEnv = (input: Record<string, string | undefined>): Rab
   return rabbitMqEnvSchema.parse(input);
 };
 
-const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
-const defaultDatabaseFilePath = resolve(packageDirectory, ".data", "sealant-control-plane.sqlite");
-
 export const databaseEnvSchema = z.object({
-  DATABASE_FILE_PATH: z.string().trim().min(1).default(defaultDatabaseFilePath),
-  DATABASE_BUSY_TIMEOUT_MS: z.coerce.number().int().min(0).default(5000),
+  DATABASE_URL: z
+    .string()
+    .url()
+    .default("postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane"),
 });
 
 export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;

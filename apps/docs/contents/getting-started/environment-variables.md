@@ -13,14 +13,13 @@ For complete contracts, see each app/package env module:
 - `apps/api/src/env.ts`
 - `apps/worker/src/env.ts`
 - `apps/ssh-gateway/src/env.ts`
-- `packages/db/src/env.ts`
+- `packages/db/src/runtime-env.ts`
 - `packages/rabbitmq/src/env.ts`
 - `packages/auth/src/env.ts`
 
 ## Shared infrastructure
 
-- `DATABASE_FILE_PATH` (SQLite path)
-- `DATABASE_BUSY_TIMEOUT_MS`
+- `DATABASE_URL`
 - `RABBITMQ_URL`
 - `SANDBOX_BUILD_QUEUE_PREFETCH`
 - `REGISTRY_BASE_URL`

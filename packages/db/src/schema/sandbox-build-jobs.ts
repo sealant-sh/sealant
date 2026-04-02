@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 import type { NewSandbox, SandboxBuild } from "../payloads.js";
 import { sandboxAttempts } from "./control-plane.js";
@@ -16,7 +16,7 @@ export const sandboxRuntimeInstanceStatusValues = [
 
 export type SandboxRuntimeInstanceStatus = (typeof sandboxRuntimeInstanceStatusValues)[number];
 
-export const ociImageBuildJobs = sqliteTable(
+export const ociImageBuildJobs = pgTable(
   "oci_image_build_jobs",
   {
     id: text().primaryKey(),
@@ -25,29 +25,29 @@ export const ociImageBuildJobs = sqliteTable(
     registryId: text().notNull(),
     repository: text().notNull(),
     tag: text().notNull(),
-    requestPayload: text("request_payload", { mode: "json" }).$type<NewSandbox>().notNull(),
+    requestPayload: jsonb("request_payload").$type<NewSandbox>().notNull(),
     idempotencyKey: text(),
-    attemptCount: integer({ mode: "number" }).notNull().default(0),
-    maxAttempts: integer({ mode: "number" }).notNull().default(3),
-    availableAt: integer({ mode: "timestamp_ms" })
+    attemptCount: integer().notNull().default(0),
+    maxAttempts: integer().notNull().default(3),
+    availableAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    claimedAt: integer({ mode: "timestamp_ms" }),
-    leaseExpiresAt: integer({ mode: "timestamp_ms" }),
+    claimedAt: timestamp({ mode: "date", withTimezone: true }),
+    leaseExpiresAt: timestamp({ mode: "date", withTimezone: true }),
     workerId: text(),
-    startedAt: integer({ mode: "timestamp_ms" }),
-    finishedAt: integer({ mode: "timestamp_ms" }),
+    startedAt: timestamp({ mode: "date", withTimezone: true }),
+    finishedAt: timestamp({ mode: "date", withTimezone: true }),
     builderId: text(),
-    resultPayload: text("result_payload", { mode: "json" }).$type<SandboxBuild>(),
+    resultPayload: jsonb("result_payload").$type<SandboxBuild>(),
     publishedReference: text(),
     publishedDigestReference: text(),
     publishedDigest: text(),
     errorCode: text(),
     errorMessage: text(),
-    createdAt: integer({ mode: "timestamp_ms" })
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
@@ -61,7 +61,7 @@ export const ociImageBuildJobs = sqliteTable(
   ],
 );
 
-export const sandboxRuntimeInstances = sqliteTable(
+export const sandboxRuntimeInstances = pgTable(
   "sandbox_runtime_instances",
   {
     runId: text("run_id")
@@ -74,12 +74,12 @@ export const sandboxRuntimeInstances = sqliteTable(
     endpoint: text(),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
-    launchedAt: integer("launched_at", { mode: "timestamp_ms" }),
-    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
-    createdAt: integer({ mode: "timestamp_ms" })
+    launchedAt: timestamp("launched_at", { mode: "date", withTimezone: true }),
+    finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
@@ -101,8 +101,6 @@ export type NewSandboxRuntimeInstance = typeof sandboxRuntimeInstances.$inferIns
 export const sandboxBuildJobStatusValues = ociImageBuildJobStatusValues;
 
 export type SandboxBuildJobStatus = OciImageBuildJobStatus;
-
-export const sandboxBuildJobs = ociImageBuildJobs;
 
 export type SandboxBuildJob = OciImageBuildJob;
 export type NewSandboxBuildJob = NewOciImageBuildJob;

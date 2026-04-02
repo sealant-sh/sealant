@@ -1,17 +1,17 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
-export const user = sqliteTable(
+export const user = pgTable(
   "user",
   {
     id: text().primaryKey(),
     name: text().notNull(),
     email: text().notNull(),
-    emailVerified: integer({ mode: "boolean" }).notNull().default(false),
+    emailVerified: boolean().notNull().default(false),
     image: text(),
-    createdAt: integer({ mode: "timestamp_ms" })
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
@@ -19,7 +19,7 @@ export const user = sqliteTable(
   (table) => [uniqueIndex("user_email_idx").on(table.email)],
 );
 
-export const session = sqliteTable(
+export const session = pgTable(
   "session",
   {
     id: text().primaryKey(),
@@ -27,13 +27,13 @@ export const session = sqliteTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     token: text().notNull(),
-    expiresAt: integer({ mode: "timestamp_ms" }).notNull(),
+    expiresAt: timestamp({ mode: "date", withTimezone: true }).notNull(),
     ipAddress: text(),
     userAgent: text(),
-    createdAt: integer({ mode: "timestamp_ms" })
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
@@ -45,7 +45,7 @@ export const session = sqliteTable(
   ],
 );
 
-export const account = sqliteTable(
+export const account = pgTable(
   "account",
   {
     id: text().primaryKey(),
@@ -56,15 +56,15 @@ export const account = sqliteTable(
     providerId: text().notNull(),
     accessToken: text(),
     refreshToken: text(),
-    accessTokenExpiresAt: integer({ mode: "timestamp_ms" }),
-    refreshTokenExpiresAt: integer({ mode: "timestamp_ms" }),
+    accessTokenExpiresAt: timestamp({ mode: "date", withTimezone: true }),
+    refreshTokenExpiresAt: timestamp({ mode: "date", withTimezone: true }),
     scope: text(),
     idToken: text(),
     password: text(),
-    createdAt: integer({ mode: "timestamp_ms" })
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
@@ -75,17 +75,17 @@ export const account = sqliteTable(
   ],
 );
 
-export const verification = sqliteTable(
+export const verification = pgTable(
   "verification",
   {
     id: text().primaryKey(),
     identifier: text().notNull(),
     value: text().notNull(),
-    expiresAt: integer({ mode: "timestamp_ms" }).notNull(),
-    createdAt: integer({ mode: "timestamp_ms" })
+    expiresAt: timestamp({ mode: "date", withTimezone: true }).notNull(),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
-    updatedAt: integer({ mode: "timestamp_ms" })
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),

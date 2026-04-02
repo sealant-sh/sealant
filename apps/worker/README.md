@@ -27,8 +27,8 @@ docker compose --profile apps up -d worker
 The Compose worker image now bakes the repo into the container and talks to the host Docker daemon
 through the mounted socket. That keeps local `node_modules` ownership on the host untouched.
 
-For local development, the Compose worker shares the same SQLite file as the host apps by mounting
-`packages/db/.data` into the container. Run migrations on the host before starting the worker:
+For local development, the Compose worker connects to the shared PostgreSQL service from the root
+`compose.yaml`. Run migrations on the host before starting the worker:
 
 ```bash
 pnpm db:migrate
@@ -36,7 +36,7 @@ pnpm db:migrate
 
 The worker expects:
 
-- the SQLite database from `@sealant/db`
+- the PostgreSQL database from `@sealant/db`
 - RabbitMQ from the root `compose.yaml` (`rabbitmq` service)
 - Zot from the root `compose.yaml` (`zot` service)
 - access to the host Docker socket for BuildKit image builds and Docker runtime launches

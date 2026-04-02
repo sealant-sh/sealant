@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_USER: sealant
+      POSTGRES_PASSWORD: sealant
+      POSTGRES_DB: sealant_control_plane
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sealant -d sealant_control_plane"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   rabbitmq:
     image: rabbitmq:4.2-management
     ports:
@@ -31,6 +48,8 @@ services:
     profiles:
       - apps
     depends_on:
+      postgres:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       zot:
@@ -38,12 +57,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.secrets:/app/.secrets:ro
-      - ./packages/db/.data:/app/packages/db/.data
     environment:
       RABBITMQ_URL: amqp://sealant:sealant@rabbitmq:5672
       REGISTRY_BASE_URL: http://zot:5000
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
-      DATABASE_FILE_PATH: /app/packages/db/.data/sealant-control-plane.sqlite
+      DATABASE_URL: postgresql://sealant:sealant@postgres:5432/sealant_control_plane
       DEFAULT_SSH_AUTHORIZED_KEYS_FILE: /app/.secrets/authorized_keys
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
       GITHUB_APP_ID: ${GITHUB_APP_ID}
@@ -82,4 +100,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres-data:
   zot-data:

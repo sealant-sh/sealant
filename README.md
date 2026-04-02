@@ -122,10 +122,11 @@ Supporting integrations feed into both flows without owning either flow:
 
 ### Current implementation status
 
-- `packages/db/`: shared Drizzle + SQLite package for durable control-plane state including auth,
-  repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job coordination
+- `packages/db/`: shared Drizzle + PostgreSQL package for durable control-plane state including
+  auth, repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job
+  coordination
 - `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
-  shared SQLite database package
+  shared PostgreSQL database package
 - `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
   reference UI, and the first registry-backed route group
 - `apps/worker/`: first background worker scaffold for consuming queued sandbox image build jobs,
@@ -185,8 +186,8 @@ over time.
 
 ## Defined package architecture
 
-- `packages/db/`: shared SQLite database package for durable control-plane state, Drizzle schema,
-  migrations, and repositories for build-job processing
+- `packages/db/`: shared PostgreSQL database package for durable control-plane state, Drizzle
+  schema, migrations, and repositories for build-job processing
 - `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session
   helpers across product apps
 - `packages/validators/`: shared contract schemas used by API routes and worker messaging

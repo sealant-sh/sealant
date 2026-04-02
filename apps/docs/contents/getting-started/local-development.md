@@ -38,11 +38,12 @@ pnpm --filter @sealant/db db:migrate
 ## 4) Start local infrastructure
 
 ```bash
-docker compose up -d rabbitmq zot
+docker compose up -d postgres rabbitmq zot
 ```
 
 Default local endpoints:
 
+- PostgreSQL: `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane`
 - RabbitMQ AMQP: `amqp://sealant:sealant@127.0.0.1:5673`
 - RabbitMQ UI: `http://127.0.0.1:15673`
 - Zot registry: `http://127.0.0.1:5000`
