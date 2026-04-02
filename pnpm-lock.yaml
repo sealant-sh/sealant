@@ -201,9 +201,6 @@ importers:
       '@standard-community/standard-openapi':
         specifier: ^0.2.9
         version: 0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(effect@3.21.0)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@4.3.6))(zod@4.3.6))(@standard-schema/spec@1.1.0)(effect@3.21.0)(openapi-types@12.1.3)(zod-openapi@4.2.4(zod@4.3.6))(zod@4.3.6)
-      '@t3-oss/env-core':
-        specifier: 'catalog:'
-        version: 0.13.11(typescript@5.9.3)(zod@4.3.6)
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
@@ -441,9 +438,9 @@ importers:
 
   apps/ssh-gateway:
     dependencies:
-      '@t3-oss/env-core':
-        specifier: 'catalog:'
-        version: 0.13.11(typescript@5.9.3)(zod@4.3.6)
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../../packages/validators
       ssh2:
         specifier: ^1.17.0
         version: 1.17.0
@@ -596,12 +593,9 @@ importers:
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
-      '@t3-oss/env-core':
-        specifier: 'catalog:'
-        version: 0.13.11(typescript@5.9.3)(zod@4.3.6)
-      zod:
-        specifier: 'catalog:'
-        version: 4.3.6
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../../packages/validators
     devDependencies:
       '@sealant/typescript':
         specifier: workspace:*
@@ -615,12 +609,12 @@ importers:
       '@sealant/db':
         specifier: workspace:*
         version: link:../db
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../validators
       better-auth:
         specifier: ^1.4.13
         version: 1.5.5(@tanstack/react-start@1.167.16(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)))(better-sqlite3@12.8.0)(drizzle-kit@0.31.10)(drizzle-orm@0.44.7(@libsql/client@0.15.15)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)(kysely@0.28.13))(mongodb@7.1.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)(vitest@3.2.4(@types/debug@4.1.13)(@types/node@24.12.0)(jiti@2.6.1)(jsdom@28.1.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.12.13(@types/node@24.12.0)(typescript@5.9.3))(tsx@4.21.0)(yaml@2.8.3))
-      zod:
-        specifier: 'catalog:'
-        version: 4.3.6
     devDependencies:
       '@sealant/typescript':
         specifier: workspace:*
@@ -653,12 +647,12 @@ importers:
 
   packages/rabbitmq:
     dependencies:
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../validators
       amqplib:
         specifier: 'catalog:'
         version: 0.10.9
-      zod:
-        specifier: 'catalog:'
-        version: 4.3.6
     devDependencies:
       '@sealant/typescript':
         specifier: workspace:*
