@@ -120,3 +120,5 @@ while migration to the `oci_image_build_jobs` table name is completed.
 
 - [db-effect-service-layer.md](./db-effect-service-layer.md) - step-by-step walkthrough of the
   Effect service tag and live integration layer used for DB runtime composition.
+- [db-effect-postgres-follow-up-plan.md](./db-effect-postgres-follow-up-plan.md) - incremental plan
+  to migrate DB runtime wiring to Drizzle `connect-effect-postgres`.

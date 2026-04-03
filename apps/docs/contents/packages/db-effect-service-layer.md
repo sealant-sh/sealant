@@ -85,3 +85,7 @@ const runnable = program.pipe(Effect.provide(databaseServiceFromEnvLayer()));
   progress.
 - The target architecture is service-tag contract first, integration in layers, and boundary-level
   composition.
+
+## Related docs
+
+- [db-effect-postgres-follow-up-plan.md](./db-effect-postgres-follow-up-plan.md)

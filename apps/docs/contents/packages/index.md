@@ -32,3 +32,8 @@ This section documents shared packages under `packages/`.
 
 This order mirrors the sandbox lifecycle path from contracts and transport through orchestration and
 state.
+
+## DB deep dives
+
+- [db-effect-service-layer.md](./db-effect-service-layer.md)
+- [db-effect-postgres-follow-up-plan.md](./db-effect-postgres-follow-up-plan.md)
