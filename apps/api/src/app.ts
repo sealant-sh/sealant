@@ -41,39 +41,47 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   return app;
 };
 
-const databaseClient = await createDatabaseClientFromEnv(env);
-const packageResolutionCacheRepository = createPackageResolutionCacheRepository(databaseClient);
-const repositoryProfileRepository = createRepositoryProfileRepository(databaseClient);
-const gitHubInstallationRepository = createGitHubInstallationRepository(databaseClient);
-const gitHubInstallationRepositoryCacheRepository =
-  createGitHubInstallationRepositoryCacheRepository(databaseClient);
-const gitHubWebhookDeliveryRepository = createGitHubWebhookDeliveryRepository(databaseClient);
-const packageStandardizer = createApiPackageStandardizer({
-  env,
-  cacheRepository: packageResolutionCacheRepository,
-});
+/**
+ * Creates the default API app with runtime infrastructure wiring.
+ *
+ * DB initialization is intentionally done here (instead of module top-level) so tests and tools
+ * can import the module without opening a database connection.
+ */
+export const createDefaultApiApp = async () => {
+  const databaseClient = await createDatabaseClientFromEnv(env);
+  const packageResolutionCacheRepository = createPackageResolutionCacheRepository(databaseClient);
+  const repositoryProfileRepository = createRepositoryProfileRepository(databaseClient);
+  const gitHubInstallationRepository = createGitHubInstallationRepository(databaseClient);
+  const gitHubInstallationRepositoryCacheRepository =
+    createGitHubInstallationRepositoryCacheRepository(databaseClient);
+  const gitHubWebhookDeliveryRepository = createGitHubWebhookDeliveryRepository(databaseClient);
+  const packageStandardizer = createApiPackageStandardizer({
+    env,
+    cacheRepository: packageResolutionCacheRepository,
+  });
 
-const app = createApiApp({
-  env,
-  registryClient: createRegistryClient(env),
-  sandboxBuildJobPublisher: createSandboxBuildJobPublisher(env),
-  sandboxBuildJobRepository: createSandboxBuildJobRepository(databaseClient),
-  packageStandardizer,
-  gitHubSourceIntegration: createGitHubSourceIntegration({
-    apiBaseUrl: env.GITHUB_API_BASE_URL,
-    ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
-    ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
-    ...(env.GITHUB_APP_WEBHOOK_SECRET === undefined
-      ? {}
-      : { webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET }),
-  }),
-  gitHubInstallationRepository,
-  gitHubInstallationRepositoryCacheRepository,
-  gitHubWebhookDeliveryRepository,
-  repositoryProfileRepository,
-  sandboxRepository: createSandboxRepository(databaseClient),
-  sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepository(databaseClient),
-  sandboxAttemptRepository: createSandboxAttemptRepository(databaseClient),
-});
-
-export default app;
+  return createApiApp({
+    env,
+    registryClient: createRegistryClient(env),
+    sandboxBuildJobPublisher: createSandboxBuildJobPublisher(env),
+    sandboxBuildJobRepository: createSandboxBuildJobRepository(databaseClient),
+    packageStandardizer,
+    gitHubSourceIntegration: createGitHubSourceIntegration({
+      apiBaseUrl: env.GITHUB_API_BASE_URL,
+      ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
+      ...(env.GITHUB_APP_PRIVATE_KEY === undefined
+        ? {}
+        : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
+      ...(env.GITHUB_APP_WEBHOOK_SECRET === undefined
+        ? {}
+        : { webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET }),
+    }),
+    gitHubInstallationRepository,
+    gitHubInstallationRepositoryCacheRepository,
+    gitHubWebhookDeliveryRepository,
+    repositoryProfileRepository,
+    sandboxRepository: createSandboxRepository(databaseClient),
+    sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepository(databaseClient),
+    sandboxAttemptRepository: createSandboxAttemptRepository(databaseClient),
+  });
+};

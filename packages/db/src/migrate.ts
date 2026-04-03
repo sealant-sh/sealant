@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 
-import { migrate } from "drizzle-orm/libsql/migrator";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 
 import { closeDatabaseClient, createDatabaseClientFromEnv } from "./client.js";
 
+/** Runs all pending Drizzle migrations against the configured PostgreSQL database. */
 export const runMigrations = async () => {
   const client = await createDatabaseClientFromEnv();
 
@@ -12,6 +13,6 @@ export const runMigrations = async () => {
       migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
     });
   } finally {
-    closeDatabaseClient(client);
+    await closeDatabaseClient(client);
   }
 };

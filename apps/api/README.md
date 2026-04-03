@@ -60,7 +60,7 @@ When configured, sandbox runtime endpoints returned by the API are rewritten to:
 `ssh://<prefix>-<sandboxId>@<gateway-host>:<gateway-port>`.
 
 The sandbox build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
-and the shared SQLite database from `@sealant/db`.
+and the shared PostgreSQL database from `@sealant/db`.
 
 ## Operations Runbook (Local Image Build Flow)
 
@@ -68,7 +68,7 @@ This API is the control-plane entrypoint for sandbox image builds.
 
 ### What this flow does
 
-1. `POST /v1/sandboxes` stores a durable sandbox plus internal execution records in SQLite and
+1. `POST /v1/sandboxes` stores a durable sandbox plus internal execution records in PostgreSQL and
    publishes a queue message to RabbitMQ.
 2. `@sealant/worker` consumes the job through `@sealant/sandboxes`, compiles via BuildKit, and
    publishes the OCI image to Zot.
@@ -88,9 +88,10 @@ pnpm --filter @sealant/db db:migrate
 ### Start local dependencies
 
 ```bash
-docker compose up -d rabbitmq zot
+docker compose up -d postgres rabbitmq zot
 ```
 
+- PostgreSQL: `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane`
 - RabbitMQ AMQP: `amqp://sealant:sealant@127.0.0.1:5673`
 - RabbitMQ UI: `http://127.0.0.1:15673`
 - Zot registry: `http://127.0.0.1:5000`
@@ -104,8 +105,7 @@ pnpm --filter @sealant/api dev
 pnpm --filter @sealant/worker dev
 ```
 
-If you run the worker through Docker Compose instead, keep using the same host SQLite file by
-running migrations on the host first:
+If you run the worker through Docker Compose instead, run migrations on the host first:
 
 ```bash
 pnpm db:migrate

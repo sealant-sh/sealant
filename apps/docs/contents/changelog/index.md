@@ -40,22 +40,164 @@ Use concise tags so reviewers can grep quickly:
 
 ## Tag Index
 
-| Tag             | Entries              |
-| --------------- | -------------------- |
-| `arch:effect`   | `CHG-2026-04-02-001` |
-| `area:api`      | `CHG-2026-04-02-001` |
-| `area:rabbitmq` | `CHG-2026-04-02-001` |
-| `area:docs`     | `CHG-2026-04-02-001` |
-| `kind:refactor` | `CHG-2026-04-02-001` |
-| `risk:medium`   | `CHG-2026-04-02-001` |
+| Tag                      | Entries                                    |
+| ------------------------ | ------------------------------------------ |
+| `arch:effect`            | `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:api`               | `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:auth`              | `CHG-2026-04-03-001`                       |
+| `area:db`                | `CHG-2026-04-03-001`                       |
+| `area:docs`              | `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:rabbitmq`          | `CHG-2026-04-02-001`                       |
+| `area:worker`            | `CHG-2026-04-03-001`                       |
+| `domain:issue-workflows` | `CHG-2026-04-03-001`                       |
+| `domain:sandboxes`       | `CHG-2026-04-03-001`                       |
+| `kind:feature`           | `CHG-2026-04-03-001`                       |
+| `kind:refactor`          | `CHG-2026-04-02-001`                       |
+| `risk:high`              | `CHG-2026-04-03-001`                       |
+| `risk:medium`            | `CHG-2026-04-02-001`                       |
 
 ## Entries (newest first)
+
+### CHG-2026-04-03-001 - Control-plane DB Migration to PostgreSQL and Effect Service
+
+| Field    | Value                                                                                                                                                    |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status` | `in_review`                                                                                                                                              |
+| `owners` | `engineering`                                                                                                                                            |
+| `scope`  | `packages/db`, `packages/validators`, `packages/auth`, `apps/api`, `apps/worker`, `apps/docs`, `compose.yaml`, root `README.md`                          |
+| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `kind:feature`, `risk:high` |
+| `links`  | PR: `https://github.com/get-sealant/sealant/pull/51`, commit: `0859797`, rollout plan: `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md`                              |
+
+**PR Description (copy-ready)**
+
+This PR migrates the shared control-plane data layer from SQLite/libsql to PostgreSQL and adds an
+Effect-style database service boundary for runtime composition.
+
+**Key changes**
+
+- **PostgreSQL as the source of truth:** Replaces SQLite file-path configuration with
+  `DATABASE_URL`, updates Drizzle configuration to PostgreSQL, and introduces a new baseline
+  PostgreSQL migration.
+- **Effect database service boundary:** Adds a DB service contract/tag + layer constructors in
+  `@sealant/db` so callers can compose runtime dependencies at boundaries instead of ad-hoc
+  initialization.
+- **Consumer runtime updates:** Wires API, worker, and auth integration to the PostgreSQL client
+  lifecycle and provider settings.
+- **Operational/docs alignment:** Updates local compose topology and docs so local development,
+  scripts, and environment docs all describe PostgreSQL-first flow.
+
+**Scope in this PR**
+
+- Migrate `@sealant/db` client + migrator from libsql to `pg`.
+- Convert schema definitions from SQLite builders/types to PostgreSQL builders/types.
+- Replace Zod generation path in DB validation with `drizzle-orm/effect-schema`.
+- Add `packages/db/src/service.ts` and export service/layer helpers.
+- Update API/worker/auth integration points and tests for the `DATABASE_URL` env contract.
+- Replace old SQLite migration history files with a PostgreSQL baseline migration snapshot.
+
+**Non-goals (explicitly not changed)**
+
+- No data migration path from existing SQLite files (clean-break migration strategy).
+- No API endpoint contract or payload shape changes.
+- No product-domain behavior changes for sandbox or issue workflow lifecycles.
+
+**Design decision**
+
+- Adopt PostgreSQL as the canonical control-plane persistence backend.
+- Keep DB access ergonomics through existing repository APIs while adding Effect service composition
+  support.
+- Ship migration as a clean baseline to minimize rollout complexity and de-risk hybrid behavior.
+
+**Reviewer guide (recommended order)**
+
+1. `packages/db/src/client.ts` - Postgres pool + Drizzle client creation lifecycle.
+2. `packages/db/src/service.ts` - DB service tag/contract and layer constructors.
+3. `packages/db/src/schema/control-plane.ts` - largest schema dialect migration surface.
+4. `packages/db/src/validation.ts` - `effect-schema` generation switch.
+5. `apps/api/src/app.ts` and `apps/api/src/index.ts` - async app bootstrap with DB init moved to
+   startup boundary.
+6. `compose.yaml` - local infra contract update for PostgreSQL service.
+
+**Key before/after snippets**
+
+Environment contract:
+
+```ts
+// Before
+DATABASE_FILE_PATH;
+DATABASE_BUSY_TIMEOUT_MS;
+
+// After
+DATABASE_URL;
+```
+
+Auth adapter provider:
+
+```ts
+// Before
+provider: "sqlite";
+
+// After
+provider: "pg";
+```
+
+API startup boundary:
+
+```ts
+// Before
+const databaseClient = await createDatabaseClientFromEnv(env);
+const app = createApiApp({ ... });
+
+// After
+export const createDefaultApiApp = async () => {
+  const databaseClient = await createDatabaseClientFromEnv(env);
+  return createApiApp({ ... });
+};
+```
+
+**Implementation summary**
+
+- Updated `packages/validators/src/env.ts` to define `DATABASE_URL` as shared DB runtime contract.
+- Migrated DB package dependencies and scripts in `packages/db/package.json` for PostgreSQL +
+  Drizzle beta tooling compatibility.
+- Reworked DB runtime in `packages/db/src/client.ts` and `packages/db/src/migrate.ts` to use
+  `pg`/`node-postgres` migrator.
+- Converted schema files in `packages/db/src/schema/*.ts` from SQLite to PostgreSQL types, including
+  index-name normalization for PostgreSQL identifier limits.
+- Added `packages/db/src/service.ts` and exported service helpers via `packages/db/src/index.ts`.
+- Updated consumer wiring in `packages/auth/src/server.ts`, `apps/api/src/app.ts`, and
+  `apps/worker/src/workers/sandboxes.ts`.
+- Added PostgreSQL local service in `compose.yaml` and updated project docs/READMEs accordingly.
+
+**Validation and results**
+
+- `pnpm --filter @sealant/db db:generate`
+- `pnpm --filter @sealant/db db:migrate` (validated with local `postgres` compose service)
+- `pnpm typecheck`
+- `pnpm format:fix`
+
+All commands passed during implementation.
+
+**Risk and mitigation**
+
+- Main risk is migration impact from clean-break replacement of prior SQLite migration history.
+- Mitigated by making migration strategy explicit, validating generation + migration + typecheck,
+  and keeping repository interfaces stable.
+- Mitigated operationally by updating local infra/docs in the same PR to avoid env/runtime drift.
+
+**Follow-ups**
+
+- Split follow-up rollout into targeted PR slices from `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md` where
+  needed for incremental review.
+- Add explicit test-layer DB service variants once broader Effect service composition is adopted in
+  runtime boundaries.
+- Keep this entry synchronized with PR body/status through merge.
 
 ### CHG-2026-04-02-001 - Initial Effect Service Runtime Wiring
 
 | Field    | Value                                                                                                                    |
 | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `status` | `in_review`                                                                                                              |
+| `status` | `merged`                                                                                                                 |
 | `owners` | `engineering`                                                                                                            |
 | `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs          |
 | `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                                  |

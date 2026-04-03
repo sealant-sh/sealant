@@ -2,8 +2,18 @@ export {
   closeDatabaseClient,
   createDatabaseClient,
   createDatabaseClientFromEnv,
-  createSqliteConnection,
+  createPostgresConnection,
 } from "./client.js";
+
+export {
+  database,
+  databaseServiceConfigLayer,
+  databaseServiceFromEnvLayer,
+  databaseServiceLayer,
+  databaseServiceLiveLayer,
+  DatabaseServiceConfig,
+  DatabaseServiceTag,
+} from "./service.js";
 
 export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./runtime-env.js";
 
@@ -267,5 +277,7 @@ export {
 } from "./validation.js";
 
 export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";
+
+export type { DatabaseService } from "./service.js";
 
 export type { DatabaseEnv } from "./runtime-env.js";

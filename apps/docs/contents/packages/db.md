@@ -8,7 +8,7 @@ updated: 2026-03-31
 
 ## Purpose
 
-`@sealant/db` is the shared SQLite + Drizzle package for control-plane persistence.
+`@sealant/db` is the shared PostgreSQL + Drizzle package for control-plane persistence.
 
 It stores durable state for Sealant's two core product domains:
 
@@ -107,8 +107,7 @@ while migration to the `oci_image_build_jobs` table name is completed.
 
 ## Environment
 
-- `DATABASE_FILE_PATH` (default: `packages/db/.data/sealant-control-plane.sqlite`)
-- `DATABASE_BUSY_TIMEOUT_MS` (default: `5000`)
+- `DATABASE_URL` (default: `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane`)
 
 ## Scripts
 
@@ -116,3 +115,10 @@ while migration to the `oci_image_build_jobs` table name is completed.
 - `pnpm --filter @sealant/db db:migrate`
 - `pnpm --filter @sealant/db lint`
 - `pnpm --filter @sealant/db typecheck`
+
+## Related docs
+
+- [db-effect-service-layer.md](./db-effect-service-layer.md) - step-by-step walkthrough of the
+  Effect service tag and live integration layer used for DB runtime composition.
+- [db-effect-postgres-follow-up-plan.md](./db-effect-postgres-follow-up-plan.md) - incremental plan
+  to migrate DB runtime wiring to Drizzle `connect-effect-postgres`.
