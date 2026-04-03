@@ -1,7 +1,6 @@
 # Initial UI/UX Flow Analysis (apps/web)
 
-Date: 2026-04-01
-Author: OpenCode (Playwright pass on localhost:3000)
+Date: 2026-04-01 Author: OpenCode (Playwright pass on localhost:3000)
 
 ## Scope
 
@@ -34,8 +33,8 @@ Author: OpenCode (Playwright pass on localhost:3000)
 
 ## 1) Flow Integrity
 
-- Repository sandbox links can route to non-existent entities (`/sandboxes/run-1042`), causing a
-  raw error boundary instead of a guided recovery.
+- Repository sandbox links can route to non-existent entities (`/sandboxes/run-1042`), causing a raw
+  error boundary instead of a guided recovery.
 - `View Spec` button in sandbox detail toggles active state but does not navigate; side-nav `Spec`
   link does navigate.
 - Search input appears present but non-functional in tested scenarios (no observable result state).
