@@ -17,16 +17,11 @@ export class DatabaseServiceConfig extends Context.Tag("@sealant/db/DatabaseServ
 
 /**
  * Runtime DB service contract used by Effect-based composition.
- *
- * Exposes both the raw client and typed Drizzle instance so existing repositories can keep their
- * current APIs while adopting service boundaries.
  */
 export class DatabaseServiceTag extends Context.Tag("@sealant/db/DatabaseService")<
   DatabaseServiceTag,
   {
-    readonly client: DatabaseClient;
     readonly db: SealantDatabase;
-    readonly close: () => Promise<void>;
   }
 >() {}
 
@@ -38,24 +33,36 @@ const toClientOptions = (env: DatabaseEnv): DatabaseClientOptions => {
   };
 };
 
-/** Live DB service implementation backed by `createDatabaseClient`. */
-export const databaseServiceLiveLayer = Layer.effect(
-  DatabaseServiceTag,
-  Effect.gen(function* () {
-    const options = yield* DatabaseServiceConfig;
-    const client = yield* Effect.promise(() => createDatabaseClient(options));
+const makeDatabaseClientResource = Effect.gen(function* () {
+  const options = yield* DatabaseServiceConfig;
 
-    return {
-      client,
-      db: client.db,
-      close: () => closeDatabaseClient(client),
-    };
-  }),
+  return yield* Effect.promise(() => createDatabaseClient(options));
+});
+
+const releaseDatabaseClientResource = (client: DatabaseClient) => {
+  return Effect.promise(() => closeDatabaseClient(client));
+};
+
+/** Live DB service integration layer with managed Postgres pool lifecycle. */
+export const databaseServiceLiveLayer = Layer.scoped(
+  DatabaseServiceTag,
+  Effect.acquireRelease(makeDatabaseClientResource, releaseDatabaseClientResource).pipe(
+    Effect.map((client): DatabaseService => {
+      return {
+        db: client.db,
+      };
+    }),
+  ),
 );
+
+/** Builds a DB config layer from explicit client options. */
+export const databaseServiceConfigLayer = (options: DatabaseClientOptions) => {
+  return Layer.succeed(DatabaseServiceConfig, options);
+};
 
 /** Builds a live DB service layer from explicit client options. */
 export const databaseServiceLayer = (options: DatabaseClientOptions) => {
-  const configLayer = Layer.succeed(DatabaseServiceConfig, options);
+  const configLayer = databaseServiceConfigLayer(options);
 
   return databaseServiceLiveLayer.pipe(Layer.provide(configLayer));
 };
@@ -65,18 +72,5 @@ export const databaseServiceFromEnvLayer = (env: DatabaseEnv = databaseEnv) => {
   return databaseServiceLayer(toClientOptions(env));
 };
 
-/** Materializes the DB service contract from explicit options. */
-export const createDatabaseService = async (
-  options: DatabaseClientOptions,
-): Promise<DatabaseService> => {
-  return Effect.runPromise(DatabaseServiceTag.pipe(Effect.provide(databaseServiceLayer(options))));
-};
-
-/** Materializes the DB service contract from runtime environment values. */
-export const createDatabaseServiceFromEnv = async (
-  env: DatabaseEnv = databaseEnv,
-): Promise<DatabaseService> => {
-  return Effect.runPromise(
-    DatabaseServiceTag.pipe(Effect.provide(databaseServiceFromEnvLayer(env))),
-  );
-};
+/** Accessor effect for the typed Drizzle DB instance from service context. */
+export const database = Effect.map(DatabaseServiceTag, (service) => service.db);

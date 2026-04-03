@@ -6,8 +6,8 @@ export {
 } from "./client.js";
 
 export {
-  createDatabaseService,
-  createDatabaseServiceFromEnv,
+  database,
+  databaseServiceConfigLayer,
   databaseServiceFromEnvLayer,
   databaseServiceLayer,
   databaseServiceLiveLayer,
