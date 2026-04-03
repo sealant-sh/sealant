@@ -115,3 +115,8 @@ while migration to the `oci_image_build_jobs` table name is completed.
 - `pnpm --filter @sealant/db db:migrate`
 - `pnpm --filter @sealant/db lint`
 - `pnpm --filter @sealant/db typecheck`
+
+## Related docs
+
+- [db-effect-service-layer.md](./db-effect-service-layer.md) - step-by-step walkthrough of the
+  Effect service tag and live integration layer used for DB runtime composition.
