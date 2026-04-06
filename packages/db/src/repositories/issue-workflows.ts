@@ -1,6 +1,7 @@
 import { asc, desc, eq } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   issuePullRequestLinks,
   issues,
@@ -104,234 +105,388 @@ export interface IssueWorkflowExecutionPullRequestRecord {
   readonly pullRequest: PullRequest;
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
+/** @deprecated Use IssueWorkflowRepo + IssueWorkflowRepoLive instead. */
+export const createIssueWorkflowRepository = (): never => {
+  throw new Error("createIssueWorkflowRepository is disabled during the Effect transition.");
+};
+
+/** @deprecated Use IssueWorkflowRepoService instead. */
+export type IssueWorkflowRepository = IssueWorkflowRepoService;
+
+const issueWorkflowRepoOperationSchema = Schema.Literal(
+  "createIssueWorkflow",
+  "createIssueWorkflowExecution",
+  "linkExecutionPullRequest",
+  "linkIssuePullRequest",
+  "listExecutionPullRequests",
+  "listIssueWorkflows",
+  "listWorkflowExecutions",
+  "upsertIssue",
+  "upsertPullRequest",
+);
+
+export class IssueWorkflowRepoInvariantError extends Schema.TaggedError<IssueWorkflowRepoInvariantError>(
+  "IssueWorkflowRepoInvariantError",
+)("IssueWorkflowRepoInvariantError", {
+  operation: issueWorkflowRepoOperationSchema,
+  message: Schema.String,
+}) {}
+
+export class IssueWorkflowRepoUnexpectedError extends Schema.TaggedError<IssueWorkflowRepoUnexpectedError>(
+  "IssueWorkflowRepoUnexpectedError",
+)("IssueWorkflowRepoUnexpectedError", {
+  operation: issueWorkflowRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+export const issueWorkflowRepoErrorSchema = Schema.Union(
+  IssueWorkflowRepoInvariantError,
+  IssueWorkflowRepoUnexpectedError,
+);
+
+export type IssueWorkflowRepoError = typeof issueWorkflowRepoErrorSchema.Type;
+
+type IssueWorkflowRepoOperation = typeof issueWorkflowRepoOperationSchema.Type;
+
+const mapIssueWorkflowRepoError = (
+  operation: IssueWorkflowRepoOperation,
+  cause: unknown,
+): IssueWorkflowRepoError => {
+  if (
+    cause instanceof IssueWorkflowRepoInvariantError ||
+    cause instanceof IssueWorkflowRepoUnexpectedError
+  ) {
+    return cause;
   }
 
-  return row;
+  return new IssueWorkflowRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
 };
 
-export const createIssueWorkflowRepository = (client: DatabaseClient) => {
-  const { db } = client;
+const withIssueWorkflowRepoError = <A>(
+  operation: IssueWorkflowRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, IssueWorkflowRepoError> => {
+  return effect.pipe(Effect.mapError((cause) => mapIssueWorkflowRepoError(operation, cause)));
+};
 
-  const upsertIssue = async (input: UpsertIssueInput): Promise<Issue> => {
-    const [issue] = await db
-      .insert(issues)
-      .values({
-        id: input.id,
-        repositoryId: input.repositoryId,
-        ...(input.provider === undefined ? {} : { provider: input.provider }),
-        ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-        number: input.number,
-        title: input.title,
-        ...(input.state === undefined ? {} : { state: input.state }),
-        ...(input.url === undefined ? {} : { url: input.url }),
-        ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
-        ...(input.assigneeUserId === undefined ? {} : { assigneeUserId: input.assigneeUserId }),
-        ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
-        ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
-        ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
-      } satisfies NewIssue)
-      .onConflictDoUpdate({
-        target: [issues.provider, issues.repositoryId, issues.number],
-        set: {
-          ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-          title: input.title,
-          ...(input.state === undefined ? {} : { state: input.state }),
-          ...(input.url === undefined ? {} : { url: input.url }),
-          ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
-          ...(input.assigneeUserId === undefined ? {} : { assigneeUserId: input.assigneeUserId }),
-          ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
-          ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
-          ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
-        },
-      })
-      .returning();
-
-    return assertInserted(issue, "Failed to upsert issue.");
-  };
-
-  const upsertPullRequest = async (input: UpsertPullRequestInput): Promise<PullRequest> => {
-    const [pullRequest] = await db
-      .insert(pullRequests)
-      .values({
-        id: input.id,
-        repositoryId: input.repositoryId,
-        ...(input.provider === undefined ? {} : { provider: input.provider }),
-        ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-        number: input.number,
-        title: input.title,
-        ...(input.state === undefined ? {} : { state: input.state }),
-        headBranch: input.headBranch,
-        baseBranch: input.baseBranch,
-        ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
-        ...(input.url === undefined ? {} : { url: input.url }),
-        ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
-        ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
-        ...(input.mergedAt === undefined ? {} : { mergedAt: input.mergedAt }),
-        ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
-        ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
-      } satisfies NewPullRequest)
-      .onConflictDoUpdate({
-        target: [pullRequests.provider, pullRequests.repositoryId, pullRequests.number],
-        set: {
-          ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-          title: input.title,
-          ...(input.state === undefined ? {} : { state: input.state }),
-          headBranch: input.headBranch,
-          baseBranch: input.baseBranch,
-          ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
-          ...(input.url === undefined ? {} : { url: input.url }),
-          ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
-          ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
-          ...(input.mergedAt === undefined ? {} : { mergedAt: input.mergedAt }),
-          ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
-          ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
-        },
-      })
-      .returning();
-
-    return assertInserted(pullRequest, "Failed to upsert pull request.");
-  };
-
-  const createIssueWorkflow = async (input: CreateIssueWorkflowInput): Promise<IssueWorkflow> => {
-    const [workflow] = await db
-      .insert(issueWorkflows)
-      .values({
-        id: input.id,
-        issueId: input.issueId,
-        repositoryId: input.repositoryId,
-        ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
-        ...(input.requestedByUserId === undefined
-          ? {}
-          : { requestedByUserId: input.requestedByUserId }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-      } satisfies NewIssueWorkflow)
-      .returning();
-
-    return assertInserted(workflow, "Failed to create issue workflow.");
-  };
-
-  const createIssueWorkflowExecution = async (
+export interface IssueWorkflowRepoService {
+  readonly upsertIssue: (input: UpsertIssueInput) => Effect.Effect<Issue, IssueWorkflowRepoError>;
+  readonly upsertPullRequest: (
+    input: UpsertPullRequestInput,
+  ) => Effect.Effect<PullRequest, IssueWorkflowRepoError>;
+  readonly createIssueWorkflow: (
+    input: CreateIssueWorkflowInput,
+  ) => Effect.Effect<IssueWorkflow, IssueWorkflowRepoError>;
+  readonly createIssueWorkflowExecution: (
     input: CreateIssueWorkflowExecutionInput,
-  ): Promise<IssueWorkflowExecution> => {
-    const [execution] = await db
-      .insert(issueWorkflowExecutions)
-      .values({
-        id: input.id,
-        issueWorkflowId: input.issueWorkflowId,
-        ...(input.sandboxId === undefined ? {} : { sandboxId: input.sandboxId }),
-        ...(input.sandboxAttemptId === undefined
-          ? {}
-          : { sandboxAttemptId: input.sandboxAttemptId }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
-        ...(input.requestedByUserId === undefined
-          ? {}
-          : { requestedByUserId: input.requestedByUserId }),
-        ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
-      } satisfies NewIssueWorkflowExecution)
-      .returning();
-
-    return assertInserted(execution, "Failed to create issue workflow execution.");
-  };
-
-  const linkExecutionPullRequest = async (
+  ) => Effect.Effect<IssueWorkflowExecution, IssueWorkflowRepoError>;
+  readonly linkExecutionPullRequest: (
     input: LinkIssueWorkflowExecutionPullRequestInput,
-  ): Promise<IssueWorkflowExecutionPullRequestLink> => {
-    const [link] = await db
-      .insert(issueWorkflowExecutionPullRequestLinks)
-      .values({
-        executionId: input.executionId,
-        pullRequestId: input.pullRequestId,
-        ...(input.relation === undefined ? {} : { relation: input.relation }),
-        ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-      } satisfies NewIssueWorkflowExecutionPullRequestLink)
-      .onConflictDoUpdate({
-        target: [
-          issueWorkflowExecutionPullRequestLinks.executionId,
-          issueWorkflowExecutionPullRequestLinks.pullRequestId,
-        ],
-        set: {
-          ...(input.relation === undefined ? {} : { relation: input.relation }),
-          ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-        },
-      })
-      .returning();
-
-    return assertInserted(link, "Failed to link issue workflow execution and pull request.");
-  };
-
-  const linkIssuePullRequest = async (
+  ) => Effect.Effect<IssueWorkflowExecutionPullRequestLink, IssueWorkflowRepoError>;
+  readonly linkIssuePullRequest: (
     input: LinkIssuePullRequestInput,
-  ): Promise<IssuePullRequestLink> => {
-    const [link] = await db
-      .insert(issuePullRequestLinks)
-      .values({
-        issueId: input.issueId,
-        pullRequestId: input.pullRequestId,
-        ...(input.relation === undefined ? {} : { relation: input.relation }),
-        ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-      } satisfies NewIssuePullRequestLink)
-      .onConflictDoUpdate({
-        target: [issuePullRequestLinks.issueId, issuePullRequestLinks.pullRequestId],
-        set: {
-          ...(input.relation === undefined ? {} : { relation: input.relation }),
-          ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-        },
-      })
-      .returning();
-
-    return assertInserted(link, "Failed to link issue and pull request.");
-  };
-
-  const listIssueWorkflows = async (issueId: string): Promise<readonly IssueWorkflow[]> => {
-    return db
-      .select()
-      .from(issueWorkflows)
-      .where(eq(issueWorkflows.issueId, issueId))
-      .orderBy(desc(issueWorkflows.createdAt));
-  };
-
-  const listWorkflowExecutions = async (
+  ) => Effect.Effect<IssuePullRequestLink, IssueWorkflowRepoError>;
+  readonly listIssueWorkflows: (
+    issueId: string,
+  ) => Effect.Effect<readonly IssueWorkflow[], IssueWorkflowRepoError>;
+  readonly listWorkflowExecutions: (
     issueWorkflowId: string,
-  ): Promise<readonly IssueWorkflowExecution[]> => {
-    return db
-      .select()
-      .from(issueWorkflowExecutions)
-      .where(eq(issueWorkflowExecutions.issueWorkflowId, issueWorkflowId))
-      .orderBy(desc(issueWorkflowExecutions.createdAt));
-  };
-
-  const listExecutionPullRequests = async (
+  ) => Effect.Effect<readonly IssueWorkflowExecution[], IssueWorkflowRepoError>;
+  readonly listExecutionPullRequests: (
     executionId: string,
-  ): Promise<readonly IssueWorkflowExecutionPullRequestRecord[]> => {
-    return db
-      .select({
-        link: issueWorkflowExecutionPullRequestLinks,
-        pullRequest: pullRequests,
-      })
-      .from(issueWorkflowExecutionPullRequestLinks)
-      .innerJoin(
-        pullRequests,
-        eq(pullRequests.id, issueWorkflowExecutionPullRequestLinks.pullRequestId),
-      )
-      .where(eq(issueWorkflowExecutionPullRequestLinks.executionId, executionId))
-      .orderBy(desc(issueWorkflowExecutionPullRequestLinks.linkedAt), asc(pullRequests.number));
-  };
+  ) => Effect.Effect<readonly IssueWorkflowExecutionPullRequestRecord[], IssueWorkflowRepoError>;
+}
 
-  return {
-    createIssueWorkflow,
-    createIssueWorkflowExecution,
-    linkExecutionPullRequest,
-    linkIssuePullRequest,
-    listExecutionPullRequests,
-    listIssueWorkflows,
-    listWorkflowExecutions,
-    upsertIssue,
-    upsertPullRequest,
-  };
-};
+export class IssueWorkflowRepo extends Context.Tag("IssueWorkflowRepo")<
+  IssueWorkflowRepo,
+  IssueWorkflowRepoService
+>() {}
 
-export type IssueWorkflowRepository = ReturnType<typeof createIssueWorkflowRepository>;
+export const IssueWorkflowRepoLive = Layer.effect(
+  IssueWorkflowRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+
+    return {
+      upsertIssue: (input) =>
+        withIssueWorkflowRepoError(
+          "upsertIssue",
+          Effect.gen(function* () {
+            const [issue] = yield* db
+              .insert(issues)
+              .values({
+                id: input.id,
+                repositoryId: input.repositoryId,
+                ...(input.provider === undefined ? {} : { provider: input.provider }),
+                ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                number: input.number,
+                title: input.title,
+                ...(input.state === undefined ? {} : { state: input.state }),
+                ...(input.url === undefined ? {} : { url: input.url }),
+                ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
+                ...(input.assigneeUserId === undefined
+                  ? {}
+                  : { assigneeUserId: input.assigneeUserId }),
+                ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
+                ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
+                ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
+              } satisfies NewIssue)
+              .onConflictDoUpdate({
+                target: [issues.provider, issues.repositoryId, issues.number],
+                set: {
+                  ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                  title: input.title,
+                  ...(input.state === undefined ? {} : { state: input.state }),
+                  ...(input.url === undefined ? {} : { url: input.url }),
+                  ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
+                  ...(input.assigneeUserId === undefined
+                    ? {}
+                    : { assigneeUserId: input.assigneeUserId }),
+                  ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
+                  ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
+                  ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
+                },
+              })
+              .returning();
+
+            if (issue === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "upsertIssue",
+                message: "Failed to upsert issue.",
+              });
+            }
+
+            return issue;
+          }),
+        ),
+
+      upsertPullRequest: (input) =>
+        withIssueWorkflowRepoError(
+          "upsertPullRequest",
+          Effect.gen(function* () {
+            const [pullRequest] = yield* db
+              .insert(pullRequests)
+              .values({
+                id: input.id,
+                repositoryId: input.repositoryId,
+                ...(input.provider === undefined ? {} : { provider: input.provider }),
+                ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                number: input.number,
+                title: input.title,
+                ...(input.state === undefined ? {} : { state: input.state }),
+                headBranch: input.headBranch,
+                baseBranch: input.baseBranch,
+                ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
+                ...(input.url === undefined ? {} : { url: input.url }),
+                ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
+                ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
+                ...(input.mergedAt === undefined ? {} : { mergedAt: input.mergedAt }),
+                ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
+                ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
+              } satisfies NewPullRequest)
+              .onConflictDoUpdate({
+                target: [pullRequests.provider, pullRequests.repositoryId, pullRequests.number],
+                set: {
+                  ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                  title: input.title,
+                  ...(input.state === undefined ? {} : { state: input.state }),
+                  headBranch: input.headBranch,
+                  baseBranch: input.baseBranch,
+                  ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
+                  ...(input.url === undefined ? {} : { url: input.url }),
+                  ...(input.authorUserId === undefined ? {} : { authorUserId: input.authorUserId }),
+                  ...(input.openedAt === undefined ? {} : { openedAt: input.openedAt }),
+                  ...(input.mergedAt === undefined ? {} : { mergedAt: input.mergedAt }),
+                  ...(input.closedAt === undefined ? {} : { closedAt: input.closedAt }),
+                  ...(input.syncedAt === undefined ? {} : { syncedAt: input.syncedAt }),
+                },
+              })
+              .returning();
+
+            if (pullRequest === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "upsertPullRequest",
+                message: "Failed to upsert pull request.",
+              });
+            }
+
+            return pullRequest;
+          }),
+        ),
+
+      createIssueWorkflow: (input) =>
+        withIssueWorkflowRepoError(
+          "createIssueWorkflow",
+          Effect.gen(function* () {
+            const [workflow] = yield* db
+              .insert(issueWorkflows)
+              .values({
+                id: input.id,
+                issueId: input.issueId,
+                repositoryId: input.repositoryId,
+                ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
+                ...(input.requestedByUserId === undefined
+                  ? {}
+                  : { requestedByUserId: input.requestedByUserId }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+              } satisfies NewIssueWorkflow)
+              .returning();
+
+            if (workflow === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "createIssueWorkflow",
+                message: "Failed to create issue workflow.",
+              });
+            }
+
+            return workflow;
+          }),
+        ),
+
+      createIssueWorkflowExecution: (input) =>
+        withIssueWorkflowRepoError(
+          "createIssueWorkflowExecution",
+          Effect.gen(function* () {
+            const [execution] = yield* db
+              .insert(issueWorkflowExecutions)
+              .values({
+                id: input.id,
+                issueWorkflowId: input.issueWorkflowId,
+                ...(input.sandboxId === undefined ? {} : { sandboxId: input.sandboxId }),
+                ...(input.sandboxAttemptId === undefined
+                  ? {}
+                  : { sandboxAttemptId: input.sandboxAttemptId }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+                ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
+                ...(input.requestedByUserId === undefined
+                  ? {}
+                  : { requestedByUserId: input.requestedByUserId }),
+                ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
+              } satisfies NewIssueWorkflowExecution)
+              .returning();
+
+            if (execution === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "createIssueWorkflowExecution",
+                message: "Failed to create issue workflow execution.",
+              });
+            }
+
+            return execution;
+          }),
+        ),
+
+      linkExecutionPullRequest: (input) =>
+        withIssueWorkflowRepoError(
+          "linkExecutionPullRequest",
+          Effect.gen(function* () {
+            const [link] = yield* db
+              .insert(issueWorkflowExecutionPullRequestLinks)
+              .values({
+                executionId: input.executionId,
+                pullRequestId: input.pullRequestId,
+                ...(input.relation === undefined ? {} : { relation: input.relation }),
+                ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
+              } satisfies NewIssueWorkflowExecutionPullRequestLink)
+              .onConflictDoUpdate({
+                target: [
+                  issueWorkflowExecutionPullRequestLinks.executionId,
+                  issueWorkflowExecutionPullRequestLinks.pullRequestId,
+                ],
+                set: {
+                  ...(input.relation === undefined ? {} : { relation: input.relation }),
+                  ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
+                },
+              })
+              .returning();
+
+            if (link === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "linkExecutionPullRequest",
+                message: "Failed to link issue workflow execution and pull request.",
+              });
+            }
+
+            return link;
+          }),
+        ),
+
+      linkIssuePullRequest: (input) =>
+        withIssueWorkflowRepoError(
+          "linkIssuePullRequest",
+          Effect.gen(function* () {
+            const [link] = yield* db
+              .insert(issuePullRequestLinks)
+              .values({
+                issueId: input.issueId,
+                pullRequestId: input.pullRequestId,
+                ...(input.relation === undefined ? {} : { relation: input.relation }),
+                ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
+              } satisfies NewIssuePullRequestLink)
+              .onConflictDoUpdate({
+                target: [issuePullRequestLinks.issueId, issuePullRequestLinks.pullRequestId],
+                set: {
+                  ...(input.relation === undefined ? {} : { relation: input.relation }),
+                  ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
+                },
+              })
+              .returning();
+
+            if (link === undefined) {
+              return yield* new IssueWorkflowRepoInvariantError({
+                operation: "linkIssuePullRequest",
+                message: "Failed to link issue and pull request.",
+              });
+            }
+
+            return link;
+          }),
+        ),
+
+      listIssueWorkflows: (issueId) =>
+        withIssueWorkflowRepoError(
+          "listIssueWorkflows",
+          db
+            .select()
+            .from(issueWorkflows)
+            .where(eq(issueWorkflows.issueId, issueId))
+            .orderBy(desc(issueWorkflows.createdAt)),
+        ),
+
+      listWorkflowExecutions: (issueWorkflowId) =>
+        withIssueWorkflowRepoError(
+          "listWorkflowExecutions",
+          db
+            .select()
+            .from(issueWorkflowExecutions)
+            .where(eq(issueWorkflowExecutions.issueWorkflowId, issueWorkflowId))
+            .orderBy(desc(issueWorkflowExecutions.createdAt)),
+        ),
+
+      listExecutionPullRequests: (executionId) =>
+        withIssueWorkflowRepoError(
+          "listExecutionPullRequests",
+          db
+            .select({
+              link: issueWorkflowExecutionPullRequestLinks,
+              pullRequest: pullRequests,
+            })
+            .from(issueWorkflowExecutionPullRequestLinks)
+            .innerJoin(
+              pullRequests,
+              eq(pullRequests.id, issueWorkflowExecutionPullRequestLinks.pullRequestId),
+            )
+            .where(eq(issueWorkflowExecutionPullRequestLinks.executionId, executionId))
+            .orderBy(
+              desc(issueWorkflowExecutionPullRequestLinks.linkedAt),
+              asc(pullRequests.number),
+            ),
+        ),
+    } satisfies IssueWorkflowRepoService;
+  }),
+);

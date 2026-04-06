@@ -1,6 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   repositories,
   repositoryProfileProfileLinks,
@@ -77,308 +78,450 @@ export interface RepositoryProfileRevisionBundle {
   readonly profileLinks: readonly RepositoryProfileProfileLink[];
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
-  }
-
-  return row;
+/** @deprecated Use RepositoryProfileRepo + RepositoryProfileRepoLive instead. */
+export const createRepositoryProfileRepository = (): never => {
+  throw new Error("createRepositoryProfileRepository is disabled during the Effect transition.");
 };
 
-export const createRepositoryProfileRepository = (client: DatabaseClient) => {
-  const { db } = client;
+/** @deprecated Use RepositoryProfileRepoService instead. */
+export type RepositoryProfileRepository = RepositoryProfileRepoService;
 
-  const upsertRepository = async (input: UpsertRepositoryInput): Promise<Repository> => {
-    const [repository] = await db
-      .insert(repositories)
-      .values({
-        id: input.id,
-        ...(input.provider === undefined ? {} : { provider: input.provider }),
-        ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-        owner: input.owner,
-        name: input.name,
-        ...(input.defaultBranch === undefined ? {} : { defaultBranch: input.defaultBranch }),
-        ...(input.url === undefined ? {} : { url: input.url }),
-        ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
-        ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-      } satisfies NewRepository)
-      .onConflictDoUpdate({
-        target: repositories.id,
-        set: {
-          ...(input.provider === undefined ? {} : { provider: input.provider }),
-          ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
-          owner: input.owner,
-          name: input.name,
-          ...(input.defaultBranch === undefined ? {} : { defaultBranch: input.defaultBranch }),
-          ...(input.url === undefined ? {} : { url: input.url }),
-          ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
-          ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-        },
-      })
-      .returning();
+const repositoryProfileRepoOperationSchema = Schema.Literal(
+  "createRepositoryProfile",
+  "createRepositoryProfileRevision",
+  "getRepositoryById",
+  "getRepositoryByProviderExternalId",
+  "getRepositoryByProviderOwnerName",
+  "getRepositoryProfileRevisionBundle",
+  "listRepositoryProfiles",
+  "replaceRepositoryProfileLinks",
+  "setActiveRepositoryProfileRevision",
+  "upsertRepository",
+);
 
-    return assertInserted(repository, "Failed to upsert repository.");
-  };
+export class RepositoryProfileRepoInvariantError extends Schema.TaggedError<RepositoryProfileRepoInvariantError>(
+  "RepositoryProfileRepoInvariantError",
+)("RepositoryProfileRepoInvariantError", {
+  operation: repositoryProfileRepoOperationSchema,
+  message: Schema.String,
+}) {}
 
-  const getRepositoryById = async (id: string): Promise<Repository | undefined> => {
-    const [repository] = await db
-      .select()
-      .from(repositories)
-      .where(eq(repositories.id, id))
-      .limit(1);
-    return repository;
-  };
+export class RepositoryProfileRepoUnexpectedError extends Schema.TaggedError<RepositoryProfileRepoUnexpectedError>(
+  "RepositoryProfileRepoUnexpectedError",
+)("RepositoryProfileRepoUnexpectedError", {
+  operation: repositoryProfileRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
 
-  const getRepositoryByProviderExternalId = async (input: {
+export const repositoryProfileRepoErrorSchema = Schema.Union(
+  RepositoryProfileRepoInvariantError,
+  RepositoryProfileRepoUnexpectedError,
+);
+
+export type RepositoryProfileRepoError = typeof repositoryProfileRepoErrorSchema.Type;
+
+type RepositoryProfileRepoOperation = typeof repositoryProfileRepoOperationSchema.Type;
+
+const mapRepositoryProfileRepoError = (
+  operation: RepositoryProfileRepoOperation,
+  cause: unknown,
+): RepositoryProfileRepoError => {
+  if (
+    cause instanceof RepositoryProfileRepoInvariantError ||
+    cause instanceof RepositoryProfileRepoUnexpectedError
+  ) {
+    return cause;
+  }
+
+  return new RepositoryProfileRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
+};
+
+const withRepositoryProfileRepoError = <A>(
+  operation: RepositoryProfileRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, RepositoryProfileRepoError> => {
+  return effect.pipe(Effect.mapError((cause) => mapRepositoryProfileRepoError(operation, cause)));
+};
+
+export interface RepositoryProfileRepoService {
+  readonly upsertRepository: (
+    input: UpsertRepositoryInput,
+  ) => Effect.Effect<Repository, RepositoryProfileRepoError>;
+  readonly getRepositoryById: (
+    id: string,
+  ) => Effect.Effect<Repository | undefined, RepositoryProfileRepoError>;
+  readonly getRepositoryByProviderExternalId: (input: {
     readonly provider: SourceProvider;
     readonly externalId: string;
-  }): Promise<Repository | undefined> => {
-    const [repository] = await db
-      .select()
-      .from(repositories)
-      .where(
-        and(
-          eq(repositories.provider, input.provider),
-          eq(repositories.externalId, input.externalId),
-        ),
-      )
-      .limit(1);
-
-    return repository;
-  };
-
-  const getRepositoryByProviderOwnerName = async (input: {
+  }) => Effect.Effect<Repository | undefined, RepositoryProfileRepoError>;
+  readonly getRepositoryByProviderOwnerName: (input: {
     readonly provider: SourceProvider;
     readonly owner: string;
     readonly name: string;
-  }): Promise<Repository | undefined> => {
-    const [repository] = await db
-      .select()
-      .from(repositories)
-      .where(
-        and(
-          eq(repositories.provider, input.provider),
-          eq(repositories.owner, input.owner),
-          eq(repositories.name, input.name),
-        ),
-      )
-      .limit(1);
-
-    return repository;
-  };
-
-  const createRepositoryProfile = async (
+  }) => Effect.Effect<Repository | undefined, RepositoryProfileRepoError>;
+  readonly createRepositoryProfile: (
     input: CreateRepositoryProfileInput,
-  ): Promise<RepositoryProfile> => {
-    const [profile] = await db
-      .insert(repositoryProfiles)
-      .values({
-        id: input.id,
-        repositoryId: input.repositoryId,
-        name: input.name,
-        ...(input.description === undefined ? {} : { description: input.description }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-      } satisfies NewRepositoryProfile)
-      .returning();
-
-    return assertInserted(profile, "Failed to create repository profile.");
-  };
-
-  const listRepositoryProfiles = async (
+  ) => Effect.Effect<RepositoryProfile, RepositoryProfileRepoError>;
+  readonly listRepositoryProfiles: (
     input: ListRepositoryProfilesInput,
-  ): Promise<readonly RepositoryProfile[]> => {
-    const limit = input.limit ?? 100;
-
-    if (input.status === undefined) {
-      return db
-        .select()
-        .from(repositoryProfiles)
-        .where(eq(repositoryProfiles.repositoryId, input.repositoryId))
-        .orderBy(asc(repositoryProfiles.createdAt))
-        .limit(limit);
-    }
-
-    return db
-      .select()
-      .from(repositoryProfiles)
-      .where(
-        and(
-          eq(repositoryProfiles.repositoryId, input.repositoryId),
-          eq(repositoryProfiles.status, input.status),
-        ),
-      )
-      .orderBy(asc(repositoryProfiles.createdAt))
-      .limit(limit);
-  };
-
-  const setActiveRepositoryProfileRevision = async (
+  ) => Effect.Effect<readonly RepositoryProfile[], RepositoryProfileRepoError>;
+  readonly setActiveRepositoryProfileRevision: (
     input: SetActiveRepositoryProfileRevisionInput,
-  ): Promise<RepositoryProfile | null> => {
-    return db.transaction(async (tx: DatabaseClient["db"]) => {
-      const [revision] = await tx
-        .select({ id: repositoryProfileRevisions.id })
-        .from(repositoryProfileRevisions)
-        .where(
-          and(
-            eq(repositoryProfileRevisions.id, input.revisionId),
-            eq(repositoryProfileRevisions.repositoryProfileId, input.repositoryProfileId),
-          ),
-        )
-        .limit(1);
-
-      if (revision === undefined) {
-        return null;
-      }
-
-      const [updated] = await tx
-        .update(repositoryProfiles)
-        .set({ activeRevisionId: input.revisionId })
-        .where(eq(repositoryProfiles.id, input.repositoryProfileId))
-        .returning();
-
-      return updated ?? null;
-    });
-  };
-
-  const createRepositoryProfileRevision = async (
+  ) => Effect.Effect<RepositoryProfile | null, RepositoryProfileRepoError>;
+  readonly createRepositoryProfileRevision: (
     input: CreateRepositoryProfileRevisionInput,
-  ): Promise<RepositoryProfileRevision> => {
-    return db.transaction(async (tx: DatabaseClient["db"]) => {
-      const [profile] = await tx
-        .select({ id: repositoryProfiles.id })
-        .from(repositoryProfiles)
-        .where(eq(repositoryProfiles.id, input.repositoryProfileId))
-        .limit(1);
-
-      if (profile === undefined) {
-        throw new Error(`Repository profile not found: ${input.repositoryProfileId}`);
-      }
-
-      const [versionRow] = await tx
-        .select({
-          maxVersion: sql<number>`coalesce(max(${repositoryProfileRevisions.version}), 0)`,
-        })
-        .from(repositoryProfileRevisions)
-        .where(eq(repositoryProfileRevisions.repositoryProfileId, input.repositoryProfileId));
-
-      const version = input.version ?? (versionRow?.maxVersion ?? 0) + 1;
-      const [revision] = await tx
-        .insert(repositoryProfileRevisions)
-        .values({
-          id: input.id,
-          repositoryProfileId: input.repositoryProfileId,
-          version,
-          ...(input.createdByUserId === undefined
-            ? {}
-            : { createdByUserId: input.createdByUserId }),
-          ...(input.changeSummary === undefined ? {} : { changeSummary: input.changeSummary }),
-          fingerprint: input.fingerprint,
-          runTemplate: input.runTemplate,
-          ...(input.policyConfig === undefined ? {} : { policyConfig: input.policyConfig }),
-        } satisfies NewRepositoryProfileRevision)
-        .returning();
-
-      const insertedRevision = assertInserted(
-        revision,
-        "Failed to create repository profile revision.",
-      );
-
-      if (input.setAsActive ?? true) {
-        await tx
-          .update(repositoryProfiles)
-          .set({ activeRevisionId: insertedRevision.id })
-          .where(eq(repositoryProfiles.id, input.repositoryProfileId));
-      }
-
-      return insertedRevision;
-    });
-  };
-
-  const replaceRepositoryProfileLinks = async (
+  ) => Effect.Effect<RepositoryProfileRevision, RepositoryProfileRepoError>;
+  readonly replaceRepositoryProfileLinks: (
     input: ReplaceRepositoryProfileLinksInput,
-  ): Promise<readonly RepositoryProfileProfileLink[]> => {
-    return db.transaction(async (tx: DatabaseClient["db"]) => {
-      await tx
-        .delete(repositoryProfileProfileLinks)
-        .where(
-          eq(
-            repositoryProfileProfileLinks.repositoryProfileRevisionId,
-            input.repositoryProfileRevisionId,
-          ),
-        );
-
-      if (input.links.length === 0) {
-        return [];
-      }
-
-      return tx
-        .insert(repositoryProfileProfileLinks)
-        .values(
-          input.links.map((link) => {
-            return {
-              id: link.id,
-              repositoryProfileRevisionId: input.repositoryProfileRevisionId,
-              profileRevisionId: link.profileRevisionId,
-              ...(link.precedence === undefined ? {} : { precedence: link.precedence }),
-              ...(link.isRequired === undefined ? {} : { isRequired: link.isRequired }),
-            } satisfies NewRepositoryProfileProfileLink;
-          }),
-        )
-        .returning();
-    });
-  };
-
-  const getRepositoryProfileRevisionBundle = async (
+  ) => Effect.Effect<readonly RepositoryProfileProfileLink[], RepositoryProfileRepoError>;
+  readonly getRepositoryProfileRevisionBundle: (
     revisionId: string,
-  ): Promise<RepositoryProfileRevisionBundle | null> => {
-    const [revision] = await db
-      .select()
-      .from(repositoryProfileRevisions)
-      .where(eq(repositoryProfileRevisions.id, revisionId))
-      .limit(1);
+  ) => Effect.Effect<RepositoryProfileRevisionBundle | null, RepositoryProfileRepoError>;
+}
 
-    if (revision === undefined) {
-      return null;
-    }
+export class RepositoryProfileRepo extends Context.Tag("RepositoryProfileRepo")<
+  RepositoryProfileRepo,
+  RepositoryProfileRepoService
+>() {}
 
-    const [repositoryProfile] = await db
-      .select()
-      .from(repositoryProfiles)
-      .where(eq(repositoryProfiles.id, revision.repositoryProfileId))
-      .limit(1);
-
-    if (repositoryProfile === undefined) {
-      return null;
-    }
-
-    const profileLinks = await db
-      .select()
-      .from(repositoryProfileProfileLinks)
-      .where(eq(repositoryProfileProfileLinks.repositoryProfileRevisionId, revision.id))
-      .orderBy(
-        asc(repositoryProfileProfileLinks.precedence),
-        asc(repositoryProfileProfileLinks.profileRevisionId),
-      );
+export const RepositoryProfileRepoLive = Layer.effect(
+  RepositoryProfileRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
 
     return {
-      repositoryProfile,
-      revision,
-      profileLinks,
-    };
-  };
+      upsertRepository: (input) =>
+        withRepositoryProfileRepoError(
+          "upsertRepository",
+          Effect.gen(function* () {
+            const [repository] = yield* db
+              .insert(repositories)
+              .values({
+                id: input.id,
+                ...(input.provider === undefined ? {} : { provider: input.provider }),
+                ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                owner: input.owner,
+                name: input.name,
+                ...(input.defaultBranch === undefined
+                  ? {}
+                  : { defaultBranch: input.defaultBranch }),
+                ...(input.url === undefined ? {} : { url: input.url }),
+                ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
+                ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+              } satisfies NewRepository)
+              .onConflictDoUpdate({
+                target: repositories.id,
+                set: {
+                  ...(input.provider === undefined ? {} : { provider: input.provider }),
+                  ...(input.externalId === undefined ? {} : { externalId: input.externalId }),
+                  owner: input.owner,
+                  name: input.name,
+                  ...(input.defaultBranch === undefined
+                    ? {}
+                    : { defaultBranch: input.defaultBranch }),
+                  ...(input.url === undefined ? {} : { url: input.url }),
+                  ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
+                  ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+                },
+              })
+              .returning();
 
-  return {
-    createRepositoryProfile,
-    createRepositoryProfileRevision,
-    getRepositoryById,
-    getRepositoryByProviderExternalId,
-    getRepositoryByProviderOwnerName,
-    getRepositoryProfileRevisionBundle,
-    listRepositoryProfiles,
-    replaceRepositoryProfileLinks,
-    setActiveRepositoryProfileRevision,
-    upsertRepository,
-  };
-};
+            if (repository === undefined) {
+              return yield* new RepositoryProfileRepoInvariantError({
+                operation: "upsertRepository",
+                message: "Failed to upsert repository.",
+              });
+            }
 
-export type RepositoryProfileRepository = ReturnType<typeof createRepositoryProfileRepository>;
+            return repository;
+          }),
+        ),
+
+      getRepositoryById: (id) =>
+        withRepositoryProfileRepoError(
+          "getRepositoryById",
+          Effect.gen(function* () {
+            const [repository] = yield* db
+              .select()
+              .from(repositories)
+              .where(eq(repositories.id, id))
+              .limit(1);
+
+            return repository;
+          }),
+        ),
+
+      getRepositoryByProviderExternalId: (input) =>
+        withRepositoryProfileRepoError(
+          "getRepositoryByProviderExternalId",
+          Effect.gen(function* () {
+            const [repository] = yield* db
+              .select()
+              .from(repositories)
+              .where(
+                and(
+                  eq(repositories.provider, input.provider),
+                  eq(repositories.externalId, input.externalId),
+                ),
+              )
+              .limit(1);
+
+            return repository;
+          }),
+        ),
+
+      getRepositoryByProviderOwnerName: (input) =>
+        withRepositoryProfileRepoError(
+          "getRepositoryByProviderOwnerName",
+          Effect.gen(function* () {
+            const [repository] = yield* db
+              .select()
+              .from(repositories)
+              .where(
+                and(
+                  eq(repositories.provider, input.provider),
+                  eq(repositories.owner, input.owner),
+                  eq(repositories.name, input.name),
+                ),
+              )
+              .limit(1);
+
+            return repository;
+          }),
+        ),
+
+      createRepositoryProfile: (input) =>
+        withRepositoryProfileRepoError(
+          "createRepositoryProfile",
+          Effect.gen(function* () {
+            const [profile] = yield* db
+              .insert(repositoryProfiles)
+              .values({
+                id: input.id,
+                repositoryId: input.repositoryId,
+                name: input.name,
+                ...(input.description === undefined ? {} : { description: input.description }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+              } satisfies NewRepositoryProfile)
+              .returning();
+
+            if (profile === undefined) {
+              return yield* new RepositoryProfileRepoInvariantError({
+                operation: "createRepositoryProfile",
+                message: "Failed to create repository profile.",
+              });
+            }
+
+            return profile;
+          }),
+        ),
+
+      listRepositoryProfiles: (input) =>
+        withRepositoryProfileRepoError(
+          "listRepositoryProfiles",
+          Effect.gen(function* () {
+            const limit = input.limit ?? 100;
+
+            if (input.status === undefined) {
+              return yield* db
+                .select()
+                .from(repositoryProfiles)
+                .where(eq(repositoryProfiles.repositoryId, input.repositoryId))
+                .orderBy(asc(repositoryProfiles.createdAt))
+                .limit(limit);
+            }
+
+            return yield* db
+              .select()
+              .from(repositoryProfiles)
+              .where(
+                and(
+                  eq(repositoryProfiles.repositoryId, input.repositoryId),
+                  eq(repositoryProfiles.status, input.status),
+                ),
+              )
+              .orderBy(asc(repositoryProfiles.createdAt))
+              .limit(limit);
+          }),
+        ),
+
+      setActiveRepositoryProfileRevision: (input) =>
+        withRepositoryProfileRepoError(
+          "setActiveRepositoryProfileRevision",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [revision] = yield* tx
+                .select({ id: repositoryProfileRevisions.id })
+                .from(repositoryProfileRevisions)
+                .where(
+                  and(
+                    eq(repositoryProfileRevisions.id, input.revisionId),
+                    eq(repositoryProfileRevisions.repositoryProfileId, input.repositoryProfileId),
+                  ),
+                )
+                .limit(1);
+
+              if (revision === undefined) {
+                return null;
+              }
+
+              const [updated] = yield* tx
+                .update(repositoryProfiles)
+                .set({ activeRevisionId: input.revisionId })
+                .where(eq(repositoryProfiles.id, input.repositoryProfileId))
+                .returning();
+
+              return updated ?? null;
+            }),
+          ),
+        ),
+
+      createRepositoryProfileRevision: (input) =>
+        withRepositoryProfileRepoError(
+          "createRepositoryProfileRevision",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [profile] = yield* tx
+                .select({ id: repositoryProfiles.id })
+                .from(repositoryProfiles)
+                .where(eq(repositoryProfiles.id, input.repositoryProfileId))
+                .limit(1);
+
+              if (profile === undefined) {
+                return yield* new RepositoryProfileRepoInvariantError({
+                  operation: "createRepositoryProfileRevision",
+                  message: `Repository profile not found: ${input.repositoryProfileId}`,
+                });
+              }
+
+              const [versionRow] = yield* tx
+                .select({
+                  maxVersion: sql<number>`coalesce(max(${repositoryProfileRevisions.version}), 0)`,
+                })
+                .from(repositoryProfileRevisions)
+                .where(
+                  eq(repositoryProfileRevisions.repositoryProfileId, input.repositoryProfileId),
+                );
+
+              const version = input.version ?? (versionRow?.maxVersion ?? 0) + 1;
+              const [revision] = yield* tx
+                .insert(repositoryProfileRevisions)
+                .values({
+                  id: input.id,
+                  repositoryProfileId: input.repositoryProfileId,
+                  version,
+                  ...(input.createdByUserId === undefined
+                    ? {}
+                    : { createdByUserId: input.createdByUserId }),
+                  ...(input.changeSummary === undefined
+                    ? {}
+                    : { changeSummary: input.changeSummary }),
+                  fingerprint: input.fingerprint,
+                  runTemplate: input.runTemplate,
+                  ...(input.policyConfig === undefined ? {} : { policyConfig: input.policyConfig }),
+                } satisfies NewRepositoryProfileRevision)
+                .returning();
+
+              if (revision === undefined) {
+                return yield* new RepositoryProfileRepoInvariantError({
+                  operation: "createRepositoryProfileRevision",
+                  message: "Failed to create repository profile revision.",
+                });
+              }
+
+              if (input.setAsActive ?? true) {
+                yield* tx
+                  .update(repositoryProfiles)
+                  .set({ activeRevisionId: revision.id })
+                  .where(eq(repositoryProfiles.id, input.repositoryProfileId));
+              }
+
+              return revision;
+            }),
+          ),
+        ),
+
+      replaceRepositoryProfileLinks: (input) =>
+        withRepositoryProfileRepoError(
+          "replaceRepositoryProfileLinks",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .delete(repositoryProfileProfileLinks)
+                .where(
+                  eq(
+                    repositoryProfileProfileLinks.repositoryProfileRevisionId,
+                    input.repositoryProfileRevisionId,
+                  ),
+                );
+
+              if (input.links.length === 0) {
+                return [];
+              }
+
+              return yield* tx
+                .insert(repositoryProfileProfileLinks)
+                .values(
+                  input.links.map((link) => {
+                    return {
+                      id: link.id,
+                      repositoryProfileRevisionId: input.repositoryProfileRevisionId,
+                      profileRevisionId: link.profileRevisionId,
+                      ...(link.precedence === undefined ? {} : { precedence: link.precedence }),
+                      ...(link.isRequired === undefined ? {} : { isRequired: link.isRequired }),
+                    } satisfies NewRepositoryProfileProfileLink;
+                  }),
+                )
+                .returning();
+            }),
+          ),
+        ),
+
+      getRepositoryProfileRevisionBundle: (revisionId) =>
+        withRepositoryProfileRepoError(
+          "getRepositoryProfileRevisionBundle",
+          Effect.gen(function* () {
+            const [revision] = yield* db
+              .select()
+              .from(repositoryProfileRevisions)
+              .where(eq(repositoryProfileRevisions.id, revisionId))
+              .limit(1);
+
+            if (revision === undefined) {
+              return null;
+            }
+
+            const [repositoryProfile] = yield* db
+              .select()
+              .from(repositoryProfiles)
+              .where(eq(repositoryProfiles.id, revision.repositoryProfileId))
+              .limit(1);
+
+            if (repositoryProfile === undefined) {
+              return null;
+            }
+
+            const profileLinks = yield* db
+              .select()
+              .from(repositoryProfileProfileLinks)
+              .where(eq(repositoryProfileProfileLinks.repositoryProfileRevisionId, revision.id))
+              .orderBy(
+                asc(repositoryProfileProfileLinks.precedence),
+                asc(repositoryProfileProfileLinks.profileRevisionId),
+              );
+
+            return {
+              repositoryProfile,
+              revision,
+              profileLinks,
+            };
+          }),
+        ),
+    } satisfies RepositoryProfileRepoService;
+  }),
+);

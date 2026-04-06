@@ -8,6 +8,7 @@ import * as schema from "./schema.js";
 
 //Define relations
 const relations = defineRelations(schema);
+
 // Build an Effect that, when run with required dependencies (PgClient + defaults),
 // creates a Drizzle DB instance typed with schema and relations.
 const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations });
@@ -25,9 +26,3 @@ export type TSealantDB = Context.Tag.Service<typeof SealantDB>;
 
 // Create a Layer that provides the SealantDB service by running `dbEffect`.
 export const SealantDBLive = Layer.effect(SealantDB, dbEffect);
-
-export const test = Effect.gen(function* () {
-  const db = yield* SealantDB;
-  const profiles = yield* db.query.profiles.findMany();
-  return profiles;
-});

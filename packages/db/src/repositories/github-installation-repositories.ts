@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, like } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   githubAppInstallations,
   githubInstallationRepositories,
@@ -37,217 +38,347 @@ export interface ListGitHubRepositoriesForUserInput {
   readonly search?: string;
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
-  }
-
-  return row;
+/** @deprecated Use GitHubInstallationRepositoryCacheRepo + GitHubInstallationRepositoryCacheRepoLive instead. */
+export const createGitHubInstallationRepositoryCacheRepository = (): never => {
+  throw new Error(
+    "createGitHubInstallationRepositoryCacheRepository is disabled during the Effect transition.",
+  );
 };
 
-export const createGitHubInstallationRepositoryCacheRepository = (client: DatabaseClient) => {
-  const { db } = client;
+/** @deprecated Use GitHubInstallationRepositoryCacheRepoService instead. */
+export type GitHubInstallationRepositoryCacheRepository =
+  GitHubInstallationRepositoryCacheRepoService;
 
-  const upsertInstallationRepository = async (
+const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literal(
+  "getInstallationRepositoryByExternalRepoId",
+  "getInstallationRepositoryById",
+  "getInstallationRepositoryByRepoId",
+  "listRepositoriesForInstallation",
+  "listRepositoriesForUser",
+  "markInstallationRepositoriesRemoved",
+  "upsertInstallationRepository",
+);
+
+export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoInvariantError>(
+  "GitHubInstallationRepositoryCacheRepoInvariantError",
+)("GitHubInstallationRepositoryCacheRepoInvariantError", {
+  operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
+  message: Schema.String,
+}) {}
+
+export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoUnexpectedError>(
+  "GitHubInstallationRepositoryCacheRepoUnexpectedError",
+)("GitHubInstallationRepositoryCacheRepoUnexpectedError", {
+  operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+export const gitHubInstallationRepositoryCacheRepoErrorSchema = Schema.Union(
+  GitHubInstallationRepositoryCacheRepoInvariantError,
+  GitHubInstallationRepositoryCacheRepoUnexpectedError,
+);
+
+export type GitHubInstallationRepositoryCacheRepoError =
+  typeof gitHubInstallationRepositoryCacheRepoErrorSchema.Type;
+
+type GitHubInstallationRepositoryCacheRepoOperation =
+  typeof gitHubInstallationRepositoryCacheRepoOperationSchema.Type;
+
+const mapGitHubInstallationRepositoryCacheRepoError = (
+  operation: GitHubInstallationRepositoryCacheRepoOperation,
+  cause: unknown,
+): GitHubInstallationRepositoryCacheRepoError => {
+  if (
+    cause instanceof GitHubInstallationRepositoryCacheRepoInvariantError ||
+    cause instanceof GitHubInstallationRepositoryCacheRepoUnexpectedError
+  ) {
+    return cause;
+  }
+
+  return new GitHubInstallationRepositoryCacheRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
+};
+
+const withGitHubInstallationRepositoryCacheRepoError = <A>(
+  operation: GitHubInstallationRepositoryCacheRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, GitHubInstallationRepositoryCacheRepoError> => {
+  return effect.pipe(
+    Effect.mapError((cause) => mapGitHubInstallationRepositoryCacheRepoError(operation, cause)),
+  );
+};
+
+export interface GitHubInstallationRepositoryCacheRepoService {
+  readonly upsertInstallationRepository: (
     input: UpsertGitHubInstallationRepositoryInput,
-  ): Promise<GitHubInstallationRepository> => {
-    const fullName = input.fullName ?? `${input.owner}/${input.name}`;
-    const [record] = await db
-      .insert(githubInstallationRepositories)
-      .values({
-        id: input.id,
-        installationId: input.installationId,
-        repositoryId: input.repositoryId,
-        externalRepositoryId: input.externalRepositoryId,
-        owner: input.owner,
-        name: input.name,
-        fullName,
-        ...(input.defaultBranch === undefined ? {} : { defaultBranch: input.defaultBranch }),
-        ...(input.isPrivate === undefined ? {} : { isPrivate: input.isPrivate }),
-        ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
-        ...(input.pushedAt === undefined ? {} : { pushedAt: input.pushedAt }),
-        ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-        ...(input.removedAt === undefined ? {} : { removedAt: input.removedAt }),
-      } satisfies NewGitHubInstallationRepository)
-      .onConflictDoUpdate({
-        target: [
-          githubInstallationRepositories.installationId,
-          githubInstallationRepositories.externalRepositoryId,
-        ],
-        set: {
-          repositoryId: input.repositoryId,
-          owner: input.owner,
-          name: input.name,
-          fullName,
-          ...(input.defaultBranch === undefined ? {} : { defaultBranch: input.defaultBranch }),
-          ...(input.isPrivate === undefined ? {} : { isPrivate: input.isPrivate }),
-          ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
-          ...(input.pushedAt === undefined ? {} : { pushedAt: input.pushedAt }),
-          ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-          removedAt: input.removedAt ?? null,
-        },
-      })
-      .returning();
-
-    return assertInserted(record, "Failed to upsert GitHub installation repository.");
-  };
-
-  const markInstallationRepositoriesRemoved = async (input: {
+  ) => Effect.Effect<GitHubInstallationRepository, GitHubInstallationRepositoryCacheRepoError>;
+  readonly markInstallationRepositoriesRemoved: (input: {
     readonly installationId: string;
     readonly preservedExternalRepositoryIds: readonly string[];
     readonly removedAt?: Date;
-  }): Promise<number> => {
-    const activeRows = await db
-      .select({
-        id: githubInstallationRepositories.id,
-        externalRepositoryId: githubInstallationRepositories.externalRepositoryId,
-      })
-      .from(githubInstallationRepositories)
-      .where(
-        and(
-          eq(githubInstallationRepositories.installationId, input.installationId),
-          isNull(githubInstallationRepositories.removedAt),
-        ),
-      );
-
-    const staleIds = activeRows
-      .filter(
-        (row: { readonly externalRepositoryId: string }) =>
-          !input.preservedExternalRepositoryIds.includes(row.externalRepositoryId),
-      )
-      .map((row: { readonly id: string }) => row.id);
-
-    if (staleIds.length === 0) {
-      return 0;
-    }
-
-    const updated = await Promise.all(
-      staleIds.map(async (id: string) => {
-        const [row] = await db
-          .update(githubInstallationRepositories)
-          .set({ removedAt: input.removedAt ?? new Date() })
-          .where(eq(githubInstallationRepositories.id, id))
-          .returning({ id: githubInstallationRepositories.id });
-
-        return row;
-      }),
-    );
-
-    return updated.filter((row: { readonly id: string } | undefined) => row !== undefined).length;
-  };
-
-  const listRepositoriesForInstallation = async (
+  }) => Effect.Effect<number, GitHubInstallationRepositoryCacheRepoError>;
+  readonly listRepositoriesForInstallation: (
     input: ListGitHubInstallationRepositoriesInput,
-  ): Promise<readonly GitHubInstallationRepository[]> => {
-    const whereClauses = [
-      eq(githubInstallationRepositories.installationId, input.installationId),
-      ...(input.includeRemoved ? [] : [isNull(githubInstallationRepositories.removedAt)]),
-      ...(input.search === undefined || input.search.trim().length === 0
-        ? []
-        : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
-    ];
-
-    return db
-      .select()
-      .from(githubInstallationRepositories)
-      .where(and(...whereClauses))
-      .orderBy(asc(githubInstallationRepositories.fullName));
-  };
-
-  const listRepositoriesForUser = async (
+  ) => Effect.Effect<
+    readonly GitHubInstallationRepository[],
+    GitHubInstallationRepositoryCacheRepoError
+  >;
+  readonly listRepositoriesForUser: (
     input: ListGitHubRepositoriesForUserInput,
-  ): Promise<readonly GitHubInstallationRepository[]> => {
-    const whereClauses = [
-      eq(githubInstallationUserGrants.userId, input.userId),
-      isNull(githubInstallationUserGrants.revokedAt),
-      eq(githubAppInstallations.status, "active"),
-      isNull(githubInstallationRepositories.removedAt),
-      ...(input.installationId === undefined
-        ? []
-        : [eq(githubInstallationRepositories.installationId, input.installationId)]),
-      ...(input.search === undefined || input.search.trim().length === 0
-        ? []
-        : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
-    ];
-
-    const rows = await db
-      .select({ installationRepository: githubInstallationRepositories })
-      .from(githubInstallationRepositories)
-      .innerJoin(
-        githubAppInstallations,
-        eq(githubAppInstallations.id, githubInstallationRepositories.installationId),
-      )
-      .innerJoin(
-        githubInstallationUserGrants,
-        eq(githubInstallationUserGrants.installationId, githubAppInstallations.id),
-      )
-      .where(and(...whereClauses))
-      .orderBy(asc(githubInstallationRepositories.fullName));
-
-    return rows.map((row: { readonly installationRepository: GitHubInstallationRepository }) => {
-      return row.installationRepository;
-    });
-  };
-
-  const getInstallationRepositoryById = async (
+  ) => Effect.Effect<
+    readonly GitHubInstallationRepository[],
+    GitHubInstallationRepositoryCacheRepoError
+  >;
+  readonly getInstallationRepositoryById: (
     id: string,
-  ): Promise<GitHubInstallationRepository | undefined> => {
-    const [record] = await db
-      .select()
-      .from(githubInstallationRepositories)
-      .where(eq(githubInstallationRepositories.id, id))
-      .limit(1);
-
-    return record;
-  };
-
-  const getInstallationRepositoryByRepoId = async (input: {
+  ) => Effect.Effect<
+    GitHubInstallationRepository | undefined,
+    GitHubInstallationRepositoryCacheRepoError
+  >;
+  readonly getInstallationRepositoryByRepoId: (input: {
     readonly installationId: string;
     readonly repositoryId: string;
-  }): Promise<GitHubInstallationRepository | undefined> => {
-    const [record] = await db
-      .select()
-      .from(githubInstallationRepositories)
-      .where(
-        and(
-          eq(githubInstallationRepositories.installationId, input.installationId),
-          eq(githubInstallationRepositories.repositoryId, input.repositoryId),
-        ),
-      )
-      .limit(1);
-
-    return record;
-  };
-
-  const getInstallationRepositoryByExternalRepoId = async (input: {
+  }) => Effect.Effect<
+    GitHubInstallationRepository | undefined,
+    GitHubInstallationRepositoryCacheRepoError
+  >;
+  readonly getInstallationRepositoryByExternalRepoId: (input: {
     readonly installationId: string;
     readonly externalRepositoryId: string;
-  }): Promise<GitHubInstallationRepository | undefined> => {
-    const [record] = await db
-      .select()
-      .from(githubInstallationRepositories)
-      .where(
-        and(
-          eq(githubInstallationRepositories.installationId, input.installationId),
-          eq(githubInstallationRepositories.externalRepositoryId, input.externalRepositoryId),
+  }) => Effect.Effect<
+    GitHubInstallationRepository | undefined,
+    GitHubInstallationRepositoryCacheRepoError
+  >;
+}
+
+export class GitHubInstallationRepositoryCacheRepo extends Context.Tag(
+  "GitHubInstallationRepositoryCacheRepo",
+)<GitHubInstallationRepositoryCacheRepo, GitHubInstallationRepositoryCacheRepoService>() {}
+
+export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
+  GitHubInstallationRepositoryCacheRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+
+    return {
+      upsertInstallationRepository: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "upsertInstallationRepository",
+          Effect.gen(function* () {
+            const fullName = input.fullName ?? `${input.owner}/${input.name}`;
+
+            const [record] = yield* db
+              .insert(githubInstallationRepositories)
+              .values({
+                id: input.id,
+                installationId: input.installationId,
+                repositoryId: input.repositoryId,
+                externalRepositoryId: input.externalRepositoryId,
+                owner: input.owner,
+                name: input.name,
+                fullName,
+                ...(input.defaultBranch === undefined
+                  ? {}
+                  : { defaultBranch: input.defaultBranch }),
+                ...(input.isPrivate === undefined ? {} : { isPrivate: input.isPrivate }),
+                ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
+                ...(input.pushedAt === undefined ? {} : { pushedAt: input.pushedAt }),
+                ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+                ...(input.removedAt === undefined ? {} : { removedAt: input.removedAt }),
+              } satisfies NewGitHubInstallationRepository)
+              .onConflictDoUpdate({
+                target: [
+                  githubInstallationRepositories.installationId,
+                  githubInstallationRepositories.externalRepositoryId,
+                ],
+                set: {
+                  repositoryId: input.repositoryId,
+                  owner: input.owner,
+                  name: input.name,
+                  fullName,
+                  ...(input.defaultBranch === undefined
+                    ? {}
+                    : { defaultBranch: input.defaultBranch }),
+                  ...(input.isPrivate === undefined ? {} : { isPrivate: input.isPrivate }),
+                  ...(input.isArchived === undefined ? {} : { isArchived: input.isArchived }),
+                  ...(input.pushedAt === undefined ? {} : { pushedAt: input.pushedAt }),
+                  ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+                  removedAt: input.removedAt ?? null,
+                },
+              })
+              .returning();
+
+            if (record === undefined) {
+              return yield* new GitHubInstallationRepositoryCacheRepoInvariantError({
+                operation: "upsertInstallationRepository",
+                message: "Failed to upsert GitHub installation repository.",
+              });
+            }
+
+            return record;
+          }),
         ),
-      )
-      .limit(1);
 
-    return record;
-  };
+      markInstallationRepositoriesRemoved: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "markInstallationRepositoriesRemoved",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const activeRows = yield* tx
+                .select({
+                  id: githubInstallationRepositories.id,
+                  externalRepositoryId: githubInstallationRepositories.externalRepositoryId,
+                })
+                .from(githubInstallationRepositories)
+                .where(
+                  and(
+                    eq(githubInstallationRepositories.installationId, input.installationId),
+                    isNull(githubInstallationRepositories.removedAt),
+                  ),
+                );
 
-  return {
-    getInstallationRepositoryByExternalRepoId,
-    getInstallationRepositoryById,
-    getInstallationRepositoryByRepoId,
-    listRepositoriesForInstallation,
-    listRepositoriesForUser,
-    markInstallationRepositoriesRemoved,
-    upsertInstallationRepository,
-  };
-};
+              const staleIds = activeRows
+                .filter((row: { readonly externalRepositoryId: string }) => {
+                  return !input.preservedExternalRepositoryIds.includes(row.externalRepositoryId);
+                })
+                .map((row: { readonly id: string }) => row.id);
 
-export type GitHubInstallationRepositoryCacheRepository = ReturnType<
-  typeof createGitHubInstallationRepositoryCacheRepository
->;
+              if (staleIds.length === 0) {
+                return 0;
+              }
+
+              const updated = yield* Effect.forEach(staleIds, (id) =>
+                tx
+                  .update(githubInstallationRepositories)
+                  .set({ removedAt: input.removedAt ?? new Date() })
+                  .where(eq(githubInstallationRepositories.id, id))
+                  .returning({ id: githubInstallationRepositories.id })
+                  .pipe(Effect.map((rows) => rows[0])),
+              );
+
+              return updated.filter((row: { readonly id: string } | undefined) => row !== undefined)
+                .length;
+            }),
+          ),
+        ),
+
+      listRepositoriesForInstallation: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "listRepositoriesForInstallation",
+          Effect.gen(function* () {
+            const whereClauses = [
+              eq(githubInstallationRepositories.installationId, input.installationId),
+              ...(input.includeRemoved ? [] : [isNull(githubInstallationRepositories.removedAt)]),
+              ...(input.search === undefined || input.search.trim().length === 0
+                ? []
+                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+            ];
+
+            return yield* db
+              .select()
+              .from(githubInstallationRepositories)
+              .where(and(...whereClauses))
+              .orderBy(asc(githubInstallationRepositories.fullName));
+          }),
+        ),
+
+      listRepositoriesForUser: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "listRepositoriesForUser",
+          Effect.gen(function* () {
+            const whereClauses = [
+              eq(githubInstallationUserGrants.userId, input.userId),
+              isNull(githubInstallationUserGrants.revokedAt),
+              eq(githubAppInstallations.status, "active"),
+              isNull(githubInstallationRepositories.removedAt),
+              ...(input.installationId === undefined
+                ? []
+                : [eq(githubInstallationRepositories.installationId, input.installationId)]),
+              ...(input.search === undefined || input.search.trim().length === 0
+                ? []
+                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+            ];
+
+            const rows = yield* db
+              .select({ installationRepository: githubInstallationRepositories })
+              .from(githubInstallationRepositories)
+              .innerJoin(
+                githubAppInstallations,
+                eq(githubAppInstallations.id, githubInstallationRepositories.installationId),
+              )
+              .innerJoin(
+                githubInstallationUserGrants,
+                eq(githubInstallationUserGrants.installationId, githubAppInstallations.id),
+              )
+              .where(and(...whereClauses))
+              .orderBy(asc(githubInstallationRepositories.fullName));
+
+            return rows.map(
+              (row: { readonly installationRepository: GitHubInstallationRepository }) => {
+                return row.installationRepository;
+              },
+            );
+          }),
+        ),
+
+      getInstallationRepositoryById: (id) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "getInstallationRepositoryById",
+          Effect.gen(function* () {
+            const [record] = yield* db
+              .select()
+              .from(githubInstallationRepositories)
+              .where(eq(githubInstallationRepositories.id, id))
+              .limit(1);
+
+            return record;
+          }),
+        ),
+
+      getInstallationRepositoryByRepoId: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "getInstallationRepositoryByRepoId",
+          Effect.gen(function* () {
+            const [record] = yield* db
+              .select()
+              .from(githubInstallationRepositories)
+              .where(
+                and(
+                  eq(githubInstallationRepositories.installationId, input.installationId),
+                  eq(githubInstallationRepositories.repositoryId, input.repositoryId),
+                ),
+              )
+              .limit(1);
+
+            return record;
+          }),
+        ),
+
+      getInstallationRepositoryByExternalRepoId: (input) =>
+        withGitHubInstallationRepositoryCacheRepoError(
+          "getInstallationRepositoryByExternalRepoId",
+          Effect.gen(function* () {
+            const [record] = yield* db
+              .select()
+              .from(githubInstallationRepositories)
+              .where(
+                and(
+                  eq(githubInstallationRepositories.installationId, input.installationId),
+                  eq(
+                    githubInstallationRepositories.externalRepositoryId,
+                    input.externalRepositoryId,
+                  ),
+                ),
+              )
+              .limit(1);
+
+            return record;
+          }),
+        ),
+    } satisfies GitHubInstallationRepositoryCacheRepoService;
+  }),
+);

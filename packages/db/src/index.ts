@@ -1,7 +1,13 @@
 export { SealantDB, SealantDBLive, type TSealantDB, type DB } from "./client.js";
 
 export {
+  GitHubInstallationRepo,
+  GitHubInstallationRepoInvariantError,
+  GitHubInstallationRepoLive,
+  GitHubInstallationRepoUnexpectedError,
   createGitHubInstallationRepository,
+  type GitHubInstallationRepoError,
+  type GitHubInstallationRepoService,
   type GitHubInstallationRepository,
   type GrantGitHubInstallationToUserInput,
   type ListGitHubInstallationsForUserInput,
@@ -11,7 +17,13 @@ export {
 } from "./repositories/github-installations.js";
 
 export {
+  GitHubInstallationRepositoryCacheRepo,
+  GitHubInstallationRepositoryCacheRepoInvariantError,
+  GitHubInstallationRepositoryCacheRepoLive,
+  GitHubInstallationRepositoryCacheRepoUnexpectedError,
   createGitHubInstallationRepositoryCacheRepository,
+  type GitHubInstallationRepositoryCacheRepoError,
+  type GitHubInstallationRepositoryCacheRepoService,
   type GitHubInstallationRepositoryCacheRepository,
   type ListGitHubInstallationRepositoriesInput,
   type ListGitHubRepositoriesForUserInput,
@@ -19,15 +31,27 @@ export {
 } from "./repositories/github-installation-repositories.js";
 
 export {
+  GitHubWebhookDeliveryRepo,
+  GitHubWebhookDeliveryRepoInvariantError,
+  GitHubWebhookDeliveryRepoLive,
+  GitHubWebhookDeliveryRepoUnexpectedError,
   createGitHubWebhookDeliveryRepository,
   type CreateGitHubWebhookDeliveryInput,
+  type GitHubWebhookDeliveryRepoError,
+  type GitHubWebhookDeliveryRepoService,
   type GitHubWebhookDeliveryRepository,
 } from "./repositories/github-webhook-deliveries.js";
 
 export {
+  IssueWorkflowRepo,
+  IssueWorkflowRepoInvariantError,
+  IssueWorkflowRepoLive,
+  IssueWorkflowRepoUnexpectedError,
   createIssueWorkflowRepository,
   type CreateIssueWorkflowExecutionInput,
   type CreateIssueWorkflowInput,
+  type IssueWorkflowRepoError,
+  type IssueWorkflowRepoService,
   type IssueWorkflowExecutionPullRequestRecord,
   type IssueWorkflowRepository,
   type LinkIssuePullRequestInput,
@@ -37,10 +61,16 @@ export {
 } from "./repositories/issue-workflows.js";
 
 export {
+  ProfileRepo,
+  ProfileRepoInvariantError,
+  ProfileRepoLive,
+  ProfileRepoUnexpectedError,
   createProfileRepository,
   type CreateProfileInput,
   type CreateProfileRevisionGraphInput,
   type ListProfilesByOwnerInput,
+  type ProfileRepoError,
+  type ProfileRepoService,
   type ProfileRepository,
   type ProfileRevisionEnvVarInput,
   type ProfileRevisionGraph,
@@ -51,10 +81,16 @@ export {
 } from "./repositories/profiles.js";
 
 export {
+  RepositoryProfileRepo,
+  RepositoryProfileRepoInvariantError,
+  RepositoryProfileRepoLive,
+  RepositoryProfileRepoUnexpectedError,
   createRepositoryProfileRepository,
   type CreateRepositoryProfileInput,
   type CreateRepositoryProfileRevisionInput,
   type ListRepositoryProfilesInput,
+  type RepositoryProfileRepoError,
+  type RepositoryProfileRepoService,
   type ReplaceRepositoryProfileLinksInput,
   type RepositoryProfileRepository,
   type RepositoryProfileRevisionBundle,
@@ -63,7 +99,13 @@ export {
 } from "./repositories/repository-profiles.js";
 
 export {
+  PackageResolutionCacheRepo,
+  PackageResolutionCacheRepoInvariantError,
+  PackageResolutionCacheRepoLive,
+  PackageResolutionCacheRepoUnexpectedError,
   createPackageResolutionCacheRepository,
+  type PackageResolutionCacheRepoError,
+  type PackageResolutionCacheRepoService,
   type PackageResolutionCacheRepository,
   type UpsertPackageResolutionCacheEntryInput,
 } from "./repositories/package-resolution-cache.js";
@@ -85,10 +127,16 @@ export {
 } from "./repositories/sandboxes.js";
 
 export {
+  IssueWorkflowExecutionRepo,
+  IssueWorkflowExecutionRepoInvariantError,
+  IssueWorkflowExecutionRepoLive,
+  IssueWorkflowExecutionRepoUnexpectedError,
   createIssueWorkflowExecutionRepository,
   type AppendIssueWorkflowExecutionEventInput,
   type InsertIssueWorkflowExecutionArtifactInput,
   type IssueWorkflowExecutionDetailBundle,
+  type IssueWorkflowExecutionRepoError,
+  type IssueWorkflowExecutionRepoService,
   type IssueWorkflowExecutionRepository,
   type ReplaceIssueWorkflowExecutionDiffFileInput,
   type ReplaceIssueWorkflowExecutionValidationResultInput,
@@ -96,12 +144,22 @@ export {
 } from "./repositories/issue-workflow-executions.js";
 
 export {
+  SandboxRuntimeInstanceRepo,
+  SandboxRuntimeInstanceRepoInvariantError,
+  SandboxRuntimeInstanceRepoLive,
+  SandboxRuntimeInstanceRepoUnexpectedError,
   createSandboxRuntimeInstanceRepository,
+  type SandboxRuntimeInstanceRepoError,
+  type SandboxRuntimeInstanceRepoService,
   type SandboxRuntimeInstanceRepository,
   type UpsertSandboxRuntimeInstanceInput,
 } from "./repositories/sandbox-runtime-instances.js";
 
 export {
+  SandboxAttemptRepo,
+  SandboxAttemptRepoInvariantError,
+  SandboxAttemptRepoLive,
+  SandboxAttemptRepoUnexpectedError,
   createSandboxAttemptRepository,
   type CreateQueuedSandboxAttemptInput,
   type ListSandboxAttemptsInput,
@@ -109,11 +167,17 @@ export {
   type MarkSandboxAttemptFailedInput,
   type MarkSandboxAttemptRunningInput,
   type MarkSandboxAttemptSucceededInput,
+  type SandboxAttemptRepoError,
+  type SandboxAttemptRepoService,
   type SandboxAttemptRepository,
   type SetSandboxAttemptSnapshotInput,
 } from "./repositories/sandbox-attempts.js";
 
 export {
+  SandboxBuildJobRepo,
+  SandboxBuildJobRepoInvariantError,
+  SandboxBuildJobRepoLive,
+  SandboxBuildJobRepoUnexpectedError,
   createSandboxBuildJobRepository,
   type ClaimSandboxBuildJobByIdInput,
   type ClaimNextSandboxBuildJobInput,
@@ -121,6 +185,8 @@ export {
   type MarkSandboxBuildJobFailedInput,
   type MarkSandboxBuildJobRunningInput,
   type MarkSandboxBuildJobSucceededInput,
+  type SandboxBuildJobRepoError,
+  type SandboxBuildJobRepoService,
   type SandboxBuildJobRepository,
 } from "./repositories/sandbox-build-jobs.js";
 

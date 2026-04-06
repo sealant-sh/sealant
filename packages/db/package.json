@@ -5,8 +5,7 @@
   "description": "Shared PostgreSQL database package for control-plane state",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./payloads": "./src/payloads.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
