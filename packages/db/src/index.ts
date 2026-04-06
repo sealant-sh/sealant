@@ -69,10 +69,16 @@ export {
 } from "./repositories/package-resolution-cache.js";
 
 export {
+  SandboxRepo,
+  SandboxRepoInvariantError,
+  SandboxRepoLive,
+  SandboxRepoUnexpectedError,
   createSandboxRepository,
   type CreateSandboxInput,
   type LinkSandboxAttemptInput,
   type ListSandboxesInput,
+  type SandboxRepoError,
+  type SandboxRepoService,
   type SetSandboxNameInput,
   type SandboxRepository,
   type SetSandboxStatusInput,
