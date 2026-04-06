@@ -1,7 +1,7 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Github, Monitor, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { LogoText } from "../../../web/src/components/app/Logo";
@@ -123,8 +123,8 @@ function Brand() {
       className="inline-flex items-center gap-3 text-inherit no-underline"
       aria-label="Sealant home"
     >
-      <LogoBlob className="size-8 shrink-0" aria-hidden="true" />
-      <LogoText className="h-8 w-auto shrink-0" aria-hidden="true" />
+      <LogoBlob className="size-[42px] shrink-0" aria-hidden="true" />
+      <LogoText className="size-[42px] w-auto shrink-0" aria-hidden="true" />
     </a>
   );
 }
@@ -135,12 +135,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant | Open source sandbox and issue workflow platform",
+        title: "Sealant | The open platform for reproducible software work",
       },
       {
         name: "description",
         content:
-          "Launch deeply customizable isolated sandboxes and run issue-to-PR workflows with built-in traceability.",
+          "A self-hosted platform for managing isolated sandboxes, tracking execution lineage, and building modular developer workflows.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -153,6 +153,7 @@ function RootComponent() {
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        <script src="https://mcp.figma.com/mcp/html-to-design/capture.js" async />
         <HeadContent />
       </head>
       <body className="marketing-body" id="top">
@@ -162,12 +163,13 @@ function RootComponent() {
             <div className="inline-flex items-center gap-2.5">
               <ThemeSwitcher />
               <a
-                className="inline-flex min-h-9 items-center justify-center border border-primary bg-primary px-4 text-xs font-bold uppercase tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
-                href="https://github.com/sealant-ops/sealant"
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 border border-primary bg-primary px-4 text-xs font-bold uppercase tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
+                href="https://github.com/get-sealant/sealant"
                 target="_blank"
                 rel="noreferrer"
               >
-                View GitHub
+                <Github className="size-3.5" aria-hidden="true" />
+                GitHub
               </a>
             </div>
           </div>
@@ -175,7 +177,7 @@ function RootComponent() {
         <Outlet />
         <footer className="border-t-2 border-ring py-4 pb-5">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
-            <p>Open source control plane for isolated sandboxes and issue workflows.</p>
+            <p>The open platform for reproducible software work.</p>
             <a
               className="m-0 text-[0.78rem] text-muted-foreground no-underline hover:text-foreground"
               href="#top"
