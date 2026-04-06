@@ -214,7 +214,7 @@ export const createRepositoryProfileRepository = (client: DatabaseClient) => {
   const setActiveRepositoryProfileRevision = async (
     input: SetActiveRepositoryProfileRevisionInput,
   ): Promise<RepositoryProfile | null> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [revision] = await tx
         .select({ id: repositoryProfileRevisions.id })
         .from(repositoryProfileRevisions)
@@ -243,7 +243,7 @@ export const createRepositoryProfileRepository = (client: DatabaseClient) => {
   const createRepositoryProfileRevision = async (
     input: CreateRepositoryProfileRevisionInput,
   ): Promise<RepositoryProfileRevision> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [profile] = await tx
         .select({ id: repositoryProfiles.id })
         .from(repositoryProfiles)
@@ -297,7 +297,7 @@ export const createRepositoryProfileRepository = (client: DatabaseClient) => {
   const replaceRepositoryProfileLinks = async (
     input: ReplaceRepositoryProfileLinksInput,
   ): Promise<readonly RepositoryProfileProfileLink[]> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       await tx
         .delete(repositoryProfileProfileLinks)
         .where(

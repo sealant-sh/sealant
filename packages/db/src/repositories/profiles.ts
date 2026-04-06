@@ -212,7 +212,7 @@ export const createProfileRepository = (client: DatabaseClient) => {
   const setActiveProfileRevision = async (
     input: SetActiveProfileRevisionInput,
   ): Promise<Profile | null> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [revision] = await tx
         .select({ id: profileRevisions.id })
         .from(profileRevisions)
@@ -241,7 +241,7 @@ export const createProfileRepository = (client: DatabaseClient) => {
   const createProfileRevisionGraph = async (
     input: CreateProfileRevisionGraphInput,
   ): Promise<ProfileRevisionGraph> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [profile] = await tx
         .select({ id: profiles.id })
         .from(profiles)

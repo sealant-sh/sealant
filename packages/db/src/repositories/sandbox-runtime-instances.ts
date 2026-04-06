@@ -89,7 +89,11 @@ export const createSandboxRuntimeInstanceRepository = (client: DatabaseClient) =
       .where(inArray(sandboxRuntimeInstances.runId, [...runIds]))
       .orderBy(desc(sandboxRuntimeInstances.updatedAt));
 
-    return new Map(rows.map((row) => [row.runId, row]));
+    return new Map(
+      rows.map((row: SandboxRuntimeInstance) => {
+        return [row.runId, row] as const;
+      }),
+    );
   };
 
   return {

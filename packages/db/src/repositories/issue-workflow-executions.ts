@@ -104,7 +104,7 @@ export const createIssueWorkflowExecutionRepository = (client: DatabaseClient) =
       return [];
     }
 
-    return db.transaction(async (tx) => {
+    return db.transaction((async (tx: DatabaseClient["db"]) => {
       const inserted: IssueWorkflowExecutionEvent[] = [];
 
       for (const event of events) {
@@ -142,14 +142,14 @@ export const createIssueWorkflowExecutionRepository = (client: DatabaseClient) =
       }
 
       return inserted;
-    });
+    }) as never);
   };
 
   const replaceExecutionValidationResults = async (
     executionId: string,
     results: readonly ReplaceIssueWorkflowExecutionValidationResultInput[],
   ): Promise<readonly IssueWorkflowExecutionValidationResult[]> => {
-    return db.transaction(async (tx) => {
+    return db.transaction((async (tx: DatabaseClient["db"]) => {
       await tx
         .delete(issueWorkflowExecutionValidationResults)
         .where(eq(issueWorkflowExecutionValidationResults.executionId, executionId));
@@ -174,14 +174,14 @@ export const createIssueWorkflowExecutionRepository = (client: DatabaseClient) =
           }),
         )
         .returning();
-    });
+    }) as never);
   };
 
   const replaceExecutionDiffFiles = async (
     executionId: string,
     files: readonly ReplaceIssueWorkflowExecutionDiffFileInput[],
   ): Promise<readonly IssueWorkflowExecutionDiffFile[]> => {
-    return db.transaction(async (tx) => {
+    return db.transaction((async (tx: DatabaseClient["db"]) => {
       await tx
         .delete(issueWorkflowExecutionDiffFiles)
         .where(eq(issueWorkflowExecutionDiffFiles.executionId, executionId));
@@ -210,7 +210,7 @@ export const createIssueWorkflowExecutionRepository = (client: DatabaseClient) =
           }),
         )
         .returning();
-    });
+    }) as never);
   };
 
   const insertExecutionArtifacts = async (

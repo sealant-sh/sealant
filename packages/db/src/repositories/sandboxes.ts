@@ -144,7 +144,7 @@ export const createSandboxRepository = (client: DatabaseClient) => {
   };
 
   const linkSandboxAttempt = async (input: LinkSandboxAttemptInput): Promise<SandboxRunLink> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [link] = await tx
         .insert(sandboxRunLinks)
         .values({

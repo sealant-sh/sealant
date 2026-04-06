@@ -111,15 +111,18 @@ export const createGitHubInstallationRepositoryCacheRepository = (client: Databa
       );
 
     const staleIds = activeRows
-      .filter((row) => !input.preservedExternalRepositoryIds.includes(row.externalRepositoryId))
-      .map((row) => row.id);
+      .filter(
+        (row: { readonly externalRepositoryId: string }) =>
+          !input.preservedExternalRepositoryIds.includes(row.externalRepositoryId),
+      )
+      .map((row: { readonly id: string }) => row.id);
 
     if (staleIds.length === 0) {
       return 0;
     }
 
     const updated = await Promise.all(
-      staleIds.map(async (id) => {
+      staleIds.map(async (id: string) => {
         const [row] = await db
           .update(githubInstallationRepositories)
           .set({ removedAt: input.removedAt ?? new Date() })
@@ -130,7 +133,7 @@ export const createGitHubInstallationRepositoryCacheRepository = (client: Databa
       }),
     );
 
-    return updated.filter((row) => row !== undefined).length;
+    return updated.filter((row: { readonly id: string } | undefined) => row !== undefined).length;
   };
 
   const listRepositoriesForInstallation = async (
@@ -181,7 +184,9 @@ export const createGitHubInstallationRepositoryCacheRepository = (client: Databa
       .where(and(...whereClauses))
       .orderBy(asc(githubInstallationRepositories.fullName));
 
-    return rows.map((row) => row.installationRepository);
+    return rows.map((row: { readonly installationRepository: GitHubInstallationRepository }) => {
+      return row.installationRepository;
+    });
   };
 
   const getInstallationRepositoryById = async (

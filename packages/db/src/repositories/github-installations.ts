@@ -152,7 +152,7 @@ export const createGitHubInstallationRepository = (client: DatabaseClient) => {
       .where(and(...whereClauses))
       .orderBy(asc(githubAppInstallations.accountLogin));
 
-    return rows.map((row) => row.installation);
+    return rows.map((row: { readonly installation: GitHubAppInstallation }) => row.installation);
   };
 
   const listActiveInstallations = async (): Promise<readonly GitHubAppInstallation[]> => {

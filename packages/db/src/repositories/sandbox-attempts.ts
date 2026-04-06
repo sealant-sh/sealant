@@ -182,7 +182,7 @@ export const createSandboxAttemptRepository = (client: DatabaseClient) => {
     finishedAt: Date,
     extra: Partial<Pick<SandboxAttempt, "cancelReason">> = {},
   ): Promise<SandboxAttempt | null> => {
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [existing] = await tx
         .select()
         .from(sandboxAttempts)

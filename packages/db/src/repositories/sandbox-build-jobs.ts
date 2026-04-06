@@ -171,7 +171,7 @@ export const createSandboxBuildJobRepository = (client: DatabaseClient) => {
     // Claiming is kept inside one transaction so the worker does not read one
     // queued job and accidentally let another worker claim the same row before
     // the status update happens.
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [candidate] = await tx
         .select()
         .from(sandboxBuildJobs)
@@ -211,7 +211,7 @@ export const createSandboxBuildJobRepository = (client: DatabaseClient) => {
     const now = requiredDate(input.now);
     const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
 
-    return db.transaction(async (tx) => {
+    return db.transaction(async (tx: DatabaseClient["db"]) => {
       const [candidate] = await tx
         .select()
         .from(sandboxBuildJobs)

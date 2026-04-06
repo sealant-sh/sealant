@@ -1,21 +1,4 @@
-export {
-  closeDatabaseClient,
-  createDatabaseClient,
-  createDatabaseClientFromEnv,
-  createPostgresConnection,
-} from "./client.js";
-
-export {
-  database,
-  databaseServiceConfigLayer,
-  databaseServiceFromEnvLayer,
-  databaseServiceLayer,
-  databaseServiceLiveLayer,
-  DatabaseServiceConfig,
-  DatabaseServiceTag,
-} from "./service.js";
-
-export { databaseEnv, databaseEnvSchema, parseDatabaseEnv } from "./runtime-env.js";
+export { SealantDB, SealantDBLive, type TSealantDB, type DB } from "./client.js";
 
 export {
   createGitHubInstallationRepository,
@@ -136,15 +119,6 @@ export {
 } from "./repositories/sandbox-build-jobs.js";
 
 export {
-  newSandboxSchema,
-  sandboxBuildSchema,
-  sandboxLaunchSchema,
-  type NewSandbox,
-  type SandboxBuild,
-  type SandboxLaunch,
-} from "./payloads.js";
-
-export {
   githubAppInstallations,
   githubInstallationAccountTypeValues,
   githubInstallationRepositories,
@@ -251,8 +225,6 @@ export {
 
 export * as schema from "./schema/index.js";
 
-export { runMigrations } from "./migrate.js";
-
 export {
   issueStateSchema,
   issueWorkflowExecutionInsertSchema,
@@ -275,9 +247,3 @@ export {
   sandboxBuildJobSelectSchema,
   sandboxBuildJobStatusSchema,
 } from "./validation.js";
-
-export type { DatabaseClient, DatabaseClientOptions, SealantDatabase } from "./client.js";
-
-export type { DatabaseService } from "./service.js";
-
-export type { DatabaseEnv } from "./runtime-env.js";
