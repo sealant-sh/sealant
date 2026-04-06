@@ -103,14 +103,14 @@ function ThemeSwitcher() {
   return (
     <button
       type="button"
-      className="inline-flex min-h-9 items-center gap-1.5 border border-border bg-transparent px-3 font-mono text-xs uppercase tracking-wider text-foreground/80 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
+      className="inline-flex min-h-9 items-center gap-1.5 border border-border bg-transparent px-3 font-sans text-[1rem] font-semibold tracking-wider text-foreground/80 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
       aria-label={`Theme: ${activeTheme.label}`}
       title={`Theme: ${activeTheme.label}`}
       onClick={() => {
         setTheme(nextTheme(theme));
       }}
     >
-      <Icon className="size-3.5" aria-hidden="true" />
+      <Icon className="size-[1.3125rem]" aria-hidden="true" />
       <span>{activeTheme.label}</span>
     </button>
   );
@@ -124,7 +124,18 @@ function Brand() {
       aria-label="Sealant home"
     >
       <LogoBlob className="size-[42px] shrink-0" aria-hidden="true" />
-      <LogoText className="size-[42px] w-auto shrink-0" aria-hidden="true" />
+      <LogoText className="size-[44px] w-auto shrink-0" aria-hidden="true" />
+    </a>
+  );
+}
+
+function TopLevelNavLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <a
+      href={href}
+      className="font-sans text-[1.2rem] font-semibold tracking-[0.6px] text-foreground/80 no-underline transition-colors duration-200 hover:text-foreground"
+    >
+      {children}
     </a>
   );
 }
@@ -159,16 +170,22 @@ function RootComponent() {
       <body className="marketing-body" id="top">
         <header className="sticky top-0 z-40 border-b border-border bg-background text-foreground">
           <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-4 px-6 sm:px-8">
-            <Brand />
+            <div className="flex items-center gap-8 lg:gap-10">
+              <Brand />
+              <nav className="mt-1 hidden items-center gap-6 md:flex" aria-label="Primary">
+                <TopLevelNavLink href="/blog">Blog</TopLevelNavLink>
+                <TopLevelNavLink href="/docs">Docs</TopLevelNavLink>
+              </nav>
+            </div>
             <div className="inline-flex items-center gap-2.5">
               <ThemeSwitcher />
               <a
-                className="inline-flex min-h-9 items-center justify-center gap-1.5 border border-primary bg-primary px-4 text-xs font-bold uppercase tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 border border-primary bg-primary px-4 font-sans text-[1rem] font-semibold tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
                 href="https://github.com/get-sealant/sealant"
                 target="_blank"
                 rel="noreferrer"
               >
-                <Github className="size-3.5" aria-hidden="true" />
+                <Github className="size-[1.3125rem]" aria-hidden="true" />
                 GitHub
               </a>
             </div>

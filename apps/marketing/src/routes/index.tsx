@@ -1,42 +1,58 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { ClipboardClock, Container as ContainerIcon, Hammer } from "lucide-react";
 
 export const Route = createFileRoute("/" as never)({
   component: MarketingPage,
 });
 
+function HeroWave() {
+  return (
+    <svg viewBox="0 0 56 20" className="h-10 w-20 shrink-0 text-foreground/55" aria-hidden="true">
+      <path
+        d="M1 10C6.4 10 6.4 2 11.8 2C17.2 2 17.2 18 22.6 18C28 18 28 2 33.4 2C38.8 2 38.8 18 44.2 18C49.6 18 49.6 10 55 10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function AnimatedHeroCta() {
+  return (
+    <div className="mt-6 flex w-fit items-center gap-5 text-foreground mx-auto">
+      <Hammer className="size-16 shrink-0 [stroke-width:1.5px]" aria-hidden="true" />
+      <HeroWave />
+      <ContainerIcon className="size-16 shrink-0 [stroke-width:1.5px]" aria-hidden="true" />
+      <HeroWave />
+      <ClipboardClock className="size-16 shrink-0 [stroke-width:1.5px]" aria-hidden="true" />
+    </div>
+  );
+}
+
 function MarketingPage() {
   return (
     <main>
-      <section className="border-b-2 border-ring bg-background text-foreground">
-        <div className="marketing-hero flex mx-10 justify-center items-center grid min-h-[calc(100svh-4rem)] max-w-7xl px-6 lg:grid-cols-[6fr_5fr] lg:px-8">
-          <div className="hero-copy flex flex-col justify-center border-b border-border bg-transparent px-6 py-10 lg:border-r lg:border-b-0 lg:px-10 lg:py-14">
-            <p className="inline-flex self-start bg-primary px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-primary-foreground">
-              Sealant
-            </p>
-            <h1 className="m-0 mt-4 max-w-full font-display text-3xl uppercase sm:text-4xl lg:text-5xl">
-              The open platform for reproducible agentic work.
-            </h1>
-            <p className="mt-6 max-w-2xl text-base text-foreground/85 sm:text-lg">
-              A self-hosted platform for managing isolated sandboxes, tracking execution lineage,
-              and building modular developer workflows.
-            </p>
-            <div className="hero-copy__actions mt-7 flex flex-wrap gap-3">
-              <a
-                className="inline-flex min-h-9 items-center justify-center border border-primary bg-primary px-4 text-xs font-bold uppercase tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
-                href="https://github.com/get-sealant/sealant"
-                target="_blank"
-                rel="noreferrer"
-              >
-                View GitHub
-              </a>
-              <a
-                className="inline-flex min-h-9 items-center justify-center border border-ring bg-transparent px-4 text-xs font-bold uppercase tracking-wider text-foreground no-underline transition duration-200 hover:-translate-y-px hover:bg-accent/50"
-                href="#details"
-              >
-                See platform
-              </a>
+      <section className="relative overflow-hidden border-b-2 border-ring bg-background text-foreground">
+        <div className="pointer-events-none absolute -left-52 -top-44 size-[36rem] rounded-full bg-primary/16 blur-[170px]" />
+        <div className="pointer-events-none absolute -right-60 top-1/4 size-[44rem] rounded-full bg-primary/14 blur-[220px]" />
+        <div className="relative mx-auto grid min-h-[calc(100svh-4rem)] w-full max-w-[1720px] px-6 sm:px-8 lg:grid-cols-[40px_710px_minmax(0,1fr)] lg:px-0">
+          <div className="hidden lg:block" aria-hidden="true" />
+          <div className="flex items-center py-16 lg:border-r lg:border-border lg:py-0">
+            <div className="w-full py-10 text-center lg:pl-[42px] lg:pr-[15px] lg:py-0">
+              <h1 className="m-0 mx-auto max-w-[487px] font-display text-[48px] uppercase leading-[48px] tracking-[0.48px]">
+                The open platform for secure agents &amp; workflows
+              </h1>
+              <p className="mt-6 mx-auto max-w-[582px] text-base text-foreground/85 sm:text-[1.1rem]">
+                A self-hosted platform for managing isolated sandboxes, tracking execution lineage,
+                and building modular developer workflows.
+              </p>
+              <AnimatedHeroCta />
             </div>
           </div>
+          <div className="hidden lg:block" aria-hidden="true" />
         </div>
       </section>
 
