@@ -1,46 +1,154 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ClipboardClock, Container as ContainerIcon, Hammer } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
+import { ClipboardClock, Container as ContainerIcon, Hammer, type LucideIcon } from "lucide-react";
 
 export const Route = createFileRoute("/" as never)({
   component: MarketingPage,
 });
 
-function HeroWave() {
+const HERO_CTA_CYCLE = 5.4;
+const HERO_ICON_PULSE = 0.58;
+const HERO_WAVE_DRAW = 0.72;
+const HERO_WAVE_PATH =
+  "M1 10C6.4 10 6.4 2 11.8 2C17.2 2 17.2 18 22.6 18C28 18 28 2 33.4 2C38.8 2 38.8 18 44.2 18C49.6 18 49.6 10 55 10";
+
+function createLoopTimes(start: number, active: number, tail = 0.18) {
+  return [
+    0,
+    start / HERO_CTA_CYCLE,
+    (start + active * 0.45) / HERO_CTA_CYCLE,
+    (start + active) / HERO_CTA_CYCLE,
+    Math.min((start + active + tail) / HERO_CTA_CYCLE, 0.98),
+    1,
+  ];
+}
+
+function AnimatedHeroIcon({ Icon, start }: { Icon: LucideIcon; start: number }) {
+  const shouldReduceMotion = useReducedMotion();
+
   return (
-    <svg
-      viewBox="0 0 56 20"
-      className="h-6 w-12 shrink-0 text-foreground/55 sm:h-8 sm:w-16 lg:h-10 lg:w-20"
+    <div className="relative size-12 shrink-0 sm:size-14 lg:size-16" aria-hidden="true">
+      {shouldReduceMotion ? (
+        <Icon className="absolute inset-0 size-full text-foreground [stroke-width:1.5px]" />
+      ) : (
+        <motion.div
+          className="absolute inset-0 text-foreground"
+          animate={{
+            opacity: [1, 1, 0, 0.18, 1, 1],
+          }}
+          transition={{
+            duration: HERO_CTA_CYCLE,
+            ease: "linear",
+            repeat: Number.POSITIVE_INFINITY,
+            times: createLoopTimes(start, HERO_ICON_PULSE),
+          }}
+        >
+          <Icon className="size-full [stroke-width:1.5px]" />
+        </motion.div>
+      )}
+      {shouldReduceMotion ? null : (
+        <motion.div
+          className="absolute inset-0 text-primary"
+          animate={{
+            opacity: [0, 0, 1, 0.34, 0, 0],
+            scale: [1, 1, 1.08, 1.02, 1, 1],
+            filter: [
+              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+              "drop-shadow(0 0 18px rgba(217, 36, 216, 0.95))",
+              "drop-shadow(0 0 10px rgba(217, 36, 216, 0.35))",
+              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+            ],
+          }}
+          transition={{
+            duration: HERO_CTA_CYCLE,
+            ease: "linear",
+            repeat: Number.POSITIVE_INFINITY,
+            times: createLoopTimes(start, HERO_ICON_PULSE),
+          }}
+        >
+          <Icon className="size-full [stroke-width:1.5px]" />
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+function HeroWave({ start }: { start: number }) {
+  const shouldReduceMotion = useReducedMotion();
+
+  return (
+    <div
+      className="relative h-6 w-12 shrink-0 text-foreground/55 sm:h-8 sm:w-16 lg:h-10 lg:w-20"
       aria-hidden="true"
     >
-      <path
-        d="M1 10C6.4 10 6.4 2 11.8 2C17.2 2 17.2 18 22.6 18C28 18 28 2 33.4 2C38.8 2 38.8 18 44.2 18C49.6 18 49.6 10 55 10"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
+      <svg viewBox="0 0 56 20" className="absolute inset-0 size-full">
+        <path
+          d={HERO_WAVE_PATH}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {shouldReduceMotion ? null : (
+        <motion.svg
+          viewBox="0 0 56 20"
+          className="absolute inset-0 size-full overflow-visible text-primary"
+        >
+          <motion.path
+            d={HERO_WAVE_PATH}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="blur-[4px]"
+            animate={{
+              pathLength: [0, 0, 1, 1, 1, 1],
+              opacity: [0, 0, 0.6, 0.2, 0, 0],
+            }}
+            transition={{
+              duration: HERO_CTA_CYCLE,
+              ease: "linear",
+              repeat: Number.POSITIVE_INFINITY,
+              times: createLoopTimes(start, HERO_WAVE_DRAW),
+            }}
+          />
+          <motion.path
+            d={HERO_WAVE_PATH}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            animate={{
+              pathLength: [0, 0, 1, 1, 1, 1],
+              opacity: [0, 0, 1, 0.35, 0, 0],
+            }}
+            transition={{
+              duration: HERO_CTA_CYCLE,
+              ease: "linear",
+              repeat: Number.POSITIVE_INFINITY,
+              times: createLoopTimes(start, HERO_WAVE_DRAW),
+            }}
+          />
+        </motion.svg>
+      )}
+    </div>
   );
 }
 
 function AnimatedHeroCta() {
   return (
     <div className="mx-auto mt-8 flex w-full items-center justify-center gap-2 text-foreground sm:mt-10 sm:gap-4 lg:mt-6 lg:gap-5">
-      <Hammer
-        className="size-12 shrink-0 [stroke-width:1.5px] sm:size-14 lg:size-16"
-        aria-hidden="true"
-      />
-      <HeroWave />
-      <ContainerIcon
-        className="size-12 shrink-0 [stroke-width:1.5px] sm:size-14 lg:size-16"
-        aria-hidden="true"
-      />
-      <HeroWave />
-      <ClipboardClock
-        className="size-12 shrink-0 [stroke-width:1.5px] sm:size-14 lg:size-16"
-        aria-hidden="true"
-      />
+      <AnimatedHeroIcon Icon={Hammer} start={0.2} />
+      <HeroWave start={0.88} />
+      <AnimatedHeroIcon Icon={ContainerIcon} start={1.72} />
+      <HeroWave start={2.42} />
+      <AnimatedHeroIcon Icon={ClipboardClock} start={3.28} />
     </div>
   );
 }
