@@ -128,7 +128,7 @@ function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
 function Brand() {
   return (
     <a
-      href="#top"
+      href="/"
       className="inline-flex items-center gap-2 text-inherit no-underline sm:gap-3"
       aria-label="Sealant home"
     >
