@@ -1,6 +1,7 @@
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
+import { motion, useReducedMotion } from "framer-motion";
 import { Github, Menu, Monitor, Moon, Sun, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -172,6 +173,15 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
+
+  const mobileMenuTransition = shouldReduceMotion
+    ? { duration: 0 }
+    : { duration: 0.24, ease: [0.32, 0.72, 0, 1] as const };
+
+  const mobileMenuIconTransition = shouldReduceMotion
+    ? { duration: 0 }
+    : { duration: 0.18, ease: [0.22, 1, 0.36, 1] as const };
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -214,20 +224,51 @@ function RootComponent() {
                   setMobileMenuOpen((open) => !open);
                 }}
               >
-                {mobileMenuOpen ? (
-                  <X className="size-[1.3125rem]" aria-hidden="true" />
-                ) : (
-                  <Menu className="size-[1.3125rem]" aria-hidden="true" />
-                )}
+                <span className="relative size-[1.3125rem]" aria-hidden="true">
+                  <motion.span
+                    className="absolute inset-0"
+                    initial={false}
+                    animate={{
+                      opacity: mobileMenuOpen ? 0 : 1,
+                      rotate: mobileMenuOpen ? -45 : 0,
+                      scale: mobileMenuOpen ? 0.86 : 1,
+                    }}
+                    transition={mobileMenuIconTransition}
+                  >
+                    <Menu className="size-[1.3125rem]" aria-hidden="true" />
+                  </motion.span>
+                  <motion.span
+                    className="absolute inset-0"
+                    initial={false}
+                    animate={{
+                      opacity: mobileMenuOpen ? 1 : 0,
+                      rotate: mobileMenuOpen ? 0 : 45,
+                      scale: mobileMenuOpen ? 1 : 0.86,
+                    }}
+                    transition={mobileMenuIconTransition}
+                  >
+                    <X className="size-[1.3125rem]" aria-hidden="true" />
+                  </motion.span>
+                </span>
               </button>
             </div>
           </div>
-          {mobileMenuOpen ? (
-            <div id="marketing-mobile-nav" className="border-t border-border md:hidden">
+          <motion.div
+            className={`overflow-hidden md:hidden ${mobileMenuOpen ? "pointer-events-auto" : "pointer-events-none"}`}
+            initial={false}
+            animate={{
+              height: mobileMenuOpen ? "auto" : 0,
+              opacity: mobileMenuOpen ? 1 : 0,
+            }}
+            transition={mobileMenuTransition}
+            aria-hidden={!mobileMenuOpen}
+          >
+            <div id="marketing-mobile-nav" className="border-t border-border">
               <div className="mx-auto grid max-w-7xl gap-2 px-4 py-3 sm:px-6">
                 <a
                   href="/blog"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
                     setMobileMenuOpen(false);
                   }}
@@ -237,6 +278,7 @@ function RootComponent() {
                 <a
                   href="/docs"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
                     setMobileMenuOpen(false);
                   }}
@@ -248,6 +290,7 @@ function RootComponent() {
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex min-h-11 items-center justify-center gap-1.5 border border-primary bg-primary px-4 font-sans text-[1rem] font-semibold tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
                     setMobileMenuOpen(false);
                   }}
@@ -257,7 +300,7 @@ function RootComponent() {
                 </a>
               </div>
             </div>
-          ) : null}
+          </motion.div>
         </header>
         <Outlet />
         <footer className="border-t-2 border-ring py-4 pb-5">
