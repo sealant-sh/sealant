@@ -158,12 +158,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant | The open platform for reproducible software work",
+        title: "Sealant | The open platform for tracked agent execution",
       },
       {
         name: "description",
         content:
-          "A self-hosted platform for managing isolated sandboxes, tracking execution lineage, and building modular developer workflows.",
+          "A self-hosted platform for isolated sandboxes, tracked executions, and modular developer workflows.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -305,7 +305,7 @@ function RootComponent() {
         <Outlet />
         <footer className="border-t-2 border-ring py-4 pb-5">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
-            <p>The open platform for reproducible software work.</p>
+            <p>The open platform for isolated, tracked software work.</p>
             <a
               className="m-0 text-[0.78rem] text-muted-foreground no-underline hover:text-foreground"
               href="#top"

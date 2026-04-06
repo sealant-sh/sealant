@@ -164,11 +164,11 @@ function MarketingPage() {
           <div className="flex items-center lg:border-r lg:border-border lg:py-0">
             <div className="w-full text-center lg:pl-[42px] lg:pr-[15px] lg:py-0">
               <h1 className="m-0 mx-auto max-w-[11ch] font-display text-[2.5rem] leading-[0.95] uppercase sm:text-[3rem] lg:max-w-[487px] lg:text-[48px] lg:leading-[48px] lg:tracking-[0.48px]">
-                The open platform for secure agents &amp; workflows
+                The open platform for tracked agent execution
               </h1>
               <p className="mt-5 mx-auto max-w-[34rem] text-sm leading-7 text-foreground/85 sm:mt-6 sm:text-base lg:max-w-[582px] lg:text-[1.1rem]">
-                A self-hosted platform for managing isolated sandboxes, tracking execution lineage,
-                and building modular developer workflows.
+                A self-hosted platform for running isolated sandboxes, capturing execution history,
+                and building modular developer workflows on top.
               </p>
               <AnimatedHeroCta />
             </div>
@@ -184,11 +184,11 @@ function MarketingPage() {
               Platform overview
             </p>
             <h2 className="m-0 max-w-[16ch] font-display text-[2.25rem] uppercase tracking-wide leading-none sm:text-5xl lg:text-6xl">
-              Reproducible software work, modeled as platform primitives.
+              Tracked software work, built on two core primitives.
             </h2>
             <p>
-              Sealant centers sandboxes, executions, tracked work, and modular workflows on one
-              self-hosted platform.
+              Sealant centers two core primitives: sandboxes and executions. Workflow modules build
+              on top of that foundation.
             </p>
           </div>
           <ol
@@ -200,11 +200,9 @@ function MarketingPage() {
                 The Core
               </span>
               <p>
-                Two core primitives: fast, highly customizable sandboxes and reproducible software
-                runs (executions). Sandboxes can be opened in a preferred editor or harness,
-                shipping fully configured with custom dotfiles and specific tooling built in.
-                Managed lifecycles, capability routing, and secure artifact storage form the
-                foundational layer.
+                Two core primitives: fast, highly customizable sandboxes and tracked software runs
+                (executions). Sandboxes provide the isolated environment. Executions provide the
+                durable record of what ran, what changed, and how the run completed.
               </p>
             </li>
             <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
@@ -212,9 +210,9 @@ function MarketingPage() {
                 Observability
               </span>
               <p>
-                Sealant captures the complete lifecycle of every run. State transitions, raw logs,
-                diffs, patches, and I/O lineage are tracked by default, generating a completely
-                inspectable history of all sandbox activity.
+                Execution visibility is a core product surface. Sealant focuses first on state
+                transitions, artifacts, diffs, and run summaries, with deeper tracing added over
+                time.
               </p>
             </li>
             <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
@@ -222,9 +220,9 @@ function MarketingPage() {
                 First-party modules
               </span>
               <p>
-                Sealant ships with built-in functional components, starting with automated Issue
-                Workflows. These features are built entirely on internal module boundaries to
-                guarantee a genuinely extensible architecture from day one.
+                Sealant is designed to support first-party workflow modules, starting with Issue
+                Workflows. These modules are intended to exercise the same execution, artifact, and
+                policy surfaces that future extension points will build on.
               </p>
             </li>
             <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
@@ -232,10 +230,10 @@ function MarketingPage() {
                 SDK &amp; extensions
               </span>
               <p>
-                An upcoming SDK will enable the creation of custom modules. Third-party modules will
-                have the exact same access to core primitives, logging, and observability as the
-                first-party modules. The architecture allows injecting custom hooks, swapping
-                adapters, and building entirely new tools directly on the platform.
+                Sealant is being built with future extension seams in mind. Early extension points
+                are expected around workflow hooks, reporters, runtime adapters, and first-party-
+                style modules, with the public SDK formalized after those seams are proven in
+                product use.
               </p>
             </li>
           </ol>
@@ -251,7 +249,7 @@ function MarketingPage() {
             Self-hosted by default.
           </h2>
           <p>
-            Run Sealant inside your own boundary and build on an open platform for reproducible
+            Run Sealant inside your own boundary and build on an open platform for isolated, tracked
             software work.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
