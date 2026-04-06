@@ -1,3 +1,4 @@
+import type { NewSandbox as NewSandboxSpec } from "@sealant/validators";
 import {
   boolean,
   index,
@@ -10,7 +11,6 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import type { NewSandbox as NewSandboxSpec } from "../payloads.js";
 import { user } from "./auth.js";
 
 export const sourceProviderValues = ["github", "gitlab", "generic"] as const;

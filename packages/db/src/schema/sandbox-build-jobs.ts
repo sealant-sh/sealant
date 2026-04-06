@@ -1,6 +1,6 @@
+import type { NewSandbox, SandboxBuild } from "@sealant/validators";
 import { index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
-import type { NewSandbox, SandboxBuild } from "../payloads.js";
 import { sandboxAttempts } from "./control-plane.js";
 
 export const ociImageBuildJobStatusValues = ["queued", "running", "succeeded", "failed"] as const;

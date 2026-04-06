@@ -1,8 +1,5 @@
-import process from "node:process";
-
+import { parseDatabaseEnv } from "@sealant/validators/env";
 import { defineConfig } from "drizzle-kit";
-
-import { parseDatabaseEnv } from "./src/runtime-env.js";
 
 const env = parseDatabaseEnv(process.env);
 
