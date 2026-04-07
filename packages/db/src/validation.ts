@@ -2,6 +2,9 @@ import { createInsertSchema, createSelectSchema } from "drizzle-orm/effect-schem
 import { Schema } from "effect";
 
 import {
+  githubAppInstallations,
+  githubInstallationRepositories,
+  githubWebhookDeliveries,
   issueStateValues,
   issueWorkflowExecutions,
   issueWorkflowExecutionStatusValues,
@@ -17,6 +20,22 @@ import {
   sandboxStatusValues,
   sandboxBuildJobs,
 } from "./schema.js";
+
+export const githubAppInstallationSelectSchema = createSelectSchema(githubAppInstallations);
+
+export const githubAppInstallationInsertSchema = createInsertSchema(githubAppInstallations);
+
+export const githubInstallationRepositorySelectSchema = createSelectSchema(
+  githubInstallationRepositories,
+);
+
+export const githubInstallationRepositoryInsertSchema = createInsertSchema(
+  githubInstallationRepositories,
+);
+
+export const githubWebhookDeliverySelectSchema = createSelectSchema(githubWebhookDeliveries);
+
+export const githubWebhookDeliveryInsertSchema = createInsertSchema(githubWebhookDeliveries);
 
 export const sandboxBuildJobSelectSchema = createSelectSchema(sandboxBuildJobs);
 

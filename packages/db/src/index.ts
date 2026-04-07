@@ -298,6 +298,12 @@ export {
 export * as schema from "./schema/index.js";
 
 export {
+  githubAppInstallationInsertSchema,
+  githubAppInstallationSelectSchema,
+  githubInstallationRepositoryInsertSchema,
+  githubInstallationRepositorySelectSchema,
+  githubWebhookDeliveryInsertSchema,
+  githubWebhookDeliverySelectSchema,
   issueStateSchema,
   issueWorkflowExecutionInsertSchema,
   issueWorkflowExecutionSelectSchema,

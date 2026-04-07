@@ -11,9 +11,11 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@effect/platform": "catalog:",
     "@hono/node-server": "^1.18.1",
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",
+    "@sealant/api-contracts": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/sandboxes": "workspace:*",

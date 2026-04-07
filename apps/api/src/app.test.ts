@@ -1166,11 +1166,38 @@ describe("createApiApp", () => {
     expect(body.paths["/v1/sandboxes/{sandboxId}/attempts"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/events"]).toBeDefined();
     expect(body.paths["/v1/sandboxes/{sandboxId}/ssh-target"]).toBeDefined();
-    expect(body.paths["/v1/github/installations"]).toBeDefined();
-    expect(body.paths["/v1/github/installations/import"]).toBeDefined();
-    expect(body.paths["/v1/github/installations/{installationId}/repositories"]).toBeDefined();
-    expect(body.paths["/v1/github/webhooks"]).toBeDefined();
+    expect(body.paths["/v1/github/installations"]).toBeUndefined();
     expect(body.paths["/v1/runs/{runId}"]).toBeUndefined();
+  });
+
+  it("serves the GitHub module OpenAPI document", async () => {
+    const app = createApiApp({
+      env: testEnv,
+      registryClient: createRegistryClientStub(),
+      sandboxBuildJobPublisher: createSandboxBuildJobPublisherStub(),
+      sandboxBuildJobRepository: createSandboxBuildJobRepositoryStub(),
+      sandboxRepository: createSandboxRepositoryStub(),
+      sandboxAttemptRepository: createSandboxAttemptRepositoryStub(),
+      sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepositoryStub(),
+    });
+
+    const response = await app.request("/v1/github/openapi.json");
+
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      paths: Record<string, unknown>;
+      info: {
+        title: string;
+      };
+    };
+
+    expect(body.info.title).toBe("Sealant Control Plane API - GitHub");
+    expect(body.paths["/installations"]).toBeDefined();
+    expect(body.paths["/installations/import"]).toBeDefined();
+    expect(body.paths["/installations/{installationId}/repositories"]).toBeDefined();
+    expect(body.paths["/installations/{installationId}/sync"]).toBeDefined();
+    expect(body.paths["/webhooks"]).toBeDefined();
   });
 
   it("lists granted GitHub installations", async () => {
@@ -1399,6 +1426,7 @@ describe("createApiApp", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
+      _tag: "GitHubForbiddenError",
       message: `User ${testUserId} does not have access to GitHub installation gh_installation_1.`,
     });
   });

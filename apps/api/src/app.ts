@@ -18,7 +18,7 @@ import { createApiPackageStandardizer } from "./lib/create-package-standardizer.
 import { createRegistryClient } from "./lib/create-registry-client.js";
 import { createSandboxBuildJobPublisher } from "./lib/create-sandbox-build-job-publisher.js";
 import type { AppRuntimeConfig } from "./lib/types.js";
-import github from "./routes/github/github.index.js";
+import { createGitHubWebHandler } from "./routes/github/github.http-api.js";
 import packages from "./routes/packages/packages.index.js";
 import registries from "./routes/registries/registries.index.js";
 import sandboxes from "./routes/sandboxes/sandboxes.index.js";
@@ -33,9 +33,9 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   routes.route("/v1/packages", packages);
   routes.route("/v1/sandboxes", sandboxes);
   routes.route("/v1/registries", registries);
-  routes.route("/v1/github", github);
 
   app.route("/", routes);
+  app.mount("/v1/github", createGitHubWebHandler(config));
   configureOpenAPI(app, routes, config.env);
 
   return app;
