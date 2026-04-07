@@ -1,4 +1,4 @@
-export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "./env.js";
+export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "@sealant/validators/env";
 
 export {
   consumeRabbitMqJsonMessages,
@@ -21,3 +21,12 @@ export {
   getRabbitMqSingleton,
   type RabbitMqSingleton,
 } from "./singleton.js";
+
+export {
+  createRabbitMqService,
+  rabbitMqServiceLayer,
+  rabbitMqServiceLiveLayer,
+  RabbitMqServiceTag,
+  RabbitMqConnectionConfig,
+  type RabbitMqService,
+} from "./service.js";

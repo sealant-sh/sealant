@@ -1,13 +1,14 @@
-import { env } from "./env.js";
+import { env } from "./runtime-env.js";
 import { startWorkers } from "./workers/index.js";
 
 const retryDelayMs = 2000;
+const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log("Sealant worker starting", {
   workerId: env.WORKER_ID,
   rabbitMqUrl: env.RABBITMQ_URL,
   registryBaseUrl: env.REGISTRY_BASE_URL,
-  databaseFilePath: env.DATABASE_FILE_PATH,
+  database: `${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
   defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
   defaultSshBindHost: env.DEFAULT_SSH_BIND_HOST,

@@ -2,28 +2,31 @@
   "name": "@sealant/db",
   "version": "0.0.0",
   "private": true,
-  "description": "Shared SQLite database package for control-plane state",
+  "description": "Shared PostgreSQL database package for control-plane state",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./payloads": "./src/payloads.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/run-migrations.ts",
-    "dev": "exec drizzle-kit studio --config drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "dev": "drizzle-kit studio",
     "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@libsql/client": "^0.15.15",
+    "@effect/sql": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@sealant/validators": "workspace:*",
-    "drizzle-orm": "^0.44.7",
-    "drizzle-zod": "^0.8.2",
-    "zod": "catalog:"
+    "drizzle-orm": "1.0.0-beta.20",
+    "effect": "catalog:",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
-    "drizzle-kit": "^0.31.5"
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "1.0.0-beta.20"
   }
 }

@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   githubAppInstallations,
   githubInstallationUserGrants,
@@ -53,218 +54,352 @@ export interface ListGitHubInstallationsForUserInput {
   readonly status?: GitHubInstallationStatus;
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
+/** @deprecated Use GitHubInstallationRepo + GitHubInstallationRepoLive instead. */
+export const createGitHubInstallationRepository = (): never => {
+  throw new Error("createGitHubInstallationRepository is disabled during the Effect transition.");
+};
+
+/** @deprecated Use GitHubInstallationRepoService instead. */
+export type GitHubInstallationRepository = GitHubInstallationRepoService;
+
+const gitHubInstallationRepoOperationSchema = Schema.Literal(
+  "getInstallationByExternalId",
+  "getInstallationById",
+  "grantInstallationToUser",
+  "listActiveInstallations",
+  "listInstallationGrants",
+  "listInstallationsForUser",
+  "revokeInstallationGrant",
+  "setInstallationStatus",
+  "upsertInstallation",
+  "userHasInstallationGrant",
+);
+
+export class GitHubInstallationRepoInvariantError extends Schema.TaggedError<GitHubInstallationRepoInvariantError>(
+  "GitHubInstallationRepoInvariantError",
+)("GitHubInstallationRepoInvariantError", {
+  operation: gitHubInstallationRepoOperationSchema,
+  message: Schema.String,
+}) {}
+
+export class GitHubInstallationRepoUnexpectedError extends Schema.TaggedError<GitHubInstallationRepoUnexpectedError>(
+  "GitHubInstallationRepoUnexpectedError",
+)("GitHubInstallationRepoUnexpectedError", {
+  operation: gitHubInstallationRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+export const gitHubInstallationRepoErrorSchema = Schema.Union(
+  GitHubInstallationRepoInvariantError,
+  GitHubInstallationRepoUnexpectedError,
+);
+
+export type GitHubInstallationRepoError = typeof gitHubInstallationRepoErrorSchema.Type;
+
+type GitHubInstallationRepoOperation = typeof gitHubInstallationRepoOperationSchema.Type;
+
+const mapGitHubInstallationRepoError = (
+  operation: GitHubInstallationRepoOperation,
+  cause: unknown,
+): GitHubInstallationRepoError => {
+  if (
+    cause instanceof GitHubInstallationRepoInvariantError ||
+    cause instanceof GitHubInstallationRepoUnexpectedError
+  ) {
+    return cause;
   }
 
-  return row;
+  return new GitHubInstallationRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
 };
 
-export const createGitHubInstallationRepository = (client: DatabaseClient) => {
-  const { db } = client;
+const withGitHubInstallationRepoError = <A>(
+  operation: GitHubInstallationRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, GitHubInstallationRepoError> => {
+  return effect.pipe(Effect.mapError((cause) => mapGitHubInstallationRepoError(operation, cause)));
+};
 
-  const upsertInstallation = async (
+export interface GitHubInstallationRepoService {
+  readonly upsertInstallation: (
     input: UpsertGitHubInstallationInput,
-  ): Promise<GitHubAppInstallation> => {
-    const [installation] = await db
-      .insert(githubAppInstallations)
-      .values({
-        id: input.id,
-        externalInstallationId: input.externalInstallationId,
-        ...(input.externalAccountId === undefined
-          ? {}
-          : { externalAccountId: input.externalAccountId }),
-        accountLogin: input.accountLogin,
-        accountType: input.accountType,
-        ...(input.targetType === undefined ? {} : { targetType: input.targetType }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
-        ...(input.repositorySelection === undefined
-          ? {}
-          : { repositorySelection: input.repositorySelection }),
-        ...(input.installedAt === undefined ? {} : { installedAt: input.installedAt }),
-        ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
-        ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-      } satisfies NewGitHubAppInstallation)
-      .onConflictDoUpdate({
-        target: githubAppInstallations.externalInstallationId,
-        set: {
-          ...(input.externalAccountId === undefined
-            ? {}
-            : { externalAccountId: input.externalAccountId }),
-          accountLogin: input.accountLogin,
-          accountType: input.accountType,
-          ...(input.targetType === undefined ? {} : { targetType: input.targetType }),
-          ...(input.status === undefined ? {} : { status: input.status }),
-          ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
-          ...(input.repositorySelection === undefined
-            ? {}
-            : { repositorySelection: input.repositorySelection }),
-          ...(input.installedAt === undefined ? {} : { installedAt: input.installedAt }),
-          ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
-          ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-        },
-      })
-      .returning();
-
-    return assertInserted(installation, "Failed to upsert GitHub installation.");
-  };
-
-  const getInstallationById = async (id: string): Promise<GitHubAppInstallation | undefined> => {
-    const [installation] = await db
-      .select()
-      .from(githubAppInstallations)
-      .where(eq(githubAppInstallations.id, id))
-      .limit(1);
-
-    return installation;
-  };
-
-  const getInstallationByExternalId = async (
+  ) => Effect.Effect<GitHubAppInstallation, GitHubInstallationRepoError>;
+  readonly getInstallationById: (
+    id: string,
+  ) => Effect.Effect<GitHubAppInstallation | undefined, GitHubInstallationRepoError>;
+  readonly getInstallationByExternalId: (
     externalInstallationId: string,
-  ): Promise<GitHubAppInstallation | undefined> => {
-    const [installation] = await db
-      .select()
-      .from(githubAppInstallations)
-      .where(eq(githubAppInstallations.externalInstallationId, externalInstallationId))
-      .limit(1);
-
-    return installation;
-  };
-
-  const listInstallationsForUser = async (
+  ) => Effect.Effect<GitHubAppInstallation | undefined, GitHubInstallationRepoError>;
+  readonly listInstallationsForUser: (
     input: ListGitHubInstallationsForUserInput,
-  ): Promise<readonly GitHubAppInstallation[]> => {
-    const whereClauses = [
-      eq(githubInstallationUserGrants.userId, input.userId),
-      isNull(githubInstallationUserGrants.revokedAt),
-      ...(input.status === undefined ? [] : [eq(githubAppInstallations.status, input.status)]),
-    ];
-
-    const rows = await db
-      .select({ installation: githubAppInstallations })
-      .from(githubInstallationUserGrants)
-      .innerJoin(
-        githubAppInstallations,
-        eq(githubAppInstallations.id, githubInstallationUserGrants.installationId),
-      )
-      .where(and(...whereClauses))
-      .orderBy(asc(githubAppInstallations.accountLogin));
-
-    return rows.map((row) => row.installation);
-  };
-
-  const listActiveInstallations = async (): Promise<readonly GitHubAppInstallation[]> => {
-    return db
-      .select()
-      .from(githubAppInstallations)
-      .where(eq(githubAppInstallations.status, "active"))
-      .orderBy(asc(githubAppInstallations.accountLogin));
-  };
-
-  const setInstallationStatus = async (
+  ) => Effect.Effect<readonly GitHubAppInstallation[], GitHubInstallationRepoError>;
+  readonly listActiveInstallations: () => Effect.Effect<
+    readonly GitHubAppInstallation[],
+    GitHubInstallationRepoError
+  >;
+  readonly setInstallationStatus: (
     input: SetGitHubInstallationStatusInput,
-  ): Promise<GitHubAppInstallation | null> => {
-    const [installation] = await db
-      .update(githubAppInstallations)
-      .set({
-        status: input.status,
-        ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
-        ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
-      })
-      .where(eq(githubAppInstallations.id, input.installationId))
-      .returning();
-
-    return installation ?? null;
-  };
-
-  const grantInstallationToUser = async (
+  ) => Effect.Effect<GitHubAppInstallation | null, GitHubInstallationRepoError>;
+  readonly grantInstallationToUser: (
     input: GrantGitHubInstallationToUserInput,
-  ): Promise<GitHubInstallationUserGrant> => {
-    const [grant] = await db
-      .insert(githubInstallationUserGrants)
-      .values({
-        installationId: input.installationId,
-        userId: input.userId,
-        ...(input.grantedByUserId === undefined ? {} : { grantedByUserId: input.grantedByUserId }),
-        ...(input.grantedAt === undefined ? {} : { grantedAt: input.grantedAt }),
-      } satisfies NewGitHubInstallationUserGrant)
-      .onConflictDoUpdate({
-        target: [githubInstallationUserGrants.installationId, githubInstallationUserGrants.userId],
-        set: {
-          revokedAt: null,
-          ...(input.grantedByUserId === undefined
-            ? {}
-            : { grantedByUserId: input.grantedByUserId }),
-          grantedAt: input.grantedAt ?? new Date(),
-        },
-      })
-      .returning();
-
-    return assertInserted(grant, "Failed to grant GitHub installation access.");
-  };
-
-  const revokeInstallationGrant = async (
+  ) => Effect.Effect<GitHubInstallationUserGrant, GitHubInstallationRepoError>;
+  readonly revokeInstallationGrant: (
     input: RevokeGitHubInstallationGrantInput,
-  ): Promise<GitHubInstallationUserGrant | null> => {
-    const [grant] = await db
-      .update(githubInstallationUserGrants)
-      .set({
-        revokedAt: input.revokedAt ?? new Date(),
-      })
-      .where(
-        and(
-          eq(githubInstallationUserGrants.installationId, input.installationId),
-          eq(githubInstallationUserGrants.userId, input.userId),
-        ),
-      )
-      .returning();
-
-    return grant ?? null;
-  };
-
-  const userHasInstallationGrant = async (input: {
+  ) => Effect.Effect<GitHubInstallationUserGrant | null, GitHubInstallationRepoError>;
+  readonly userHasInstallationGrant: (input: {
     readonly installationId: string;
     readonly userId: string;
-  }): Promise<boolean> => {
-    const [grant] = await db
-      .select({ installationId: githubInstallationUserGrants.installationId })
-      .from(githubInstallationUserGrants)
-      .where(
-        and(
-          eq(githubInstallationUserGrants.installationId, input.installationId),
-          eq(githubInstallationUserGrants.userId, input.userId),
-          isNull(githubInstallationUserGrants.revokedAt),
-        ),
-      )
-      .limit(1);
-
-    return grant !== undefined;
-  };
-
-  const listInstallationGrants = async (
+  }) => Effect.Effect<boolean, GitHubInstallationRepoError>;
+  readonly listInstallationGrants: (
     installationId: string,
-  ): Promise<readonly GitHubInstallationUserGrant[]> => {
-    return db
-      .select()
-      .from(githubInstallationUserGrants)
-      .where(eq(githubInstallationUserGrants.installationId, installationId))
-      .orderBy(asc(githubInstallationUserGrants.userId));
-  };
+  ) => Effect.Effect<readonly GitHubInstallationUserGrant[], GitHubInstallationRepoError>;
+}
 
-  return {
-    getInstallationByExternalId,
-    getInstallationById,
-    grantInstallationToUser,
-    listActiveInstallations,
-    listInstallationGrants,
-    listInstallationsForUser,
-    revokeInstallationGrant,
-    setInstallationStatus,
-    upsertInstallation,
-    userHasInstallationGrant,
-  };
-};
+export class GitHubInstallationRepo extends Context.Tag("GitHubInstallationRepo")<
+  GitHubInstallationRepo,
+  GitHubInstallationRepoService
+>() {}
 
-export type GitHubInstallationRepository = ReturnType<typeof createGitHubInstallationRepository>;
+export const GitHubInstallationRepoLive = Layer.effect(
+  GitHubInstallationRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+
+    return {
+      upsertInstallation: (input) =>
+        withGitHubInstallationRepoError(
+          "upsertInstallation",
+          Effect.gen(function* () {
+            const [installation] = yield* db
+              .insert(githubAppInstallations)
+              .values({
+                id: input.id,
+                externalInstallationId: input.externalInstallationId,
+                ...(input.externalAccountId === undefined
+                  ? {}
+                  : { externalAccountId: input.externalAccountId }),
+                accountLogin: input.accountLogin,
+                accountType: input.accountType,
+                ...(input.targetType === undefined ? {} : { targetType: input.targetType }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+                ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+                ...(input.repositorySelection === undefined
+                  ? {}
+                  : { repositorySelection: input.repositorySelection }),
+                ...(input.installedAt === undefined ? {} : { installedAt: input.installedAt }),
+                ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
+                ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+              } satisfies NewGitHubAppInstallation)
+              .onConflictDoUpdate({
+                target: githubAppInstallations.externalInstallationId,
+                set: {
+                  ...(input.externalAccountId === undefined
+                    ? {}
+                    : { externalAccountId: input.externalAccountId }),
+                  accountLogin: input.accountLogin,
+                  accountType: input.accountType,
+                  ...(input.targetType === undefined ? {} : { targetType: input.targetType }),
+                  ...(input.status === undefined ? {} : { status: input.status }),
+                  ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+                  ...(input.repositorySelection === undefined
+                    ? {}
+                    : { repositorySelection: input.repositorySelection }),
+                  ...(input.installedAt === undefined ? {} : { installedAt: input.installedAt }),
+                  ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
+                  ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+                },
+              })
+              .returning();
+
+            if (installation === undefined) {
+              return yield* new GitHubInstallationRepoInvariantError({
+                operation: "upsertInstallation",
+                message: "Failed to upsert GitHub installation.",
+              });
+            }
+
+            return installation;
+          }),
+        ),
+
+      getInstallationById: (id) =>
+        withGitHubInstallationRepoError(
+          "getInstallationById",
+          Effect.gen(function* () {
+            const [installation] = yield* db
+              .select()
+              .from(githubAppInstallations)
+              .where(eq(githubAppInstallations.id, id))
+              .limit(1);
+
+            return installation;
+          }),
+        ),
+
+      getInstallationByExternalId: (externalInstallationId) =>
+        withGitHubInstallationRepoError(
+          "getInstallationByExternalId",
+          Effect.gen(function* () {
+            const [installation] = yield* db
+              .select()
+              .from(githubAppInstallations)
+              .where(eq(githubAppInstallations.externalInstallationId, externalInstallationId))
+              .limit(1);
+
+            return installation;
+          }),
+        ),
+
+      listInstallationsForUser: (input) =>
+        withGitHubInstallationRepoError(
+          "listInstallationsForUser",
+          Effect.gen(function* () {
+            const whereClauses = [
+              eq(githubInstallationUserGrants.userId, input.userId),
+              isNull(githubInstallationUserGrants.revokedAt),
+              ...(input.status === undefined
+                ? []
+                : [eq(githubAppInstallations.status, input.status)]),
+            ];
+
+            const rows = yield* db
+              .select({ installation: githubAppInstallations })
+              .from(githubInstallationUserGrants)
+              .innerJoin(
+                githubAppInstallations,
+                eq(githubAppInstallations.id, githubInstallationUserGrants.installationId),
+              )
+              .where(and(...whereClauses))
+              .orderBy(asc(githubAppInstallations.accountLogin));
+
+            return rows.map((row: { readonly installation: GitHubAppInstallation }) => {
+              return row.installation;
+            });
+          }),
+        ),
+
+      listActiveInstallations: () =>
+        withGitHubInstallationRepoError(
+          "listActiveInstallations",
+          db
+            .select()
+            .from(githubAppInstallations)
+            .where(eq(githubAppInstallations.status, "active"))
+            .orderBy(asc(githubAppInstallations.accountLogin)),
+        ),
+
+      setInstallationStatus: (input) =>
+        withGitHubInstallationRepoError(
+          "setInstallationStatus",
+          Effect.gen(function* () {
+            const [installation] = yield* db
+              .update(githubAppInstallations)
+              .set({
+                status: input.status,
+                ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
+                ...(input.lastSyncedAt === undefined ? {} : { lastSyncedAt: input.lastSyncedAt }),
+              })
+              .where(eq(githubAppInstallations.id, input.installationId))
+              .returning();
+
+            return installation ?? null;
+          }),
+        ),
+
+      grantInstallationToUser: (input) =>
+        withGitHubInstallationRepoError(
+          "grantInstallationToUser",
+          Effect.gen(function* () {
+            const [grant] = yield* db
+              .insert(githubInstallationUserGrants)
+              .values({
+                installationId: input.installationId,
+                userId: input.userId,
+                ...(input.grantedByUserId === undefined
+                  ? {}
+                  : { grantedByUserId: input.grantedByUserId }),
+                ...(input.grantedAt === undefined ? {} : { grantedAt: input.grantedAt }),
+              } satisfies NewGitHubInstallationUserGrant)
+              .onConflictDoUpdate({
+                target: [
+                  githubInstallationUserGrants.installationId,
+                  githubInstallationUserGrants.userId,
+                ],
+                set: {
+                  revokedAt: null,
+                  ...(input.grantedByUserId === undefined
+                    ? {}
+                    : { grantedByUserId: input.grantedByUserId }),
+                  grantedAt: input.grantedAt ?? new Date(),
+                },
+              })
+              .returning();
+
+            if (grant === undefined) {
+              return yield* new GitHubInstallationRepoInvariantError({
+                operation: "grantInstallationToUser",
+                message: "Failed to grant GitHub installation access.",
+              });
+            }
+
+            return grant;
+          }),
+        ),
+
+      revokeInstallationGrant: (input) =>
+        withGitHubInstallationRepoError(
+          "revokeInstallationGrant",
+          Effect.gen(function* () {
+            const [grant] = yield* db
+              .update(githubInstallationUserGrants)
+              .set({
+                revokedAt: input.revokedAt ?? new Date(),
+              })
+              .where(
+                and(
+                  eq(githubInstallationUserGrants.installationId, input.installationId),
+                  eq(githubInstallationUserGrants.userId, input.userId),
+                ),
+              )
+              .returning();
+
+            return grant ?? null;
+          }),
+        ),
+
+      userHasInstallationGrant: (input) =>
+        withGitHubInstallationRepoError(
+          "userHasInstallationGrant",
+          Effect.gen(function* () {
+            const [grant] = yield* db
+              .select({ installationId: githubInstallationUserGrants.installationId })
+              .from(githubInstallationUserGrants)
+              .where(
+                and(
+                  eq(githubInstallationUserGrants.installationId, input.installationId),
+                  eq(githubInstallationUserGrants.userId, input.userId),
+                  isNull(githubInstallationUserGrants.revokedAt),
+                ),
+              )
+              .limit(1);
+
+            return grant !== undefined;
+          }),
+        ),
+
+      listInstallationGrants: (installationId) =>
+        withGitHubInstallationRepoError(
+          "listInstallationGrants",
+          db
+            .select()
+            .from(githubInstallationUserGrants)
+            .where(eq(githubInstallationUserGrants.installationId, installationId))
+            .orderBy(asc(githubInstallationUserGrants.userId)),
+        ),
+    } satisfies GitHubInstallationRepoService;
+  }),
+);

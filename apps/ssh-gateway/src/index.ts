@@ -1,6 +1,6 @@
 import { parseAuthorizedKeys } from "./authorized-keys.js";
-import { env } from "./env.js";
 import { startSshGatewayServer } from "./gateway-server.js";
+import { env } from "./runtime-env.js";
 
 // Entry point responsibilities:
 // 1) Load/validate configuration and key material.

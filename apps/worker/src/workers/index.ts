@@ -1,4 +1,5 @@
-import type { WorkerEnv } from "../env.js";
+import type { WorkerEnv } from "@sealant/validators/env";
+
 import { startSandboxWorker } from "./sandboxes.js";
 
 export const startWorkers = async (env: WorkerEnv) => {

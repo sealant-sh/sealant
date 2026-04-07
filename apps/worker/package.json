@@ -5,7 +5,7 @@
   "description": "Background worker for sandbox image build jobs",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
@@ -15,9 +15,10 @@
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/sandboxes": "workspace:*",
     "@sealant/source-integrations": "workspace:*",
-    "zod": "catalog:"
+    "@sealant/validators": "workspace:*"
   },
   "devDependencies": {
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "workspace:*",
+    "dotenv-cli": "catalog:"
   }
 }

@@ -1,15 +1,22 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-import { createPassthroughPackageStandardizer } from "./create-package-standardizer.js";
+import { createApiRuntime } from "./create-api-runtime.js";
 import type { AppBindings, AppRuntimeConfig } from "./types.js";
 
+/**
+ * Creates a typed Hono router with Sealant API bindings.
+ */
 export const createRouter = () => {
   return new Hono<AppBindings>();
 };
 
+/**
+ * Creates the API application, wires middleware, and injects runtime dependencies.
+ */
 export const createApp = (config: AppRuntimeConfig) => {
   const app = createRouter();
+  const runtime = createApiRuntime(config);
   const allowAllOrigins = config.env.CORS_ALLOWED_ORIGINS.trim() === "*";
   const allowedOrigins = parseAllowedOrigins(config.env.CORS_ALLOWED_ORIGINS);
 
@@ -39,25 +46,7 @@ export const createApp = (config: AppRuntimeConfig) => {
   );
 
   app.use("*", async (c, next) => {
-    c.set("env", config.env);
-    c.set("registryClient", config.registryClient);
-    c.set("sandboxBuildJobPublisher", config.sandboxBuildJobPublisher);
-    c.set("sandboxBuildJobRepository", config.sandboxBuildJobRepository);
-    c.set("gitHubSourceIntegration", config.gitHubSourceIntegration);
-    c.set("gitHubInstallationRepository", config.gitHubInstallationRepository);
-    c.set(
-      "gitHubInstallationRepositoryCacheRepository",
-      config.gitHubInstallationRepositoryCacheRepository,
-    );
-    c.set("gitHubWebhookDeliveryRepository", config.gitHubWebhookDeliveryRepository);
-    c.set("repositoryProfileRepository", config.repositoryProfileRepository);
-    c.set(
-      "packageStandardizer",
-      config.packageStandardizer ?? createPassthroughPackageStandardizer(),
-    );
-    c.set("sandboxRepository", config.sandboxRepository);
-    c.set("sandboxRuntimeInstanceRepository", config.sandboxRuntimeInstanceRepository);
-    c.set("sandboxAttemptRepository", config.sandboxAttemptRepository);
+    c.set("runtime", runtime);
     await next();
   });
 
@@ -71,7 +60,7 @@ export const createApp = (config: AppRuntimeConfig) => {
   });
 
   app.onError((error, c) => {
-    console.error("[api] request failed", {
+    c.get("runtime").logger.error("[api] request failed", {
       method: c.req.method,
       path: c.req.path,
       error: error.message,
@@ -89,6 +78,9 @@ export const createApp = (config: AppRuntimeConfig) => {
   return app;
 };
 
+/**
+ * Parses a comma-separated CORS allow-list into a normalized lookup set.
+ */
 const parseAllowedOrigins = (value: string): Set<string> => {
   return new Set(
     value

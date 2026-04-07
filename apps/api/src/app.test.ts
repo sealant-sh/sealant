@@ -23,15 +23,14 @@ import type {
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
 import { packageResolutionSchema, type NewSandbox } from "@sealant/validators";
+import type { AppEnv } from "@sealant/validators/env";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
-import type { AppEnv } from "./env.js";
 import type { SandboxBuildJobPublisher } from "./lib/types.js";
 
 const testEnv: AppEnv = {
-  DATABASE_BUSY_TIMEOUT_MS: 5000,
-  DATABASE_FILE_PATH: ":memory:",
+  DATABASE_URL: "postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane_test",
   CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001",
   NODE_ENV: "test",
   PORT: 3000,

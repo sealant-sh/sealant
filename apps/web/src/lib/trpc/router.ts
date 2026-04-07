@@ -167,10 +167,12 @@ export const appRouter = router({
     list: protectedProcedure
       .input(listOwnedSandboxesInputSchema.optional())
       .query(async ({ ctx, input }) => {
-        const query = listOwnedSandboxesInputSchema.parse(input ?? {});
-
+        /**
+         * Keep a stable default limit when optional input is omitted.
+         */
         return ctx.coreApi.sandboxes.list({
-          ...query,
+          limit: input?.limit ?? 25,
+          ...(input?.status === undefined ? {} : { status: input.status }),
           ownerUserId: ctx.session.user.id,
         });
       }),

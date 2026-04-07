@@ -23,6 +23,14 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 - Never touch `pnpm-lock.yaml` (no manual edits and no workflow steps that update it).
 - For internal dependencies, always use `workspace:*` in `package.json` and import via
   `@sealant/<package-name>`; never import from `../packages/*` paths.
+- For external dependencies used by more than one app/package, prefer `catalog:` versions in
+  `package.json` instead of inline semver.
+- If a shared external dependency is missing from the catalog, add it to the root
+  `pnpm-workspace.yaml` `catalog` and then reference it as `catalog:` from importers.
+- Do not duplicate shared external dependency version strings across apps/packages; keep version
+  authority in `pnpm-workspace.yaml`.
+- When installing new dependencies for agent work, do not update the lockfile (for example use
+  `pnpm add --lockfile=false ...` when needed).
 - For any non-tiny UI change in `apps/web`, read `apps/web/DESIGN.md` first and follow it as the
   design source of truth.
 - Do not add `"use client"` anywhere; this repo is not Next.js.
@@ -35,9 +43,13 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 **IMPORTANT:** Always consult effect-solutions before writing Effect code.
 
-1. Run `effect-solutions list` to see available guides
-2. Run `effect-solutions show <topic>...` for relevant patterns (supports multiple topics)
+1. Run `pnpm exec effect-solutions list` to see available guides
+2. Run `pnpm exec effect-solutions show <topic>...` for relevant patterns (supports multiple topics)
 3. Search `~/.local/share/effect-solutions/effect` for real implementations
+4. Define Effect services as types/contracts first (`Context.Tag` / `ServiceMap.Service`) with no
+   embedded live implementation in the definition.
+5. Define live/test implementations as separate layer constants after the service definitions (same
+   file is fine when clearly sectioned), and compose those layers at the boundary.
 
 Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling,
 error-handling, config, testing, cli.

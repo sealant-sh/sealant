@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   sandboxRunLinks,
   sandboxes,
@@ -47,154 +48,308 @@ export interface LinkSandboxAttemptInput {
   readonly linkedAt?: Date;
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
+/** @deprecated Use SandboxRepo + SandboxRepoLive instead. */
+export const createSandboxRepository = (): never => {
+  throw new Error("createSandboxRepository is disabled during the Effect transition.");
+};
+
+/** @deprecated Use SandboxRepoService instead. */
+export type SandboxRepository = SandboxRepoService;
+
+// Keep operation names constrained so all repo failures include consistent metadata.
+const sandboxRepoOperationSchema = Schema.Literal(
+  "createSandbox",
+  "getSandboxByAttemptId",
+  "getSandboxById",
+  "linkSandboxAttempt",
+  "listSandboxAttemptLinks",
+  "listSandboxes",
+  "setSandboxName",
+  "setSandboxStatus",
+);
+
+// Invariant errors represent expected domain/consistency violations
+// (for example, an insert/update path that should return a row but did not).
+export class SandboxRepoInvariantError extends Schema.TaggedError<SandboxRepoInvariantError>(
+  "SandboxRepoInvariantError",
+)("SandboxRepoInvariantError", {
+  operation: sandboxRepoOperationSchema,
+  message: Schema.String,
+}) {}
+
+// Unexpected errors wrap unknown defects from infra/driver boundaries
+// so callers can still pattern-match on a typed repo error channel.
+export class SandboxRepoUnexpectedError extends Schema.TaggedError<SandboxRepoUnexpectedError>(
+  "SandboxRepoUnexpectedError",
+)("SandboxRepoUnexpectedError", {
+  operation: sandboxRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+export const sandboxRepoErrorSchema = Schema.Union(
+  SandboxRepoInvariantError,
+  SandboxRepoUnexpectedError,
+);
+
+export type SandboxRepoError = typeof sandboxRepoErrorSchema.Type;
+
+type SandboxRepoOperation = typeof sandboxRepoOperationSchema.Type;
+
+const mapSandboxRepoError = (operation: SandboxRepoOperation, cause: unknown): SandboxRepoError => {
+  if (cause instanceof SandboxRepoInvariantError || cause instanceof SandboxRepoUnexpectedError) {
+    return cause;
   }
 
-  return row;
+  return new SandboxRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
 };
 
-export const createSandboxRepository = (client: DatabaseClient) => {
-  const { db } = client;
+const withSandboxRepoError = <A>(
+  operation: SandboxRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, SandboxRepoError> => {
+  return effect.pipe(Effect.mapError((cause) => mapSandboxRepoError(operation, cause)));
+};
 
-  const createSandbox = async (input: CreateSandboxInput): Promise<Sandbox> => {
-    const [sandbox] = await db
-      .insert(sandboxes)
-      .values({
-        id: input.id,
-        name: input.name,
-        ownerUserId: input.ownerUserId,
-        ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
-        ...(input.repositoryProfileRevisionId === undefined
-          ? {}
-          : { repositoryProfileRevisionId: input.repositoryProfileRevisionId }),
-        ...(input.profileRevisionId === undefined
-          ? {}
-          : { profileRevisionId: input.profileRevisionId }),
-        ...(input.requestedByUserId === undefined
-          ? {}
-          : { requestedByUserId: input.requestedByUserId }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-      } satisfies NewSandbox)
-      .returning();
+export interface SandboxRepoService {
+  /** Inserts a new sandbox row and returns the created sandbox. */
+  readonly createSandbox: (input: CreateSandboxInput) => Effect.Effect<Sandbox, SandboxRepoError>;
 
-    return assertInserted(sandbox, "Failed to create sandbox.");
-  };
+  /** Finds a sandbox by linked attempt/run id. Returns undefined when no link exists. */
+  readonly getSandboxByAttemptId: (
+    attemptId: string,
+  ) => Effect.Effect<Sandbox | undefined, SandboxRepoError>;
 
-  const getSandboxById = async (id: string): Promise<Sandbox | undefined> => {
-    const [sandbox] = await db.select().from(sandboxes).where(eq(sandboxes.id, id)).limit(1);
-    return sandbox;
-  };
+  /** Finds a sandbox by id. Returns undefined when not found. */
+  readonly getSandboxById: (id: string) => Effect.Effect<Sandbox | undefined, SandboxRepoError>;
 
-  const getSandboxByAttemptId = async (attemptId: string): Promise<Sandbox | undefined> => {
-    const [row] = await db
-      .select({ sandbox: sandboxes })
-      .from(sandboxRunLinks)
-      .innerJoin(sandboxes, eq(sandboxes.id, sandboxRunLinks.sandboxId))
-      .where(eq(sandboxRunLinks.runId, attemptId))
-      .limit(1);
+  /** Upserts the sandbox-attempt link and updates latestRunId on the sandbox row. */
+  readonly linkSandboxAttempt: (
+    input: LinkSandboxAttemptInput,
+  ) => Effect.Effect<SandboxRunLink, SandboxRepoError>;
 
-    return row?.sandbox;
-  };
+  /** Lists sandboxes newest-first with optional owner, repository, and status filters. */
+  readonly listSandboxes: (
+    input?: ListSandboxesInput,
+  ) => Effect.Effect<readonly Sandbox[], SandboxRepoError>;
 
-  const listSandboxes = async (input: ListSandboxesInput = {}): Promise<readonly Sandbox[]> => {
-    const whereClauses = [
-      ...(input.ownerUserId === undefined ? [] : [eq(sandboxes.ownerUserId, input.ownerUserId)]),
-      ...(input.repositoryId === undefined ? [] : [eq(sandboxes.repositoryId, input.repositoryId)]),
-      ...(input.statuses === undefined || input.statuses.length === 0
-        ? []
-        : [inArray(sandboxes.status, [...input.statuses])]),
-    ];
-
-    if (whereClauses.length === 0) {
-      return db
-        .select()
-        .from(sandboxes)
-        .orderBy(desc(sandboxes.createdAt))
-        .limit(input.limit ?? 100);
-    }
-
-    return db
-      .select()
-      .from(sandboxes)
-      .where(and(...whereClauses))
-      .orderBy(desc(sandboxes.createdAt))
-      .limit(input.limit ?? 100);
-  };
-
-  const setSandboxStatus = async (input: SetSandboxStatusInput): Promise<Sandbox | null> => {
-    const [sandbox] = await db
-      .update(sandboxes)
-      .set({ status: input.status })
-      .where(eq(sandboxes.id, input.id))
-      .returning();
-
-    return sandbox ?? null;
-  };
-
-  const setSandboxName = async (input: SetSandboxNameInput): Promise<Sandbox | null> => {
-    const [sandbox] = await db
-      .update(sandboxes)
-      .set({ name: input.name })
-      .where(eq(sandboxes.id, input.id))
-      .returning();
-
-    return sandbox ?? null;
-  };
-
-  const linkSandboxAttempt = async (input: LinkSandboxAttemptInput): Promise<SandboxRunLink> => {
-    return db.transaction(async (tx) => {
-      const [link] = await tx
-        .insert(sandboxRunLinks)
-        .values({
-          sandboxId: input.sandboxId,
-          runId: input.attemptId,
-          ...(input.relation === undefined ? {} : { relation: input.relation }),
-          ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
-        } satisfies NewSandboxRunLink)
-        .onConflictDoUpdate({
-          target: [sandboxRunLinks.sandboxId, sandboxRunLinks.runId],
-          set: {
-            relation: input.relation ?? "launch",
-            linkedAt: input.linkedAt ?? new Date(),
-          },
-        })
-        .returning();
-
-      const insertedLink = assertInserted(link, "Failed to link sandbox attempt.");
-
-      await tx
-        .update(sandboxes)
-        .set({ latestRunId: insertedLink.runId })
-        .where(eq(sandboxes.id, insertedLink.sandboxId));
-
-      return insertedLink;
-    });
-  };
-
-  const listSandboxAttemptLinks = async (
+  /** Lists links for a sandbox newest-first, bounded by the optional limit. */
+  readonly listSandboxAttemptLinks: (
     sandboxId: string,
-    limit = 100,
-  ): Promise<readonly SandboxRunLink[]> => {
-    return db
-      .select()
-      .from(sandboxRunLinks)
-      .where(eq(sandboxRunLinks.sandboxId, sandboxId))
-      .orderBy(desc(sandboxRunLinks.linkedAt))
-      .limit(limit);
-  };
+    limit?: number,
+  ) => Effect.Effect<readonly SandboxRunLink[], SandboxRepoError>;
 
-  return {
-    createSandbox,
-    getSandboxByAttemptId,
-    getSandboxById,
-    linkSandboxAttempt,
-    listSandboxes,
-    listSandboxAttemptLinks,
-    setSandboxName,
-    setSandboxStatus,
-  };
-};
+  /** Updates sandbox name and returns the updated row, or null when not found. */
+  readonly setSandboxName: (
+    input: SetSandboxNameInput,
+  ) => Effect.Effect<Sandbox | null, SandboxRepoError>;
 
-export type SandboxRepository = ReturnType<typeof createSandboxRepository>;
+  /** Updates sandbox status and returns the updated row, or null when not found. */
+  readonly setSandboxStatus: (
+    input: SetSandboxStatusInput,
+  ) => Effect.Effect<Sandbox | null, SandboxRepoError>;
+}
+export class SandboxRepo extends Context.Tag("SandboxRepo")<SandboxRepo, SandboxRepoService>() {}
+
+export const SandboxRepoLive = Layer.effect(
+  SandboxRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+
+    return {
+      createSandbox: (input) =>
+        withSandboxRepoError(
+          "createSandbox",
+          Effect.gen(function* () {
+            const [sandbox] = yield* db
+              .insert(sandboxes)
+              .values({
+                id: input.id,
+                name: input.name,
+                ownerUserId: input.ownerUserId,
+                ...(input.repositoryId === undefined ? {} : { repositoryId: input.repositoryId }),
+                ...(input.repositoryProfileRevisionId === undefined
+                  ? {}
+                  : { repositoryProfileRevisionId: input.repositoryProfileRevisionId }),
+                ...(input.profileRevisionId === undefined
+                  ? {}
+                  : { profileRevisionId: input.profileRevisionId }),
+                ...(input.requestedByUserId === undefined
+                  ? {}
+                  : { requestedByUserId: input.requestedByUserId }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+              } satisfies NewSandbox)
+              .returning();
+
+            if (sandbox === undefined) {
+              return yield* new SandboxRepoInvariantError({
+                operation: "createSandbox",
+                message: "Failed to create sandbox.",
+              });
+            }
+
+            return sandbox;
+          }),
+        ),
+
+      getSandboxByAttemptId: (attemptId) =>
+        withSandboxRepoError(
+          "getSandboxByAttemptId",
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .select({ sandbox: sandboxes })
+              .from(sandboxRunLinks)
+              .innerJoin(sandboxes, eq(sandboxes.id, sandboxRunLinks.sandboxId))
+              .where(eq(sandboxRunLinks.runId, attemptId))
+              .limit(1);
+
+            return row?.sandbox;
+          }),
+        ),
+
+      getSandboxById: (id) =>
+        withSandboxRepoError(
+          "getSandboxById",
+          Effect.gen(function* () {
+            const [sandbox] = yield* db
+              .select()
+              .from(sandboxes)
+              .where(eq(sandboxes.id, id))
+              .limit(1);
+            return sandbox;
+          }),
+        ),
+
+      linkSandboxAttempt: (input) =>
+        withSandboxRepoError(
+          "linkSandboxAttempt",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [link] = yield* tx
+                .insert(sandboxRunLinks)
+                .values({
+                  sandboxId: input.sandboxId,
+                  runId: input.attemptId,
+                  ...(input.relation === undefined ? {} : { relation: input.relation }),
+                  ...(input.linkedAt === undefined ? {} : { linkedAt: input.linkedAt }),
+                } satisfies NewSandboxRunLink)
+                .onConflictDoUpdate({
+                  target: [sandboxRunLinks.sandboxId, sandboxRunLinks.runId],
+                  set: {
+                    relation: input.relation ?? "launch",
+                    linkedAt: input.linkedAt ?? new Date(),
+                  },
+                })
+                .returning();
+
+              if (link === undefined) {
+                return yield* new SandboxRepoInvariantError({
+                  operation: "linkSandboxAttempt",
+                  message: "Failed to link sandbox attempt.",
+                });
+              }
+
+              yield* tx
+                .update(sandboxes)
+                .set({ latestRunId: link.runId })
+                .where(eq(sandboxes.id, link.sandboxId));
+
+              return link;
+            }),
+          ),
+        ),
+
+      listSandboxes: (input = {}) =>
+        withSandboxRepoError(
+          "listSandboxes",
+          Effect.gen(function* () {
+            const whereClauses = [
+              ...(input.ownerUserId === undefined
+                ? []
+                : [eq(sandboxes.ownerUserId, input.ownerUserId)]),
+              ...(input.repositoryId === undefined
+                ? []
+                : [eq(sandboxes.repositoryId, input.repositoryId)]),
+              ...(input.statuses === undefined || input.statuses.length === 0
+                ? []
+                : [inArray(sandboxes.status, [...input.statuses])]),
+            ];
+
+            if (whereClauses.length === 0) {
+              return yield* db
+                .select()
+                .from(sandboxes)
+                .orderBy(desc(sandboxes.createdAt))
+                .limit(input.limit ?? 100);
+            }
+
+            return yield* db
+              .select()
+              .from(sandboxes)
+              .where(and(...whereClauses))
+              .orderBy(desc(sandboxes.createdAt))
+              .limit(input.limit ?? 100);
+          }),
+        ),
+
+      listSandboxAttemptLinks: (sandboxId, limit = 100) =>
+        withSandboxRepoError(
+          "listSandboxAttemptLinks",
+          db
+            .select()
+            .from(sandboxRunLinks)
+            .where(eq(sandboxRunLinks.sandboxId, sandboxId))
+            .orderBy(desc(sandboxRunLinks.linkedAt))
+            .limit(limit),
+        ),
+
+      setSandboxName: (input) =>
+        withSandboxRepoError(
+          "setSandboxName",
+          Effect.gen(function* () {
+            const [sandbox] = yield* db
+              .update(sandboxes)
+              .set({ name: input.name })
+              .where(eq(sandboxes.id, input.id))
+              .returning();
+
+            return sandbox ?? null;
+          }),
+        ),
+
+      setSandboxStatus: (input) =>
+        withSandboxRepoError(
+          "setSandboxStatus",
+          Effect.gen(function* () {
+            const [sandbox] = yield* db
+              .update(sandboxes)
+              .set({ status: input.status })
+              .where(eq(sandboxes.id, input.id))
+              .returning();
+
+            return sandbox ?? null;
+          }),
+        ),
+    } satisfies SandboxRepoService;
+  }),
+);
+
+/*
+Example usage in an Effect program (following effect-solutions services-and-layers guidance):
+
+import { Effect, Layer } from "effect";
+import { SandboxRepo, SandboxRepoLive, SealantDBLive } from "@sealant/db";
+
+const program = Effect.gen(function* () {
+  const sandboxRepo = yield* SandboxRepo;
+  return yield* sandboxRepo.listSandboxes({ ownerUserId: "user_123", limit: 20 });
+});
+
+const appLayer = SandboxRepoLive.pipe(Layer.provide(SealantDBLive));
+
+const sandboxes = await Effect.runPromise(program.pipe(Effect.provide(appLayer)));
+*/

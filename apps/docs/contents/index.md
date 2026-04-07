@@ -3,7 +3,7 @@ title: Sealant Docs Content
 slug: /
 status: draft
 owner: engineering
-updated: 2026-03-28
+updated: 2026-04-03
 ---
 
 This directory contains framework-agnostic Markdown content for the docs site.
@@ -17,6 +17,7 @@ in flux.
 - [architecture/index.md](./architecture/index.md): cross-package lifecycle and system flow docs
 - [apps/index.md](./apps/index.md): deployable app/service docs
 - [getting-started/index.md](./getting-started/index.md): local setup and first-run guides
+- [changelog/index.md](./changelog/index.md): implementation notes and rollout history
 
 ## Writing conventions
 

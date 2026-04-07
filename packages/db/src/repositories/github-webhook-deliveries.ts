@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
+import { Context, Effect, Layer, Schema } from "effect";
 
-import type { DatabaseClient } from "../client.js";
+import { SealantDB } from "../client.js";
 import {
   githubWebhookDeliveries,
   type GitHubWebhookDelivery,
@@ -21,112 +22,208 @@ export interface CreateGitHubWebhookDeliveryInput {
   readonly errorMessage?: string;
 }
 
-const assertInserted = <T>(row: T | undefined, message: string): T => {
-  if (row === undefined) {
-    throw new Error(message);
-  }
-
-  return row;
+/** @deprecated Use GitHubWebhookDeliveryRepo + GitHubWebhookDeliveryRepoLive instead. */
+export const createGitHubWebhookDeliveryRepository = (): never => {
+  throw new Error(
+    "createGitHubWebhookDeliveryRepository is disabled during the Effect transition.",
+  );
 };
 
-export const createGitHubWebhookDeliveryRepository = (client: DatabaseClient) => {
-  const { db } = client;
+/** @deprecated Use GitHubWebhookDeliveryRepoService instead. */
+export type GitHubWebhookDeliveryRepository = GitHubWebhookDeliveryRepoService;
 
-  const createWebhookDelivery = async (
+const gitHubWebhookDeliveryRepoOperationSchema = Schema.Literal(
+  "createWebhookDelivery",
+  "getWebhookDeliveryByDeliveryId",
+  "listWebhookDeliveries",
+  "markWebhookDeliveryFailed",
+  "markWebhookDeliveryProcessed",
+);
+
+export class GitHubWebhookDeliveryRepoInvariantError extends Schema.TaggedError<GitHubWebhookDeliveryRepoInvariantError>(
+  "GitHubWebhookDeliveryRepoInvariantError",
+)("GitHubWebhookDeliveryRepoInvariantError", {
+  operation: gitHubWebhookDeliveryRepoOperationSchema,
+  message: Schema.String,
+}) {}
+
+export class GitHubWebhookDeliveryRepoUnexpectedError extends Schema.TaggedError<GitHubWebhookDeliveryRepoUnexpectedError>(
+  "GitHubWebhookDeliveryRepoUnexpectedError",
+)("GitHubWebhookDeliveryRepoUnexpectedError", {
+  operation: gitHubWebhookDeliveryRepoOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+export const gitHubWebhookDeliveryRepoErrorSchema = Schema.Union(
+  GitHubWebhookDeliveryRepoInvariantError,
+  GitHubWebhookDeliveryRepoUnexpectedError,
+);
+
+export type GitHubWebhookDeliveryRepoError = typeof gitHubWebhookDeliveryRepoErrorSchema.Type;
+
+type GitHubWebhookDeliveryRepoOperation = typeof gitHubWebhookDeliveryRepoOperationSchema.Type;
+
+const mapGitHubWebhookDeliveryRepoError = (
+  operation: GitHubWebhookDeliveryRepoOperation,
+  cause: unknown,
+): GitHubWebhookDeliveryRepoError => {
+  if (
+    cause instanceof GitHubWebhookDeliveryRepoInvariantError ||
+    cause instanceof GitHubWebhookDeliveryRepoUnexpectedError
+  ) {
+    return cause;
+  }
+
+  return new GitHubWebhookDeliveryRepoUnexpectedError({
+    operation,
+    message: cause instanceof Error ? cause.message : `${operation} failed.`,
+    cause,
+  });
+};
+
+const withGitHubWebhookDeliveryRepoError = <A>(
+  operation: GitHubWebhookDeliveryRepoOperation,
+  effect: Effect.Effect<A, unknown>,
+): Effect.Effect<A, GitHubWebhookDeliveryRepoError> => {
+  return effect.pipe(
+    Effect.mapError((cause) => mapGitHubWebhookDeliveryRepoError(operation, cause)),
+  );
+};
+
+export interface GitHubWebhookDeliveryRepoService {
+  readonly createWebhookDelivery: (
     input: CreateGitHubWebhookDeliveryInput,
-  ): Promise<GitHubWebhookDelivery> => {
-    const [delivery] = await db
-      .insert(githubWebhookDeliveries)
-      .values({
-        id: input.id,
-        deliveryId: input.deliveryId,
-        eventType: input.eventType,
-        ...(input.action === undefined ? {} : { action: input.action }),
-        ...(input.installationExternalId === undefined
-          ? {}
-          : { installationExternalId: input.installationExternalId }),
-        ...(input.payload === undefined ? {} : { payload: input.payload }),
-        ...(input.receivedAt === undefined ? {} : { receivedAt: input.receivedAt }),
-        ...(input.status === undefined ? {} : { status: input.status }),
-        ...(input.processedAt === undefined ? {} : { processedAt: input.processedAt }),
-        ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
-      } satisfies NewGitHubWebhookDelivery)
-      .onConflictDoNothing({ target: githubWebhookDeliveries.deliveryId })
-      .returning();
-
-    if (delivery !== undefined) {
-      return delivery;
-    }
-
-    const existing = await getWebhookDeliveryByDeliveryId(input.deliveryId);
-    return assertInserted(existing, "Failed to create or retrieve GitHub webhook delivery.");
-  };
-
-  const getWebhookDeliveryByDeliveryId = async (
+  ) => Effect.Effect<GitHubWebhookDelivery, GitHubWebhookDeliveryRepoError>;
+  readonly getWebhookDeliveryByDeliveryId: (
     deliveryId: string,
-  ): Promise<GitHubWebhookDelivery | undefined> => {
-    const [delivery] = await db
-      .select()
-      .from(githubWebhookDeliveries)
-      .where(eq(githubWebhookDeliveries.deliveryId, deliveryId))
-      .limit(1);
-
-    return delivery;
-  };
-
-  const markWebhookDeliveryProcessed = async (input: {
+  ) => Effect.Effect<GitHubWebhookDelivery | undefined, GitHubWebhookDeliveryRepoError>;
+  readonly markWebhookDeliveryProcessed: (input: {
     readonly deliveryId: string;
     readonly processedAt?: Date;
     readonly status?: Extract<GitHubWebhookDeliveryStatus, "processed" | "ignored">;
-  }): Promise<GitHubWebhookDelivery | null> => {
-    const [delivery] = await db
-      .update(githubWebhookDeliveries)
-      .set({
-        status: input.status ?? "processed",
-        processedAt: input.processedAt ?? new Date(),
-        errorMessage: null,
-      })
-      .where(eq(githubWebhookDeliveries.deliveryId, input.deliveryId))
-      .returning();
-
-    return delivery ?? null;
-  };
-
-  const markWebhookDeliveryFailed = async (input: {
+  }) => Effect.Effect<GitHubWebhookDelivery | null, GitHubWebhookDeliveryRepoError>;
+  readonly markWebhookDeliveryFailed: (input: {
     readonly deliveryId: string;
     readonly errorMessage: string;
     readonly processedAt?: Date;
-  }): Promise<GitHubWebhookDelivery | null> => {
-    const [delivery] = await db
-      .update(githubWebhookDeliveries)
-      .set({
-        status: "failed",
-        errorMessage: input.errorMessage,
-        processedAt: input.processedAt ?? new Date(),
-      })
-      .where(eq(githubWebhookDeliveries.deliveryId, input.deliveryId))
-      .returning();
+  }) => Effect.Effect<GitHubWebhookDelivery | null, GitHubWebhookDeliveryRepoError>;
+  readonly listWebhookDeliveries: (
+    limit?: number,
+  ) => Effect.Effect<readonly GitHubWebhookDelivery[], GitHubWebhookDeliveryRepoError>;
+}
 
-    return delivery ?? null;
-  };
+export class GitHubWebhookDeliveryRepo extends Context.Tag("GitHubWebhookDeliveryRepo")<
+  GitHubWebhookDeliveryRepo,
+  GitHubWebhookDeliveryRepoService
+>() {}
 
-  const listWebhookDeliveries = async (limit = 100): Promise<readonly GitHubWebhookDelivery[]> => {
-    return db
-      .select()
-      .from(githubWebhookDeliveries)
-      .orderBy(desc(githubWebhookDeliveries.receivedAt))
-      .limit(limit);
-  };
+export const GitHubWebhookDeliveryRepoLive = Layer.effect(
+  GitHubWebhookDeliveryRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
 
-  return {
-    createWebhookDelivery,
-    getWebhookDeliveryByDeliveryId,
-    listWebhookDeliveries,
-    markWebhookDeliveryFailed,
-    markWebhookDeliveryProcessed,
-  };
-};
+    const getWebhookDeliveryByDeliveryId = (deliveryId: string) =>
+      withGitHubWebhookDeliveryRepoError(
+        "getWebhookDeliveryByDeliveryId",
+        Effect.gen(function* () {
+          const [delivery] = yield* db
+            .select()
+            .from(githubWebhookDeliveries)
+            .where(eq(githubWebhookDeliveries.deliveryId, deliveryId))
+            .limit(1);
 
-export type GitHubWebhookDeliveryRepository = ReturnType<
-  typeof createGitHubWebhookDeliveryRepository
->;
+          return delivery;
+        }),
+      );
+
+    return {
+      createWebhookDelivery: (input) =>
+        withGitHubWebhookDeliveryRepoError(
+          "createWebhookDelivery",
+          Effect.gen(function* () {
+            const [delivery] = yield* db
+              .insert(githubWebhookDeliveries)
+              .values({
+                id: input.id,
+                deliveryId: input.deliveryId,
+                eventType: input.eventType,
+                ...(input.action === undefined ? {} : { action: input.action }),
+                ...(input.installationExternalId === undefined
+                  ? {}
+                  : { installationExternalId: input.installationExternalId }),
+                ...(input.payload === undefined ? {} : { payload: input.payload }),
+                ...(input.receivedAt === undefined ? {} : { receivedAt: input.receivedAt }),
+                ...(input.status === undefined ? {} : { status: input.status }),
+                ...(input.processedAt === undefined ? {} : { processedAt: input.processedAt }),
+                ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
+              } satisfies NewGitHubWebhookDelivery)
+              .onConflictDoNothing({ target: githubWebhookDeliveries.deliveryId })
+              .returning();
+
+            if (delivery !== undefined) {
+              return delivery;
+            }
+
+            const existing = yield* getWebhookDeliveryByDeliveryId(input.deliveryId);
+            if (existing === undefined) {
+              return yield* new GitHubWebhookDeliveryRepoInvariantError({
+                operation: "createWebhookDelivery",
+                message: "Failed to create or retrieve GitHub webhook delivery.",
+              });
+            }
+
+            return existing;
+          }),
+        ),
+
+      getWebhookDeliveryByDeliveryId,
+
+      markWebhookDeliveryProcessed: (input) =>
+        withGitHubWebhookDeliveryRepoError(
+          "markWebhookDeliveryProcessed",
+          Effect.gen(function* () {
+            const [delivery] = yield* db
+              .update(githubWebhookDeliveries)
+              .set({
+                status: input.status ?? "processed",
+                processedAt: input.processedAt ?? new Date(),
+                errorMessage: null,
+              })
+              .where(eq(githubWebhookDeliveries.deliveryId, input.deliveryId))
+              .returning();
+
+            return delivery ?? null;
+          }),
+        ),
+
+      markWebhookDeliveryFailed: (input) =>
+        withGitHubWebhookDeliveryRepoError(
+          "markWebhookDeliveryFailed",
+          Effect.gen(function* () {
+            const [delivery] = yield* db
+              .update(githubWebhookDeliveries)
+              .set({
+                status: "failed",
+                errorMessage: input.errorMessage,
+                processedAt: input.processedAt ?? new Date(),
+              })
+              .where(eq(githubWebhookDeliveries.deliveryId, input.deliveryId))
+              .returning();
+
+            return delivery ?? null;
+          }),
+        ),
+
+      listWebhookDeliveries: (limit = 100) =>
+        withGitHubWebhookDeliveryRepoError(
+          "listWebhookDeliveries",
+          db
+            .select()
+            .from(githubWebhookDeliveries)
+            .orderBy(desc(githubWebhookDeliveries.receivedAt))
+            .limit(limit),
+        ),
+    } satisfies GitHubWebhookDeliveryRepoService;
+  }),
+);
