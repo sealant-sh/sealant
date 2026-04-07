@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { devtools } from "@tanstack/devtools-vite";
@@ -7,6 +9,13 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 const config = defineConfig({
+  resolve: {
+    alias: {
+      "@sealant/ui/styles/globals.css": fileURLToPath(
+        new URL("../../packages/ui/src/styles/globals.css", import.meta.url),
+      ),
+    },
+  },
   plugins: [
     devtools(),
     tsconfigPaths({ projects: ["./tsconfig.json"] }),
