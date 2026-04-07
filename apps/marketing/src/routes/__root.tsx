@@ -196,8 +196,8 @@ function RootComponent() {
             <div className="flex items-center gap-8 lg:gap-10">
               <Brand />
               <nav className="mt-0.5 hidden items-center gap-6 md:flex" aria-label="Primary">
-                <TopLevelNavLink href="/blog">Blog</TopLevelNavLink>
-                <TopLevelNavLink href="/docs">Docs</TopLevelNavLink>
+                <TopLevelNavLink href="/">Blog</TopLevelNavLink>
+                <TopLevelNavLink href="/">Docs</TopLevelNavLink>
               </nav>
             </div>
             <div className="hidden items-center gap-2.5 md:inline-flex">
@@ -266,7 +266,7 @@ function RootComponent() {
             <div id="marketing-mobile-nav" className="border-t border-border">
               <div className="mx-auto grid max-w-7xl gap-2 px-4 py-3 sm:px-6">
                 <a
-                  href="/blog"
+                  href="/"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
                   tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
@@ -276,7 +276,7 @@ function RootComponent() {
                   Blog
                 </a>
                 <a
-                  href="/docs"
+                  href="/"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
                   tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
