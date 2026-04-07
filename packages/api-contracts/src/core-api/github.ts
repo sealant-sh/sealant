@@ -30,26 +30,32 @@ export const messageResponseSchema = Schema.Struct({
 export const githubInstallationsQuerySchema = Schema.Struct({
   userId: NonEmptyString,
 });
+export type GitHubInstallationsQuery = typeof githubInstallationsQuerySchema.Type;
 
 export const githubInstallationRepositoriesQuerySchema = Schema.Struct({
   userId: NonEmptyString,
   search: Schema.optional(NonEmptyString),
 });
+export type GitHubInstallationRepositoriesQuery =
+  typeof githubInstallationRepositoriesQuerySchema.Type;
 
 export const syncGitHubInstallationQuerySchema = Schema.Struct({
   userId: NonEmptyString,
 });
+export type SyncGitHubInstallationQuery = typeof syncGitHubInstallationQuerySchema.Type;
 
 export const importGitHubInstallationRequestSchema = Schema.Struct({
   userId: NonEmptyString,
   externalInstallationId: NonEmptyString,
 });
+export type ImportGitHubInstallationRequest = typeof importGitHubInstallationRequestSchema.Type;
 
 export const githubWebhookHeadersSchema = Schema.Struct({
   "x-github-delivery": Schema.optional(NonEmptyString),
   "x-github-event": Schema.optional(NonEmptyString),
   "x-hub-signature-256": Schema.optional(NonEmptyString),
 });
+export type GitHubWebhookHeaders = typeof githubWebhookHeadersSchema.Type;
 
 export const githubInstallationSummarySchema = Schema.Struct({
   installationId: NonEmptyString,
@@ -60,6 +66,7 @@ export const githubInstallationSummarySchema = Schema.Struct({
   repositorySelection: GitHubInstallationRepositorySelectionSchema,
   lastSyncedAt: Schema.optional(Schema.String),
 });
+export type GitHubInstallationSummary = typeof githubInstallationSummarySchema.Type;
 
 export const githubInstallationRepositorySummarySchema = Schema.Struct({
   installationRepositoryId: NonEmptyString,
@@ -74,31 +81,39 @@ export const githubInstallationRepositorySummarySchema = Schema.Struct({
   isArchived: Schema.Boolean,
   lastSyncedAt: Schema.optional(Schema.String),
 });
+export type GitHubInstallationRepositorySummary =
+  typeof githubInstallationRepositorySummarySchema.Type;
 
 export const listGitHubInstallationsResponseSchema = Schema.Struct({
   items: Schema.Array(githubInstallationSummarySchema),
 });
+export type ListGitHubInstallationsResponse = typeof listGitHubInstallationsResponseSchema.Type;
 
 export const listGitHubInstallationRepositoriesResponseSchema = Schema.Struct({
   items: Schema.Array(githubInstallationRepositorySummarySchema),
 });
+export type ListGitHubInstallationRepositoriesResponse =
+  typeof listGitHubInstallationRepositoriesResponseSchema.Type;
 
 export const syncGitHubInstallationResponseSchema = Schema.Struct({
   installationId: NonEmptyString,
   syncedRepositoryCount: Schema.NonNegative,
   syncedAt: Schema.String,
 });
+export type SyncGitHubInstallationResponse = typeof syncGitHubInstallationResponseSchema.Type;
 
 export const importGitHubInstallationResponseSchema = Schema.Struct({
   installation: githubInstallationSummarySchema,
   syncedRepositoryCount: Schema.NonNegative,
   syncedAt: Schema.String,
 });
+export type ImportGitHubInstallationResponse = typeof importGitHubInstallationResponseSchema.Type;
 
 export const githubWebhookResponseSchema = Schema.Struct({
   deliveryId: NonEmptyString,
   status: GitHubWebhookDeliveryStatusSchema,
 });
+export type GitHubWebhookResponse = typeof githubWebhookResponseSchema.Type;
 
 export class GitHubBadRequestError extends Schema.TaggedError<GitHubBadRequestError>(
   "GitHubBadRequestError",
