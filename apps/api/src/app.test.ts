@@ -22,8 +22,10 @@ import type {
   GitHubRemoteInstallationRepository,
   GitHubSourceIntegration,
 } from "@sealant/source-integrations";
+import { GitHubSourceIntegrationHttpError } from "@sealant/source-integrations";
 import { packageResolutionSchema, type NewSandbox } from "@sealant/validators";
 import type { AppEnv } from "@sealant/validators/env";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { createApiApp } from "./app.js";
@@ -673,30 +675,36 @@ const createGitHubSourceIntegrationStub = (
       installation,
     ]),
   );
-  const stub = {
+  const stub: GitHubSourceIntegration = {
     isConfigured: () => options.isConfigured ?? true,
     isWebhookVerificationConfigured: () => options.isWebhookVerificationConfigured ?? true,
-    createAppJwt: () => "test-jwt",
+    createAppJwt: () => Effect.succeed("test-jwt"),
     verifyWebhookSignature: () => true,
-    createInstallationAccessToken: async () => ({
-      token: "token",
-      expiresAt: new Date("2026-03-25T12:00:00.000Z"),
-    }),
-    getInstallation: async (externalInstallationId: string) => {
+    createInstallationAccessToken: () =>
+      Effect.succeed({
+        token: "token",
+        expiresAt: new Date("2026-03-25T12:00:00.000Z"),
+      }),
+    getInstallation: (externalInstallationId: string) => {
       const installation = installationsByExternalId.get(externalInstallationId);
 
       if (installation === undefined) {
-        throw new Error("GitHub installation request failed with status 404.");
+        return Effect.fail(
+          new GitHubSourceIntegrationHttpError({
+            operation: "getInstallation",
+            statusCode: 404,
+            message: "GitHub installation request failed with status 404.",
+          }),
+        );
       }
 
-      return installation;
+      return Effect.succeed(installation);
     },
-    listInstallationRepositories: async (externalInstallationId: string) => {
-      return options.repositoriesByInstallationExternalId?.[externalInstallationId] ?? [];
-    },
+    listInstallationRepositories: (externalInstallationId: string) =>
+      Effect.succeed(options.repositoriesByInstallationExternalId?.[externalInstallationId] ?? []),
   };
 
-  return stub as unknown as GitHubSourceIntegration;
+  return stub;
 };
 
 const createRepositoryProfileRepositoryStub = (): RepositoryProfileRepository => {

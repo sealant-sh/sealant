@@ -41,13 +41,7 @@ export const createApiApp = (config: AppRuntimeConfig) => {
   return app;
 };
 
-/**
- * Creates the default API app with runtime infrastructure wiring.
- *
- * DB initialization is intentionally done here (instead of module top-level) so tests and tools
- * can import the module without opening a database connection.
- */
-export const createDefaultApiApp = async () => {
+export const createDefaultAppRuntimeConfig = async (): Promise<AppRuntimeConfig> => {
   const databaseClient = await createDatabaseClientFromEnv(env);
   const packageResolutionCacheRepository = createPackageResolutionCacheRepository(databaseClient);
   const repositoryProfileRepository = createRepositoryProfileRepository(databaseClient);
@@ -60,7 +54,7 @@ export const createDefaultApiApp = async () => {
     cacheRepository: packageResolutionCacheRepository,
   });
 
-  return createApiApp({
+  return {
     env,
     registryClient: createRegistryClient(env),
     sandboxBuildJobPublisher: createSandboxBuildJobPublisher(env),
@@ -83,5 +77,15 @@ export const createDefaultApiApp = async () => {
     sandboxRepository: createSandboxRepository(databaseClient),
     sandboxRuntimeInstanceRepository: createSandboxRuntimeInstanceRepository(databaseClient),
     sandboxAttemptRepository: createSandboxAttemptRepository(databaseClient),
-  });
+  };
+};
+
+/**
+ * Creates the default API app with runtime infrastructure wiring.
+ *
+ * DB initialization is intentionally done here (instead of module top-level) so tests and tools
+ * can import the module without opening a database connection.
+ */
+export const createDefaultApiApp = async () => {
+  return createApiApp(await createDefaultAppRuntimeConfig());
 };

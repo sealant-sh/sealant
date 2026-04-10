@@ -11,6 +11,9 @@
     "lint": "oxlint .",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "effect": "catalog:"
+  },
   "devDependencies": {
     "@sealant/typescript": "workspace:*"
   }

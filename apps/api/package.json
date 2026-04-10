@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@effect/platform": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@hono/node-server": "^1.18.1",
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",

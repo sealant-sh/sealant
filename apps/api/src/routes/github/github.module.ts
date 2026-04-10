@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   GitHubBadRequestError,
   GitHubForbiddenError,
@@ -17,12 +19,19 @@ import {
   type SyncGitHubInstallationResponse,
   GitHubUnauthorizedError,
 } from "@sealant/api-contracts";
-import type { GitHubAppInstallation } from "@sealant/db";
-import type { GitHubRemoteInstallation } from "@sealant/source-integrations";
+import {
+  GitHubInstallationRepo,
+  GitHubInstallationRepositoryCacheRepo,
+  GitHubWebhookDeliveryRepo,
+  RepositoryProfileRepo,
+  type GitHubAppInstallation,
+} from "@sealant/db";
+import {
+  GitHubSourceIntegrationHttpError,
+  type GitHubRemoteInstallation,
+  GitHubSourceIntegrationService,
+} from "@sealant/source-integrations";
 import { Context, Effect, Layer } from "effect";
-
-import { createApiRuntime } from "../../lib/create-api-runtime.js";
-import type { AppRuntimeConfig } from "../../lib/types.js";
 
 export interface GitHubModule {
   readonly listInstallations: (
@@ -150,9 +159,23 @@ const toInstallationStatusFromRemote = (
   return installation.suspendedAt === undefined ? "active" : "suspended";
 };
 
-const makeGitHubModule = (config: AppRuntimeConfig): GitHubModule => {
-  const runtime = createApiRuntime(config);
+interface GitHubModuleRuntime {
+  readonly clock: {
+    now: () => Date;
+  };
+  readonly idGenerator: {
+    randomUuid: () => string;
+  };
+  readonly gitHubSourceIntegration: Context.Tag.Service<typeof GitHubSourceIntegrationService>;
+  readonly gitHubInstallationRepository: Context.Tag.Service<typeof GitHubInstallationRepo>;
+  readonly gitHubInstallationRepositoryCacheRepository: Context.Tag.Service<
+    typeof GitHubInstallationRepositoryCacheRepo
+  >;
+  readonly gitHubWebhookDeliveryRepository: Context.Tag.Service<typeof GitHubWebhookDeliveryRepo>;
+  readonly repositoryProfileRepository: Context.Tag.Service<typeof RepositoryProfileRepo>;
+}
 
+const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
   const upsertInstallationRecord = async (input: {
     readonly externalInstallationId: string;
     readonly externalAccountId?: string;
@@ -618,7 +641,7 @@ const makeGitHubModule = (config: AppRuntimeConfig): GitHubModule => {
               throw error;
             }
 
-            if (message.includes("status 404")) {
+            if (error instanceof GitHubSourceIntegrationHttpError && error.statusCode === 404) {
               throw new GitHubNotFoundError({ message });
             }
 
@@ -755,6 +778,21 @@ const makeGitHubModule = (config: AppRuntimeConfig): GitHubModule => {
   };
 };
 
-export const makeGitHubModuleLayer = (config: AppRuntimeConfig) => {
-  return Layer.succeed(GitHubModuleService, makeGitHubModule(config));
-};
+export const makeGitHubModuleLayer = Layer.effect(
+  GitHubModuleService,
+  Effect.gen(function* () {
+    return makeGitHubModule({
+      clock: {
+        now: () => new Date(),
+      },
+      idGenerator: {
+        randomUuid: () => randomUUID(),
+      },
+      gitHubSourceIntegration: yield* GitHubSourceIntegrationService,
+      gitHubInstallationRepository: yield* GitHubInstallationRepo,
+      gitHubInstallationRepositoryCacheRepository: yield* GitHubInstallationRepositoryCacheRepo,
+      gitHubWebhookDeliveryRepository: yield* GitHubWebhookDeliveryRepo,
+      repositoryProfileRepository: yield* RepositoryProfileRepo,
+    });
+  }),
+);

@@ -1,11 +1,11 @@
 import { HttpApiBuilder, HttpApiScalar, HttpServer } from "@effect/platform";
-import { GitHubApi } from "@sealant/api-contracts";
+import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Effect, Layer } from "effect";
 
 import type { AppRuntimeConfig } from "../../lib/types.js";
 import { GitHubModuleService, makeGitHubModuleLayer } from "./github.module.js";
 
-const GitHubHandlersLive = HttpApiBuilder.group(GitHubApi, "github", (handlers) => {
+const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
   return handlers
     .handle("listInstallations", ({ urlParams }) =>
       Effect.flatMap(GitHubModuleService, (github) => github.listInstallations(urlParams)),
@@ -47,12 +47,8 @@ const GitHubHandlersLive = HttpApiBuilder.group(GitHubApi, "github", (handlers) 
     );
 });
 
-export const createGitHubWebHandler = (config: AppRuntimeConfig) => {
-  const GitHubRuntimeLive = makeGitHubModuleLayer(config);
-  const GitHubApiLive = HttpApiBuilder.api(GitHubApi).pipe(
-    Layer.provide(GitHubHandlersLive),
-    Layer.provide(GitHubRuntimeLive),
-  );
+export const createGitHubWebHandler = (_config?: AppRuntimeConfig) => {
+  const GitHubApiLive = makeGitHubHttpApiLayer();
 
   const GitHubOpenApiLive = HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" }).pipe(
     Layer.provide(GitHubApiLive),
@@ -73,4 +69,11 @@ export const createGitHubWebHandler = (config: AppRuntimeConfig) => {
   );
 
   return handler;
+};
+
+export const makeGitHubHttpApiLayer = () => {
+  return HttpApiBuilder.api(ControlPlaneAPI).pipe(
+    Layer.provide(GitHubHandlersLive),
+    Layer.provide(makeGitHubModuleLayer),
+  );
 };
