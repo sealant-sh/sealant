@@ -7,11 +7,11 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
 import * as schema from "./schema.js";
-import { relations } from "./schema.js";
+import { relations } from "./schema/relations.js";
 
 // Build an Effect that, when run with required dependencies (PgClient + defaults),
 // creates a Drizzle DB instance typed with schema and relations.
-const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations });
+const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations, casing: "snake_case" });
 
 // Extract the "success value" type from that Effect.
 // This becomes the actual DB type (schema-aware).

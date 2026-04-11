@@ -1,4 +1,10 @@
 export {
+  createBetterAuthDatabaseClient,
+  createBetterAuthDatabaseClientFromEnv,
+  type BetterAuthDatabaseClient,
+} from "./better-auth-client.js";
+
+export {
   createSealantDB,
   createSealantDBFromEnv,
   makeSealantDBLayer,
