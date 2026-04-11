@@ -69,7 +69,7 @@ Use concise tags so reviewers can grep quickly:
 | `owners` | `engineering`                                                                                                                                                                                    |
 | `scope`  | `packages/db`, `packages/auth`, `packages/sandboxes`, `apps/api`, `apps/web`, `apps/worker`, `apps/docs`, `flake.nix`                                                                            |
 | `tags`   | `arch:effect`, `area:db`, `area:api`, `area:web`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `domain:source-integrations`, `kind:fix`, `risk:medium` |
-| `links`  | PR: `TBD (this PR)`, commits: `ba6ae9e`, `ea094d8`                                                                                                                                               |
+| `links`  | PR: `https://github.com/get-sealant/sealant/pull/55`, commits: `ba6ae9e`, `ea094d8`, `f6e0e67`                                                                                                   |
 
 **PR Description (copy-ready)**
 
