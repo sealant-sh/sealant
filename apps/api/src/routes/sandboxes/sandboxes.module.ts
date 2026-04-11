@@ -49,7 +49,7 @@ import {
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
 import { newSandboxSchema, type NewSandbox } from "@sealant/validators";
-import { Clock, Context, Effect } from "effect";
+import { Context, Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
 import {
@@ -95,8 +95,6 @@ const gitHubUnavailableMessage = "GitHub integration is not configured.";
 const toErrorMessage = (error: unknown, fallback: string): string => {
   return error instanceof Error ? error.message : fallback;
 };
-
-const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
 const randomId = Effect.sync(() => randomUUID());
 
@@ -848,7 +846,6 @@ const acceptedSandboxResponse = (
 
 const maybeReturnExistingIdempotentSandbox = (idempotencyKey: string) => {
   return Effect.gen(function* () {
-    const sandboxes = yield* SandboxRepo;
     const sandboxBuildJobs = yield* SandboxBuildJobRepo;
     const sandboxAttempts = yield* SandboxAttemptRepo;
 
