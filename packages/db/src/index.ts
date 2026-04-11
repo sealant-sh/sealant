@@ -1,4 +1,5 @@
 export { SealantDB, SealantDBLive, type TSealantDB, type DB } from "./client.js";
+export { ControlPlaneDataAccessLive, GitHubDataAccessLive } from "./layers.js";
 
 export {
   GitHubInstallationRepo,
@@ -298,6 +299,12 @@ export {
 export * as schema from "./schema/index.js";
 
 export {
+  githubAppInstallationInsertSchema,
+  githubAppInstallationSelectSchema,
+  githubInstallationRepositoryInsertSchema,
+  githubInstallationRepositorySelectSchema,
+  githubWebhookDeliveryInsertSchema,
+  githubWebhookDeliverySelectSchema,
   issueStateSchema,
   issueWorkflowExecutionInsertSchema,
   issueWorkflowExecutionSelectSchema,

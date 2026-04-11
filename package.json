@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@effect/cli": "^0.75.0",
-    "@effect/platform": "^0.96.0",
+    "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

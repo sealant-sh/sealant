@@ -1,14 +1,17 @@
-import type {
-  GitHubInstallationRepository,
-  GitHubInstallationRepositoryCacheRepository,
-  GitHubWebhookDeliveryRepository,
-  RepositoryProfileRepository,
-  SandboxAttemptRepository,
-  SandboxRepository,
-  SandboxRuntimeInstanceRepository,
-  SandboxBuildJobRepository,
-} from "@sealant/db";
-import type { PackageStandardizer, RegistryClient } from "@sealant/sandboxes";
+// import type {
+// GitHubInstallationRepository,
+// GitHubInstallationRepositoryCacheRepository,
+// GitHubWebhookDeliveryRepository,
+// RepositoryProfileRepository,
+// SandboxAttemptRepository,
+// SandboxRepository,
+// SandboxRuntimeInstanceRepository,
+// SandboxBuildJobRepository,
+// } from "@sealant/db";
+// import type {
+//   // PackageStandardizer,
+//   // RegistryClient,
+// } from "@sealant/sandboxes";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { AppEnv } from "@sealant/validators/env";
 import { Context } from "effect";
@@ -19,18 +22,18 @@ export interface SandboxBuildJobPublisher {
 
 export interface AppRuntimeConfig {
   readonly env: AppEnv;
-  readonly registryClient: RegistryClient;
-  readonly sandboxBuildJobPublisher: SandboxBuildJobPublisher;
-  readonly sandboxBuildJobRepository: SandboxBuildJobRepository;
-  readonly packageStandardizer?: PackageStandardizer;
+  // readonly registryClient: RegistryClient;
+  // readonly sandboxBuildJobPublisher: SandboxBuildJobPublisher;
+  // readonly sandboxBuildJobRepository: SandboxBuildJobRepository;
+  // readonly packageStandardizer?: PackageStandardizer;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-  readonly gitHubInstallationRepository?: GitHubInstallationRepository;
-  readonly gitHubInstallationRepositoryCacheRepository?: GitHubInstallationRepositoryCacheRepository;
-  readonly gitHubWebhookDeliveryRepository?: GitHubWebhookDeliveryRepository;
-  readonly repositoryProfileRepository?: RepositoryProfileRepository;
-  readonly sandboxRepository: SandboxRepository;
-  readonly sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
-  readonly sandboxAttemptRepository: SandboxAttemptRepository;
+  // readonly gitHubInstallationRepository?: GitHubInstallationRepository;
+  // readonly gitHubInstallationRepositoryCacheRepository?: GitHubInstallationRepositoryCacheRepository;
+  // readonly gitHubWebhookDeliveryRepository?: GitHubWebhookDeliveryRepository;
+  // readonly repositoryProfileRepository?: RepositoryProfileRepository;
+  // readonly sandboxRepository: SandboxRepository;
+  // readonly sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
+  // readonly sandboxAttemptRepository: SandboxAttemptRepository;
 }
 
 export class ConfigService extends Context.Tag("@sealant/api/ConfigService")<
@@ -77,18 +80,18 @@ export interface ApiRuntime {
   readonly clock: ApiClock;
   readonly idGenerator: ApiIdGenerator;
   readonly logger: ApiLogger;
-  readonly registryClient: RegistryClient;
-  readonly sandboxBuildJobPublisher: SandboxBuildJobPublisher;
-  readonly sandboxBuildJobRepository: SandboxBuildJobRepository;
-  readonly packageStandardizer: PackageStandardizer;
-  readonly gitHubSourceIntegration?: GitHubSourceIntegration;
-  readonly gitHubInstallationRepository?: GitHubInstallationRepository;
-  readonly gitHubInstallationRepositoryCacheRepository?: GitHubInstallationRepositoryCacheRepository;
-  readonly gitHubWebhookDeliveryRepository?: GitHubWebhookDeliveryRepository;
-  readonly repositoryProfileRepository?: RepositoryProfileRepository;
-  readonly sandboxRepository: SandboxRepository;
-  readonly sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
-  readonly sandboxAttemptRepository: SandboxAttemptRepository;
+  // readonly registryClient: RegistryClient;
+  // readonly sandboxBuildJobPublisher: SandboxBuildJobPublisher;
+  // readonly sandboxBuildJobRepository: SandboxBuildJobRepository;
+  // readonly packageStandardizer: PackageStandardizer;
+  // readonly gitHubSourceIntegration?: GitHubSourceIntegration;
+  // readonly gitHubInstallationRepository?: GitHubInstallationRepository;
+  // readonly gitHubInstallationRepositoryCacheRepository?: GitHubInstallationRepositoryCacheRepository;
+  // readonly gitHubWebhookDeliveryRepository?: GitHubWebhookDeliveryRepository;
+  // readonly repositoryProfileRepository?: RepositoryProfileRepository;
+  // readonly sandboxRepository: SandboxRepository;
+  // readonly sandboxRuntimeInstanceRepository: SandboxRuntimeInstanceRepository;
+  // readonly sandboxAttemptRepository: SandboxAttemptRepository;
 }
 
 export class ApiRuntimeService extends Context.Tag("@sealant/api/ApiRuntimeService")<

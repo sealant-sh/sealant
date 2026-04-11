@@ -1,8 +1,8 @@
 {
-  "name": "@sealant/source-integrations",
+  "name": "@sealant/api-contracts",
   "version": "0.0.0",
   "private": true,
-  "description": "Source-provider integrations for repository selection, ref resolution, and access flows",
+  "description": "Contract-first HTTP API definitions for Sealant services",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -12,6 +12,8 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@effect/platform": "catalog:",
+    "@sealant/db": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
