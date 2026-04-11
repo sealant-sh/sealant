@@ -69,7 +69,7 @@ Use concise tags so reviewers can grep quickly:
 | `owners` | `engineering`                                                                              |
 | `scope`  | `apps/api`, `packages/api-contracts`, `apps/docs`                                          |
 | `tags`   | `arch:effect`, `area:api`, `area:docs`, `domain:sandboxes`, `kind:refactor`, `risk:medium` |
-| `links`  | PR: `TBD (this PR)`, commit: `c56686f`                                                     |
+| `links`  | PR: `https://github.com/get-sealant/sealant/pull/56`, commits: `c56686f`, `2fe9094`        |
 
 **PR Description (copy-ready)**
 
@@ -151,7 +151,7 @@ Both commands passed after migration and wiring updates.
 
 - Add focused API tests for migrated `packages`, `registries`, and `sandboxes` Effect handlers.
 - Remove or archive deprecated Hono route files once migration confidence gates are complete.
-- Replace `TBD` in `links` with final PR URL and set `status` to `merged` after merge.
+- Set `status` to `merged` after merge.
 
 ### CHG-2026-04-12-001 - Stabilize DB Client Wiring and Effect Repository Access
 
