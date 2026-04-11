@@ -200,14 +200,12 @@ export const SandboxRepoLive = Layer.effect(
         withSandboxRepoError(
           "getSandboxByAttemptId",
           Effect.gen(function* () {
-            const [row] = yield* db
-              .select({ sandbox: sandboxes })
-              .from(sandboxRunLinks)
-              .innerJoin(sandboxes, eq(sandboxes.id, sandboxRunLinks.sandboxId))
-              .where(eq(sandboxRunLinks.runId, attemptId))
-              .limit(1);
+            const link = yield* db.query.sandboxRunLinks.findFirst({
+              where: { runId: attemptId },
+              with: { sandbox: true },
+            });
 
-            return row?.sandbox;
+            return link?.sandbox ?? undefined;
           }),
         ),
 
@@ -215,12 +213,7 @@ export const SandboxRepoLive = Layer.effect(
         withSandboxRepoError(
           "getSandboxById",
           Effect.gen(function* () {
-            const [sandbox] = yield* db
-              .select()
-              .from(sandboxes)
-              .where(eq(sandboxes.id, id))
-              .limit(1);
-            return sandbox;
+            return yield* db.query.sandboxes.findFirst({ where: { id } });
           }),
         ),
 
@@ -299,12 +292,11 @@ export const SandboxRepoLive = Layer.effect(
       listSandboxAttemptLinks: (sandboxId, limit = 100) =>
         withSandboxRepoError(
           "listSandboxAttemptLinks",
-          db
-            .select()
-            .from(sandboxRunLinks)
-            .where(eq(sandboxRunLinks.sandboxId, sandboxId))
-            .orderBy(desc(sandboxRunLinks.linkedAt))
-            .limit(limit),
+          db.query.sandboxRunLinks.findMany({
+            where: { sandboxId },
+            orderBy: { linkedAt: "desc" },
+            limit,
+          }),
         ),
 
       setSandboxName: (input) =>

@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -471,21 +471,31 @@ export const IssueWorkflowRepoLive = Layer.effect(
       listExecutionPullRequests: (executionId) =>
         withIssueWorkflowRepoError(
           "listExecutionPullRequests",
-          db
-            .select({
-              link: issueWorkflowExecutionPullRequestLinks,
-              pullRequest: pullRequests,
-            })
-            .from(issueWorkflowExecutionPullRequestLinks)
-            .innerJoin(
-              pullRequests,
-              eq(pullRequests.id, issueWorkflowExecutionPullRequestLinks.pullRequestId),
-            )
-            .where(eq(issueWorkflowExecutionPullRequestLinks.executionId, executionId))
-            .orderBy(
-              desc(issueWorkflowExecutionPullRequestLinks.linkedAt),
-              asc(pullRequests.number),
-            ),
+          Effect.gen(function* () {
+            const rows = yield* db.query.issueWorkflowExecutionPullRequestLinks.findMany({
+              where: { executionId },
+              with: { pullRequest: true },
+              orderBy: { linkedAt: "desc" },
+            });
+
+            return rows.flatMap((row) => {
+              if (row.pullRequest === null) {
+                return [];
+              }
+
+              return [
+                {
+                  link: {
+                    executionId: row.executionId,
+                    pullRequestId: row.pullRequestId,
+                    relation: row.relation,
+                    linkedAt: row.linkedAt,
+                  },
+                  pullRequest: row.pullRequest,
+                },
+              ];
+            });
+          }),
         ),
     } satisfies IssueWorkflowRepoService;
   }),

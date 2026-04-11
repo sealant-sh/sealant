@@ -229,28 +229,14 @@ export const GitHubInstallationRepoLive = Layer.effect(
       getInstallationById: (id) =>
         withGitHubInstallationRepoError(
           "getInstallationById",
-          Effect.gen(function* () {
-            const [installation] = yield* db
-              .select()
-              .from(githubAppInstallations)
-              .where(eq(githubAppInstallations.id, id))
-              .limit(1);
-
-            return installation;
-          }),
+          db.query.githubAppInstallations.findFirst({ where: { id } }),
         ),
 
       getInstallationByExternalId: (externalInstallationId) =>
         withGitHubInstallationRepoError(
           "getInstallationByExternalId",
-          Effect.gen(function* () {
-            const [installation] = yield* db
-              .select()
-              .from(githubAppInstallations)
-              .where(eq(githubAppInstallations.externalInstallationId, externalInstallationId))
-              .limit(1);
-
-            return installation;
+          db.query.githubAppInstallations.findFirst({
+            where: { externalInstallationId },
           }),
         ),
 
@@ -285,11 +271,10 @@ export const GitHubInstallationRepoLive = Layer.effect(
       listActiveInstallations: () =>
         withGitHubInstallationRepoError(
           "listActiveInstallations",
-          db
-            .select()
-            .from(githubAppInstallations)
-            .where(eq(githubAppInstallations.status, "active"))
-            .orderBy(asc(githubAppInstallations.accountLogin)),
+          db.query.githubAppInstallations.findMany({
+            where: { status: "active" },
+            orderBy: { accountLogin: "asc" },
+          }),
         ),
 
       setInstallationStatus: (input) =>
@@ -394,11 +379,10 @@ export const GitHubInstallationRepoLive = Layer.effect(
       listInstallationGrants: (installationId) =>
         withGitHubInstallationRepoError(
           "listInstallationGrants",
-          db
-            .select()
-            .from(githubInstallationUserGrants)
-            .where(eq(githubInstallationUserGrants.installationId, installationId))
-            .orderBy(asc(githubInstallationUserGrants.userId)),
+          db.query.githubInstallationUserGrants.findMany({
+            where: { installationId },
+            orderBy: { userId: "asc" },
+          }),
         ),
     } satisfies GitHubInstallationRepoService;
   }),

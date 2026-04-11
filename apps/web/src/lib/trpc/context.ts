@@ -1,13 +1,13 @@
 import { createSealantAuth, type SealantAuth } from "@sealant/auth/server";
 import { getAuthSession, type MaybeAuthSession } from "@sealant/auth/session";
-import { createDatabaseClientFromEnv, type DatabaseClient } from "@sealant/db";
+import { createSealantDBFromEnv, type DB } from "@sealant/db";
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 
 import { createCoreApiClient, type CoreApiClient } from "@/lib/api/core-api-client";
 
 interface TrpcServerResources {
   readonly auth: SealantAuth;
-  readonly db: DatabaseClient;
+  readonly db: DB;
   readonly coreApi: CoreApiClient;
 }
 
@@ -37,12 +37,14 @@ const parseCookies = (cookieHeader: string | null): ReadonlyMap<string, string> 
   return parsedCookies;
 };
 
+const createDatabaseFromEnv = (): Promise<DB> => createSealantDBFromEnv();
+
 let trpcServerResourcesPromise: Promise<TrpcServerResources> | undefined;
 
 const getTrpcServerResources = (): Promise<TrpcServerResources> => {
   trpcServerResourcesPromise ??= (async () => {
-    const db = await createDatabaseClientFromEnv();
-    const auth = await createSealantAuth({ databaseClient: db });
+    const db = await createDatabaseFromEnv();
+    const auth = await createSealantAuth();
     const coreApi = createCoreApiClient();
 
     return { auth, coreApi, db };
@@ -53,7 +55,7 @@ const getTrpcServerResources = (): Promise<TrpcServerResources> => {
 
 export interface TrpcContext {
   readonly auth: SealantAuth;
-  readonly db: DatabaseClient;
+  readonly db: DB;
   readonly coreApi: CoreApiClient;
   readonly session: MaybeAuthSession;
   readonly headers: Headers;

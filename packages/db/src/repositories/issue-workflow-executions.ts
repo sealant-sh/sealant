@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -418,53 +418,28 @@ export const IssueWorkflowExecutionRepoLive = Layer.effect(
         withIssueWorkflowExecutionRepoError(
           "getExecutionDetailBundle",
           Effect.gen(function* () {
-            const [execution] = yield* db
-              .select()
-              .from(issueWorkflowExecutions)
-              .where(eq(issueWorkflowExecutions.id, executionId))
-              .limit(1);
+            const execution = yield* db.query.issueWorkflowExecutions.findFirst({
+              where: { id: executionId },
+              with: {
+                summary: true,
+                events: { orderBy: { sequence: "asc" } },
+                validationResults: { orderBy: { checkKey: "asc" } },
+                diffFiles: { orderBy: { path: "asc" } },
+                artifacts: { orderBy: { createdAt: "asc" } },
+              },
+            });
 
             if (execution === undefined) {
               return null;
             }
 
-            const [summary] = yield* db
-              .select()
-              .from(issueWorkflowExecutionSummaries)
-              .where(eq(issueWorkflowExecutionSummaries.executionId, executionId))
-              .limit(1);
-
-            const events = yield* db
-              .select()
-              .from(issueWorkflowExecutionEvents)
-              .where(eq(issueWorkflowExecutionEvents.executionId, executionId))
-              .orderBy(asc(issueWorkflowExecutionEvents.sequence));
-
-            const validationResults = yield* db
-              .select()
-              .from(issueWorkflowExecutionValidationResults)
-              .where(eq(issueWorkflowExecutionValidationResults.executionId, executionId))
-              .orderBy(asc(issueWorkflowExecutionValidationResults.checkKey));
-
-            const diffFiles = yield* db
-              .select()
-              .from(issueWorkflowExecutionDiffFiles)
-              .where(eq(issueWorkflowExecutionDiffFiles.executionId, executionId))
-              .orderBy(asc(issueWorkflowExecutionDiffFiles.path));
-
-            const artifacts = yield* db
-              .select()
-              .from(issueWorkflowExecutionArtifacts)
-              .where(eq(issueWorkflowExecutionArtifacts.executionId, executionId))
-              .orderBy(asc(issueWorkflowExecutionArtifacts.createdAt));
-
             return {
               execution,
-              summary: summary ?? null,
-              events,
-              validationResults,
-              diffFiles,
-              artifacts,
+              summary: execution.summary,
+              events: execution.events,
+              validationResults: execution.validationResults,
+              diffFiles: execution.diffFiles,
+              artifacts: execution.artifacts,
             };
           }),
         ),

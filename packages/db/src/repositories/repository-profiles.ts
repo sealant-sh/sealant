@@ -245,15 +245,7 @@ export const RepositoryProfileRepoLive = Layer.effect(
       getRepositoryById: (id) =>
         withRepositoryProfileRepoError(
           "getRepositoryById",
-          Effect.gen(function* () {
-            const [repository] = yield* db
-              .select()
-              .from(repositories)
-              .where(eq(repositories.id, id))
-              .limit(1);
-
-            return repository;
-          }),
+          db.query.repositories.findFirst({ where: { id } }),
         ),
 
       getRepositoryByProviderExternalId: (input) =>
@@ -486,39 +478,28 @@ export const RepositoryProfileRepoLive = Layer.effect(
         withRepositoryProfileRepoError(
           "getRepositoryProfileRevisionBundle",
           Effect.gen(function* () {
-            const [revision] = yield* db
-              .select()
-              .from(repositoryProfileRevisions)
-              .where(eq(repositoryProfileRevisions.id, revisionId))
-              .limit(1);
+            const revision = yield* db.query.repositoryProfileRevisions.findFirst({
+              where: { id: revisionId },
+              with: {
+                repositoryProfile: true,
+                profileLinks: {
+                  orderBy: { precedence: "asc", profileRevisionId: "asc" },
+                },
+              },
+            });
 
             if (revision === undefined) {
               return null;
             }
 
-            const [repositoryProfile] = yield* db
-              .select()
-              .from(repositoryProfiles)
-              .where(eq(repositoryProfiles.id, revision.repositoryProfileId))
-              .limit(1);
-
-            if (repositoryProfile === undefined) {
+            if (revision.repositoryProfile === null) {
               return null;
             }
 
-            const profileLinks = yield* db
-              .select()
-              .from(repositoryProfileProfileLinks)
-              .where(eq(repositoryProfileProfileLinks.repositoryProfileRevisionId, revision.id))
-              .orderBy(
-                asc(repositoryProfileProfileLinks.precedence),
-                asc(repositoryProfileProfileLinks.profileRevisionId),
-              );
-
             return {
-              repositoryProfile,
+              repositoryProfile: revision.repositoryProfile,
               revision,
-              profileLinks,
+              profileLinks: revision.profileLinks,
             };
           }),
         ),

@@ -1,13 +1,17 @@
 import {
-  createGitHubInstallationRepository,
-  createGitHubInstallationRepositoryCacheRepository,
-  type DatabaseClient,
+  GitHubInstallationRepo,
+  GitHubInstallationRepoLive,
+  GitHubInstallationRepositoryCacheRepo,
+  GitHubInstallationRepositoryCacheRepoLive,
+  SealantDB,
+  type DB,
 } from "@sealant/db";
 import {
   parseGitHubInstallationRepositoryAuthRef,
   type GitHubSourceIntegration,
 } from "@sealant/source-integrations";
 import type { NewSandbox } from "@sealant/validators";
+import { Effect, Layer } from "effect";
 
 import type { SandboxCloneAuth } from "../runtime/index.js";
 
@@ -19,7 +23,7 @@ const createWorkerError = (code: string, message: string) => {
 
 const resolveInstallationAccessToken = async (input: {
   readonly authRef: string | undefined;
-  readonly dbClient: DatabaseClient;
+  readonly db: DB;
   readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
   readonly unavailableIntegrationMessage: string;
   readonly unavailableRepositoryContext: string;
@@ -39,12 +43,24 @@ const resolveInstallationAccessToken = async (input: {
     throw createWorkerError("github-integration-unavailable", input.unavailableIntegrationMessage);
   }
 
-  const installationRepositoryCache = createGitHubInstallationRepositoryCacheRepository(
-    input.dbClient,
+  const dbLayer = Layer.succeed(SealantDB, input.db);
+  const dataAccessLayer = Layer.mergeAll(
+    GitHubInstallationRepositoryCacheRepoLive,
+    GitHubInstallationRepoLive,
+  ).pipe(Layer.provide(dbLayer));
+
+  const repos = await Effect.runPromise(
+    Effect.gen(function* () {
+      return {
+        installationRepositoryCache: yield* GitHubInstallationRepositoryCacheRepo,
+        installationRepository: yield* GitHubInstallationRepo,
+      };
+    }).pipe(Effect.provide(dataAccessLayer)),
   );
-  const installationRepository = createGitHubInstallationRepository(input.dbClient);
-  const installationRepositoryRecord =
-    await installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId);
+
+  const installationRepositoryRecord = await Effect.runPromise(
+    repos.installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId),
+  );
 
   if (
     installationRepositoryRecord === undefined ||
@@ -56,8 +72,8 @@ const resolveInstallationAccessToken = async (input: {
     );
   }
 
-  const installation = await installationRepository.getInstallationById(
-    installationRepositoryRecord.installationId,
+  const installation = await Effect.runPromise(
+    repos.installationRepository.getInstallationById(installationRepositoryRecord.installationId),
   );
 
   if (installation === undefined) {
@@ -74,8 +90,10 @@ const resolveInstallationAccessToken = async (input: {
     );
   }
 
-  const accessToken = await input.gitHubSourceIntegration.createInstallationAccessToken(
-    installation.externalInstallationId,
+  const accessToken = await Effect.runPromise(
+    input.gitHubSourceIntegration.createInstallationAccessToken(
+      installation.externalInstallationId,
+    ),
   );
 
   return accessToken.token;
@@ -83,12 +101,12 @@ const resolveInstallationAccessToken = async (input: {
 
 export const resolveSandboxCloneAuth = async (input: {
   readonly spec: NewSandbox;
-  readonly dbClient: DatabaseClient;
+  readonly db: DB;
   readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
 }): Promise<SandboxCloneAuth | undefined> => {
   const token = await resolveInstallationAccessToken({
     authRef: input.spec.sources.sandbox.authRef,
-    dbClient: input.dbClient,
+    db: input.db,
     gitHubSourceIntegration: input.gitHubSourceIntegration,
     unavailableIntegrationMessage:
       "GitHub source integration is not configured for GitHub-backed sandbox launches.",
@@ -110,14 +128,14 @@ export const resolveSandboxCloneAuth = async (input: {
 
 export const resolveDotfilesRuntimeEnv = async (input: {
   readonly spec: NewSandbox;
-  readonly dbClient: DatabaseClient;
+  readonly db: DB;
   readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
 }): Promise<Record<string, string>> => {
   const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
 
   const token = await resolveInstallationAccessToken({
     authRef: dotfilesSource?.authRef,
-    dbClient: input.dbClient,
+    db: input.db,
     gitHubSourceIntegration: input.gitHubSourceIntegration,
     unavailableIntegrationMessage:
       "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
