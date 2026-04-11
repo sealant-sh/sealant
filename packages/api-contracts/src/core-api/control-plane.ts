@@ -1,8 +1,16 @@
 import { HttpApi, OpenApi } from "@effect/platform";
 
 import { GitHubGroup } from "./github.js";
+import { PackagesGroup } from "./packages.js";
+import { RegistriesGroup } from "./registries.js";
+import { SandboxesGroup } from "./sandboxes.js";
+import { SystemGroup } from "./system.js";
 
 export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
+  .add(SystemGroup)
+  .add(PackagesGroup.prefix("/v1/packages"))
+  .add(SandboxesGroup.prefix("/v1/sandboxes"))
+  .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
   .annotate(OpenApi.Title, "Sealant Control Plane API")
   .annotate(OpenApi.Version, "0.0.0")

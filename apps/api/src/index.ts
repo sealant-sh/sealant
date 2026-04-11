@@ -3,12 +3,13 @@ import { createServer } from "node:http";
 import { HttpApiBuilder, HttpApiScalar, HttpServer } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
-import { GitHubDataAccessLive, SealantDBLive } from "@sealant/db";
+import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { Layer, Redacted } from "effect";
 
-import { makeGitHubHttpApiLayer } from "./routes/github/github.http-api.js";
+import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { env } from "./runtime-env.js";
+import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -54,12 +55,12 @@ const databaseClientLayer = SealantDBLive.pipe(
 /**
  * Repository layer (domain-level):
  *
- * `GitHubDataAccessLive` is a ready-made composition exported by `@sealant/db`.
- * It merges all repository services needed by the GitHub module.
+ * `ControlPlaneDataAccessLive` is a ready-made composition exported by `@sealant/db`.
+ * It merges all repository services needed across control-plane route domains.
  *
  * This is the "sane default" composition point so app code stays minimal.
  */
-const databaseLayer = GitHubDataAccessLive.pipe(Layer.provide(databaseClientLayer));
+const databaseLayer = ControlPlaneDataAccessLive.pipe(Layer.provide(databaseClientLayer));
 
 /**
  * Source integration layer:
@@ -79,15 +80,16 @@ const sourceIntegrationLayer = gitHubSourceIntegrationLayer({
 /**
  * Core API layer:
  *
- * `makeGitHubHttpApiLayer()` returns the `HttpApiBuilder.api(...)` layer for our
- * contract-first GitHub API implementation.
+ * `makeControlPlaneHttpApiLayer()` returns the `HttpApiBuilder.api(...)` layer for our
+ * contract-first control-plane API implementation.
  *
  * We satisfy its dependencies here by providing:
  * - source integrations
  * - repository/data access services
  */
-const apiLayer = makeGitHubHttpApiLayer().pipe(
+const apiLayer = makeControlPlaneHttpApiLayer().pipe(
   Layer.provide(sourceIntegrationLayer),
+  Layer.provide(ControlPlaneCapabilitiesLive),
   Layer.provide(databaseLayer),
 );
 

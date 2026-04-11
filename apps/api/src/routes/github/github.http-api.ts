@@ -10,7 +10,7 @@ import {
   syncInstallation,
 } from "./github.module.js";
 
-const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
+export const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
   return handlers
     .handle("listInstallations", ({ urlParams }) => listInstallations(urlParams))
     .handle("listInstallationRepositories", ({ path, urlParams }) =>
