@@ -1,0 +1,539 @@
+---
+title: Effect Control Plane Architecture Guide
+slug: /architecture/api-route-effect-approach
+status: draft
+owner: engineering
+updated: 2026-04-11
+---
+
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+import { File, Files, Folder } from "fumadocs-ui/components/files";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+This document is the canonical Effect guide for the API control plane in this repository.
+
+Use it when you are adding or reviewing API work from DB repositories to HTTP handlers.
+
+## Scope and current status
+
+- The live Effect HTTP path today is the GitHub control-plane domain.
+- Legacy Hono route files still exist in `apps/api/src/routes/*` but are intentionally disabled.
+- New route domains should follow the same Effect architecture used by GitHub.
+
+## SOP: five services and the wiring order
+
+<Callout type="idea" title="Use this as the default blueprint for every new API domain">
+  Always wire from persistence to transport in this exact order. Keep each service focused and
+  composable.
+</Callout>
+
+<Files>
+  <Folder name="packages" defaultOpen>
+    <Folder name="db" defaultOpen>
+      <File name="src/client.ts" />
+      <File name="src/repositories/*.ts" />
+      <File name="src/layers.ts" />
+    </Folder>
+    <Folder name="source-integrations" defaultOpen>
+      <File name="src/github/service.ts" />
+      <File name="src/github/layer.ts" />
+    </Folder>
+    <Folder name="api-contracts" defaultOpen>
+      <File name="src/core-api/github.ts" />
+      <File name="src/core-api/control-plane.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="apps" defaultOpen>
+    <Folder name="api" defaultOpen>
+      <File name="src/routes/github/github.module.ts" />
+      <File name="src/routes/github/github.http-api.ts" />
+      <File name="src/index.ts" />
+    </Folder>
+  </Folder>
+</Files>
+
+<Steps>
+<Step>
+
+### Service 1: DB service
+
+- **Role:** provide one typed Drizzle DB service tag.
+- **File:** `packages/db/src/client.ts`
+- **Output:** `SealantDB` tag + `SealantDBLive` layer.
+
+</Step>
+<Step>
+
+### Service 2: repository services
+
+- **Role:** expose one service per aggregate/table boundary.
+- **Files:** `packages/db/src/repositories/*.ts`
+- **Output:** repo tags + `*Live` layers + repo error types.
+
+</Step>
+<Step>
+
+### Service 3: package/use-case capability service
+
+- **Role:** encapsulate external/provider logic (GitHub is example only).
+- **Files:** `packages/source-integrations/src/github/service.ts`,
+  `packages/source-integrations/src/github/layer.ts`
+- **Output:** `GitHubSourceIntegrationService` and live provider layer.
+
+</Step>
+<Step>
+
+### Service 4: HTTP contract service
+
+- **Role:** define boundary schemas, endpoint IDs, and HTTP error contracts.
+- **Files:** `packages/api-contracts/src/core-api/github.ts`,
+  `packages/api-contracts/src/core-api/control-plane.ts`
+- **Output:** `HttpApi` contract with OpenAPI metadata and no runtime side effects.
+
+</Step>
+<Step>
+
+### Service 5: per-domain HTTP implementation service
+
+- **Role:** implement endpoint behavior as raw Effects and bind endpoint handlers.
+- **Files:** `apps/api/src/routes/github/github.module.ts`,
+  `apps/api/src/routes/github/github.http-api.ts`
+- **Output:** thin handler binding over Effect use-cases.
+
+</Step>
+</Steps>
+
+<Tabs items={["Template Wiring", "GitHub Wiring (Current)"]}>
+  <Tab>
+
+```ts
+const dbClientLayer = DBServiceLive.pipe(Layer.provide(RuntimeSqlClientLayer));
+const repoLayer = DomainDataAccessLive.pipe(Layer.provide(dbClientLayer));
+const packageLayer = packageCapabilityLayer(runtimeOptions);
+
+const apiLayer = makeDomainHttpApiLayer().pipe(
+  Layer.provide(packageLayer),
+  Layer.provide(repoLayer),
+);
+```
+
+  </Tab>
+  <Tab>
+
+```ts
+const databaseClientLayer = SealantDBLive.pipe(
+  Layer.provide(PgClient.layer({ url: Redacted.make(env.DATABASE_URL) })),
+);
+
+const databaseLayer = GitHubDataAccessLive.pipe(Layer.provide(databaseClientLayer));
+
+const apiLayer = makeGitHubHttpApiLayer().pipe(
+  Layer.provide(sourceIntegrationLayer),
+  Layer.provide(databaseLayer),
+);
+```
+
+  </Tab>
+</Tabs>
+
+## Wiring contract (consumes -> provides)
+
+```txt
+Service 1 (DB) -> Service 2 (Repos) -> Service 5 (HTTP impl)
+                           \-> Service 3 (Capability) -/
+Service 4 (HTTP contract) -----------------------------> Service 5 (HTTP impl)
+Service 5 (HTTP impl) ---------------------------------> Runtime bootstrap (`apps/api/src/index.ts`)
+```
+
+<Accordions type="multiple">
+  <Accordion title="Service 1: DB service (`packages/db/src/client.ts`)">
+
+- **Consumes:** SQL client dependencies from `PgClient.layer(...)`.
+- **Provides:** `SealantDB` via `SealantDBLive`.
+- **Rule:** no route/business logic here.
+
+```ts
+export class SealantDB extends Context.Tag("SealantDB")<SealantDB, DB>() {}
+export const SealantDBLive = Layer.effect(SealantDB, dbEffect);
+```
+
+  </Accordion>
+
+  <Accordion title="Service 2: repo services (`packages/db/src/repositories/*.ts` + `packages/db/src/layers.ts`)">
+
+- **Consumes:** `SealantDB`.
+- **Provides:** repo tags (`GitHubInstallationRepo`, `GitHubWebhookDeliveryRepo`, etc.).
+- **Rule:** persistence-only; no HTTP/provider calls.
+- **Shape:** each repo exports `*RepoService` (contract), `*Repo` tag, and `*RepoLive` layer.
+
+```ts
+export interface GitHubWebhookDeliveryRepoService {
+  readonly createWebhookDelivery: (
+    input: CreateGitHubWebhookDeliveryInput,
+  ) => Effect.Effect<GitHubWebhookDelivery, GitHubWebhookDeliveryRepoError>;
+  readonly getWebhookDeliveryByDeliveryId: (
+    deliveryId: string,
+  ) => Effect.Effect<GitHubWebhookDelivery | undefined, GitHubWebhookDeliveryRepoError>;
+}
+
+export class GitHubWebhookDeliveryRepo extends Context.Tag("GitHubWebhookDeliveryRepo")<
+  GitHubWebhookDeliveryRepo,
+  GitHubWebhookDeliveryRepoService
+>() {}
+
+export const GitHubWebhookDeliveryRepoLive = Layer.effect(
+  GitHubWebhookDeliveryRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+  }),
+);
+
+export const GitHubDataAccessLive = Layer.mergeAll(
+  GitHubInstallationRepoLive,
+  GitHubInstallationRepositoryCacheRepoLive,
+  GitHubWebhookDeliveryRepoLive,
+  RepositoryProfileRepoLive,
+);
+```
+
+  </Accordion>
+
+  <Accordion title="Service 3: capability package service (GitHub example)">
+
+- **Consumes:** runtime options (app id, private key, webhook secret, API base URL).
+- **Provides:** `GitHubSourceIntegrationService`.
+- **Rule:** provider logic only; no app-route imports.
+
+```ts
+export const gitHubSourceIntegrationLayer = (options: GitHubSourceIntegrationOptions = {}) => {
+  const configLayer = Layer.succeed(GitHubSourceIntegrationConfig, options);
+  return gitHubSourceIntegrationLiveLayer.pipe(Layer.provide(configLayer));
+};
+```
+
+  </Accordion>
+
+  <Accordion title="Service 4: HTTP contract service (`packages/api-contracts`)">
+
+- **Consumes:** schemas/types only.
+- **Provides:** `ControlPlaneAPI` (endpoint IDs, request/response schemas, API errors).
+- **Rule:** no layer wiring, no DB, no side effects.
+
+```ts
+export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi").add(
+  GitHubGroup.prefix("/v1/github"),
+);
+```
+
+  </Accordion>
+
+  <Accordion title="Service 5: per-domain HTTP implementation (`apps/api/src/routes/github/*`)">
+
+- **Consumes:** Service 2 repos + Service 3 capability + Service 4 endpoint IDs.
+- **Provides:** endpoint implementations as raw Effects bound by `HttpApiBuilder.group(...)`.
+- **Rule:** keep `github.http-api.ts` thin; keep logic in `github.module.ts`.
+
+```ts
+const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
+  return handlers
+    .handle("listInstallations", ({ urlParams }) => listInstallations(urlParams))
+    .handle("syncInstallation", ({ path, urlParams }) =>
+      syncInstallation({ installationId: path.installationId, query: urlParams }),
+    );
+});
+```
+
+  </Accordion>
+</Accordions>
+
+<Callout type="success" title="SOP pass criteria">
+  If a new route can be explained with the same 5-service consumes/provides chain, your wiring is
+  correct for this repo.
+</Callout>
+
+## Concrete GitHub examples (end to end)
+
+The snippets below are minimal extracts from the current implementation so the architecture is
+concrete, not abstract.
+
+### A) Repository service and live layer (`@sealant/db`)
+
+`packages/db/src/repositories/github-installations.ts`:
+
+```ts
+export class GitHubInstallationRepo extends Context.Tag("GitHubInstallationRepo")<
+  GitHubInstallationRepo,
+  GitHubInstallationRepoService
+>() {}
+
+export const GitHubInstallationRepoLive = Layer.effect(
+  GitHubInstallationRepo,
+  Effect.gen(function* () {
+    const db = yield* SealantDB;
+    return {
+      getInstallationById: (id) =>
+        withGitHubInstallationRepoError(
+          "getInstallationById",
+          Effect.gen(function* () {
+            const [installation] = yield* db
+              .select()
+              .from(githubAppInstallations)
+              .where(eq(githubAppInstallations.id, id))
+              .limit(1);
+            return installation;
+          }),
+        ),
+      // ...other repository operations
+    };
+  }),
+);
+```
+
+### B) Repo bundle layer (`@sealant/db`)
+
+`packages/db/src/layers.ts`:
+
+```ts
+export const GitHubDataAccessLive = Layer.mergeAll(
+  GitHubInstallationRepoLive,
+  GitHubInstallationRepositoryCacheRepoLive,
+  GitHubWebhookDeliveryRepoLive,
+  RepositoryProfileRepoLive,
+);
+```
+
+### C) HTTP contract and route prefix (`@sealant/api-contracts`)
+
+`packages/api-contracts/src/core-api/github.ts` and
+`packages/api-contracts/src/core-api/control-plane.ts`:
+
+```ts
+export const GitHubGroup = HttpApiGroup.make("github").add(
+  HttpApiEndpoint.get("listInstallations", "/installations")
+    .setUrlParams(githubInstallationsQuerySchema)
+    .addSuccess(listGitHubInstallationsResponseSchema)
+    .addError(GitHubServiceUnavailableError)
+    .addError(GitHubInternalServerError),
+);
+
+export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi").add(
+  GitHubGroup.prefix("/v1/github"),
+);
+```
+
+### D) Domain use-case implementation (`apps/api`)
+
+`apps/api/src/routes/github/github.module.ts`:
+
+```ts
+export const listInstallations = (query: GitHubInstallationsQuery) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const installations = yield* withInternalError(
+      installationRepo.listInstallationsForUser({ userId: query.userId, status: "active" }),
+      "Failed to list GitHub installations.",
+    );
+
+    return {
+      items: installations.map(toInstallationSummary),
+    } satisfies ListGitHubInstallationsResponse;
+  });
+};
+```
+
+### E) Thin handler binding (`apps/api`)
+
+`apps/api/src/routes/github/github.http-api.ts`:
+
+```ts
+const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
+  return handlers
+    .handle("listInstallations", ({ urlParams }) => listInstallations(urlParams))
+    .handle("importInstallation", ({ payload }) => importInstallation(payload));
+});
+```
+
+### F) Runtime composition (`apps/api`)
+
+`apps/api/src/index.ts`:
+
+```ts
+const databaseClientLayer = SealantDBLive.pipe(
+  Layer.provide(PgClient.layer({ url: Redacted.make(env.DATABASE_URL) })),
+);
+
+const databaseLayer = GitHubDataAccessLive.pipe(Layer.provide(databaseClientLayer));
+
+const apiLayer = makeGitHubHttpApiLayer().pipe(
+  Layer.provide(gitHubSourceIntegrationLayer({ apiBaseUrl: env.GITHUB_API_BASE_URL })),
+  Layer.provide(databaseLayer),
+);
+```
+
+This is the full stack from Drizzle repository implementation to served HTTP handlers.
+
+## Layer responsibilities
+
+### 1) Data access package (`packages/db`)
+
+`@sealant/db` owns typed persistence contracts and implementations.
+
+Expected shape:
+
+- one service tag per repository (`Context.Tag`)
+- one `*Live` layer per repository (`Layer.effect`)
+- typed repository errors (invariant/unexpected)
+- optional bundle layers (`GitHubDataAccessLive`, `ControlPlaneDataAccessLive`)
+
+Rules:
+
+- no HTTP concerns
+- no provider API calls
+- no API contract error types
+
+### 2) Capability packages (`packages/*`)
+
+Capability packages own external system behavior.
+
+Current reference: `@sealant/source-integrations` for GitHub App operations.
+
+Expected shape:
+
+- `service.ts`: capability contract and errors
+- `layer.ts`: live implementation and layer constructors
+- pure helpers in `utils.ts`
+
+Rules:
+
+- no imports from `apps/api`
+- no direct HTTP transport mapping
+
+### 3) API boundary contract (`packages/api-contracts`)
+
+`api-contracts` defines HTTP shape only.
+
+Expected shape:
+
+- request/query/header schemas
+- response schemas
+- boundary API errors (status + payload)
+- `HttpApi` group and endpoint definitions
+- OpenAPI metadata
+
+Rules:
+
+- no side effects
+- no repository access
+- no runtime layer composition
+
+### 4) API behavior and binding (`apps/api`)
+
+Expected shape per domain:
+
+- `*.module.ts`
+  - endpoint use-cases as Effects
+  - consumes repository/capability services
+  - maps internal errors to boundary API errors
+- `*.http-api.ts`
+  - thin endpoint-to-use-case binding only
+
+## Dependency direction (must hold)
+
+- `packages/db` and capability packages do not depend on `apps/api`
+- `packages/api-contracts` does not depend on `apps/api`
+- `apps/api` depends on `packages/api-contracts`, `packages/db`, and capability packages
+
+In short: contracts + capabilities + repositories are reusable; `apps/api` composes them.
+
+## GitHub route reference (current production pattern)
+
+### Contract
+
+- `packages/api-contracts/src/core-api/github.ts`
+- `packages/api-contracts/src/core-api/control-plane.ts`
+
+Defines endpoint IDs, params/payload schemas, success models, and typed API errors.
+
+### Use-cases
+
+- `apps/api/src/routes/github/github.module.ts`
+
+Implements business operations such as:
+
+- installation listing and access checks
+- installation import/sync orchestration
+- webhook validation, idempotency, and processing
+- mapping repository/capability failures into contract errors
+
+### Binding
+
+- `apps/api/src/routes/github/github.http-api.ts`
+
+Maps each endpoint to one Effect function from `github.module.ts` and nothing more.
+
+### App composition
+
+- `apps/api/src/index.ts`
+
+Builds and provides layers in this order:
+
+1. `PgClient.layer(...)`
+2. `SealantDBLive`
+3. `GitHubDataAccessLive`
+4. `gitHubSourceIntegrationLayer(...)`
+5. `makeGitHubHttpApiLayer()`
+6. OpenAPI and Scalar middleware
+7. CORS middleware
+8. `HttpApiBuilder.serve()` + `NodeHttpServer.layer(...)`
+
+## Error strategy
+
+Use a two-stage error model:
+
+1. **Internal errors**
+   - repository errors (`*RepoInvariantError`, `*RepoUnexpectedError`)
+   - capability errors (`GitHubSourceIntegration*Error`)
+
+2. **Boundary errors**
+   - API contract errors in `@sealant/api-contracts` (400/401/403/404/500/503)
+
+Mapping is done in `apps/api/src/routes/*/*.module.ts`.
+
+## Service granularity guidance
+
+Use this default:
+
+- repository service per repository in `@sealant/db`
+- capability service per provider/integration package
+- endpoint behavior as plain exported Effects in `*.module.ts`
+
+Introduce an additional domain service in `apps/api` only when behavior must be shared across
+multiple runtimes (for example HTTP + worker + scheduled job).
+
+Do not create one service per endpoint handler.
+
+## Route implementation checklist (new domains)
+
+1. Add or extend repository services in `@sealant/db` as needed.
+2. Add or extend capability package services for external systems.
+3. Define HTTP schemas/errors/endpoints in `packages/api-contracts`.
+4. Implement domain behavior in `apps/api/src/routes/<domain>/<domain>.module.ts`.
+5. Bind handlers in `apps/api/src/routes/<domain>/<domain>.http-api.ts`.
+6. Provide required layers in `apps/api/src/index.ts`.
+7. Add tests for success paths and error mapping.
+
+## What to avoid
+
+- putting business logic directly in `*.http-api.ts`
+- importing app route code from capability or db packages
+- returning raw internal repository/capability errors over HTTP
+- mixing runtime composition into `api-contracts`
+
+## Related references
+
+- `apps/api/src/index.ts`
+- `packages/db/src/client.ts`
+- `packages/db/src/layers.ts`
+- `packages/api-contracts/src/core-api/control-plane.ts`
+- `apps/docs/contents/packages/db-effect-service-layer.md`

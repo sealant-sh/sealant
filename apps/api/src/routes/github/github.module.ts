@@ -31,59 +31,7 @@ import {
   type GitHubRemoteInstallation,
   GitHubSourceIntegrationService,
 } from "@sealant/source-integrations";
-import { Context, Effect, Layer } from "effect";
-
-export interface GitHubModule {
-  readonly listInstallations: (
-    query: GitHubInstallationsQuery,
-  ) => Effect.Effect<
-    ListGitHubInstallationsResponse,
-    GitHubServiceUnavailableError | GitHubInternalServerError
-  >;
-  readonly listInstallationRepositories: (input: {
-    readonly installationId: string;
-    readonly query: GitHubInstallationRepositoriesQuery;
-  }) => Effect.Effect<
-    ListGitHubInstallationRepositoriesResponse,
-    | GitHubForbiddenError
-    | GitHubNotFoundError
-    | GitHubServiceUnavailableError
-    | GitHubInternalServerError
-  >;
-  readonly syncInstallation: (input: {
-    readonly installationId: string;
-    readonly query: SyncGitHubInstallationQuery;
-  }) => Effect.Effect<
-    SyncGitHubInstallationResponse,
-    | GitHubForbiddenError
-    | GitHubNotFoundError
-    | GitHubServiceUnavailableError
-    | GitHubInternalServerError
-  >;
-  readonly importInstallation: (
-    input: ImportGitHubInstallationRequest,
-  ) => Effect.Effect<
-    ImportGitHubInstallationResponse,
-    GitHubNotFoundError | GitHubServiceUnavailableError | GitHubInternalServerError
-  >;
-  readonly handleWebhook: (input: {
-    readonly deliveryIdHeader?: string;
-    readonly eventTypeHeader?: string;
-    readonly signatureHeader?: string;
-    readonly payloadText: string;
-  }) => Effect.Effect<
-    GitHubWebhookResponse,
-    | GitHubBadRequestError
-    | GitHubUnauthorizedError
-    | GitHubServiceUnavailableError
-    | GitHubInternalServerError
-  >;
-}
-
-export class GitHubModuleService extends Context.Tag("@sealant/api/GitHubModuleService")<
-  GitHubModuleService,
-  GitHubModule
->() {}
+import { Clock, Effect } from "effect";
 
 const gitHubUnavailableMessage = "GitHub integration is not configured.";
 
@@ -91,26 +39,30 @@ const toErrorMessage = (error: unknown, fallback: string): string => {
   return error instanceof Error ? error.message : fallback;
 };
 
-const runResult = async <A>(result: Effect.Effect<A, unknown, never> | Promise<A> | A) => {
-  if (Effect.isEffect(result)) {
-    return Effect.runPromise(result);
-  }
+const now = Effect.map(Clock.currentTimeMillis, (millis) => new Date(millis));
 
-  return await result;
-};
+const randomId = Effect.sync(() => randomUUID());
 
 const toIsoString = (value: Date | null | undefined): string | undefined => {
   return value?.toISOString();
 };
 
-const parseWebhookPayload = (payload: string): Record<string, unknown> => {
-  const parsed = JSON.parse(payload) as unknown;
+const parseWebhookPayload = (payload: string) => {
+  return Effect.try({
+    try: () => {
+      const parsed = JSON.parse(payload) as unknown;
 
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error("GitHub webhook payload must be a JSON object.");
-  }
+      if (typeof parsed !== "object" || parsed === null) {
+        throw new Error("GitHub webhook payload must be a JSON object.");
+      }
 
-  return parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>;
+    },
+    catch: () =>
+      new GitHubBadRequestError({
+        message: "GitHub webhook payload must be a JSON object.",
+      }),
+  });
 };
 
 const getWebhookInstallationExternalId = (payload: Record<string, unknown>): string | undefined => {
@@ -159,50 +111,42 @@ const toInstallationStatusFromRemote = (
   return installation.suspendedAt === undefined ? "active" : "suspended";
 };
 
-interface GitHubModuleRuntime {
-  readonly clock: {
-    now: () => Date;
-  };
-  readonly idGenerator: {
-    randomUuid: () => string;
-  };
-  readonly gitHubSourceIntegration: Context.Tag.Service<typeof GitHubSourceIntegrationService>;
-  readonly gitHubInstallationRepository: Context.Tag.Service<typeof GitHubInstallationRepo>;
-  readonly gitHubInstallationRepositoryCacheRepository: Context.Tag.Service<
-    typeof GitHubInstallationRepositoryCacheRepo
-  >;
-  readonly gitHubWebhookDeliveryRepository: Context.Tag.Service<typeof GitHubWebhookDeliveryRepo>;
-  readonly repositoryProfileRepository: Context.Tag.Service<typeof RepositoryProfileRepo>;
-}
+const withInternalError = <A>(effect: Effect.Effect<A, unknown>, fallback: string) => {
+  return effect.pipe(
+    Effect.mapError(
+      (error) =>
+        new GitHubInternalServerError({
+          message: toErrorMessage(error, fallback),
+        }),
+    ),
+  );
+};
 
-const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
-  const upsertInstallationRecord = async (input: {
-    readonly externalInstallationId: string;
-    readonly externalAccountId?: string;
-    readonly accountLogin: string;
-    readonly accountType: GitHubAppInstallation["accountType"];
-    readonly targetType?: GitHubAppInstallation["accountType"];
-    readonly status: GitHubAppInstallation["status"];
-    readonly permissions?: Record<string, string>;
-    readonly repositorySelection: GitHubAppInstallation["repositorySelection"];
-    readonly suspendedAt?: Date | null;
-    readonly lastSyncedAt?: Date;
-    readonly installedAt?: Date;
-  }): Promise<GitHubAppInstallation | null> => {
-    const installationRepository = runtime.gitHubInstallationRepository;
-
-    if (installationRepository === undefined) {
-      return null;
-    }
-
-    const existing = await runResult(
-      installationRepository.getInstallationByExternalId(input.externalInstallationId),
+const upsertInstallationRecord = (input: {
+  readonly externalInstallationId: string;
+  readonly externalAccountId?: string;
+  readonly accountLogin: string;
+  readonly accountType: GitHubAppInstallation["accountType"];
+  readonly targetType?: GitHubAppInstallation["accountType"];
+  readonly status: GitHubAppInstallation["status"];
+  readonly permissions?: Record<string, string>;
+  readonly repositorySelection: GitHubAppInstallation["repositorySelection"];
+  readonly suspendedAt?: Date | null;
+  readonly lastSyncedAt?: Date;
+  readonly installedAt?: Date;
+}) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const existing = yield* withInternalError(
+      installationRepo.getInstallationByExternalId(input.externalInstallationId),
+      "Failed to load GitHub installation.",
     );
-    const now = runtime.clock.now();
+    const currentTime = yield* now;
+    const id = existing?.id ?? (yield* randomId);
 
-    return runResult(
-      installationRepository.upsertInstallation({
-        id: existing?.id ?? runtime.idGenerator.randomUuid(),
+    return yield* withInternalError(
+      installationRepo.upsertInstallation({
+        id,
         externalInstallationId: input.externalInstallationId,
         ...(input.externalAccountId === undefined
           ? {}
@@ -214,16 +158,19 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
         ...(input.permissions === undefined ? {} : { permissions: input.permissions }),
         repositorySelection: input.repositorySelection,
         ...(input.suspendedAt === undefined ? {} : { suspendedAt: input.suspendedAt }),
-        lastSyncedAt: input.lastSyncedAt ?? now,
-        installedAt: input.installedAt ?? existing?.installedAt ?? now,
+        lastSyncedAt: input.lastSyncedAt ?? currentTime,
+        installedAt: input.installedAt ?? existing?.installedAt ?? currentTime,
       }),
+      "Failed to upsert GitHub installation.",
     );
-  };
+  });
+};
 
-  const upsertInstallationFromWebhook = async (
-    payload: Record<string, unknown>,
-    action: string | undefined,
-  ): Promise<GitHubAppInstallation | null> => {
+const upsertInstallationFromWebhook = (
+  payload: Record<string, unknown>,
+  action: string | undefined,
+) => {
+  return Effect.gen(function* () {
     const installation = payload.installation;
     if (typeof installation !== "object" || installation === null) {
       return null;
@@ -264,9 +211,9 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
             ),
           )
         : undefined;
-    const now = runtime.clock.now();
+    const currentTime = yield* now;
 
-    return upsertInstallationRecord({
+    return yield* upsertInstallationRecord({
       externalInstallationId,
       ...(externalAccountId === undefined ? {} : { externalAccountId }),
       accountLogin: account.login,
@@ -275,47 +222,42 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
       status: toInstallationStatus(action),
       ...(permissions === undefined ? {} : { permissions }),
       repositorySelection: payload.repository_selection === "selected" ? "selected" : "all",
-      suspendedAt: toInstallationStatus(action) === "suspended" ? now : null,
-      lastSyncedAt: now,
-      installedAt: now,
+      suspendedAt: toInstallationStatus(action) === "suspended" ? currentTime : null,
+      lastSyncedAt: currentTime,
+      installedAt: currentTime,
     });
-  };
+  });
+};
 
-  const syncInstallationRepositories = async (
-    installation: GitHubAppInstallation,
-  ): Promise<number> => {
-    const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
-    const installationRepositoryCache = runtime.gitHubInstallationRepositoryCacheRepository;
-    const repositoryProfileRepository = runtime.repositoryProfileRepository;
-    const installationRepository = runtime.gitHubInstallationRepository;
+const syncInstallationRepositories = (installation: GitHubAppInstallation) => {
+  return Effect.gen(function* () {
+    const sourceIntegration = yield* GitHubSourceIntegrationService;
+    const installationCacheRepo = yield* GitHubInstallationRepositoryCacheRepo;
+    const repositoryProfileRepo = yield* RepositoryProfileRepo;
+    const installationRepo = yield* GitHubInstallationRepo;
 
-    if (
-      gitHubSourceIntegration === undefined ||
-      installationRepositoryCache === undefined ||
-      repositoryProfileRepository === undefined ||
-      installationRepository === undefined
-    ) {
-      throw new GitHubServiceUnavailableError({
-        message: "GitHub sync dependencies are not configured.",
-      });
-    }
-
-    const syncedAt = runtime.clock.now();
-    const remoteRepositories = await runResult(
-      gitHubSourceIntegration.listInstallationRepositories(installation.externalInstallationId),
+    const syncedAt = yield* now;
+    const remoteRepositories = yield* withInternalError(
+      sourceIntegration.listInstallationRepositories(installation.externalInstallationId),
+      "Failed to list repositories for GitHub installation.",
     );
+
     const preservedExternalRepositoryIds: string[] = [];
 
     for (const remoteRepository of remoteRepositories) {
-      const existingRepository = await runResult(
-        repositoryProfileRepository.getRepositoryByProviderExternalId({
+      const existingRepository = yield* withInternalError(
+        repositoryProfileRepo.getRepositoryByProviderExternalId({
           provider: "github",
           externalId: remoteRepository.externalRepositoryId,
         }),
+        "Failed to load repository profile.",
       );
-      const repository = await runResult(
-        repositoryProfileRepository.upsertRepository({
-          id: existingRepository?.id ?? runtime.idGenerator.randomUuid(),
+
+      const repositoryId = existingRepository?.id ?? (yield* randomId);
+
+      const repository = yield* withInternalError(
+        repositoryProfileRepo.upsertRepository({
+          id: repositoryId,
           provider: "github",
           externalId: remoteRepository.externalRepositoryId,
           owner: remoteRepository.owner,
@@ -325,17 +267,22 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
           isArchived: remoteRepository.isArchived,
           lastSyncedAt: syncedAt,
         }),
+        "Failed to upsert repository profile.",
       );
-      const existingInstallationRepository = await runResult(
-        installationRepositoryCache.getInstallationRepositoryByExternalRepoId({
+
+      const existingInstallationRepository = yield* withInternalError(
+        installationCacheRepo.getInstallationRepositoryByExternalRepoId({
           installationId: installation.id,
           externalRepositoryId: remoteRepository.externalRepositoryId,
         }),
+        "Failed to load installation repository cache entry.",
       );
 
-      await runResult(
-        installationRepositoryCache.upsertInstallationRepository({
-          id: existingInstallationRepository?.id ?? runtime.idGenerator.randomUuid(),
+      const installationRepositoryId = existingInstallationRepository?.id ?? (yield* randomId);
+
+      yield* withInternalError(
+        installationCacheRepo.upsertInstallationRepository({
+          id: installationRepositoryId,
           installationId: installation.id,
           repositoryId: repository.id,
           externalRepositoryId: remoteRepository.externalRepositoryId,
@@ -351,43 +298,57 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
           lastSyncedAt: syncedAt,
           removedAt: null,
         }),
+        "Failed to upsert installation repository cache entry.",
       );
 
       preservedExternalRepositoryIds.push(remoteRepository.externalRepositoryId);
     }
 
-    await runResult(
-      installationRepositoryCache.markInstallationRepositoriesRemoved({
+    yield* withInternalError(
+      installationCacheRepo.markInstallationRepositoriesRemoved({
         installationId: installation.id,
         preservedExternalRepositoryIds,
         removedAt: syncedAt,
       }),
+      "Failed to mark stale installation repositories as removed.",
     );
-    await runResult(
-      installationRepository.setInstallationStatus({
+
+    yield* withInternalError(
+      installationRepo.setInstallationStatus({
         installationId: installation.id,
         status: installation.status === "deleted" ? "deleted" : "active",
         ...(installation.status === "deleted" ? {} : { suspendedAt: null }),
         lastSyncedAt: syncedAt,
       }),
+      "Failed to update GitHub installation status after sync.",
     );
 
     return remoteRepositories.length;
-  };
+  });
+};
 
-  const importInstallationState = async (
-    externalInstallationId: string,
-  ): Promise<GitHubAppInstallation> => {
-    const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
+const importInstallationState = (externalInstallationId: string) => {
+  return Effect.gen(function* () {
+    const sourceIntegration = yield* GitHubSourceIntegrationService;
 
-    if (gitHubSourceIntegration === undefined || !gitHubSourceIntegration.isConfigured()) {
-      throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
+    if (!sourceIntegration.isConfigured()) {
+      return yield* new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
     }
 
-    const remoteInstallation = await runResult(
-      gitHubSourceIntegration.getInstallation(externalInstallationId),
-    );
-    const installation = await upsertInstallationRecord({
+    const remoteInstallation = yield* sourceIntegration
+      .getInstallation(externalInstallationId)
+      .pipe(
+        Effect.mapError((error) => {
+          const message = toErrorMessage(error, "GitHub installation import failed.");
+          if (error instanceof GitHubSourceIntegrationHttpError && error.statusCode === 404) {
+            return new GitHubNotFoundError({ message });
+          }
+
+          return new GitHubInternalServerError({ message });
+        }),
+      );
+
+    return yield* upsertInstallationRecord({
       externalInstallationId: remoteInstallation.externalInstallationId,
       ...(remoteInstallation.externalAccountId === undefined
         ? {}
@@ -400,399 +361,292 @@ const makeGitHubModule = (runtime: GitHubModuleRuntime): GitHubModule => {
       repositorySelection: remoteInstallation.repositorySelection,
       suspendedAt: remoteInstallation.suspendedAt ?? null,
     });
+  });
+};
 
-    if (installation === null) {
-      throw new GitHubServiceUnavailableError({
-        message: "GitHub installation repository is not configured.",
+export const listInstallations = (query: GitHubInstallationsQuery) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const installations = yield* withInternalError(
+      installationRepo.listInstallationsForUser({
+        userId: query.userId,
+        status: "active",
+      }),
+      "Failed to list GitHub installations.",
+    );
+
+    return {
+      items: installations.map(toInstallationSummary),
+    } satisfies ListGitHubInstallationsResponse;
+  });
+};
+
+export const listInstallationRepositories = (input: {
+  readonly installationId: string;
+  readonly query: GitHubInstallationRepositoriesQuery;
+}) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const installationCacheRepo = yield* GitHubInstallationRepositoryCacheRepo;
+
+    const installation = yield* withInternalError(
+      installationRepo.getInstallationById(input.installationId),
+      "Failed to load GitHub installation.",
+    );
+
+    if (installation === undefined) {
+      return yield* new GitHubNotFoundError({
+        message: `GitHub installation not found: ${input.installationId}`,
       });
     }
 
-    return installation;
-  };
-
-  return {
-    listInstallations: (query) =>
-      Effect.tryPromise({
-        try: async () => {
-          const installationRepository = runtime.gitHubInstallationRepository;
-
-          if (installationRepository === undefined) {
-            throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
-          }
-
-          const installations = await runResult(
-            installationRepository.listInstallationsForUser({
-              userId: query.userId,
-              status: "active",
-            }),
-          );
-
-          return {
-            items: installations.map(toInstallationSummary),
-          };
-        },
-        catch: (error) => {
-          if (
-            error instanceof GitHubServiceUnavailableError ||
-            error instanceof GitHubInternalServerError
-          ) {
-            return error;
-          }
-
-          return new GitHubInternalServerError({
-            message: toErrorMessage(error, "Failed to list GitHub installations."),
-          });
-        },
+    const hasGrant = yield* withInternalError(
+      installationRepo.userHasInstallationGrant({
+        installationId: installation.id,
+        userId: input.query.userId,
       }),
+      "Failed to verify GitHub installation access.",
+    );
 
-    listInstallationRepositories: (input) =>
-      Effect.tryPromise({
-        try: async () => {
-          const installationRepository = runtime.gitHubInstallationRepository;
-          const installationRepositoryCache = runtime.gitHubInstallationRepositoryCacheRepository;
+    if (!hasGrant) {
+      return yield* new GitHubForbiddenError({
+        message: `User ${input.query.userId} does not have access to GitHub installation ${input.installationId}.`,
+      });
+    }
 
-          if (installationRepository === undefined || installationRepositoryCache === undefined) {
-            throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
-          }
-
-          const installation = await runResult(
-            installationRepository.getInstallationById(input.installationId),
-          );
-          if (installation === undefined) {
-            throw new GitHubNotFoundError({
-              message: `GitHub installation not found: ${input.installationId}`,
-            });
-          }
-
-          const hasGrant = await runResult(
-            installationRepository.userHasInstallationGrant({
-              installationId: installation.id,
-              userId: input.query.userId,
-            }),
-          );
-
-          if (!hasGrant) {
-            throw new GitHubForbiddenError({
-              message: `User ${input.query.userId} does not have access to GitHub installation ${input.installationId}.`,
-            });
-          }
-
-          const repositories = await runResult(
-            installationRepositoryCache.listRepositoriesForUser({
-              userId: input.query.userId,
-              installationId: input.installationId,
-              ...(input.query.search === undefined ? {} : { search: input.query.search }),
-            }),
-          );
-
-          return {
-            items: repositories.map((repository): GitHubInstallationRepositorySummary => {
-              return {
-                installationRepositoryId: repository.id,
-                installationId: repository.installationId,
-                repositoryId: repository.repositoryId,
-                externalRepositoryId: repository.externalRepositoryId,
-                owner: repository.owner,
-                name: repository.name,
-                fullName: repository.fullName,
-                defaultBranch: repository.defaultBranch,
-                isPrivate: repository.isPrivate,
-                isArchived: repository.isArchived,
-                ...(repository.lastSyncedAt === null
-                  ? {}
-                  : { lastSyncedAt: toIsoString(repository.lastSyncedAt) }),
-              };
-            }),
-          };
-        },
-        catch: (error) => {
-          if (
-            error instanceof GitHubForbiddenError ||
-            error instanceof GitHubNotFoundError ||
-            error instanceof GitHubServiceUnavailableError ||
-            error instanceof GitHubInternalServerError
-          ) {
-            return error;
-          }
-
-          return new GitHubInternalServerError({
-            message: toErrorMessage(error, "Failed to list GitHub installation repositories."),
-          });
-        },
+    const repositories = yield* withInternalError(
+      installationCacheRepo.listRepositoriesForUser({
+        userId: input.query.userId,
+        installationId: input.installationId,
+        ...(input.query.search === undefined ? {} : { search: input.query.search }),
       }),
+      "Failed to list GitHub installation repositories.",
+    );
 
-    syncInstallation: (input) =>
-      Effect.tryPromise({
-        try: async () => {
-          const installationRepository = runtime.gitHubInstallationRepository;
-          const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
-
-          if (
-            installationRepository === undefined ||
-            gitHubSourceIntegration === undefined ||
-            !gitHubSourceIntegration.isConfigured()
-          ) {
-            throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
-          }
-
-          const installation = await runResult(
-            installationRepository.getInstallationById(input.installationId),
-          );
-          if (installation === undefined) {
-            throw new GitHubNotFoundError({
-              message: `GitHub installation not found: ${input.installationId}`,
-            });
-          }
-
-          if (installation.status !== "active") {
-            throw new GitHubForbiddenError({
-              message: `GitHub installation ${input.installationId} is not active.`,
-            });
-          }
-
-          const hasGrant = await runResult(
-            installationRepository.userHasInstallationGrant({
-              installationId: installation.id,
-              userId: input.query.userId,
-            }),
-          );
-
-          if (!hasGrant) {
-            throw new GitHubForbiddenError({
-              message: `User ${input.query.userId} does not have access to GitHub installation ${input.installationId}.`,
-            });
-          }
-
-          const syncedAt = runtime.clock.now();
-          const syncedRepositoryCount = await syncInstallationRepositories(installation);
-
-          return {
-            installationId: installation.id,
-            syncedRepositoryCount,
-            syncedAt: syncedAt.toISOString(),
-          };
-        },
-        catch: (error) => {
-          if (
-            error instanceof GitHubForbiddenError ||
-            error instanceof GitHubNotFoundError ||
-            error instanceof GitHubServiceUnavailableError ||
-            error instanceof GitHubInternalServerError
-          ) {
-            return error;
-          }
-
-          return new GitHubInternalServerError({
-            message: toErrorMessage(error, "GitHub installation sync failed."),
-          });
-        },
+    return {
+      items: repositories.map((repository): GitHubInstallationRepositorySummary => {
+        return {
+          installationRepositoryId: repository.id,
+          installationId: repository.installationId,
+          repositoryId: repository.repositoryId,
+          externalRepositoryId: repository.externalRepositoryId,
+          owner: repository.owner,
+          name: repository.name,
+          fullName: repository.fullName,
+          defaultBranch: repository.defaultBranch,
+          isPrivate: repository.isPrivate,
+          isArchived: repository.isArchived,
+          ...(repository.lastSyncedAt === null
+            ? {}
+            : { lastSyncedAt: toIsoString(repository.lastSyncedAt) }),
+        };
       }),
-
-    importInstallation: (input) =>
-      Effect.tryPromise({
-        try: async () => {
-          const installationRepository = runtime.gitHubInstallationRepository;
-          const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
-
-          if (
-            installationRepository === undefined ||
-            gitHubSourceIntegration === undefined ||
-            !gitHubSourceIntegration.isConfigured()
-          ) {
-            throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
-          }
-
-          try {
-            const installation = await importInstallationState(input.externalInstallationId);
-
-            await runResult(
-              installationRepository.grantInstallationToUser({
-                installationId: installation.id,
-                userId: input.userId,
-                grantedByUserId: input.userId,
-              }),
-            );
-
-            const syncedAt = runtime.clock.now();
-            const syncedRepositoryCount =
-              installation.status === "active"
-                ? await syncInstallationRepositories(installation)
-                : 0;
-
-            const latestInstallation =
-              syncedRepositoryCount === 0 && installation.status !== "active"
-                ? installation
-                : ((await runResult(installationRepository.getInstallationById(installation.id))) ??
-                  installation);
-
-            return {
-              installation: toInstallationSummary(latestInstallation),
-              syncedRepositoryCount,
-              syncedAt: syncedAt.toISOString(),
-            };
-          } catch (error) {
-            const message = toErrorMessage(error, "GitHub installation import failed.");
-
-            if (
-              error instanceof GitHubNotFoundError ||
-              error instanceof GitHubServiceUnavailableError ||
-              error instanceof GitHubInternalServerError
-            ) {
-              throw error;
-            }
-
-            if (error instanceof GitHubSourceIntegrationHttpError && error.statusCode === 404) {
-              throw new GitHubNotFoundError({ message });
-            }
-
-            throw new GitHubInternalServerError({ message });
-          }
-        },
-        catch: (error) => {
-          if (
-            error instanceof GitHubNotFoundError ||
-            error instanceof GitHubServiceUnavailableError ||
-            error instanceof GitHubInternalServerError
-          ) {
-            return error;
-          }
-
-          return new GitHubInternalServerError({
-            message: toErrorMessage(error, "GitHub installation import failed."),
-          });
-        },
-      }),
-
-    handleWebhook: (input) =>
-      Effect.tryPromise({
-        try: async () => {
-          const gitHubSourceIntegration = runtime.gitHubSourceIntegration;
-          const webhookRepository = runtime.gitHubWebhookDeliveryRepository;
-
-          if (gitHubSourceIntegration === undefined || webhookRepository === undefined) {
-            throw new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
-          }
-
-          if (!gitHubSourceIntegration.isWebhookVerificationConfigured()) {
-            throw new GitHubServiceUnavailableError({
-              message: "GitHub webhook verification is not configured.",
-            });
-          }
-
-          const deliveryId = input.deliveryIdHeader;
-          const eventType = input.eventTypeHeader;
-          const signature256 = input.signatureHeader;
-
-          if (deliveryId === undefined || eventType === undefined) {
-            throw new GitHubBadRequestError({
-              message: "GitHub webhook delivery headers are missing.",
-            });
-          }
-
-          if (
-            !gitHubSourceIntegration.verifyWebhookSignature({
-              payload: input.payloadText,
-              signature256,
-            })
-          ) {
-            throw new GitHubUnauthorizedError({
-              message: "GitHub webhook signature verification failed.",
-            });
-          }
-
-          const payload = parseWebhookPayload(input.payloadText);
-          const action = typeof payload.action === "string" ? payload.action : undefined;
-          const installationExternalId = getWebhookInstallationExternalId(payload);
-          const existingDelivery = await runResult(
-            webhookRepository.getWebhookDeliveryByDeliveryId(deliveryId),
-          );
-
-          if (existingDelivery !== undefined && existingDelivery.status !== "received") {
-            return {
-              deliveryId,
-              status: existingDelivery.status,
-            };
-          }
-
-          const delivery = await runResult(
-            webhookRepository.createWebhookDelivery({
-              id: existingDelivery?.id ?? runtime.idGenerator.randomUuid(),
-              deliveryId,
-              eventType,
-              ...(action === undefined ? {} : { action }),
-              ...(installationExternalId === undefined ? {} : { installationExternalId }),
-              payload,
-            }),
-          );
-
-          try {
-            const installation = await upsertInstallationFromWebhook(payload, action);
-
-            if (
-              installation !== null &&
-              installation.status === "active" &&
-              (eventType === "installation" || eventType === "installation_repositories")
-            ) {
-              await syncInstallationRepositories(installation);
-            }
-
-            const processedStatus = installation === null ? "ignored" : "processed";
-            await runResult(
-              webhookRepository.markWebhookDeliveryProcessed({
-                deliveryId,
-                status: processedStatus,
-              }),
-            );
-
-            return {
-              deliveryId: delivery.deliveryId,
-              status: processedStatus,
-            };
-          } catch (error) {
-            const message = toErrorMessage(error, "GitHub webhook processing failed.");
-            await runResult(
-              webhookRepository.markWebhookDeliveryFailed({
-                deliveryId,
-                errorMessage: message,
-              }),
-            );
-
-            throw new GitHubInternalServerError({ message });
-          }
-        },
-        catch: (error) => {
-          if (
-            error instanceof GitHubBadRequestError ||
-            error instanceof GitHubUnauthorizedError ||
-            error instanceof GitHubServiceUnavailableError ||
-            error instanceof GitHubInternalServerError
-          ) {
-            return error;
-          }
-
-          return new GitHubInternalServerError({
-            message: toErrorMessage(error, "GitHub webhook processing failed."),
-          });
-        },
-      }),
-  };
+    } satisfies ListGitHubInstallationRepositoriesResponse;
+  });
 };
 
-export const makeGitHubModuleLayer = Layer.effect(
-  GitHubModuleService,
-  Effect.gen(function* () {
-    return makeGitHubModule({
-      clock: {
-        now: () => new Date(),
-      },
-      idGenerator: {
-        randomUuid: () => randomUUID(),
-      },
-      gitHubSourceIntegration: yield* GitHubSourceIntegrationService,
-      gitHubInstallationRepository: yield* GitHubInstallationRepo,
-      gitHubInstallationRepositoryCacheRepository: yield* GitHubInstallationRepositoryCacheRepo,
-      gitHubWebhookDeliveryRepository: yield* GitHubWebhookDeliveryRepo,
-      repositoryProfileRepository: yield* RepositoryProfileRepo,
+export const syncInstallation = (input: {
+  readonly installationId: string;
+  readonly query: SyncGitHubInstallationQuery;
+}) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const sourceIntegration = yield* GitHubSourceIntegrationService;
+
+    if (!sourceIntegration.isConfigured()) {
+      return yield* new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
+    }
+
+    const installation = yield* withInternalError(
+      installationRepo.getInstallationById(input.installationId),
+      "Failed to load GitHub installation.",
+    );
+
+    if (installation === undefined) {
+      return yield* new GitHubNotFoundError({
+        message: `GitHub installation not found: ${input.installationId}`,
+      });
+    }
+
+    if (installation.status !== "active") {
+      return yield* new GitHubForbiddenError({
+        message: `GitHub installation ${input.installationId} is not active.`,
+      });
+    }
+
+    const hasGrant = yield* withInternalError(
+      installationRepo.userHasInstallationGrant({
+        installationId: installation.id,
+        userId: input.query.userId,
+      }),
+      "Failed to verify GitHub installation access.",
+    );
+
+    if (!hasGrant) {
+      return yield* new GitHubForbiddenError({
+        message: `User ${input.query.userId} does not have access to GitHub installation ${input.installationId}.`,
+      });
+    }
+
+    const syncedAt = yield* now;
+    const syncedRepositoryCount = yield* syncInstallationRepositories(installation);
+
+    return {
+      installationId: installation.id,
+      syncedRepositoryCount,
+      syncedAt: syncedAt.toISOString(),
+    } satisfies SyncGitHubInstallationResponse;
+  });
+};
+
+export const importInstallation = (input: ImportGitHubInstallationRequest) => {
+  return Effect.gen(function* () {
+    const installationRepo = yield* GitHubInstallationRepo;
+    const sourceIntegration = yield* GitHubSourceIntegrationService;
+
+    if (!sourceIntegration.isConfigured()) {
+      return yield* new GitHubServiceUnavailableError({ message: gitHubUnavailableMessage });
+    }
+
+    const installation = yield* importInstallationState(input.externalInstallationId);
+
+    yield* withInternalError(
+      installationRepo.grantInstallationToUser({
+        installationId: installation.id,
+        userId: input.userId,
+        grantedByUserId: input.userId,
+      }),
+      "Failed to grant GitHub installation access.",
+    );
+
+    const syncedAt = yield* now;
+    const syncedRepositoryCount =
+      installation.status === "active" ? yield* syncInstallationRepositories(installation) : 0;
+
+    const latestInstallation =
+      syncedRepositoryCount === 0 && installation.status !== "active"
+        ? installation
+        : ((yield* withInternalError(
+            installationRepo.getInstallationById(installation.id),
+            "Failed to refresh GitHub installation after import.",
+          )) ?? installation);
+
+    return {
+      installation: toInstallationSummary(latestInstallation),
+      syncedRepositoryCount,
+      syncedAt: syncedAt.toISOString(),
+    } satisfies ImportGitHubInstallationResponse;
+  });
+};
+
+export const handleWebhook = (input: {
+  readonly deliveryIdHeader?: string;
+  readonly eventTypeHeader?: string;
+  readonly signatureHeader?: string;
+  readonly payloadText: string;
+}) => {
+  return Effect.gen(function* () {
+    const sourceIntegration = yield* GitHubSourceIntegrationService;
+    const webhookRepo = yield* GitHubWebhookDeliveryRepo;
+
+    if (!sourceIntegration.isWebhookVerificationConfigured()) {
+      return yield* new GitHubServiceUnavailableError({
+        message: "GitHub webhook verification is not configured.",
+      });
+    }
+
+    const deliveryId = input.deliveryIdHeader;
+    const eventType = input.eventTypeHeader;
+    const signature256 = input.signatureHeader;
+
+    if (deliveryId === undefined || eventType === undefined) {
+      return yield* new GitHubBadRequestError({
+        message: "GitHub webhook delivery headers are missing.",
+      });
+    }
+
+    if (
+      !sourceIntegration.verifyWebhookSignature({
+        payload: input.payloadText,
+        signature256,
+      })
+    ) {
+      return yield* new GitHubUnauthorizedError({
+        message: "GitHub webhook signature verification failed.",
+      });
+    }
+
+    const payload = yield* parseWebhookPayload(input.payloadText);
+    const action = typeof payload.action === "string" ? payload.action : undefined;
+    const installationExternalId = getWebhookInstallationExternalId(payload);
+
+    const existingDelivery = yield* withInternalError(
+      webhookRepo.getWebhookDeliveryByDeliveryId(deliveryId),
+      "Failed to load existing webhook delivery.",
+    );
+
+    if (existingDelivery !== undefined && existingDelivery.status !== "received") {
+      return {
+        deliveryId,
+        status: existingDelivery.status,
+      } satisfies GitHubWebhookResponse;
+    }
+
+    const createdDelivery = yield* withInternalError(
+      webhookRepo.createWebhookDelivery({
+        id: existingDelivery?.id ?? (yield* randomId),
+        deliveryId,
+        eventType,
+        ...(action === undefined ? {} : { action }),
+        ...(installationExternalId === undefined ? {} : { installationExternalId }),
+        payload,
+      }),
+      "Failed to create webhook delivery.",
+    );
+
+    const processWebhook = Effect.gen(function* () {
+      const installation = yield* upsertInstallationFromWebhook(payload, action);
+
+      if (
+        installation !== null &&
+        installation.status === "active" &&
+        (eventType === "installation" || eventType === "installation_repositories")
+      ) {
+        yield* syncInstallationRepositories(installation);
+      }
+
+      const processedStatus = installation === null ? "ignored" : "processed";
+
+      yield* withInternalError(
+        webhookRepo.markWebhookDeliveryProcessed({
+          deliveryId,
+          status: processedStatus,
+        }),
+        "Failed to mark webhook delivery as processed.",
+      );
+
+      return {
+        deliveryId: createdDelivery.deliveryId,
+        status: processedStatus,
+      } satisfies GitHubWebhookResponse;
     });
-  }),
-);
+
+    return yield* processWebhook.pipe(
+      Effect.catchAll((error) =>
+        Effect.gen(function* () {
+          const message = toErrorMessage(error, "GitHub webhook processing failed.");
+
+          yield* withInternalError(
+            webhookRepo.markWebhookDeliveryFailed({
+              deliveryId,
+              errorMessage: message,
+            }),
+            "Failed to mark webhook delivery as failed.",
+          );
+
+          return yield* new GitHubInternalServerError({ message });
+        }),
+      ),
+    );
+  });
+};
