@@ -6,7 +6,6 @@ import {
   issueWorkflowExecutionArtifacts,
   issueWorkflowExecutionDiffFiles,
   issueWorkflowExecutionEvents,
-  issueWorkflowExecutions,
   issueWorkflowExecutionSummaries,
   issueWorkflowExecutionValidationResults,
   type IssueWorkflowExecution,
