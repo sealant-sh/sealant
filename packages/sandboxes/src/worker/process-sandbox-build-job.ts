@@ -1,11 +1,16 @@
 import {
-  createSandboxAttemptRepository,
-  createSandboxRuntimeInstanceRepository,
-  createSandboxBuildJobRepository,
-  type DatabaseClient,
+  SandboxAttemptRepo,
+  SandboxAttemptRepoLive,
+  SandboxBuildJobRepo,
+  SandboxBuildJobRepoLive,
+  SandboxRuntimeInstanceRepo,
+  SandboxRuntimeInstanceRepoLive,
+  SealantDB,
+  type DB,
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newSandboxSchema, type NewSandbox, type SandboxBuild } from "@sealant/validators";
+import { Effect, Layer } from "effect";
 
 import { compileSandboxBuildSpec } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
@@ -25,7 +30,7 @@ export interface ProcessSandboxBuildJobOptions {
   readonly jobId: string;
   readonly workerId: string;
   readonly leaseDurationMs: number;
-  readonly dbClient: DatabaseClient;
+  readonly db: DB;
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly registryClient: RegistryClient;
@@ -95,14 +100,37 @@ const toErrorCode = (error: unknown) => {
 };
 
 export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOptions) => {
-  const jobs = createSandboxBuildJobRepository(options.dbClient);
-  const runtimeInstances = createSandboxRuntimeInstanceRepository(options.dbClient);
-  const attempts = createSandboxAttemptRepository(options.dbClient);
-  const job = await jobs.claimJobById({
-    id: options.jobId,
-    workerId: options.workerId,
-    leaseDurationMs: options.leaseDurationMs,
-  });
+  const dbLayer = Layer.succeed(SealantDB, options.db);
+  const dataAccessLayer = Layer.mergeAll(
+    SandboxBuildJobRepoLive,
+    SandboxRuntimeInstanceRepoLive,
+    SandboxAttemptRepoLive,
+  ).pipe(Layer.provide(dbLayer));
+
+  const repos = await Effect.runPromise(
+    Effect.gen(function* () {
+      return {
+        jobs: yield* SandboxBuildJobRepo,
+        runtimeInstances: yield* SandboxRuntimeInstanceRepo,
+        attempts: yield* SandboxAttemptRepo,
+      };
+    }).pipe(Effect.provide(dataAccessLayer)),
+  );
+
+  const runDb = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
+    return Effect.runPromise(effect);
+  };
+
+  const jobs = repos.jobs;
+  const runtimeInstances = repos.runtimeInstances;
+  const attempts = repos.attempts;
+  const job = await runDb(
+    jobs.claimJobById({
+      id: options.jobId,
+      workerId: options.workerId,
+      leaseDurationMs: options.leaseDurationMs,
+    }),
+  );
 
   if (job === null) {
     return null;
@@ -112,7 +140,7 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
 
   try {
     if (job.runId !== null) {
-      await attempts.markAttemptRunning({ id: job.runId }).catch(() => null);
+      await runDb(attempts.markAttemptRunning({ id: job.runId })).catch(() => null);
     }
 
     const spec = newSandboxSchema.parse(job.requestPayload);
@@ -133,31 +161,35 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     });
     const resultPayload: SandboxBuild = compileResult;
 
-    await jobs.markJobSucceeded({
-      id: job.id,
-      builderId: compileResult.builder.id,
-      resultPayload,
-      publishedReference: publishedImage.reference,
-      publishedDigestReference: publishedImage.digestReference,
-      publishedDigest: publishedImage.digest,
-    });
+    await runDb(
+      jobs.markJobSucceeded({
+        id: job.id,
+        builderId: compileResult.builder.id,
+        resultPayload,
+        publishedReference: publishedImage.reference,
+        publishedDigestReference: publishedImage.digestReference,
+        publishedDigest: publishedImage.digest,
+      }),
+    );
     buildSucceeded = true;
 
     if (job.runId !== null) {
-      await runtimeInstances.upsertRuntimeInstance({
-        runId: job.runId,
-        status: "pending",
-      });
+      await runDb(
+        runtimeInstances.upsertRuntimeInstance({
+          runId: job.runId,
+          status: "pending",
+        }),
+      );
     }
 
     const sandboxCloneAuth = await resolveSandboxCloneAuth({
       spec,
-      dbClient: options.dbClient,
+      db: options.db,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
     const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
       spec,
-      dbClient: options.dbClient,
+      db: options.db,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
     const runtimeSpec: NewSandbox =
@@ -183,21 +215,23 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     });
 
     if (job.runId !== null) {
-      await runtimeInstances.upsertRuntimeInstance({
-        runId: job.runId,
-        status: runtimeLaunchResult.status,
-        adapter: runtimeLaunchResult.adapter,
-        resourceId: runtimeLaunchResult.resourceId,
-        reference: runtimeLaunchResult.reference,
-        ...(runtimeLaunchResult.endpoint === undefined
-          ? {}
-          : { endpoint: runtimeLaunchResult.endpoint }),
-        launchedAt: new Date(),
-      });
+      await runDb(
+        runtimeInstances.upsertRuntimeInstance({
+          runId: job.runId,
+          status: runtimeLaunchResult.status,
+          adapter: runtimeLaunchResult.adapter,
+          resourceId: runtimeLaunchResult.resourceId,
+          reference: runtimeLaunchResult.reference,
+          ...(runtimeLaunchResult.endpoint === undefined
+            ? {}
+            : { endpoint: runtimeLaunchResult.endpoint }),
+          launchedAt: new Date(),
+        }),
+      );
     }
 
     if (job.runId !== null) {
-      await attempts.markAttemptSucceeded({ id: job.runId }).catch(() => null);
+      await runDb(attempts.markAttemptSucceeded({ id: job.runId })).catch(() => null);
     }
 
     return publishedImage;
@@ -205,26 +239,30 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     const errorCode = toErrorCode(error);
 
     if (job.runId !== null) {
-      await runtimeInstances.upsertRuntimeInstance({
-        runId: job.runId,
-        status: "failed",
-        ...(errorCode === undefined ? {} : { errorCode }),
-        errorMessage: toErrorMessage(error),
-        finishedAt: new Date(),
-      });
+      await runDb(
+        runtimeInstances.upsertRuntimeInstance({
+          runId: job.runId,
+          status: "failed",
+          ...(errorCode === undefined ? {} : { errorCode }),
+          errorMessage: toErrorMessage(error),
+          finishedAt: new Date(),
+        }),
+      );
     }
 
     await Promise.allSettled([
       ...(buildSucceeded
         ? []
         : [
-            jobs.markJobFailed({
-              id: job.id,
-              errorMessage: toErrorMessage(error),
-              ...(errorCode === undefined ? {} : { errorCode }),
-            }),
+            runDb(
+              jobs.markJobFailed({
+                id: job.id,
+                errorMessage: toErrorMessage(error),
+                ...(errorCode === undefined ? {} : { errorCode }),
+              }),
+            ),
           ]),
-      ...(job.runId === null ? [] : [attempts.markAttemptFailed({ id: job.runId })]),
+      ...(job.runId === null ? [] : [runDb(attempts.markAttemptFailed({ id: job.runId }))]),
     ]);
 
     throw error;

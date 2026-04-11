@@ -7,6 +7,7 @@ import {
 } from "@sealant/sandboxes";
 import { packageResolutionSchema } from "@sealant/validators";
 import type { AppEnv } from "@sealant/validators/env";
+import { Effect } from "effect";
 
 const createCacheStore = (
   repository: PackageResolutionCacheRepository,
@@ -19,11 +20,7 @@ const createCacheStore = (
         return null;
       }
 
-      let entry: Awaited<ReturnType<PackageResolutionCacheRepository["getByQuery"]>>;
-
-      try {
-        entry = await repository.getByQuery(query);
-      } catch (error) {
+      const entry = await Effect.runPromise(repository.getByQuery(query)).catch((error) => {
         cacheUnavailable = true;
         const message = error instanceof Error ? error.message : "Unknown cache read error.";
 
@@ -34,7 +31,7 @@ const createCacheStore = (
         });
 
         return null;
-      }
+      });
 
       if (entry === null) {
         return null;
@@ -56,11 +53,13 @@ const createCacheStore = (
       const parsed = packageResolutionSchema.parse(input.payload);
 
       try {
-        await repository.upsertByQuery({
-          query: input.query,
-          resolutionPayload: parsed,
-          expiresAt: input.expiresAt,
-        });
+        await repository
+          .upsertByQuery({
+            query: input.query,
+            resolutionPayload: parsed,
+            expiresAt: input.expiresAt,
+          })
+          .pipe(Effect.runPromise);
       } catch (error) {
         cacheUnavailable = true;
         const message = error instanceof Error ? error.message : "Unknown cache write error.";

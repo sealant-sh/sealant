@@ -186,46 +186,26 @@ export const ProfileRepoLive = Layer.effect(
       revisionId: string,
     ): Effect.Effect<ProfileRevisionGraph | null, unknown> => {
       return Effect.gen(function* () {
-        const [revision] = yield* db
-          .select()
-          .from(profileRevisions)
-          .where(eq(profileRevisions.id, revisionId))
-          .limit(1);
+        const revision = yield* db.query.profileRevisions.findFirst({
+          where: { id: revisionId },
+          with: {
+            sshSettings: true,
+            envVars: { orderBy: { key: "asc" } },
+            secretBindings: { orderBy: { targetKey: "asc" } },
+            sshKeyBindings: { orderBy: { purpose: "asc", sshKeyId: "asc" } },
+          },
+        });
 
         if (revision === undefined) {
           return null;
         }
 
-        const [sshSettings] = yield* db
-          .select()
-          .from(profileSshSettings)
-          .where(eq(profileSshSettings.profileRevisionId, revisionId))
-          .limit(1);
-
-        const envVars = yield* db
-          .select()
-          .from(profileEnvVars)
-          .where(eq(profileEnvVars.profileRevisionId, revisionId))
-          .orderBy(asc(profileEnvVars.key));
-
-        const secretBindings = yield* db
-          .select()
-          .from(profileSecretBindings)
-          .where(eq(profileSecretBindings.profileRevisionId, revisionId))
-          .orderBy(asc(profileSecretBindings.targetKey));
-
-        const sshKeyBindings = yield* db
-          .select()
-          .from(profileSshKeyBindings)
-          .where(eq(profileSshKeyBindings.profileRevisionId, revisionId))
-          .orderBy(asc(profileSshKeyBindings.purpose), asc(profileSshKeyBindings.sshKeyId));
-
         return {
           revision,
-          envVars,
-          secretBindings,
-          sshSettings: sshSettings ?? null,
-          sshKeyBindings,
+          envVars: revision.envVars,
+          secretBindings: revision.secretBindings,
+          sshSettings: revision.sshSettings,
+          sshKeyBindings: revision.sshKeyBindings,
         };
       });
     };
@@ -259,13 +239,7 @@ export const ProfileRepoLive = Layer.effect(
         ),
 
       getProfileById: (id) =>
-        withProfileRepoError(
-          "getProfileById",
-          Effect.gen(function* () {
-            const [row] = yield* db.select().from(profiles).where(eq(profiles.id, id)).limit(1);
-            return row;
-          }),
-        ),
+        withProfileRepoError("getProfileById", db.query.profiles.findFirst({ where: { id } })),
 
       listProfilesByOwner: (input) =>
         withProfileRepoError(

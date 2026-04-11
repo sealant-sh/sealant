@@ -1,8 +1,7 @@
 import {
-  createDatabaseClientFromEnv,
-  runMigrations,
+  createBetterAuthDatabaseClientFromEnv,
   schema,
-  type DatabaseClient,
+  type BetterAuthDatabaseClient,
 } from "@sealant/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -11,7 +10,8 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { authEnv, type AuthEnv } from "./runtime-env.js";
 
 export interface CreateSealantAuthOptions {
-  readonly databaseClient?: DatabaseClient;
+  // This is intentionally promise-based Drizzle for Better Auth compatibility.
+  readonly databaseClient?: BetterAuthDatabaseClient;
   readonly env?: AuthEnv;
 }
 
@@ -22,9 +22,14 @@ const ensureDatabaseReady = (env: AuthEnv) => {
     return Promise.resolve();
   }
 
-  migrationsPromise ??= runMigrations();
+  // Auth startup does not run migrations directly.
+  // Local/dev flows should apply migrations via `pnpm db:migrate` before boot.
+  migrationsPromise ??= Promise.resolve();
   return migrationsPromise;
 };
+
+const createDatabaseFromEnv = (): BetterAuthDatabaseClient =>
+  createBetterAuthDatabaseClientFromEnv();
 
 const toTrustedOrigins = (env: AuthEnv): Array<string> => {
   const trustedOrigins = new Set(env.BETTER_AUTH_TRUSTED_ORIGINS);
@@ -43,7 +48,7 @@ export const createSealantAuth = async (options: CreateSealantAuthOptions = {}) 
     await ensureDatabaseReady(resolvedEnv);
   }
 
-  const resolvedDatabaseClient = options.databaseClient ?? (await createDatabaseClientFromEnv());
+  const resolvedDatabaseClient = options.databaseClient ?? createDatabaseFromEnv();
   const trustedOrigins = toTrustedOrigins(resolvedEnv);
 
   return betterAuth({
@@ -63,7 +68,7 @@ export const createSealantAuth = async (options: CreateSealantAuthOptions = {}) 
       : {
           trustedOrigins,
         }),
-    database: drizzleAdapter(resolvedDatabaseClient.db, {
+    database: drizzleAdapter(resolvedDatabaseClient, {
       provider: "pg",
       schema,
     }),

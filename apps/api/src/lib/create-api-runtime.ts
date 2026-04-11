@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { Effect, Layer } from "effect";
 
-import { createPassthroughPackageStandardizer } from "./create-package-standardizer.js";
 import {
   ApiRuntimeService,
   ClockService,
@@ -76,8 +75,6 @@ export const apiRuntimeLiveLayer = Layer.effect(
       clock,
       idGenerator,
       logger,
-      packageStandardizer:
-        dependencies.packageStandardizer ?? createPassthroughPackageStandardizer(),
     };
   }),
 );

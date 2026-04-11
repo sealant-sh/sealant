@@ -29,6 +29,7 @@
             bat
             nodejs_24
             nodePackages.pnpm
+            postgresql
           ];
         };
       }

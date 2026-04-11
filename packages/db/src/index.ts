@@ -1,4 +1,18 @@
-export { SealantDB, SealantDBLive, type TSealantDB, type DB } from "./client.js";
+export {
+  createBetterAuthDatabaseClient,
+  createBetterAuthDatabaseClientFromEnv,
+  type BetterAuthDatabaseClient,
+} from "./better-auth-client.js";
+
+export {
+  createSealantDB,
+  createSealantDBFromEnv,
+  makeSealantDBLayer,
+  SealantDB,
+  SealantDBLive,
+  type TSealantDB,
+  type DB,
+} from "./client.js";
 export { ControlPlaneDataAccessLive, GitHubDataAccessLive } from "./layers.js";
 
 export {

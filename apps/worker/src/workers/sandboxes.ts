@@ -1,4 +1,4 @@
-import { closeDatabaseClient, createDatabaseClientFromEnv } from "@sealant/db";
+import { createSealantDB, type DB } from "@sealant/db";
 import { createRabbitMqService } from "@sealant/rabbitmq";
 import {
   consumeSandboxBuildJobs,
@@ -11,11 +11,15 @@ import {
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
 
+const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
+  return createSealantDB(env.DATABASE_URL);
+};
+
 /**
  * Starts the sandbox worker loop and returns a graceful shutdown handle.
  */
 export const startSandboxWorker = async (env: WorkerEnv) => {
-  const dbClient = await createDatabaseClientFromEnv(env);
+  const db = await createDatabaseFromEnv(env);
   const rabbitMq = createRabbitMqService(env.RABBITMQ_URL);
   const registryClient = createZotRegistryClient({
     baseUrl: env.REGISTRY_BASE_URL,
@@ -48,7 +52,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
           jobId: message.jobId,
           workerId: env.WORKER_ID,
           leaseDurationMs: env.SANDBOX_BUILD_JOB_LEASE_DURATION_MS,
-          dbClient,
+          db,
           runtimeAdapters,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
           gitHubSourceIntegration,
@@ -69,7 +73,6 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     stop: async () => {
       await consumer.cancel();
       await rabbitMq.close();
-      await closeDatabaseClient(dbClient);
     },
   };
 };

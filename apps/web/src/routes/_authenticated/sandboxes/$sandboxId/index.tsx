@@ -1,5 +1,5 @@
-import { type NewSandbox } from "@sealant/db/payloads";
 import { Badge, Button } from "@sealant/ui";
+import { type NewSandbox } from "@sealant/validators";
 import {
   useMutation,
   useQueryClient,
