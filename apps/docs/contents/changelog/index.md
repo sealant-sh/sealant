@@ -40,26 +40,118 @@ Use concise tags so reviewers can grep quickly:
 
 ## Tag Index
 
-| Tag                          | Entries                                                          |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `arch:effect`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
-| `area:api`                   | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
-| `area:auth`                  | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
-| `area:db`                    | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
-| `area:docs`                  | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
-| `area:rabbitmq`              | `CHG-2026-04-02-001`                                             |
-| `area:web`                   | `CHG-2026-04-12-001`                                             |
-| `area:worker`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
-| `domain:source-integrations` | `CHG-2026-04-12-001`                                             |
-| `domain:issue-workflows`     | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
-| `domain:sandboxes`           | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
-| `kind:fix`                   | `CHG-2026-04-12-001`                                             |
-| `kind:feature`               | `CHG-2026-04-03-001`                                             |
-| `kind:refactor`              | `CHG-2026-04-02-001`                                             |
-| `risk:high`                  | `CHG-2026-04-03-001`                                             |
-| `risk:medium`                | `CHG-2026-04-12-001`, `CHG-2026-04-02-001`                       |
+| Tag                          | Entries                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `arch:effect`                | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:api`                   | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:auth`                  | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
+| `area:db`                    | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
+| `area:docs`                  | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:rabbitmq`              | `CHG-2026-04-02-001`                                                                   |
+| `area:web`                   | `CHG-2026-04-12-001`                                                                   |
+| `area:worker`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
+| `domain:source-integrations` | `CHG-2026-04-12-001`                                                                   |
+| `domain:issue-workflows`     | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
+| `domain:sandboxes`           | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
+| `kind:fix`                   | `CHG-2026-04-12-001`                                                                   |
+| `kind:feature`               | `CHG-2026-04-03-001`                                                                   |
+| `kind:refactor`              | `CHG-2026-04-12-002`, `CHG-2026-04-02-001`                                             |
+| `risk:high`                  | `CHG-2026-04-03-001`                                                                   |
+| `risk:medium`                | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-02-001`                       |
 
 ## Entries (newest first)
+
+### CHG-2026-04-12-002 - Complete Control-Plane Route Migration from Hono to Effect HttpApi
+
+| Field    | Value                                                                                      |
+| -------- | ------------------------------------------------------------------------------------------ |
+| `status` | `in_review`                                                                                |
+| `owners` | `engineering`                                                                              |
+| `scope`  | `apps/api`, `packages/api-contracts`, `apps/docs`                                          |
+| `tags`   | `arch:effect`, `area:api`, `area:docs`, `domain:sandboxes`, `kind:refactor`, `risk:medium` |
+| `links`  | PR: `https://github.com/get-sealant/sealant/pull/56`, commits: `c56686f`, `2fe9094`        |
+
+**PR Description (copy-ready)**
+
+This PR completes migration of the remaining control-plane API domains from legacy Hono route files
+to Effect `HttpApi` contracts and handlers, and wires them into a single control-plane API layer.
+
+**Key changes**
+
+- **Contract-first expansion:** Add Effect HTTP contracts for `system`, `packages`, `registries`,
+  and `sandboxes` in `@sealant/api-contracts` and register all groups in `ControlPlaneAPI`.
+- **Per-domain Effect modules:** Implement route behavior in `*.module.ts` files and keep
+  `*.http-api.ts` as thin endpoint-to-use-case bindings.
+- **Unified control-plane composition:** Add a composed API layer in
+  `apps/api/src/routes/control-plane.http-api.ts` and switch `apps/api/src/index.ts` to consume it.
+- **Capability service boundaries:** Add Effect services for package standardization, registry
+  access, and sandbox build-job publishing in `apps/api/src/services/control-plane-capabilities.ts`.
+- **Error boundary mapping:** Preserve domain-level 4xx/5xx behavior by mapping Promise-based and
+  repository failures into typed contract errors.
+
+**Scope in this PR**
+
+- Add new contracts in
+  `packages/api-contracts/src/core-api/{system,packages,registries,sandboxes}.ts`.
+- Update `packages/api-contracts/src/core-api/control-plane.ts` and
+  `packages/api-contracts/src/index.ts` exports.
+- Add Effect domain modules and bindings in
+  `apps/api/src/routes/{system,packages,registries,sandboxes}/*`.
+- Add composed route layer in `apps/api/src/routes/control-plane.http-api.ts`.
+- Update API startup wiring in `apps/api/src/index.ts` to use `ControlPlaneDataAccessLive` plus
+  control-plane capability layers.
+
+**Non-goals (explicitly not changed)**
+
+- No DB schema migrations.
+- No queue topology changes.
+- No additional frontend/web behavior changes.
+
+**Design decision**
+
+- Follow the five-service SOP in `api-route-effect-approach.mdx`: repository services + capability
+  services + API contract services feeding thin per-domain HTTP bindings at the app boundary.
+- Keep non-Effect dependencies behind explicit `Effect.tryPromise` boundaries in domain modules
+  until those packages expose native Effect services.
+
+**Reviewer guide (recommended order)**
+
+1. `packages/api-contracts/src/core-api/control-plane.ts` and new contract files - endpoint shapes
+   and error contracts.
+2. `apps/api/src/routes/control-plane.http-api.ts` - composed handler wiring.
+3. `apps/api/src/routes/sandboxes/sandboxes.module.ts` - largest behavior migration surface.
+4. `apps/api/src/routes/{packages,registries,system}/*.module.ts` - remaining migrated domains.
+5. `apps/api/src/services/control-plane-capabilities.ts` and `apps/api/src/index.ts` - runtime
+   composition and layer provisioning.
+
+**Implementation summary**
+
+- Added four new Effect contract groups and attached them to `ControlPlaneAPI`.
+- Added Effect module + binding pairs for `system`, `packages`, `registries`, and `sandboxes`.
+- Introduced `ControlPlaneCapabilitiesLive` to centralize Promise-backed integration boundaries.
+- Switched app bootstrap from GitHub-only API layer to full control-plane API layer.
+- Preserved GitHub group behavior and exported `GitHubHandlersLive` for merged composition.
+
+**Validation and results**
+
+- `pnpm format:fix`
+- `pnpm typecheck`
+
+Both commands passed after migration and wiring updates.
+
+**Risk and mitigation**
+
+- Primary risk is behavior drift on sandbox endpoints due to migration size.
+- Mitigated by retaining existing persistence/service dependencies, preserving route shapes, and
+  validating with full monorepo typecheck.
+- Mitigated by keeping contracts explicit in `@sealant/api-contracts` and using typed boundary
+  errors in modules.
+
+**Follow-ups**
+
+- Add focused API tests for migrated `packages`, `registries`, and `sandboxes` Effect handlers.
+- Remove or archive deprecated Hono route files once migration confidence gates are complete.
+- Set `status` to `merged` after merge.
 
 ### CHG-2026-04-12-001 - Stabilize DB Client Wiring and Effect Repository Access
 
