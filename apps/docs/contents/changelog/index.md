@@ -42,80 +42,100 @@ Use concise tags so reviewers can grep quickly:
 
 | Tag                          | Entries                                                          |
 | ---------------------------- | ---------------------------------------------------------------- |
-| `arch:effect`                | `CHG-2026-04-03-001`, `CHG-2026-04-02-001`                       |
-| `area:api`                   | `CHG-2026-04-03-001`, `CHG-2026-04-02-001`                       |
-| `area:auth`                  | `CHG-2026-04-03-001`                                             |
+| `arch:effect`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:api`                   | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
+| `area:auth`                  | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
 | `area:db`                    | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
 | `area:docs`                  | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`, `CHG-2026-04-02-001` |
 | `area:rabbitmq`              | `CHG-2026-04-02-001`                                             |
-| `area:worker`                | `CHG-2026-04-03-001`                                             |
+| `area:web`                   | `CHG-2026-04-12-001`                                             |
+| `area:worker`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
 | `domain:source-integrations` | `CHG-2026-04-12-001`                                             |
-| `domain:issue-workflows`     | `CHG-2026-04-03-001`                                             |
-| `domain:sandboxes`           | `CHG-2026-04-03-001`                                             |
+| `domain:issue-workflows`     | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
+| `domain:sandboxes`           | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
 | `kind:fix`                   | `CHG-2026-04-12-001`                                             |
 | `kind:feature`               | `CHG-2026-04-03-001`                                             |
 | `kind:refactor`              | `CHG-2026-04-02-001`                                             |
-| `risk:low`                   | `CHG-2026-04-12-001`                                             |
 | `risk:high`                  | `CHG-2026-04-03-001`                                             |
-| `risk:medium`                | `CHG-2026-04-02-001`                                             |
+| `risk:medium`                | `CHG-2026-04-12-001`, `CHG-2026-04-02-001`                       |
 
 ## Entries (newest first)
 
-### CHG-2026-04-12-001 - Align Effect DB Casing with PostgreSQL Schema for GitHub Installations
+### CHG-2026-04-12-001 - Stabilize DB Client Wiring and Effect Repository Access
 
-| Field    | Value                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------- |
-| `status` | `in_review`                                                                                 |
-| `owners` | `engineering`                                                                               |
-| `scope`  | `packages/db`, `apps/docs`                                                                  |
-| `tags`   | `arch:effect`, `area:db`, `area:docs`, `domain:source-integrations`, `kind:fix`, `risk:low` |
-| `links`  | PR: `TBD (this PR)`, commits: `TBD`                                                         |
+| Field    | Value                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `status` | `in_review`                                                                                                                                                                                      |
+| `owners` | `engineering`                                                                                                                                                                                    |
+| `scope`  | `packages/db`, `packages/auth`, `packages/sandboxes`, `apps/api`, `apps/web`, `apps/worker`, `apps/docs`, `flake.nix`                                                                            |
+| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:web`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `domain:source-integrations`, `kind:fix`, `risk:medium` |
+| `links`  | PR: `TBD (this PR)`, commits: `ba6ae9e`, `ea094d8`                                                                                                                                               |
 
 **PR Description (copy-ready)**
 
-This PR fixes a PostgreSQL column-resolution regression in the Effect Drizzle client used by
-control-plane services and documents the fix using the changelog contract.
+This PR stabilizes control-plane DB usage across API/web/worker/auth flows by aligning Drizzle
+client construction, moving sandbox worker paths onto Effect repository services, and documenting
+the change with the changelog contract.
 
 **Key changes**
 
-- **Snake-case query generation for Effect DB client:** Configure Drizzle Effect PostgreSQL client
-  with `casing: "snake_case"` so generated SQL aligns with migrated PostgreSQL columns such as
-  `created_at` and `updated_at`.
-- **Explicit relations import for DB client wiring:** Point DB client relation import to
-  `./schema/relations.js` to keep runtime schema/relations wiring consistent.
-- **DB export parity for auth and non-auth consumers:** Re-export Better Auth DB client constructors
-  from `@sealant/db` package root.
-- **Changelog-first PR discipline:** Add this entry as the canonical implementation log for review,
-  rollback context, and follow-up tracking.
+- **Split DB client responsibilities by runtime:** Add a dedicated promise-based
+  `createBetterAuthDatabaseClient*` for Better Auth while keeping Effect-based `createSealantDB*`
+  for service-layer consumers.
+- **Fix casing drift for PostgreSQL queries:** Set Effect Drizzle client `casing: "snake_case"` and
+  wire explicit schema relations to prevent generated SQL from requesting camelCase columns.
+- **Adopt relation-driven repository reads:** Move repository read paths in GitHub installations,
+  profiles, repository profiles, sandboxes, issue workflows, and issue workflow executions to
+  `db.query.*` + `with` loading patterns.
+- **Move sandbox worker DB access to Effect services:** Replace direct repository constructor usage
+  with repository tags/layers in sandbox build orchestration and GitHub installation auth resolver.
+- **Strengthen app boundary wiring:** Update API package standardizer calls, worker startup DB
+  wiring, web imports, and auth startup to use the updated DB client contracts.
+- **Changelog-first PR discipline:** Add this entry and update tag index for canonical review and
+  incident/debug traceability.
 
 **Scope in this PR**
 
-- Update Effect Drizzle DB construction in `packages/db/src/client.ts`.
-- Update package exports in `packages/db/src/index.ts`.
+- Add new Better Auth DB client construction utilities in `packages/db/src/better-auth-client.ts`
+  and package exports in `packages/db/src/index.ts`.
+- Update Effect DB construction and helpers in `packages/db/src/client.ts`.
+- Add explicit relation definitions in `packages/db/src/schema/relations.ts` and adopt
+  relation-aware query patterns in repository implementations.
+- Update DB consumer wiring in `packages/auth/src/server.ts`,
+  `apps/worker/src/workers/sandboxes.ts`, `apps/web/src/lib/trpc/context.ts`,
+  `apps/api/src/lib/create-package-standardizer.ts`, and sandbox worker internals.
 - Record implementation details in `apps/docs/contents/changelog/index.md`.
 
 **Non-goals (explicitly not changed)**
 
-- No schema migration changes.
-- No API contract or payload shape changes.
-- No product-domain behavior changes for sandbox or issue workflow lifecycle flows.
+- No schema migration shape changes.
+- No HTTP API contract or payload schema changes.
+- No queue topology changes for sandbox build orchestration.
 
 **Design decision**
 
-- Standardize all PostgreSQL Drizzle clients on snake-case query generation whenever schema columns
-  are snake_case.
-- Keep repository and service contracts unchanged to minimize rollout risk while restoring query
-  compatibility.
+- Keep Better Auth on a promise-based Drizzle client while Effect services continue to consume
+  Effect-native DB clients.
+- Standardize Postgres query casing in Drizzle client config and centralize relation definitions to
+  remove implicit relation inference.
+- Prefer repository tag/layer composition at runtime boundaries over direct repository constructors.
 
 **Reviewer guide (recommended order)**
 
-1. `packages/db/src/client.ts` - Effect Drizzle `casing` and relation import alignment.
-2. `packages/db/src/index.ts` - package-root export parity for auth DB client utilities.
-3. `apps/docs/contents/changelog/index.md` - changelog entry structure and PR narrative.
+1. `packages/db/src/better-auth-client.ts` and `packages/db/src/client.ts` - DB client split,
+   casing, and helper constructors.
+2. `packages/db/src/schema/relations.ts` - explicit relation map used by all Drizzle clients.
+3. `packages/db/src/repositories/*.ts` (changed files) - relation-based read path rewrites.
+4. `packages/sandboxes/src/worker/process-sandbox-build-job.ts` and
+   `packages/sandboxes/src/worker/github-installation-auth-resolver.ts` - runtime Effect repository
+   composition.
+5. `packages/auth/src/server.ts`, `apps/worker/src/workers/sandboxes.ts`, and
+   `apps/api/src/lib/create-package-standardizer.ts` - consumer wiring updates.
+6. `apps/docs/contents/changelog/index.md` - changelog entry and tag index.
 
 **Key before/after snippets**
 
-Effect Drizzle casing:
+DB client construction:
 
 ```ts
 // Before
@@ -125,24 +145,30 @@ const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations });
 const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations, casing: "snake_case" });
 ```
 
-Package exports:
+Sandbox worker repository access:
 
 ```ts
 // Before
-export { createSealantDB, createSealantDBFromEnv, ... } from "./client.js";
+const jobs = createSandboxBuildJobRepository(options.dbClient);
+await jobs.claimJobById(...);
 
 // After
-export { createBetterAuthDatabaseClient, createBetterAuthDatabaseClientFromEnv, ... } from "./better-auth-client.js";
-export { createSealantDB, createSealantDBFromEnv, ... } from "./client.js";
+const dbLayer = Layer.succeed(SealantDB, options.db);
+const dataAccessLayer = Layer.mergeAll(SandboxBuildJobRepoLive, ...).pipe(Layer.provide(dbLayer));
+const repos = await Effect.runPromise(Effect.gen(function* () { ... }).pipe(Effect.provide(dataAccessLayer)));
+await Effect.runPromise(repos.jobs.claimJobById(...));
 ```
 
 **Implementation summary**
 
-- Added `casing: "snake_case"` to Effect PostgreSQL Drizzle configuration in
-  `packages/db/src/client.ts`.
-- Switched DB client relation import to `./schema/relations.js` in `packages/db/src/client.ts`.
-- Added package-root exports for Better Auth DB clients in `packages/db/src/index.ts`.
-- Added this changelog entry and updated tag index in `apps/docs/contents/changelog/index.md`.
+- Added promise-based Better Auth DB client constructor utilities and exports at `@sealant/db` root.
+- Added `createSealantDB*` helpers and `casing: "snake_case"` to Effect PostgreSQL Drizzle config.
+- Added explicit schema relation definitions and updated repository read paths to use relation-aware
+  query APIs.
+- Updated sandbox worker internals to compose repository services via Effect layers.
+- Updated API/auth/web/worker integration code to consume the new DB helpers and effectful
+  repositories.
+- Added this changelog entry and updated tag index.
 
 **Validation and results**
 
@@ -153,16 +179,18 @@ Both commands passed during implementation.
 
 **Risk and mitigation**
 
-- Primary risk is accidental query-shape drift between DB clients.
-- Mitigated by explicitly setting `casing: "snake_case"` in the Effect client and preserving schema
-  mappings.
-- Mitigated further by keeping this change isolated from schema and API contracts.
+- Primary risk is runtime behavior drift while moving worker/repository access from direct
+  constructors to Effect service composition.
+- Mitigated by preserving repository interfaces and limiting this PR to wiring/query-path changes.
+- Mitigated by full monorepo formatting and typecheck validation.
 
 **Follow-ups**
 
-- Add a small repository-level regression test that exercises a read path over
-  `github_app_installations` through the Effect client.
-- Keep `links` updated with final PR URL and commit hash once merged.
+- Add focused repository integration tests for relation-based `db.query.*` paths in
+  `issue-workflows`, `profiles`, and `sandboxes` repositories.
+- Add a regression test covering `github_app_installations.created_at`/`updated_at` selection
+  through Effect DB clients.
+- Keep `links` and `status` synchronized with final PR URL and merge state.
 
 ### CHG-2026-04-03-001 - Control-plane DB Migration to PostgreSQL and Effect Service
 
