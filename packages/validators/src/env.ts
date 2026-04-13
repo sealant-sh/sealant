@@ -213,6 +213,7 @@ const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
 export const workerRuntimeEnvSchema = z.object({
   DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
+  DEFAULT_DOCKER_SANDBOX_NETWORK: z.string().trim().min(1).optional(),
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
   DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
     .string()

@@ -1,19 +1,77 @@
 import type { DB } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewSandbox, SandboxBuild } from "@sealant/validators";
+import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RegistryClient } from "../registry/index.js";
 import type { RuntimeAdapter } from "../runtime/index.js";
 import { processSandboxBuildJob } from "./process-sandbox-build-job.js";
 
-vi.mock("@sealant/db", () => {
+vi.mock("@sealant/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sealant/db")>();
+
+  const createGitHubInstallationRepository = vi.fn();
+  const createGitHubInstallationRepositoryCacheRepository = vi.fn();
+  const createSandboxAttemptRepository = vi.fn();
+  const createSandboxRuntimeInstanceRepository = vi.fn();
+  const createSandboxBuildJobRepository = vi.fn();
+
   return {
-    createGitHubInstallationRepository: vi.fn(),
-    createGitHubInstallationRepositoryCacheRepository: vi.fn(),
-    createSandboxAttemptRepository: vi.fn(),
-    createSandboxRuntimeInstanceRepository: vi.fn(),
-    createSandboxBuildJobRepository: vi.fn(),
+    ...actual,
+    createGitHubInstallationRepository,
+    createGitHubInstallationRepositoryCacheRepository,
+    createSandboxAttemptRepository,
+    createSandboxRuntimeInstanceRepository,
+    createSandboxBuildJobRepository,
+    SandboxBuildJobRepoLive: Layer.succeed(actual.SandboxBuildJobRepo, {
+      claimJobById: (input: unknown) => {
+        return Effect.promise(() => createSandboxBuildJobRepository().claimJobById(input));
+      },
+      markJobSucceeded: (input: unknown) => {
+        return Effect.promise(() => createSandboxBuildJobRepository().markJobSucceeded(input));
+      },
+      markJobFailed: (input: unknown) => {
+        return Effect.promise(() => createSandboxBuildJobRepository().markJobFailed(input));
+      },
+    } as never),
+    SandboxRuntimeInstanceRepoLive: Layer.succeed(actual.SandboxRuntimeInstanceRepo, {
+      upsertRuntimeInstance: (input: unknown) => {
+        return Effect.promise(() =>
+          createSandboxRuntimeInstanceRepository().upsertRuntimeInstance(input),
+        );
+      },
+    } as never),
+    SandboxAttemptRepoLive: Layer.succeed(actual.SandboxAttemptRepo, {
+      markAttemptRunning: (input: unknown) => {
+        return Effect.promise(() => createSandboxAttemptRepository().markAttemptRunning(input));
+      },
+      markAttemptSucceeded: (input: unknown) => {
+        return Effect.promise(() => createSandboxAttemptRepository().markAttemptSucceeded(input));
+      },
+      markAttemptFailed: (input: unknown) => {
+        return Effect.promise(() => createSandboxAttemptRepository().markAttemptFailed(input));
+      },
+    } as never),
+    GitHubInstallationRepoLive: Layer.succeed(actual.GitHubInstallationRepo, {
+      getInstallationById: (installationId: string) => {
+        return Effect.promise(() =>
+          createGitHubInstallationRepository().getInstallationById(installationId),
+        );
+      },
+    } as never),
+    GitHubInstallationRepositoryCacheRepoLive: Layer.succeed(
+      actual.GitHubInstallationRepositoryCacheRepo,
+      {
+        getInstallationRepositoryById: (installationRepositoryId: string) => {
+          return Effect.promise(() =>
+            createGitHubInstallationRepositoryCacheRepository().getInstallationRepositoryById(
+              installationRepositoryId,
+            ),
+          );
+        },
+      } as never,
+    ),
   };
 });
 
@@ -101,14 +159,14 @@ const createGitHubSourceIntegrationStub = (): GitHubSourceIntegration => {
     createAppJwt: () => "jwt",
     isWebhookVerificationConfigured: () => false,
     verifyWebhookSignature: () => false,
-    createInstallationAccessToken: vi.fn(async () => ({
-      token: "github-installation-token",
-      expiresAt: new Date("2026-03-26T12:00:00.000Z"),
-    })),
-    getInstallation: vi.fn(async () => {
-      throw new Error("not implemented");
-    }),
-    listInstallationRepositories: vi.fn(async () => []),
+    createInstallationAccessToken: vi.fn(() =>
+      Effect.succeed({
+        token: "github-installation-token",
+        expiresAt: new Date("2026-03-26T12:00:00.000Z"),
+      }),
+    ),
+    getInstallation: vi.fn(() => Effect.fail(new Error("not implemented"))),
+    listInstallationRepositories: vi.fn(() => Effect.succeed([])),
   } as unknown as GitHubSourceIntegration;
 };
 
@@ -703,7 +761,7 @@ describe("processSandboxBuildJob", () => {
     expect(repository.markJobSucceeded).not.toHaveBeenCalled();
   });
 
-  it("keeps build succeeded when runtime launch selection fails", async () => {
+  it("marks the job failed when runtime launch selection fails", async () => {
     const repository = {
       claimJobById: vi.fn(async () => ({
         id: "job_123",
@@ -752,7 +810,11 @@ describe("processSandboxBuildJob", () => {
       }),
     ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");
 
-    expect(repository.markJobFailed).not.toHaveBeenCalled();
+    expect(repository.markJobFailed).toHaveBeenCalledWith({
+      id: "job_123",
+      errorCode: "unsupported-runtime",
+      errorMessage: "No runtime adapter is registered for target.runtime.family 'k8s'.",
+    });
     expect(repository.markJobSucceeded).toHaveBeenCalledTimes(1);
   });
 });

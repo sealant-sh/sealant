@@ -15,7 +15,8 @@
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/sandboxes": "workspace:*",
     "@sealant/source-integrations": "workspace:*",
-    "@sealant/validators": "workspace:*"
+    "@sealant/validators": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",

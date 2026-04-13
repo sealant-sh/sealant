@@ -4,12 +4,12 @@ import { HttpApiBuilder, HttpApiScalar, HttpServer } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
+import { sandboxesServiceLayer } from "@sealant/sandboxes";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { Layer, Redacted } from "effect";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { env } from "./runtime-env.js";
-import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -77,6 +77,18 @@ const sourceIntegrationLayer = gitHubSourceIntegrationLayer({
     : { webhookSecret: env.GITHUB_APP_WEBHOOK_SECRET }),
 });
 
+const sandboxesLayer = sandboxesServiceLayer({
+  rabbitMqUrl: env.RABBITMQ_URL,
+  registryBaseUrl: env.REGISTRY_BASE_URL,
+  registryPushRegistry: env.REGISTRY_PUSH_REGISTRY,
+  ...(env.REGISTRY_USERNAME === undefined ? {} : { registryUsername: env.REGISTRY_USERNAME }),
+  ...(env.REGISTRY_PASSWORD === undefined ? {} : { registryPassword: env.REGISTRY_PASSWORD }),
+  repologyApiBaseUrl: env.REPOLOGY_API_BASE_URL,
+  repologyUserAgent: env.REPOLOGY_USER_AGENT,
+  repologyRequestTimeoutMs: env.REPOLOGY_REQUEST_TIMEOUT_MS,
+  repologyMinimumIntervalMs: env.REPOLOGY_MINIMUM_INTERVAL_MS,
+});
+
 /**
  * Core API layer:
  *
@@ -89,7 +101,7 @@ const sourceIntegrationLayer = gitHubSourceIntegrationLayer({
  */
 const apiLayer = makeControlPlaneHttpApiLayer().pipe(
   Layer.provide(sourceIntegrationLayer),
-  Layer.provide(ControlPlaneCapabilitiesLive),
+  Layer.provide(sandboxesLayer),
   Layer.provide(databaseLayer),
 );
 

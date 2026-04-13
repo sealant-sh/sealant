@@ -12,7 +12,7 @@ import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newSandboxSchema, type NewSandbox, type SandboxBuild } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 
-import { compileSandboxBuildSpec } from "../buildkit/index.js";
+import { BuildkitBuilderLive, compileSandboxBuildSpec } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
@@ -107,54 +107,67 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     SandboxAttemptRepoLive,
   ).pipe(Layer.provide(dbLayer));
 
-  const repos = await Effect.runPromise(
-    Effect.gen(function* () {
-      return {
-        jobs: yield* SandboxBuildJobRepo,
-        runtimeInstances: yield* SandboxRuntimeInstanceRepo,
-        attempts: yield* SandboxAttemptRepo,
-      };
-    }).pipe(Effect.provide(dataAccessLayer)),
-  );
+  const repositoriesEffect = Effect.gen(function* () {
+    return {
+      jobs: yield* SandboxBuildJobRepo,
+      runtimeInstances: yield* SandboxRuntimeInstanceRepo,
+      attempts: yield* SandboxAttemptRepo,
+    };
+  }).pipe(Effect.provide(dataAccessLayer));
 
   const runDb = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
     return Effect.runPromise(effect);
   };
 
-  const jobs = repos.jobs;
-  const runtimeInstances = repos.runtimeInstances;
-  const attempts = repos.attempts;
-  const job = await runDb(
-    jobs.claimJobById({
-      id: options.jobId,
-      workerId: options.workerId,
-      leaseDurationMs: options.leaseDurationMs,
-    }),
-  );
-
-  if (job === null) {
-    return null;
-  }
-
-  let buildSucceeded = false;
+  let repositories: Effect.Effect.Success<typeof repositoriesEffect> | undefined;
+  let claimedJob:
+    | {
+        readonly id: string;
+        readonly runId: string | null;
+        readonly repository: string;
+        readonly tag: string;
+        readonly requestPayload: unknown;
+      }
+    | null
+    | undefined;
 
   try {
-    if (job.runId !== null) {
-      await runDb(attempts.markAttemptRunning({ id: job.runId })).catch(() => null);
+    repositories = await Effect.runPromise(repositoriesEffect);
+
+    claimedJob = await runDb(
+      repositories.jobs.claimJobById({
+        id: options.jobId,
+        workerId: options.workerId,
+        leaseDurationMs: options.leaseDurationMs,
+      }),
+    );
+
+    if (claimedJob === null) {
+      return null;
     }
 
-    const spec = newSandboxSchema.parse(job.requestPayload);
+    if (claimedJob.runId !== null) {
+      await runDb(repositories.attempts.markAttemptRunning({ id: claimedJob.runId })).catch(
+        () => null,
+      );
+    }
+
+    const spec = newSandboxSchema.parse(claimedJob.requestPayload);
     const compileSpec =
       options.compileSandboxSpec ??
       (async (inputSpec: NewSandbox): Promise<SandboxBuild> => {
-        return compileSandboxBuildSpec({ blueprint: inputSpec });
+        return Effect.runPromise(
+          compileSandboxBuildSpec({ blueprint: inputSpec }).pipe(
+            Effect.provide(BuildkitBuilderLive),
+          ),
+        );
       });
     const compileResult = await compileSpec(spec);
     const imageArtifact = selectPublishableImageArtifact(compileResult);
     const publishedImage = await options.registryClient.publishOciImage({
       artifactPath: imageArtifact.path,
-      repository: job.repository,
-      tag: job.tag,
+      repository: claimedJob.repository,
+      tag: claimedJob.tag,
       ...(imageArtifact.reference === undefined
         ? {}
         : { sourceReference: imageArtifact.reference }),
@@ -162,8 +175,8 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
     const resultPayload: SandboxBuild = compileResult;
 
     await runDb(
-      jobs.markJobSucceeded({
-        id: job.id,
+      repositories.jobs.markJobSucceeded({
+        id: claimedJob.id,
         builderId: compileResult.builder.id,
         resultPayload,
         publishedReference: publishedImage.reference,
@@ -171,12 +184,11 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
         publishedDigest: publishedImage.digest,
       }),
     );
-    buildSucceeded = true;
 
-    if (job.runId !== null) {
+    if (claimedJob.runId !== null) {
       await runDb(
-        runtimeInstances.upsertRuntimeInstance({
-          runId: job.runId,
+        repositories.runtimeInstances.upsertRuntimeInstance({
+          runId: claimedJob.runId,
           status: "pending",
         }),
       );
@@ -214,10 +226,10 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
     });
 
-    if (job.runId !== null) {
+    if (claimedJob.runId !== null) {
       await runDb(
-        runtimeInstances.upsertRuntimeInstance({
-          runId: job.runId,
+        repositories.runtimeInstances.upsertRuntimeInstance({
+          runId: claimedJob.runId,
           status: runtimeLaunchResult.status,
           adapter: runtimeLaunchResult.adapter,
           resourceId: runtimeLaunchResult.resourceId,
@@ -230,40 +242,50 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
       );
     }
 
-    if (job.runId !== null) {
-      await runDb(attempts.markAttemptSucceeded({ id: job.runId })).catch(() => null);
+    if (claimedJob.runId !== null) {
+      await runDb(repositories.attempts.markAttemptSucceeded({ id: claimedJob.runId })).catch(
+        () => null,
+      );
     }
 
     return publishedImage;
   } catch (error) {
     const errorCode = toErrorCode(error);
+    const errorMessage = toErrorMessage(error);
+    const failureUpdates: Promise<unknown>[] = [];
 
-    if (job.runId !== null) {
-      await runDb(
-        runtimeInstances.upsertRuntimeInstance({
-          runId: job.runId,
-          status: "failed",
-          ...(errorCode === undefined ? {} : { errorCode }),
-          errorMessage: toErrorMessage(error),
-          finishedAt: new Date(),
-        }),
+    if (repositories !== undefined) {
+      const jobId = claimedJob?.id ?? options.jobId;
+
+      failureUpdates.push(
+        runDb(
+          repositories.jobs.markJobFailed({
+            id: jobId,
+            errorMessage,
+            ...(errorCode === undefined ? {} : { errorCode }),
+          }),
+        ),
       );
+
+      if (claimedJob?.runId !== null && claimedJob?.runId !== undefined) {
+        failureUpdates.push(
+          runDb(
+            repositories.runtimeInstances.upsertRuntimeInstance({
+              runId: claimedJob.runId,
+              status: "failed",
+              ...(errorCode === undefined ? {} : { errorCode }),
+              errorMessage,
+              finishedAt: new Date(),
+            }),
+          ),
+        );
+        failureUpdates.push(
+          runDb(repositories.attempts.markAttemptFailed({ id: claimedJob.runId })),
+        );
+      }
     }
 
-    await Promise.allSettled([
-      ...(buildSucceeded
-        ? []
-        : [
-            runDb(
-              jobs.markJobFailed({
-                id: job.id,
-                errorMessage: toErrorMessage(error),
-                ...(errorCode === undefined ? {} : { errorCode }),
-              }),
-            ),
-          ]),
-      ...(job.runId === null ? [] : [runDb(attempts.markAttemptFailed({ id: job.runId }))]),
-    ]);
+    await Promise.allSettled(failureUpdates);
 
     throw error;
   }

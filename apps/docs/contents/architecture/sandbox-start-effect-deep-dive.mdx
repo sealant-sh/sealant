@@ -1,0 +1,511 @@
+---
+title: Sandbox Start Flow and BuildKit Effect Deep Dive
+slug: /architecture/sandbox-start-effect-deep-dive
+status: draft
+owner: engineering
+updated: 2026-04-12
+---
+
+import { File, Files, Folder } from "fumadocs-ui/components/files";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+This document explains, in implementation-level detail, what happens when a user clicks **Start
+Sandbox** in the web UI.
+
+It follows the request across:
+
+- web UI mutation
+- API Effect handlers
+- DB repository services
+- queue publish and consume
+- worker orchestration
+- BuildKit compile service internals
+
+It also explains the Effect architecture decisions (Tag, Layer, Effect programs, error mapping) used
+at each stage.
+
+<Callout type="warning" title="Scope">
+  This is a code-accurate walkthrough for the current implementation in this repository. It is not a
+  generic Effect tutorial.
+</Callout>
+
+## The files that matter
+
+<Files>
+  <Folder name="apps" defaultOpen>
+    <Folder name="web" defaultOpen>
+      <File name="src/routes/_authenticated/sandboxes/new.tsx" />
+      <File name="src/lib/trpc/router.ts" />
+      <File name="src/lib/api/core-api-client.ts" />
+    </Folder>
+    <Folder name="api" defaultOpen>
+      <File name="src/index.ts" />
+      <File name="src/routes/control-plane.http-api.ts" />
+      <File name="src/routes/sandboxes/sandboxes.http-api.ts" />
+      <File name="src/routes/sandboxes/sandboxes.module.ts" />
+    </Folder>
+    <Folder name="worker" defaultOpen>
+      <File name="src/workers/sandboxes.ts" />
+    </Folder>
+  </Folder>
+  <Folder name="packages" defaultOpen>
+    <Folder name="db" defaultOpen>
+      <File name="src/client.ts" />
+      <File name="src/layers.ts" />
+      <File name="src/repositories/sandboxes.ts" />
+      <File name="src/repositories/sandbox-attempts.ts" />
+      <File name="src/repositories/sandbox-build-jobs.ts" />
+      <File name="src/repositories/sandbox-runtime-instances.ts" />
+    </Folder>
+    <Folder name="sandboxes" defaultOpen>
+      <File name="src/service.ts" />
+      <File name="src/queue/publisher.ts" />
+      <File name="src/queue/consumer.ts" />
+      <File name="src/worker/process-sandbox-build-job.ts" />
+      <File name="src/buildkit/buildkit-builder.ts" />
+    </Folder>
+  </Folder>
+</Files>
+
+## 0) One-screen sequence map
+
+```txt
+User clicks Start Sandbox (web form)
+  -> apps/web route builds CreateSandboxRequest payload
+  -> tRPC protected procedure forwards payload + owner user id
+  -> core API client POST /v1/sandboxes
+  -> Effect HTTP handler calls createSandbox module function
+  -> DB repos create sandbox + attempt + snapshot + queued build job
+  -> SandboxesService publishes RabbitMQ message { jobId }
+  -> worker consumes message, claims job, marks attempt running
+  -> worker compiles spec (BuildkitBuilder service)
+  -> worker publishes OCI image
+  -> worker marks build job succeeded
+  -> worker launches runtime, writes runtime instance
+  -> worker marks attempt succeeded
+  -> UI polling reads sandbox summary/details/events and reflects new status
+```
+
+## 1) UI click -> request payload
+
+`apps/web/src/routes/_authenticated/sandboxes/new.tsx` is where the **Start Sandbox** button lives.
+
+- `handleSubmit(...)` validates form state, normalizes packages and lifecycle commands, then calls
+  `createSandboxMutation.mutateAsync(...)`.
+- The mutation payload includes:
+  - registry target (`registryId`, `repository`, `tag`)
+  - blueprint-like `spec` object (sources, harness, access.ssh, tooling, customization, lifecycle,
+    runtime, target)
+  - optional GitHub source and dotfiles selection metadata.
+- On success it invalidates list query cache and redirects to `/sandboxes/<sandboxId>`.
+
+Key implementation point: the UI already sends a mostly complete sandbox blueprint shape, so API
+does not synthesize a blueprint from many partial fields; it mostly validates, enriches, and queues.
+
+## 2) Web app bridge layer (tRPC -> core API)
+
+`apps/web/src/lib/trpc/router.ts`:
+
+- `sandbox.create` is a protected procedure.
+- It receives typed input from the form and forwards to `ctx.coreApi.sandboxes.create(...)`.
+- It injects `ownerUserId` from authenticated session (`ctx.session.user.id`) before calling API.
+
+`apps/web/src/lib/api/core-api-client.ts`:
+
+- `createSandbox(...)` validates payload with `createSandboxRequestSchema`.
+- It issues `POST /v1/sandboxes`.
+- `requestJson(...)` maps non-2xx responses to `CoreApiHttpError` with status and message.
+
+## 3) API runtime composition (Effect Layers)
+
+All route logic is executed inside a startup-composed Effect layer graph in `apps/api/src/index.ts`.
+
+`apps/api/src/index.ts` composes:
+
+1. DB client layer:
+   - `PgClient.layer(...)` from `@effect/sql-pg`
+   - `SealantDBLive` from `@sealant/db`
+2. Repository layer:
+   - `ControlPlaneDataAccessLive` from `@sealant/db`
+3. Source integration layer:
+   - `gitHubSourceIntegrationLayer(...)`
+4. Sandbox domain service layer:
+   - `sandboxesServiceLayer(...)`
+5. HTTP handlers:
+   - `makeControlPlaneHttpApiLayer()`
+
+This is critical: by the time request handlers run, they can `yield*` service tags directly because
+the runtime already has concrete layers provided.
+
+## 4) HTTP endpoint binding
+
+`apps/api/src/routes/control-plane.http-api.ts` merges route groups.
+
+`apps/api/src/routes/sandboxes/sandboxes.http-api.ts` binds endpoint ID `createSandbox` to module
+function `createSandbox(...)` from `apps/api/src/routes/sandboxes/sandboxes.module.ts`.
+
+No business logic in handler glue. It is intentionally thin.
+
+## 5) createSandbox module flow (DB + queue)
+
+The core orchestration starts in `apps/api/src/routes/sandboxes/sandboxes.module.ts` function
+`createSandbox(...)`.
+
+<Steps>
+<Step>
+
+### Read and validate request
+
+- Reads optional `idempotency-key` header.
+- Verifies `registryId` matches configured registry.
+- Optionally resolves idempotent existing job + sandbox response.
+- Parses and validates spec via `parseSandboxSpec(...)`.
+
+</Step>
+<Step>
+
+### Resolve source and dotfiles selections
+
+- `resolveGitHubSourceSelection(...)` enforces auth and converts GitHub selection to concrete source
+  info.
+- `resolveGitHubDotfilesSelection(...)` does equivalent for dotfiles input source.
+
+</Step>
+<Step>
+
+### Standardize packages
+
+- Calls `standardizeRequestedPackages(...)`.
+- If package standardization yields errors, returns `SandboxBadRequestError`.
+
+</Step>
+<Step>
+
+### Persist lifecycle records (Effect DB repos)
+
+- Generates `sandboxId`, `runId`, `jobId`.
+- Uses repository services (all Effect-based):
+  - `SandboxRepo.createSandbox(...)`
+  - `SandboxAttemptRepo.createQueuedAttempt(...)`
+  - `SandboxRepo.linkSandboxAttempt(...)`
+  - `SandboxAttemptRepo.setAttemptSnapshot(...)`
+  - `SandboxBuildJobRepo.insertQueuedJob(...)`
+- Wraps this in `Effect.either(...)` to classify DB failures.
+
+</Step>
+<Step>
+
+### Publish queue event
+
+- Resolves `SandboxesService` and calls `publishSandboxBuildJobRequested({ jobId })`.
+- On publish failure, it best-effort marks:
+  - build job failed
+  - attempt failed
+  - sandbox failed then returns `SandboxBadGatewayError`.
+
+</Step>
+<Step>
+
+### Return accepted response
+
+- Returns `CreateSandboxResponse` with `status: "queued"`.
+
+</Step>
+</Steps>
+
+## 6) DB model transitions for this flow
+
+The following repo operations define the status model transitions:
+
+`packages/db/src/repositories/sandbox-build-jobs.ts`
+
+- `insertQueuedJob(...)` writes initial queued job.
+- `claimJobById(...)` transitions `queued/running(expired lease)` -> `running`, increments
+  `attemptCount`, sets `workerId`, `claimedAt`, `leaseExpiresAt`, `startedAt`.
+- `markJobSucceeded(...)` writes publish outputs and clears error fields.
+- `markJobFailed(...)` writes `status: failed`, `errorMessage`, optional `errorCode`, `finishedAt`.
+
+`packages/db/src/repositories/sandbox-attempts.ts`
+
+- `createQueuedAttempt(...)` writes attempt row.
+- `markAttemptRunning(...)` sets `status: running` and `startedAt`.
+- `markAttemptSucceeded(...)` and `markAttemptFailed(...)` finalize state and duration.
+
+`packages/db/src/repositories/sandbox-runtime-instances.ts`
+
+- `upsertRuntimeInstance(...)` writes pending/running/failed runtime metadata keyed by `runId`.
+
+`packages/db/src/repositories/sandboxes.ts`
+
+- `setSandboxStatus(...)` is used for queue publish failure rollback path in API module.
+
+## 7) Queue publish/consume path
+
+`packages/sandboxes/src/queue/publisher.ts`
+
+- Validates message schema (`parseSandboxBuildJobRequestedMessage`).
+- Asserts queue topology.
+- Publishes JSON with `messageId = jobId` and type marker.
+
+`packages/sandboxes/src/queue/consumer.ts`
+
+- Asserts the same topology.
+- Consumes from queue `sandbox-image-builds`.
+- Parses each message using same schema parser.
+
+`apps/worker/src/workers/sandboxes.ts`
+
+- Starts consumer with `onMessage({ message, ack, nack })`.
+- Calls `processSandboxBuildJob(...)`.
+- On success: `ack()`.
+- On failure: logs and `nack(false)`.
+
+## 8) Worker orchestration flow (processSandboxBuildJob)
+
+`packages/sandboxes/src/worker/process-sandbox-build-job.ts` orchestrates the full backend path.
+
+### 8.1 Effect repository acquisition
+
+- Creates `dbLayer = Layer.succeed(SealantDB, options.db)`.
+- Merges repository live layers and provides DB layer.
+- Builds `repositoriesEffect` to resolve `jobs`, `runtimeInstances`, `attempts` from tags.
+- Executes repository effects via `Effect.runPromise` helper `runDb(...)`.
+
+### 8.2 Claim and mark running
+
+- `claimJobById(...)` for this `jobId` and worker lease.
+- If no claim candidate, return `null`.
+- Best-effort `markAttemptRunning(...)`.
+
+### 8.3 Compile and publish
+
+- Parses stored `requestPayload` with `newSandboxSchema`.
+- Compiles via Effect BuildKit API:
+  - `compileSandboxBuildSpec({ blueprint: inputSpec })`
+  - provided with `BuildkitBuilderLive`.
+- Selects OCI artifact from compile result.
+- Publishes image via registry client.
+- Marks job succeeded with publish metadata.
+
+### 8.4 Runtime launch and finalization
+
+- Writes runtime instance `pending`.
+- Resolves runtime auth additions (GitHub installation token path).
+- Selects runtime adapter and launches published image.
+- Upserts runtime instance with running endpoint metadata.
+- Marks attempt succeeded.
+
+### 8.5 Unified failure handling
+
+In `catch`:
+
+- Computes `errorCode` from `error.code` if present.
+- Builds `failureUpdates` list:
+  - mark job failed (always attempted when repos are available)
+  - upsert runtime failed (if run exists)
+  - mark attempt failed (if run exists)
+- Executes with `Promise.allSettled(...)` so one failing write does not prevent the others.
+- Rethrows original error so outer consumer logic can decide ACK/NACK behavior.
+
+<Callout type="info" title="Important operational behavior">
+  The worker now attempts `markJobFailed(...)` even if other failure-side updates throw, which
+  closes the earlier gap where some failures could skip durable failed state.
+</Callout>
+
+## 9) BuildKit service deep dive (almost line-by-line)
+
+This is the detailed walk through of `packages/sandboxes/src/buildkit/buildkit-builder.ts`.
+
+### 9.1 Top-level structure by line range
+
+```txt
+1-22     imports (Node APIs + validators + Effect + harness integration)
+37-64    command runner contracts and compile options
+66-133   typed BuildKit error + normalization helpers
+135-153  distro type definitions
+164-227  default command runner implemented as Effect.tryPromise(spawn)
+240-324  distro catalog (fedora, arch, nix)
+326-580  planning helpers and support checks
+581-652  map blueprint -> resolved image plan
+660-1157 render package install, harness install, entrypoint, dotfiles, containerfile
+1165-1261 write build context files as Effect program
+1269-1300 docker build + save as Effect program
+1302-1407 pure compile pipeline (parse -> select os -> plan -> write -> build -> parse result)
+1409-1486 service constructor, live layer, and public Effect accessors
+```
+
+### A) Service contract and typed errors (lines 37-133)
+
+- `BuildkitCommandRunner` is now Effect-based, not Promise-based.
+- `BuildkitBuilderError` is a tagged schema error with strict `{ code, message }` payload.
+- `BuildkitBuilderApi` declares three operations: `selectBuildkitOsFamily`,
+  `mapBlueprintToBuildkitImagePlan`, and `compileSandboxBuildSpec`.
+- `BuildkitBuilder` is a `Context.Tag` service identifier.
+- `toBuildkitBuilderError(...)` normalizes unknown defects/errors into the typed domain error.
+
+### B) Effectful process runner (lines 164-227)
+
+- `defaultCommandRunner(...)` wraps `spawn` inside `Effect.tryPromise`.
+- Sets `DOCKER_BUILDKIT=1` in child env.
+- Collects stdout/stderr buffers.
+- Hooks cancellation: `signal.addEventListener("abort", () => child.kill())`.
+- Maps non-zero exit or signal termination to `BuildkitBuilderError` code `buildkit-command-failed`.
+
+This is the first major effectification change: command execution is now a first-class interruptible
+Effect.
+
+### C) Planning policy and support checks (lines 240-652)
+
+- `distroDefinitions`: central source of OS families, package manager, package mapping, shell paths,
+  sshd path.
+- `getBuildkitSupportForOs(...)`: rejects unsupported combinations early with structured reasons:
+  `unsupported-os`, `unsupported-harness`, `unsupported-package`, `unsupported-runtime-requirement`.
+- `selectBuildkitOsFamilyInternal(...)`: chooses the first supported OS from candidate order.
+- `resolvePackages(...)`: merges package requests from user tooling + harness requirements + shell +
+  dotfiles helpers.
+- `mapBlueprintToResolvedImagePlan(...)`: produces a concrete, security-sensitive plan that decides
+  build vs runtime secrets, dotfiles apply stage (`build` or `runtime`), and GitHub installation auth
+  routing.
+
+### D) Renderers (lines 660-1157)
+
+- `renderPackageInstallCommand(...)`: emits distro-specific install RUN block.
+- `renderHarnessInstallCommand(...)`: emits harness install command with nix-specific npm rewrite.
+- `renderRuntimeStep(...)`: isolates each lifecycle step in a subshell.
+- `renderForegroundCommand(...)`: chooses literal command or harness launch command.
+- `renderSandboxEntrypoint(...)`: large generated runtime script handling repo clone auth
+  materialization (SSH key and/or HTTP token), optional SSH daemon startup, sandbox clone, optional
+  runtime dotfiles apply, setup/startup step execution, and final foreground process exec.
+- `renderDotfilesStep(...)`: optional build-time dotfiles apply layer.
+- `renderContainerfile(...)`: assembles final Dockerfile ordering for cache behavior.
+
+### E) Effectful filesystem materialization (lines 1165-1261)
+
+`writeBuildContext(...)` is an `Effect.gen` pipeline that:
+
+- creates temp context dir (`mkdtemp`)
+- computes all output paths
+- builds `BuildkitBuildSpec`
+- writes `Containerfile`, `entrypoint.sh`, `resolved-image-plan.json`, and
+  `buildkit-spec.json`
+
+Every IO step is wrapped in `Effect.tryPromise` and mapped to a specific
+`buildkit-write-context-failed` error message.
+
+### F) Effectful build execution (lines 1269-1300)
+
+`buildImageTarball(...)` is also `Effect.gen`:
+
+- computes build args, including BuildKit secrets and optional `--platform linux/amd64` for arch
+- runs `docker build`
+- runs `docker save --output ...`
+
+Because command runner is an Effect, this function is fully composable and test-injectable.
+
+### G) Compile pipeline and service assembly (lines 1302-1486)
+
+- `selectBuildkitOsFamilyFromInput(...)` and `mapBlueprintToBuildkitImagePlanFromInput(...)` wrap
+  synchronous logic with `Effect.try` and typed error mapping.
+- `compileSandboxBuildSpecFromInput(...)` is the full compile pipeline:
+  1. parse compile input schema
+  2. select OS family
+  3. map blueprint to image plan
+  4. write build context
+  5. build + save image tarball
+  6. parse and return final compile result schema
+- `makeBuildkitBuilder(...)` creates the service implementation using default options + per-call
+  overrides merge.
+- `BuildkitBuilderLive` is default layer; `buildkitBuilderLayer(options)` is configurable layer.
+- public exports (`selectBuildkitOsFamily`, `mapBlueprintToBuildkitImagePlan`,
+  `compileSandboxBuildSpec`) are now environment-aware Effect accessors that `flatMap` the
+  `BuildkitBuilder` service from context.
+
+## 10) How BuildKit service gets wired into API and worker
+
+<Tabs items={["API layer path", "Worker direct path"]}>
+  <Tab>
+
+`apps/api/src/index.ts` provides `sandboxesServiceLayer(...)`.
+
+Inside `packages/sandboxes/src/service.ts`:
+
+- `SandboxesServiceLive` resolves `BuildkitBuilder` from context.
+- `sandboxesServiceLayer(config)` provides:
+  - config layer
+  - `buildkitBuilderLayer(...)` constructed from config defaults
+
+So API consumers can call `SandboxesService.compileSandboxBuildSpec(...)` and receive
+`SandboxesServiceError` mapped from `BuildkitBuilderError`.
+
+  </Tab>
+  <Tab>
+
+`packages/sandboxes/src/worker/process-sandbox-build-job.ts` directly runs:
+
+```ts
+compileSandboxBuildSpec({ blueprint: inputSpec }).pipe(Effect.provide(BuildkitBuilderLive));
+```
+
+So worker uses the same service contract but provides `BuildkitBuilderLive` inline for the compile
+call.
+
+  </Tab>
+</Tabs>
+
+## 11) End-to-end status timeline for a successful click
+
+```txt
+UI click
+  -> API accepted (sandbox queued)
+  sandbox.status: queued
+  attempt.status: queued
+  build_job.status: queued
+
+Worker claims message
+  -> build_job.status: running
+  -> attempt.status: running
+
+Build and publish succeed
+  -> build_job.status: succeeded
+  -> runtime_instance.status: pending
+
+Runtime launch succeeds
+  -> runtime_instance.status: running (+ endpoint)
+  -> attempt.status: succeeded
+
+API summary/detail reads combine attempt + latest job + runtime instance
+  -> surface status: ready
+```
+
+## 12) Failure timeline highlights
+
+- If queue publish fails in API after persistence, API marks build job failed, attempt failed,
+  sandbox failed and returns bad gateway.
+- If compile/publish/runtime fails in worker, worker catch block attempts all failure updates with
+  `Promise.allSettled(...)` and rethrows.
+- Worker logs then `nack(false)` in current consumer configuration.
+
+## 13) Why Effect is valuable in this path
+
+- **Explicit service contracts:** `Context.Tag` for DB repos, sandboxes domain service, and BuildKit
+  builder.
+- **Deterministic composition:** one startup layer graph in API, one worker runtime composition.
+- **Typed failure channels:** domain-level tagged errors instead of only thrown defects.
+- **Testability:** command runners and service implementations are injectable.
+- **Interruption support:** process-level operations can observe Effect cancellation signals.
+
+## 14) Practical debugging checklist when Start Sandbox is stuck
+
+1. Verify API accepted response from `POST /v1/sandboxes`.
+2. Confirm build job row exists and status transition (`queued` -> `running`).
+3. Confirm worker consumed queue message.
+4. If compile failed, inspect `sandbox_build_jobs.error_message` and `error_code`.
+5. If runtime failed, inspect `sandbox_runtime_instances` and worker logs.
+6. If UI still stale, verify list/detail/event endpoints return latest run/job/runtime records.
+
+<Callout type="success" title="Mental model to keep">
+  Start Sandbox is not one giant request. It is a persisted state machine advanced by Effect
+  services: API records intent and queues work; worker claims, compiles, publishes, launches, and
+  writes each transition.
+</Callout>

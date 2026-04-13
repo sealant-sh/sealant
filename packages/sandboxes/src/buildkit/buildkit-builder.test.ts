@@ -1,13 +1,20 @@
 import { readFile } from "node:fs/promises";
 
 import type { NewSandbox } from "@sealant/validators";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BuildkitBuilder,
+  BuildkitBuilderLive,
   compileSandboxBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   selectBuildkitOsFamily,
 } from "./buildkit-builder.js";
+
+const runWithBuildkitLive = <A, E>(effect: Effect.Effect<A, E, BuildkitBuilder>) => {
+  return effect.pipe(Effect.provide(BuildkitBuilderLive));
+};
 
 const createSandboxBuildSpec = (overrides: Partial<NewSandbox> = {}): NewSandbox => {
   const base: NewSandbox = {
@@ -187,7 +194,14 @@ describe("compileSandboxBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint,
+          osFamily: "fedora",
+        }),
+      ),
+    );
 
     expect(plan.osFamily).toBe("fedora");
     expect(plan.packageManager).toBe("dnf");
@@ -208,8 +222,17 @@ describe("compileSandboxBuildSpec", () => {
 
   it("defers GitHub-authenticated dotfiles to runtime apply", async () => {
     const commandRunner = vi.fn<
-      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "", stderr: "" }));
+      (
+        command: string,
+        args: readonly string[],
+      ) => Effect.Effect<
+        {
+          stdout: string;
+          stderr: string;
+        },
+        never
+      >
+    >(() => Effect.succeed({ stdout: "", stderr: "" }));
     const blueprint = createSandboxBuildSpec({
       sources: {
         sandbox: {
@@ -242,19 +265,30 @@ describe("compileSandboxBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint,
+          osFamily: "fedora",
+        }),
+      ),
+    );
     expect(plan.dotfiles).toMatchObject({
       applyAt: "runtime",
       githubInstallationRepositoryId: "gh_installation_repo_1",
     });
     expect(plan.buildSecrets).toEqual([]);
 
-    const result = await compileSandboxBuildSpec({
-      blueprint,
-      options: {
-        commandRunner,
-      },
-    });
+    const result = await Effect.runPromise(
+      runWithBuildkitLive(
+        compileSandboxBuildSpec({
+          blueprint,
+          options: {
+            commandRunner,
+          },
+        }),
+      ),
+    );
     const entrypointPath = result.buildkit.spec.containerfilePath.replace(
       /Containerfile$/,
       "entrypoint.sh",
@@ -307,7 +341,14 @@ describe("compileSandboxBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const plan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint,
+          osFamily: "fedora",
+        }),
+      ),
+    );
     expect(plan.packages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -318,41 +359,49 @@ describe("compileSandboxBuildSpec", () => {
   });
 
   it("includes npm when Node.js-backed harness tooling is requested on Linux distros", () => {
-    const fedoraPlan = mapBlueprintToBuildkitImagePlan(
-      createSandboxBuildSpec({
-        harness: {
-          id: "opencode",
-        },
-        target: {
-          os: {
-            family: "fedora",
-            mode: "prefer",
-          },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      "fedora",
+    const fedoraPlan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint: createSandboxBuildSpec({
+            harness: {
+              id: "opencode",
+            },
+            target: {
+              os: {
+                family: "fedora",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+          osFamily: "fedora",
+        }),
+      ),
     );
-    const archPlan = mapBlueprintToBuildkitImagePlan(
-      createSandboxBuildSpec({
-        harness: {
-          id: "codex",
-        },
-        target: {
-          os: {
-            family: "arch",
-            mode: "prefer",
-          },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      "arch",
+    const archPlan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint: createSandboxBuildSpec({
+            harness: {
+              id: "codex",
+            },
+            target: {
+              os: {
+                family: "arch",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+          osFamily: "arch",
+        }),
+      ),
     );
 
     expect(fedoraPlan.packages).toEqual(
@@ -374,59 +423,76 @@ describe("compileSandboxBuildSpec", () => {
   });
 
   it("prefers fedora when target.os.family is auto", () => {
-    const osFamily = selectBuildkitOsFamily({
-      blueprint: createSandboxBuildSpec({
-        target: {
-          os: {
-            family: "auto",
-            mode: "prefer",
-          },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-    });
+    const osFamily = Effect.runSync(
+      runWithBuildkitLive(
+        selectBuildkitOsFamily({
+          blueprint: createSandboxBuildSpec({
+            target: {
+              os: {
+                family: "auto",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+        }),
+      ),
+    );
 
     expect(osFamily).toBe("fedora");
   });
 
   it("renders a build context and invokes docker build plus docker save", async () => {
     const commandRunner = vi.fn<
-      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "", stderr: "" }));
-    const result = await compileSandboxBuildSpec({
-      blueprint: createSandboxBuildSpec({
-        tooling: {
-          packages: [{ id: "git" }, { id: "ripgrep" }],
+      (
+        command: string,
+        args: readonly string[],
+      ) => Effect.Effect<
+        {
+          stdout: string;
+          stderr: string;
         },
-        lifecycle: {
-          setup: [],
-          startup: {
-            steps: [],
-            foreground: {
-              kind: "command",
-              run: "pnpm dev",
-              shell: "bash",
+        never
+      >
+    >(() => Effect.succeed({ stdout: "", stderr: "" }));
+    const result = await Effect.runPromise(
+      runWithBuildkitLive(
+        compileSandboxBuildSpec({
+          blueprint: createSandboxBuildSpec({
+            tooling: {
+              packages: [{ id: "git" }, { id: "ripgrep" }],
             },
+            lifecycle: {
+              setup: [],
+              startup: {
+                steps: [],
+                foreground: {
+                  kind: "command",
+                  run: "pnpm dev",
+                  shell: "bash",
+                },
+              },
+            },
+            target: {
+              os: {
+                family: "fedora",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+          options: {
+            commandRunner,
           },
-        },
-        target: {
-          os: {
-            family: "fedora",
-            mode: "prefer",
-          },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      options: {
-        commandRunner,
-      },
-    });
+        }),
+      ),
+    );
 
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
     const saveCommandArgs = (commandRunner.mock.calls[1]?.[1] ?? []) as string[];
@@ -464,35 +530,48 @@ describe("compileSandboxBuildSpec", () => {
 
   it("starts the selected harness when startup foreground is harness", async () => {
     const commandRunner = vi.fn<
-      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "", stderr: "" }));
-    const result = await compileSandboxBuildSpec({
-      blueprint: createSandboxBuildSpec({
-        harness: {
-          id: "codex",
+      (
+        command: string,
+        args: readonly string[],
+      ) => Effect.Effect<
+        {
+          stdout: string;
+          stderr: string;
         },
-        customization: {
-          defaultShell: "zsh",
-          dotfilesManager: "auto",
-          dotfilesTarget: "home",
-          applyDotfiles: true,
-          dotfilesBootstrap: true,
-        },
-        target: {
-          os: {
-            family: "arch",
-            mode: "prefer",
+        never
+      >
+    >(() => Effect.succeed({ stdout: "", stderr: "" }));
+    const result = await Effect.runPromise(
+      runWithBuildkitLive(
+        compileSandboxBuildSpec({
+          blueprint: createSandboxBuildSpec({
+            harness: {
+              id: "codex",
+            },
+            customization: {
+              defaultShell: "zsh",
+              dotfilesManager: "auto",
+              dotfilesTarget: "home",
+              applyDotfiles: true,
+              dotfilesBootstrap: true,
+            },
+            target: {
+              os: {
+                family: "arch",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+          options: {
+            commandRunner,
           },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      options: {
-        commandRunner,
-      },
-    });
+        }),
+      ),
+    );
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
     const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
@@ -509,35 +588,48 @@ describe("compileSandboxBuildSpec", () => {
 
   it("renders nix build contexts with nix package installs", async () => {
     const commandRunner = vi.fn<
-      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "", stderr: "" }));
-    const result = await compileSandboxBuildSpec({
-      blueprint: createSandboxBuildSpec({
-        harness: {
-          id: "codex",
+      (
+        command: string,
+        args: readonly string[],
+      ) => Effect.Effect<
+        {
+          stdout: string;
+          stderr: string;
         },
-        customization: {
-          defaultShell: "zsh",
-          dotfilesManager: "auto",
-          dotfilesTarget: "home",
-          applyDotfiles: true,
-          dotfilesBootstrap: true,
-        },
-        target: {
-          os: {
-            family: "nix",
-            mode: "prefer",
+        never
+      >
+    >(() => Effect.succeed({ stdout: "", stderr: "" }));
+    const result = await Effect.runPromise(
+      runWithBuildkitLive(
+        compileSandboxBuildSpec({
+          blueprint: createSandboxBuildSpec({
+            harness: {
+              id: "codex",
+            },
+            customization: {
+              defaultShell: "zsh",
+              dotfilesManager: "auto",
+              dotfilesTarget: "home",
+              applyDotfiles: true,
+              dotfilesBootstrap: true,
+            },
+            target: {
+              os: {
+                family: "nix",
+                mode: "prefer",
+              },
+              runtime: {
+                family: "auto",
+                mode: "prefer",
+              },
+            },
+          }),
+          options: {
+            commandRunner,
           },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      options: {
-        commandRunner,
-      },
-    });
+        }),
+      ),
+    );
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
     const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
@@ -599,7 +691,14 @@ describe("compileSandboxBuildSpec", () => {
       },
     });
 
-    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "arch");
+    const plan = Effect.runSync(
+      runWithBuildkitLive(
+        mapBlueprintToBuildkitImagePlan({
+          blueprint,
+          osFamily: "arch",
+        }),
+      ),
+    );
 
     expect(plan.packages).toEqual(
       expect.arrayContaining([

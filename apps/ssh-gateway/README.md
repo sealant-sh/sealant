@@ -85,7 +85,7 @@ pnpm ssh:setup:dev
 This script:
 
 - Generates gateway host/upstream/client keys under `.secrets/`.
-- Updates `.env.local` with gateway env values.
+- Updates `.env` with gateway env values.
 - Writes `~/.config/sealant/ssh_config` and `~/.config/sealant/known_hosts`.
 - Tries to add `Include ~/.config/sealant/ssh_config` to `~/.ssh/config`.
 

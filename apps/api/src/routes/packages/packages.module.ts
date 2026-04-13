@@ -3,9 +3,8 @@ import {
   type ResolvePackageQuery,
   type ResolvePackageResponse,
 } from "@sealant/api-contracts";
+import { SandboxesService } from "@sealant/sandboxes";
 import { Effect } from "effect";
-
-import { PackageStandardizerService } from "../../services/control-plane-capabilities.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string => {
   return error instanceof Error ? error.message : fallback;
@@ -13,19 +12,23 @@ const toErrorMessage = (error: unknown, fallback: string): string => {
 
 export const resolvePackage = (query: ResolvePackageQuery) => {
   return Effect.gen(function* () {
-    const packageStandardizer = yield* PackageStandardizerService;
+    const sandboxes = yield* SandboxesService;
     const targetOs = query.targetOs ?? "fedora";
 
-    return yield* Effect.tryPromise({
-      try: () =>
-        packageStandardizer.resolvePackage({
-          query: query.query,
-          targetOs,
-        }),
-      catch: (error) =>
-        new PackagesBadGatewayError({
-          message: toErrorMessage(error, "Package resolution failed."),
-        }),
-    }).pipe(Effect.map((resolution) => resolution satisfies ResolvePackageResponse));
+    const resolution = yield* sandboxes
+      .resolvePackage({
+        query: query.query,
+        targetOs,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new PackagesBadGatewayError({
+              message: toErrorMessage(error, "Package resolution failed."),
+            }),
+        ),
+      );
+
+    return resolution satisfies ResolvePackageResponse;
   });
 };

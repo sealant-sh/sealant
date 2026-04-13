@@ -44,6 +44,7 @@ export interface DockerRuntimeAdapterOptions {
   readonly containerNamePrefix?: string;
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
+  readonly sandboxNetwork?: string;
   readonly defaultSshAuthorizedKeysFile?: string;
   readonly sshBindHost?: string;
   readonly sshEndpointExposureStrategy?: DockerSshEndpointExposureStrategy;
@@ -220,6 +221,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly verifyRunning: boolean;
 
+  private readonly sandboxNetwork: string | undefined;
+
   private readonly defaultSshAuthorizedKeysFile: string | undefined;
 
   private readonly sshBindHost: string;
@@ -235,6 +238,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
+    this.sandboxNetwork = options.sandboxNetwork;
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
     this.sshEndpointExposureStrategy = options.sshEndpointExposureStrategy ?? "host-published";
@@ -598,6 +602,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       "-d",
       "--runtime",
       parsed.blueprint.runtime.ociRuntime,
+      ...(this.sandboxNetwork === undefined ? [] : ["--network", this.sandboxNetwork]),
       "--name",
       containerName,
       "-w",

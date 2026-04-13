@@ -17,6 +17,7 @@ import {
   type ResolvedImagePlan,
   type SandboxBlueprint,
 } from "@sealant/validators";
+import { Context, Effect, Layer, Schema } from "effect";
 
 import { getHarnessIntegration, type HarnessIntegration } from "../harness/integrations.js";
 
@@ -53,14 +54,83 @@ export interface BuildkitCommandOptions {
  */
 export type BuildkitCommandRunner = (
   command: string,
-  args: string[],
+  args: readonly string[],
   options?: BuildkitCommandOptions,
-) => Promise<BuildkitCommandResult>;
+) => Effect.Effect<BuildkitCommandResult, BuildkitBuilderError>;
 
 export interface BuildkitCompilerOptions {
   readonly commandRunner?: BuildkitCommandRunner;
   readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
 }
+
+export class BuildkitBuilderError extends Schema.TaggedError<BuildkitBuilderError>(
+  "BuildkitBuilderError",
+)("BuildkitBuilderError", {
+  code: Schema.String,
+  message: Schema.String,
+}) {}
+
+export interface BuildkitBuilderApi {
+  readonly selectBuildkitOsFamily: (input: {
+    readonly blueprint: SandboxBlueprint;
+    readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+  }) => Effect.Effect<BuildkitTargetOsFamily, BuildkitBuilderError>;
+  readonly mapBlueprintToBuildkitImagePlan: (input: {
+    readonly blueprint: SandboxBlueprint;
+    readonly osFamily: BuildkitTargetOsFamily;
+  }) => Effect.Effect<ResolvedImagePlan, BuildkitBuilderError>;
+  readonly compileSandboxBuildSpec: (input: {
+    readonly blueprint: SandboxBlueprint;
+    readonly options?: BuildkitCompilerOptions;
+  }) => Effect.Effect<BuildkitOsBuilderCompileResult, BuildkitBuilderError>;
+}
+
+export class BuildkitBuilder extends Context.Tag("@sealant/sandboxes/BuildkitBuilder")<
+  BuildkitBuilder,
+  BuildkitBuilderApi
+>() {}
+
+const isBuildkitErrorCause = (
+  cause: unknown,
+): cause is { readonly code: string; readonly message: string } => {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    "message" in cause &&
+    typeof cause.code === "string" &&
+    typeof cause.message === "string"
+  );
+};
+
+const toBuildkitBuilderError = (
+  cause: unknown,
+  fallbackCode: string,
+  fallbackMessage: string,
+): BuildkitBuilderError => {
+  if (cause instanceof BuildkitBuilderError) {
+    return cause;
+  }
+
+  if (isBuildkitErrorCause(cause)) {
+    return new BuildkitBuilderError({
+      code: cause.code,
+      message: cause.message,
+    });
+  }
+
+  if (cause instanceof Error) {
+    return new BuildkitBuilderError({
+      code: fallbackCode,
+      message: cause.message,
+    });
+  }
+
+  return new BuildkitBuilderError({
+    code: fallbackCode,
+    message: fallbackMessage,
+  });
+};
 
 /** Maps a logical package request id to concrete distro packages to install. */
 interface PackageMapping {
@@ -92,52 +162,67 @@ interface DistroDefinition {
  *   can classify failures consistently
  */
 const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options?.cwd,
-      env: {
-        ...process.env,
-        DOCKER_BUILDKIT: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  return Effect.tryPromise({
+    try: (signal) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(command, args, {
+          cwd: options?.cwd,
+          env: {
+            ...process.env,
+            DOCKER_BUILDKIT: "1",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
 
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
 
-    child.stdout.on("data", (chunk: string | Buffer) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
+        child.stdout.on("data", (chunk: string | Buffer) => {
+          stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
 
-    child.stderr.on("data", (chunk: string | Buffer) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
+        child.stderr.on("data", (chunk: string | Buffer) => {
+          stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
 
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+        signal.addEventListener("abort", () => {
+          child.kill();
+        });
 
-      if (signal !== null) {
-        const error = new Error(
-          `BuildKit command exited via signal ${signal}: ${command} ${args.join(" ")}`,
-        ) as Error & { code: string };
-        error.code = "buildkit-command-failed";
-        reject(error);
-        return;
-      }
+        child.on("error", reject);
+        child.on("close", (code, runtimeSignal) => {
+          const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+          const stderr = Buffer.concat(stderrChunks).toString("utf8");
 
-      if (code !== 0) {
-        const error = new Error(
-          `BuildKit command failed with exit ${code ?? "unknown"}: ${command} ${args.join(" ")}\n${stderr || stdout}`,
-        ) as Error & { code: string };
-        error.code = "buildkit-command-failed";
-        reject(error);
-        return;
-      }
+          if (runtimeSignal !== null) {
+            reject(
+              new BuildkitBuilderError({
+                code: "buildkit-command-failed",
+                message: `BuildKit command exited via signal ${runtimeSignal}: ${command} ${args.join(" ")}`,
+              }),
+            );
+            return;
+          }
 
-      resolve({ stdout, stderr });
-    });
+          if (code !== 0) {
+            reject(
+              new BuildkitBuilderError({
+                code: "buildkit-command-failed",
+                message: `BuildKit command failed with exit ${code ?? "unknown"}: ${command} ${args.join(" ")}\n${stderr || stdout}`,
+              }),
+            );
+            return;
+          }
+
+          resolve({ stdout, stderr });
+        });
+      }),
+    catch: (cause) =>
+      toBuildkitBuilderError(
+        cause,
+        "buildkit-command-failed",
+        `BuildKit command failed: ${command} ${args.join(" ")}`,
+      ),
   });
 };
 
@@ -314,9 +399,10 @@ const getDotfilesSource = (blueprint: SandboxBlueprint) => {
 };
 
 const createBuildkitCompilerError = (code: string, message: string) => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
+  return new BuildkitBuilderError({
+    code,
+    message,
+  });
 };
 
 const getBuildkitSupportForOs = (
@@ -385,7 +471,7 @@ const resolveCandidateOsFamilies = (
   return [blueprint.target.os.family];
 };
 
-export const selectBuildkitOsFamily = (input: {
+const selectBuildkitOsFamilyInternal = (input: {
   readonly blueprint: SandboxBlueprint;
   readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
 }): BuildkitTargetOsFamily => {
@@ -416,7 +502,10 @@ const resolveHarnessIntegration = (blueprint: SandboxBlueprint): HarnessIntegrat
   const integration = getHarnessIntegration(blueprint.harness.id);
 
   if (integration === undefined) {
-    throw new Error(`No AI harness integration is registered for '${blueprint.harness.id}'.`);
+    throw createBuildkitCompilerError(
+      "unsupported-harness",
+      `No AI harness integration is registered for '${blueprint.harness.id}'.`,
+    );
   }
 
   return integration;
@@ -495,7 +584,7 @@ const mapBlueprintToResolvedImagePlan = (
 ): ResolvedImagePlan => {
   const support = getBuildkitSupportForOs(blueprint, osFamily);
   if (!support.supported) {
-    throw new Error(support.message);
+    throw createBuildkitCompilerError(support.reason, support.message);
   }
 
   const dotfiles = getDotfilesSource(blueprint);
@@ -1073,40 +1162,102 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
  * Artifacts written here are both build inputs (`Containerfile`, `entrypoint.sh`) and metadata
  * outputs (`resolved-image-plan.json`, `buildkit-spec.json`) consumed by downstream systems.
  */
-const writeBuildContext = async (plan: ResolvedImagePlan) => {
-  const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
-  const containerfilePath = join(contextDirectory, "Containerfile");
-  const entrypointPath = join(contextDirectory, "entrypoint.sh");
-  const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
-  const buildSpecPath = join(contextDirectory, "buildkit-spec.json");
-  const imageTarPath = join(contextDirectory, "sandbox-image.tar");
-  const imageReference = `${defaultImageNameForBlueprint(plan.blueprint, plan.osFamily)}:${plan.blueprint.harness.id}`;
-  const spec: BuildkitBuildSpec = {
-    contextDirectory,
-    containerfilePath,
-    imageReference,
-    push: false,
-    secrets: plan.buildSecrets.map((secret) => ({
-      id: secret.id,
-      sourceRef: secret.sourceRef,
-    })),
-    buildArgs: {},
-  };
+const writeBuildContext = (
+  plan: ResolvedImagePlan,
+): Effect.Effect<
+  {
+    readonly contextDirectory: string;
+    readonly containerfilePath: string;
+    readonly imagePlanPath: string;
+    readonly buildSpecPath: string;
+    readonly imageTarPath: string;
+    readonly spec: BuildkitBuildSpec;
+  },
+  BuildkitBuilderError
+> => {
+  return Effect.gen(function* () {
+    const contextDirectory = yield* Effect.tryPromise({
+      try: () => mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`)),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          "Failed to create temporary BuildKit context directory.",
+        ),
+    });
+    const containerfilePath = join(contextDirectory, "Containerfile");
+    const entrypointPath = join(contextDirectory, "entrypoint.sh");
+    const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
+    const buildSpecPath = join(contextDirectory, "buildkit-spec.json");
+    const imageTarPath = join(contextDirectory, "sandbox-image.tar");
+    const imageReference = `${defaultImageNameForBlueprint(plan.blueprint, plan.osFamily)}:${plan.blueprint.harness.id}`;
+    const spec: BuildkitBuildSpec = {
+      contextDirectory,
+      containerfilePath,
+      imageReference,
+      push: false,
+      secrets: plan.buildSecrets.map((secret) => ({
+        id: secret.id,
+        sourceRef: secret.sourceRef,
+      })),
+      buildArgs: {},
+    };
 
-  await mkdir(dirname(containerfilePath), { recursive: true });
-  await writeFile(containerfilePath, renderContainerfile(plan), "utf8");
-  await writeFile(entrypointPath, renderSandboxEntrypoint(plan), "utf8");
-  await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
-  await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
+    yield* Effect.tryPromise({
+      try: () => mkdir(dirname(containerfilePath), { recursive: true }),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          `Failed to create BuildKit context directory ${dirname(containerfilePath)}.`,
+        ),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(containerfilePath, renderContainerfile(plan), "utf8"),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          `Failed to write generated Containerfile at ${containerfilePath}.`,
+        ),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(entrypointPath, renderSandboxEntrypoint(plan), "utf8"),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          `Failed to write generated entrypoint script at ${entrypointPath}.`,
+        ),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8"),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          `Failed to write resolved image plan metadata at ${imagePlanPath}.`,
+        ),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8"),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "buildkit-write-context-failed",
+          `Failed to write BuildKit spec metadata at ${buildSpecPath}.`,
+        ),
+    });
 
-  return {
-    contextDirectory,
-    containerfilePath,
-    imagePlanPath,
-    buildSpecPath,
-    imageTarPath,
-    spec,
-  };
+    return {
+      contextDirectory,
+      containerfilePath,
+      imagePlanPath,
+      buildSpecPath,
+      imageTarPath,
+      spec,
+    };
+  });
 };
 
 /**
@@ -1115,94 +1266,221 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
  * We call `docker save` immediately after build so consumers can move a single OCI tarball artifact
  * across process boundaries without requiring local image state persistence.
  */
-const buildImageTarball = async (
+const buildImageTarball = (
   spec: BuildkitBuildSpec,
   imageTarPath: string,
   commandRunner: BuildkitCommandRunner,
   osFamily: BuildkitTargetOsFamily,
 ) => {
-  const platformArgs = osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
-  const buildArgs = [
-    "build",
-    "--file",
-    spec.containerfilePath,
-    ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
-    ...Object.entries(spec.buildArgs).flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
-    ...platformArgs,
-    "--tag",
-    spec.imageReference,
-    spec.contextDirectory,
-  ];
+  return Effect.gen(function* () {
+    const platformArgs = osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
+    const buildArgs = [
+      "build",
+      "--file",
+      spec.containerfilePath,
+      ...spec.secrets.flatMap((secret) => ["--secret", `id=${secret.id},src=${secret.sourceRef}`]),
+      ...Object.entries(spec.buildArgs).flatMap(([key, value]) => [
+        "--build-arg",
+        `${key}=${value}`,
+      ]),
+      ...platformArgs,
+      "--tag",
+      spec.imageReference,
+      spec.contextDirectory,
+    ];
 
-  await commandRunner("docker", buildArgs, {
-    cwd: spec.contextDirectory,
-  });
+    yield* commandRunner("docker", buildArgs, {
+      cwd: spec.contextDirectory,
+    });
 
-  await commandRunner("docker", ["save", "--output", imageTarPath, spec.imageReference], {
-    cwd: spec.contextDirectory,
+    yield* commandRunner("docker", ["save", "--output", imageTarPath, spec.imageReference], {
+      cwd: spec.contextDirectory,
+    });
   });
 };
 
-export const compileSandboxBuildSpec = async (input: {
+const selectBuildkitOsFamilyFromInput = (input: {
+  readonly blueprint: SandboxBlueprint;
+  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+}): Effect.Effect<BuildkitTargetOsFamily, BuildkitBuilderError> => {
+  return Effect.try({
+    try: () =>
+      selectBuildkitOsFamilyInternal({
+        blueprint: input.blueprint,
+        ...(input.autoOsFamilyOrder === undefined
+          ? {}
+          : { autoOsFamilyOrder: input.autoOsFamilyOrder }),
+      }),
+    catch: (cause) =>
+      toBuildkitBuilderError(cause, "unsupported-os", "No BuildKit target OS is available."),
+  });
+};
+
+const mapBlueprintToBuildkitImagePlanFromInput = (input: {
+  readonly blueprint: SandboxBlueprint;
+  readonly osFamily: BuildkitTargetOsFamily;
+}): Effect.Effect<ResolvedImagePlan, BuildkitBuilderError> => {
+  return Effect.try({
+    try: () => mapBlueprintToResolvedImagePlan(input.blueprint, input.osFamily),
+    catch: (cause) =>
+      toBuildkitBuilderError(
+        cause,
+        "buildkit-image-plan-failed",
+        `Failed to resolve image plan for ${input.osFamily}.`,
+      ),
+  });
+};
+
+const compileSandboxBuildSpecFromInput = (input: {
   readonly blueprint: SandboxBlueprint;
   readonly options?: BuildkitCompilerOptions;
-}): Promise<BuildkitOsBuilderCompileResult> => {
-  const parsed = parseBuildkitOsBuilderCompileInput({
-    blueprint: parseSandboxBlueprint(input.blueprint),
-  });
-  const osFamily = selectBuildkitOsFamily({
-    blueprint: parsed.blueprint,
-    ...(input.options?.autoOsFamilyOrder === undefined
-      ? {}
-      : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
-  });
-  const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily);
-  const buildContext = await writeBuildContext(imagePlan);
-  const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
-
-  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, osFamily);
-
-  return parseBuildkitOsBuilderCompileResult({
-    builder: {
-      id: osFamily,
+}): Effect.Effect<BuildkitOsBuilderCompileResult, BuildkitBuilderError> => {
+  return Effect.gen(function* () {
+    const parsed = yield* Effect.try({
+      try: () =>
+        parseBuildkitOsBuilderCompileInput({
+          blueprint: parseSandboxBlueprint(input.blueprint),
+        }),
+      catch: (cause) =>
+        toBuildkitBuilderError(cause, "invalid-blueprint", "Sandbox blueprint validation failed."),
+    });
+    const osFamily = yield* selectBuildkitOsFamilyFromInput({
+      blueprint: parsed.blueprint,
+      ...(input.options?.autoOsFamilyOrder === undefined
+        ? {}
+        : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
+    });
+    const imagePlan = yield* mapBlueprintToBuildkitImagePlanFromInput({
+      blueprint: parsed.blueprint,
       osFamily,
-    },
-    artifacts: [
-      {
-        kind: "oci-image",
-        name: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
-        path: buildContext.imageTarPath,
-        reference: buildContext.spec.imageReference,
-        loader: "docker-load",
-      },
-      {
-        kind: "metadata",
-        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-image-plan`,
-        path: buildContext.imagePlanPath,
-        format: "json",
-      },
-      {
-        kind: "metadata",
-        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-buildkit-spec`,
-        path: buildContext.buildSpecPath,
-        format: "json",
-      },
-    ],
-    metadata: {
-      defaultArtifactName: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
-      notes: [`Compiled by the ${osFamily} BuildKit compiler.`],
-    },
-    buildkit: {
-      imagePlan,
-      spec: buildContext.spec,
-    },
+    });
+    const buildContext = yield* writeBuildContext(imagePlan);
+    const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
+
+    yield* buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, osFamily);
+
+    return yield* Effect.try({
+      try: () =>
+        parseBuildkitOsBuilderCompileResult({
+          builder: {
+            id: osFamily,
+            osFamily,
+          },
+          artifacts: [
+            {
+              kind: "oci-image",
+              name: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+              path: buildContext.imageTarPath,
+              reference: buildContext.spec.imageReference,
+              loader: "docker-load",
+            },
+            {
+              kind: "metadata",
+              name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-image-plan`,
+              path: buildContext.imagePlanPath,
+              format: "json",
+            },
+            {
+              kind: "metadata",
+              name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-buildkit-spec`,
+              path: buildContext.buildSpecPath,
+              format: "json",
+            },
+          ],
+          metadata: {
+            defaultArtifactName: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+            notes: [`Compiled by the ${osFamily} BuildKit compiler.`],
+          },
+          buildkit: {
+            imagePlan,
+            spec: buildContext.spec,
+          },
+        }),
+      catch: (cause) =>
+        toBuildkitBuilderError(
+          cause,
+          "invalid-compile-result",
+          "BuildKit compile result validation failed.",
+        ),
+    });
   });
 };
 
-/** Public helper used by callers/tests that only need planning (without running Docker). */
-export const mapBlueprintToBuildkitImagePlan = (
-  blueprint: SandboxBlueprint,
-  osFamily: BuildkitTargetOsFamily,
-) => {
-  return mapBlueprintToResolvedImagePlan(blueprint, osFamily);
+const mergeBuildkitCompilerOptions = (
+  defaults: BuildkitCompilerOptions,
+  overrides: BuildkitCompilerOptions | undefined,
+): BuildkitCompilerOptions | undefined => {
+  const merged: BuildkitCompilerOptions = {
+    ...(defaults.commandRunner === undefined ? {} : { commandRunner: defaults.commandRunner }),
+    ...(defaults.autoOsFamilyOrder === undefined
+      ? {}
+      : { autoOsFamilyOrder: defaults.autoOsFamilyOrder }),
+    ...(overrides ?? {}),
+  };
+
+  if (merged.commandRunner === undefined && merged.autoOsFamilyOrder === undefined) {
+    return undefined;
+  }
+
+  return merged;
+};
+
+const makeBuildkitBuilder = (defaults: BuildkitCompilerOptions): BuildkitBuilderApi => {
+  return {
+    selectBuildkitOsFamily: (input) =>
+      selectBuildkitOsFamilyFromInput({
+        blueprint: input.blueprint,
+        ...(input.autoOsFamilyOrder === undefined
+          ? defaults.autoOsFamilyOrder === undefined
+            ? {}
+            : { autoOsFamilyOrder: defaults.autoOsFamilyOrder }
+          : { autoOsFamilyOrder: input.autoOsFamilyOrder }),
+      }),
+    mapBlueprintToBuildkitImagePlan: (input) =>
+      mapBlueprintToBuildkitImagePlanFromInput({
+        blueprint: input.blueprint,
+        osFamily: input.osFamily,
+      }),
+    compileSandboxBuildSpec: (input) => {
+      const options = mergeBuildkitCompilerOptions(defaults, input.options);
+
+      return compileSandboxBuildSpecFromInput({
+        blueprint: input.blueprint,
+        ...(options === undefined ? {} : { options }),
+      });
+    },
+  };
+};
+
+export const BuildkitBuilderLive = Layer.succeed(BuildkitBuilder, makeBuildkitBuilder({}));
+
+export const buildkitBuilderLayer = (options: BuildkitCompilerOptions = {}) => {
+  return Layer.succeed(BuildkitBuilder, makeBuildkitBuilder(options));
+};
+
+export const selectBuildkitOsFamily = (input: {
+  readonly blueprint: SandboxBlueprint;
+  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+}) => {
+  return Effect.flatMap(BuildkitBuilder, (buildkitBuilder) => {
+    return buildkitBuilder.selectBuildkitOsFamily(input);
+  });
+};
+
+export const mapBlueprintToBuildkitImagePlan = (input: {
+  readonly blueprint: SandboxBlueprint;
+  readonly osFamily: BuildkitTargetOsFamily;
+}) => {
+  return Effect.flatMap(BuildkitBuilder, (buildkitBuilder) => {
+    return buildkitBuilder.mapBlueprintToBuildkitImagePlan(input);
+  });
+};
+
+export const compileSandboxBuildSpec = (input: {
+  readonly blueprint: SandboxBlueprint;
+  readonly options?: BuildkitCompilerOptions;
+}) => {
+  return Effect.flatMap(BuildkitBuilder, (buildkitBuilder) => {
+    return buildkitBuilder.compileSandboxBuildSpec(input);
+  });
 };

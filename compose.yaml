@@ -62,6 +62,7 @@ services:
       REGISTRY_BASE_URL: http://zot:5000
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
       DATABASE_URL: postgresql://sealant:sealant@postgres:5432/sealant_control_plane
+      DEFAULT_DOCKER_SANDBOX_NETWORK: ${COMPOSE_PROJECT_NAME:-sealant}_default
       DEFAULT_SSH_AUTHORIZED_KEYS_FILE: /app/.secrets/authorized_keys
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
       GITHUB_APP_ID: ${GITHUB_APP_ID}
@@ -87,7 +88,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
-      - ./.env.local
+      - ./.env
     environment:
       SSH_GATEWAY_HOST: 0.0.0.0
       SSH_GATEWAY_PORT: 2222

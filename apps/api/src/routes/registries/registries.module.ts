@@ -9,11 +9,10 @@ import {
   type RegistryTagsResponse,
   type RegistryExtensionsResponse,
 } from "@sealant/api-contracts";
-import { RegistryClientHttpError } from "@sealant/sandboxes";
+import { SandboxesRegistryRequestError, SandboxesService } from "@sealant/sandboxes";
 import { Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
-import { RegistryClientService } from "../../services/control-plane-capabilities.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string => {
   return error instanceof Error ? error.message : fallback;
@@ -32,9 +31,9 @@ const ensureRegistry = (registryId: string) => {
 };
 
 const mapRegistryFailure = (error: unknown) => {
-  if (error instanceof RegistryClientHttpError) {
+  if (error instanceof SandboxesRegistryRequestError) {
     return new RegistriesBadGatewayError({
-      message: `Registry request failed with status ${error.status}.`,
+      message: `Registry request failed with status ${error.statusCode}.`,
     });
   }
 
@@ -62,14 +61,9 @@ export const getRegistry = (registryId: string) => {
 
 export const pingRegistry = (registryId: string) => {
   return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
+    const sandboxes = yield* SandboxesService;
     yield* ensureRegistry(registryId);
-    yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.ping(),
-        catch: (error) => error,
-      }),
-    );
+    yield* withRegistryFailure(sandboxes.pingRegistry());
 
     return {
       name: env.REGISTRY_NAME,
@@ -80,15 +74,10 @@ export const pingRegistry = (registryId: string) => {
 
 export const listRegistryExtensions = (registryId: string) => {
   return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
+    const sandboxes = yield* SandboxesService;
     yield* ensureRegistry(registryId);
 
-    const extensions = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.discoverExtensions(),
-        catch: (error) => error,
-      }),
-    );
+    const extensions = yield* withRegistryFailure(sandboxes.discoverRegistryExtensions());
 
     return {
       extensions,
@@ -101,13 +90,12 @@ export const listRegistryTags = (input: {
   readonly query: RegistryTagsQuery;
 }) => {
   return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
+    const sandboxes = yield* SandboxesService;
     yield* ensureRegistry(input.registryId);
 
     const tags = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.listTags(input.query.repository),
-        catch: (error) => error,
+      sandboxes.listRegistryTags({
+        repository: input.query.repository,
       }),
     );
 
@@ -123,13 +111,13 @@ export const getRegistryManifest = (input: {
   readonly query: RegistryManifestQuery;
 }) => {
   return Effect.gen(function* () {
-    const registryClient = yield* RegistryClientService;
+    const sandboxes = yield* SandboxesService;
     yield* ensureRegistry(input.registryId);
 
     const manifest = yield* withRegistryFailure(
-      Effect.tryPromise({
-        try: () => registryClient.getManifest(input.query.repository, input.query.reference),
-        catch: (error) => error,
+      sandboxes.getRegistryManifest({
+        repository: input.query.repository,
+        reference: input.query.reference,
       }),
     );
 

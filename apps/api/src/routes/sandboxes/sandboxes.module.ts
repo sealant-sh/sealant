@@ -38,6 +38,7 @@ import {
   SandboxRuntimeInstanceRepo,
 } from "@sealant/db";
 import {
+  SandboxesService,
   resolveSandboxError,
   resolveSandboxPublishedImage,
   resolveSandboxRuntime,
@@ -52,10 +53,6 @@ import { newSandboxSchema, type NewSandbox } from "@sealant/validators";
 import { Context, Effect } from "effect";
 
 import { env } from "../../runtime-env.js";
-import {
-  PackageStandardizerService,
-  SandboxBuildJobPublisherService,
-} from "../../services/control-plane-capabilities.js";
 
 interface SandboxEventDraft {
   readonly sandboxId: string;
@@ -315,7 +312,7 @@ const dedupePackageNames = (values: readonly string[]): string[] => {
 
 const standardizeRequestedPackages = (spec: NewSandbox) => {
   return Effect.gen(function* () {
-    const packageStandardizer = yield* PackageStandardizerService;
+    const sandboxesService = yield* SandboxesService;
     const requestedPackages = parseRequestedPackageIds(spec);
 
     if (requestedPackages.length === 0) {
@@ -342,17 +339,19 @@ const standardizeRequestedPackages = (spec: NewSandbox) => {
     const packageErrors: string[] = [];
 
     for (const requested of requestedPackages) {
-      const resolution = yield* Effect.tryPromise({
-        try: () =>
-          packageStandardizer.resolvePackage({
-            query: requested,
-            targetOs,
-          }),
-        catch: (error) =>
-          new SandboxInternalServerError({
-            message: toErrorMessage(error, "Package resolution failed."),
-          }),
-      });
+      const resolution = yield* sandboxesService
+        .resolvePackage({
+          query: requested,
+          targetOs,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new SandboxInternalServerError({
+                message: toErrorMessage(error, "Package resolution failed."),
+              }),
+          ),
+        );
 
       const osSupport = resolution.osSupport[targetOs];
 
@@ -1009,15 +1008,9 @@ export const createSandbox = (input: {
       });
     }
 
-    const sandboxBuildJobPublisher = yield* SandboxBuildJobPublisherService;
+    const sandboxesService = yield* SandboxesService;
 
-    yield* Effect.tryPromise({
-      try: () =>
-        sandboxBuildJobPublisher.publishRequested({
-          jobId,
-        }),
-      catch: (error) => error,
-    }).pipe(
+    yield* sandboxesService.publishSandboxBuildJobRequested({ jobId }).pipe(
       Effect.catchAll((error) =>
         Effect.gen(function* () {
           yield* Effect.all(

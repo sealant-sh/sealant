@@ -55,6 +55,7 @@ Sandbox startup and SSH behavior are spec-authoritative. Worker defaults only co
 - `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY=host-published` (`container-network` is gateway-ready)
+- `DEFAULT_DOCKER_SANDBOX_NETWORK` (optional explicit network for launched sandbox containers)
 
 For local Docker Compose usage, create `./.secrets/authorized_keys` in the repo with one or more
 public keys. When SSH is enabled the Docker runtime adapter injects that key material into the
