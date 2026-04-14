@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
+import { GitHubLogo } from "#/components/github";
+import { LinearLogo } from "#/components/linear";
+
 export const Route = createFileRoute("/" as never)({
   component: MarketingPage,
 });
@@ -17,6 +20,9 @@ export const Route = createFileRoute("/" as never)({
 const HERO_CTA_CYCLE = 5.4;
 const HERO_ICON_PULSE = 0.58;
 const HERO_WAVE_DRAW = 0.72;
+const ISSUE_WORKFLOW_CYCLE = 4.8;
+const ISSUE_WORKFLOW_PULSE = 0.48;
+const IMAGE_CREATION_CYCLE = 4.6;
 const HERO_WAVE_PATH =
   "M1 10C6.4 10 6.4 2 11.8 2C17.2 2 17.2 18 22.6 18C28 18 28 2 33.4 2C38.8 2 38.8 18 44.2 18C49.6 18 49.6 10 55 10";
 const HERO_WINDOW_X_OFFSETS = [0, 26, 52, 78] as const;
@@ -32,13 +38,13 @@ interface HeroWindowDefinition {
   readonly content: ReactNode;
 }
 
-function createLoopTimes(start: number, active: number, tail = 0.18) {
+function createLoopTimes(duration: number, start: number, active: number, tail = 0.18) {
   return [
     0,
-    start / HERO_CTA_CYCLE,
-    (start + active * 0.45) / HERO_CTA_CYCLE,
-    (start + active) / HERO_CTA_CYCLE,
-    Math.min((start + active + tail) / HERO_CTA_CYCLE, 0.98),
+    start / duration,
+    (start + active * 0.45) / duration,
+    (start + active) / duration,
+    Math.min((start + active + tail) / duration, 0.98),
     1,
   ];
 }
@@ -60,7 +66,7 @@ function AnimatedHeroIcon({ Icon, start }: { Icon: LucideIcon; start: number }) 
             duration: HERO_CTA_CYCLE,
             ease: "linear",
             repeat: Number.POSITIVE_INFINITY,
-            times: createLoopTimes(start, HERO_ICON_PULSE),
+            times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_ICON_PULSE),
           }}
         >
           <Icon className="size-full [stroke-width:1.5px]" />
@@ -85,7 +91,7 @@ function AnimatedHeroIcon({ Icon, start }: { Icon: LucideIcon; start: number }) 
             duration: HERO_CTA_CYCLE,
             ease: "linear",
             repeat: Number.POSITIVE_INFINITY,
-            times: createLoopTimes(start, HERO_ICON_PULSE),
+            times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_ICON_PULSE),
           }}
         >
           <Icon className="size-full [stroke-width:1.5px]" />
@@ -134,7 +140,7 @@ function HeroWave({ start }: { start: number }) {
               duration: HERO_CTA_CYCLE,
               ease: "linear",
               repeat: Number.POSITIVE_INFINITY,
-              times: createLoopTimes(start, HERO_WAVE_DRAW),
+              times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_WAVE_DRAW),
             }}
           />
           <motion.path
@@ -152,11 +158,203 @@ function HeroWave({ start }: { start: number }) {
               duration: HERO_CTA_CYCLE,
               ease: "linear",
               repeat: Number.POSITIVE_INFINITY,
-              times: createLoopTimes(start, HERO_WAVE_DRAW),
+              times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_WAVE_DRAW),
             }}
           />
         </motion.svg>
       )}
+    </div>
+  );
+}
+
+function IssueWorkflowLogos() {
+  return (
+    <div className="grid w-fit grid-cols-2 grid-rows-2 gap-1">
+      <div className="flex size-9 items-center justify-center lg:size-11">
+        <LinearLogo className="size-8 text-white lg:size-10" />
+      </div>
+      <div className="size-10 lg:size-12" />
+      <div className="size-10 lg:size-12" />
+      <div className="flex size-9 items-center justify-center lg:size-11">
+        <GitHubLogo className="size-8 text-white lg:size-10" />
+      </div>
+    </div>
+  );
+}
+
+function IssueWorkflowPulse() {
+  const shouldReduceMotion = useReducedMotion();
+
+  const glowFrames = [
+    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+    "drop-shadow(0 0 18px rgba(255, 255, 255, 0.9))",
+    "drop-shadow(0 0 10px rgba(255, 255, 255, 0.42))",
+    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+  ] as const;
+
+  const createPulseTransition = (start: number) => ({
+    duration: ISSUE_WORKFLOW_CYCLE,
+    ease: "linear" as const,
+    repeat: Number.POSITIVE_INFINITY,
+    times: createLoopTimes(ISSUE_WORKFLOW_CYCLE, start, ISSUE_WORKFLOW_PULSE),
+  });
+
+  return (
+    <div className="flex h-full items-center justify-center" aria-hidden="true">
+      <div className="flex items-center gap-6 text-white sm:gap-7 lg:gap-8">
+        {shouldReduceMotion ? (
+          <IssueWorkflowLogos />
+        ) : (
+          <motion.div
+            animate={{
+              opacity: [0.76, 0.76, 1, 0.84, 0.76, 0.76],
+              scale: [1, 1, 1.08, 1.03, 1, 1],
+              filter: glowFrames,
+            }}
+            transition={createPulseTransition(0.18)}
+          >
+            <IssueWorkflowLogos />
+          </motion.div>
+        )}
+
+        {shouldReduceMotion ? (
+          <ArrowRight className="h-8 w-16 text-white/72 [stroke-width:1.65px] lg:h-10 lg:w-20" />
+        ) : (
+          <motion.div
+            className="text-white/72"
+            animate={{
+              opacity: [0.48, 0.48, 1, 0.7, 0.48, 0.48],
+              scale: [1, 1, 1.12, 1.04, 1, 1],
+              x: [0, 0, 2, 1, 0, 0],
+              filter: glowFrames,
+            }}
+            transition={createPulseTransition(1.72)}
+          >
+            <ArrowRight className="h-8 w-16 [stroke-width:1.65px] lg:h-10 lg:w-20" />
+          </motion.div>
+        )}
+
+        {shouldReduceMotion ? (
+          <Hammer className="size-14 text-white [stroke-width:1.6px] lg:h-[3.125rem] lg:w-[3.125rem]" />
+        ) : (
+          <motion.div
+            className="text-white"
+            animate={{
+              opacity: [0.66, 0.66, 1, 0.8, 0.66, 0.66],
+              scale: [1, 1, 1.1, 1.03, 1, 1],
+              rotate: [0, 0, -4, -1.5, 0, 0],
+              filter: glowFrames,
+            }}
+            transition={createPulseTransition(3.18)}
+          >
+            <Hammer className="size-14 [stroke-width:1.6px] lg:h-[3.125rem] lg:w-[3.125rem]" />
+          </motion.div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ImageCreationPulse() {
+  const shouldReduceMotion = useReducedMotion();
+  const spinTimes = [0, 0.12, 0.68, 0.72, 1] as const;
+  const pulseTimes = [0, 0.72, 0.8, 0.88, 0.95, 1] as const;
+
+  return (
+    <div className="flex items-center justify-center gap-4 text-white sm:gap-5" aria-hidden="true">
+      {shouldReduceMotion ? (
+        <ArrowRight className="h-7 w-12 text-white/72 [stroke-width:1.65px] lg:h-8 lg:w-14" />
+      ) : (
+        <motion.div
+          className="text-white/72"
+          animate={{
+            opacity: [0.42, 0.42, 1, 0.7, 0.42, 0.42],
+            scale: [1, 1, 1.1, 1.03, 1, 1],
+            x: [0, 0, 2, 1, 0, 0],
+            filter: [
+              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+              "drop-shadow(0 0 14px rgba(255, 255, 255, 0.88))",
+              "drop-shadow(0 0 8px rgba(255, 255, 255, 0.36))",
+              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+            ],
+          }}
+          transition={{
+            duration: IMAGE_CREATION_CYCLE,
+            ease: "linear",
+            repeat: Number.POSITIVE_INFINITY,
+            times: createLoopTimes(IMAGE_CREATION_CYCLE, 1.18, 0.42),
+          }}
+        >
+          <ArrowRight className="h-7 w-12 [stroke-width:1.65px] lg:h-8 lg:w-14" />
+        </motion.div>
+      )}
+
+      <div className="relative flex size-24 items-center justify-center lg:size-28">
+        {shouldReduceMotion ? (
+          <ContainerIcon className="size-14 text-white [stroke-width:1.6px] lg:size-[3.75rem]" />
+        ) : (
+          <motion.div
+            className="absolute inset-0 flex items-center justify-center text-white"
+            animate={{
+              filter: [
+                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+                "blur(1.35px) drop-shadow(0 0 10px rgba(255, 255, 255, 0.2))",
+                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
+              ],
+              rotate: [0, 0, 1440, 1440, 1440],
+            }}
+            transition={{
+              duration: IMAGE_CREATION_CYCLE,
+              repeat: Number.POSITIVE_INFINITY,
+              filter: {
+                ease: ["linear", [0.42, 0, 0.58, 1], "easeOut", "linear"],
+                times: spinTimes,
+              },
+              rotate: {
+                ease: ["linear", [0.42, 0, 0.58, 1], "easeOut", "linear"],
+                times: spinTimes,
+              },
+            }}
+          >
+            <motion.div
+              className="flex items-center justify-center text-white"
+              animate={{
+                scale: [1, 1, 1.18, 1.06, 1.01, 1],
+                color: [
+                  "rgb(255, 255, 255)",
+                  "rgb(255, 255, 255)",
+                  "rgb(217, 36, 216)",
+                  "rgb(217, 36, 216)",
+                  "rgb(255, 255, 255)",
+                  "rgb(255, 255, 255)",
+                ],
+                filter: [
+                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+                  "drop-shadow(0 0 20px rgba(217, 36, 216, 0.96))",
+                  "drop-shadow(0 0 12px rgba(217, 36, 216, 0.38))",
+                  "drop-shadow(0 0 2px rgba(217, 36, 216, 0.12))",
+                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
+                ],
+              }}
+              transition={{
+                duration: IMAGE_CREATION_CYCLE,
+                ease: "linear",
+                repeat: Number.POSITIVE_INFINITY,
+                times: pulseTimes,
+              }}
+            >
+              <ContainerIcon className="size-14 [stroke-width:1.6px] lg:size-[3.75rem]" />
+            </motion.div>
+          </motion.div>
+        )}
+      </div>
     </div>
   );
 }
@@ -180,19 +378,7 @@ const heroWindows: ReadonlyArray<HeroWindowDefinition> = [
     step: "Issue Workflow",
     title: "Capture issues",
     description: "Pull issues from GitHub or Linear, and define the execution outline",
-    content: (
-      <div className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <div className="h-2.5 w-24 rounded-full bg-foreground/14" />
-            <div className="h-2.5 w-full rounded-full bg-foreground/10" />
-            <div className="h-2.5 w-4/5 rounded-full bg-foreground/10" />
-          </div>
-          <div className="rounded-[1.25rem] border border-dashed border-border/90 bg-background/70 px-4 py-5"></div>
-        </div>
-        <div className="grid gap-3 self-start"></div>
-      </div>
-    ),
+    content: <IssueWorkflowPulse />,
   },
   {
     id: "image-creation",
@@ -201,28 +387,30 @@ const heroWindows: ReadonlyArray<HeroWindowDefinition> = [
     description:
       "Drop in environment details, build inputs, and policies for your sandbox lifecycle.",
     content: (
-      <div className="grid gap-4">
-        <div className="grid gap-3 sm:grid-cols-[0.9fr_1.1fr]">
-          <div className="rounded-[1.2rem] border border-border bg-background/80 px-4 py-4">
-            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Clone repo, install dependencies
-            </p>
-            <div className="mt-4 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="h-2.5 w-20 rounded-full bg-foreground/12" />
-                <div className="h-6 w-14 rounded-full border border-border bg-background/70" />
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <div className="h-2.5 w-16 rounded-full bg-foreground/12" />
-                <div className="h-6 w-[4.5rem] rounded-full border border-border bg-background/70" />
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <div className="h-2.5 w-24 rounded-full bg-foreground/12" />
-                <div className="h-6 w-12 rounded-full border border-border bg-background/70" />
-              </div>
+      <div className="grid h-full gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="rounded-[1.2rem] border border-border bg-background/80 px-4 py-4">
+          <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">
+            Spec Definition
+          </p>
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <pre className="font-mono text-sm">
+                {JSON.stringify(
+                  {
+                    spec: {
+                      harness: "opencode",
+                      image: "arch",
+                      dependencies: ["pnpm", "nodejs", "postgresql"],
+                    },
+                  },
+                  null,
+                  4,
+                )}
+              </pre>
             </div>
           </div>
         </div>
+        <ImageCreationPulse />
       </div>
     ),
   },
