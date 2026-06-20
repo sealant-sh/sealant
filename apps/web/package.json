@@ -15,11 +15,13 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@dnd-kit/react": "^0.5.0",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/plus-jakarta-sans": "catalog:",
     "@fontsource/space-grotesk": "catalog:",
     "@sealant/auth": "workspace:*",
     "@sealant/db": "workspace:*",
+    "@sealant/issues": "workspace:*",
     "@sealant/ui": "workspace:*",
     "@sealant/validators": "workspace:*",
     "@tailwindcss/vite": "catalog:",

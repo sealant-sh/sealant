@@ -23,6 +23,11 @@ import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
 import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
+import { Route as ApiLinearStatusRouteImport } from './routes/api/linear/status'
+import { Route as ApiLinearImportRouteImport } from './routes/api/linear/import'
+import { Route as ApiLinearDisconnectRouteImport } from './routes/api/linear/disconnect'
+import { Route as ApiLinearConnectRouteImport } from './routes/api/linear/connect'
+import { Route as ApiLinearCallbackRouteImport } from './routes/api/linear/callback'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authenticated/sandboxes/new'
 import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
@@ -120,6 +125,31 @@ const AuthenticatedIssuesIndexRoute =
 const ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({
   id: '/api/trpc/$',
   path: '/api/trpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLinearStatusRoute = ApiLinearStatusRouteImport.update({
+  id: '/api/linear/status',
+  path: '/api/linear/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLinearImportRoute = ApiLinearImportRouteImport.update({
+  id: '/api/linear/import',
+  path: '/api/linear/import',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLinearDisconnectRoute = ApiLinearDisconnectRouteImport.update({
+  id: '/api/linear/disconnect',
+  path: '/api/linear/disconnect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLinearConnectRoute = ApiLinearConnectRouteImport.update({
+  id: '/api/linear/connect',
+  path: '/api/linear/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiLinearCallbackRoute = ApiLinearCallbackRouteImport.update({
+  id: '/api/linear/callback',
+  path: '/api/linear/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -287,6 +317,11 @@ export interface FileRoutesByFullPath {
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/linear/callback': typeof ApiLinearCallbackRoute
+  '/api/linear/connect': typeof ApiLinearConnectRoute
+  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
+  '/api/linear/import': typeof ApiLinearImportRoute
+  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues/': typeof AuthenticatedIssuesIndexRoute
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
@@ -326,6 +361,11 @@ export interface FileRoutesByTo {
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/linear/callback': typeof ApiLinearCallbackRoute
+  '/api/linear/connect': typeof ApiLinearConnectRoute
+  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
+  '/api/linear/import': typeof ApiLinearImportRoute
+  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/issues': typeof AuthenticatedIssuesIndexRoute
   '/profiles': typeof AuthenticatedProfilesIndexRoute
@@ -368,6 +408,11 @@ export interface FileRoutesById {
   '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/_authenticated/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/linear/callback': typeof ApiLinearCallbackRoute
+  '/api/linear/connect': typeof ApiLinearConnectRoute
+  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
+  '/api/linear/import': typeof ApiLinearImportRoute
+  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
@@ -409,6 +454,11 @@ export interface FileRouteTypes {
     | '/sandboxes/failed'
     | '/sandboxes/new'
     | '/api/auth/$'
+    | '/api/linear/callback'
+    | '/api/linear/connect'
+    | '/api/linear/disconnect'
+    | '/api/linear/import'
+    | '/api/linear/status'
     | '/api/trpc/$'
     | '/issues/'
     | '/profiles/'
@@ -448,6 +498,11 @@ export interface FileRouteTypes {
     | '/sandboxes/failed'
     | '/sandboxes/new'
     | '/api/auth/$'
+    | '/api/linear/callback'
+    | '/api/linear/connect'
+    | '/api/linear/disconnect'
+    | '/api/linear/import'
+    | '/api/linear/status'
     | '/api/trpc/$'
     | '/issues'
     | '/profiles'
@@ -489,6 +544,11 @@ export interface FileRouteTypes {
     | '/_authenticated/sandboxes/failed'
     | '/_authenticated/sandboxes/new'
     | '/api/auth/$'
+    | '/api/linear/callback'
+    | '/api/linear/connect'
+    | '/api/linear/disconnect'
+    | '/api/linear/import'
+    | '/api/linear/status'
     | '/api/trpc/$'
     | '/_authenticated/issues/'
     | '/_authenticated/profiles/'
@@ -518,6 +578,11 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiLinearCallbackRoute: typeof ApiLinearCallbackRoute
+  ApiLinearConnectRoute: typeof ApiLinearConnectRoute
+  ApiLinearDisconnectRoute: typeof ApiLinearDisconnectRoute
+  ApiLinearImportRoute: typeof ApiLinearImportRoute
+  ApiLinearStatusRoute: typeof ApiLinearStatusRoute
   ApiTrpcSplatRoute: typeof ApiTrpcSplatRoute
 }
 
@@ -619,6 +684,41 @@ declare module '@tanstack/react-router' {
       path: '/api/trpc/$'
       fullPath: '/api/trpc/$'
       preLoaderRoute: typeof ApiTrpcSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/linear/status': {
+      id: '/api/linear/status'
+      path: '/api/linear/status'
+      fullPath: '/api/linear/status'
+      preLoaderRoute: typeof ApiLinearStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/linear/import': {
+      id: '/api/linear/import'
+      path: '/api/linear/import'
+      fullPath: '/api/linear/import'
+      preLoaderRoute: typeof ApiLinearImportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/linear/disconnect': {
+      id: '/api/linear/disconnect'
+      path: '/api/linear/disconnect'
+      fullPath: '/api/linear/disconnect'
+      preLoaderRoute: typeof ApiLinearDisconnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/linear/connect': {
+      id: '/api/linear/connect'
+      path: '/api/linear/connect'
+      fullPath: '/api/linear/connect'
+      preLoaderRoute: typeof ApiLinearConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/linear/callback': {
+      id: '/api/linear/callback'
+      path: '/api/linear/callback'
+      fullPath: '/api/linear/callback'
+      preLoaderRoute: typeof ApiLinearCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -908,6 +1008,11 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiLinearCallbackRoute: ApiLinearCallbackRoute,
+  ApiLinearConnectRoute: ApiLinearConnectRoute,
+  ApiLinearDisconnectRoute: ApiLinearDisconnectRoute,
+  ApiLinearImportRoute: ApiLinearImportRoute,
+  ApiLinearStatusRoute: ApiLinearStatusRoute,
   ApiTrpcSplatRoute: ApiTrpcSplatRoute,
 }
 export const routeTree = rootRouteImport

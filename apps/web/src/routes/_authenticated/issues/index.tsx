@@ -1,32 +1,46 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { IssueRows } from "@/components/app/issue-rows";
+import { IssueWorkflowBoard } from "@/components/app/issue-workflow-board";
 import { SandboxPage } from "@/components/app/sandbox-page";
-import { ISSUES } from "@/lib/navigation/sandbox-data";
+import {
+  ISSUE_WORKFLOW_IMPORT_SUMMARIES,
+  ISSUE_WORKFLOW_RECORDS,
+  parseLinearImportSearchStatus,
+} from "@/lib/navigation/issue-workflow-data";
 
-export const Route = createFileRoute("/_authenticated/issues/" as never)({
+export const Route = createFileRoute("/_authenticated/issues/")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    linear: parseLinearImportSearchStatus(search.linear),
+  }),
   component: IssuesPage,
 });
 
 function IssuesPage() {
+  const search = Route.useSearch();
+
   return (
     <SandboxPage
       kicker="Issues"
-      title="Delegation queue"
-      description="Start here when triaging incoming issues and routing each one into the right run and profile context."
+      title="Issue workflow board"
+      description="Import GitHub and Linear issues, triage what is ready, and keep workflow state visible before sandbox launch."
       metrics={[
-        { label: "All issues", value: String(ISSUES.length) },
+        { label: "Imported issues", value: String(ISSUE_WORKFLOW_RECORDS.length) },
         {
-          label: "Assigned to me",
-          value: String(ISSUES.filter((issue) => issue.assignedToMe).length),
+          label: "Ready",
+          value: String(ISSUE_WORKFLOW_RECORDS.filter((issue) => issue.stage === "ready").length),
         },
         {
-          label: "Ready for run",
-          value: String(ISSUES.filter((issue) => issue.readyForRun).length),
+          label: "Providers",
+          value: String(ISSUE_WORKFLOW_IMPORT_SUMMARIES.length),
         },
       ]}
     >
-      <IssueRows issues={ISSUES} />
+      <IssueWorkflowBoard
+        autoImportLinear={search.linear === "connected"}
+        connectReturnTo="/issues"
+        issues={ISSUE_WORKFLOW_RECORDS}
+        imports={ISSUE_WORKFLOW_IMPORT_SUMMARIES}
+      />
     </SandboxPage>
   );
 }

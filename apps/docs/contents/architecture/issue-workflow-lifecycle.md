@@ -29,6 +29,12 @@ reporting reproducible.
 - `@sealant/db`
   - persists issue workflow entities and execution lineage
   - stores execution events, validation results, diff files, summaries, artifacts, and PR links
+- `@sealant/issues`
+  - normalizes imported GitHub and Linear issues into issue workflow records
+  - provides board ordering helpers for product surfaces
+- `apps/web`
+  - owns the current one-click Linear OAuth importer and issue workflow board interaction
+  - keeps Linear tokens server-side while returning normalized issue records to the client board
 
 ### 2) Source and auth context
 
@@ -73,6 +79,7 @@ This is the core of auditability and reproducibility for issue workflows.
 ## Related docs
 
 - `apps/docs/contents/packages/db.md`
+- `apps/docs/contents/packages/issues.md`
 - `apps/docs/contents/packages/validators.md`
 - `apps/docs/contents/packages/source-integrations.md`
 - `apps/docs/contents/packages/rabbitmq.md`

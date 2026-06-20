@@ -9,14 +9,6 @@ export interface RunRecord {
   readonly trigger: string;
 }
 
-export interface IssueRecord {
-  readonly id: string;
-  readonly title: string;
-  readonly repoId: string;
-  readonly assignedToMe: boolean;
-  readonly readyForRun: boolean;
-}
-
 export interface RepositoryRecord {
   readonly id: string;
   readonly name: string;
@@ -66,30 +58,6 @@ export const RUNS: readonly RunRecord[] = [
     status: "completed",
     startedAt: "3h ago",
     trigger: "Scheduled",
-  },
-];
-
-export const ISSUES: readonly IssueRecord[] = [
-  {
-    id: "iss-218",
-    title: "Validation mismatch on prep recipe modifiers",
-    repoId: "kitchen-api",
-    assignedToMe: true,
-    readyForRun: true,
-  },
-  {
-    id: "iss-214",
-    title: "Missing trace events in floor terminal handoff",
-    repoId: "floor-console",
-    assignedToMe: true,
-    readyForRun: false,
-  },
-  {
-    id: "iss-209",
-    title: "Repository setup drift after package refresh",
-    repoId: "inventory-sync",
-    assignedToMe: false,
-    readyForRun: true,
   },
 ];
 
