@@ -1,31 +1,44 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { IssueRows } from "@/components/app/issue-rows";
+import { IssueWorkflowBoard } from "@/components/app/issue-workflow-board";
 import { SandboxPage } from "@/components/app/sandbox-page";
-import { ISSUES } from "@/lib/navigation/sandbox-data";
+import {
+  ISSUE_WORKFLOW_IMPORT_SUMMARIES,
+  ISSUE_WORKFLOW_RECORDS,
+  parseLinearImportSearchStatus,
+} from "@/lib/navigation/issue-workflow-data";
 
-export const Route = createFileRoute("/_authenticated/issues/ready" as never)({
+export const Route = createFileRoute("/_authenticated/issues/ready")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    linear: parseLinearImportSearchStatus(search.linear),
+  }),
   component: ReadyIssuesPage,
 });
 
 function ReadyIssuesPage() {
-  const readyIssues = ISSUES.filter((issue) => issue.readyForRun);
+  const search = Route.useSearch();
+  const readyIssues = ISSUE_WORKFLOW_RECORDS.filter((issue) => issue.stage === "ready");
 
   return (
     <SandboxPage
       kicker="Issues"
-      title="Ready for run"
-      description="These issues have enough context to launch execution immediately without extra setup steps."
+      title="Ready for workflow"
+      description="These imported issues have enough source context and ownership signal to begin an issue workflow without extra setup steps."
       metrics={[
         { label: "Ready", value: String(readyIssues.length) },
         {
           label: "Assigned",
-          value: String(readyIssues.filter((issue) => issue.assignedToMe).length),
+          value: String(readyIssues.filter((issue) => issue.assigneeName !== null).length),
         },
-        { label: "Avg prep", value: "5m" },
+        { label: "Providers", value: String(ISSUE_WORKFLOW_IMPORT_SUMMARIES.length) },
       ]}
     >
-      <IssueRows issues={readyIssues} />
+      <IssueWorkflowBoard
+        autoImportLinear={search.linear === "connected"}
+        connectReturnTo="/issues/ready"
+        issues={readyIssues}
+        imports={ISSUE_WORKFLOW_IMPORT_SUMMARIES}
+      />
     </SandboxPage>
   );
 }
