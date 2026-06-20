@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sealantd → sealant-core integration plan &amp; log</title>
+<style>
+  :root { --bg:#0d1117; --fg:#c9d1d9; --mut:#8b949e; --acc:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --card:#161b22; --line:#30363d; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system,Segoe UI,Helvetica,Arial,sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  h3 { font-size:16px; margin:20px 0 6px; color:var(--acc); }
+  code, pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  code { background:#1f2630; padding:1px 5px; border-radius:5px; }
+  pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow:auto; }
+  .mut { color:var(--mut); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:10px 0; }
+  table { border-collapse:collapse; width:100%; margin:8px 0; }
+  th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:#1f2630; }
+  .pill { display:inline-block; font-size:11px; font-weight:600; padding:1px 8px; border-radius:20px; }
+  .todo { background:#21262d; color:var(--mut); } .doing { background:#3a2d05; color:var(--warn); }
+  .done { background:#0f2e16; color:var(--ok); } .next { background:#0d2436; color:var(--acc); }
+  .err { color:var(--err); } .ok { color:var(--ok); } .warn { color:var(--warn); }
+  ul { margin:6px 0 6px 0; padding-left:22px; } li { margin:3px 0; }
+  .small { font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>sealantd → sealant-core integration</h1>
+  <p class="mut">Living plan + decision log + progress. Branch <code>integrate/sealantd</code> (sealant-core) +
+  <code>integrate/sdk-fromstream</code> (sealantd). Commit as we go; <b>no pushes</b>. Last updated by the overnight run.</p>
+
+  <h2>0 · Mandate</h2>
+  <div class="card">
+    <b>Make it as realistic as possible.</b> Not a toy slice — the real Docker runtime path, real buildkit
+    pipeline, idiomatic Effect-TS wiring. Free to change anything in either repo; not constrained by package
+    boundaries. Be creative. The proof bar: a sandbox built by the real pipeline boots sealantd, and the
+    orchestrator drives it (exec + binary-safe IO + streamed telemetry) through a typed Effect service.
+  </div>
+
+  <h2>1 · Architecture (Docker; k3s is unused)</h2>
+  <p>Sandboxes run as Docker containers via <code>packages/sandboxes/src/runtime/docker-runtime-adapter.ts</code>.
+  sealantd runs <i>inside</i> the container, listening on a Unix socket. The orchestrator reaches it from outside
+  the container; tonight via <code>docker exec</code>, later via the SSH gateway (a tunnel channel).</p>
+  <pre>orchestrator (Effect)                         sandbox container (docker)
+┌───────────────────────────┐                 ┌────────────────────────────────┐
+│ SealantRuntime service     │  docker exec    │ entrypoint:                    │
+│  ├─ transport (exec/socat) │◄──────stdio────►│   sealantd --socket … --ws … & │
+│  ├─ @sealant/runtime-client│   ⇆ unix sock   │   (then user workload)         │
+│  │    SealantClient.fromStream(duplex)        │   /run/sealant/control.sock    │
+│  └─ Effect Stream&lt;Event&gt;    │                 │   baked: COPY --from ghcr …    │
+└───────────────────────────┘                 └────────────────────────────────┘</pre>
+
+  <h2>2 · Layers &amp; status</h2>
+  <table>
+    <tr><th>#</th><th>Layer</th><th>What</th><th>Where</th><th>Status</th></tr>
+    <tr><td>L1</td><td>Bake binary</td><td><code>COPY --from=ghcr.io/get-sealant/sealantd:0.1.2</code> + <code>socat</code> for the relay, gated by a flag</td><td>buildkit-builder.ts <code>renderContainerfile</code>, distro <code>packageMap</code></td><td><span class="pill doing">doing</span></td></tr>
+    <tr><td>L2</td><td>Launch</td><td>entrypoint starts sealantd behind <code>SEALANT_ENABLE_SEALANTD</code>, socket <code>/run/sealant/control.sock</code>, ws=workdir</td><td>buildkit-builder.ts <code>renderSandboxEntrypoint</code></td><td><span class="pill todo">todo</span></td></tr>
+    <tr><td>L3</td><td>Transport</td><td><code>docker exec -i &lt;c&gt; socat - UNIX-CONNECT:…</code> → Duplex. <code>-i</code> load-bearing, never <code>-t</code></td><td>new: <code>packages/sandboxes/src/sealantd/transport.ts</code></td><td><span class="pill todo">todo</span></td></tr>
+    <tr><td>L4</td><td>SDK</td><td><code>SealantClient.fromStream(duplex)</code> — generic Duplex transport</td><td>sealantd <code>packages/runtime-client/src/client.ts</code></td><td><span class="pill doing">doing</span></td></tr>
+    <tr><td>L5</td><td>Effect service</td><td><code>SealantRuntime</code>: <code>exec</code>, <code>events: Stream</code>, scoped connection; typed results</td><td>new: <code>packages/sandboxes/src/sealantd/runtime.ts</code></td><td><span class="pill todo">todo</span></td></tr>
+    <tr><td>L6</td><td>Consumer</td><td>at least one real path: an api-contracts op + route OR a worker capability that execs+streams</td><td>api-contracts + apps/api or apps/worker</td><td><span class="pill next">stretch</span></td></tr>
+    <tr><td>L7</td><td>Telemetry sink</td><td>creative: forward events to rabbitmq / persist; or just expose the stream</td><td>packages/rabbitmq / db</td><td><span class="pill next">stretch</span></td></tr>
+    <tr><td>T</td><td>Tests</td><td>SDK fromStream unit; transport bridge; a real built-image boot+exec e2e</td><td>per layer</td><td><span class="pill todo">todo</span></td></tr>
+  </table>
+
+  <h2>3 · Decisions &amp; tradeoffs</h2>
+  <ul>
+    <li><b>Docker only.</b> k3s/k8s adapters are stubs. sealantd runs in the container; no new RuntimeAdapter id needed (but L5 service is adapter-agnostic so the gateway/k8s path can slot in later).</li>
+    <li><b>GHCR image, not bundled binary.</b> <code>ghcr.io/get-sealant/sealantd:0.1.2</code> is public + multi-arch (amd64/arm64) + verified pullable. <code>COPY --from</code> = production path, no build-context plumbing. Pin 0.1.2 → 0.1.3 after that release clears. Offline fallback binary at <code>.sealantd-work/sealantd</code>.</li>
+    <li><b>docker exec transport for now.</b> The SSH gateway is an SSH relay; reaching an in-pod unix socket needs a new tunnel channel (deferred). docker exec proves the SDK path realistically and is what the worker can already do.</li>
+    <li><b>Relay must be added.</b> No base image (fedora/arch/nixos) ships socat/nc-with-unix. Add <code>socat</code> to the sealantd-enabled image's packages (fallback: bundle a static socat for nixos/distroless).</li>
+    <li><b>peer-cred.</b> sealantd validates <code>SO_PEERCRED</code> (same uid / root / allowlist). docker exec runs as a uid → must match sealantd's uid, or set <code>--allowed-peer-uids</code>, or run both as the sandbox user. Will verify + handle.</li>
+  </ul>
+
+  <h2>4 · Execution phases</h2>
+  <ol>
+    <li><span class="pill doing">P1</span> SDK <code>fromStream</code> (sealantd) + build + unit test + commit.</li>
+    <li><span class="pill todo">P2</span> buildkit L1+L2 edits + buildkit-builder tests + commit.</li>
+    <li><span class="pill todo">P3</span> Build a <b>real</b> sandbox image through the pipeline (scaffold a blueprint/build invocation). Identify the minimal real inputs.</li>
+    <li><span class="pill todo">P4</span> Transport module (L3) + boot the image, exec via SDK, assert stdout/exit/events. Resolve peer-cred/socat/ordering.</li>
+    <li><span class="pill todo">P5</span> Effect <code>SealantRuntime</code> service (L5) + unit/e2e tests + commit.</li>
+    <li><span class="pill next">P6</span> One real consumer (L6) — api-contracts op + route or worker hook — if time permits.</li>
+    <li><span class="pill next">P7</span> Telemetry sink (L7) creative stretch.</li>
+  </ol>
+
+  <h2>5 · Progress log <span class="mut small">(newest first)</span></h2>
+  <div class="card small" id="log">
+    <p><span class="mut">—</span> P1 started: added <code>import type Duplex</code> to client.ts; refactoring net.Socket→Duplex + <code>fromStream()</code>.</p>
+    <p><span class="mut">—</span> Confirmed GHCR image public/multi-arch/pullable; switched L1 to <code>COPY --from</code>.</p>
+    <p><span class="mut">—</span> Spec workflow done; arm64 static binary boots in a clean container (all features present).</p>
+    <p><span class="mut">—</span> Mapped sealant-core seams (corrected k3s→docker). Branch + binary ready.</p>
+  </div>
+
+  <h2>6 · Open questions / what I need <span class="mut small">(for the morning)</span></h2>
+  <ul>
+    <li>Which is the canonical <b>real build invocation</b> to produce a sandbox image outside the worker? (process-sandbox-build-job needs blueprint/sources/registry — I'll find the thinnest real entry; flag if it needs a registry push or creds.)</li>
+    <li>Default <b>uid</b> sandboxes run as (for the peer-cred match). I'll detect from the entrypoint/user setup; confirm if there's a fixed sandbox user.</li>
+    <li>Is enabling sealantd <b>per-sandbox</b> (a blueprint/runtime flag) or <b>always-on</b>? I'll default to a runtime env flag, off unless set.</li>
+    <li>Appetite for the <b>L6 consumer surface</b> (API route vs worker capability) — I'll pick the lowest-risk real one and note it.</li>
+  </ul>
+
+  <h2>7 · Final report</h2>
+  <div class="card mut">To be filled at end of run: what shipped, the tradeoffs, and the ordered next parts —
+  SSH-gateway tunnel, Effect-Schema api-contracts alignment, GHCR 0.1.3 bump, multi-arch (amd64) validation,
+  worker/api production wiring, telemetry persistence.</div>
+</main>
+</body>
+</html>
