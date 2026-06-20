@@ -1,4 +1,8 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { Github } from "lucide-react";
+import { type ReactNode } from "react";
+
+import { LogoBlob } from "#/components/logo";
 
 import appCss from "../styles.css?url";
 
@@ -71,149 +75,10 @@ function RootComponent() {
             </div>
             <div className="inline-flex items-center gap-2 md:hidden">
               <ThemeSwitcher compact />
-              <button
-                type="button"
-                className="inline-flex size-11 items-center justify-center border border-border bg-transparent text-foreground/80 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
-                aria-expanded={mobileMenuOpen}
-                aria-controls="marketing-mobile-nav"
-                aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
-                onClick={() => {
-                  setMobileMenuOpen((open) => !open);
-                }}
-              >
-                <span className="relative size-[1.3125rem]" aria-hidden="true">
-                  <motion.span
-                    className="absolute inset-0"
-                    initial={false}
-                    animate={{
-                      opacity: mobileMenuOpen ? 0 : 1,
-                      rotate: mobileMenuOpen ? -45 : 0,
-                      scale: mobileMenuOpen ? 0.86 : 1,
-                    }}
-                    transition={mobileMenuIconTransition}
-                  >
-                    <Menu className="size-[1.3125rem]" aria-hidden="true" />
-                  </motion.span>
-                  <motion.span
-                    className="absolute inset-0"
-                    initial={false}
-                    animate={{
-                      opacity: mobileMenuOpen ? 1 : 0,
-                      rotate: mobileMenuOpen ? 0 : 45,
-                      scale: mobileMenuOpen ? 1 : 0.86,
-                    }}
-                    transition={mobileMenuIconTransition}
-                  >
-                    <X className="size-[1.3125rem]" aria-hidden="true" />
-                  </motion.span>
-                </span>
-              </button>
             </div>
           </div>
-          <motion.div
-            className={`overflow-hidden md:hidden ${mobileMenuOpen ? "pointer-events-auto" : "pointer-events-none"}`}
-            initial={false}
-            animate={{
-              height: mobileMenuOpen ? "auto" : 0,
-              opacity: mobileMenuOpen ? 1 : 0,
-            }}
-            transition={mobileMenuTransition}
-            aria-hidden={!mobileMenuOpen}
-          >
-            <div id="marketing-mobile-nav" className="border-t border-border">
-              <div className="mx-auto grid max-w-[1320px] gap-2 px-4 py-3 sm:px-6">
-                <a
-                  href="#product"
-                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  Product
-                </a>
-                <a
-                  href="#security"
-                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  Security
-                </a>
-                <a
-                  href="#review"
-                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  Review
-                </a>
-                <a
-                  href="#sdk"
-                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  SDK
-                </a>
-                <a
-                  href="https://github.com/get-sealant/sealant"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  Docs
-                </a>
-                <a
-                  href="https://github.com/get-sealant/sealant"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex min-h-11 items-center justify-center gap-1.5 border border-primary bg-primary px-4 font-sans text-[1rem] font-semibold tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95"
-                  tabIndex={mobileMenuOpen ? 0 : -1}
-                  onClick={() => {
-                    setMobileMenuOpen(false);
-                  }}
-                >
-                  <Github className="size-[1.3125rem]" aria-hidden="true" />
-                  GitHub
-                </a>
-              </div>
-            </div>
-          </motion.div>
         </header>
         <Outlet />
-        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2">
-          <div className="flex items-center gap-1 rounded-full border border-border bg-background/90 px-2 py-1.5 backdrop-blur-sm shadow-lg">
-            <span className="px-2 font-mono text-[0.52rem] uppercase tracking-[0.14em] text-muted-foreground">
-              Design
-            </span>
-            {[
-              { href: "/", label: "V1" },
-              { href: "/v2", label: "V2" },
-              { href: "/v3", label: "V3" },
-              { href: "/v4", label: "V4" },
-              { href: "/v5", label: "V5" },
-            ].map((v) => (
-              <a
-                key={v.href}
-                href={v.href}
-                className="rounded-full px-3 py-1 font-mono text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground"
-              >
-                {v.label}
-              </a>
-            ))}
-          </div>
-        </div>
         <footer className="border-t-2 border-[var(--sw-rule)] py-4 pb-5">
           <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
             <p className="m-0 text-sm text-muted-foreground">
@@ -227,12 +92,56 @@ function RootComponent() {
             </a>
           </div>
         </footer>
-        <TanStackDevtools
-          config={{ position: "bottom-right" }}
-          plugins={[{ name: "TanStack Router", render: <TanStackRouterDevtoolsPanel /> }]}
-        />
         <Scripts />
       </body>
     </html>
+  );
+}
+
+function Brand() {
+  return (
+    <a
+      className="inline-flex items-center gap-2 font-display text-xl font-bold uppercase tracking-tight text-foreground no-underline"
+      href="/"
+      aria-label="Sealant home"
+    >
+      <LogoBlob className="size-8" aria-hidden="true" />
+      Sealant
+    </a>
+  );
+}
+
+function TopLevelNavLink({
+  href,
+  children,
+}: {
+  readonly href: string;
+  readonly children: ReactNode;
+}) {
+  const external = href.startsWith("http");
+
+  return (
+    <a
+      className="font-sans text-sm font-semibold text-foreground/70 no-underline transition-colors duration-200 hover:text-foreground"
+      href={href}
+      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+    >
+      {children}
+    </a>
+  );
+}
+
+function ThemeSwitcher({ compact = false }: { readonly compact?: boolean }) {
+  return (
+    <button
+      type="button"
+      className="inline-flex min-h-9 items-center justify-center border border-border bg-transparent px-3 font-mono text-[0.62rem] font-bold uppercase tracking-[0.12em] text-foreground/70 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
+      aria-label="Toggle color theme"
+      onClick={() => {
+        document.documentElement.classList.toggle("dark");
+      }}
+    >
+      {compact ? "Mode" : "Theme"}
+    </button>
   );
 }

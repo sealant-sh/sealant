@@ -20,7 +20,7 @@ import { type ReactNode } from "react";
 import { GitHubLogo } from "#/components/github";
 
 export const Route = createFileRoute("/" as never)({
-  component: HomePage,
+  component: MarketingPage,
 });
 
 const REPO_URL = "https://github.com/get-sealant/sealant";
