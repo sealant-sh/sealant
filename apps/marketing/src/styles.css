@@ -24,6 +24,7 @@
   --sw-muted: #767676;
   --sw-rule: #141414;
   --sw-soft-rule: #e4e4e4;
+  --sw-accent: #d92f24;
   --secondary: #f1f1f0;
   --secondary-foreground: var(--sw-ink);
   --muted: #f3f3f2;
@@ -55,6 +56,7 @@
   --sw-muted: #afaea9;
   --sw-rule: #f1f1ee;
   --sw-soft-rule: #383835;
+  --sw-accent: #d92f24;
   --secondary: #222220;
   --secondary-foreground: var(--sw-ink);
   --muted: #20201e;
@@ -77,4 +79,90 @@
   --sidebar-border: var(--sw-soft-rule);
   --sidebar-ring: #e5e5e1;
   color-scheme: dark;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--sw-accent);
+    color: #ffffff;
+  }
+
+  section[id] {
+    scroll-margin-top: 4.5rem;
+  }
+}
+
+@utility sealant-dot-grid {
+  background-image: radial-gradient(
+    circle at center,
+    color-mix(in oklab, var(--sw-ink) 14%, transparent) 1px,
+    transparent 1.4px
+  );
+  background-size: 22px 22px;
+  background-position: center;
+}
+
+@utility sealant-rule-grid {
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in oklab, var(--sw-soft-rule) 80%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--sw-soft-rule) 80%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 64px 64px;
+}
+
+@keyframes sealant-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes sealant-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sealant-rise {
+  animation: sealant-rise 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.sealant-status-running {
+  animation: sealant-status-pulse 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .sealant-rise,
+  .sealant-status-running {
+    animation: none;
+  }
 }
