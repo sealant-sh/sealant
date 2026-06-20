@@ -158,15 +158,30 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant | The open platform for tracked agent execution",
+        title: "Sealant — Secure AI coding runs, reviewable from first command to final PR",
       },
       {
         name: "description",
         content:
-          "A self-hosted platform for isolated sandboxes, tracked executions, and modular developer workflows.",
+          "The secure run layer for AI software work. Sealant runs agents inside isolated sandboxes and turns every run into a reviewable record — from issue intake to pull request.",
       },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      {
+        rel: "preconnect",
+        href: "https://fonts.googleapis.com",
+      },
+      {
+        rel: "preconnect",
+        href: "https://fonts.gstatic.com",
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Sans:wght@400;500;700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,900;1,9..144,400&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
+      },
+    ],
   }),
   component: RootComponent,
 });
@@ -192,12 +207,17 @@ function RootComponent() {
       </head>
       <body className="marketing-body" id="top">
         <header className="sticky top-0 z-40 border-b border-border bg-background text-foreground">
-          <div className="mx-auto flex min-h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 md:gap-4 md:px-8">
+          <div className="mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 sm:px-6 md:gap-4 md:px-8">
             <div className="flex items-center gap-8 lg:gap-10">
               <Brand />
               <nav className="mt-0.5 hidden items-center gap-6 md:flex" aria-label="Primary">
-                <TopLevelNavLink href="/">Blog</TopLevelNavLink>
-                <TopLevelNavLink href="/">Docs</TopLevelNavLink>
+                <TopLevelNavLink href="#product">Product</TopLevelNavLink>
+                <TopLevelNavLink href="#security">Security</TopLevelNavLink>
+                <TopLevelNavLink href="#review">Review</TopLevelNavLink>
+                <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
+                <TopLevelNavLink href="https://github.com/get-sealant/sealant">
+                  Docs
+                </TopLevelNavLink>
               </nav>
             </div>
             <div className="hidden items-center gap-2.5 md:inline-flex">
@@ -264,19 +284,51 @@ function RootComponent() {
             aria-hidden={!mobileMenuOpen}
           >
             <div id="marketing-mobile-nav" className="border-t border-border">
-              <div className="mx-auto grid max-w-7xl gap-2 px-4 py-3 sm:px-6">
+              <div className="mx-auto grid max-w-[1320px] gap-2 px-4 py-3 sm:px-6">
                 <a
-                  href="/"
+                  href="#product"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
                   tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
                     setMobileMenuOpen(false);
                   }}
                 >
-                  Blog
+                  Product
                 </a>
                 <a
-                  href="/"
+                  href="#security"
+                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                  }}
+                >
+                  Security
+                </a>
+                <a
+                  href="#review"
+                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                  }}
+                >
+                  Review
+                </a>
+                <a
+                  href="#sdk"
+                  className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
+                  tabIndex={mobileMenuOpen ? 0 : -1}
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                  }}
+                >
+                  SDK
+                </a>
+                <a
+                  href="https://github.com/get-sealant/sealant"
+                  target="_blank"
+                  rel="noreferrer"
                   className="inline-flex min-h-11 items-center border border-transparent px-1 font-sans text-base font-semibold text-foreground/90 no-underline transition-colors duration-200 hover:text-foreground"
                   tabIndex={mobileMenuOpen ? 0 : -1}
                   onClick={() => {
@@ -303,11 +355,35 @@ function RootComponent() {
           </motion.div>
         </header>
         <Outlet />
-        <footer className="border-t-2 border-ring py-4 pb-5">
-          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
-            <p>The open platform for isolated, tracked software work.</p>
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2">
+          <div className="flex items-center gap-1 rounded-full border border-border bg-background/90 px-2 py-1.5 backdrop-blur-sm shadow-lg">
+            <span className="px-2 font-mono text-[0.52rem] uppercase tracking-[0.14em] text-muted-foreground">
+              Design
+            </span>
+            {[
+              { href: "/", label: "V1" },
+              { href: "/v2", label: "V2" },
+              { href: "/v3", label: "V3" },
+              { href: "/v4", label: "V4" },
+              { href: "/v5", label: "V5" },
+            ].map((v) => (
+              <a
+                key={v.href}
+                href={v.href}
+                className="rounded-full px-3 py-1 font-mono text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {v.label}
+              </a>
+            ))}
+          </div>
+        </div>
+        <footer className="border-t-2 border-[var(--sw-rule)] py-4 pb-5">
+          <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
+            <p className="m-0 text-sm text-muted-foreground">
+              The secure run layer for AI software work.
+            </p>
             <a
-              className="m-0 text-[0.78rem] text-muted-foreground no-underline hover:text-foreground"
+              className="m-0 font-mono text-[0.72rem] uppercase tracking-[0.16em] text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
               href="#top"
             >
               Back to top

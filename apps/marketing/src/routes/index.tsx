@@ -1,712 +1,931 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion } from "framer-motion";
 import {
-  ArrowLeft,
+  AlertTriangle,
   ArrowRight,
-  ClipboardClock,
-  Container as ContainerIcon,
-  Hammer,
-  type LucideIcon,
+  ArrowUpRight,
+  Check,
+  Code2,
+  Eye,
+  GitPullRequest,
+  Key,
+  Layers,
+  Lock,
+  Network,
+  Shield,
+  Terminal,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode } from "react";
 
 import { GitHubLogo } from "#/components/github";
-import { LinearLogo } from "#/components/linear";
 
 export const Route = createFileRoute("/" as never)({
   component: MarketingPage,
 });
 
-const HERO_CTA_CYCLE = 5.4;
-const HERO_ICON_PULSE = 0.58;
-const HERO_WAVE_DRAW = 0.72;
-const ISSUE_WORKFLOW_CYCLE = 4.8;
-const ISSUE_WORKFLOW_PULSE = 0.48;
-const IMAGE_CREATION_CYCLE = 4.6;
-const HERO_WAVE_PATH =
-  "M1 10C6.4 10 6.4 2 11.8 2C17.2 2 17.2 18 22.6 18C28 18 28 2 33.4 2C38.8 2 38.8 18 44.2 18C49.6 18 49.6 10 55 10";
-const HERO_WINDOW_X_OFFSETS = [0, 26, 52, 78] as const;
-const HERO_WINDOW_Y_OFFSETS = [0, 18, 36, 54] as const;
-const HERO_WINDOW_SCALES = [1, 0.974, 0.948, 0.922] as const;
-const HERO_WINDOW_OPACITIES = [1, 0.9, 0.76, 0.58] as const;
+const REPO_URL = "https://github.com/get-sealant/sealant";
 
-interface HeroWindowDefinition {
-  readonly id: string;
-  readonly step: string;
-  readonly title: string;
-  readonly description: string;
-  readonly content: ReactNode;
-}
+function Reveal({
+  children,
+  className,
+  delay = 0,
+}: {
+  children: ReactNode;
+  className?: string;
+  delay?: number;
+}) {
+  const reduceMotion = useReducedMotion();
 
-function createLoopTimes(duration: number, start: number, active: number, tail = 0.18) {
-  return [
-    0,
-    start / duration,
-    (start + active * 0.45) / duration,
-    (start + active) / duration,
-    Math.min((start + active + tail) / duration, 0.98),
-    1,
-  ];
-}
-
-function AnimatedHeroIcon({ Icon, start }: { Icon: LucideIcon; start: number }) {
-  const shouldReduceMotion = useReducedMotion();
+  if (reduceMotion) {
+    return <div className={className}>{children}</div>;
+  }
 
   return (
-    <div className="relative size-12 shrink-0 sm:size-14 lg:size-16" aria-hidden="true">
-      {shouldReduceMotion ? (
-        <Icon className="absolute inset-0 size-full text-foreground [stroke-width:1.5px]" />
-      ) : (
-        <motion.div
-          className="absolute inset-0 text-foreground"
-          animate={{
-            opacity: [1, 1, 0, 0.18, 1, 1],
-          }}
-          transition={{
-            duration: HERO_CTA_CYCLE,
-            ease: "linear",
-            repeat: Number.POSITIVE_INFINITY,
-            times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_ICON_PULSE),
-          }}
-        >
-          <Icon className="size-full [stroke-width:1.5px]" />
-        </motion.div>
-      )}
-      {shouldReduceMotion ? null : (
-        <motion.div
-          className="absolute inset-0 text-primary"
-          animate={{
-            opacity: [0, 0, 1, 0.34, 0, 0],
-            scale: [1, 1, 1.08, 1.02, 1, 1],
-            filter: [
-              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-              "drop-shadow(0 0 18px rgba(217, 36, 216, 0.95))",
-              "drop-shadow(0 0 10px rgba(217, 36, 216, 0.35))",
-              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-              "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-            ],
-          }}
-          transition={{
-            duration: HERO_CTA_CYCLE,
-            ease: "linear",
-            repeat: Number.POSITIVE_INFINITY,
-            times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_ICON_PULSE),
-          }}
-        >
-          <Icon className="size-full [stroke-width:1.5px]" />
-        </motion.div>
-      )}
-    </div>
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: 18 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-72px" }}
+      transition={{ duration: 0.52, ease: "easeOut", delay }}
+    >
+      {children}
+    </motion.div>
   );
 }
 
-function HeroWave({ start }: { start: number }) {
-  const shouldReduceMotion = useReducedMotion();
+function PrimaryLink({
+  href,
+  children,
+  external = false,
+}: {
+  href: string;
+  children: ReactNode;
+  external?: boolean;
+}) {
+  return (
+    <a
+      className="inline-flex min-h-11 items-center justify-center gap-2 bg-[var(--sw-accent)] px-5 text-sm font-bold uppercase tracking-[0.08em] text-white no-underline transition duration-200 hover:-translate-y-px hover:brightness-95 md:min-h-10"
+      href={href}
+      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+    >
+      {children}
+    </a>
+  );
+}
 
+function OutlineLink({
+  href,
+  children,
+  external = false,
+}: {
+  href: string;
+  children: ReactNode;
+  external?: boolean;
+}) {
+  return (
+    <a
+      className="inline-flex min-h-11 items-center justify-center gap-2 border border-[var(--sw-rule)] bg-transparent px-5 text-sm font-bold uppercase tracking-[0.08em] text-foreground no-underline transition duration-200 hover:bg-foreground hover:text-background md:min-h-10"
+      href={href}
+      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+    >
+      {children}
+    </a>
+  );
+}
+
+function Kicker({ children }: { children: ReactNode }) {
+  return (
+    <p className="m-0 font-mono text-[0.72rem] uppercase tracking-[0.22em] text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function SectionRail() {
+  return (
+    <span className="absolute inset-x-0 top-0 h-[3px] bg-[var(--sw-accent)]" aria-hidden="true" />
+  );
+}
+
+function Panel({
+  label,
+  children,
+  tone = "panel",
+}: {
+  label: string;
+  children: ReactNode;
+  tone?: "panel" | "bg";
+}) {
   return (
     <div
-      className="relative h-6 w-12 shrink-0 text-foreground/55 sm:h-8 sm:w-16 lg:h-10 lg:w-20"
-      aria-hidden="true"
+      className={`relative border border-[var(--sw-soft-rule)] ${tone === "panel" ? "bg-[var(--sw-panel)]" : "bg-[var(--sw-bg)]"}`}
     >
-      <svg viewBox="0 0 56 20" className="absolute inset-0 size-full">
-        <path
-          d={HERO_WAVE_PATH}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-      {shouldReduceMotion ? null : (
-        <motion.svg
-          viewBox="0 0 56 20"
-          className="absolute inset-0 size-full overflow-visible text-primary"
-        >
-          <motion.path
-            d={HERO_WAVE_PATH}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="blur-[4px]"
-            animate={{
-              pathLength: [0, 0, 1, 1, 1, 1],
-              opacity: [0, 0, 0.6, 0.2, 0, 0],
-            }}
-            transition={{
-              duration: HERO_CTA_CYCLE,
-              ease: "linear",
-              repeat: Number.POSITIVE_INFINITY,
-              times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_WAVE_DRAW),
-            }}
-          />
-          <motion.path
-            d={HERO_WAVE_PATH}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            animate={{
-              pathLength: [0, 0, 1, 1, 1, 1],
-              opacity: [0, 0, 1, 0.35, 0, 0],
-            }}
-            transition={{
-              duration: HERO_CTA_CYCLE,
-              ease: "linear",
-              repeat: Number.POSITIVE_INFINITY,
-              times: createLoopTimes(HERO_CTA_CYCLE, start, HERO_WAVE_DRAW),
-            }}
-          />
-        </motion.svg>
-      )}
+      <SectionRail />
+      <div className="border-b border-[var(--sw-soft-rule)] px-4 py-2.5">
+        <p className="m-0 font-mono text-[0.6rem] uppercase tracking-[0.18em] text-muted-foreground">
+          {label}
+        </p>
+      </div>
+      <div className="p-4">{children}</div>
     </div>
   );
 }
 
-function IssueWorkflowLogos() {
+function FlowArrow() {
   return (
-    <div className="grid w-fit grid-cols-2 grid-rows-2 gap-1">
-      <div className="flex size-9 items-center justify-center lg:size-11">
-        <LinearLogo className="size-8 text-white lg:size-10" />
-      </div>
-      <div className="size-10 lg:size-12" />
-      <div className="size-10 lg:size-12" />
-      <div className="flex size-9 items-center justify-center lg:size-11">
-        <GitHubLogo className="size-8 text-white lg:size-10" />
-      </div>
+    <div className="flex items-center justify-center py-2 lg:py-0" aria-hidden="true">
+      <ArrowRight className="size-5 rotate-90 text-[var(--sw-accent)] lg:rotate-0" />
     </div>
   );
 }
 
-function IssueWorkflowPulse() {
-  const shouldReduceMotion = useReducedMotion();
-
-  const glowFrames = [
-    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-    "drop-shadow(0 0 18px rgba(255, 255, 255, 0.9))",
-    "drop-shadow(0 0 10px rgba(255, 255, 255, 0.42))",
-    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-    "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-  ] as const;
-
-  const createPulseTransition = (start: number) => ({
-    duration: ISSUE_WORKFLOW_CYCLE,
-    ease: "linear" as const,
-    repeat: Number.POSITIVE_INFINITY,
-    times: createLoopTimes(ISSUE_WORKFLOW_CYCLE, start, ISSUE_WORKFLOW_PULSE),
-  });
-
+function HeroSplitStory() {
   return (
-    <div className="flex h-full items-center justify-center" aria-hidden="true">
-      <div className="flex items-center gap-6 text-white sm:gap-7 lg:gap-8">
-        {shouldReduceMotion ? (
-          <IssueWorkflowLogos />
-        ) : (
-          <motion.div
-            animate={{
-              opacity: [0.76, 0.76, 1, 0.84, 0.76, 0.76],
-              scale: [1, 1, 1.08, 1.03, 1, 1],
-              filter: glowFrames,
-            }}
-            transition={createPulseTransition(0.18)}
-          >
-            <IssueWorkflowLogos />
-          </motion.div>
-        )}
-
-        {shouldReduceMotion ? (
-          <ArrowRight className="h-8 w-16 text-white/72 [stroke-width:1.65px] lg:h-10 lg:w-20" />
-        ) : (
-          <motion.div
-            className="text-white/72"
-            animate={{
-              opacity: [0.48, 0.48, 1, 0.7, 0.48, 0.48],
-              scale: [1, 1, 1.12, 1.04, 1, 1],
-              x: [0, 0, 2, 1, 0, 0],
-              filter: glowFrames,
-            }}
-            transition={createPulseTransition(1.72)}
-          >
-            <ArrowRight className="h-8 w-16 [stroke-width:1.65px] lg:h-10 lg:w-20" />
-          </motion.div>
-        )}
-
-        {shouldReduceMotion ? (
-          <Hammer className="size-14 text-white [stroke-width:1.6px] lg:h-[3.125rem] lg:w-[3.125rem]" />
-        ) : (
-          <motion.div
-            className="text-white"
-            animate={{
-              opacity: [0.66, 0.66, 1, 0.8, 0.66, 0.66],
-              scale: [1, 1, 1.1, 1.03, 1, 1],
-              rotate: [0, 0, -4, -1.5, 0, 0],
-              filter: glowFrames,
-            }}
-            transition={createPulseTransition(3.18)}
-          >
-            <Hammer className="size-14 [stroke-width:1.6px] lg:h-[3.125rem] lg:w-[3.125rem]" />
-          </motion.div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ImageCreationPulse() {
-  const shouldReduceMotion = useReducedMotion();
-  const spinTimes = [0, 0.12, 0.68, 0.72, 1] as const;
-  const pulseTimes = [0, 0.72, 0.8, 0.88, 0.95, 1] as const;
-
-  return (
-    <div className="flex items-center justify-center gap-4 text-white sm:gap-5" aria-hidden="true">
-      {shouldReduceMotion ? (
-        <ArrowRight className="h-7 w-12 text-white/72 [stroke-width:1.65px] lg:h-8 lg:w-14" />
-      ) : (
-        <motion.div
-          className="text-white/72"
-          animate={{
-            opacity: [0.42, 0.42, 1, 0.7, 0.42, 0.42],
-            scale: [1, 1, 1.1, 1.03, 1, 1],
-            x: [0, 0, 2, 1, 0, 0],
-            filter: [
-              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-              "drop-shadow(0 0 14px rgba(255, 255, 255, 0.88))",
-              "drop-shadow(0 0 8px rgba(255, 255, 255, 0.36))",
-              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-              "drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-            ],
-          }}
-          transition={{
-            duration: IMAGE_CREATION_CYCLE,
-            ease: "linear",
-            repeat: Number.POSITIVE_INFINITY,
-            times: createLoopTimes(IMAGE_CREATION_CYCLE, 1.18, 0.42),
-          }}
-        >
-          <ArrowRight className="h-7 w-12 [stroke-width:1.65px] lg:h-8 lg:w-14" />
-        </motion.div>
-      )}
-
-      <div className="relative flex size-24 items-center justify-center lg:size-28">
-        {shouldReduceMotion ? (
-          <ContainerIcon className="size-14 text-white [stroke-width:1.6px] lg:size-[3.75rem]" />
-        ) : (
-          <motion.div
-            className="absolute inset-0 flex items-center justify-center text-white"
-            animate={{
-              filter: [
-                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-                "blur(1.35px) drop-shadow(0 0 10px rgba(255, 255, 255, 0.2))",
-                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-                "blur(0px) drop-shadow(0 0 0 rgba(255, 255, 255, 0))",
-              ],
-              rotate: [0, 0, 1440, 1440, 1440],
-            }}
-            transition={{
-              duration: IMAGE_CREATION_CYCLE,
-              repeat: Number.POSITIVE_INFINITY,
-              filter: {
-                ease: ["linear", [0.42, 0, 0.58, 1], "easeOut", "linear"],
-                times: spinTimes,
-              },
-              rotate: {
-                ease: ["linear", [0.42, 0, 0.58, 1], "easeOut", "linear"],
-                times: spinTimes,
-              },
-            }}
-          >
-            <motion.div
-              className="flex items-center justify-center text-white"
-              animate={{
-                scale: [1, 1, 1.18, 1.06, 1.01, 1],
-                color: [
-                  "rgb(255, 255, 255)",
-                  "rgb(255, 255, 255)",
-                  "rgb(217, 36, 216)",
-                  "rgb(217, 36, 216)",
-                  "rgb(255, 255, 255)",
-                  "rgb(255, 255, 255)",
-                ],
-                filter: [
-                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-                  "drop-shadow(0 0 20px rgba(217, 36, 216, 0.96))",
-                  "drop-shadow(0 0 12px rgba(217, 36, 216, 0.38))",
-                  "drop-shadow(0 0 2px rgba(217, 36, 216, 0.12))",
-                  "drop-shadow(0 0 0 rgba(217, 36, 216, 0))",
-                ],
-              }}
-              transition={{
-                duration: IMAGE_CREATION_CYCLE,
-                ease: "linear",
-                repeat: Number.POSITIVE_INFINITY,
-                times: pulseTimes,
-              }}
-            >
-              <ContainerIcon className="size-14 [stroke-width:1.6px] lg:size-[3.75rem]" />
-            </motion.div>
-          </motion.div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AnimatedHeroCta() {
-  return (
-    <div className="mx-auto mt-8 flex w-full items-center justify-center gap-2 text-foreground sm:mt-10 sm:gap-4 lg:mx-0 lg:mt-6 lg:justify-start lg:gap-5">
-      <AnimatedHeroIcon Icon={Hammer} start={0.2} />
-      <HeroWave start={0.88} />
-      <AnimatedHeroIcon Icon={ContainerIcon} start={1.72} />
-      <HeroWave start={2.42} />
-      <AnimatedHeroIcon Icon={ClipboardClock} start={3.28} />
-    </div>
-  );
-}
-
-// Replace the placeholder copy and blocks below with your product-specific diagrams and messaging.
-const heroWindows: ReadonlyArray<HeroWindowDefinition> = [
-  {
-    id: "issue-brief",
-    step: "Issue Workflow",
-    title: "Capture issues",
-    description: "Pull issues from GitHub or Linear, and define the execution outline",
-    content: <IssueWorkflowPulse />,
-  },
-  {
-    id: "image-creation",
-    step: "Image Creation",
-    title: "Define your image",
-    description:
-      "Drop in environment details, build inputs, and policies for your sandbox lifecycle.",
-    content: (
-      <div className="grid h-full gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-        <div className="rounded-[1.2rem] border border-border bg-background/80 px-4 py-4">
-          <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">
-            Spec Definition
-          </p>
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <pre className="font-mono text-sm">
-                {JSON.stringify(
-                  {
-                    spec: {
-                      harness: "opencode",
-                      image: "arch",
-                      dependencies: ["pnpm", "nodejs", "postgresql"],
-                    },
-                  },
-                  null,
-                  4,
-                )}
-              </pre>
-            </div>
+    <div className="sealant-rise lg:pl-4" style={{ animationDelay: "120ms" }}>
+      <div className="grid gap-3 lg:grid-cols-[1fr_auto_1fr_auto_1fr] lg:items-stretch">
+        <Panel label="Issue">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground">
+              acme/billing
+            </span>
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-[var(--sw-accent)]">
+              #482
+            </span>
           </div>
-        </div>
-        <ImageCreationPulse />
-      </div>
-    ),
-  },
-  {
-    id: "review-diff",
-    step: "Agent work",
-    title: "Execute your changes",
-    description: "Use your preferred harness, and make desired changes",
-    content: (
-      <div className="grid gap-4 lg:grid-cols-[1fr_0.92fr]">
-        <div className="space-y-3">
-          <div className="rounded-[1rem] border border-border bg-background/80 px-4 py-4">
-            <div className="h-2.5 w-20 rounded-full bg-foreground/12" />
-            <div className="mt-3 space-y-2">
-              <div className="h-2.5 w-full rounded-full bg-foreground/10" />
-              <div className="h-2.5 w-11/12 rounded-full bg-foreground/10" />
-              <div className="h-2.5 w-3/4 rounded-full bg-foreground/10" />
-            </div>
-          </div>
-          <div className="rounded-[1rem] border border-border bg-background/80 px-4 py-4">
-            <div className="grid grid-cols-3 gap-2">
-              <div className="h-10 rounded-[0.85rem] border border-border bg-background/70" />
-              <div className="h-10 rounded-[0.85rem] border border-border bg-background/70" />
-              <div className="h-10 rounded-[0.85rem] border border-border bg-background/70" />
-            </div>
-          </div>
-        </div>
-      </div>
-    ),
-  },
-  {
-    id: "execution-output",
-    step: "Output",
-    title: "View Execution Summary, Open PR",
-    description: "View execution metrics, outcome summaries, or a polished trace snapshot.",
-    content: (
-      <div className="grid gap-4">
-        <div className="grid gap-3 sm:grid-cols-[0.86fr_1.14fr]">
-          <div className="grid gap-3">
-            <div className="rounded-[1rem] border border-border bg-background/80 px-4 py-4">
-              <div className="h-2.5 w-[4.5rem] rounded-full bg-foreground/12" />
-              <div className="mt-4 grid gap-2">
-                <div className="h-10 rounded-[0.85rem] border border-border bg-background/70" />
-                <div className="h-10 rounded-[0.85rem] border border-border bg-background/70" />
-              </div>
-            </div>
-            <div className="rounded-[1rem] border border-border bg-background/80 px-4 py-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <div className="h-2.5 w-12 rounded-full bg-foreground/12" />
-                  <div className="mt-3 h-8 rounded-[0.85rem] border border-border bg-background/70" />
-                </div>
-                <div>
-                  <div className="h-2.5 w-16 rounded-full bg-foreground/12" />
-                  <div className="mt-3 h-8 rounded-[0.85rem] border border-border bg-background/70" />
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-[1.2rem] border border-dashed border-border/90 bg-background/70 px-4 py-4">
-            <p className="font-mono text-[0.62rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Metrics
+          <p className="m-0 mt-2 text-[0.88rem] leading-6 text-foreground">Fix billing retry bug</p>
+          <div className="mt-3 border-t border-[var(--sw-soft-rule)] pt-3">
+            <p className="m-0 font-mono text-[0.58rem] uppercase tracking-[0.14em] text-muted-foreground">
+              Assigned to
             </p>
-            <div className="mt-4 grid gap-3">
-              <div className="h-28 rounded-[1rem] border border-border bg-background/75" />
-              <div className="grid grid-cols-3 gap-3">
-                <div className="h-10 rounded-[0.85rem] border border-border bg-background/75" />
-                <div className="h-10 rounded-[0.85rem] border border-border bg-background/75" />
-                <div className="h-10 rounded-[0.85rem] border border-border bg-background/75" />
+            <p className="m-0 mt-1 font-mono text-[0.72rem] text-foreground/85">Codex</p>
+          </div>
+        </Panel>
+
+        <FlowArrow />
+
+        <Panel label="Sandbox">
+          <div className="flex items-center gap-1.5">
+            <span
+              className="sealant-status-running size-2 rounded-full bg-[var(--sw-accent)]"
+              aria-hidden="true"
+            />
+            <span className="font-mono text-[0.58rem] uppercase tracking-[0.14em] text-[var(--sw-accent)]">
+              Isolated runtime
+            </span>
+          </div>
+          <div className="mt-3 space-y-1.5 font-mono text-[0.66rem] leading-5 text-foreground/75">
+            <p className="m-0">
+              <span className="text-muted-foreground">$</span> pnpm install
+            </p>
+            <p className="m-0">
+              <span className="text-muted-foreground">$</span> pnpm test
+            </p>
+            <p className="m-0">
+              <span className="text-muted-foreground">$</span> pnpm typecheck
+            </p>
+          </div>
+          <div className="mt-3 border-t border-[var(--sw-soft-rule)] pt-2">
+            <p className="m-0 font-mono text-[0.56rem] uppercase tracking-[0.12em] text-muted-foreground">
+              Recorder active
+            </p>
+          </div>
+        </Panel>
+
+        <FlowArrow />
+
+        <Panel label="Pull request + Run record">
+          <p className="m-0 font-mono text-[0.66rem] text-foreground">
+            fix: retry handling for failed invoices
+          </p>
+          <div className="mt-3 grid gap-1.5">
+            {[
+              { k: "Commands run", v: "14" },
+              { k: "Files changed", v: "3" },
+              { k: "Tests passed", v: "11 / 12" },
+              { k: "Network", v: "restricted" },
+              { k: "Secrets", v: "scoped" },
+              { k: "Validation", v: "complete" },
+            ].map((row) => (
+              <div key={row.k} className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[0.58rem] uppercase tracking-[0.1em] text-muted-foreground">
+                  {row.k}
+                </span>
+                <span className="font-mono text-[0.62rem] text-foreground/88">{row.v}</span>
               </div>
-            </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function Hero() {
+  return (
+    <section className="relative overflow-hidden border-b-2 border-[var(--sw-rule)] bg-[var(--sw-bg)]">
+      <div
+        className="sealant-dot-grid pointer-events-none absolute inset-0 opacity-60 [mask-image:radial-gradient(ellipse_at_28%_24%,black,transparent_72%)]"
+        aria-hidden="true"
+      />
+      <div className="relative mx-auto grid max-w-[1320px] gap-12 px-6 py-16 sm:px-8 lg:min-h-[calc(100svh-4rem)] lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-12 lg:py-20">
+        <div className="sealant-rise">
+          <Kicker>The secure run layer for AI software work</Kicker>
+          <h1 className="m-0 mt-5 font-display text-[2.75rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4rem]">
+            <span className="block">Secure AI coding runs.</span>
+            <span className="block">
+              Reviewable from <span className="text-[var(--sw-accent)]">first command</span>
+            </span>
+            <span className="block">to final PR.</span>
+          </h1>
+          <p className="mt-6 max-w-[50ch] text-[1.05rem] leading-7 text-foreground/82">
+            Sealant runs repositories, issues, and agent tasks inside isolated sandboxes, records
+            what happened inside the runtime, and turns every run into a fast, trustworthy review.
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <PrimaryLink href={REPO_URL} external>
+              Run an issue
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </PrimaryLink>
+            <OutlineLink href="#review">
+              View the execution record
+              <ArrowRight className="size-4" aria-hidden="true" />
+            </OutlineLink>
           </div>
         </div>
+
+        <HeroSplitStory />
       </div>
-    ),
+    </section>
+  );
+}
+
+const painPoints: ReadonlyArray<{ readonly title: string; readonly body: string }> = [
+  {
+    title: "Agents need secure, disposable environments",
+    body: "Running an agent on a laptop gives it your files, your secrets, and your network. Runs need a controlled place they can be torn down after.",
+  },
+  {
+    title: "Runs must be reproducible",
+    body: "A diff without its environment is a guess. Reviewers need to know the exact repo ref, tooling, and policy a run used.",
+  },
+  {
+    title: "PRs need evidence, not just summaries",
+    body: "A reviewer gets a diff and a summary, but not the execution trail: what commands ran, what changed, what failed, what access the agent had.",
+  },
+  {
+    title: "Work should start from anywhere",
+    body: "Issues arrive in GitHub, Linear, Slack, or your phone. Waiting to be at a laptop to kick off a run slows the whole loop.",
   },
 ];
 
-function wrapIndex(value: number, length: number) {
-  return (value + length) % length;
-}
-
-function StackedHeroWindows() {
-  const shouldReduceMotion = useReducedMotion();
-  const [activeIndex, setActiveIndex] = useState(0);
-  const total = heroWindows.length;
-
-  const cycleWindows = (delta: 1 | -1) => {
-    setActiveIndex((current) => wrapIndex(current + delta, total));
-  };
-
-  const windowTransition = shouldReduceMotion
-    ? { duration: 0 }
-    : { duration: 0.42, ease: [0.22, 1, 0.36, 1] as const };
-
+function Problem() {
   return (
-    <div className="mx-auto w-full max-w-[42rem] lg:mx-0 lg:max-w-[46rem]">
-      <div className="mb-5 flex items-end justify-between gap-4">
-        <div></div>
-        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-background/75 p-1.5">
-          <span className="px-2 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-muted-foreground">
-            {String(activeIndex + 1).padStart(2, "0")}/{String(total).padStart(2, "0")}
-          </span>
-          <button
-            type="button"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-border bg-background text-foreground transition-colors duration-200 hover:bg-accent/45"
-            aria-label="Show previous window"
-            onClick={() => {
-              cycleWindows(-1);
-            }}
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="inline-flex size-10 items-center justify-center rounded-full border border-border bg-background text-foreground transition-colors duration-200 hover:bg-accent/45"
-            aria-label="Show next window"
-            onClick={() => {
-              cycleWindows(1);
-            }}
-          >
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </button>
+    <section
+      id="problem"
+      className="relative border-b-2 border-[var(--sw-rule)] bg-[var(--sw-panel)]"
+    >
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <Reveal className="max-w-[64ch]">
+          <Kicker>The problem</Kicker>
+          <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+            AI can write code. Teams still need to trust the work.
+          </h2>
+          <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+            AI coding agents are powerful, but their work is often invisible. A reviewer gets a diff
+            and a summary, but not the actual execution trail: what environment it ran in, what
+            commands executed, what changed, what failed, what passed, and what access the agent
+            had.
+          </p>
+        </Reveal>
+        <div className="mt-10 grid gap-px border border-[var(--sw-soft-rule)] bg-[var(--sw-soft-rule)] md:grid-cols-2">
+          {painPoints.map((point, index) => (
+            <Reveal
+              key={point.title}
+              delay={(index % 2) * 0.05}
+              className="bg-[var(--sw-panel)] p-6 lg:p-8"
+            >
+              <span className="font-display text-[2.25rem] leading-none text-[var(--sw-accent)]">
+                {`0${index + 1}`}
+              </span>
+              <h3 className="m-0 mt-3 font-mono text-[0.8rem] uppercase tracking-[0.12em] text-foreground">
+                {point.title}
+              </h3>
+              <p className="mt-3 text-[0.92rem] leading-6 text-foreground/75">{point.body}</p>
+            </Reveal>
+          ))}
         </div>
       </div>
+    </section>
+  );
+}
 
-      <div className="relative min-h-[27rem] pb-16 pr-10 sm:min-h-[29rem] sm:pb-20 sm:pr-16 lg:min-h-[31rem] lg:pb-24 lg:pr-20">
-        {heroWindows.map((window, index) => {
-          const depth = wrapIndex(index - activeIndex, total);
-          const isActive = depth === 0;
-          const x = HERO_WINDOW_X_OFFSETS[depth] ?? 0;
-          const y = HERO_WINDOW_Y_OFFSETS[depth] ?? 0;
-          const scale = HERO_WINDOW_SCALES[depth] ?? 1;
-          const opacity = HERO_WINDOW_OPACITIES[depth] ?? 1;
+const pipelineStages: ReadonlyArray<{
+  readonly step: string;
+  readonly label: string;
+  readonly items: ReadonlyArray<string>;
+}> = [
+  { step: "01", label: "Trigger", items: ["issue", "repo", "PR", "SDK", "phone"] },
+  { step: "02", label: "Policy", items: ["secrets", "network", "tools", "approvals"] },
+  { step: "03", label: "Sandbox", items: ["isolated runtime"] },
+  { step: "04", label: "Recorder", items: ["commands", "processes", "files", "output", "events"] },
+  { step: "05", label: "Validation", items: ["tests", "lint", "typecheck", "custom checks"] },
+  { step: "06", label: "Review", items: ["summary", "diff", "risk", "evidence"] },
+];
 
-          return (
-            <motion.section
-              key={window.id}
-              className={`absolute inset-0 origin-top-left overflow-hidden rounded-[1.75rem] border border-border bg-background ${isActive ? "pointer-events-auto" : "pointer-events-none"}`}
-              initial={false}
-              animate={{
-                x,
-                y,
-                scale,
-                opacity,
-                filter: isActive
-                  ? "drop-shadow(0 26px 42px rgba(0, 0, 0, 0.16))"
-                  : "drop-shadow(0 18px 28px rgba(0, 0, 0, 0.08))",
-              }}
-              transition={windowTransition}
-              style={{
-                zIndex: total - depth,
-              }}
-            >
-              <div className="flex items-center justify-between border-b border-border bg-muted/25 px-5 py-3">
-                <div className="flex items-center gap-2.5" aria-hidden="true">
-                  <span className="size-3 rounded-full bg-[#ff5f57]" />
-                  <span className="size-3 rounded-full bg-[#ffbd2e]" />
-                  <span className="size-3 rounded-full bg-[#28c840]" />
+function CoreProduct() {
+  return (
+    <section id="product" className="relative border-b-2 border-[var(--sw-rule)]">
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <Reveal className="max-w-[60ch]">
+          <Kicker>The core product</Kicker>
+          <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.5rem]">
+            Every run gets a sandbox and a recorder.
+          </h2>
+          <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+            A Sealant run starts from a repo, issue, PR, SDK call, or mobile action. Sealant
+            launches an isolated sandbox, runs the human or AI workflow, and records the execution
+            from inside the runtime.
+          </p>
+        </Reveal>
+
+        <Reveal delay={0.08} className="mt-10">
+          <div className="overflow-x-auto border border-[var(--sw-soft-rule)] bg-[var(--sw-panel)]">
+            <div className="flex items-stretch gap-px bg-[var(--sw-soft-rule)] min-w-[860px]">
+              {pipelineStages.map((stage, index) => (
+                <div key={stage.step} className="flex flex-1 items-stretch">
+                  <div className="flex-1 bg-[var(--sw-panel)] p-4">
+                    <div className="flex items-center gap-2 border-b border-[var(--sw-soft-rule)] pb-2.5">
+                      <span className="font-display text-[1.5rem] leading-none text-[var(--sw-accent)]">
+                        {stage.step}
+                      </span>
+                      <span className="font-mono text-[0.7rem] uppercase tracking-[0.1em] text-foreground">
+                        {stage.label}
+                      </span>
+                    </div>
+                    <ul className="m-0 mt-2.5 list-none space-y-1 p-0">
+                      {stage.items.map((item) => (
+                        <li
+                          key={item}
+                          className="font-mono text-[0.6rem] leading-4 text-foreground/72"
+                        >
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  {index < pipelineStages.length - 1 ? (
+                    <div
+                      className="flex w-6 items-center justify-center bg-[var(--sw-panel)]"
+                      aria-hidden="true"
+                    >
+                      <ArrowRight className="size-3.5 text-[var(--sw-accent)]" />
+                    </div>
+                  ) : null}
                 </div>
-                <p className="font-mono text-[0.64rem] uppercase tracking-[0.18em] text-muted-foreground">
-                  {window.step}
+              ))}
+            </div>
+          </div>
+        </Reveal>
+
+        <Reveal delay={0.12} className="mt-4">
+          <p className="m-0 text-center font-mono text-[0.66rem] uppercase tracking-[0.16em] text-muted-foreground">
+            Trigger → Policy → Sandbox → Recorder → Validation → Reviewable PR
+          </p>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+const securityCaps: ReadonlyArray<{
+  readonly icon: typeof Shield;
+  readonly label: string;
+  readonly detail: string;
+}> = [
+  {
+    icon: Shield,
+    label: "Disposable sandboxes",
+    detail:
+      "Each run gets a fresh runtime, torn down when the run ends. Nothing persists by default.",
+  },
+  {
+    icon: Key,
+    label: "Scoped repository access",
+    detail:
+      "A run sees only the repo and ref it was given. Access is resolved per run, not inherited.",
+  },
+  {
+    icon: Lock,
+    label: "Scoped secrets and SSH keys",
+    detail: "Secrets are injected per run and scoped to the policy. They do not live in the image.",
+  },
+  {
+    icon: Network,
+    label: "Network and runtime policy",
+    detail:
+      "Restrict outbound network, pick the runtime isolation level, and bound what the run can do.",
+  },
+  {
+    icon: Eye,
+    label: "Per-run environment records",
+    detail:
+      "Every run records the environment it ran in: tooling, harness, policy, and runtime config.",
+  },
+  {
+    icon: Shield,
+    label: "Stronger runtime isolation",
+    detail:
+      "Optional gVisor / runsc isolation for runs that need a harder boundary than the default.",
+  },
+  {
+    icon: Lock,
+    label: "Approval gates for risky actions",
+    detail: "Hold a run for a human decision before risky changes, secret access, or PR creation.",
+  },
+];
+
+function Security() {
+  return (
+    <section
+      id="security"
+      className="relative border-b-2 border-[var(--sw-rule)] bg-[var(--sw-panel)]"
+    >
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <Reveal className="max-w-[60ch]">
+          <Kicker>Security</Kicker>
+          <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+            Agents run with boundaries.
+          </h2>
+          <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+            Sealant gives AI coding work a controlled place to execute. Each run can be isolated,
+            scoped, observed, and shut down without depending on a developer machine.
+          </p>
+        </Reveal>
+
+        <Reveal delay={0.08} className="mt-10">
+          <div className="border-y border-[var(--sw-rule)]">
+            <table className="w-full border-collapse text-left">
+              <tbody>
+                {securityCaps.map((cap) => {
+                  const Icon = cap.icon;
+                  return (
+                    <tr
+                      key={cap.label}
+                      className="border-b border-[var(--sw-soft-rule)] last:border-b-0"
+                    >
+                      <td className="w-12 border-r border-[var(--sw-soft-rule)] py-4 pl-5 align-middle">
+                        <Icon className="size-4 text-[var(--sw-accent)]" aria-hidden="true" />
+                      </td>
+                      <td className="w-[14rem] border-r border-[var(--sw-soft-rule)] py-4 pl-4 pr-4 align-middle">
+                        <span className="font-mono text-[0.74rem] uppercase tracking-[0.1em] text-foreground">
+                          {cap.label}
+                        </span>
+                      </td>
+                      <td className="py-4 pl-4 pr-5 align-middle">
+                        <span className="text-[0.92rem] leading-6 text-foreground/78">
+                          {cap.detail}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+const fingerprint: ReadonlyArray<{ readonly label: string; readonly value: string }> = [
+  { label: "Repository", value: "acme/billing" },
+  { label: "Ref", value: "main@8f3c…" },
+  { label: "Sandbox image", value: "sha256:…" },
+  { label: "Harness", value: "Codex / Claude Code / OpenCode" },
+  { label: "Runtime", value: "Docker / Kubernetes" },
+  { label: "Policy", value: "restricted network, scoped secrets" },
+  { label: "Validation", value: "12 checks · 11 passed · 1 warning" },
+];
+
+function Reproducibility() {
+  return (
+    <section id="reproducibility" className="relative border-b-2 border-[var(--sw-rule)]">
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <div className="grid gap-10 lg:grid-cols-[1fr_1fr] lg:items-start lg:gap-16">
+          <Reveal>
+            <Kicker>Reproducibility</Kicker>
+            <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+              A run is a real artifact, not a chat transcript.
+            </h2>
+            <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+              Sealant captures the inputs that matter: repo ref, issue context, environment profile,
+              packages, dotfiles, runtime, harness, commands, logs, artifacts, validation, and final
+              diff.
+            </p>
+            <p className="mt-4 text-[1rem] leading-7 text-foreground/80">
+              This lets teams rerun, resume, compare, debug, and explain software work.
+            </p>
+          </Reveal>
+
+          <Reveal delay={0.1}>
+            <div className="relative border border-[var(--sw-soft-rule)] bg-[var(--sw-panel)]">
+              <SectionRail />
+              <div className="border-b border-[var(--sw-soft-rule)] px-5 py-3">
+                <p className="m-0 font-mono text-[0.64rem] uppercase tracking-[0.18em] text-muted-foreground">
+                  Run fingerprint
                 </p>
               </div>
-              <div className="flex h-[calc(100%-3.25rem)] flex-col px-5 py-5 sm:px-6 sm:py-6">
-                <div className="border-b border-border pb-4">
-                  <h3 className="mt-3 font-display text-[2rem] uppercase leading-none tracking-[0.03em] text-foreground sm:text-[2.35rem]">
-                    {window.title}
-                  </h3>
-                  <p className="mt-3 max-w-[42rem] text-sm leading-7 text-foreground/76 sm:text-[0.98rem]">
-                    {window.description}
-                  </p>
-                </div>
-                <div className="mt-5 flex-1">{window.content}</div>
-              </div>
-            </motion.section>
-          );
-        })}
+              <dl className="m-0 divide-y divide-[var(--sw-soft-rule)] p-0">
+                {fingerprint.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[7rem_1fr] gap-3 px-5 py-3.5">
+                    <dt className="pt-0.5 font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground">
+                      {row.label}
+                    </dt>
+                    <dd className="m-0 font-mono text-[0.74rem] leading-6 text-foreground/88">
+                      {row.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </Reveal>
+        </div>
       </div>
-    </div>
+    </section>
+  );
+}
+
+const reviewRows: ReadonlyArray<{ readonly label: string; readonly value: ReactNode }> = [
+  { label: "Objective", value: "Fix retry handling for failed invoices" },
+  { label: "Commands", value: "pnpm test · pnpm typecheck · pnpm lint" },
+  { label: "Files changed", value: "3 files, grouped by intent" },
+  {
+    label: "Tests",
+    value: (
+      <span>
+        <span className="text-foreground/88">11 passed</span>
+        <span className="text-muted-foreground"> · </span>
+        <span className="text-[var(--sw-accent)]">1 failed</span>
+        <span className="text-muted-foreground"> · 0 skipped</span>
+      </span>
+    ),
+  },
+  {
+    label: "Risk flags",
+    value: (
+      <span className="inline-flex flex-wrap gap-1.5">
+        {["auth touched", "migration added", "dependency changed"].map((flag) => (
+          <span
+            key={flag}
+            className="inline-flex items-center gap-1 border border-[var(--sw-accent)] px-1.5 py-0.5 font-mono text-[0.56rem] uppercase tracking-[0.08em] text-[var(--sw-accent)]"
+          >
+            <AlertTriangle className="size-2.5" aria-hidden="true" />
+            {flag}
+          </span>
+        ))}
+      </span>
+    ),
+  },
+  { label: "Agent notes", value: "Assumptions and uncertainties recorded by the agent" },
+  {
+    label: "Evidence",
+    value: "Raw logs and runtime events available",
+  },
+];
+
+function PrReview() {
+  return (
+    <section
+      id="review"
+      className="relative border-b-2 border-[var(--sw-rule)] bg-[var(--sw-panel)]"
+    >
+      <div
+        className="sealant-rule-grid pointer-events-none absolute inset-0 opacity-25 [mask-image:radial-gradient(ellipse_at_50%_0%,black,transparent_65%)]"
+        aria-hidden="true"
+      />
+      <div className="relative mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <div className="grid gap-10 lg:grid-cols-[1fr_1.15fr] lg:items-start lg:gap-16">
+          <Reveal>
+            <Kicker>PR review</Kicker>
+            <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+              Review the run before you review the diff.
+            </h2>
+            <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+              Sealant compresses PR review by showing what happened during the run: the objective,
+              plan, commands, test results, file changes, risky areas, unexplained edits, and
+              validation status.
+            </p>
+            <div className="mt-7">
+              <PrimaryLink href={REPO_URL} external>
+                Open run record
+                <ArrowUpRight className="size-4" aria-hidden="true" />
+              </PrimaryLink>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.1}>
+            <div className="relative border border-[var(--sw-soft-rule)] bg-[var(--sw-bg)]">
+              <SectionRail />
+              <div className="flex items-center justify-between border-b border-[var(--sw-soft-rule)] px-5 py-3">
+                <p className="m-0 font-mono text-[0.64rem] uppercase tracking-[0.18em] text-muted-foreground">
+                  Run record · #wf_482
+                </p>
+                <span className="inline-flex items-center gap-1.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] text-foreground/80">
+                  <Check className="size-3" aria-hidden="true" />
+                  Reviewable
+                </span>
+              </div>
+              <dl className="m-0 divide-y divide-[var(--sw-soft-rule)] p-0">
+                {reviewRows.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[7rem_1fr] gap-3 px-5 py-3.5">
+                    <dt className="pt-0.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] text-muted-foreground">
+                      {row.label}
+                    </dt>
+                    <dd className="m-0 text-[0.84rem] leading-6 text-foreground/88">{row.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const phoneNotifications: ReadonlyArray<{
+  readonly icon: typeof Terminal;
+  readonly title: string;
+  readonly detail: string;
+}> = [
+  { icon: Terminal, title: "Run issue in sandbox", detail: "acme/billing · #482" },
+  { icon: Key, title: "Approve secret access", detail: "STRIPE_SECRET_KEY" },
+  { icon: Check, title: "Validation finished", detail: "11 / 12 checks passed" },
+  { icon: GitPullRequest, title: "PR ready for review", detail: "fix: retry handling" },
+];
+
+function RunFromAnywhere() {
+  return (
+    <section id="anywhere" className="relative border-b-2 border-[var(--sw-rule)]">
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <div className="grid gap-10 lg:grid-cols-[1fr_auto] lg:items-center lg:gap-20">
+          <Reveal>
+            <Kicker>Run from anywhere</Kicker>
+            <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+              Start work wherever the issue finds you.
+            </h2>
+            <p className="mt-5 max-w-[48ch] text-[1rem] leading-7 text-foreground/80">
+              Kick off a sandbox or issue workflow from the web app, GitHub, Slack, Linear, CLI,
+              SDK, or your phone. The run happens in Sealant infrastructure, not on your laptop.
+            </p>
+            <ul className="m-0 mt-6 flex list-none flex-wrap gap-2 p-0">
+              {["Web app", "GitHub", "Slack", "Linear", "CLI", "SDK", "Phone"].map((source) => (
+                <li
+                  key={source}
+                  className="border border-[var(--sw-soft-rule)] px-2.5 py-1 font-mono text-[0.62rem] uppercase tracking-[0.1em] text-foreground/75"
+                >
+                  {source}
+                </li>
+              ))}
+            </ul>
+          </Reveal>
+
+          <Reveal delay={0.1}>
+            <div className="mx-auto w-[15rem] rounded-[1.75rem] border-2 border-[var(--sw-rule)] bg-[var(--sw-panel)] p-3 shadow-[0_24px_40px_-24px_rgba(0,0,0,0.4)]">
+              <div
+                className="mx-auto mb-3 h-1 w-10 rounded-full bg-[var(--sw-soft-rule)]"
+                aria-hidden="true"
+              />
+              <div className="space-y-2">
+                {phoneNotifications.map((n) => {
+                  const Icon = n.icon;
+                  return (
+                    <div
+                      key={n.title}
+                      className="border border-[var(--sw-soft-rule)] bg-[var(--sw-bg)] px-3 py-2.5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Icon
+                          className="size-3.5 shrink-0 text-[var(--sw-accent)]"
+                          aria-hidden="true"
+                        />
+                        <span className="font-mono text-[0.6rem] uppercase tracking-[0.08em] text-foreground">
+                          {n.title}
+                        </span>
+                      </div>
+                      <p className="m-0 mt-1 pl-5 font-mono text-[0.56rem] text-muted-foreground">
+                        {n.detail}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface SdkModule {
+  readonly name: string;
+  readonly icon: typeof Code2;
+  readonly methods: ReadonlyArray<string>;
+}
+
+const sdkModules: ReadonlyArray<SdkModule> = [
+  { name: "Sandboxes", icon: Layers, methods: ["create", "connect", "inspect", "stop", "retry"] },
+  {
+    name: "Issue Workflows",
+    icon: GitPullRequest,
+    methods: ["run", "observe", "validate", "report"],
+  },
+  {
+    name: "Runtime Events",
+    icon: Terminal,
+    methods: ["commands", "output", "process lifecycle", "artifacts"],
+  },
+  { name: "Policies", icon: Shield, methods: ["secrets", "network", "approvals", "permissions"] },
+  {
+    name: "Harnesses",
+    icon: Code2,
+    methods: ["Codex", "Claude Code", "OpenCode", "custom agents"],
+  },
+  { name: "Integrations", icon: Network, methods: ["GitHub first", "more providers later"] },
+];
+
+const SDK_CODE_LINES: ReadonlyArray<string> = [
+  "const run = await sealant.issueWorkflows.run({",
+  '  repo: "acme/billing",',
+  "  issue: 482,",
+  '  harness: "codex",',
+  '  policy: "review-required",',
+  "});",
+  "",
+  'await run.waitUntil("pr.ready");',
+];
+
+function Sdk() {
+  return (
+    <section id="sdk" className="relative border-b-2 border-[var(--sw-rule)] bg-[var(--sw-panel)]">
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <Reveal className="max-w-[64ch]">
+          <Kicker>SDK and platform</Kicker>
+          <h2 className="m-0 mt-4 font-display text-[2.5rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[4.25rem]">
+            Build your own workflows on the run layer.
+          </h2>
+          <p className="mt-5 text-[1rem] leading-7 text-foreground/80">
+            Sealant exposes sandboxes, issue workflows, runtime events, profiles, policies,
+            registries, and harnesses as programmable modules.
+          </p>
+        </Reveal>
+
+        <div className="mt-12 grid gap-10 lg:grid-cols-[1.1fr_1fr] lg:gap-16">
+          <Reveal>
+            <div className="grid gap-px border border-[var(--sw-soft-rule)] bg-[var(--sw-soft-rule)] sm:grid-cols-2">
+              {sdkModules.map((module) => {
+                const Icon = module.icon;
+                return (
+                  <div key={module.name} className="bg-[var(--sw-panel)] p-5">
+                    <div className="flex items-center gap-2.5 border-b border-[var(--sw-soft-rule)] pb-3">
+                      <Icon
+                        className="size-4 shrink-0 text-[var(--sw-accent)]"
+                        aria-hidden="true"
+                      />
+                      <span className="font-mono text-[0.74rem] uppercase tracking-[0.06em] text-foreground">
+                        {module.name}
+                      </span>
+                    </div>
+                    <ul className="m-0 mt-3 flex list-none flex-wrap gap-1.5 p-0">
+                      {module.methods.map((method) => (
+                        <li
+                          key={method}
+                          className="border border-[var(--sw-soft-rule)] px-2 py-1 font-mono text-[0.58rem] tracking-[0.02em] text-foreground/72"
+                        >
+                          {method}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.08}>
+            <div className="relative border border-[var(--sw-soft-rule)] bg-[var(--sw-bg)]">
+              <SectionRail />
+              <div className="flex items-center justify-between border-b border-[var(--sw-soft-rule)] px-4 py-2.5">
+                <p className="m-0 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground">
+                  sealant.ts
+                </p>
+                <div className="flex items-center gap-1.5" aria-hidden="true">
+                  <span className="size-2.5 rounded-full bg-[#ff5f57]" />
+                  <span className="size-2.5 rounded-full bg-[#ffbd2e]" />
+                  <span className="size-2.5 rounded-full bg-[#28c840]" />
+                </div>
+              </div>
+              <pre className="m-0 overflow-x-auto px-4 py-4 font-mono text-[0.74rem] leading-[1.7] text-foreground/90">
+                <code>
+                  {SDK_CODE_LINES.map((line, index) => (
+                    <span key={index} className="block">
+                      {line.length === 0 ? "\u00A0" : line}
+                    </span>
+                  ))}
+                </code>
+              </pre>
+            </div>
+          </Reveal>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const architecturePoints: ReadonlyArray<string> = [
+  "Control plane for lifecycle and policy",
+  "Build workers for reproducible images",
+  "Runtime adapters for Docker and Kubernetes",
+  "SSH gateway for editor and terminal access",
+  "Binary recorder inside the runtime",
+  "Event stream and artifacts for review",
+  "Contract-first API and SDK modules",
+];
+
+function Architecture() {
+  return (
+    <section id="architecture" className="relative border-b-2 border-[var(--sw-rule)]">
+      <div className="mx-auto max-w-[1320px] px-6 py-16 sm:px-8 lg:py-24">
+        <Reveal className="max-w-[60ch]">
+          <Kicker>Architecture proof</Kicker>
+          <h2 className="m-0 mt-4 font-display text-[2.25rem] uppercase leading-[0.9] tracking-[0.01em] text-foreground sm:text-[3rem] lg:text-[3.75rem]">
+            Built for real execution, not demos.
+          </h2>
+        </Reveal>
+        <Reveal delay={0.08} className="mt-10">
+          <ul className="m-0 list-none divide-y divide-[var(--sw-soft-rule)] border-y border-[var(--sw-soft-rule)] p-0">
+            {architecturePoints.map((point) => (
+              <li key={point} className="flex items-start gap-3 py-3.5">
+                <span
+                  className="mt-2 size-1.5 shrink-0 rounded-full bg-[var(--sw-accent)]"
+                  aria-hidden="true"
+                />
+                <span className="text-[0.95rem] leading-6 text-foreground/82">{point}</span>
+              </li>
+            ))}
+          </ul>
+        </Reveal>
+      </div>
+    </section>
+  );
+}
+
+function FinalCta() {
+  return (
+    <section
+      id="opensource"
+      className="relative overflow-hidden border-b-2 border-[var(--sw-rule)] bg-[var(--sw-panel)]"
+    >
+      <div
+        className="sealant-rule-grid pointer-events-none absolute inset-0 opacity-40 [mask-image:radial-gradient(ellipse_at_70%_30%,black,transparent_70%)]"
+        aria-hidden="true"
+      />
+      <div className="relative mx-auto max-w-[1320px] px-6 py-20 text-center sm:px-8 lg:py-28">
+        <Reveal>
+          <h2 className="m-0 mx-auto max-w-[20ch] font-display text-[2.5rem] uppercase leading-[0.92] tracking-[0.01em] text-foreground sm:text-[3.5rem] lg:text-[5rem]">
+            Give AI coding work a place to run and a record to trust.
+          </h2>
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <PrimaryLink href={REPO_URL} external>
+              Run an issue
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </PrimaryLink>
+            <OutlineLink href={REPO_URL} external>
+              <GitHubLogo className="size-4" />
+              Read the docs
+            </OutlineLink>
+          </div>
+        </Reveal>
+      </div>
+    </section>
   );
 }
 
 function MarketingPage() {
   return (
     <main>
-      <section className="relative overflow-hidden border-b-2 border-ring bg-background text-foreground">
-        <div className="pointer-events-none absolute -left-40 -top-32 size-[24rem] rounded-full bg-primary/16 blur-[130px] lg:-left-52 lg:-top-44 lg:size-[36rem] lg:blur-[170px]" />
-        <div className="pointer-events-none absolute -right-44 top-1/3 size-[28rem] rounded-full bg-primary/14 blur-[180px] lg:-right-60 lg:top-1/4 lg:size-[44rem] lg:blur-[220px]" />
-        <div className="relative mx-auto w-full max-w-[1720px] px-6 py-16 sm:px-8 sm:py-20 lg:grid lg:min-h-[calc(100svh-4rem)] lg:grid-cols-[40px_640px_minmax(0,1fr)] lg:px-0 lg:py-0 xl:grid-cols-[40px_690px_minmax(0,1fr)]">
-          <div className="hidden lg:block" aria-hidden="true" />
-          <div className="flex items-center lg:border-r lg:border-border lg:py-0">
-            <div className="w-full text-center lg:pl-[42px] lg:pr-10 lg:py-0 lg:text-left xl:pr-14">
-              <h1 className="m-0 mx-auto max-w-[11ch] font-display text-[2.5rem] leading-[0.95] uppercase sm:text-[3rem] lg:mx-0 lg:max-w-[487px] lg:text-[48px] lg:leading-[48px] lg:tracking-[0.48px] xl:max-w-[11.5ch] xl:text-[56px] xl:leading-[54px] xl:tracking-[0.56px]">
-                The open platform for tracked agent execution
-              </h1>
-              <p className="mx-auto mt-5 max-w-[34rem] text-sm leading-7 text-foreground/85 sm:mt-6 sm:text-base lg:mx-0 lg:max-w-[34rem] lg:text-[1.1rem]">
-                A self-hosted platform for running isolated sandboxes, capturing execution history,
-                and building modular developer workflows on top.
-              </p>
-              <AnimatedHeroCta />
-            </div>
-          </div>
-          <div className="mt-12 flex items-center lg:mt-0 lg:pl-10 xl:pl-14">
-            <StackedHeroWindows />
-          </div>
-        </div>
-      </section>
-
-      <section id="details" className="border-b-2 border-ring pt-1.5">
-        <div className="mx-auto grid max-w-7xl gap-4 px-6 py-10 sm:px-8 sm:py-12">
-          <div>
-            <p className="m-0 font-mono text-xs uppercase tracking-wider text-muted-foreground">
-              Platform overview
-            </p>
-            <h2 className="m-0 max-w-[16ch] font-display text-[2.25rem] uppercase tracking-wide leading-none sm:text-5xl lg:text-6xl">
-              Tracked software work, built on two core primitives.
-            </h2>
-            <p>
-              Sealant centers two core primitives: sandboxes and executions. Workflow modules build
-              on top of that foundation.
-            </p>
-          </div>
-          <ol
-            className="m-0 list-none border-t border-border p-0"
-            aria-label="Sealant capabilities"
-          >
-            <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
-              <span className="font-mono text-xs uppercase tracking-wider leading-6 text-muted-foreground">
-                The Core
-              </span>
-              <p>
-                Two core primitives: fast, highly customizable sandboxes and tracked software runs
-                (executions). Sandboxes provide the isolated environment. Executions provide the
-                durable record of what ran, what changed, and how the run completed.
-              </p>
-            </li>
-            <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
-              <span className="font-mono text-xs uppercase tracking-wider leading-6 text-muted-foreground">
-                Observability
-              </span>
-              <p>
-                Execution visibility is a core product surface. Sealant focuses first on state
-                transitions, artifacts, diffs, and run summaries, with deeper tracing added over
-                time.
-              </p>
-            </li>
-            <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
-              <span className="font-mono text-xs uppercase tracking-wider leading-6 text-muted-foreground">
-                First-party modules
-              </span>
-              <p>
-                Sealant is designed to support first-party workflow modules, starting with Issue
-                Workflows. These modules are intended to exercise the same execution, artifact, and
-                policy surfaces that future extension points will build on.
-              </p>
-            </li>
-            <li className="grid items-start gap-2 border-b border-border py-4 sm:gap-3 md:grid-cols-[10rem_minmax(0,1fr)]">
-              <span className="font-mono text-xs uppercase tracking-wider leading-6 text-muted-foreground">
-                SDK &amp; extensions
-              </span>
-              <p>
-                Sealant is being built with future extension seams in mind. Early extension points
-                are expected around workflow hooks, reporters, runtime adapters, and first-party-
-                style modules, with the public SDK formalized after those seams are proven in
-                product use.
-              </p>
-            </li>
-          </ol>
-        </div>
-      </section>
-
-      <section id="opensource" className="py-12 pb-16">
-        <div className="mx-auto max-w-7xl px-6 sm:px-8">
-          <p className="m-0 font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            Open Source
-          </p>
-          <h2 className="m-0 max-w-[16ch] font-display text-[2.25rem] uppercase tracking-wide leading-none sm:text-5xl lg:text-6xl">
-            Self-hosted by default.
-          </h2>
-          <p>
-            Run Sealant inside your own boundary and build on an open platform for isolated, tracked
-            software work.
-          </p>
-          <div className="mt-7 flex flex-wrap gap-3">
-            <a
-              className="inline-flex min-h-11 items-center justify-center border border-primary bg-primary px-4 text-sm font-bold uppercase tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95 md:min-h-9 md:text-xs"
-              href="https://github.com/sealant-ops/sealant"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Explore repository
-            </a>
-          </div>
-        </div>
-      </section>
+      <Hero />
+      <Problem />
+      <CoreProduct />
+      <Security />
+      <Reproducibility />
+      <PrReview />
+      <RunFromAnywhere />
+      <Sdk />
+      <Architecture />
+      <FinalCta />
     </main>
   );
 }

@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Sealant",
+    "slug": "sealant-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sealant",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.sealant.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.sealant.mobile",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-notifications",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Allow Sealant to protect privileged approvals and sessions."
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e315d12a-ee00-4030-ae8b-6c85d80e507c"
+      }
+    }
+  }
+}
