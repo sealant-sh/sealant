@@ -11,7 +11,7 @@ import {
   toImportedAt,
   type UnknownRecord,
 } from "./parsing.js";
-import { inferIssueWorkflowPriority, inferIssueWorkflowStage } from "./stage.js";
+import { inferIssueWorkflowStage } from "./stage.js";
 import {
   IssueWorkflowImportHttpError,
   IssueWorkflowImportParseError,

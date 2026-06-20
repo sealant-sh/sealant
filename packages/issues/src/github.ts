@@ -16,7 +16,6 @@ import {
 import { inferIssueWorkflowPriority, inferIssueWorkflowStage } from "./stage.js";
 import {
   IssueWorkflowImportHttpError,
-  IssueWorkflowImportParseError,
   type IssueWorkflowImportResult,
   type IssueWorkflowPriority,
   type IssueWorkflowRecord,
