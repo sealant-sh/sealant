@@ -20,13 +20,13 @@
     "@effect/sql": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@sealant/validators": "workspace:*",
-    "drizzle-orm": "1.0.0-beta.20",
+    "drizzle-orm": "1.0.0-beta.22",
     "effect": "catalog:",
     "pg": "^8.20.0"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
     "@types/pg": "^8.20.0",
-    "drizzle-kit": "1.0.0-beta.20"
+    "drizzle-kit": "1.0.0-beta.22"
   }
 }

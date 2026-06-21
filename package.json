@@ -53,8 +53,11 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
+    "overrides": {
+      "drizzle-orm": "1.0.0-beta.22"
+    },
     "packageExtensions": {
-      "drizzle-orm@1.0.0-beta.20": {
+      "drizzle-orm@1.0.0-beta.22": {
         "dependencies": {
           "effect": "3.21.0"
         }
