@@ -25,6 +25,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*",
     "@types/amqplib": "catalog:"
   }

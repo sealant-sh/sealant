@@ -1,114 +1,117 @@
-import type { DB } from "@sealant/db";
+import {
+  GitHubInstallationRepo,
+  GitHubInstallationRepositoryCacheRepo,
+  SandboxAttemptRepo,
+  SandboxBuildJobRepo,
+  SandboxRuntimeInstanceRepo,
+  type GitHubInstallationRepoService,
+  type GitHubInstallationRepositoryCacheRepoService,
+  type SandboxAttemptRepoService,
+  type SandboxBuildJobRepoService,
+  type SandboxRuntimeInstanceRepoService,
+} from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewSandbox, SandboxBuild } from "@sealant/validators";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
+import { vi } from "vitest";
 
 import type { RegistryClient } from "../registry/index.js";
 import type { RuntimeAdapter } from "../runtime/index.js";
-import { processSandboxBuildJob } from "./process-sandbox-build-job.js";
+import { SandboxBuildJobProcessingError } from "./errors.js";
+import {
+  processSandboxBuildJobEffect,
+  type ProcessSandboxBuildJobEffectOptions,
+} from "./process-sandbox-build-job.js";
 
-vi.mock("@sealant/db", () => {
-  return {
-    createGitHubInstallationRepository: vi.fn(),
-    createGitHubInstallationRepositoryCacheRepository: vi.fn(),
-    createSandboxAttemptRepository: vi.fn(),
-    createSandboxRuntimeInstanceRepository: vi.fn(),
-    createSandboxBuildJobRepository: vi.fn(),
-  };
+const sandboxBuildJobRepoStub = (
+  overrides: {
+    readonly claimJobById?: () => unknown;
+  } = {},
+) => ({
+  claimJobById: vi.fn((_input: { id: string; workerId: string; leaseDurationMs: number }) =>
+    Effect.succeed(overrides.claimJobById?.() ?? null),
+  ),
+  markJobSucceeded: vi.fn((_input: unknown) => Effect.succeed({})),
+  markJobFailed: vi.fn((_input: unknown) => Effect.succeed({})),
 });
 
-const {
-  createGitHubInstallationRepository,
-  createGitHubInstallationRepositoryCacheRepository,
-  createSandboxAttemptRepository,
-  createSandboxRuntimeInstanceRepository,
-  createSandboxBuildJobRepository,
-} = await import("@sealant/db");
+const sandboxAttemptRepoStub = () => ({
+  markAttemptRunning: vi.fn((_input: { id: string }) => Effect.succeed(null)),
+  markAttemptSucceeded: vi.fn((_input: { id: string }) => Effect.succeed(null)),
+  markAttemptFailed: vi.fn((_input: { id: string }) => Effect.succeed(null)),
+});
 
-const createSandboxAttemptRepositoryStub = () => {
-  return {
-    markAttemptRunning: vi.fn(async () => null),
-    markAttemptSucceeded: vi.fn(async () => null),
-    markAttemptFailed: vi.fn(async () => null),
-  };
-};
+const sandboxRuntimeInstanceRepoStub = () => ({
+  upsertRuntimeInstance: vi.fn((_input: unknown) => Effect.succeed({})),
+});
 
-const createSandboxRuntimeInstanceRepositoryStub = () => {
-  return {
-    upsertRuntimeInstance: vi.fn(async () => null),
-  };
-};
+const githubInstallationRepoStub = (options: { status?: string } = {}) => ({
+  getInstallationById: vi.fn((installationId: string) => {
+    if (installationId !== "gh_installation_1") {
+      return Effect.succeed(undefined);
+    }
 
-const createGitHubInstallationRepositoryStub = () => {
-  return {
-    getInstallationById: vi.fn(async (installationId: string) => {
-      if (installationId !== "gh_installation_1") {
-        return undefined;
-      }
+    return Effect.succeed({
+      id: "gh_installation_1",
+      provider: "github",
+      externalInstallationId: "1001",
+      externalAccountId: "2001",
+      accountLogin: "sealant-ops",
+      accountType: "organization",
+      targetType: "organization",
+      status: options.status ?? "active",
+      permissions: { contents: "read", metadata: "read" },
+      repositorySelection: "all",
+      installedAt: new Date("2026-03-20T12:00:00.000Z"),
+      suspendedAt: options.status === "active" || options.status === undefined ? null : new Date(),
+      lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+      createdAt: new Date("2026-03-20T12:00:00.000Z"),
+      updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+    });
+  }),
+});
 
-      return {
-        id: "gh_installation_1",
-        provider: "github",
-        externalInstallationId: "1001",
-        externalAccountId: "2001",
-        accountLogin: "sealant-ops",
-        accountType: "organization",
-        targetType: "organization",
-        status: "active",
-        permissions: { contents: "read", metadata: "read" },
-        repositorySelection: "all",
-        installedAt: new Date("2026-03-20T12:00:00.000Z"),
-        suspendedAt: null,
-        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
-        createdAt: new Date("2026-03-20T12:00:00.000Z"),
-        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
-      };
-    }),
-  };
-};
+const githubInstallationRepositoryCacheStub = () => ({
+  getInstallationRepositoryById: vi.fn((installationRepositoryId: string) => {
+    if (installationRepositoryId !== "gh_installation_repo_1") {
+      return Effect.succeed(undefined);
+    }
 
-const createGitHubInstallationRepositoryCacheStub = () => {
-  return {
-    getInstallationRepositoryById: vi.fn(async (installationRepositoryId: string) => {
-      if (installationRepositoryId !== "gh_installation_repo_1") {
-        return undefined;
-      }
+    return Effect.succeed({
+      id: "gh_installation_repo_1",
+      installationId: "gh_installation_1",
+      repositoryId: "repo_core",
+      externalRepositoryId: "3001",
+      owner: "sealant-ops",
+      name: "core",
+      fullName: "sealant-ops/core",
+      defaultBranch: "main",
+      isPrivate: true,
+      isArchived: false,
+      pushedAt: null,
+      lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
+      createdAt: new Date("2026-03-20T12:00:00.000Z"),
+      updatedAt: new Date("2026-03-24T12:00:00.000Z"),
+      removedAt: null,
+    });
+  }),
+});
 
-      return {
-        id: "gh_installation_repo_1",
-        installationId: "gh_installation_1",
-        repositoryId: "repo_core",
-        externalRepositoryId: "3001",
-        owner: "sealant-ops",
-        name: "core",
-        fullName: "sealant-ops/core",
-        defaultBranch: "main",
-        isPrivate: true,
-        isArchived: false,
-        pushedAt: null,
-        lastSyncedAt: new Date("2026-03-24T12:00:00.000Z"),
-        createdAt: new Date("2026-03-20T12:00:00.000Z"),
-        updatedAt: new Date("2026-03-24T12:00:00.000Z"),
-        removedAt: null,
-      };
-    }),
-  };
-};
-
-const createGitHubSourceIntegrationStub = (): GitHubSourceIntegration => {
+const githubSourceIntegrationStub = (): GitHubSourceIntegration => {
   return {
     isConfigured: () => true,
-    createAppJwt: () => "jwt",
+    createAppJwt: () => Effect.succeed("jwt"),
     isWebhookVerificationConfigured: () => false,
     verifyWebhookSignature: () => false,
-    createInstallationAccessToken: vi.fn(async () => ({
-      token: "github-installation-token",
-      expiresAt: new Date("2026-03-26T12:00:00.000Z"),
-    })),
-    getInstallation: vi.fn(async () => {
-      throw new Error("not implemented");
-    }),
-    listInstallationRepositories: vi.fn(async () => []),
+    createInstallationAccessToken: vi.fn((_externalInstallationId: string) =>
+      Effect.succeed({
+        token: "github-installation-token",
+        expiresAt: new Date("2026-03-26T12:00:00.000Z"),
+      }),
+    ),
+    getInstallation: vi.fn(() => Effect.die("not implemented")),
+    listInstallationRepositories: vi.fn(() => Effect.succeed([])),
   } as unknown as GitHubSourceIntegration;
 };
 
@@ -243,10 +246,57 @@ const createSandboxBuildSpec = (
   };
 };
 
-describe("processSandboxBuildJob", () => {
-  it("mints GitHub installation token auth right before runtime launch", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+const successRegistryClient = (): RegistryClient =>
+  ({
+    publishOciImage: vi.fn(async () => ({
+      repository: "sealant/sandboxes/demo",
+      tag: "opencode",
+      reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
+      digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
+      digest: "sha256:test",
+    })),
+  }) as unknown as RegistryClient;
+
+const provideRepos = (stubs: {
+  readonly jobs: unknown;
+  readonly runtimeInstances: unknown;
+  readonly attempts: unknown;
+  readonly installations?: unknown;
+  readonly installationRepositories?: unknown;
+}) =>
+  Layer.mergeAll(
+    Layer.succeed(SandboxBuildJobRepo, stubs.jobs as SandboxBuildJobRepoService),
+    Layer.succeed(
+      SandboxRuntimeInstanceRepo,
+      stubs.runtimeInstances as SandboxRuntimeInstanceRepoService,
+    ),
+    Layer.succeed(SandboxAttemptRepo, stubs.attempts as SandboxAttemptRepoService),
+    Layer.succeed(
+      GitHubInstallationRepo,
+      (stubs.installations ?? {}) as GitHubInstallationRepoService,
+    ),
+    Layer.succeed(
+      GitHubInstallationRepositoryCacheRepo,
+      (stubs.installationRepositories ?? {}) as GitHubInstallationRepositoryCacheRepoService,
+    ),
+  );
+
+const baseOptions = (
+  overrides: Partial<ProcessSandboxBuildJobEffectOptions>,
+): ProcessSandboxBuildJobEffectOptions => ({
+  jobId: "job_123",
+  workerId: "worker-test",
+  leaseDurationMs: 60000,
+  runtimeAdapters: [createRuntimeAdapterStub("docker")],
+  defaultRuntimeAdapterId: "docker",
+  registryClient: successRegistryClient(),
+  ...overrides,
+});
+
+describe("processSandboxBuildJobEffect", () => {
+  it.effect("mints GitHub installation token auth right before runtime launch", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_github_runtime_auth",
         runId: null,
         repository: "sealant/sandboxes/demo",
@@ -256,66 +306,45 @@ describe("processSandboxBuildJob", () => {
           authRef: "github-installation-repository:gh_installation_repo_1",
           osFamily: "nix",
         }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-    vi.mocked(createGitHubInstallationRepository).mockReturnValue(
-      createGitHubInstallationRepositoryStub() as never,
-    );
-    vi.mocked(createGitHubInstallationRepositoryCacheRepository).mockReturnValue(
-      createGitHubInstallationRepositoryCacheStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-    const gitHubSourceIntegration = createGitHubSourceIntegrationStub();
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const gitHubSourceIntegration = githubSourceIntegrationStub();
     const runtimeAdapter = createRuntimeAdapterStub("docker");
 
-    await processSandboxBuildJob({
-      jobId: "job_github_runtime_auth",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      db: {} as DB,
-      runtimeAdapters: [runtimeAdapter],
-      defaultRuntimeAdapterId: "docker",
-      gitHubSourceIntegration,
-      registryClient,
-      compileSandboxSpec,
-    });
+    return Effect.gen(function* () {
+      yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_github_runtime_auth",
+          runtimeAdapters: [runtimeAdapter],
+          gitHubSourceIntegration,
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
 
-    expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
-    expect(runtimeAdapter.launch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sandboxCloneAuth: {
-          type: "http-token",
-          username: "x-access-token",
-          token: "github-installation-token",
-        },
-      }),
+      expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sandboxCloneAuth: {
+            type: "http-token",
+            username: "x-access-token",
+            token: "github-installation-token",
+          },
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
     );
   });
 
-  it("injects dotfiles GitHub token env for runtime-applied config repos", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("injects dotfiles GitHub token env for runtime-applied config repos", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_dotfiles_runtime_auth",
         runId: null,
         repository: "sealant/sandboxes/demo",
@@ -335,138 +364,93 @@ describe("processSandboxBuildJob", () => {
             },
           ],
         }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-    vi.mocked(createGitHubInstallationRepository).mockReturnValue(
-      createGitHubInstallationRepositoryStub() as never,
-    );
-    vi.mocked(createGitHubInstallationRepositoryCacheRepository).mockReturnValue(
-      createGitHubInstallationRepositoryCacheStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-    const gitHubSourceIntegration = createGitHubSourceIntegrationStub();
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const gitHubSourceIntegration = githubSourceIntegrationStub();
     const runtimeAdapter = createRuntimeAdapterStub("docker");
 
-    await processSandboxBuildJob({
-      jobId: "job_dotfiles_runtime_auth",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      db: {} as DB,
-      runtimeAdapters: [runtimeAdapter],
-      defaultRuntimeAdapterId: "docker",
-      gitHubSourceIntegration,
-      registryClient,
-      compileSandboxSpec,
-    });
+    return Effect.gen(function* () {
+      yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_dotfiles_runtime_auth",
+          runtimeAdapters: [runtimeAdapter],
+          gitHubSourceIntegration,
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
 
-    expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
-    expect(runtimeAdapter.launch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        blueprint: expect.objectContaining({
-          runtime: expect.objectContaining({
-            env: expect.objectContaining({
-              SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
-              SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+      expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          blueprint: expect.objectContaining({
+            runtime: expect.objectContaining({
+              env: expect.objectContaining({
+                SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
+                SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+              }),
             }),
           }),
         }),
-      }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
     );
   });
 
-  it("uses startup and SSH values from the request spec", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("uses startup and SSH values from the request spec", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_defaults",
         runId: null,
         repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        requestPayload: createSandboxBuildSpec({
-          osFamily: "nix",
-        }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-
+        requestPayload: createSandboxBuildSpec({ osFamily: "nix" }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
     const runtimeAdapter = createRuntimeAdapterStub("docker");
 
-    await processSandboxBuildJob({
-      jobId: "job_defaults",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      db: {} as DB,
-      runtimeAdapters: [runtimeAdapter],
-      defaultRuntimeAdapterId: "docker",
-      registryClient,
-      compileSandboxSpec,
-    });
+    return Effect.gen(function* () {
+      yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_defaults",
+          runtimeAdapters: [runtimeAdapter],
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
 
-    const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
-    expect(launchCall).toBeDefined();
+      const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+      expect(launchCall).toBeDefined();
 
-    if (launchCall === undefined) {
-      throw new Error("Runtime adapter launch call was not captured.");
-    }
+      if (launchCall === undefined) {
+        throw new Error("Runtime adapter launch call was not captured.");
+      }
 
-    const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
-    expect(launchCall.blueprint.access.ssh).toEqual({
-      enabled: false,
-      listenPort: 2222,
-    });
-    expect(lifecycle).toMatchObject({
-      startup: {
-        foreground: {
-          kind: "harness",
+      const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+      expect(launchCall.blueprint.access.ssh).toEqual({
+        enabled: false,
+        listenPort: 2222,
+      });
+      expect(lifecycle).toMatchObject({
+        startup: {
+          foreground: {
+            kind: "harness",
+          },
         },
-      },
-    });
+      });
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
-  it("respects explicit startup and SSH settings from spec", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("respects explicit startup and SSH settings from spec", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_explicit",
         runId: null,
         repository: "sealant/sandboxes/demo",
@@ -476,236 +460,164 @@ describe("processSandboxBuildJob", () => {
           sshEnabled: false,
           startupCommand: "pnpm dev",
         }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-
-    const runtimeAdapter = createRuntimeAdapterStub("docker");
-
-    await processSandboxBuildJob({
-      jobId: "job_explicit",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      db: {} as DB,
-      runtimeAdapters: [runtimeAdapter],
-      defaultRuntimeAdapterId: "docker",
-      registryClient,
-      compileSandboxSpec,
-    });
-
-    const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
-    expect(launchCall).toBeDefined();
-
-    if (launchCall === undefined) {
-      throw new Error("Runtime adapter launch call was not captured.");
-    }
-
-    const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
-    expect(launchCall.blueprint.access.ssh.enabled).toBe(false);
-    expect(lifecycle).toMatchObject({
-      startup: {
-        foreground: {
-          kind: "command",
-          run: "pnpm dev",
-          shell: "bash",
-        },
-      },
-    });
-  });
-
-  it("claims, compiles, publishes, and marks a job as succeeded", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
-        id: "job_123",
-        runId: "run_123",
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        requestPayload: createSandboxBuildSpec({
-          osFamily: "nix",
-        }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    const runRepository = createSandboxAttemptRepositoryStub();
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
-    const runtimeRepository = createSandboxRuntimeInstanceRepositoryStub();
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(runtimeRepository as never);
-
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
-
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
-        repository: "sealant/sandboxes/demo",
-        tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-    const runtimeAdapter = createRuntimeAdapterStub("docker");
-
-    const result = await processSandboxBuildJob({
-      jobId: "job_123",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-      db: {} as DB,
-      runtimeAdapters: [runtimeAdapter],
-      defaultRuntimeAdapterId: "docker",
-      registryClient,
-      compileSandboxSpec,
-    });
-
-    expect(result?.digest).toBe("sha256:test");
-    expect(repository.claimJobById).toHaveBeenCalledWith({
-      id: "job_123",
-      workerId: "worker-test",
-      leaseDurationMs: 60000,
-    });
-    expect(repository.markJobSucceeded).toHaveBeenCalled();
-    expect(repository.markJobFailed).not.toHaveBeenCalled();
-    expect(runRepository.markAttemptRunning).toHaveBeenCalledWith({ id: "run_123" });
-    expect(runRepository.markAttemptSucceeded).toHaveBeenCalledWith({ id: "run_123" });
-    expect(runRepository.markAttemptFailed).not.toHaveBeenCalled();
-    expect(runtimeRepository.upsertRuntimeInstance).toHaveBeenCalledTimes(2);
-    expect(runtimeAdapter.launch).toHaveBeenCalledTimes(1);
-    expect(repository.markJobSucceeded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resultPayload: expect.objectContaining({
-          builder: expect.any(Object),
-        }),
       }),
-    );
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_explicit",
+          runtimeAdapters: [runtimeAdapter],
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      const launchCall = vi.mocked(runtimeAdapter.launch).mock.calls[0]?.[0];
+      expect(launchCall).toBeDefined();
+
+      if (launchCall === undefined) {
+        throw new Error("Runtime adapter launch call was not captured.");
+      }
+
+      const lifecycle = (launchCall.blueprint as unknown as { lifecycle?: unknown }).lifecycle;
+      expect(launchCall.blueprint.access.ssh.enabled).toBe(false);
+      expect(lifecycle).toMatchObject({
+        startup: {
+          foreground: {
+            kind: "command",
+            run: "pnpm dev",
+            shell: "bash",
+          },
+        },
+      });
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
-  it("marks a job as failed when compile or publish throws", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("claims, compiles, publishes, and marks a job as succeeded", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_123",
         runId: "run_123",
         repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        requestPayload: createSandboxBuildSpec({
-          osFamily: "nix",
-        }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    const runRepository = createSandboxAttemptRepositoryStub();
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(runRepository as never);
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => {
-      throw new Error("compile exploded");
+        requestPayload: createSandboxBuildSpec({ osFamily: "nix" }),
+      }),
     });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
 
-    await expect(
-      processSandboxBuildJob({
-        jobId: "job_123",
+    return Effect.gen(function* () {
+      const result = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_123",
+          runtimeAdapters: [runtimeAdapter],
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(result?.digest).toBe("sha256:test");
+      expect(jobs.claimJobById).toHaveBeenCalledWith({
+        id: "job_123",
         workerId: "worker-test",
         leaseDurationMs: 60000,
-        db: {} as DB,
-        runtimeAdapters: [createRuntimeAdapterStub("docker")],
-        defaultRuntimeAdapterId: "docker",
-        registryClient: {} as RegistryClient,
-        compileSandboxSpec,
-      }),
-    ).rejects.toThrow("compile exploded");
-
-    expect(repository.markJobFailed).toHaveBeenCalledWith({
-      id: "job_123",
-      errorMessage: "compile exploded",
-    });
-    expect(runRepository.markAttemptFailed).toHaveBeenCalledWith({ id: "run_123" });
+      });
+      expect(jobs.markJobSucceeded).toHaveBeenCalled();
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+      expect(attempts.markAttemptRunning).toHaveBeenCalledWith({ id: "run_123" });
+      expect(attempts.markAttemptSucceeded).toHaveBeenCalledWith({ id: "run_123" });
+      expect(attempts.markAttemptFailed).not.toHaveBeenCalled();
+      expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledTimes(2);
+      expect(runtimeAdapter.launch).toHaveBeenCalledTimes(1);
+      expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resultPayload: expect.objectContaining({
+            builder: expect.any(Object),
+          }),
+        }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
-  it("marks a job as failed when compilation rejects unsupported target OS", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("marks a job as failed when compile or publish throws", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_123",
+        runId: "run_123",
+        repository: "sealant/sandboxes/demo",
+        tag: "opencode",
+        requestPayload: createSandboxBuildSpec({ osFamily: "nix" }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+
+    return Effect.gen(function* () {
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_123",
+          registryClient: {} as RegistryClient,
+          compileSandboxSpec: vi.fn(async () => {
+            throw new Error("compile exploded");
+          }),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SandboxBuildJobProcessingError);
+      expect(error.message).toContain("compile exploded");
+      expect(jobs.markJobFailed).toHaveBeenCalledWith({
+        id: "job_123",
+        errorMessage: "compile exploded",
+      });
+      expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_123" });
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("marks a job as failed when compilation rejects unsupported target OS", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_123",
         runId: null,
         repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        requestPayload: createSandboxBuildSpec({
-          osFamily: "fedora",
-        }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
-
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
-
-    const compileSandboxSpec = vi.fn(async () => {
-      const error = new Error(
-        "No compiler is available for target.os.family 'fedora'.",
-      ) as Error & {
-        code: string;
-      };
-      error.code = "unsupported-os";
-      throw error;
-    });
-
-    await expect(
-      processSandboxBuildJob({
-        jobId: "job_123",
-        workerId: "worker-test",
-        leaseDurationMs: 60000,
-        db: {} as DB,
-        runtimeAdapters: [createRuntimeAdapterStub("docker")],
-        defaultRuntimeAdapterId: "docker",
-        registryClient: {} as RegistryClient,
-        compileSandboxSpec,
+        requestPayload: createSandboxBuildSpec({ osFamily: "fedora" }),
       }),
-    ).rejects.toThrow("No compiler is available for target.os.family 'fedora'.");
-
-    expect(repository.markJobFailed).toHaveBeenCalledWith({
-      id: "job_123",
-      errorCode: "unsupported-os",
-      errorMessage: "No compiler is available for target.os.family 'fedora'.",
     });
-    expect(repository.markJobSucceeded).not.toHaveBeenCalled();
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+
+    return Effect.gen(function* () {
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_123",
+          registryClient: {} as RegistryClient,
+          compileSandboxSpec: vi.fn(async () => {
+            const failure = new Error(
+              "No compiler is available for target.os.family 'fedora'.",
+            ) as Error & { code: string };
+            failure.code = "unsupported-os";
+            throw failure;
+          }),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error.message).toContain("No compiler is available for target.os.family 'fedora'.");
+      expect(error.errorCode).toBe("unsupported-os");
+      expect(jobs.markJobFailed).toHaveBeenCalledWith({
+        id: "job_123",
+        errorCode: "unsupported-os",
+        errorMessage: "No compiler is available for target.os.family 'fedora'.",
+      });
+      expect(jobs.markJobSucceeded).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
-  it("keeps build succeeded when runtime launch selection fails", async () => {
-    const repository = {
-      claimJobById: vi.fn(async () => ({
+  it.effect("keeps build succeeded when runtime launch selection fails", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
         id: "job_123",
         runId: null,
         repository: "sealant/sandboxes/demo",
@@ -714,45 +626,145 @@ describe("processSandboxBuildJob", () => {
           runtimeFamily: "k8s",
           runtimeMode: "require",
         }),
-      })),
-      markJobSucceeded: vi.fn(async () => ({})),
-      markJobFailed: vi.fn(async () => ({})),
-    };
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
 
-    vi.mocked(createSandboxBuildJobRepository).mockReturnValue(repository as never);
-    vi.mocked(createSandboxAttemptRepository).mockReturnValue(
-      createSandboxAttemptRepositoryStub() as never,
-    );
-    vi.mocked(createSandboxRuntimeInstanceRepository).mockReturnValue(
-      createSandboxRuntimeInstanceRepositoryStub() as never,
-    );
+    return Effect.gen(function* () {
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_123",
+          runtimeAdapters: [createRuntimeAdapterStub("docker")],
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.flip);
 
-    const compileSandboxSpec = vi.fn(async () => createCompileResult({ id: "nix" }));
+      expect(error.message).toContain(
+        "No runtime adapter is registered for target.runtime.family 'k8s'.",
+      );
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+      expect(jobs.markJobSucceeded).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
 
-    const registryClient = {
-      publishOciImage: vi.fn(async () => ({
+  it.effect("fails the launch when the GitHub integration is unavailable", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_no_integration",
+        runId: null,
         repository: "sealant/sandboxes/demo",
         tag: "opencode",
-        reference: "127.0.0.1:5000/sealant/sandboxes/demo:opencode",
-        digestReference: "127.0.0.1:5000/sealant/sandboxes/demo@sha256:test",
-        digest: "sha256:test",
-      })),
-    } as unknown as RegistryClient;
-
-    await expect(
-      processSandboxBuildJob({
-        jobId: "job_123",
-        workerId: "worker-test",
-        leaseDurationMs: 60000,
-        db: {} as DB,
-        runtimeAdapters: [createRuntimeAdapterStub("docker")],
-        defaultRuntimeAdapterId: "docker",
-        registryClient,
-        compileSandboxSpec,
+        requestPayload: createSandboxBuildSpec({
+          url: "https://github.com/sealant-ops/core.git",
+          authRef: "github-installation-repository:gh_installation_repo_1",
+          osFamily: "nix",
+        }),
       }),
-    ).rejects.toThrow("No runtime adapter is registered for target.runtime.family 'k8s'.");
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
 
-    expect(repository.markJobFailed).not.toHaveBeenCalled();
-    expect(repository.markJobSucceeded).toHaveBeenCalledTimes(1);
+    return Effect.gen(function* () {
+      // No gitHubSourceIntegration provided -> resolver must fail, not crash.
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_no_integration",
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SandboxBuildJobProcessingError);
+      expect(error.errorCode).toBe("github-integration-unavailable");
+      // The image build already succeeded, so the job stays succeeded (failure is in Phase B).
+      expect(jobs.markJobSucceeded).toHaveBeenCalledTimes(1);
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("fails the launch when the GitHub installation repository is unavailable", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_unknown_repo",
+        runId: null,
+        repository: "sealant/sandboxes/demo",
+        tag: "opencode",
+        requestPayload: createSandboxBuildSpec({
+          url: "https://github.com/sealant-ops/core.git",
+          authRef: "github-installation-repository:gh_unknown_repo",
+          osFamily: "nix",
+        }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const gitHubSourceIntegration = githubSourceIntegrationStub();
+
+    return Effect.gen(function* () {
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_unknown_repo",
+          gitHubSourceIntegration,
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error.errorCode).toBe("github-installation-repository-unavailable");
+      expect(gitHubSourceIntegration.createInstallationAccessToken).not.toHaveBeenCalled();
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("records a failed runtime instance when the GitHub installation is inactive", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_inactive",
+        runId: "run_inactive",
+        repository: "sealant/sandboxes/demo",
+        tag: "opencode",
+        requestPayload: createSandboxBuildSpec({
+          url: "https://github.com/sealant-ops/core.git",
+          authRef: "github-installation-repository:gh_installation_repo_1",
+          osFamily: "nix",
+        }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub({ status: "suspended" });
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const gitHubSourceIntegration = githubSourceIntegrationStub();
+
+    return Effect.gen(function* () {
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_inactive",
+          gitHubSourceIntegration,
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error.errorCode).toBe("github-installation-inactive");
+      expect(gitHubSourceIntegration.createInstallationAccessToken).not.toHaveBeenCalled();
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+      expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_inactive" });
+      expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run_inactive",
+          status: "failed",
+          errorCode: "github-installation-inactive",
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
   });
 });
