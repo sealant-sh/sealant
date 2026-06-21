@@ -16,8 +16,8 @@
   "dependencies": {
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
-    "@sealant/runtime-client": "^0.3.0",
-    "@sealant/runtime-protocol": "^0.3.0",
+    "@sealant/runtime-client": "^0.4.0",
+    "@sealant/runtime-protocol": "^0.4.0",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
     "amqplib": "catalog:",

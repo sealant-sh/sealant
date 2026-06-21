@@ -214,10 +214,6 @@ catalogs:
       specifier: ^4.1.12
       version: 4.3.6
 
-overrides:
-  '@sealant/runtime-protocol': link:../sealantd/packages/runtime-protocol
-  '@sealant/runtime-client': link:../sealantd/packages/runtime-client
-
 packageExtensionsChecksum: sha256-xpU4mJSaAzj0Sf2JXGoePZ47IQmL+5LobCLNrV/X91I=
 
 importers:
@@ -650,11 +646,11 @@ importers:
   apps/ssh-gateway:
     dependencies:
       '@sealant/runtime-client':
-        specifier: link:../../../sealantd/packages/runtime-client
-        version: link:../../../sealantd/packages/runtime-client
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/runtime-protocol':
-        specifier: link:../../../sealantd/packages/runtime-protocol
-        version: link:../../../sealantd/packages/runtime-protocol
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -927,11 +923,11 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: link:../../../sealantd/packages/runtime-client
-        version: link:../../../sealantd/packages/runtime-client
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/runtime-protocol':
-        specifier: link:../../../sealantd/packages/runtime-protocol
-        version: link:../../../sealantd/packages/runtime-protocol
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -4281,6 +4277,14 @@ packages:
 
   '@scalar/types@0.6.10':
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-client@0.4.0':
+    resolution: {integrity: sha512-ErDS3QNHbu9R/yu3kAfzuhQelIx87aC+ZM20uZcP3bHuPsY/JXuz6WrI3IsVugGaIsqKuNzfiO7DT6l9nwKdaQ==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-protocol@0.4.0':
+    resolution: {integrity: sha512-17Z66LI+t9wjnnFvfOHKKMAXBVol2rt5rLdx6eSKPv8OAMGJFxW2VIb7qmako2ZYRMNGZzoYuKzerO2O8cbt3Q==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -13150,7 +13154,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -13261,6 +13267,15 @@ snapshots:
       nanoid: 5.1.7
       type-fest: 5.4.4
       zod: 4.3.6
+
+  '@sealant/runtime-client@0.4.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': 0.4.0
+
+  '@sealant/runtime-protocol@0.4.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
 
   '@sec-ant/readable-stream@0.4.1': {}
 
