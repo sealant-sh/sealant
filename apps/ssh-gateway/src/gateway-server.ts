@@ -90,22 +90,27 @@ const bridgeChannel = (input: {
 }): void => {
   const { sshChannel, channel, onClientData, relayExit } = input;
 
-  // Pump inbound daemon bytes -> SSH client.
+  // Pump inbound daemon bytes -> SSH client, THEN relay the exit/close. The ordering here is
+  // load-bearing: the `for await` loop only completes after the channel iterator has yielded every
+  // queued inbound chunk (the daemon's `StreamEnd` first drains `#inbound`, then ends the iterator).
+  // Only once the last byte has been handed to `sshChannel.write` do we relay the exit status and
+  // `end()` the SSH side. Doing the exit/`end()` off `channel.closed` instead RACES the pump: for a
+  // short final payload (e.g. a 35-byte HTTP body) `closed` can resolve and close the SSH channel
+  // before the trailing data chunk is flushed, truncating the response. (`channel.closed` resolving
+  // does NOT imply inbound is drained — `#inbound` may still hold queued chunks.)
   void (async () => {
     try {
       for await (const chunk of channel) {
         sshChannel.write(Buffer.from(chunk));
       }
     } catch {
-      // Iteration ends on close; failures fall through to the `closed` handling below.
+      // Iteration ends on close; the close cause is read from `channel.closeCause` below.
     }
-  })();
 
-  // The daemon channel's full close (the remote `End`) is the authoritative end: relay the process
-  // exit status, then close the SSH side. `closed` only resolves on a *full* close, so a client-side
-  // half-close (`end()`) does not trip this — we wait for the daemon's `End`.
-  void channel.closed.then((cause) => {
-    if (relayExit && cause.kind === "remote") {
+    // The pump has drained: every inbound byte is now flushed to the SSH client. Read why the channel
+    // closed (set by the iterator completing) and relay the exit status before closing the SSH side.
+    const cause = channel.closeCause;
+    if (relayExit && cause?.kind === "remote") {
       const { exitCode, signal } = cause.end;
       if (typeof signal === "number" && SIGNAL_NAMES[signal] !== undefined) {
         // Process died from a signal: relay a proper SSH `exit-signal`.
@@ -118,8 +123,7 @@ const bridgeChannel = (input: {
       }
     }
     sshChannel.end();
-    return undefined;
-  });
+  })();
 
   // Client -> daemon. Forward bytes; the two teardown events map to the two close modes:
   sshChannel.on("data", (data: Buffer) => {
