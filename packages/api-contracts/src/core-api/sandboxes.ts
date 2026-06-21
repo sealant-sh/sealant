@@ -208,7 +208,11 @@ export const listSandboxEventsResponseSchema = Schema.Struct({
 export type ListSandboxEventsResponse = typeof listSandboxEventsResponseSchema.Type;
 
 export const sandboxGatewayHeadersSchema = Schema.Struct({
+  // Authenticates the gateway as a trusted caller of this internal endpoint.
   "x-sealant-gateway-token": Schema.optional(NonEmptyString),
+  // Identifies the client principal (the SSH key's owner). The API authorizes principal x sandbox
+  // before returning a control target (gateway-spec §3.4).
+  "x-sealant-principal-id": Schema.optional(NonEmptyString),
 });
 export type SandboxGatewayHeaders = typeof sandboxGatewayHeadersSchema.Type;
 

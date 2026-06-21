@@ -1,7 +1,18 @@
 import { z } from "zod";
 
+import type { ControlTarget } from "./control-transport.js";
+
+/*
+Routing + per-sandbox authorization resolution (gateway-spec §3.4).
+
+The gateway resolves a *control target* (how to reach a sandbox's sealantd control socket) from the
+API — no longer an `ssh://` endpoint to an inner sshd. The username (`sbx-<id>`) is only a routing
+hint; the real per-sandbox gate is the API, which authorizes the *principal* (the client key's owner)
+against the sandbox before returning a target.
+*/
+
 // Exact response contract from API route GET /v1/sandboxes/{sandboxId}/ssh-target.
-// Keeping this local schema means gateway fails loudly if API shape drifts.
+// Keeping this local schema means the gateway fails loudly if the API shape drifts.
 const sandboxSshTargetSchema = z.object({
   sandboxId: z.string().trim().min(1),
   attemptId: z.string().trim().min(1),
@@ -20,11 +31,8 @@ const messageResponseSchema = z.object({
 
 export type SandboxSshTarget = z.infer<typeof sandboxSshTargetSchema>;
 
-export interface ParsedSshEndpoint {
-  readonly user: string;
-  readonly host: string;
-  readonly port: number;
-}
+/** Absolute path of the daemon control socket inside a sandbox container. */
+export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
 
 // We route users to sandboxes through usernames such as `sbx-<sandboxId>`.
 // This parser extracts the sandbox id and applies a conservative character policy
@@ -56,40 +64,34 @@ export const parseSandboxIdFromUsername = (
   return sandboxId;
 };
 
-// Runtime metadata stores endpoints as URIs so we parse once here and hand typed
-// connection parameters to the gateway SSH client.
-export const parseSshEndpoint = (endpoint: string): ParsedSshEndpoint => {
-  const normalized = endpoint.trim();
-
-  if (!normalized.startsWith("ssh://")) {
-    throw new Error(`Invalid runtime endpoint '${endpoint}'. Expected ssh:// URI.`);
+/**
+ * Map a resolved API target to a transport `ControlTarget`. Docker adapters reach the daemon socket
+ * via `docker exec` into the container (resourceId). A bind-mounted-socket fast path (§2.2) would
+ * arrive as an explicit host socketPath, which the API does not advertise yet — so we default to the
+ * docker-exec reach.
+ */
+export const toControlTarget = (target: SandboxSshTarget): ControlTarget => {
+  if (target.runtime.adapter !== "docker") {
+    throw new Error(
+      `Unsupported runtime adapter '${target.runtime.adapter}' for control transport.`,
+    );
   }
-
-  let parsed: URL;
-
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    throw new Error(`Invalid runtime endpoint '${endpoint}'.`);
-  }
-
-  if (parsed.hostname.length === 0) {
-    throw new Error(`Invalid runtime endpoint '${endpoint}'. Missing host.`);
-  }
-
   return {
-    // Runtime metadata can omit user/port; default to OpenSSH conventions.
-    user: parsed.username.length === 0 ? "root" : parsed.username,
-    host: parsed.hostname,
-    port: parsed.port.length === 0 ? 22 : Number(parsed.port),
+    kind: "docker-exec",
+    containerId: target.runtime.resourceId,
+    socketPath: DEFAULT_CONTROL_SOCKET_PATH,
   };
 };
 
-// Ask the API for the current internal SSH target for a sandbox.
-// The gateway token keeps this route private to trusted gateway callers.
-export const resolveSandboxSshTarget = async (input: {
+/**
+ * Ask the API for the current control target for a sandbox. The gateway token authenticates the
+ * gateway as a trusted caller; the principal id scopes *what it may resolve* — the API returns a
+ * target only if that principal is authorized for that sandbox (§3.4 step 2).
+ */
+export const resolveSandboxControlTarget = async (input: {
   readonly apiBaseUrl: string;
   readonly gatewayToken: string;
+  readonly principalId: string;
   readonly sandboxId: string;
 }): Promise<SandboxSshTarget> => {
   const url = new URL(
@@ -101,6 +103,8 @@ export const resolveSandboxSshTarget = async (input: {
     headers: {
       // Shared secret between gateway and API for this internal endpoint.
       "x-sealant-gateway-token": input.gatewayToken,
+      // Identifies *who* the client is, so the API can authorize principal x sandbox.
+      "x-sealant-principal-id": input.principalId,
     },
   });
   const payload = await response.json().catch(() => null);
@@ -111,7 +115,7 @@ export const resolveSandboxSshTarget = async (input: {
     throw new Error(
       parsedError.success
         ? parsedError.data.message
-        : `SSH target resolution failed with status ${response.status}.`,
+        : `Control target resolution failed with status ${response.status}.`,
     );
   }
 

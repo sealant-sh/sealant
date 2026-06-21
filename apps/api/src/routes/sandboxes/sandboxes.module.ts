@@ -177,6 +177,10 @@ const readGatewayToken = (headers: SandboxGatewayHeaders): string | undefined =>
   return headers["x-sealant-gateway-token"];
 };
 
+const readPrincipalId = (headers: SandboxGatewayHeaders): string | undefined => {
+  return headers["x-sealant-principal-id"];
+};
+
 const sanitizeSandboxName = (name: string): string => {
   return name.trim().replace(/\s+/g, " ").slice(0, 120);
 };
@@ -1243,6 +1247,16 @@ export const getSandboxSshTarget = (input: {
       });
     }
 
+    // The gateway token proves *the gateway* is a trusted caller; the principal id scopes *what it may
+    // resolve* (gateway-spec §3.4). Per-sandbox authorization lives here at the API, not the daemon.
+    const principalId = readPrincipalId(input.headers);
+
+    if (principalId === undefined || principalId.length === 0) {
+      return yield* new SandboxUnauthorizedError({
+        message: "Missing client principal for sandbox SSH target.",
+      });
+    }
+
     const sandbox = yield* withInternalError(
       (yield* SandboxRepo).getSandboxById(input.sandboxId),
       "Failed to load sandbox.",
@@ -1251,6 +1265,13 @@ export const getSandboxSshTarget = (input: {
     if (sandbox === undefined) {
       return yield* new SandboxNotFoundError({
         message: `Sandbox not found: ${input.sandboxId}`,
+      });
+    }
+
+    // Owner-scoped authorization (ACL extension deferred): the principal must own this sandbox.
+    if (sandbox.ownerUserId !== principalId) {
+      return yield* new SandboxUnauthorizedError({
+        message: "Principal is not authorized for this sandbox.",
       });
     }
 

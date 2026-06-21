@@ -57,8 +57,6 @@ For complete contracts, see each app/package env module:
 - `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX`
 - `CORE_API_BASE_URL`
 - `SANDBOX_SSH_GATEWAY_TOKEN` (required)
-- `SSH_UPSTREAM_PRIVATE_KEY_PATH`
-- `SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING`
 
 ## Auth (`@sealant/auth`)
 

@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
+import { join as joinPath } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -48,6 +50,14 @@ export interface DockerRuntimeAdapterOptions {
   readonly sshBindHost?: string;
   readonly sshEndpointExposureStrategy?: DockerSshEndpointExposureStrategy;
   readonly dockerSocketPath?: string;
+  /**
+   * Opt-in control-socket bind-mount fast path (gateway-spec §2.2). When set, the adapter bind-mounts
+   * `<controlSocketHostDir>/<containerName>` (created 0700) at `/run/sealant` inside the container, so
+   * the gateway can `net.connect` the daemon's `control.sock` directly on the host instead of bridging
+   * with `docker exec` + socat. This requires the daemon to allow the gateway's host uid
+   * (`SEALANT_ALLOWED_PEER_UIDS`); leave unset to keep the universal docker-exec reach (§2.1).
+   */
+  readonly controlSocketHostDir?: string;
 }
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
@@ -226,6 +236,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly sshEndpointExposureStrategy: DockerSshEndpointExposureStrategy;
 
+  private readonly controlSocketHostDir: string | undefined;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
@@ -238,6 +250,20 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
     this.sshEndpointExposureStrategy = options.sshEndpointExposureStrategy ?? "host-published";
+    this.controlSocketHostDir = options.controlSocketHostDir;
+  }
+
+  /**
+   * Build the `-v` args for the §2.2 control-socket bind-mount, creating the per-container host dir
+   * 0700 first. Returns no args (and creates nothing) when the fast path is not enabled.
+   */
+  private async buildControlSocketMountArgs(containerName: string): Promise<string[]> {
+    if (this.controlSocketHostDir === undefined) {
+      return [];
+    }
+    const hostDir = joinPath(this.controlSocketHostDir, containerName);
+    await mkdir(hostDir, { recursive: true, mode: 0o700 });
+    return ["-v", `${hostDir}:/run/sealant`];
   }
 
   private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
@@ -593,6 +619,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             "-e",
             `SEALANT_SANDBOX_HTTP_TOKEN=${sandboxCloneAuth.token}`,
           ];
+    // §2.2 opt-in fast path: bind-mount the daemon's socket *parent dir* to a per-container host dir
+    // so the gateway can connect directly. We mount the parent (the daemon creates control.sock
+    // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
+    const controlSocketMountArgs = await this.buildControlSocketMountArgs(containerName);
     const args = [
       "run",
       "-d",
@@ -606,6 +636,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...sshEnvArgs,
       ...sandboxAuthEnvArgs,
       ...sandboxHttpAuthEnvArgs,
+      ...controlSocketMountArgs,
       ...envArgsFromBlueprint(parsed),
       imageReference,
     ];
