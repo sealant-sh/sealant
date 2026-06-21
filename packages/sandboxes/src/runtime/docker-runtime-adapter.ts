@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import { readFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { join as joinPath } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
 import {
@@ -20,6 +19,13 @@ import {
 } from "./runtime-adapter.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * In-container path of the daemon control socket the sandbox entrypoint (`sealantd boot`) listens on.
+ * Mirrors `DEFAULT_CONTROL_SOCKET_PATH` in `sealantd/target.ts`; the gateway reaches this over the
+ * docker-exec/socat relay (gateway-spec §2.1).
+ */
+const CONTROL_SOCKET_CONTAINER_PATH = "/run/sealant/control.sock";
 
 export interface DockerCommandResult {
   readonly stdout: string;
@@ -47,7 +53,17 @@ export interface DockerRuntimeAdapterOptions {
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
   readonly defaultSshAuthorizedKeysFile?: string;
+  /**
+   * @deprecated The inner sshd was removed (gateway-spec §4.3): the gateway reaches the daemon control
+   * socket, not an inner sshd, so no SSH port is published and this host has no effect. Retained on the
+   * options shape only so existing callers (worker env wiring) keep type-checking; remove once the
+   * worker drops the env var.
+   */
   readonly sshBindHost?: string;
+  /**
+   * @deprecated Inner sshd removed (gateway-spec §4.3); there is no longer an `ssh://` endpoint to
+   * publish or discover, so the exposure strategy has no effect. Retained for caller compatibility.
+   */
   readonly sshEndpointExposureStrategy?: DockerSshEndpointExposureStrategy;
   readonly dockerSocketPath?: string;
   /**
@@ -232,10 +248,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly defaultSshAuthorizedKeysFile: string | undefined;
 
-  private readonly sshBindHost: string;
-
-  private readonly sshEndpointExposureStrategy: DockerSshEndpointExposureStrategy;
-
   private readonly controlSocketHostDir: string | undefined;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
@@ -248,8 +260,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
-    this.sshBindHost = options.sshBindHost ?? "127.0.0.1";
-    this.sshEndpointExposureStrategy = options.sshEndpointExposureStrategy ?? "host-published";
     this.controlSocketHostDir = options.controlSocketHostDir;
   }
 
@@ -284,41 +294,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         availableRuntimes.length === 0 ? "none reported" : availableRuntimes.join(", ")
       }`,
     );
-  }
-
-  private async resolveAuthorizedKeysBase64(input: RuntimeAdapterLaunchInput): Promise<string> {
-    const configuredPath =
-      input.blueprint.access.ssh.authorizedKeysRef ?? this.defaultSshAuthorizedKeysFile;
-
-    if (configuredPath === undefined || configuredPath.length === 0) {
-      throw createAdapterError(
-        "unsupported-access-mode",
-        "SSH is enabled but no authorized keys file is configured.",
-      );
-    }
-
-    let keyData: string;
-    try {
-      keyData = await readFile(configuredPath, "utf8");
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : `Could not read SSH authorized keys file: ${configuredPath}`;
-      throw createAdapterError(
-        "unsupported-access-mode",
-        `SSH authorized keys file could not be read at '${configuredPath}': ${message}`,
-      );
-    }
-    const trimmed = keyData.trim();
-    if (trimmed.length === 0) {
-      throw createAdapterError(
-        "unsupported-access-mode",
-        `SSH authorized keys file is empty: ${configuredPath}`,
-      );
-    }
-
-    return Buffer.from(trimmed, "utf8").toString("base64");
   }
 
   private async resolveSandboxAuthKeyBase64(
@@ -371,97 +346,23 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  private async resolvePublishedSshEndpoint(
-    containerId: string,
-    containerSshPort: number,
-  ): Promise<string | undefined> {
-    const maxAttempts = 10;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        const portResult = await this.commandRunner("docker", [
-          "port",
-          containerId,
-          `${containerSshPort}/tcp`,
-        ]);
-        const output = portResult.stdout.trim();
-
-        if (output.length > 0) {
-          const lastLine = output.split("\n").pop();
-          if (lastLine !== undefined) {
-            const match = /^(?<host>.+):(?<port>\d+)$/.exec(lastLine.trim());
-            if (match?.groups?.host !== undefined && match.groups.port !== undefined) {
-              const host = match.groups.host === "0.0.0.0" ? "127.0.0.1" : match.groups.host;
-              const endpointHost = host.includes(":") ? `[${host}]` : host;
-              return `ssh://root@${endpointHost}:${match.groups.port}`;
-            }
-          }
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (!message.includes("No public port")) {
-          throw error;
-        }
-      }
-
-      if (attempt < maxAttempts - 1) {
-        await sleep(100);
-      }
+  /**
+   * Resolve the sandbox's *control* endpoint (gateway-spec §4.3). The inner sshd is gone — the gateway
+   * no longer dials an `ssh://root@host:2222` URI; it reaches the daemon control socket. The default
+   * reach is `docker exec` into the container (keyed by container id, which the adapter already returns
+   * as `resourceId`). When the §2.2 bind-mount fast path is enabled, the daemon socket is reachable on
+   * the host at `<controlSocketHostDir>/<containerName>/control.sock`, so we surface that path instead.
+   *
+   * The string is purely informational for downstream wiring: the gateway derives its `ControlTarget`
+   * from the runtime `resourceId` + the fixed in-container socket path (`toControlTarget`), so the
+   * control-socket reach does not depend on this value. We return a non-`ssh://` descriptor so nothing
+   * mistakes the sandbox for an sshd-exposing host.
+   */
+  private resolveControlEndpoint(containerId: string, containerName: string): string {
+    if (this.controlSocketHostDir !== undefined) {
+      return `unix://${joinPath(this.controlSocketHostDir, containerName, "control.sock")}`;
     }
-
-    return undefined;
-  }
-
-  private async resolveContainerNetworkSshEndpoint(
-    containerId: string,
-    containerSshPort: number,
-  ): Promise<string | undefined> {
-    const inspectResult = await this.commandRunner("docker", [
-      "inspect",
-      "--format",
-      "{{json .NetworkSettings.Networks}}",
-      containerId,
-    ]);
-    const rawNetworks = inspectResult.stdout.trim();
-
-    if (rawNetworks.length === 0 || rawNetworks === "null") {
-      return undefined;
-    }
-
-    let parsedNetworks: unknown;
-
-    try {
-      parsedNetworks = JSON.parse(rawNetworks);
-    } catch {
-      throw createAdapterError(
-        "adapter-unavailable",
-        `Docker inspect returned an unparseable network payload for '${containerId}'.`,
-      );
-    }
-
-    if (typeof parsedNetworks !== "object" || parsedNetworks === null) {
-      return undefined;
-    }
-
-    const networkEntries = Object.values(parsedNetworks);
-
-    for (const entry of networkEntries) {
-      if (typeof entry !== "object" || entry === null) {
-        continue;
-      }
-
-      const ipAddress =
-        "IPAddress" in entry && typeof entry.IPAddress === "string" ? entry.IPAddress.trim() : "";
-
-      if (ipAddress.length === 0) {
-        continue;
-      }
-
-      const endpointHost = ipAddress.includes(":") ? `[${ipAddress}]` : ipAddress;
-      return `ssh://root@${endpointHost}:${containerSshPort}`;
-    }
-
-    return undefined;
+    return `docker-exec://${containerId}${CONTROL_SOCKET_CONTAINER_PATH}`;
   }
 
   private async inspectContainerState(containerId: string): Promise<{
@@ -582,30 +483,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
     const imageReference = parsed.publishedImage.digestReference;
+    // SSH "access" now means the gateway should be able to reach a shell over the daemon control
+    // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
+    // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`
+    // env is plumbed here.
     const sshEnabled = parsed.blueprint.access.ssh.enabled;
-    const containerSshPort = parsed.blueprint.access.ssh.listenPort ?? 2222;
     const sandboxCloneAuth = this.resolveSandboxCloneAuth(parsed);
     const sandboxAuthKeyBase64 =
       sandboxCloneAuth?.type === "file-ref"
         ? await this.resolveSandboxAuthKeyBase64(sandboxCloneAuth)
         : undefined;
-    const sshArgs =
-      sshEnabled === true && this.sshEndpointExposureStrategy === "host-published"
-        ? ["-p", `${this.sshBindHost}::${containerSshPort}`]
-        : [];
-    const sshEnvArgs =
-      sshEnabled === true
-        ? [
-            "-e",
-            "SEALANT_ENABLE_SSH=true",
-            "-e",
-            `SEALANT_SSH_PORT=${containerSshPort}`,
-            "-e",
-            "SEALANT_SSH_AUTHORIZED_KEYS_FILE=/sandbox/.ssh-runtime/authorized_keys.input",
-            "-e",
-            `SEALANT_SSH_AUTHORIZED_KEYS_BASE64=${await this.resolveAuthorizedKeysBase64(parsed)}`,
-          ]
-        : [];
     const sandboxAuthEnvArgs =
       sandboxAuthKeyBase64 === undefined
         ? []
@@ -632,8 +519,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       containerName,
       "-w",
       parsed.blueprint.runtime.workingDirectory,
-      ...sshArgs,
-      ...sshEnvArgs,
       ...sandboxAuthEnvArgs,
       ...sandboxHttpAuthEnvArgs,
       ...controlSocketMountArgs,
@@ -654,24 +539,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       await this.assertContainerRunning(containerId, containerName);
     }
 
+    // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still
+    // reaches the daemon via the runtime `resourceId` (container id) + the fixed in-container socket
+    // path, so this descriptor is informational; it just must never advertise an sshd host.
     const endpoint =
-      sshEnabled === true
-        ? this.sshEndpointExposureStrategy === "host-published"
-          ? await this.resolvePublishedSshEndpoint(containerId, containerSshPort)
-          : await this.resolveContainerNetworkSshEndpoint(containerId, containerSshPort)
-        : undefined;
-
-    if (sshEnabled && endpoint === undefined) {
-      console.warn("[docker-runtime-adapter] SSH endpoint discovery failed", {
-        containerId,
-        containerName,
-        containerSshPort,
-      });
-    }
-
-    if (this.verifyRunning) {
-      await this.assertContainerRunning(containerId, containerName);
-    }
+      sshEnabled === true ? this.resolveControlEndpoint(containerId, containerName) : undefined;
 
     return parseRuntimeAdapterLaunchResult({
       adapter: this.id,

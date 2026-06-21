@@ -472,6 +472,12 @@ describe("compileSandboxBuildSpec", () => {
       `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
     );
 
+    // §4.1: the inner sshd is gone — no openssh-server in the install layer — but the ssh *client*
+    // (git-over-ssh clone) and socat (control-socket relay) are retained.
+    expect(containerfile).not.toContain("openssh-server");
+    expect(containerfile).toContain("openssh-clients");
+    expect(containerfile).toContain("socat");
+
     // The deleted bash entrypoint must be fully gone: no generated script, no inline supervision.
     expect(containerfile).not.toContain("entrypoint.sh");
     expect(containerfile).not.toContain("sandbox-entrypoint");

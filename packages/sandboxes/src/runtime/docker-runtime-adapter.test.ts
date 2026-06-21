@@ -225,7 +225,9 @@ describe("DockerRuntimeAdapter", () => {
       }),
     );
 
-    expect(commandRunner).toHaveBeenCalledTimes(3);
+    // `run` + a single running-state `inspect`. The previously-redundant second `assertContainerRunning`
+    // (vestigial of the removed ssh:// endpoint-discovery block, §4.3) is gone.
+    expect(commandRunner).toHaveBeenCalledTimes(2);
     const firstCall = commandRunner.mock.calls[0];
     const command = firstCall?.[0];
     const args = firstCall?.[1];
@@ -435,7 +437,7 @@ describe("DockerRuntimeAdapter", () => {
     );
   });
 
-  it("publishes SSH port and endpoint when SSH is enabled", async () => {
+  it("exposes a control endpoint without publishing or injecting an inner sshd when SSH access is enabled", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
     const keyFile = join(tempDir, "authorized_keys");
     await writeFile(
@@ -461,13 +463,6 @@ describe("DockerRuntimeAdapter", () => {
         };
       }
 
-      if (args[0] === "port") {
-        return {
-          stdout: "127.0.0.1:49153\n",
-          stderr: "",
-        };
-      }
-
       return {
         stdout: "",
         stderr: "",
@@ -494,19 +489,24 @@ describe("DockerRuntimeAdapter", () => {
       );
 
       const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
-      expect(runArgs).toContain("-p");
-      expect(runArgs).toContain("127.0.0.1::2222");
-      expect(runArgs).toContain("SEALANT_ENABLE_SSH=true");
-      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_AUTHORIZED_KEYS_BASE64="))).toBe(
-        true,
-      );
-      expect(result.endpoint).toBe("ssh://root@127.0.0.1:49153");
+      // §4.3: no inner-sshd plumbing — no published SSH port, no SEALANT_SSH_* env injection.
+      expect(runArgs).not.toContain("-p");
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_ENABLE_SSH"))).toBe(false);
+      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_"))).toBe(false);
+      // The endpoint is now the daemon control target (docker-exec reach), never an ssh:// URI.
+      expect(result.endpoint).toBe("docker-exec://container-id-456/run/sealant/control.sock");
+      expect(result.endpoint?.startsWith("ssh://")).toBe(false);
+      // The gateway reaches the daemon by the container id (resourceId), unaffected by sshd removal.
+      expect(result.resourceId).toBe("container-id-456");
+      // No `docker port` / network-inspect discovery is performed anymore.
+      const dockerSubcommands = commandRunner.mock.calls.map((call) => call[1]?.[0]);
+      expect(dockerSubcommands).not.toContain("port");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps container running when SSH endpoint discovery fails", async () => {
+  it("surfaces the host socket path as the control endpoint when the bind-mount fast path is enabled", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
     const keyFile = join(tempDir, "authorized_keys");
     await writeFile(
@@ -514,13 +514,14 @@ describe("DockerRuntimeAdapter", () => {
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
       "utf8",
     );
+    const socketHostDir = join(tempDir, "sealant-sockets");
 
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
     >(async (_command, args) => {
       if (args[0] === "run") {
         return {
-          stdout: "container-id-999\n",
+          stdout: "container-id-fastpath\n",
           stderr: "",
         };
       }
@@ -532,10 +533,6 @@ describe("DockerRuntimeAdapter", () => {
         };
       }
 
-      if (args[0] === "port") {
-        throw new Error("No public port '2222/tcp' published for container-id-999");
-      }
-
       return {
         stdout: "",
         stderr: "",
@@ -547,72 +544,7 @@ describe("DockerRuntimeAdapter", () => {
       containerNamePrefix: "sealant-test",
       defaultSshAuthorizedKeysFile: keyFile,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
-    });
-
-    try {
-      const result = await adapter.launch(
-        createLaunchInput({
-          access: {
-            ssh: {
-              enabled: true,
-              listenPort: 2222,
-            },
-          },
-        }),
-      );
-
-      expect(result.status).toBe("running");
-      expect(result.endpoint).toBeUndefined();
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves container-network SSH endpoints when gateway exposure is enabled", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
-    const keyFile = join(tempDir, "authorized_keys");
-    await writeFile(
-      keyFile,
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
-      "utf8",
-    );
-
-    const commandRunner = vi.fn<
-      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
-    >(async (_command, args) => {
-      if (args[0] === "run") {
-        return {
-          stdout: "container-id-gateway\n",
-          stderr: "",
-        };
-      }
-
-      if (args[0] === "inspect" && args[2]?.includes(".State")) {
-        return {
-          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
-          stderr: "",
-        };
-      }
-
-      if (args[0] === "inspect" && args[2]?.includes("NetworkSettings.Networks")) {
-        return {
-          stdout: '{"bridge":{"IPAddress":"172.18.0.4"}}\n',
-          stderr: "",
-        };
-      }
-
-      return {
-        stdout: "",
-        stderr: "",
-      };
-    });
-
-    const adapter = new DockerRuntimeAdapter({
-      commandRunner,
-      containerNamePrefix: "sealant-test",
-      defaultSshAuthorizedKeysFile: keyFile,
-      runtimeCatalogLoader: createRuntimeCatalogLoader(),
-      sshEndpointExposureStrategy: "container-network",
+      controlSocketHostDir: socketHostDir,
     });
 
     try {
@@ -628,10 +560,59 @@ describe("DockerRuntimeAdapter", () => {
       );
 
       const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+      const containerName = result.reference;
+      // The control-socket parent dir is bind-mounted; still no SSH port published.
+      expect(runArgs).toContain("-v");
+      expect(runArgs).toContain(`${join(socketHostDir, containerName)}:/run/sealant`);
       expect(runArgs).not.toContain("-p");
-      expect(result.endpoint).toBe("ssh://root@172.18.0.4:2222");
+      expect(result.endpoint).toBe(`unix://${join(socketHostDir, containerName, "control.sock")}`);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("omits a control endpoint when SSH access is disabled", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return {
+          stdout: "container-id-no-ssh\n",
+          stderr: "",
+        };
+      }
+
+      if (args[0] === "inspect") {
+        return {
+          stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+          stderr: "",
+        };
+      }
+
+      return {
+        stdout: "",
+        stderr: "",
+      };
+    });
+
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.launch(
+      createLaunchInput({
+        access: {
+          ssh: {
+            enabled: false,
+            listenPort: 2222,
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("running");
+    expect(result.endpoint).toBeUndefined();
   });
 });
