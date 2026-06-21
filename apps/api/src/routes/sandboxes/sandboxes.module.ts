@@ -346,17 +346,19 @@ const standardizeRequestedPackages = (spec: NewSandbox) => {
     const packageErrors: string[] = [];
 
     for (const requested of requestedPackages) {
-      const resolution = yield* Effect.tryPromise({
-        try: () =>
-          packageStandardizer.resolvePackage({
-            query: requested,
-            targetOs,
-          }),
-        catch: (error) =>
-          new SandboxInternalServerError({
-            message: toErrorMessage(error, "Package resolution failed."),
-          }),
-      });
+      const resolution = yield* packageStandardizer
+        .resolvePackage({
+          query: requested,
+          targetOs,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new SandboxInternalServerError({
+                message: toErrorMessage(error, "Package resolution failed."),
+              }),
+          ),
+        );
 
       const osSupport = resolution.osSupport[targetOs];
 
