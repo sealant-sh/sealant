@@ -93,6 +93,14 @@ export const bootSealantdContainer = async (
     "run",
     "-d",
     "--rm",
+    // `sealantd boot` requires repo url/ref to be present in the env contract even when the clone is
+    // skipped (the `.git` bind mount below makes boot skip the actual clone). These are run-dynamic
+    // vars the runtime adapter would normally inject; we supply placeholders so config validation
+    // passes and the daemon boots without touching the network.
+    "-e",
+    "SEALANT_SANDBOX_REPO_URL=https://example.invalid/skipped.git",
+    "-e",
+    "SEALANT_SANDBOX_REPO_REF=main",
     "-e",
     "SEALANT_FOREGROUND_COMMAND=sleep infinity",
     "-v",

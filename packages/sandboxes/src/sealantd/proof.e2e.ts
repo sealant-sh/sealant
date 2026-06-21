@@ -81,6 +81,12 @@ describe("sealantd baked-image e2e proof", () => {
       "run",
       "-d",
       "--rm",
+      // `sealantd boot` requires the repo url/ref env even when the clone is skipped via the `.git`
+      // bind mount below. Supply placeholders so config validation passes (no network is touched).
+      "-e",
+      "SEALANT_SANDBOX_REPO_URL=https://example.invalid/skipped.git",
+      "-e",
+      "SEALANT_SANDBOX_REPO_REF=main",
       "-e",
       "SEALANT_FOREGROUND_COMMAND=sleep infinity",
       "-v",
