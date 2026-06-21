@@ -214,6 +214,10 @@ catalogs:
       specifier: ^4.1.12
       version: 4.3.6
 
+overrides:
+  '@sealant/runtime-protocol': file:../sealantd/packages/runtime-protocol
+  '@sealant/runtime-client': file:../sealantd/packages/runtime-client
+
 packageExtensionsChecksum: sha256-xpU4mJSaAzj0Sf2JXGoePZ47IQmL+5LobCLNrV/X91I=
 
 importers:
@@ -913,6 +917,12 @@ importers:
       '@sealant/rabbitmq':
         specifier: workspace:*
         version: link:../rabbitmq
+      '@sealant/runtime-client':
+        specifier: file:../../../sealantd/packages/runtime-client
+        version: file:../sealantd/packages/runtime-client
+      '@sealant/runtime-protocol':
+        specifier: file:../../../sealantd/packages/runtime-protocol
+        version: file:../sealantd/packages/runtime-protocol
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -1698,6 +1708,9 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
+
+  '@bufbuild/protobuf@2.12.0':
+    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
 
   '@cloudflare/kv-asset-handler@0.4.2':
     resolution: {integrity: sha512-SIOD2DxrRRwQ+jgzlXCqoEFiKOFqaPjhnNTGKXSRLvp1HiOvapLaFG2kEr9dYQTYe8rKrd9uvDUzmAITeNyaHQ==}
@@ -4256,6 +4269,14 @@ packages:
 
   '@scalar/types@0.6.10':
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-client@file:../sealantd/packages/runtime-client':
+    resolution: {directory: ../sealantd/packages/runtime-client, type: directory}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-protocol@file:../sealantd/packages/runtime-protocol':
+    resolution: {directory: ../sealantd/packages/runtime-protocol, type: directory}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -10825,6 +10846,8 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
+  '@bufbuild/protobuf@2.12.0': {}
+
   '@cloudflare/kv-asset-handler@0.4.2': {}
 
   '@cloudflare/unenv-preset@2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260317.1)':
@@ -13236,6 +13259,15 @@ snapshots:
       nanoid: 5.1.7
       type-fest: 5.4.4
       zod: 4.3.6
+
+  '@sealant/runtime-client@file:../sealantd/packages/runtime-client':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': file:../sealantd/packages/runtime-protocol
+
+  '@sealant/runtime-protocol@file:../sealantd/packages/runtime-protocol':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
 
   '@sec-ant/readable-stream@0.4.1': {}
 

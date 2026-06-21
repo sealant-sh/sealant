@@ -10,11 +10,14 @@
   "scripts": {
     "lint": "oxlint .",
     "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
+    "@sealant/runtime-client": "file:../../../sealantd/packages/runtime-client",
+    "@sealant/runtime-protocol": "file:../../../sealantd/packages/runtime-protocol",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
     "amqplib": "catalog:",
