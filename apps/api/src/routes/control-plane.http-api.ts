@@ -1,6 +1,6 @@
-import { HttpApiBuilder } from "@effect/platform";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Layer } from "effect";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { GitHubHandlersLive } from "./github/github.http-api.js";
 import { PackagesHandlersLive } from "./packages/packages.http-api.js";
@@ -17,5 +17,7 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
 );
 
 export const makeControlPlaneHttpApiLayer = () => {
-  return HttpApiBuilder.api(ControlPlaneAPI).pipe(Layer.provide(ControlPlaneHandlersLive));
+  return HttpApiBuilder.layer(ControlPlaneAPI, { openapiPath: "/openapi.json" }).pipe(
+    Layer.provide(ControlPlaneHandlersLive),
+  );
 };

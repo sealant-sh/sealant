@@ -4,7 +4,7 @@ import { ProfileRows } from "@/components/app/profile-rows";
 import { SandboxPage } from "@/components/app/sandbox-page";
 import { PROFILES } from "@/lib/navigation/sandbox-data";
 
-export const Route = createFileRoute("/_authenticated/profiles/" as never)({
+export const Route = createFileRoute("/_authenticated/profiles/")({
   component: ProfilesPage,
 });
 

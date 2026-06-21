@@ -4,14 +4,18 @@ import {
   index,
   integer,
   jsonb,
-  pgTable,
   primaryKey,
+  snakeCase,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 import { user } from "./auth.js";
+
+// Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
+// table level to keep implicit column names mapping to snake_case db columns.
+const pgTable = snakeCase.table;
 
 export const sourceProviderValues = ["github", "gitlab", "generic"] as const;
 export type SourceProvider = (typeof sourceProviderValues)[number];

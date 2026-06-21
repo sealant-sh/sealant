@@ -71,7 +71,7 @@ export const createSandboxAttemptRepository = (): never => {
 /** @deprecated Use SandboxAttemptRepoService instead. */
 export type SandboxAttemptRepository = SandboxAttemptRepoService;
 
-const sandboxAttemptRepoOperationSchema = Schema.Literal(
+const sandboxAttemptRepoOperationSchema = Schema.Literals([
   "createQueuedAttempt",
   "getAttemptById",
   "getAttemptSnapshotByRunId",
@@ -81,27 +81,23 @@ const sandboxAttemptRepoOperationSchema = Schema.Literal(
   "markAttemptRunning",
   "markAttemptSucceeded",
   "setAttemptSnapshot",
-);
+]);
 
-export class SandboxAttemptRepoInvariantError extends Schema.TaggedError<SandboxAttemptRepoInvariantError>(
-  "SandboxAttemptRepoInvariantError",
-)("SandboxAttemptRepoInvariantError", {
+export class SandboxAttemptRepoInvariantError extends Schema.TaggedErrorClass<SandboxAttemptRepoInvariantError>()("SandboxAttemptRepoInvariantError", {
   operation: sandboxAttemptRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class SandboxAttemptRepoUnexpectedError extends Schema.TaggedError<SandboxAttemptRepoUnexpectedError>(
-  "SandboxAttemptRepoUnexpectedError",
-)("SandboxAttemptRepoUnexpectedError", {
+export class SandboxAttemptRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxAttemptRepoUnexpectedError>()("SandboxAttemptRepoUnexpectedError", {
   operation: sandboxAttemptRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const sandboxAttemptRepoErrorSchema = Schema.Union(
+export const sandboxAttemptRepoErrorSchema = Schema.Union([
   SandboxAttemptRepoInvariantError,
   SandboxAttemptRepoUnexpectedError,
-);
+]);
 
 export type SandboxAttemptRepoError = typeof sandboxAttemptRepoErrorSchema.Type;
 
@@ -162,10 +158,10 @@ export interface SandboxAttemptRepoService {
   ) => Effect.Effect<readonly SandboxAttempt[], SandboxAttemptRepoError>;
 }
 
-export class SandboxAttemptRepo extends Context.Tag("SandboxAttemptRepo")<
+export class SandboxAttemptRepo extends Context.Service<
   SandboxAttemptRepo,
   SandboxAttemptRepoService
->() {}
+>()("SandboxAttemptRepo") {}
 
 export const SandboxAttemptRepoLive = Layer.effect(
   SandboxAttemptRepo,

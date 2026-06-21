@@ -632,7 +632,7 @@ export const handleWebhook = (input: {
     });
 
     return yield* processWebhook.pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.gen(function* () {
           const message = toErrorMessage(error, "GitHub webhook processing failed.");
 

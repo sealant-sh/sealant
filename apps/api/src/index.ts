@@ -1,11 +1,13 @@
 import { createServer } from "node:http";
 
-import { HttpApiBuilder, HttpApiScalar, HttpServer } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
+import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { Layer, Redacted } from "effect";
+import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
+import { HttpApiScalar } from "effect/unstable/httpapi";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { env } from "./runtime-env.js";
@@ -78,28 +80,33 @@ const sourceIntegrationLayer = gitHubSourceIntegrationLayer({
 });
 
 /**
- * Core API layer:
+ * Request-scoped dependency layer:
  *
- * `makeControlPlaneHttpApiLayer()` returns the `HttpApiBuilder.api(...)` layer for our
- * contract-first control-plane API implementation.
+ * Domain handlers depend on the repository/integration/capability services. In
+ * Effect 4 these surface as request-level requirements on the API layer, so we
+ * provide them with `HttpRouter.provideRequest(...)` below rather than at layer
+ * construction time.
  *
- * We satisfy its dependencies here by providing:
- * - source integrations
- * - repository/data access services
+ * `ControlPlaneCapabilitiesLive` itself needs the package-resolution cache repo,
+ * so we provide `databaseLayer` into it while still re-exporting the repos for
+ * the handlers via `Layer.provideMerge`.
  */
-const apiLayer = makeControlPlaneHttpApiLayer().pipe(
-  Layer.provide(sourceIntegrationLayer),
-  Layer.provide(ControlPlaneCapabilitiesLive),
-  Layer.provide(databaseLayer),
-);
+const requestDependenciesLayer = Layer.mergeAll(
+  sourceIntegrationLayer,
+  ControlPlaneCapabilitiesLive,
+).pipe(Layer.provideMerge(databaseLayer));
 
 /**
- * OpenAPI endpoint layer.
+ * Core API layer:
  *
- * Adds `/openapi.json` derived from the same `HttpApi` contract.
+ * `makeControlPlaneHttpApiLayer()` returns the `HttpApiBuilder.layer(...)` layer for our
+ * contract-first control-plane API implementation, registered against the request
+ * router and serving `/openapi.json` derived from the same `HttpApi` contract.
+ *
+ * We satisfy the handlers' request-scoped dependencies here.
  */
-const openApiLayer = HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" }).pipe(
-  Layer.provide(apiLayer),
+const apiLayer = makeControlPlaneHttpApiLayer().pipe(
+  HttpRouter.provideRequest(requestDependenciesLayer),
 );
 
 /**
@@ -107,7 +114,7 @@ const openApiLayer = HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" })
  *
  * Adds Scalar docs at `/docs`, again generated from the same contract.
  */
-const docsLayer = HttpApiScalar.layer({
+const docsLayer = HttpApiScalar.layer(ControlPlaneAPI, {
   path: "/docs",
   scalar: {
     theme: "saturn",
@@ -115,14 +122,14 @@ const docsLayer = HttpApiScalar.layer({
     darkMode: true,
     defaultOpenAllTags: false,
   },
-}).pipe(Layer.provide(apiLayer));
+});
 
 /**
- * CORS transport middleware layer.
+ * CORS transport middleware.
  *
  * This runs at HTTP transport level, not inside domain handlers.
  */
-const corsLayer = HttpApiBuilder.middlewareCors({
+const corsMiddleware = HttpMiddleware.cors({
   allowedOrigins: (origin) => {
     // Explicit wildcard support for local/dev and trusted edge deployments.
     if (allowAllOrigins) {
@@ -146,24 +153,23 @@ const corsLayer = HttpApiBuilder.middlewareCors({
 /**
  * App composition layer.
  *
- * This merges route handlers + docs + transport middleware.
+ * This merges route handlers + docs into the request router.
  */
-const appLayer = Layer.mergeAll(apiLayer, openApiLayer, docsLayer, corsLayer);
+const appLayer = Layer.mergeAll(apiLayer, docsLayer);
 
 /**
  * Server layer.
  *
- * `HttpApiBuilder.serve()` converts the API layer graph into an HTTP app.
+ * `HttpRouter.serve(...)` converts the router app layer graph into an HTTP app
+ * and applies transport-level CORS middleware.
  * `NodeHttpServer.layer(...)` binds that app to a real Node HTTP server.
  *
  * Lifecycle reminder:
  * The full layer graph is initialized once when `Layer.launch(serverLayer)` runs.
  */
-const serverLayer = HttpApiBuilder.serve().pipe(
-  Layer.provide(appLayer),
-  Layer.provide(HttpServer.layerContext),
-  Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })),
-);
+const serverLayer = HttpRouter.serve(appLayer, {
+  middleware: corsMiddleware,
+}).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })));
 
 /**
  * Startup diagnostics for operational visibility.

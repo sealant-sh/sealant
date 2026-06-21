@@ -1,5 +1,5 @@
-import { HttpApiBuilder } from "@effect/platform";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
   createSandbox,
@@ -22,29 +22,29 @@ export const SandboxesHandlersLive = HttpApiBuilder.group(
           payload,
         }),
       )
-      .handle("renameSandbox", ({ path, payload }) =>
+      .handle("renameSandbox", ({ params, payload }) =>
         renameSandbox({
-          sandboxId: path.sandboxId,
+          sandboxId: params.sandboxId,
           payload,
         }),
       )
-      .handle("listSandboxes", ({ urlParams }) => listSandboxes(urlParams))
-      .handle("getSandbox", ({ path }) => getSandbox(path.sandboxId))
-      .handle("listSandboxAttempts", ({ path, urlParams }) =>
+      .handle("listSandboxes", ({ query }) => listSandboxes(query))
+      .handle("getSandbox", ({ params }) => getSandbox(params.sandboxId))
+      .handle("listSandboxAttempts", ({ params, query }) =>
         listSandboxAttempts({
-          sandboxId: path.sandboxId,
-          query: urlParams,
+          sandboxId: params.sandboxId,
+          query,
         }),
       )
-      .handle("listSandboxEvents", ({ path, urlParams }) =>
+      .handle("listSandboxEvents", ({ params, query }) =>
         listSandboxEvents({
-          sandboxId: path.sandboxId,
-          query: urlParams,
+          sandboxId: params.sandboxId,
+          query,
         }),
       )
-      .handle("getSandboxSshTarget", ({ path, headers }) =>
+      .handle("getSandboxSshTarget", ({ params, headers }) =>
         getSandboxSshTarget({
-          sandboxId: path.sandboxId,
+          sandboxId: params.sandboxId,
           headers,
         }),
       );

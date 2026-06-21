@@ -84,7 +84,7 @@ function toSandboxSummary(input: {
   };
 }
 
-export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/")({
   loader: async ({
     context,
     params,

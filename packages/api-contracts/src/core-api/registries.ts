@@ -1,7 +1,7 @@
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform";
 import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 
-const NonEmptyString = Schema.NonEmptyTrimmedString;
+const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const registryIdParamsSchema = Schema.Struct({
   registryId: NonEmptyString,
@@ -55,63 +55,65 @@ export const registryManifestResponseSchema = Schema.Struct({
   repository: NonEmptyString,
   reference: NonEmptyString,
   digest: Schema.optional(Schema.String),
-  contentType: Schema.Union(Schema.String, Schema.Null),
+  contentType: Schema.Union([Schema.String, Schema.Null]),
   manifest: Schema.Unknown,
 });
 export type RegistryManifestResponse = typeof registryManifestResponseSchema.Type;
 
-export class RegistriesNotFoundError extends Schema.TaggedError<RegistriesNotFoundError>(
-  "RegistriesNotFoundError",
-)(
+export class RegistriesNotFoundError extends Schema.TaggedErrorClass<RegistriesNotFoundError>()(
   "RegistriesNotFoundError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 }),
+  { httpApiStatus: 404 },
 ) {}
 
-export class RegistriesBadGatewayError extends Schema.TaggedError<RegistriesBadGatewayError>(
-  "RegistriesBadGatewayError",
-)(
+export class RegistriesBadGatewayError extends Schema.TaggedErrorClass<RegistriesBadGatewayError>()(
   "RegistriesBadGatewayError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 502 }),
+  { httpApiStatus: 502 },
 ) {}
 
-const registryId = HttpApiSchema.param("registryId", NonEmptyString);
+const registryIdParams = Schema.Struct({ registryId: NonEmptyString });
 
 export const RegistriesGroup = HttpApiGroup.make("registries")
   .add(
-    HttpApiEndpoint.get("getRegistry")`/${registryId}`
-      .addSuccess(registrySummarySchema)
-      .addError(RegistriesNotFoundError),
+    HttpApiEndpoint.get("getRegistry", "/:registryId", {
+      params: registryIdParams,
+      success: registrySummarySchema,
+      error: RegistriesNotFoundError,
+    }),
   )
   .add(
-    HttpApiEndpoint.get("pingRegistry")`/${registryId}/ping`
-      .addSuccess(registryPingSchema)
-      .addError(RegistriesNotFoundError)
-      .addError(RegistriesBadGatewayError),
+    HttpApiEndpoint.get("pingRegistry", "/:registryId/ping", {
+      params: registryIdParams,
+      success: registryPingSchema,
+      error: [RegistriesNotFoundError, RegistriesBadGatewayError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("listRegistryExtensions")`/${registryId}/extensions`
-      .addSuccess(registryExtensionsResponseSchema)
-      .addError(RegistriesNotFoundError)
-      .addError(RegistriesBadGatewayError),
+    HttpApiEndpoint.get("listRegistryExtensions", "/:registryId/extensions", {
+      params: registryIdParams,
+      success: registryExtensionsResponseSchema,
+      error: [RegistriesNotFoundError, RegistriesBadGatewayError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("listRegistryTags")`/${registryId}/tags`
-      .setUrlParams(registryTagsQuerySchema)
-      .addSuccess(registryTagsResponseSchema)
-      .addError(RegistriesNotFoundError)
-      .addError(RegistriesBadGatewayError),
+    HttpApiEndpoint.get("listRegistryTags", "/:registryId/tags", {
+      params: registryIdParams,
+      query: registryTagsQuerySchema,
+      success: registryTagsResponseSchema,
+      error: [RegistriesNotFoundError, RegistriesBadGatewayError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("getRegistryManifest")`/${registryId}/manifest`
-      .setUrlParams(registryManifestQuerySchema)
-      .addSuccess(registryManifestResponseSchema)
-      .addError(RegistriesNotFoundError)
-      .addError(RegistriesBadGatewayError),
+    HttpApiEndpoint.get("getRegistryManifest", "/:registryId/manifest", {
+      params: registryIdParams,
+      query: registryManifestQuerySchema,
+      success: registryManifestResponseSchema,
+      error: [RegistriesNotFoundError, RegistriesBadGatewayError],
+    }),
   )
   .annotate(OpenApi.Description, "Registry metadata and OCI read operations.");

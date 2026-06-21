@@ -21,7 +21,7 @@
  */
 import { StreamKind } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
-import { Chunk, Effect, Stream } from "effect";
+import { Effect, Stream } from "effect";
 
 import { SealantRuntime, type SealantError, type SealantTarget } from "./runtime.js";
 
@@ -129,7 +129,7 @@ export const execInSandbox = (
 
       const stdoutChunks: Buffer[] = [];
       let exitCode: number | undefined;
-      for (const event of Chunk.toReadonlyArray(events)) {
+      for (const event of events) {
         const payload = event.payload;
         if (
           payload.case === "ioChunk" &&

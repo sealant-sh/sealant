@@ -1,4 +1,3 @@
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform";
 import {
   githubAppInstallationInsertSchema,
   githubInstallationAccountTypeValues,
@@ -9,19 +8,26 @@ import {
   githubWebhookDeliveryStatusValues,
 } from "@sealant/db";
 import { Schema } from "effect";
+import {
+  HttpApi,
+  HttpApiEndpoint,
+  HttpApiGroup,
+  HttpApiSchema,
+  OpenApi,
+} from "effect/unstable/httpapi";
 
 export const GitHubAppInstallationDbInsertSchema = githubAppInstallationInsertSchema;
 export const GitHubInstallationRepositoryDbInsertSchema = githubInstallationRepositoryInsertSchema;
 export const GitHubWebhookDeliveryDbInsertSchema = githubWebhookDeliveryInsertSchema;
 
-const GitHubInstallationAccountTypeSchema = Schema.Literal(...githubInstallationAccountTypeValues);
-const GitHubInstallationStatusSchema = Schema.Literal(...githubInstallationStatusValues);
-const GitHubInstallationRepositorySelectionSchema = Schema.Literal(
-  ...githubInstallationRepositorySelectionValues,
+const GitHubInstallationAccountTypeSchema = Schema.Literals(githubInstallationAccountTypeValues);
+const GitHubInstallationStatusSchema = Schema.Literals(githubInstallationStatusValues);
+const GitHubInstallationRepositorySelectionSchema = Schema.Literals(
+  githubInstallationRepositorySelectionValues,
 );
-const GitHubWebhookDeliveryStatusSchema = Schema.Literal(...githubWebhookDeliveryStatusValues);
+const GitHubWebhookDeliveryStatusSchema = Schema.Literals(githubWebhookDeliveryStatusValues);
 
-const NonEmptyString = Schema.NonEmptyTrimmedString;
+const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const messageResponseSchema = Schema.Struct({
   message: Schema.String,
@@ -97,14 +103,14 @@ export type ListGitHubInstallationRepositoriesResponse =
 
 export const syncGitHubInstallationResponseSchema = Schema.Struct({
   installationId: NonEmptyString,
-  syncedRepositoryCount: Schema.NonNegative,
+  syncedRepositoryCount: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
   syncedAt: Schema.String,
 });
 export type SyncGitHubInstallationResponse = typeof syncGitHubInstallationResponseSchema.Type;
 
 export const importGitHubInstallationResponseSchema = Schema.Struct({
   installation: githubInstallationSummarySchema,
-  syncedRepositoryCount: Schema.NonNegative,
+  syncedRepositoryCount: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
   syncedAt: Schema.String,
 });
 export type ImportGitHubInstallationResponse = typeof importGitHubInstallationResponseSchema.Type;
@@ -115,113 +121,113 @@ export const githubWebhookResponseSchema = Schema.Struct({
 });
 export type GitHubWebhookResponse = typeof githubWebhookResponseSchema.Type;
 
-export class GitHubBadRequestError extends Schema.TaggedError<GitHubBadRequestError>(
-  "GitHubBadRequestError",
-)(
+export class GitHubBadRequestError extends Schema.TaggedErrorClass<GitHubBadRequestError>()(
   "GitHubBadRequestError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 }),
+  { httpApiStatus: 400 },
 ) {}
 
-export class GitHubUnauthorizedError extends Schema.TaggedError<GitHubUnauthorizedError>(
-  "GitHubUnauthorizedError",
-)(
+export class GitHubUnauthorizedError extends Schema.TaggedErrorClass<GitHubUnauthorizedError>()(
   "GitHubUnauthorizedError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 401 }),
+  { httpApiStatus: 401 },
 ) {}
 
-export class GitHubForbiddenError extends Schema.TaggedError<GitHubForbiddenError>(
-  "GitHubForbiddenError",
-)(
+export class GitHubForbiddenError extends Schema.TaggedErrorClass<GitHubForbiddenError>()(
   "GitHubForbiddenError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 403 }),
+  { httpApiStatus: 403 },
 ) {}
 
-export class GitHubNotFoundError extends Schema.TaggedError<GitHubNotFoundError>(
-  "GitHubNotFoundError",
-)(
+export class GitHubNotFoundError extends Schema.TaggedErrorClass<GitHubNotFoundError>()(
   "GitHubNotFoundError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 }),
+  { httpApiStatus: 404 },
 ) {}
 
-export class GitHubServiceUnavailableError extends Schema.TaggedError<GitHubServiceUnavailableError>(
-  "GitHubServiceUnavailableError",
-)(
+export class GitHubServiceUnavailableError extends Schema.TaggedErrorClass<GitHubServiceUnavailableError>()(
   "GitHubServiceUnavailableError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 503 }),
+  { httpApiStatus: 503 },
 ) {}
 
-export class GitHubInternalServerError extends Schema.TaggedError<GitHubInternalServerError>(
-  "GitHubInternalServerError",
-)(
+export class GitHubInternalServerError extends Schema.TaggedErrorClass<GitHubInternalServerError>()(
   "GitHubInternalServerError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 500 }),
+  { httpApiStatus: 500 },
 ) {}
 
-const installationId = HttpApiSchema.param("installationId", NonEmptyString);
+const installationIdParams = Schema.Struct({ installationId: NonEmptyString });
 
 export const GitHubGroup = HttpApiGroup.make("github")
   .add(
-    HttpApiEndpoint.get("listInstallations", "/installations")
-      .setUrlParams(githubInstallationsQuerySchema)
-      .addSuccess(listGitHubInstallationsResponseSchema)
-      .addError(GitHubServiceUnavailableError)
-      .addError(GitHubInternalServerError),
+    HttpApiEndpoint.get("listInstallations", "/installations", {
+      query: githubInstallationsQuerySchema,
+      success: listGitHubInstallationsResponseSchema,
+      error: [GitHubServiceUnavailableError, GitHubInternalServerError],
+    }),
   )
   .add(
     HttpApiEndpoint.get(
       "listInstallationRepositories",
-    )`/installations/${installationId}/repositories`
-      .setUrlParams(githubInstallationRepositoriesQuerySchema)
-      .addSuccess(listGitHubInstallationRepositoriesResponseSchema)
-      .addError(GitHubForbiddenError)
-      .addError(GitHubNotFoundError)
-      .addError(GitHubServiceUnavailableError)
-      .addError(GitHubInternalServerError),
+      "/installations/:installationId/repositories",
+      {
+        params: installationIdParams,
+        query: githubInstallationRepositoriesQuerySchema,
+        success: listGitHubInstallationRepositoriesResponseSchema,
+        error: [
+          GitHubForbiddenError,
+          GitHubNotFoundError,
+          GitHubServiceUnavailableError,
+          GitHubInternalServerError,
+        ],
+      },
+    ),
   )
   .add(
-    HttpApiEndpoint.post("importInstallation", "/installations/import")
-      .setPayload(importGitHubInstallationRequestSchema)
-      .addSuccess(importGitHubInstallationResponseSchema)
-      .addError(GitHubNotFoundError)
-      .addError(GitHubServiceUnavailableError)
-      .addError(GitHubInternalServerError),
+    HttpApiEndpoint.post("importInstallation", "/installations/import", {
+      payload: importGitHubInstallationRequestSchema,
+      success: importGitHubInstallationResponseSchema,
+      error: [GitHubNotFoundError, GitHubServiceUnavailableError, GitHubInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.post("syncInstallation")`/installations/${installationId}/sync`
-      .setUrlParams(syncGitHubInstallationQuerySchema)
-      .addSuccess(syncGitHubInstallationResponseSchema)
-      .addError(GitHubForbiddenError)
-      .addError(GitHubNotFoundError)
-      .addError(GitHubServiceUnavailableError)
-      .addError(GitHubInternalServerError),
+    HttpApiEndpoint.post("syncInstallation", "/installations/:installationId/sync", {
+      params: installationIdParams,
+      query: syncGitHubInstallationQuerySchema,
+      success: syncGitHubInstallationResponseSchema,
+      error: [
+        GitHubForbiddenError,
+        GitHubNotFoundError,
+        GitHubServiceUnavailableError,
+        GitHubInternalServerError,
+      ],
+    }),
   )
   .add(
-    HttpApiEndpoint.post("handleWebhook", "/webhooks")
-      .setHeaders(githubWebhookHeadersSchema)
-      .setPayload(HttpApiSchema.Text({ contentType: "application/json" }))
-      .addSuccess(githubWebhookResponseSchema, { status: 202 })
-      .addError(GitHubBadRequestError)
-      .addError(GitHubUnauthorizedError)
-      .addError(GitHubServiceUnavailableError)
-      .addError(GitHubInternalServerError),
+    HttpApiEndpoint.post("handleWebhook", "/webhooks", {
+      headers: githubWebhookHeadersSchema,
+      payload: Schema.String.pipe(HttpApiSchema.asText({ contentType: "application/json" })),
+      success: githubWebhookResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        GitHubBadRequestError,
+        GitHubUnauthorizedError,
+        GitHubServiceUnavailableError,
+        GitHubInternalServerError,
+      ],
+    }),
   )
   .annotate(OpenApi.Description, "GitHub App installation and webhook control-plane operations.");
 

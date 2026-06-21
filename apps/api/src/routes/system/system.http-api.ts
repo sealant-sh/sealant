@@ -1,5 +1,5 @@
-import { HttpApiBuilder } from "@effect/platform";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { getIndex, health, ready } from "./system.module.js";
 

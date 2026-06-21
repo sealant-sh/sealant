@@ -11,7 +11,6 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@hono/node-server": "^1.18.1",

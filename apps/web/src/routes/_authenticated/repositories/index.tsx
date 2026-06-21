@@ -4,7 +4,7 @@ import { RepositoryRows } from "@/components/app/repository-rows";
 import { SandboxPage } from "@/components/app/sandbox-page";
 import { REPOSITORIES } from "@/lib/navigation/sandbox-data";
 
-export const Route = createFileRoute("/_authenticated/repositories/" as never)({
+export const Route = createFileRoute("/_authenticated/repositories/")({
   component: RepositoriesPage,
 });
 

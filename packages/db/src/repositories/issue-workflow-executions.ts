@@ -95,34 +95,30 @@ export const createIssueWorkflowExecutionRepository = (): never => {
 /** @deprecated Use IssueWorkflowExecutionRepoService instead. */
 export type IssueWorkflowExecutionRepository = IssueWorkflowExecutionRepoService;
 
-const issueWorkflowExecutionRepoOperationSchema = Schema.Literal(
+const issueWorkflowExecutionRepoOperationSchema = Schema.Literals([
   "appendExecutionEvents",
   "getExecutionDetailBundle",
   "insertExecutionArtifacts",
   "replaceExecutionDiffFiles",
   "replaceExecutionValidationResults",
   "upsertExecutionSummary",
-);
+]);
 
-export class IssueWorkflowExecutionRepoInvariantError extends Schema.TaggedError<IssueWorkflowExecutionRepoInvariantError>(
-  "IssueWorkflowExecutionRepoInvariantError",
-)("IssueWorkflowExecutionRepoInvariantError", {
+export class IssueWorkflowExecutionRepoInvariantError extends Schema.TaggedErrorClass<IssueWorkflowExecutionRepoInvariantError>()("IssueWorkflowExecutionRepoInvariantError", {
   operation: issueWorkflowExecutionRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class IssueWorkflowExecutionRepoUnexpectedError extends Schema.TaggedError<IssueWorkflowExecutionRepoUnexpectedError>(
-  "IssueWorkflowExecutionRepoUnexpectedError",
-)("IssueWorkflowExecutionRepoUnexpectedError", {
+export class IssueWorkflowExecutionRepoUnexpectedError extends Schema.TaggedErrorClass<IssueWorkflowExecutionRepoUnexpectedError>()("IssueWorkflowExecutionRepoUnexpectedError", {
   operation: issueWorkflowExecutionRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const issueWorkflowExecutionRepoErrorSchema = Schema.Union(
+export const issueWorkflowExecutionRepoErrorSchema = Schema.Union([
   IssueWorkflowExecutionRepoInvariantError,
   IssueWorkflowExecutionRepoUnexpectedError,
-);
+]);
 
 export type IssueWorkflowExecutionRepoError = typeof issueWorkflowExecutionRepoErrorSchema.Type;
 
@@ -183,10 +179,10 @@ export interface IssueWorkflowExecutionRepoService {
   ) => Effect.Effect<IssueWorkflowExecutionDetailBundle | null, IssueWorkflowExecutionRepoError>;
 }
 
-export class IssueWorkflowExecutionRepo extends Context.Tag("IssueWorkflowExecutionRepo")<
+export class IssueWorkflowExecutionRepo extends Context.Service<
   IssueWorkflowExecutionRepo,
   IssueWorkflowExecutionRepoService
->() {}
+>()("IssueWorkflowExecutionRepo") {}
 
 export const IssueWorkflowExecutionRepoLive = Layer.effect(
   IssueWorkflowExecutionRepo,

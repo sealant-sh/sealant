@@ -32,33 +32,29 @@ export const createGitHubWebhookDeliveryRepository = (): never => {
 /** @deprecated Use GitHubWebhookDeliveryRepoService instead. */
 export type GitHubWebhookDeliveryRepository = GitHubWebhookDeliveryRepoService;
 
-const gitHubWebhookDeliveryRepoOperationSchema = Schema.Literal(
+const gitHubWebhookDeliveryRepoOperationSchema = Schema.Literals([
   "createWebhookDelivery",
   "getWebhookDeliveryByDeliveryId",
   "listWebhookDeliveries",
   "markWebhookDeliveryFailed",
   "markWebhookDeliveryProcessed",
-);
+]);
 
-export class GitHubWebhookDeliveryRepoInvariantError extends Schema.TaggedError<GitHubWebhookDeliveryRepoInvariantError>(
-  "GitHubWebhookDeliveryRepoInvariantError",
-)("GitHubWebhookDeliveryRepoInvariantError", {
+export class GitHubWebhookDeliveryRepoInvariantError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoInvariantError>()("GitHubWebhookDeliveryRepoInvariantError", {
   operation: gitHubWebhookDeliveryRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class GitHubWebhookDeliveryRepoUnexpectedError extends Schema.TaggedError<GitHubWebhookDeliveryRepoUnexpectedError>(
-  "GitHubWebhookDeliveryRepoUnexpectedError",
-)("GitHubWebhookDeliveryRepoUnexpectedError", {
+export class GitHubWebhookDeliveryRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoUnexpectedError>()("GitHubWebhookDeliveryRepoUnexpectedError", {
   operation: gitHubWebhookDeliveryRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const gitHubWebhookDeliveryRepoErrorSchema = Schema.Union(
+export const gitHubWebhookDeliveryRepoErrorSchema = Schema.Union([
   GitHubWebhookDeliveryRepoInvariantError,
   GitHubWebhookDeliveryRepoUnexpectedError,
-);
+]);
 
 export type GitHubWebhookDeliveryRepoError = typeof gitHubWebhookDeliveryRepoErrorSchema.Type;
 
@@ -113,10 +109,10 @@ export interface GitHubWebhookDeliveryRepoService {
   ) => Effect.Effect<readonly GitHubWebhookDelivery[], GitHubWebhookDeliveryRepoError>;
 }
 
-export class GitHubWebhookDeliveryRepo extends Context.Tag("GitHubWebhookDeliveryRepo")<
+export class GitHubWebhookDeliveryRepo extends Context.Service<
   GitHubWebhookDeliveryRepo,
   GitHubWebhookDeliveryRepoService
->() {}
+>()("GitHubWebhookDeliveryRepo") {}
 
 export const GitHubWebhookDeliveryRepoLive = Layer.effect(
   GitHubWebhookDeliveryRepo,

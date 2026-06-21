@@ -102,7 +102,7 @@ export const createProfileRepository = (): never => {
 /** @deprecated Use ProfileRepoService instead. */
 export type ProfileRepository = ProfileRepoService;
 
-const profileRepoOperationSchema = Schema.Literal(
+const profileRepoOperationSchema = Schema.Literals([
   "createProfile",
   "createProfileRevisionGraph",
   "getActiveProfileRevision",
@@ -110,27 +110,23 @@ const profileRepoOperationSchema = Schema.Literal(
   "getProfileRevisionGraph",
   "listProfilesByOwner",
   "setActiveProfileRevision",
-);
+]);
 
-export class ProfileRepoInvariantError extends Schema.TaggedError<ProfileRepoInvariantError>(
-  "ProfileRepoInvariantError",
-)("ProfileRepoInvariantError", {
+export class ProfileRepoInvariantError extends Schema.TaggedErrorClass<ProfileRepoInvariantError>()("ProfileRepoInvariantError", {
   operation: profileRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class ProfileRepoUnexpectedError extends Schema.TaggedError<ProfileRepoUnexpectedError>(
-  "ProfileRepoUnexpectedError",
-)("ProfileRepoUnexpectedError", {
+export class ProfileRepoUnexpectedError extends Schema.TaggedErrorClass<ProfileRepoUnexpectedError>()("ProfileRepoUnexpectedError", {
   operation: profileRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const profileRepoErrorSchema = Schema.Union(
+export const profileRepoErrorSchema = Schema.Union([
   ProfileRepoInvariantError,
   ProfileRepoUnexpectedError,
-);
+]);
 
 export type ProfileRepoError = typeof profileRepoErrorSchema.Type;
 
@@ -175,7 +171,7 @@ export interface ProfileRepoService {
   ) => Effect.Effect<ProfileRevisionGraph, ProfileRepoError>;
 }
 
-export class ProfileRepo extends Context.Tag("ProfileRepo")<ProfileRepo, ProfileRepoService>() {}
+export class ProfileRepo extends Context.Service<ProfileRepo, ProfileRepoService>()("ProfileRepo") {}
 
 export const ProfileRepoLive = Layer.effect(
   ProfileRepo,

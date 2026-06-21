@@ -9,13 +9,14 @@ import { Schema } from "effect";
  * surfaced to operators, an optional machine `errorCode`, and the original `cause` (as a
  * `Schema.Defect`) for diagnostics.
  */
-export class SandboxBuildJobProcessingError extends Schema.TaggedError<SandboxBuildJobProcessingError>(
+export class SandboxBuildJobProcessingError extends Schema.TaggedErrorClass<SandboxBuildJobProcessingError>()(
   "SandboxBuildJobProcessingError",
-)("SandboxBuildJobProcessingError", {
-  message: Schema.String,
-  errorCode: Schema.optional(Schema.String),
-  cause: Schema.Defect,
-}) {}
+  {
+    message: Schema.String,
+    errorCode: Schema.optional(Schema.String),
+    cause: Schema.Defect(),
+  },
+) {}
 
 const extractErrorCode = (cause: unknown): string | undefined => {
   if (

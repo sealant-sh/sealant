@@ -108,7 +108,7 @@ const swallowingFailure =
   (operation: string) =>
   <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void> =>
     effect.pipe(
-      Effect.catchAllCause((cause) =>
+      Effect.catchCause((cause) =>
         Effect.logWarning(`Sandbox build job ${operation} failed; continuing.`, cause),
       ),
       Effect.asVoid,

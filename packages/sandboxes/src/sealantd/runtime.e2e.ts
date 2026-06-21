@@ -10,7 +10,7 @@
  */
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
-import { Chunk, Effect, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { bootSealantdContainer, isImagePresent, type BootedSealantd } from "./boot.js";
@@ -72,7 +72,7 @@ describe.skipIf(!imageAvailable)("SealantRuntime service over DockerExecTranspor
             Stream.runCollect,
           );
 
-          return { accepted, events: Chunk.toReadonlyArray(events) };
+          return { accepted, events };
         }),
       ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
     );

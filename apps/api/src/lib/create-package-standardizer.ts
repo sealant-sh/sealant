@@ -44,7 +44,7 @@ const createCacheStore = (
               expiresAt: entry.expiresAt,
             };
           }),
-          Effect.catchAll((error) => {
+          Effect.catch((error) => {
             cacheUnavailable = true;
             const message = error instanceof Error ? error.message : "Unknown cache read error.";
 
@@ -79,7 +79,7 @@ const createCacheStore = (
           })
           .pipe(
             Effect.asVoid,
-            Effect.catchAll((error) => {
+            Effect.catch((error) => {
               cacheUnavailable = true;
               const message = error instanceof Error ? error.message : "Unknown cache write error.";
 

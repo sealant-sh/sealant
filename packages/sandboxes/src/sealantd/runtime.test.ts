@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
-import { Chunk, Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -149,7 +149,7 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
             Stream.runCollect,
           );
 
-          return { accepted, events: Chunk.toReadonlyArray(events) };
+          return { accepted, events };
         }),
       ).pipe(Effect.provide(TestLayer)),
     );
@@ -196,9 +196,9 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
       ).pipe(Effect.provide(TestLayer)),
     );
 
-    expect(exit._tag).toBe("Failure");
-    if (exit._tag === "Failure") {
-      const error = exit.cause._tag === "Fail" ? exit.cause.error : undefined;
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
       expect(error).toBeInstanceOf(SealantControlError);
       expect((error as SealantControlError).operation).toBe("exec");
       expect(typeof (error as SealantControlError).code).toBe("number");

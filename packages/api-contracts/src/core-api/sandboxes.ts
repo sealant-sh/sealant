@@ -1,22 +1,22 @@
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform";
 import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
-const NonEmptyString = Schema.NonEmptyTrimmedString;
+const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
-export const sandboxStatusSchema = Schema.Literal(
+export const sandboxStatusSchema = Schema.Literals([
   "queued",
   "running",
   "ready",
   "failed",
   "cancelled",
-);
+]);
 export type SandboxStatus = typeof sandboxStatusSchema.Type;
 
 export const sandboxRuntimeSchema = Schema.Struct({
-  adapter: Schema.Literal("docker", "k8s", "k3s"),
+  adapter: Schema.Literals(["docker", "k8s", "k3s"]),
   resourceId: NonEmptyString,
   reference: NonEmptyString,
-  status: Schema.Literal("pending", "running", "failed", "stopped"),
+  status: Schema.Literals(["pending", "running", "failed", "stopped"]),
   endpoint: Schema.optional(Schema.String),
 });
 export type SandboxRuntime = typeof sandboxRuntimeSchema.Type;
@@ -25,10 +25,10 @@ export const sandboxSshTargetSchema = Schema.Struct({
   sandboxId: NonEmptyString,
   attemptId: NonEmptyString,
   runtime: Schema.Struct({
-    adapter: Schema.Literal("docker", "k8s", "k3s"),
+    adapter: Schema.Literals(["docker", "k8s", "k3s"]),
     resourceId: NonEmptyString,
     reference: NonEmptyString,
-    status: Schema.Literal("pending", "running", "failed", "stopped"),
+    status: Schema.Literals(["pending", "running", "failed", "stopped"]),
     endpoint: Schema.String,
   }),
 });
@@ -148,9 +148,9 @@ export type ListSandboxAttemptsQuery = typeof listSandboxAttemptsQuerySchema.Typ
 
 export const sandboxAttemptSummarySchema = Schema.Struct({
   attemptId: NonEmptyString,
-  relation: Schema.Literal("launch", "rebuild", "retry", "resume"),
+  relation: Schema.Literals(["launch", "rebuild", "retry", "resume"]),
   status: sandboxStatusSchema,
-  triggerType: Schema.Literal("manual", "issue", "schedule", "api", "retry"),
+  triggerType: Schema.Literals(["manual", "issue", "schedule", "api", "retry"]),
   triggerRef: Schema.optional(NonEmptyString),
   runtime: Schema.optional(sandboxRuntimeSchema),
   publishedImage: Schema.optional(sandboxPublishedImageSchema),
@@ -162,7 +162,7 @@ export const sandboxAttemptSummarySchema = Schema.Struct({
   linkedAt: Schema.String,
   startedAt: Schema.optional(Schema.String),
   finishedAt: Schema.optional(Schema.String),
-  durationMs: Schema.optional(Schema.NonNegative),
+  durationMs: Schema.optional(Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 export type SandboxAttemptSummary = typeof sandboxAttemptSummarySchema.Type;
 
@@ -176,7 +176,7 @@ export const listSandboxEventsQuerySchema = Schema.Struct({
 });
 export type ListSandboxEventsQuery = typeof listSandboxEventsQuerySchema.Type;
 
-export const sandboxEventTypeSchema = Schema.Literal(
+export const sandboxEventTypeSchema = Schema.Literals([
   "sandbox.created",
   "attempt.queued",
   "attempt.running",
@@ -188,7 +188,7 @@ export const sandboxEventTypeSchema = Schema.Literal(
   "runtime.running",
   "runtime.failed",
   "runtime.stopped",
-);
+]);
 export type SandboxEventType = typeof sandboxEventTypeSchema.Type;
 
 export const sandboxEventSchema = Schema.Struct({
@@ -216,146 +216,139 @@ export const sandboxGatewayHeadersSchema = Schema.Struct({
 });
 export type SandboxGatewayHeaders = typeof sandboxGatewayHeadersSchema.Type;
 
-export class SandboxBadRequestError extends Schema.TaggedError<SandboxBadRequestError>(
-  "SandboxBadRequestError",
-)(
+export class SandboxBadRequestError extends Schema.TaggedErrorClass<SandboxBadRequestError>()(
   "SandboxBadRequestError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 }),
+  { httpApiStatus: 400 },
 ) {}
 
-export class SandboxUnauthorizedError extends Schema.TaggedError<SandboxUnauthorizedError>(
-  "SandboxUnauthorizedError",
-)(
+export class SandboxUnauthorizedError extends Schema.TaggedErrorClass<SandboxUnauthorizedError>()(
   "SandboxUnauthorizedError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 401 }),
+  { httpApiStatus: 401 },
 ) {}
 
-export class SandboxForbiddenError extends Schema.TaggedError<SandboxForbiddenError>(
-  "SandboxForbiddenError",
-)(
+export class SandboxForbiddenError extends Schema.TaggedErrorClass<SandboxForbiddenError>()(
   "SandboxForbiddenError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 403 }),
+  { httpApiStatus: 403 },
 ) {}
 
-export class SandboxNotFoundError extends Schema.TaggedError<SandboxNotFoundError>(
-  "SandboxNotFoundError",
-)(
+export class SandboxNotFoundError extends Schema.TaggedErrorClass<SandboxNotFoundError>()(
   "SandboxNotFoundError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 }),
+  { httpApiStatus: 404 },
 ) {}
 
-export class SandboxConflictError extends Schema.TaggedError<SandboxConflictError>(
-  "SandboxConflictError",
-)(
+export class SandboxConflictError extends Schema.TaggedErrorClass<SandboxConflictError>()(
   "SandboxConflictError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 409 }),
+  { httpApiStatus: 409 },
 ) {}
 
-export class SandboxBadGatewayError extends Schema.TaggedError<SandboxBadGatewayError>(
-  "SandboxBadGatewayError",
-)(
+export class SandboxBadGatewayError extends Schema.TaggedErrorClass<SandboxBadGatewayError>()(
   "SandboxBadGatewayError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 502 }),
+  { httpApiStatus: 502 },
 ) {}
 
-export class SandboxServiceUnavailableError extends Schema.TaggedError<SandboxServiceUnavailableError>(
-  "SandboxServiceUnavailableError",
-)(
+export class SandboxServiceUnavailableError extends Schema.TaggedErrorClass<SandboxServiceUnavailableError>()(
   "SandboxServiceUnavailableError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 503 }),
+  { httpApiStatus: 503 },
 ) {}
 
-export class SandboxInternalServerError extends Schema.TaggedError<SandboxInternalServerError>(
-  "SandboxInternalServerError",
-)(
+export class SandboxInternalServerError extends Schema.TaggedErrorClass<SandboxInternalServerError>()(
   "SandboxInternalServerError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 500 }),
+  { httpApiStatus: 500 },
 ) {}
 
-const sandboxId = HttpApiSchema.param("sandboxId", NonEmptyString);
+const sandboxIdParams = Schema.Struct({ sandboxId: NonEmptyString });
 
 export const SandboxesGroup = HttpApiGroup.make("sandboxes")
   .add(
-    HttpApiEndpoint.post("createSandbox", "/")
-      .setHeaders(createSandboxHeadersSchema)
-      .setPayload(createSandboxRequestSchema)
-      .addSuccess(createSandboxResponseSchema, { status: 202 })
-      .addError(SandboxBadRequestError)
-      .addError(SandboxForbiddenError)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxBadGatewayError)
-      .addError(SandboxServiceUnavailableError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.post("createSandbox", "/", {
+      headers: createSandboxHeadersSchema,
+      payload: createSandboxRequestSchema,
+      success: createSandboxResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        SandboxBadRequestError,
+        SandboxForbiddenError,
+        SandboxNotFoundError,
+        SandboxBadGatewayError,
+        SandboxServiceUnavailableError,
+        SandboxInternalServerError,
+      ],
+    }),
   )
   .add(
-    HttpApiEndpoint.patch("renameSandbox")`/${sandboxId}/name`
-      .setPayload(renameSandboxRequestSchema)
-      .addSuccess(renameSandboxResponseSchema)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.patch("renameSandbox", "/:sandboxId/name", {
+      params: sandboxIdParams,
+      payload: renameSandboxRequestSchema,
+      success: renameSandboxResponseSchema,
+      error: [SandboxNotFoundError, SandboxInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("listSandboxes", "/")
-      .setUrlParams(listSandboxesQuerySchema)
-      .addSuccess(listSandboxesResponseSchema)
-      .addError(SandboxBadRequestError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.get("listSandboxes", "/", {
+      query: listSandboxesQuerySchema,
+      success: listSandboxesResponseSchema,
+      error: [SandboxBadRequestError, SandboxInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("getSandbox")`/${sandboxId}`
-      .addSuccess(sandboxDetailsSchema)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.get("getSandbox", "/:sandboxId", {
+      params: sandboxIdParams,
+      success: sandboxDetailsSchema,
+      error: [SandboxNotFoundError, SandboxInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("listSandboxAttempts")`/${sandboxId}/attempts`
-      .setUrlParams(listSandboxAttemptsQuerySchema)
-      .addSuccess(listSandboxAttemptsResponseSchema)
-      .addError(SandboxBadRequestError)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.get("listSandboxAttempts", "/:sandboxId/attempts", {
+      params: sandboxIdParams,
+      query: listSandboxAttemptsQuerySchema,
+      success: listSandboxAttemptsResponseSchema,
+      error: [SandboxBadRequestError, SandboxNotFoundError, SandboxInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("listSandboxEvents")`/${sandboxId}/events`
-      .setUrlParams(listSandboxEventsQuerySchema)
-      .addSuccess(listSandboxEventsResponseSchema)
-      .addError(SandboxBadRequestError)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.get("listSandboxEvents", "/:sandboxId/events", {
+      params: sandboxIdParams,
+      query: listSandboxEventsQuerySchema,
+      success: listSandboxEventsResponseSchema,
+      error: [SandboxBadRequestError, SandboxNotFoundError, SandboxInternalServerError],
+    }),
   )
   .add(
-    HttpApiEndpoint.get("getSandboxSshTarget")`/${sandboxId}/ssh-target`
-      .setHeaders(sandboxGatewayHeadersSchema)
-      .addSuccess(sandboxSshTargetSchema)
-      .addError(SandboxUnauthorizedError)
-      .addError(SandboxNotFoundError)
-      .addError(SandboxConflictError)
-      .addError(SandboxServiceUnavailableError)
-      .addError(SandboxInternalServerError),
+    HttpApiEndpoint.get("getSandboxSshTarget", "/:sandboxId/ssh-target", {
+      params: sandboxIdParams,
+      headers: sandboxGatewayHeadersSchema,
+      success: sandboxSshTargetSchema,
+      error: [
+        SandboxUnauthorizedError,
+        SandboxNotFoundError,
+        SandboxConflictError,
+        SandboxServiceUnavailableError,
+        SandboxInternalServerError,
+      ],
+    }),
   )
   .annotate(
     OpenApi.Description,

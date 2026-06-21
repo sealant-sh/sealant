@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { useTRPC } from "@/lib/trpc/react";
 
-export const Route = createFileRoute("/_authenticated/github/setup" as never)({
+export const Route = createFileRoute("/_authenticated/github/setup")({
   component: GitHubSetupPage,
 });
 
