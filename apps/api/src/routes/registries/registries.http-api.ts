@@ -1,5 +1,5 @@
-import { HttpApiBuilder } from "@effect/platform";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
   getRegistry,
@@ -14,19 +14,19 @@ export const RegistriesHandlersLive = HttpApiBuilder.group(
   "registries",
   (handlers) => {
     return handlers
-      .handle("getRegistry", ({ path }) => getRegistry(path.registryId))
-      .handle("pingRegistry", ({ path }) => pingRegistry(path.registryId))
-      .handle("listRegistryExtensions", ({ path }) => listRegistryExtensions(path.registryId))
-      .handle("listRegistryTags", ({ path, urlParams }) =>
+      .handle("getRegistry", ({ params }) => getRegistry(params.registryId))
+      .handle("pingRegistry", ({ params }) => pingRegistry(params.registryId))
+      .handle("listRegistryExtensions", ({ params }) => listRegistryExtensions(params.registryId))
+      .handle("listRegistryTags", ({ params, query }) =>
         listRegistryTags({
-          registryId: path.registryId,
-          query: urlParams,
+          registryId: params.registryId,
+          query,
         }),
       )
-      .handle("getRegistryManifest", ({ path, urlParams }) =>
+      .handle("getRegistryManifest", ({ params, query }) =>
         getRegistryManifest({
-          registryId: path.registryId,
-          query: urlParams,
+          registryId: params.registryId,
+          query,
         }),
       );
   },

@@ -8,18 +8,20 @@ import { createSandboxBuildJobPublisher } from "../lib/create-sandbox-build-job-
 import type { SandboxBuildJobPublisher } from "../lib/types.js";
 import { env } from "../runtime-env.js";
 
-export class PackageStandardizerService extends Context.Tag(
-  "@sealant/api/PackageStandardizerService",
-)<PackageStandardizerService, PackageStandardizer>() {}
+export class PackageStandardizerService extends Context.Service<
+  PackageStandardizerService,
+  PackageStandardizer
+>()("@sealant/api/PackageStandardizerService") {}
 
-export class RegistryClientService extends Context.Tag("@sealant/api/RegistryClientService")<
+export class RegistryClientService extends Context.Service<
   RegistryClientService,
   RegistryClient
->() {}
+>()("@sealant/api/RegistryClientService") {}
 
-export class SandboxBuildJobPublisherService extends Context.Tag(
-  "@sealant/api/SandboxBuildJobPublisherService",
-)<SandboxBuildJobPublisherService, SandboxBuildJobPublisher>() {}
+export class SandboxBuildJobPublisherService extends Context.Service<
+  SandboxBuildJobPublisherService,
+  SandboxBuildJobPublisher
+>()("@sealant/api/SandboxBuildJobPublisherService") {}
 
 export const PackageStandardizerServiceLive = Layer.effect(
   PackageStandardizerService,

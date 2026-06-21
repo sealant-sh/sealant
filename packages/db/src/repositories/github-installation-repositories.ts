@@ -10,6 +10,10 @@ import {
   type NewGitHubInstallationRepository,
 } from "../schema.js";
 
+// Treat a user-provided search term as a literal substring: escape LIKE metacharacters so a term
+// such as "a_b" or "50%" matches literally instead of being interpreted as a wildcard pattern.
+const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, (char) => `\\${char}`);
+
 export interface UpsertGitHubInstallationRepositoryInput {
   readonly id: string;
   readonly installationId: string;
@@ -49,7 +53,7 @@ export const createGitHubInstallationRepositoryCacheRepository = (): never => {
 export type GitHubInstallationRepositoryCacheRepository =
   GitHubInstallationRepositoryCacheRepoService;
 
-const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literal(
+const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literals([
   "getInstallationRepositoryByExternalRepoId",
   "getInstallationRepositoryById",
   "getInstallationRepositoryByRepoId",
@@ -57,27 +61,23 @@ const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literal(
   "listRepositoriesForUser",
   "markInstallationRepositoriesRemoved",
   "upsertInstallationRepository",
-);
+]);
 
-export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoInvariantError>(
-  "GitHubInstallationRepositoryCacheRepoInvariantError",
-)("GitHubInstallationRepositoryCacheRepoInvariantError", {
+export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoInvariantError>()("GitHubInstallationRepositoryCacheRepoInvariantError", {
   operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedError<GitHubInstallationRepositoryCacheRepoUnexpectedError>(
-  "GitHubInstallationRepositoryCacheRepoUnexpectedError",
-)("GitHubInstallationRepositoryCacheRepoUnexpectedError", {
+export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoUnexpectedError>()("GitHubInstallationRepositoryCacheRepoUnexpectedError", {
   operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const gitHubInstallationRepositoryCacheRepoErrorSchema = Schema.Union(
+export const gitHubInstallationRepositoryCacheRepoErrorSchema = Schema.Union([
   GitHubInstallationRepositoryCacheRepoInvariantError,
   GitHubInstallationRepositoryCacheRepoUnexpectedError,
-);
+]);
 
 export type GitHubInstallationRepositoryCacheRepoError =
   typeof gitHubInstallationRepositoryCacheRepoErrorSchema.Type;
@@ -155,9 +155,10 @@ export interface GitHubInstallationRepositoryCacheRepoService {
   >;
 }
 
-export class GitHubInstallationRepositoryCacheRepo extends Context.Tag(
-  "GitHubInstallationRepositoryCacheRepo",
-)<GitHubInstallationRepositoryCacheRepo, GitHubInstallationRepositoryCacheRepoService>() {}
+export class GitHubInstallationRepositoryCacheRepo extends Context.Service<
+  GitHubInstallationRepositoryCacheRepo,
+  GitHubInstallationRepositoryCacheRepoService
+>()("GitHubInstallationRepositoryCacheRepo") {}
 
 export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
   GitHubInstallationRepositoryCacheRepo,
@@ -275,7 +276,12 @@ export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
               ...(input.includeRemoved ? [] : [isNull(githubInstallationRepositories.removedAt)]),
               ...(input.search === undefined || input.search.trim().length === 0
                 ? []
-                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+                : [
+                    like(
+                      githubInstallationRepositories.fullName,
+                      `%${escapeLikePattern(input.search.trim())}%`,
+                    ),
+                  ]),
             ];
 
             return yield* db
@@ -300,7 +306,12 @@ export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
                 : [eq(githubInstallationRepositories.installationId, input.installationId)]),
               ...(input.search === undefined || input.search.trim().length === 0
                 ? []
-                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+                : [
+                    like(
+                      githubInstallationRepositories.fullName,
+                      `%${escapeLikePattern(input.search.trim())}%`,
+                    ),
+                  ]),
             ];
 
             const rows = yield* db

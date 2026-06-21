@@ -71,7 +71,7 @@ export const createSandboxBuildJobRepository = (): never => {
 /** @deprecated Use SandboxBuildJobRepoService instead. */
 export type SandboxBuildJobRepository = SandboxBuildJobRepoService;
 
-const sandboxBuildJobRepoOperationSchema = Schema.Literal(
+const sandboxBuildJobRepoOperationSchema = Schema.Literals([
   "claimJobById",
   "claimNextQueuedJob",
   "getJobById",
@@ -83,27 +83,23 @@ const sandboxBuildJobRepoOperationSchema = Schema.Literal(
   "markJobFailed",
   "markJobRunning",
   "markJobSucceeded",
-);
+]);
 
-export class SandboxBuildJobRepoInvariantError extends Schema.TaggedError<SandboxBuildJobRepoInvariantError>(
-  "SandboxBuildJobRepoInvariantError",
-)("SandboxBuildJobRepoInvariantError", {
+export class SandboxBuildJobRepoInvariantError extends Schema.TaggedErrorClass<SandboxBuildJobRepoInvariantError>()("SandboxBuildJobRepoInvariantError", {
   operation: sandboxBuildJobRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class SandboxBuildJobRepoUnexpectedError extends Schema.TaggedError<SandboxBuildJobRepoUnexpectedError>(
-  "SandboxBuildJobRepoUnexpectedError",
-)("SandboxBuildJobRepoUnexpectedError", {
+export class SandboxBuildJobRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxBuildJobRepoUnexpectedError>()("SandboxBuildJobRepoUnexpectedError", {
   operation: sandboxBuildJobRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const sandboxBuildJobRepoErrorSchema = Schema.Union(
+export const sandboxBuildJobRepoErrorSchema = Schema.Union([
   SandboxBuildJobRepoInvariantError,
   SandboxBuildJobRepoUnexpectedError,
-);
+]);
 
 export type SandboxBuildJobRepoError = typeof sandboxBuildJobRepoErrorSchema.Type;
 
@@ -171,10 +167,10 @@ export interface SandboxBuildJobRepoService {
   ) => Effect.Effect<SandboxBuildJob | null, SandboxBuildJobRepoError>;
 }
 
-export class SandboxBuildJobRepo extends Context.Tag("SandboxBuildJobRepo")<
+export class SandboxBuildJobRepo extends Context.Service<
   SandboxBuildJobRepo,
   SandboxBuildJobRepoService
->() {}
+>()("SandboxBuildJobRepo") {}
 
 export const SandboxBuildJobRepoLive = Layer.effect(
   SandboxBuildJobRepo,

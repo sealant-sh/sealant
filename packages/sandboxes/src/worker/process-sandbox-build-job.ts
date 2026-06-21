@@ -1,4 +1,8 @@
 import {
+  GitHubInstallationRepo,
+  GitHubInstallationRepoLive,
+  GitHubInstallationRepositoryCacheRepo,
+  GitHubInstallationRepositoryCacheRepoLive,
   SandboxAttemptRepo,
   SandboxAttemptRepoLive,
   SandboxBuildJobRepo,
@@ -21,10 +25,21 @@ import {
   type RuntimeAdapterId,
   type SandboxCloneAuth,
 } from "../runtime/index.js";
+import { SandboxBuildJobProcessingError, toSandboxBuildJobProcessingError } from "./errors.js";
 import {
   resolveDotfilesRuntimeEnv,
   resolveSandboxCloneAuth,
 } from "./github-installation-auth-resolver.js";
+
+export { SandboxBuildJobProcessingError } from "./errors.js";
+
+/** Repository services the job pipeline resolves from context. */
+export type ProcessSandboxBuildJobRequirements =
+  | SandboxBuildJobRepo
+  | SandboxRuntimeInstanceRepo
+  | SandboxAttemptRepo
+  | GitHubInstallationRepo
+  | GitHubInstallationRepositoryCacheRepo;
 
 export interface ProcessSandboxBuildJobOptions {
   readonly jobId: string;
@@ -37,6 +52,9 @@ export interface ProcessSandboxBuildJobOptions {
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
   readonly compileSandboxSpec?: (spec: NewSandbox) => Promise<SandboxBuild>;
 }
+
+/** Options for the Effect-native pipeline: repositories come from context, not `db`. */
+export type ProcessSandboxBuildJobEffectOptions = Omit<ProcessSandboxBuildJobOptions, "db">;
 
 const isPublishableOciImageArtifact = (
   artifact: SandboxBuild["artifacts"][number],
@@ -82,116 +100,169 @@ const launchPublishedImage = async (input: {
   });
 };
 
-const toErrorMessage = (error: unknown) => {
-  return error instanceof Error ? error.message : "Sandbox build job failed.";
-};
+/**
+ * Run a best-effort state update: never propagate its failure (so it cannot mask the originating
+ * error), but log a warning so a failed status update is still observable instead of silent.
+ */
+const swallowingFailure =
+  (operation: string) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void> =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(`Sandbox build job ${operation} failed; continuing.`, cause),
+      ),
+      Effect.asVoid,
+    );
 
-const toErrorCode = (error: unknown) => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof error.code === "string"
-  ) {
-    return error.code;
-  }
+/**
+ * Process a single sandbox build job as one Effect program.
+ *
+ * Repositories are resolved from context; external collaborators (compiler, registry, runtime
+ * adapters, GitHub integration) are wrapped at the boundary with `Effect.tryPromise`. The flow
+ * is split into two phases around the point the job is marked succeeded so cleanup knows whether
+ * the build itself failed:
+ *
+ *  - Phase A (build + publish + mark-succeeded): on failure the job is marked failed.
+ *  - Phase B (launch + record runtime instance): on failure the build stays succeeded.
+ *
+ * Both phases share best-effort cleanup (record a failed runtime instance, mark the attempt
+ * failed) that never masks the originating error.
+ */
+export const processSandboxBuildJobEffect = Effect.fn("processSandboxBuildJob")(function* (
+  options: ProcessSandboxBuildJobEffectOptions,
+) {
+  const jobs = yield* SandboxBuildJobRepo;
+  const runtimeInstances = yield* SandboxRuntimeInstanceRepo;
+  const attempts = yield* SandboxAttemptRepo;
 
-  return undefined;
-};
-
-export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOptions) => {
-  const dbLayer = Layer.succeed(SealantDB, options.db);
-  const dataAccessLayer = Layer.mergeAll(
-    SandboxBuildJobRepoLive,
-    SandboxRuntimeInstanceRepoLive,
-    SandboxAttemptRepoLive,
-  ).pipe(Layer.provide(dbLayer));
-
-  const repos = await Effect.runPromise(
-    Effect.gen(function* () {
-      return {
-        jobs: yield* SandboxBuildJobRepo,
-        runtimeInstances: yield* SandboxRuntimeInstanceRepo,
-        attempts: yield* SandboxAttemptRepo,
-      };
-    }).pipe(Effect.provide(dataAccessLayer)),
-  );
-
-  const runDb = <A>(effect: Effect.Effect<A, unknown>): Promise<A> => {
-    return Effect.runPromise(effect);
-  };
-
-  const jobs = repos.jobs;
-  const runtimeInstances = repos.runtimeInstances;
-  const attempts = repos.attempts;
-  const job = await runDb(
-    jobs.claimJobById({
+  const job = yield* jobs
+    .claimJobById({
       id: options.jobId,
       workerId: options.workerId,
       leaseDurationMs: options.leaseDurationMs,
-    }),
-  );
+    })
+    .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
   if (job === null) {
     return null;
   }
 
-  let buildSucceeded = false;
+  yield* Effect.annotateCurrentSpan({
+    jobId: job.id,
+    ...(job.runId === null ? {} : { runId: job.runId }),
+  });
 
-  try {
+  // Best-effort cleanup shared by both phases. Every step swallows its own failure so the
+  // originating error is the one that propagates.
+  const failureCleanup = (error: SandboxBuildJobProcessingError, markJobAsFailed: boolean) =>
+    Effect.gen(function* () {
+      if (job.runId !== null) {
+        yield* runtimeInstances
+          .upsertRuntimeInstance({
+            runId: job.runId,
+            status: "failed",
+            ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
+            errorMessage: error.message,
+            finishedAt: new Date(),
+          })
+          .pipe(swallowingFailure("failed runtime-instance update"));
+      }
+
+      yield* Effect.all(
+        [
+          markJobAsFailed
+            ? jobs
+                .markJobFailed({
+                  id: job.id,
+                  errorMessage: error.message,
+                  ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
+                })
+                .pipe(swallowingFailure("mark-failed update"))
+            : Effect.void,
+          job.runId === null
+            ? Effect.void
+            : attempts.markAttemptFailed({ id: job.runId }).pipe(swallowingFailure("mark-attempt-failed update")),
+        ],
+        { concurrency: "unbounded", discard: true },
+      );
+    });
+
+  // Phase A: build the image, publish it, and mark the job succeeded.
+  const buildAndPublish = Effect.gen(function* () {
     if (job.runId !== null) {
-      await runDb(attempts.markAttemptRunning({ id: job.runId })).catch(() => null);
+      yield* attempts
+        .markAttemptRunning({ id: job.runId })
+        .pipe(swallowingFailure("mark-attempt-running update"));
     }
 
-    const spec = newSandboxSchema.parse(job.requestPayload);
+    const spec = yield* Effect.try({
+      try: () => newSandboxSchema.parse(job.requestPayload),
+      catch: toSandboxBuildJobProcessingError,
+    });
+
     const compileSpec =
       options.compileSandboxSpec ??
-      (async (inputSpec: NewSandbox): Promise<SandboxBuild> => {
-        return compileSandboxBuildSpec({ blueprint: inputSpec });
-      });
-    const compileResult = await compileSpec(spec);
-    const imageArtifact = selectPublishableImageArtifact(compileResult);
-    const publishedImage = await options.registryClient.publishOciImage({
-      artifactPath: imageArtifact.path,
-      repository: job.repository,
-      tag: job.tag,
-      ...(imageArtifact.reference === undefined
-        ? {}
-        : { sourceReference: imageArtifact.reference }),
-    });
-    const resultPayload: SandboxBuild = compileResult;
+      ((inputSpec: NewSandbox): Promise<SandboxBuild> =>
+        compileSandboxBuildSpec({ blueprint: inputSpec }));
 
-    await runDb(
-      jobs.markJobSucceeded({
+    const compileResult = yield* Effect.tryPromise({
+      try: () => compileSpec(spec),
+      catch: toSandboxBuildJobProcessingError,
+    });
+
+    const imageArtifact = yield* Effect.try({
+      try: () => selectPublishableImageArtifact(compileResult),
+      catch: toSandboxBuildJobProcessingError,
+    });
+
+    const publishedImage = yield* Effect.tryPromise({
+      try: () =>
+        options.registryClient.publishOciImage({
+          artifactPath: imageArtifact.path,
+          repository: job.repository,
+          tag: job.tag,
+          ...(imageArtifact.reference === undefined
+            ? {}
+            : { sourceReference: imageArtifact.reference }),
+        }),
+      catch: toSandboxBuildJobProcessingError,
+    });
+
+    yield* jobs
+      .markJobSucceeded({
         id: job.id,
         builderId: compileResult.builder.id,
-        resultPayload,
+        resultPayload: compileResult,
         publishedReference: publishedImage.reference,
         publishedDigestReference: publishedImage.digestReference,
         publishedDigest: publishedImage.digest,
-      }),
-    );
-    buildSucceeded = true;
+      })
+      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
+    return { publishedImage, spec };
+  });
+
+  const { publishedImage, spec } = yield* buildAndPublish.pipe(
+    Effect.tapError((error) => failureCleanup(error, true)),
+  );
+
+  // Phase B: launch the runtime instance and record its state.
+  const launchAndRecord = Effect.gen(function* () {
     if (job.runId !== null) {
-      await runDb(
-        runtimeInstances.upsertRuntimeInstance({
-          runId: job.runId,
-          status: "pending",
-        }),
-      );
+      yield* runtimeInstances
+        .upsertRuntimeInstance({ runId: job.runId, status: "pending" })
+        .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
     }
 
-    const sandboxCloneAuth = await resolveSandboxCloneAuth({
+    const sandboxCloneAuth = yield* resolveSandboxCloneAuth({
       spec,
-      db: options.db,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
-    const dotfilesRuntimeEnv = await resolveDotfilesRuntimeEnv({
+    const dotfilesRuntimeEnv = yield* resolveDotfilesRuntimeEnv({
       spec,
-      db: options.db,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
+
     const runtimeSpec: NewSandbox =
       Object.keys(dotfilesRuntimeEnv).length === 0
         ? spec
@@ -206,17 +277,21 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
             },
           };
 
-    const runtimeLaunchResult = await launchPublishedImage({
-      spec: runtimeSpec,
-      runtimeAdapters: options.runtimeAdapters,
-      defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
-      publishedImage,
-      ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
+    const runtimeLaunchResult = yield* Effect.tryPromise({
+      try: () =>
+        launchPublishedImage({
+          spec: runtimeSpec,
+          runtimeAdapters: options.runtimeAdapters,
+          defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
+          publishedImage,
+          ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
+        }),
+      catch: toSandboxBuildJobProcessingError,
     });
 
     if (job.runId !== null) {
-      await runDb(
-        runtimeInstances.upsertRuntimeInstance({
+      yield* runtimeInstances
+        .upsertRuntimeInstance({
           runId: job.runId,
           status: runtimeLaunchResult.status,
           adapter: runtimeLaunchResult.adapter,
@@ -226,45 +301,42 @@ export const processSandboxBuildJob = async (options: ProcessSandboxBuildJobOpti
             ? {}
             : { endpoint: runtimeLaunchResult.endpoint }),
           launchedAt: new Date(),
-        }),
-      );
+        })
+        .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
     }
 
     if (job.runId !== null) {
-      await runDb(attempts.markAttemptSucceeded({ id: job.runId })).catch(() => null);
+      yield* attempts
+        .markAttemptSucceeded({ id: job.runId })
+        .pipe(swallowingFailure("mark-attempt-succeeded update"));
     }
+  });
 
-    return publishedImage;
-  } catch (error) {
-    const errorCode = toErrorCode(error);
+  yield* launchAndRecord.pipe(Effect.tapError((error) => failureCleanup(error, false)));
 
-    if (job.runId !== null) {
-      await runDb(
-        runtimeInstances.upsertRuntimeInstance({
-          runId: job.runId,
-          status: "failed",
-          ...(errorCode === undefined ? {} : { errorCode }),
-          errorMessage: toErrorMessage(error),
-          finishedAt: new Date(),
-        }),
-      );
-    }
+  return publishedImage;
+});
 
-    await Promise.allSettled([
-      ...(buildSucceeded
-        ? []
-        : [
-            runDb(
-              jobs.markJobFailed({
-                id: job.id,
-                errorMessage: toErrorMessage(error),
-                ...(errorCode === undefined ? {} : { errorCode }),
-              }),
-            ),
-          ]),
-      ...(job.runId === null ? [] : [runDb(attempts.markAttemptFailed({ id: job.runId }))]),
-    ]);
+/**
+ * Process a single sandbox build job.
+ *
+ * Thin Promise boundary used by the worker: it provides the live data-access layer (built from
+ * `options.db`) exactly once and runs the Effect pipeline. A failed job rejects with a
+ * {@link SandboxBuildJobProcessingError}.
+ */
+export const processSandboxBuildJob = (
+  options: ProcessSandboxBuildJobOptions,
+): Promise<PublishedImage | null> => {
+  const dbLayer = Layer.succeed(SealantDB, options.db);
+  const dataAccessLayer = Layer.mergeAll(
+    SandboxBuildJobRepoLive,
+    SandboxRuntimeInstanceRepoLive,
+    SandboxAttemptRepoLive,
+    GitHubInstallationRepoLive,
+    GitHubInstallationRepositoryCacheRepoLive,
+  ).pipe(Layer.provide(dbLayer));
 
-    throw error;
-  }
+  return Effect.runPromise(
+    processSandboxBuildJobEffect(options).pipe(Effect.provide(dataAccessLayer)),
+  );
 };

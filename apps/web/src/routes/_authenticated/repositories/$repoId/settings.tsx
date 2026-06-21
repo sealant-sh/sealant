@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { RepositoryDetailSection } from "@/components/app/repository-detail-section";
 import { getRepositoryById } from "@/lib/navigation/sandbox-data";
 
-export const Route = createFileRoute("/_authenticated/repositories/$repoId/settings" as never)({
+export const Route = createFileRoute("/_authenticated/repositories/$repoId/settings")({
   loader: ({ params }: { params: { repoId: string } }) => getRepositoryById(params.repoId),
   component: RepositorySettingsPage,
 });

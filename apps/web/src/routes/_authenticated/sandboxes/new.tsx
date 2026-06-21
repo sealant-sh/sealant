@@ -115,7 +115,7 @@ const DOTFILES_TARGET_OPTIONS: ReadonlyArray<{
   { value: "config", label: "~/.config" },
 ];
 
-export const Route = createFileRoute("/_authenticated/sandboxes/new" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/new")({
   component: NewSandboxPage,
 });
 

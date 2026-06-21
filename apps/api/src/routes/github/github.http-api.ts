@@ -1,6 +1,6 @@
-import { HttpApiBuilder } from "@effect/platform";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Layer } from "effect";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
   handleWebhook,
@@ -12,17 +12,17 @@ import {
 
 export const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github", (handlers) => {
   return handlers
-    .handle("listInstallations", ({ urlParams }) => listInstallations(urlParams))
-    .handle("listInstallationRepositories", ({ path, urlParams }) =>
+    .handle("listInstallations", ({ query }) => listInstallations(query))
+    .handle("listInstallationRepositories", ({ params, query }) =>
       listInstallationRepositories({
-        installationId: path.installationId,
-        query: urlParams,
+        installationId: params.installationId,
+        query,
       }),
     )
-    .handle("syncInstallation", ({ path, urlParams }) =>
+    .handle("syncInstallation", ({ params, query }) =>
       syncInstallation({
-        installationId: path.installationId,
-        query: urlParams,
+        installationId: params.installationId,
+        query,
       }),
     )
     .handle("importInstallation", ({ payload }) => importInstallation(payload))
@@ -43,5 +43,7 @@ export const GitHubHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "github"
 });
 
 export const makeGitHubHttpApiLayer = () => {
-  return HttpApiBuilder.api(ControlPlaneAPI).pipe(Layer.provide(GitHubHandlersLive));
+  return HttpApiBuilder.layer(ControlPlaneAPI, { openapiPath: "/openapi.json" }).pipe(
+    Layer.provide(GitHubHandlersLive),
+  );
 };

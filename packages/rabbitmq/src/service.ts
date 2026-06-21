@@ -15,19 +15,17 @@ import { assertRabbitMqTopology, type RabbitMqTopology } from "./topology.js";
 /**
  * Connection configuration injected into the RabbitMQ service layer.
  */
-export class RabbitMqConnectionConfig extends Context.Tag(
-  "@sealant/rabbitmq/RabbitMqConnectionConfig",
-)<
+export class RabbitMqConnectionConfig extends Context.Service<
   RabbitMqConnectionConfig,
   {
     readonly connectionUrl: string;
   }
->() {}
+>()("@sealant/rabbitmq/RabbitMqConnectionConfig") {}
 
 /**
  * Service contract for RabbitMQ operations used across publishers/consumers.
  */
-export class RabbitMqServiceTag extends Context.Tag("@sealant/rabbitmq/RabbitMqService")<
+export class RabbitMqServiceTag extends Context.Service<
   RabbitMqServiceTag,
   {
     readonly getSingleton: () => Promise<RabbitMqSingleton>;
@@ -43,12 +41,12 @@ export class RabbitMqServiceTag extends Context.Tag("@sealant/rabbitmq/RabbitMqS
     readonly assertTopology: (topology: RabbitMqTopology) => Promise<void>;
     readonly close: () => Promise<void>;
   }
->() {}
+>()("@sealant/rabbitmq/RabbitMqService") {}
 
 /**
  * Inferred service type from the RabbitMQ tag contract.
  */
-export type RabbitMqService = Context.Tag.Service<typeof RabbitMqServiceTag>;
+export type RabbitMqService = Context.Service.Shape<typeof RabbitMqServiceTag>;
 
 /**
  * Live RabbitMQ implementation built on top of existing singleton utilities.

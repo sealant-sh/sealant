@@ -1,112 +1,112 @@
 import {
   GitHubInstallationRepo,
-  GitHubInstallationRepoLive,
   GitHubInstallationRepositoryCacheRepo,
-  GitHubInstallationRepositoryCacheRepoLive,
-  SealantDB,
-  type DB,
 } from "@sealant/db";
 import {
   parseGitHubInstallationRepositoryAuthRef,
   type GitHubSourceIntegration,
 } from "@sealant/source-integrations";
 import type { NewSandbox } from "@sealant/validators";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 
 import type { SandboxCloneAuth } from "../runtime/index.js";
+import {
+  sandboxBuildJobProcessingError,
+  toSandboxBuildJobProcessingError,
+} from "./errors.js";
 
-const createWorkerError = (code: string, message: string) => {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
-};
-
-const resolveInstallationAccessToken = async (input: {
+interface ResolveInstallationAccessTokenInput {
   readonly authRef: string | undefined;
-  readonly db: DB;
   readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
   readonly unavailableIntegrationMessage: string;
   readonly unavailableRepositoryContext: string;
   readonly missingInstallationContext: string;
   readonly inactiveInstallationContext: string;
-}): Promise<string | undefined> => {
-  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(input.authRef);
+}
 
-  if (installationRepositoryId === undefined) {
-    return undefined;
-  }
+/**
+ * Resolve a short-lived GitHub installation access token for an installation-repository auth ref.
+ *
+ * Returns `undefined` when the auth ref does not reference a GitHub installation repository;
+ * fails with a {@link SandboxBuildJobProcessingError} when the integration is unavailable or the
+ * installation cannot be resolved. The GitHub repositories are taken from context, so a single
+ * data-access layer is provided once at the worker boundary.
+ */
+const resolveInstallationAccessToken = Effect.fn("resolveInstallationAccessToken")(
+  function* (input: ResolveInstallationAccessTokenInput) {
+    const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(input.authRef);
 
-  if (
-    input.gitHubSourceIntegration === undefined ||
-    !input.gitHubSourceIntegration.isConfigured()
-  ) {
-    throw createWorkerError("github-integration-unavailable", input.unavailableIntegrationMessage);
-  }
+    if (installationRepositoryId === undefined) {
+      return undefined;
+    }
 
-  const dbLayer = Layer.succeed(SealantDB, input.db);
-  const dataAccessLayer = Layer.mergeAll(
-    GitHubInstallationRepositoryCacheRepoLive,
-    GitHubInstallationRepoLive,
-  ).pipe(Layer.provide(dbLayer));
+    if (
+      input.gitHubSourceIntegration === undefined ||
+      !input.gitHubSourceIntegration.isConfigured()
+    ) {
+      return yield* sandboxBuildJobProcessingError({
+        errorCode: "github-integration-unavailable",
+        message: input.unavailableIntegrationMessage,
+      });
+    }
 
-  const repos = await Effect.runPromise(
-    Effect.gen(function* () {
-      return {
-        installationRepositoryCache: yield* GitHubInstallationRepositoryCacheRepo,
-        installationRepository: yield* GitHubInstallationRepo,
-      };
-    }).pipe(Effect.provide(dataAccessLayer)),
-  );
+    const installationRepositories = yield* GitHubInstallationRepositoryCacheRepo;
+    const installations = yield* GitHubInstallationRepo;
 
-  const installationRepositoryRecord = await Effect.runPromise(
-    repos.installationRepositoryCache.getInstallationRepositoryById(installationRepositoryId),
-  );
+    const installationRepositoryRecord = yield* installationRepositories
+      .getInstallationRepositoryById(installationRepositoryId)
+      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-  if (
-    installationRepositoryRecord === undefined ||
-    installationRepositoryRecord.removedAt !== null
-  ) {
-    throw createWorkerError(
-      "github-installation-repository-unavailable",
-      `GitHub installation repository '${installationRepositoryId}' is not available for ${input.unavailableRepositoryContext}.`,
-    );
-  }
+    if (
+      installationRepositoryRecord === undefined ||
+      installationRepositoryRecord.removedAt !== null
+    ) {
+      return yield* sandboxBuildJobProcessingError({
+        errorCode: "github-installation-repository-unavailable",
+        message: `GitHub installation repository '${installationRepositoryId}' is not available for ${input.unavailableRepositoryContext}.`,
+      });
+    }
 
-  const installation = await Effect.runPromise(
-    repos.installationRepository.getInstallationById(installationRepositoryRecord.installationId),
-  );
+    const installation = yield* installations
+      .getInstallationById(installationRepositoryRecord.installationId)
+      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-  if (installation === undefined) {
-    throw createWorkerError(
-      "github-installation-missing",
-      `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for ${input.missingInstallationContext}.`,
-    );
-  }
+    if (installation === undefined) {
+      return yield* sandboxBuildJobProcessingError({
+        errorCode: "github-installation-missing",
+        message: `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for ${input.missingInstallationContext}.`,
+      });
+    }
 
-  if (installation.status !== "active") {
-    throw createWorkerError(
-      "github-installation-inactive",
-      `GitHub installation '${installation.id}' is not active for ${input.inactiveInstallationContext}.`,
-    );
-  }
+    if (installation.status !== "active") {
+      return yield* sandboxBuildJobProcessingError({
+        errorCode: "github-installation-inactive",
+        message: `GitHub installation '${installation.id}' is not active for ${input.inactiveInstallationContext}.`,
+      });
+    }
 
-  const accessToken = await Effect.runPromise(
-    input.gitHubSourceIntegration.createInstallationAccessToken(
-      installation.externalInstallationId,
-    ),
-  );
+    const accessToken = yield* input.gitHubSourceIntegration
+      .createInstallationAccessToken(installation.externalInstallationId)
+      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-  return accessToken.token;
-};
+    return accessToken.token;
+  },
+);
 
-export const resolveSandboxCloneAuth = async (input: {
+export interface ResolveSandboxAuthInput {
   readonly spec: NewSandbox;
-  readonly db: DB;
   readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
-}): Promise<SandboxCloneAuth | undefined> => {
-  const token = await resolveInstallationAccessToken({
+}
+
+/**
+ * Resolve clone auth for the sandbox source repository, minting a GitHub installation token when
+ * the source is GitHub-backed. Yields `undefined` when no installation auth is required.
+ */
+export const resolveSandboxCloneAuth = Effect.fn("resolveSandboxCloneAuth")(function* (
+  input: ResolveSandboxAuthInput,
+) {
+  const token = yield* resolveInstallationAccessToken({
     authRef: input.spec.sources.sandbox.authRef,
-    db: input.db,
     gitHubSourceIntegration: input.gitHubSourceIntegration,
     unavailableIntegrationMessage:
       "GitHub source integration is not configured for GitHub-backed sandbox launches.",
@@ -119,23 +119,26 @@ export const resolveSandboxCloneAuth = async (input: {
     return undefined;
   }
 
-  return {
+  const auth: SandboxCloneAuth = {
     type: "http-token",
     username: "x-access-token",
     token,
   };
-};
 
-export const resolveDotfilesRuntimeEnv = async (input: {
-  readonly spec: NewSandbox;
-  readonly db: DB;
-  readonly gitHubSourceIntegration: GitHubSourceIntegration | undefined;
-}): Promise<Record<string, string>> => {
+  return auth;
+});
+
+/**
+ * Resolve the runtime environment variables that inject a GitHub installation token for
+ * dotfiles config repos applied at runtime. Returns an empty record when no token is required.
+ */
+export const resolveDotfilesRuntimeEnv = Effect.fn("resolveDotfilesRuntimeEnv")(function* (
+  input: ResolveSandboxAuthInput,
+) {
   const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
 
-  const token = await resolveInstallationAccessToken({
+  const token = yield* resolveInstallationAccessToken({
     authRef: dotfilesSource?.authRef,
-    db: input.db,
     gitHubSourceIntegration: input.gitHubSourceIntegration,
     unavailableIntegrationMessage:
       "GitHub source integration is not configured for GitHub-backed dotfiles config repos.",
@@ -145,11 +148,11 @@ export const resolveDotfilesRuntimeEnv = async (input: {
   });
 
   if (token === undefined) {
-    return {};
+    return {} as Record<string, string>;
   }
 
   return {
     SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
     SEALANT_DOTFILES_HTTP_TOKEN: token,
-  };
-};
+  } as Record<string, string>;
+});

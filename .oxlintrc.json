@@ -17,6 +17,7 @@
     "import/no-cycle": "error",
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
-    "unicorn/prefer-node-protocol": "error"
+    "unicorn/prefer-node-protocol": "error",
+    "no-underscore-dangle": ["error", { "allow": ["_splat", "_values"] }]
   }
 }

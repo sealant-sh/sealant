@@ -1,20 +1,20 @@
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform";
 import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 
-const NonEmptyString = Schema.NonEmptyTrimmedString;
+const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
-export const packageTargetOsSchema = Schema.Literal("arch", "fedora", "nix");
+export const packageTargetOsSchema = Schema.Literals(["arch", "fedora", "nix"]);
 export type PackageTargetOs = typeof packageTargetOsSchema.Type;
 
-export const packageResolutionStatusSchema = Schema.Literal(
+export const packageResolutionStatusSchema = Schema.Literals([
   "resolved",
   "ambiguous",
   "unsupported",
   "not-found",
   "invalid",
-);
+]);
 
-export const packageResolutionSourceSchema = Schema.Literal("cache", "repology", "override");
+export const packageResolutionSourceSchema = Schema.Literals(["cache", "repology", "override"]);
 
 export const packageOsSupportSchema = Schema.Struct({
   supported: Schema.Boolean,
@@ -56,32 +56,28 @@ export type ResolvePackageQuery = typeof resolvePackageQuerySchema.Type;
 export const resolvePackageResponseSchema = packageResolutionSchema;
 export type ResolvePackageResponse = typeof resolvePackageResponseSchema.Type;
 
-export class PackagesBadGatewayError extends Schema.TaggedError<PackagesBadGatewayError>(
-  "PackagesBadGatewayError",
-)(
+export class PackagesBadGatewayError extends Schema.TaggedErrorClass<PackagesBadGatewayError>()(
   "PackagesBadGatewayError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 502 }),
+  { httpApiStatus: 502 },
 ) {}
 
-export class PackagesInternalServerError extends Schema.TaggedError<PackagesInternalServerError>(
-  "PackagesInternalServerError",
-)(
+export class PackagesInternalServerError extends Schema.TaggedErrorClass<PackagesInternalServerError>()(
   "PackagesInternalServerError",
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 500 }),
+  { httpApiStatus: 500 },
 ) {}
 
 export const PackagesGroup = HttpApiGroup.make("packages")
   .add(
-    HttpApiEndpoint.get("resolvePackage", "/resolve")
-      .setUrlParams(resolvePackageQuerySchema)
-      .addSuccess(resolvePackageResponseSchema)
-      .addError(PackagesBadGatewayError)
-      .addError(PackagesInternalServerError),
+    HttpApiEndpoint.get("resolvePackage", "/resolve", {
+      query: resolvePackageQuerySchema,
+      success: resolvePackageResponseSchema,
+      error: [PackagesBadGatewayError, PackagesInternalServerError],
+    }),
   )
   .annotate(OpenApi.Description, "Package normalization and distro resolution operations.");

@@ -32,31 +32,27 @@ export const createSandboxRuntimeInstanceRepository = (): never => {
 /** @deprecated Use SandboxRuntimeInstanceRepoService instead. */
 export type SandboxRuntimeInstanceRepository = SandboxRuntimeInstanceRepoService;
 
-const sandboxRuntimeInstanceRepoOperationSchema = Schema.Literal(
+const sandboxRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
   "upsertRuntimeInstance",
-);
+]);
 
-export class SandboxRuntimeInstanceRepoInvariantError extends Schema.TaggedError<SandboxRuntimeInstanceRepoInvariantError>(
-  "SandboxRuntimeInstanceRepoInvariantError",
-)("SandboxRuntimeInstanceRepoInvariantError", {
+export class SandboxRuntimeInstanceRepoInvariantError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoInvariantError>()("SandboxRuntimeInstanceRepoInvariantError", {
   operation: sandboxRuntimeInstanceRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class SandboxRuntimeInstanceRepoUnexpectedError extends Schema.TaggedError<SandboxRuntimeInstanceRepoUnexpectedError>(
-  "SandboxRuntimeInstanceRepoUnexpectedError",
-)("SandboxRuntimeInstanceRepoUnexpectedError", {
+export class SandboxRuntimeInstanceRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoUnexpectedError>()("SandboxRuntimeInstanceRepoUnexpectedError", {
   operation: sandboxRuntimeInstanceRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const sandboxRuntimeInstanceRepoErrorSchema = Schema.Union(
+export const sandboxRuntimeInstanceRepoErrorSchema = Schema.Union([
   SandboxRuntimeInstanceRepoInvariantError,
   SandboxRuntimeInstanceRepoUnexpectedError,
-);
+]);
 
 export type SandboxRuntimeInstanceRepoError = typeof sandboxRuntimeInstanceRepoErrorSchema.Type;
 
@@ -101,10 +97,10 @@ export interface SandboxRuntimeInstanceRepoService {
   ) => Effect.Effect<ReadonlyMap<string, SandboxRuntimeInstance>, SandboxRuntimeInstanceRepoError>;
 }
 
-export class SandboxRuntimeInstanceRepo extends Context.Tag("SandboxRuntimeInstanceRepo")<
+export class SandboxRuntimeInstanceRepo extends Context.Service<
   SandboxRuntimeInstanceRepo,
   SandboxRuntimeInstanceRepoService
->() {}
+>()("SandboxRuntimeInstanceRepo") {}
 
 export const SandboxRuntimeInstanceRepoLive = Layer.effect(
   SandboxRuntimeInstanceRepo,

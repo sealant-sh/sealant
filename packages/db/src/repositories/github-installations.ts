@@ -62,7 +62,7 @@ export const createGitHubInstallationRepository = (): never => {
 /** @deprecated Use GitHubInstallationRepoService instead. */
 export type GitHubInstallationRepository = GitHubInstallationRepoService;
 
-const gitHubInstallationRepoOperationSchema = Schema.Literal(
+const gitHubInstallationRepoOperationSchema = Schema.Literals([
   "getInstallationByExternalId",
   "getInstallationById",
   "grantInstallationToUser",
@@ -73,27 +73,23 @@ const gitHubInstallationRepoOperationSchema = Schema.Literal(
   "setInstallationStatus",
   "upsertInstallation",
   "userHasInstallationGrant",
-);
+]);
 
-export class GitHubInstallationRepoInvariantError extends Schema.TaggedError<GitHubInstallationRepoInvariantError>(
-  "GitHubInstallationRepoInvariantError",
-)("GitHubInstallationRepoInvariantError", {
+export class GitHubInstallationRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepoInvariantError>()("GitHubInstallationRepoInvariantError", {
   operation: gitHubInstallationRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class GitHubInstallationRepoUnexpectedError extends Schema.TaggedError<GitHubInstallationRepoUnexpectedError>(
-  "GitHubInstallationRepoUnexpectedError",
-)("GitHubInstallationRepoUnexpectedError", {
+export class GitHubInstallationRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepoUnexpectedError>()("GitHubInstallationRepoUnexpectedError", {
   operation: gitHubInstallationRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const gitHubInstallationRepoErrorSchema = Schema.Union(
+export const gitHubInstallationRepoErrorSchema = Schema.Union([
   GitHubInstallationRepoInvariantError,
   GitHubInstallationRepoUnexpectedError,
-);
+]);
 
 export type GitHubInstallationRepoError = typeof gitHubInstallationRepoErrorSchema.Type;
 
@@ -159,10 +155,10 @@ export interface GitHubInstallationRepoService {
   ) => Effect.Effect<readonly GitHubInstallationUserGrant[], GitHubInstallationRepoError>;
 }
 
-export class GitHubInstallationRepo extends Context.Tag("GitHubInstallationRepo")<
+export class GitHubInstallationRepo extends Context.Service<
   GitHubInstallationRepo,
   GitHubInstallationRepoService
->() {}
+>()("GitHubInstallationRepo") {}
 
 export const GitHubInstallationRepoLive = Layer.effect(
   GitHubInstallationRepo,

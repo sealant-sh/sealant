@@ -86,7 +86,7 @@ export const createRepositoryProfileRepository = (): never => {
 /** @deprecated Use RepositoryProfileRepoService instead. */
 export type RepositoryProfileRepository = RepositoryProfileRepoService;
 
-const repositoryProfileRepoOperationSchema = Schema.Literal(
+const repositoryProfileRepoOperationSchema = Schema.Literals([
   "createRepositoryProfile",
   "createRepositoryProfileRevision",
   "getRepositoryById",
@@ -97,27 +97,23 @@ const repositoryProfileRepoOperationSchema = Schema.Literal(
   "replaceRepositoryProfileLinks",
   "setActiveRepositoryProfileRevision",
   "upsertRepository",
-);
+]);
 
-export class RepositoryProfileRepoInvariantError extends Schema.TaggedError<RepositoryProfileRepoInvariantError>(
-  "RepositoryProfileRepoInvariantError",
-)("RepositoryProfileRepoInvariantError", {
+export class RepositoryProfileRepoInvariantError extends Schema.TaggedErrorClass<RepositoryProfileRepoInvariantError>()("RepositoryProfileRepoInvariantError", {
   operation: repositoryProfileRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class RepositoryProfileRepoUnexpectedError extends Schema.TaggedError<RepositoryProfileRepoUnexpectedError>(
-  "RepositoryProfileRepoUnexpectedError",
-)("RepositoryProfileRepoUnexpectedError", {
+export class RepositoryProfileRepoUnexpectedError extends Schema.TaggedErrorClass<RepositoryProfileRepoUnexpectedError>()("RepositoryProfileRepoUnexpectedError", {
   operation: repositoryProfileRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const repositoryProfileRepoErrorSchema = Schema.Union(
+export const repositoryProfileRepoErrorSchema = Schema.Union([
   RepositoryProfileRepoInvariantError,
   RepositoryProfileRepoUnexpectedError,
-);
+]);
 
 export type RepositoryProfileRepoError = typeof repositoryProfileRepoErrorSchema.Type;
 
@@ -184,10 +180,10 @@ export interface RepositoryProfileRepoService {
   ) => Effect.Effect<RepositoryProfileRevisionBundle | null, RepositoryProfileRepoError>;
 }
 
-export class RepositoryProfileRepo extends Context.Tag("RepositoryProfileRepo")<
+export class RepositoryProfileRepo extends Context.Service<
   RepositoryProfileRepo,
   RepositoryProfileRepoService
->() {}
+>()("RepositoryProfileRepo") {}
 
 export const RepositoryProfileRepoLive = Layer.effect(
   RepositoryProfileRepo,

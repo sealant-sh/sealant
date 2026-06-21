@@ -1,4 +1,4 @@
-import { HttpApi, OpenApi } from "@effect/platform";
+import { HttpApi, OpenApi } from "effect/unstable/httpapi";
 
 import { GitHubGroup } from "./github.js";
 import { PackagesGroup } from "./packages.js";

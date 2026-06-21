@@ -252,7 +252,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       session.on("env", (acceptEnv, _rejectEnv, info) => {
         // Accumulate client-requested env (e.g. TERM) for openSession/exec.
         sessionEnv[info.key] = info.val;
-        acceptEnv();
+        // OpenSSH sends env requests with want_reply=0 (e.g. `SendEnv LANG`), so ssh2 passes no
+        // accept callback. Calling it unconditionally throws and tears down the whole connection.
+        acceptEnv?.();
       });
 
       session.on("window-change", (acceptWindowChange, _rejectWindowChange, info) => {

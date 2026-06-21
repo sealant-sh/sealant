@@ -113,7 +113,7 @@ export const createIssueWorkflowRepository = (): never => {
 /** @deprecated Use IssueWorkflowRepoService instead. */
 export type IssueWorkflowRepository = IssueWorkflowRepoService;
 
-const issueWorkflowRepoOperationSchema = Schema.Literal(
+const issueWorkflowRepoOperationSchema = Schema.Literals([
   "createIssueWorkflow",
   "createIssueWorkflowExecution",
   "linkExecutionPullRequest",
@@ -123,27 +123,23 @@ const issueWorkflowRepoOperationSchema = Schema.Literal(
   "listWorkflowExecutions",
   "upsertIssue",
   "upsertPullRequest",
-);
+]);
 
-export class IssueWorkflowRepoInvariantError extends Schema.TaggedError<IssueWorkflowRepoInvariantError>(
-  "IssueWorkflowRepoInvariantError",
-)("IssueWorkflowRepoInvariantError", {
+export class IssueWorkflowRepoInvariantError extends Schema.TaggedErrorClass<IssueWorkflowRepoInvariantError>()("IssueWorkflowRepoInvariantError", {
   operation: issueWorkflowRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class IssueWorkflowRepoUnexpectedError extends Schema.TaggedError<IssueWorkflowRepoUnexpectedError>(
-  "IssueWorkflowRepoUnexpectedError",
-)("IssueWorkflowRepoUnexpectedError", {
+export class IssueWorkflowRepoUnexpectedError extends Schema.TaggedErrorClass<IssueWorkflowRepoUnexpectedError>()("IssueWorkflowRepoUnexpectedError", {
   operation: issueWorkflowRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const issueWorkflowRepoErrorSchema = Schema.Union(
+export const issueWorkflowRepoErrorSchema = Schema.Union([
   IssueWorkflowRepoInvariantError,
   IssueWorkflowRepoUnexpectedError,
-);
+]);
 
 export type IssueWorkflowRepoError = typeof issueWorkflowRepoErrorSchema.Type;
 
@@ -202,10 +198,10 @@ export interface IssueWorkflowRepoService {
   ) => Effect.Effect<readonly IssueWorkflowExecutionPullRequestRecord[], IssueWorkflowRepoError>;
 }
 
-export class IssueWorkflowRepo extends Context.Tag("IssueWorkflowRepo")<
+export class IssueWorkflowRepo extends Context.Service<
   IssueWorkflowRepo,
   IssueWorkflowRepoService
->() {}
+>()("IssueWorkflowRepo") {}
 
 export const IssueWorkflowRepoLive = Layer.effect(
   IssueWorkflowRepo,

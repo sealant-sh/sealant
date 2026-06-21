@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/trace" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/trace")({
   beforeLoad: ({ params }: { params: { sandboxId: string } }) => {
     throw redirect({
       to: `/sandboxes/${encodeURIComponent(params.sandboxId)}/spec` as never,

@@ -7,6 +7,7 @@ import {
   type PackageResolutionStatus,
   type PackageTargetOs,
 } from "@sealant/validators";
+import { Effect, Schema } from "effect";
 
 export { packageResolutionSchema, packageTargetOsSchema };
 export type {
@@ -487,9 +488,13 @@ export interface PackageResolutionCacheValue {
   readonly expiresAt: Date;
 }
 
+/**
+ * Resolution cache port. Implementations degrade gracefully — a cache read/write failure must be
+ * absorbed (e.g. by disabling the cache) rather than surfaced — so both methods are total.
+ */
 export interface PackageResolutionCacheStore {
-  getByQuery(query: string): Promise<PackageResolutionCacheValue | null>;
-  setByQuery(input: PackageResolutionCacheValue): Promise<void>;
+  getByQuery(query: string): Effect.Effect<PackageResolutionCacheValue | null>;
+  setByQuery(input: PackageResolutionCacheValue): Effect.Effect<void>;
 }
 
 export interface RepologyClient {
@@ -577,14 +582,32 @@ export const createRepologyClient = (options: RepologyClientOptions): RepologyCl
   };
 };
 
+/** Failure raised when an upstream (Repology) lookup cannot be completed. */
+export class PackageResolutionError extends Schema.TaggedErrorClass<PackageResolutionError>()(
+  "PackageResolutionError",
+  {
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
+
 export interface PackageStandardizer {
-  resolvePackage(input: { query: string; targetOs?: PackageTargetOs }): Promise<PackageResolution>;
+  resolvePackage(input: {
+    query: string;
+    targetOs?: PackageTargetOs;
+  }): Effect.Effect<PackageResolution, PackageResolutionError>;
 }
 
 export interface CreatePackageStandardizerOptions {
   readonly repologyClient: RepologyClient;
   readonly cacheStore?: PackageResolutionCacheStore;
 }
+
+const repologyError = (operation: string, target: string, cause: unknown): PackageResolutionError =>
+  new PackageResolutionError({
+    message: cause instanceof Error ? cause.message : `Repology ${operation} failed for '${target}'.`,
+    cause,
+  });
 
 const invalidResolution = (requested: string, normalized: string, now: Date): PackageResolution => {
   const expiresAt = new Date(now.getTime() + 1000 * 60 * 60);
@@ -612,8 +635,21 @@ const parseCachedResolution = (payload: unknown): PackageResolution | null => {
 export const createPackageStandardizer = (
   options: CreatePackageStandardizerOptions,
 ): PackageStandardizer => {
+  const writeCache = (cacheKey: string, resolution: PackageResolution) =>
+    options.cacheStore === undefined
+      ? Effect.void
+      : options.cacheStore.setByQuery({
+          query: cacheKey,
+          payload: resolution,
+          expiresAt: new Date(resolution.expiresAt),
+        });
+
   return {
-    resolvePackage: async ({ query, targetOs = defaultPackageTargetOs }) => {
+    resolvePackage: Effect.fn("PackageStandardizer.resolvePackage")(function* (input: {
+      query: string;
+      targetOs?: PackageTargetOs;
+    }) {
+      const { query, targetOs = defaultPackageTargetOs } = input;
       const requested = query.trim();
       const normalized = normalizePackageQuery(requested);
       const now = new Date();
@@ -624,16 +660,14 @@ export const createPackageStandardizer = (
       }
 
       if (options.cacheStore !== undefined) {
-        const cached = await options.cacheStore.getByQuery(cacheKey);
+        const cached = yield* options.cacheStore.getByQuery(cacheKey);
 
         if (cached !== null && cached.expiresAt.getTime() > now.getTime()) {
           const parsed = parseCachedResolution(cached.payload);
 
           if (parsed !== null) {
-            return {
-              ...parsed,
-              source: "cache",
-            };
+            const cachedResolution: PackageResolution = { ...parsed, source: "cache" };
+            return cachedResolution;
           }
         }
       }
@@ -648,18 +682,15 @@ export const createPackageStandardizer = (
           now,
         });
 
-        if (options.cacheStore !== undefined) {
-          await options.cacheStore.setByQuery({
-            query: cacheKey,
-            payload: resolution,
-            expiresAt: new Date(resolution.expiresAt),
-          });
-        }
+        yield* writeCache(cacheKey, resolution);
 
         return resolution;
       }
 
-      const directProjectEntries = await options.repologyClient.getProject(normalized);
+      const directProjectEntries = yield* Effect.tryPromise({
+        try: () => options.repologyClient.getProject(normalized),
+        catch: (cause) => repologyError("getProject", normalized, cause),
+      });
 
       let resolution: PackageResolution;
 
@@ -673,7 +704,10 @@ export const createPackageStandardizer = (
           now,
         });
       } else {
-        const searchResult = await options.repologyClient.searchProjects(normalized, targetOs);
+        const searchResult = yield* Effect.tryPromise({
+          try: () => options.repologyClient.searchProjects(normalized, targetOs),
+          catch: (cause) => repologyError("searchProjects", normalized, cause),
+        });
         const bestProject = bestProjectFromSearch(searchResult, normalized);
 
         if (bestProject === null) {
@@ -698,16 +732,10 @@ export const createPackageStandardizer = (
         }
       }
 
-      if (options.cacheStore !== undefined) {
-        await options.cacheStore.setByQuery({
-          query: cacheKey,
-          payload: resolution,
-          expiresAt: new Date(resolution.expiresAt),
-        });
-      }
+      yield* writeCache(cacheKey, resolution);
 
       return resolution;
-    },
+    }),
   };
 };
 

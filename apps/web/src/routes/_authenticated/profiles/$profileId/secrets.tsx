@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ProfileDetailSection } from "@/components/app/profile-detail-section";
 import { getProfileById } from "@/lib/navigation/sandbox-data";
 
-export const Route = createFileRoute("/_authenticated/profiles/$profileId/secrets" as never)({
+export const Route = createFileRoute("/_authenticated/profiles/$profileId/secrets")({
   loader: ({ params }: { params: { profileId: string } }) => getProfileById(params.profileId),
   component: ProfileSecretsPage,
 });

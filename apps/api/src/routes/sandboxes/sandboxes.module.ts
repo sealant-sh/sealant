@@ -49,7 +49,7 @@ import {
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
 import { newSandboxSchema, type NewSandbox } from "@sealant/validators";
-import { Context, Effect } from "effect";
+import { Context, Effect, Result } from "effect";
 
 import { env } from "../../runtime-env.js";
 import {
@@ -66,27 +66,27 @@ interface SandboxEventDraft {
   readonly data?: Record<string, unknown>;
 }
 
-type SandboxRepoService = Context.Tag.Service<typeof SandboxRepo>;
-type SandboxAttemptRepoService = Context.Tag.Service<typeof SandboxAttemptRepo>;
-type SandboxBuildJobRepoService = Context.Tag.Service<typeof SandboxBuildJobRepo>;
-type SandboxRuntimeInstanceRepoService = Context.Tag.Service<typeof SandboxRuntimeInstanceRepo>;
+type SandboxRepoService = Context.Service.Shape<typeof SandboxRepo>;
+type SandboxAttemptRepoService = Context.Service.Shape<typeof SandboxAttemptRepo>;
+type SandboxBuildJobRepoService = Context.Service.Shape<typeof SandboxBuildJobRepo>;
+type SandboxRuntimeInstanceRepoService = Context.Service.Shape<typeof SandboxRuntimeInstanceRepo>;
 
 type SandboxRecord = NonNullable<
-  Effect.Effect.Success<ReturnType<SandboxRepoService["getSandboxById"]>>
+  Effect.Success<ReturnType<SandboxRepoService["getSandboxById"]>>
 >;
 type SandboxAttemptRecord = NonNullable<
-  Effect.Effect.Success<ReturnType<SandboxAttemptRepoService["getAttemptById"]>>
+  Effect.Success<ReturnType<SandboxAttemptRepoService["getAttemptById"]>>
 >;
-type SandboxBuildJobRecord = Effect.Effect.Success<
+type SandboxBuildJobRecord = Effect.Success<
   ReturnType<SandboxBuildJobRepoService["getLatestJobByRunId"]>
 >;
-type SandboxRuntimeInstanceRecord = Effect.Effect.Success<
+type SandboxRuntimeInstanceRecord = Effect.Success<
   ReturnType<SandboxRuntimeInstanceRepoService["getRuntimeInstanceByRunId"]>
 >;
-type SandboxAttemptSnapshotRecord = Effect.Effect.Success<
+type SandboxAttemptSnapshotRecord = Effect.Success<
   ReturnType<SandboxAttemptRepoService["getAttemptSnapshotByRunId"]>
 >;
-type SandboxRunLinkRecord = Effect.Effect.Success<
+type SandboxRunLinkRecord = Effect.Success<
   ReturnType<SandboxRepoService["listSandboxAttemptLinks"]>
 >[number];
 
@@ -346,17 +346,19 @@ const standardizeRequestedPackages = (spec: NewSandbox) => {
     const packageErrors: string[] = [];
 
     for (const requested of requestedPackages) {
-      const resolution = yield* Effect.tryPromise({
-        try: () =>
-          packageStandardizer.resolvePackage({
-            query: requested,
-            targetOs,
-          }),
-        catch: (error) =>
-          new SandboxInternalServerError({
-            message: toErrorMessage(error, "Package resolution failed."),
-          }),
-      });
+      const resolution = yield* packageStandardizer
+        .resolvePackage({
+          query: requested,
+          targetOs,
+        })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new SandboxInternalServerError({
+                message: toErrorMessage(error, "Package resolution failed."),
+              }),
+          ),
+        );
 
       const osSupport = resolution.osSupport[targetOs];
 
@@ -945,7 +947,7 @@ export const createSandbox = (input: {
     const sandboxBuildJobs = yield* SandboxBuildJobRepo;
     const sandboxAttempts = yield* SandboxAttemptRepo;
 
-    const persistenceResult = yield* Effect.either(
+    const persistenceResult = yield* Effect.result(
       Effect.gen(function* () {
         const sandbox = yield* sandboxes.createSandbox({
           id: sandboxId,
@@ -991,8 +993,8 @@ export const createSandbox = (input: {
       }),
     );
 
-    if (persistenceResult._tag === "Left") {
-      const persistenceError = persistenceResult.left;
+    if (Result.isFailure(persistenceResult)) {
+      const persistenceError = persistenceResult.failure;
 
       if (isForeignKeyConstraintError(persistenceError)) {
         return yield* new SandboxNotFoundError({
@@ -1022,7 +1024,7 @@ export const createSandbox = (input: {
         }),
       catch: (error) => error,
     }).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.gen(function* () {
           yield* Effect.all(
             [
@@ -1042,7 +1044,14 @@ export const createSandbox = (input: {
             {
               concurrency: "unbounded",
             },
-          ).pipe(Effect.catchAll(() => Effect.void));
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Sandbox ${sandboxId} rollback writes failed after queue publish failure; state may be inconsistent.`,
+                cause,
+              ),
+            ),
+          );
 
           return yield* new SandboxBadGatewayError({
             message: `Sandbox ${sandboxId} was recorded but could not be queued.`,

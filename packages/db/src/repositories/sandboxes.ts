@@ -57,7 +57,7 @@ export const createSandboxRepository = (): never => {
 export type SandboxRepository = SandboxRepoService;
 
 // Keep operation names constrained so all repo failures include consistent metadata.
-const sandboxRepoOperationSchema = Schema.Literal(
+const sandboxRepoOperationSchema = Schema.Literals([
   "createSandbox",
   "getSandboxByAttemptId",
   "getSandboxById",
@@ -66,31 +66,27 @@ const sandboxRepoOperationSchema = Schema.Literal(
   "listSandboxes",
   "setSandboxName",
   "setSandboxStatus",
-);
+]);
 
 // Invariant errors represent expected domain/consistency violations
 // (for example, an insert/update path that should return a row but did not).
-export class SandboxRepoInvariantError extends Schema.TaggedError<SandboxRepoInvariantError>(
-  "SandboxRepoInvariantError",
-)("SandboxRepoInvariantError", {
+export class SandboxRepoInvariantError extends Schema.TaggedErrorClass<SandboxRepoInvariantError>()("SandboxRepoInvariantError", {
   operation: sandboxRepoOperationSchema,
   message: Schema.String,
 }) {}
 
 // Unexpected errors wrap unknown defects from infra/driver boundaries
 // so callers can still pattern-match on a typed repo error channel.
-export class SandboxRepoUnexpectedError extends Schema.TaggedError<SandboxRepoUnexpectedError>(
-  "SandboxRepoUnexpectedError",
-)("SandboxRepoUnexpectedError", {
+export class SandboxRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRepoUnexpectedError>()("SandboxRepoUnexpectedError", {
   operation: sandboxRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const sandboxRepoErrorSchema = Schema.Union(
+export const sandboxRepoErrorSchema = Schema.Union([
   SandboxRepoInvariantError,
   SandboxRepoUnexpectedError,
-);
+]);
 
 export type SandboxRepoError = typeof sandboxRepoErrorSchema.Type;
 
@@ -153,7 +149,7 @@ export interface SandboxRepoService {
     input: SetSandboxStatusInput,
   ) => Effect.Effect<Sandbox | null, SandboxRepoError>;
 }
-export class SandboxRepo extends Context.Tag("SandboxRepo")<SandboxRepo, SandboxRepoService>() {}
+export class SandboxRepo extends Context.Service<SandboxRepo, SandboxRepoService>()("SandboxRepo") {}
 
 export const SandboxRepoLive = Layer.effect(
   SandboxRepo,

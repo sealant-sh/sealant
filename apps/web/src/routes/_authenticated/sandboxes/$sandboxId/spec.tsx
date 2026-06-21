@@ -4,7 +4,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { SandboxDetailSection } from "@/components/app/sandbox-detail-section";
 import type { AppTrpc } from "@/lib/trpc/client";
 
-export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/spec" as never)({
+export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/spec")({
   loader: ({
     context,
     params,

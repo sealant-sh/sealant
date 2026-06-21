@@ -37,43 +37,46 @@ export interface GitHubRemoteInstallationRepository {
   readonly url: string;
 }
 
-export const gitHubSourceIntegrationOperationSchema = Schema.Literal(
+export const gitHubSourceIntegrationOperationSchema = Schema.Literals([
   "createAppJwt",
   "createInstallationAccessToken",
   "getInstallation",
   "listInstallationRepositories",
-);
+]);
 
 export type GitHubSourceIntegrationOperation = typeof gitHubSourceIntegrationOperationSchema.Type;
 
-export class GitHubSourceIntegrationInvariantError extends Schema.TaggedError<GitHubSourceIntegrationInvariantError>(
+export class GitHubSourceIntegrationInvariantError extends Schema.TaggedErrorClass<GitHubSourceIntegrationInvariantError>()(
   "GitHubSourceIntegrationInvariantError",
-)("GitHubSourceIntegrationInvariantError", {
-  operation: gitHubSourceIntegrationOperationSchema,
-  message: Schema.String,
-}) {}
+  {
+    operation: gitHubSourceIntegrationOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class GitHubSourceIntegrationHttpError extends Schema.TaggedError<GitHubSourceIntegrationHttpError>(
+export class GitHubSourceIntegrationHttpError extends Schema.TaggedErrorClass<GitHubSourceIntegrationHttpError>()(
   "GitHubSourceIntegrationHttpError",
-)("GitHubSourceIntegrationHttpError", {
-  operation: gitHubSourceIntegrationOperationSchema,
-  statusCode: Schema.Number,
-  message: Schema.String,
-}) {}
+  {
+    operation: gitHubSourceIntegrationOperationSchema,
+    statusCode: Schema.Number,
+    message: Schema.String,
+  },
+) {}
 
-export class GitHubSourceIntegrationUnexpectedError extends Schema.TaggedError<GitHubSourceIntegrationUnexpectedError>(
+export class GitHubSourceIntegrationUnexpectedError extends Schema.TaggedErrorClass<GitHubSourceIntegrationUnexpectedError>()(
   "GitHubSourceIntegrationUnexpectedError",
-)("GitHubSourceIntegrationUnexpectedError", {
-  operation: gitHubSourceIntegrationOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect,
-}) {}
+  {
+    operation: gitHubSourceIntegrationOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
-export const gitHubSourceIntegrationErrorSchema = Schema.Union(
+export const gitHubSourceIntegrationErrorSchema = Schema.Union([
   GitHubSourceIntegrationInvariantError,
   GitHubSourceIntegrationHttpError,
   GitHubSourceIntegrationUnexpectedError,
-);
+]);
 
 export type GitHubSourceIntegrationError = typeof gitHubSourceIntegrationErrorSchema.Type;
 
@@ -96,10 +99,12 @@ export interface GitHubSourceIntegration {
   ) => Effect.Effect<readonly GitHubRemoteInstallationRepository[], GitHubSourceIntegrationError>;
 }
 
-export class GitHubSourceIntegrationService extends Context.Tag(
-  "@sealant/source-integrations/GitHubSourceIntegrationService",
-)<GitHubSourceIntegrationService, GitHubSourceIntegration>() {}
+export class GitHubSourceIntegrationService extends Context.Service<
+  GitHubSourceIntegrationService,
+  GitHubSourceIntegration
+>()("@sealant/source-integrations/GitHubSourceIntegrationService") {}
 
-export class GitHubSourceIntegrationConfig extends Context.Tag(
-  "@sealant/source-integrations/GitHubSourceIntegrationConfig",
-)<GitHubSourceIntegrationConfig, GitHubSourceIntegrationOptions>() {}
+export class GitHubSourceIntegrationConfig extends Context.Service<
+  GitHubSourceIntegrationConfig,
+  GitHubSourceIntegrationOptions
+>()("@sealant/source-integrations/GitHubSourceIntegrationConfig") {}

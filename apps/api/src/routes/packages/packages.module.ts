@@ -16,16 +16,19 @@ export const resolvePackage = (query: ResolvePackageQuery) => {
     const packageStandardizer = yield* PackageStandardizerService;
     const targetOs = query.targetOs ?? "fedora";
 
-    return yield* Effect.tryPromise({
-      try: () =>
-        packageStandardizer.resolvePackage({
-          query: query.query,
-          targetOs,
-        }),
-      catch: (error) =>
-        new PackagesBadGatewayError({
-          message: toErrorMessage(error, "Package resolution failed."),
-        }),
-    }).pipe(Effect.map((resolution) => resolution satisfies ResolvePackageResponse));
+    return yield* packageStandardizer
+      .resolvePackage({
+        query: query.query,
+        targetOs,
+      })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new PackagesBadGatewayError({
+              message: toErrorMessage(error, "Package resolution failed."),
+            }),
+        ),
+        Effect.map((resolution) => resolution satisfies ResolvePackageResponse),
+      );
   });
 };

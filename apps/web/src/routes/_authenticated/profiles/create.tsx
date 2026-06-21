@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { SandboxPage } from "@/components/app/sandbox-page";
 
-export const Route = createFileRoute("/_authenticated/profiles/create" as never)({
+export const Route = createFileRoute("/_authenticated/profiles/create")({
   component: CreateProfilePage,
 });
 

@@ -3,74 +3,96 @@ import {
   createPackageStandardizer,
   createRepologyClient,
   type PackageResolutionCacheStore,
+  type PackageResolutionCacheValue,
   type PackageStandardizer,
 } from "@sealant/sandboxes";
 import { packageResolutionSchema } from "@sealant/validators";
 import type { AppEnv } from "@sealant/validators/env";
 import { Effect } from "effect";
 
+/**
+ * Adapts the Effect-native cache repository into the standardizer's cache port.
+ *
+ * The repository's effects are composed directly (no per-call `Effect.runPromise`): the store is
+ * run once, inside the request fiber, by whoever runs the standardizer. Both methods are total —
+ * the first read/write failure trips a circuit breaker that disables the cache for the lifetime of
+ * this store so cache trouble degrades resolution gracefully instead of failing it.
+ */
 const createCacheStore = (
   repository: PackageResolutionCacheRepository,
 ): PackageResolutionCacheStore => {
   let cacheUnavailable = false;
 
   return {
-    getByQuery: async (query) => {
-      if (cacheUnavailable) {
-        return null;
-      }
+    getByQuery: (query) =>
+      Effect.suspend(() => {
+        if (cacheUnavailable) {
+          return Effect.succeed(null);
+        }
 
-      const entry = await Effect.runPromise(repository.getByQuery(query)).catch((error) => {
-        cacheUnavailable = true;
-        const message = error instanceof Error ? error.message : "Unknown cache read error.";
+        return repository.getByQuery(query).pipe(
+          Effect.map((entry): PackageResolutionCacheValue | null => {
+            if (entry === null) {
+              return null;
+            }
 
-        console.error("[packages.resolve] disabling package cache after read failure", {
-          query,
-          error: message,
-          stack: error instanceof Error ? error.stack : undefined,
-        });
+            const parsed = packageResolutionSchema.safeParse(entry.resolutionPayload);
 
-        return null;
-      });
+            return {
+              query,
+              payload: parsed.success ? parsed.data : entry.resolutionPayload,
+              expiresAt: entry.expiresAt,
+            };
+          }),
+          Effect.catch((error) => {
+            cacheUnavailable = true;
+            const message = error instanceof Error ? error.message : "Unknown cache read error.";
 
-      if (entry === null) {
-        return null;
-      }
+            console.error("[packages.resolve] disabling package cache after read failure", {
+              query,
+              error: message,
+              stack: error instanceof Error ? error.stack : undefined,
+            });
 
-      const parsed = packageResolutionSchema.safeParse(entry.resolutionPayload);
+            return Effect.succeed(null);
+          }),
+        );
+      }),
+    setByQuery: (input) =>
+      Effect.suspend(() => {
+        if (cacheUnavailable) {
+          return Effect.void;
+        }
 
-      return {
-        query,
-        payload: parsed.success ? parsed.data : entry.resolutionPayload,
-        expiresAt: entry.expiresAt,
-      };
-    },
-    setByQuery: async (input) => {
-      if (cacheUnavailable) {
-        return;
-      }
+        const parsed = packageResolutionSchema.safeParse(input.payload);
 
-      const parsed = packageResolutionSchema.parse(input.payload);
+        if (!parsed.success) {
+          // The payload should already be a valid resolution; skip caching rather than fail.
+          return Effect.void;
+        }
 
-      try {
-        await repository
+        return repository
           .upsertByQuery({
             query: input.query,
-            resolutionPayload: parsed,
+            resolutionPayload: parsed.data,
             expiresAt: input.expiresAt,
           })
-          .pipe(Effect.runPromise);
-      } catch (error) {
-        cacheUnavailable = true;
-        const message = error instanceof Error ? error.message : "Unknown cache write error.";
+          .pipe(
+            Effect.asVoid,
+            Effect.catch((error) => {
+              cacheUnavailable = true;
+              const message = error instanceof Error ? error.message : "Unknown cache write error.";
 
-        console.error("[packages.resolve] disabling package cache after write failure", {
-          query: input.query,
-          error: message,
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
-    },
+              console.error("[packages.resolve] disabling package cache after write failure", {
+                query: input.query,
+                error: message,
+                stack: error instanceof Error ? error.stack : undefined,
+              });
+
+              return Effect.void;
+            }),
+          );
+      }),
   };
 };
 
@@ -93,12 +115,13 @@ export const createApiPackageStandardizer = (options: {
 
 export const createPassthroughPackageStandardizer = (): PackageStandardizer => {
   return {
-    resolvePackage: async ({ query, targetOs: _targetOs }) => {
-      const normalized = query.trim().toLowerCase();
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);
+    resolvePackage: ({ query, targetOs: _targetOs }) =>
+      Effect.sync(() => {
+        const normalized = query.trim().toLowerCase();
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);
 
-      return packageResolutionSchema.parse({
+        return packageResolutionSchema.parse({
         requested: query,
         normalized,
         status: "resolved",
@@ -123,6 +146,6 @@ export const createPassthroughPackageStandardizer = (): PackageStandardizer => {
         fetchedAt: now.toISOString(),
         expiresAt: expiresAt.toISOString(),
       });
-    },
+      }),
   };
 };

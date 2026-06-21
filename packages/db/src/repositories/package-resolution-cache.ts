@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -24,27 +24,23 @@ export const createPackageResolutionCacheRepository = (): never => {
 /** @deprecated Use PackageResolutionCacheRepoService instead. */
 export type PackageResolutionCacheRepository = PackageResolutionCacheRepoService;
 
-const packageResolutionCacheRepoOperationSchema = Schema.Literal("getByQuery", "upsertByQuery");
+const packageResolutionCacheRepoOperationSchema = Schema.Literals(["getByQuery", "upsertByQuery"]);
 
-export class PackageResolutionCacheRepoInvariantError extends Schema.TaggedError<PackageResolutionCacheRepoInvariantError>(
-  "PackageResolutionCacheRepoInvariantError",
-)("PackageResolutionCacheRepoInvariantError", {
+export class PackageResolutionCacheRepoInvariantError extends Schema.TaggedErrorClass<PackageResolutionCacheRepoInvariantError>()("PackageResolutionCacheRepoInvariantError", {
   operation: packageResolutionCacheRepoOperationSchema,
   message: Schema.String,
 }) {}
 
-export class PackageResolutionCacheRepoUnexpectedError extends Schema.TaggedError<PackageResolutionCacheRepoUnexpectedError>(
-  "PackageResolutionCacheRepoUnexpectedError",
-)("PackageResolutionCacheRepoUnexpectedError", {
+export class PackageResolutionCacheRepoUnexpectedError extends Schema.TaggedErrorClass<PackageResolutionCacheRepoUnexpectedError>()("PackageResolutionCacheRepoUnexpectedError", {
   operation: packageResolutionCacheRepoOperationSchema,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
-export const packageResolutionCacheRepoErrorSchema = Schema.Union(
+export const packageResolutionCacheRepoErrorSchema = Schema.Union([
   PackageResolutionCacheRepoInvariantError,
   PackageResolutionCacheRepoUnexpectedError,
-);
+]);
 
 export type PackageResolutionCacheRepoError = typeof packageResolutionCacheRepoErrorSchema.Type;
 
@@ -86,10 +82,10 @@ export interface PackageResolutionCacheRepoService {
   ) => Effect.Effect<PackageResolutionCacheEntry, PackageResolutionCacheRepoError>;
 }
 
-export class PackageResolutionCacheRepo extends Context.Tag("PackageResolutionCacheRepo")<
+export class PackageResolutionCacheRepo extends Context.Service<
   PackageResolutionCacheRepo,
   PackageResolutionCacheRepoService
->() {}
+>()("PackageResolutionCacheRepo") {}
 
 export const PackageResolutionCacheRepoLive = Layer.effect(
   PackageResolutionCacheRepo,
@@ -101,26 +97,18 @@ export const PackageResolutionCacheRepoLive = Layer.effect(
         withPackageResolutionCacheRepoError(
           "getByQuery",
           Effect.gen(function* () {
+            // Atomic read+touch: increment the hit counter in a single statement so concurrent
+            // reads cannot lose updates, and so a "read" never leaves a half-applied write.
             const [entry] = yield* db
-              .select()
-              .from(packageResolutionCacheEntries)
-              .where(eq(packageResolutionCacheEntries.query, query))
-              .limit(1);
-
-            if (entry === undefined) {
-              return null;
-            }
-
-            const [updated] = yield* db
               .update(packageResolutionCacheEntries)
               .set({
                 lastUsedAt: new Date(),
-                hitCount: entry.hitCount + 1,
+                hitCount: sql`${packageResolutionCacheEntries.hitCount} + 1`,
               })
               .where(eq(packageResolutionCacheEntries.query, query))
               .returning();
 
-            return updated ?? entry;
+            return entry ?? null;
           }),
         ),
 

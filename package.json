@@ -33,12 +33,10 @@
     "typecheck:tui": "turbo typecheck --ui=tui"
   },
   "dependencies": {
-    "@effect/cli": "^0.75.0",
-    "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.84.2",
+    "@effect/language-service": "^0.86.2",
     "@playwright/test": "^1.56.1",
     "@types/node": "^24.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260315.1",
@@ -53,13 +51,6 @@
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
-    "packageExtensions": {
-      "drizzle-orm@1.0.0-beta.20": {
-        "dependencies": {
-          "effect": "3.21.0"
-        }
-      }
-    },
     "onlyBuiltDependencies": [
       "esbuild",
       "lightningcss"

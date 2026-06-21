@@ -54,7 +54,7 @@ export type SealantTarget = {
 // ---------------------------------------------------------------------------------------------
 
 /** Operations surfaced on the typed error channel, kept constrained for consistent metadata. */
-const sealantOperationSchema = Schema.Literal(
+const sealantOperationSchema = Schema.Literals([
   "open",
   "connect",
   "health",
@@ -64,45 +64,44 @@ const sealantOperationSchema = Schema.Literal(
   "signalProcess",
   "shutdown",
   "events",
-);
+]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
 
 /** Failure opening/holding the underlying transport (spawn failure, child exit, stream error). */
-export class TransportError extends Schema.TaggedError<TransportError>("TransportError")(
-  "TransportError",
+export class TransportError extends Schema.TaggedErrorClass<TransportError>()("TransportError", {
+  operation: sealantOperationSchema,
+  message: Schema.String,
+  cause: Schema.Defect(),
+}) {}
+
+/** A typed control error returned by the daemon (wraps the SDK's `SealantError`). */
+export class SealantControlError extends Schema.TaggedErrorClass<SealantControlError>()(
+  "SealantControlError",
   {
     operation: sealantOperationSchema,
+    /** Stable daemon error code (numeric `ControlErrorCode`). */
+    code: Schema.Number,
     message: Schema.String,
-    cause: Schema.Defect,
+    detailJson: Schema.optional(Schema.String),
   },
 ) {}
 
-/** A typed control error returned by the daemon (wraps the SDK's `SealantError`). */
-export class SealantControlError extends Schema.TaggedError<SealantControlError>(
-  "SealantControlError",
-)("SealantControlError", {
-  operation: sealantOperationSchema,
-  /** Stable daemon error code (numeric `ControlErrorCode`). */
-  code: Schema.Number,
-  message: Schema.String,
-  detailJson: Schema.optional(Schema.String),
-}) {}
-
 /** Any other unexpected defect crossing the SDK boundary, kept on the typed channel. */
-export class SealantUnexpectedError extends Schema.TaggedError<SealantUnexpectedError>(
+export class SealantUnexpectedError extends Schema.TaggedErrorClass<SealantUnexpectedError>()(
   "SealantUnexpectedError",
-)("SealantUnexpectedError", {
-  operation: sealantOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect,
-}) {}
+  {
+    operation: sealantOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
-export const sealantErrorSchema = Schema.Union(
+export const sealantErrorSchema = Schema.Union([
   TransportError,
   SealantControlError,
   SealantUnexpectedError,
-);
+]);
 
 /** Union of everything that can fail on a `SealantRuntime`/`SealantSession` Effect. */
 export type SealantError = typeof sealantErrorSchema.Type;
@@ -128,18 +127,22 @@ const isSdkSealantError = (
 };
 
 /**
- * Unwraps Effect's `UnknownException` (produced by the single-arg `Effect.tryPromise`) so the
- * original SDK rejection is classified, not the Effect wrapper. The wrapper exposes the original on
- * its `cause` field.
+ * Unwraps Effect's wrapper for a rejected `Effect.tryPromise` (effect 4 tags it `UnknownError`;
+ * effect 3 used `UnknownException`) so the original SDK rejection is classified, not the Effect
+ * wrapper. The wrapper exposes the original rejection on its `cause` field.
  */
 const unwrapEffectCause = (cause: unknown): unknown => {
   if (
-    cause instanceof Error &&
-    cause.name === "UnknownException" &&
+    typeof cause === "object" &&
+    cause !== null &&
     "cause" in cause &&
     (cause as { cause?: unknown }).cause !== undefined
   ) {
-    return (cause as { cause: unknown }).cause;
+    const name = (cause as { name?: unknown }).name;
+
+    if (name === "UnknownError" || name === "UnknownException") {
+      return (cause as { cause: unknown }).cause;
+    }
   }
 
   return cause;
@@ -194,10 +197,10 @@ export interface SealantTransportService {
   readonly open: (target: SealantTarget) => Effect.Effect<Duplex, TransportError, Scope.Scope>;
 }
 
-export class SealantTransport extends Context.Tag("@sealant/sandboxes/SealantTransport")<
+export class SealantTransport extends Context.Service<
   SealantTransport,
   SealantTransportService
->() {}
+>()("@sealant/sandboxes/SealantTransport") {}
 
 /**
  * P3 bridge as a transport: `docker exec -i <ctr> socat - UNIX-CONNECT:<sock>`. Deliberately no `-t`
@@ -314,10 +317,10 @@ export interface SealantRuntimeService {
   readonly connect: (target: SealantTarget) => Effect.Effect<SealantSession, SealantError, Scope.Scope>;
 }
 
-export class SealantRuntime extends Context.Tag("@sealant/sandboxes/SealantRuntime")<
+export class SealantRuntime extends Context.Service<
   SealantRuntime,
   SealantRuntimeService
->() {}
+>()("@sealant/sandboxes/SealantRuntime") {}
 
 /** Builds the per-connection session handle around a connected `SealantClient`. */
 const makeSession = (client: SealantClient): SealantSession => ({

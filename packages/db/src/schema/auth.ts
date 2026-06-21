@@ -1,4 +1,8 @@
-import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, snakeCase, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+
+// Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
+// table level to keep implicit column names mapping to snake_case db columns.
+const pgTable = snakeCase.table;
 
 export const user = pgTable(
   "user",
