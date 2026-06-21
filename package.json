@@ -33,7 +33,6 @@
     "typecheck:tui": "turbo typecheck --ui=tui"
   },
   "dependencies": {
-    "@effect/cli": "^0.75.0",
     "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
@@ -54,7 +53,11 @@
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "overrides": {
-      "drizzle-orm": "1.0.0-beta.22"
+      "drizzle-orm": "1.0.0-beta.22",
+      "@effect/sql": "0.48.6",
+      "@effect/rpc": "0.72.2",
+      "@effect/cluster": "0.55.0",
+      "@effect/workflow": "0.15.2"
     },
     "packageExtensions": {
       "drizzle-orm@1.0.0-beta.22": {
