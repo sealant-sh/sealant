@@ -79,11 +79,11 @@ interface DistroDefinition {
   readonly packageMap: Record<string, PackageMapping>;
   readonly internalPackages: readonly string[];
   /**
-   * Distro-native package ids installed only when the sealantd runtime daemon is enabled.
+   * Distro-native package ids required by the `sealantd boot` supervisor that PID-1s every image.
    *
-   * sealantd reaches its control socket over a `docker exec` relay that needs `socat`; no base
-   * image ships it, so we install it per-distro. Kept separate from `internalPackages` so the
-   * `enableSealantd === false` build path renders byte-identically to before.
+   * The control socket is bridged to the host over a `docker exec` relay that needs `socat`; no
+   * base image ships it, so we install it per-distro. Always installed now that `sealantd boot` is
+   * the mandatory entrypoint (clean cut — there is no longer a sealantd-disabled build path).
    */
   readonly sealantdPackages: readonly string[];
   readonly shellPaths: Record<"bash" | "zsh" | "fish", string>;
@@ -248,6 +248,22 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
     sshdPath: "/root/.nix-profile/bin/sshd",
   },
 };
+
+/**
+ * Public GHCR image whose `/usr/local/bin/sealantd` binary is `COPY --from`'d into every sandbox.
+ *
+ * Pinned to a digest-or-tag here (single source of truth) so the multi-stage copy stays
+ * deterministic and easy to bump. The binary is multi-arch (amd64+arm64) so we inherit both without
+ * bundling a local build context.
+ */
+const sealantdImageReference = "ghcr.io/get-sealant/sealantd:0.3.0";
+
+/**
+ * In-container control socket `sealantd boot` listens on. Build-static; promoted to
+ * `ENV SEALANT_CONTROL_SOCKET` so `boot` reads it from the env contract. Matches the path the
+ * sealantd transport/target code (`sealantd/target.ts`, `sealantd/boot.ts`) bridges into.
+ */
+const sealantdControlSocketPath = "/run/sealant/control.sock";
 
 /**
  * Computes artifact/image naming used across metadata and OCI artifacts.
@@ -583,9 +599,9 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
-    // `socat` (and any other relay deps) only when the sealantd runtime daemon is enabled, so the
-    // disabled path produces the exact same package set as before.
-    ...(plan.customization.enableSealantd === true ? distro.sealantdPackages : []),
+    // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
+    // PID-1 entrypoint and its control socket is bridged to the host over a `docker exec` relay.
+    ...distro.sealantdPackages,
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
 
@@ -636,349 +652,114 @@ const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
 };
 
 /**
- * Renders one lifecycle step as an isolated subshell block.
+ * JSON encoding of a single lifecycle step for the `SEALANT_LIFECYCLE_*_JSON` / `SEALANT_FOREGROUND_RUN_JSON`
+ * env contract consumed by `sealantd boot` (`crates/sealantd/src/boot/config.rs`).
  *
- * We intentionally execute each step in a subshell so one step's `cd` or env mutations do not leak
- * into the next step unless explicitly encoded by the user command itself.
+ * The shape deliberately mirrors `blueprint.lifecycle.setup[n]` so the Rust loader can deserialize
+ * it 1:1: `run`, `shell` (`sh` | `bash`), and an optional `workingDirectory`. `boot` resolves the
+ * concrete shell binary and a missing `workingDirectory` to `SEALANT_WORKING_DIRECTORY`.
  */
-const renderRuntimeStep = (
+interface BootLifecycleStepJson {
+  readonly run: string;
+  readonly shell: "sh" | "bash";
+  readonly workingDirectory?: string;
+}
+
+const toBootLifecycleStepJson = (
   step: SandboxBlueprint["lifecycle"]["setup"][number],
-  defaultWorkingDirectory: string,
-  bashShellPath: string,
-): string => {
-  const shell = step.shell === "sh" ? "/bin/sh" : bashShellPath;
-  const workingDirectory = step.workingDirectory ?? defaultWorkingDirectory;
-  return [
-    "(",
-    `  cd ${shellQuote(workingDirectory)}`,
-    `  ${shell} -lc ${shellQuote(step.run)}`,
-    ")",
-  ].join("\n");
+): BootLifecycleStepJson => {
+  return {
+    run: step.run,
+    shell: step.shell,
+    ...(step.workingDirectory === undefined ? {} : { workingDirectory: step.workingDirectory }),
+  };
 };
 
 /**
- * Resolves the final foreground process command for the entrypoint script.
+ * Renders an ordered `ENV` block from key/value pairs.
  *
- * If blueprint startup selects a literal command, it is executed with the requested shell.
- * Otherwise we launch the selected harness's canonical launch command in the configured default
- * shell.
+ * Single Dockerfile `ENV` instruction with backslash-continued lines so the layer is cache-stable
+ * and the diff stays readable. Every value is shell-quoted via {@link shellQuote} so JSON payloads
+ * (double quotes, brackets) and arbitrary command strings survive Docker's env parsing intact.
  */
-const renderForegroundCommand = (plan: ResolvedImagePlan): string => {
-  const foreground = plan.blueprint.lifecycle.startup.foreground;
-  if (foreground.kind === "command") {
-    const shell =
-      foreground.shell === "sh" ? "/bin/sh" : distroDefinitions[plan.osFamily].shellPaths.bash;
-    const workingDirectory = foreground.workingDirectory ?? plan.blueprint.runtime.workingDirectory;
-    return [
-      `cd ${shellQuote(workingDirectory)}`,
-      `exec ${shell} -lc ${shellQuote(foreground.run)}`,
-    ].join("\n");
-  }
-
-  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
-  const shellPath = distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
-
-  return [
-    `cd ${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
-    `exec ${shellPath} -lc ${shellQuote(harnessIntegration.launchCommand)}`,
-  ].join("\n");
+const renderEnvBlock = (entries: ReadonlyArray<readonly [string, string]>): string => {
+  return entries
+    .map(([key, value], index) => {
+      const prefix = index === 0 ? "ENV " : "    ";
+      const suffix = index === entries.length - 1 ? "" : " \\";
+      return `${prefix}${key}=${shellQuote(value)}${suffix}`;
+    })
+    .join("\n");
 };
 
-const renderSandboxEntrypoint = (plan: ResolvedImagePlan): string => {
-  const loginShellPath =
-    distroDefinitions[plan.osFamily].shellPaths[plan.customization.defaultShell];
-  const bashShellPath = distroDefinitions[plan.osFamily].shellPaths.bash;
-  const sshdPath = distroDefinitions[plan.osFamily].sshdPath;
-  const setupSteps = plan.blueprint.lifecycle.setup
-    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory, bashShellPath))
-    .join("\n\n");
-  const startupSteps = plan.blueprint.lifecycle.startup.steps
-    .map((step) => renderRuntimeStep(step, plan.blueprint.runtime.workingDirectory, bashShellPath))
-    .join("\n\n");
+/**
+ * Renders the build-static `ENV SEALANT_*` block consumed by the `sealantd boot` PID-1 supervisor.
+ *
+ * These were previously baked inline as shell literals by the deleted bash entrypoint
+ * (`renderSandboxEntrypoint`). The clean-cut design promotes every build-time-static value to an
+ * image `ENV` so it reaches `boot` through the same `std::env` surface as the run-dynamic vars the
+ * Docker runtime adapter injects with `docker run -e`. No new contract is invented here — these are
+ * the exact keys `crates/sealantd/src/boot/config.rs` reads.
+ *
+ * Ordering of emission:
+ * - always: os family, sandbox/working roots, shell + sshd paths, control socket, harness banner +
+ *   launch command, the (possibly empty) lifecycle setup/startup JSON arrays.
+ * - conditional: `SEALANT_FOREGROUND_RUN_JSON` when startup foreground is a literal command.
+ * - conditional: `SEALANT_DOTFILES_RUNTIME_APPLY=1` + the `SEALANT_DOTFILES_*` block when planning
+ *   chose runtime apply (GitHub-installation-backed dotfiles). Build-time dotfiles stay a `RUN`
+ *   layer (see `renderDotfilesStep`) and emit no boot env.
+ */
+const renderBootEnv = (plan: ResolvedImagePlan): string => {
+  const distro = distroDefinitions[plan.osFamily];
+  const loginShellPath = distro.shellPaths[plan.customization.defaultShell];
+  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
 
-  return [
-    `#!${bashShellPath}`,
-    "set -euo pipefail",
-    "",
-    `SANDBOX_ROOT=${shellQuote(plan.blueprint.runtime.sandboxRoot)}`,
-    `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
-    `SANDBOX_REPO_URL=${shellQuote(plan.blueprint.sources.sandbox.url)}`,
-    `SANDBOX_REPO_REF=${shellQuote(plan.blueprint.sources.sandbox.ref)}`,
-    `HARNESS_BANNER=${shellQuote(`Starting ${plan.blueprint.harness.id} sandbox`)}`,
-    "SSH_RUNTIME_DIR=/sandbox/.ssh-runtime",
-    "REPO_SSH_KEY_PATH=$SSH_RUNTIME_DIR/sandbox_repo_key",
-    "REPO_GIT_ASKPASS_PATH=$SSH_RUNTIME_DIR/git-askpass",
-    "",
-    'mkdir -p "$SANDBOX_ROOT" "$WORKING_DIRECTORY" "$SSH_RUNTIME_DIR" /root /tmp /var/empty /run/sshd',
-    "export HOME=/root",
-    "export USER=root",
-    "export LOGNAME=root",
-    'export PATH="/usr/local/bin:$PATH"',
-    'cd "$SANDBOX_ROOT"',
-    "if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then",
-    '  GLIBC_LOADER="$(ls /nix/store/*-glibc-*/lib/ld-linux-x86-64.so.2 2>/dev/null | head -n1 || true)"',
-    '  if [ -n "$GLIBC_LOADER" ]; then',
-    "    mkdir -p /lib64",
-    '    ln -sf "$GLIBC_LOADER" /lib64/ld-linux-x86-64.so.2',
-    "  fi",
-    "fi",
-    "",
-    'if [ -n "${SEALANT_SANDBOX_AUTH_KEY_BASE64:-}" ]; then',
-    '  printf \'%s\' "$SEALANT_SANDBOX_AUTH_KEY_BASE64" | base64 --decode > "$REPO_SSH_KEY_PATH"',
-    '  chmod 600 "$REPO_SSH_KEY_PATH"',
-    '  export GIT_SSH_COMMAND="ssh -i $REPO_SSH_KEY_PATH -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"',
-    "fi",
-    "",
-    'if [ -n "${SEALANT_SANDBOX_HTTP_TOKEN:-}" ]; then',
-    "  cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'",
-    "#!/bin/sh",
-    'case "$1" in',
-    '  *Username*) printf "%s\\n" "${SEALANT_SANDBOX_HTTP_USERNAME:-x-access-token}" ;;',
-    '  *Password*) printf "%s\\n" "$SEALANT_SANDBOX_HTTP_TOKEN" ;;',
-    '  *) printf "\\n" ;;',
-    "esac",
-    "EOF",
-    '  chmod 700 "$REPO_GIT_ASKPASS_PATH"',
-    '  export GIT_ASKPASS="$REPO_GIT_ASKPASS_PATH"',
-    "  export GIT_TERMINAL_PROMPT=0",
-    "fi",
-    "",
-    "cleanup_sandbox_clone_auth() {",
-    '  rm -f "$REPO_SSH_KEY_PATH" "$REPO_GIT_ASKPASS_PATH"',
-    "  unset GIT_SSH_COMMAND GIT_ASKPASS GIT_TERMINAL_PROMPT SEALANT_SANDBOX_HTTP_USERNAME SEALANT_SANDBOX_HTTP_TOKEN SEALANT_SANDBOX_AUTH_KEY_BASE64",
-    "}",
-    "",
-    'if [ "${SEALANT_ENABLE_SSH:-0}" = "1" ] || [ "${SEALANT_ENABLE_SSH:-}" = "true" ]; then',
-    '  SSH_PORT="${SEALANT_SSH_PORT:-2222}"',
-    '  SSH_AUTHORIZED_KEYS_FILE="${SEALANT_SSH_AUTHORIZED_KEYS_FILE:-/run/keys/authorized_keys}"',
-    "  if [ ! -w /etc/passwd ] || [ ! -w /etc/group ] || [ ! -w /etc/shadow ]; then",
-    '    cp /etc/passwd "$SSH_RUNTIME_DIR/passwd.base"',
-    '    cp /etc/group "$SSH_RUNTIME_DIR/group.base"',
-    '    cp /etc/shadow "$SSH_RUNTIME_DIR/shadow.base"',
-    "    rm -f /etc/passwd /etc/group /etc/shadow",
-    '    cp "$SSH_RUNTIME_DIR/passwd.base" /etc/passwd',
-    '    cp "$SSH_RUNTIME_DIR/group.base" /etc/group',
-    '    cp "$SSH_RUNTIME_DIR/shadow.base" /etc/shadow',
-    "    chmod 644 /etc/passwd /etc/group",
-    "    chmod 600 /etc/shadow",
-    "  fi",
-    "  SHADOW_UPDATED=0",
-    '  : > "$SSH_RUNTIME_DIR/shadow.updated"',
-    "  while IFS= read -r line; do",
-    '    case "$line" in',
-    "      root:!*)",
-    '        printf "root::%s\\n" "${line#root:!:}" >> "$SSH_RUNTIME_DIR/shadow.updated"',
-    "        SHADOW_UPDATED=1",
-    "        ;;",
-    "      *)",
-    '        printf "%s\\n" "$line" >> "$SSH_RUNTIME_DIR/shadow.updated"',
-    "        ;;",
-    "    esac",
-    "  done < /etc/shadow",
-    '  if [ "$SHADOW_UPDATED" = "1" ]; then',
-    '    cat "$SSH_RUNTIME_DIR/shadow.updated" > /etc/shadow',
-    "    chmod 600 /etc/shadow",
-    "  fi",
-    "  if ! id -u sshd >/dev/null 2>&1; then",
-    "    printf '%s\n' 'sshd:x:74:' >> /etc/group",
-    "    printf '%s\n' 'sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/sh' >> /etc/passwd",
-    "  fi",
-    "",
-    '  if [ -n "${SEALANT_SSH_AUTHORIZED_KEYS_BASE64:-}" ]; then',
-    '    printf \'%s\' "$SEALANT_SSH_AUTHORIZED_KEYS_BASE64" | base64 --decode > "$SSH_RUNTIME_DIR/authorized_keys.input"',
-    '    chmod 600 "$SSH_RUNTIME_DIR/authorized_keys.input"',
-    '    SSH_AUTHORIZED_KEYS_FILE="$SSH_RUNTIME_DIR/authorized_keys.input"',
-    "  fi",
-    "",
-    '  if [ ! -f "$SSH_AUTHORIZED_KEYS_FILE" ]; then',
-    "    printf '%s\n' \"SSH enabled but no authorized keys file found at $SSH_AUTHORIZED_KEYS_FILE\" >&2",
-    "    exit 1",
-    "  fi",
-    "",
-    '  install -m 600 "$SSH_AUTHORIZED_KEYS_FILE" "$SSH_RUNTIME_DIR/authorized_keys"',
-    '  if [ ! -f "$SSH_RUNTIME_DIR/ssh_host_ed25519_key" ]; then',
-    '    ssh-keygen -q -t ed25519 -N "" -f "$SSH_RUNTIME_DIR/ssh_host_ed25519_key"',
-    "  fi",
-    "",
-    "  cat > /usr/local/bin/sandbox-ssh-shell <<'EOF'",
-    `#!${bashShellPath}`,
-    "set -euo pipefail",
-    `WORKING_DIRECTORY=${shellQuote(plan.blueprint.runtime.workingDirectory)}`,
-    `LOGIN_SHELL=${shellQuote(loginShellPath)}`,
-    `BASH_SHELL=${shellQuote(bashShellPath)}`,
-    'export PATH="/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:$PATH"',
-    'if [ ! -x "$LOGIN_SHELL" ]; then',
-    `  LOGIN_SHELL=${shellQuote(bashShellPath)}`,
-    "fi",
-    'if [ ! -x "$BASH_SHELL" ]; then',
-    '  BASH_SHELL="$LOGIN_SHELL"',
-    "fi",
-    'if [ -d "$WORKING_DIRECTORY" ]; then',
-    '  cd "$WORKING_DIRECTORY"',
-    "fi",
-    'if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then',
-    '  exec "$BASH_SHELL" -c "$SSH_ORIGINAL_COMMAND"',
-    "fi",
-    "if [ ! -t 0 ] || [ ! -t 1 ]; then",
-    '  exec "$BASH_SHELL" --noprofile --norc -s',
-    "fi",
-    'if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then',
-    '  exec "$BASH_SHELL" -i',
-    "fi",
-    'exec "$LOGIN_SHELL" -i',
-    "EOF",
-    "",
-    "  chmod 755 /usr/local/bin/sandbox-ssh-shell",
-    "",
-    '  cat > "$SSH_RUNTIME_DIR/sshd_config" <<EOF',
-    "Port $SSH_PORT",
-    "ListenAddress 0.0.0.0",
-    "HostKey $SSH_RUNTIME_DIR/ssh_host_ed25519_key",
-    "AuthorizedKeysFile $SSH_RUNTIME_DIR/authorized_keys",
-    "PasswordAuthentication no",
-    "KbdInteractiveAuthentication no",
-    "ChallengeResponseAuthentication no",
-    "PubkeyAuthentication yes",
-    "PermitRootLogin yes",
-    "PermitEmptyPasswords no",
-    "UsePAM no",
-    "PidFile $SSH_RUNTIME_DIR/sshd.pid",
-    "PrintMotd no",
-    "StrictModes yes",
-    "ForceCommand /usr/local/bin/sandbox-ssh-shell",
-    "Subsystem sftp internal-sftp",
-    "EOF",
-    "",
-    `  ${sshdPath} -f "$SSH_RUNTIME_DIR/sshd_config" -E "$SSH_RUNTIME_DIR/sshd.log"`,
-    "  printf '%s\n' \"SSH server listening on port $SSH_PORT\"",
-    "fi",
-    "",
-    "printf '%s\n' \"$HARNESS_BANNER\"",
-    "",
-    'mkdir -p "$(dirname "$WORKING_DIRECTORY")"',
-    'if [ ! -d "$WORKING_DIRECTORY/.git" ]; then',
-    '  rm -rf "$WORKING_DIRECTORY"',
-    '  git clone --branch "$SANDBOX_REPO_REF" "$SANDBOX_REPO_URL" "$WORKING_DIRECTORY"',
-    "fi",
-    "cleanup_sandbox_clone_auth",
-    "",
-    // Runtime dotfiles apply block is only injected when planning decided on `applyAt: runtime`.
-    // This keeps build-time images free of dynamic runtime token requirements unless explicitly
-    // needed for GitHub installation-backed dotfiles auth.
-    ...(plan.dotfiles === undefined || plan.dotfiles.applyAt !== "runtime"
-      ? []
-      : [
-          `DOTFILES_REPO_URL=${shellQuote(plan.dotfiles.url)}`,
-          `DOTFILES_REPO_REF=${shellQuote(plan.dotfiles.ref)}`,
-          `DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID=${shellQuote(plan.dotfiles.githubInstallationRepositoryId ?? "")}`,
-          `DOTFILES_MANAGER=${shellQuote(plan.dotfiles.manager)}`,
-          `DOTFILES_TARGET=${shellQuote(plan.dotfiles.target)}`,
-          `DOTFILES_BOOTSTRAP=${shellQuote(plan.dotfiles.bootstrap ? "1" : "0")}`,
-          `DOTFILES_BOOTSTRAP_COMMAND=${shellQuote(plan.dotfiles.bootstrapCommand ?? "./install.sh")}`,
-          'DOTFILES_SOURCE_DIR="/root/.local/share/chezmoi"',
-          'DOTFILES_TARGET_DIR="$HOME"',
-          'DOTFILES_GIT_ASKPASS_PATH="$SSH_RUNTIME_DIR/dotfiles-git-askpass"',
-          'if [ "$DOTFILES_TARGET" = "config" ]; then',
-          '  DOTFILES_TARGET_DIR="$HOME/.config"',
-          "fi",
-          'if [ -n "$DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID" ] && [ -z "${SEALANT_DOTFILES_HTTP_TOKEN:-}" ]; then',
-          `  printf '%s\n' "Dotfiles repo auth token is missing for GitHub installation repository $DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID." >&2`,
-          "  exit 1",
-          "fi",
-          'if [ -n "${SEALANT_DOTFILES_HTTP_TOKEN:-}" ]; then',
-          "  cat > \"$DOTFILES_GIT_ASKPASS_PATH\" <<'EOF'",
-          "#!/bin/sh",
-          'case "$1" in',
-          '  *Username*) printf "%s\\n" "${SEALANT_DOTFILES_HTTP_USERNAME:-x-access-token}" ;;',
-          '  *Password*) printf "%s\\n" "$SEALANT_DOTFILES_HTTP_TOKEN" ;;',
-          '  *) printf "\\n" ;;',
-          "esac",
-          "EOF",
-          '  chmod 700 "$DOTFILES_GIT_ASKPASS_PATH"',
-          '  export GIT_ASKPASS="$DOTFILES_GIT_ASKPASS_PATH"',
-          "  export GIT_TERMINAL_PROMPT=0",
-          "fi",
-          'mkdir -p "$(dirname "$DOTFILES_SOURCE_DIR")"',
-          'rm -rf "$DOTFILES_SOURCE_DIR"',
-          'git clone --depth=1 --branch "$DOTFILES_REPO_REF" "$DOTFILES_REPO_URL" "$DOTFILES_SOURCE_DIR"',
-          'if [ "$DOTFILES_MANAGER" = "auto" ]; then',
-          '  if [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.toml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.yaml" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoi.json" ] || [ -f "$DOTFILES_SOURCE_DIR/.chezmoiexternal.toml" ] || ls "$DOTFILES_SOURCE_DIR"/dot_* >/dev/null 2>&1; then',
-          '    DOTFILES_MANAGER="chezmoi"',
-          '  elif [ -f "$DOTFILES_SOURCE_DIR/.stow-global-ignore" ] || [ -f "$DOTFILES_SOURCE_DIR/install.sh" ]; then',
-          '    DOTFILES_MANAGER="stow"',
-          "  else",
-          '    DOTFILES_MANAGER="copy"',
-          "  fi",
-          "fi",
-          'if [ "$DOTFILES_MANAGER" != "copy" ]; then',
-          '  DOTFILES_TARGET_DIR="$HOME"',
-          "fi",
-          'case "$DOTFILES_MANAGER" in',
-          "  chezmoi)",
-          '    HOME=/root chezmoi init --source="$DOTFILES_SOURCE_DIR"',
-          "    HOME=/root chezmoi apply",
-          "    ;;",
-          "  stow)",
-          '    if [ "$DOTFILES_BOOTSTRAP" = "1" ]; then',
-          '      ( cd "$DOTFILES_SOURCE_DIR" && /bin/bash -lc "$DOTFILES_BOOTSTRAP_COMMAND" )',
-          "    else",
-          '      DOTFILES_STOW_PACKAGES=""',
-          '      for package_dir in "$DOTFILES_SOURCE_DIR"/*; do',
-          '        [ -d "$package_dir" ] || continue',
-          '        package_name="$(basename "$package_dir")"',
-          '        case "$package_name" in .* ) continue ;; esac',
-          '        DOTFILES_STOW_PACKAGES="$DOTFILES_STOW_PACKAGES $package_name"',
-          "      done",
-          '      if [ -n "$DOTFILES_STOW_PACKAGES" ]; then',
-          '        ( cd "$DOTFILES_SOURCE_DIR" && stow -t "$DOTFILES_TARGET_DIR" $DOTFILES_STOW_PACKAGES )',
-          "      fi",
-          "    fi",
-          "    ;;",
-          "  copy)",
-          '    mkdir -p "$DOTFILES_TARGET_DIR"',
-          '    ( cd "$DOTFILES_SOURCE_DIR" && tar --exclude=.git -cf - . ) | ( cd "$DOTFILES_TARGET_DIR" && tar -xf - )',
-          "    ;;",
-          "  *)",
-          '    printf "%s\\n" "Unsupported dotfiles manager: $DOTFILES_MANAGER" >&2',
-          "    exit 1",
-          "    ;;",
-          "esac",
-          'rm -f "$DOTFILES_GIT_ASKPASS_PATH"',
-          "unset GIT_ASKPASS GIT_TERMINAL_PROMPT SEALANT_DOTFILES_HTTP_USERNAME SEALANT_DOTFILES_HTTP_TOKEN DOTFILES_MANAGER DOTFILES_TARGET DOTFILES_BOOTSTRAP DOTFILES_BOOTSTRAP_COMMAND DOTFILES_TARGET_DIR",
-          "",
-        ]),
-    ...(setupSteps.length === 0 ? [] : [setupSteps, ""]),
-    ...(startupSteps.length === 0 ? [] : [startupSteps, ""]),
-    // The sealantd runtime daemon is launched in the background before the foreground workload so
-    // it owns its own lifecycle without blocking the harness. A runtime override
-    // (`SEALANT_ENABLE_SEALANTD=0|false`) can suppress the launch even in a sealantd-enabled image.
-    // SEALANTD_PID is pre-declared so the EXIT trap is `set -u`-safe when launch is skipped.
-    ...(plan.customization.enableSealantd === true
-      ? [
-          'SEALANTD_PID=""',
-          "cleanup_sealantd() {",
-          '  if [ -n "$SEALANTD_PID" ]; then',
-          '    kill "$SEALANTD_PID" 2>/dev/null || true',
-          '    wait "$SEALANTD_PID" 2>/dev/null || true',
-          "  fi",
-          "}",
-          "trap cleanup_sealantd EXIT INT TERM",
-          'if [ "${SEALANT_ENABLE_SEALANTD:-1}" != "0" ] && [ "${SEALANT_ENABLE_SEALANTD:-1}" != "false" ]; then',
-          "  mkdir -p /run/sealant",
-          '  sealantd --socket /run/sealant/control.sock --workspace "$WORKING_DIRECTORY" &',
-          "  SEALANTD_PID=$!",
-          '  printf \'%s\\n\' "sealantd started (pid $SEALANTD_PID)"',
-          "fi",
-          "",
-        ]
-      : []),
-    'if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then',
-    `  exec ${bashShellPath} -lc "$SEALANT_FOREGROUND_COMMAND"`,
-    "fi",
-    "",
-    renderForegroundCommand(plan),
-    "",
-  ].join("\n");
+  const setupJson = JSON.stringify(plan.blueprint.lifecycle.setup.map(toBootLifecycleStepJson));
+  const startupJson = JSON.stringify(
+    plan.blueprint.lifecycle.startup.steps.map(toBootLifecycleStepJson),
+  );
+
+  const entries: Array<[string, string]> = [
+    ["SEALANT_OS_FAMILY", plan.osFamily],
+    ["SEALANT_SANDBOX_ROOT", plan.blueprint.runtime.sandboxRoot],
+    ["SEALANT_WORKING_DIRECTORY", plan.blueprint.runtime.workingDirectory],
+    ["SEALANT_LOGIN_SHELL_PATH", loginShellPath],
+    ["SEALANT_BASH_SHELL_PATH", distro.shellPaths.bash],
+    ["SEALANT_SSHD_PATH", distro.sshdPath],
+    ["SEALANT_CONTROL_SOCKET", sealantdControlSocketPath],
+    ["SEALANT_HARNESS_BANNER", `Starting ${plan.blueprint.harness.id} sandbox`],
+    ["SEALANT_HARNESS_LAUNCH_COMMAND", harnessIntegration.launchCommand],
+    ["SEALANT_LIFECYCLE_SETUP_JSON", setupJson],
+    ["SEALANT_LIFECYCLE_STARTUP_JSON", startupJson],
+  ];
+
+  const foreground = plan.blueprint.lifecycle.startup.foreground;
+  if (foreground.kind === "command") {
+    entries.push([
+      "SEALANT_FOREGROUND_RUN_JSON",
+      JSON.stringify(toBootLifecycleStepJson(foreground)),
+    ]);
+  }
+
+  if (plan.dotfiles !== undefined && plan.dotfiles.applyAt === "runtime") {
+    entries.push(
+      ["SEALANT_DOTFILES_RUNTIME_APPLY", "1"],
+      ["SEALANT_DOTFILES_REPO_URL", plan.dotfiles.url],
+      ["SEALANT_DOTFILES_REPO_REF", plan.dotfiles.ref],
+      ["SEALANT_DOTFILES_MANAGER", plan.dotfiles.manager],
+      ["SEALANT_DOTFILES_TARGET", plan.dotfiles.target],
+      ["SEALANT_DOTFILES_BOOTSTRAP", plan.dotfiles.bootstrap ? "1" : "0"],
+      ["SEALANT_DOTFILES_BOOTSTRAP_COMMAND", plan.dotfiles.bootstrapCommand ?? "./install.sh"],
+    );
+    if (plan.dotfiles.githubInstallationRepositoryId !== undefined) {
+      entries.push([
+        "SEALANT_DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID",
+        plan.dotfiles.githubInstallationRepositoryId,
+      ]);
+    }
+  }
+
+  return renderEnvBlock(entries);
 };
 
 /**
@@ -1071,10 +852,18 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
 /**
  * Renders the full Containerfile used for Docker build.
  *
+ * This is now a thin per-distro template: it installs packages + the harness, configures the login
+ * shell, `COPY --from`'s the `sealantd` binary, emits the build-static `ENV SEALANT_*` block, and
+ * sets `ENTRYPOINT ["sealantd", "boot"]`. All container orchestration that the deleted bash
+ * entrypoint performed (workspace prep, clone, ssh bring-up, runtime dotfiles, lifecycle, harness
+ * supervision) now lives in the `sealantd boot` PID-1 supervisor, configured entirely via the
+ * `SEALANT_*` env contract (build-static here, run-dynamic via the Docker runtime adapter).
+ *
  * Ordering is intentional:
- * - package and harness installs before entrypoint copy to maximize layer cache reuse
- * - shell configuration before runtime start
- * - optional dotfiles build step near the end because it can be highly variable
+ * - package and harness installs first to maximize layer cache reuse
+ * - shell configuration, then the `sealantd` binary copy
+ * - optional build-time dotfiles `RUN` layer near the end because it can be highly variable
+ * - the boot `ENV` block + `ENTRYPOINT` last so config changes do not bust earlier cache layers
  */
 const renderContainerfile = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
@@ -1094,22 +883,17 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
       ? `ENV SHELL=${shellQuote(shellPath)}`
       : `RUN usermod -s ${shellQuote(shellPath)} root`,
     "",
-    "COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint",
-    "RUN chmod 755 /usr/local/bin/sandbox-entrypoint",
-    // The sealantd runtime daemon is baked in from the public GHCR image via a multi-stage
-    // `COPY --from` so we inherit its multi-arch (amd64+arm64) binary without bundling a local
-    // build context. Gated on the build flag so existing sandboxes stay byte-identical.
-    ...(plan.customization.enableSealantd === true
-      ? [
-          "",
-          "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
-          "RUN chmod 755 /usr/local/bin/sealantd",
-        ]
-      : []),
+    // The sealantd binary is the mandatory PID-1 entrypoint. We bake it in from the public GHCR
+    // image via a multi-stage `COPY --from` so we inherit its multi-arch (amd64+arm64) binary
+    // without bundling a local build context.
+    `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
+    "RUN chmod 755 /usr/local/bin/sealantd",
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
     "",
+    renderBootEnv(plan),
+    "",
     "WORKDIR /sandbox",
-    'ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint"]',
+    'ENTRYPOINT ["sealantd", "boot"]',
     "",
   ].join("\n");
 };
@@ -1117,13 +901,14 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
 /**
  * Materializes a temporary BuildKit context directory and writes all generated inputs.
  *
- * Artifacts written here are both build inputs (`Containerfile`, `entrypoint.sh`) and metadata
- * outputs (`resolved-image-plan.json`, `buildkit-spec.json`) consumed by downstream systems.
+ * Artifacts written here are the build input (`Containerfile`) and metadata outputs
+ * (`resolved-image-plan.json`, `buildkit-spec.json`) consumed by downstream systems. The old
+ * generated `entrypoint.sh` is gone: the container's PID 1 is now the baked-in `sealantd boot`
+ * binary, configured via the `ENV SEALANT_*` block in the Containerfile.
  */
 const writeBuildContext = async (plan: ResolvedImagePlan) => {
   const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
   const containerfilePath = join(contextDirectory, "Containerfile");
-  const entrypointPath = join(contextDirectory, "entrypoint.sh");
   const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
   const buildSpecPath = join(contextDirectory, "buildkit-spec.json");
   const imageTarPath = join(contextDirectory, "sandbox-image.tar");
@@ -1142,7 +927,6 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
 
   await mkdir(dirname(containerfilePath), { recursive: true });
   await writeFile(containerfilePath, renderContainerfile(plan), "utf8");
-  await writeFile(entrypointPath, renderSandboxEntrypoint(plan), "utf8");
   await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 

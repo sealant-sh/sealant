@@ -13,9 +13,9 @@ import { join } from "node:path";
 
 /** Image produced by the P3-Build phase (Fedora + sealantd baked in). */
 export const DEFAULT_IMAGE_REF = "sealant-sandbox-fedora-claude-code:claude-code";
-/** Control socket path the entrypoint launches sealantd on (matches renderSandboxEntrypoint). */
+/** Control socket path `sealantd boot` listens on (matches SEALANT_CONTROL_SOCKET in the builder). */
 export const DEFAULT_CONTROL_SOCKET = "/run/sealant/control.sock";
-/** Resolved `workingDirectory` default; the entrypoint checks `<this>/.git` to decide whether to clone. */
+/** Resolved `workingDirectory` default; `sealantd boot` checks `<this>/.git` to decide whether to clone. */
 export const DEFAULT_WORKING_DIRECTORY = "/sandbox/repo";
 
 /** Run `docker <args>`, resolving with trimmed stdout or rejecting with stderr. */
@@ -93,6 +93,14 @@ export const bootSealantdContainer = async (
     "run",
     "-d",
     "--rm",
+    // `sealantd boot` requires repo url/ref to be present in the env contract even when the clone is
+    // skipped (the `.git` bind mount below makes boot skip the actual clone). These are run-dynamic
+    // vars the runtime adapter would normally inject; we supply placeholders so config validation
+    // passes and the daemon boots without touching the network.
+    "-e",
+    "SEALANT_SANDBOX_REPO_URL=https://example.invalid/skipped.git",
+    "-e",
+    "SEALANT_SANDBOX_REPO_REF=main",
     "-e",
     "SEALANT_FOREGROUND_COMMAND=sleep infinity",
     "-v",
