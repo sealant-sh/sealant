@@ -21,7 +21,6 @@ console.log("[ssh-gateway] starting", {
   coreApiBaseUrl: env.CORE_API_BASE_URL,
   usernamePrefix: env.SSH_GATEWAY_SANDBOX_USERNAME_PREFIX,
   allowedClientKeys: allowedClientKeys.length,
-  strictUpstreamHostKeyChecking: env.SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING,
 });
 
 const main = async () => {
@@ -35,9 +34,6 @@ const main = async () => {
     sandboxUsernamePrefix: env.SSH_GATEWAY_SANDBOX_USERNAME_PREFIX,
     coreApiBaseUrl: env.CORE_API_BASE_URL,
     gatewayToken: env.SANDBOX_SSH_GATEWAY_TOKEN,
-    upstreamPrivateKey: env.SSH_UPSTREAM_PRIVATE_KEY,
-    upstreamReadyTimeoutMs: env.SSH_UPSTREAM_READY_TIMEOUT_MS,
-    strictUpstreamHostKeyChecking: env.SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING,
   });
 
   const shutdown = async () => {

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 import ssh2 from "ssh2";
 
@@ -10,6 +10,12 @@ export interface AuthorizedKeyEntry {
   readonly algo: string;
   readonly data: Buffer;
   readonly verify: VerifyFunction;
+  /**
+   * Identifies *who* this key belongs to (gateway-spec §3.4). The API authorizes principal x sandbox;
+   * the gateway sends this with the control-target request. Taken from the key's trailing comment, or
+   * a stable fingerprint of the key material when no comment is present.
+   */
+  readonly principalId: string;
 }
 
 // Parse a single authorized_keys line into a structure we can compare quickly at auth time.
@@ -20,7 +26,10 @@ const toAuthorizedKeyEntry = (line: string): AuthorizedKeyEntry | undefined => {
     return undefined;
   }
 
-  const [algo, encoded] = trimmed.split(/\s+/, 3);
+  // `<algo> <base64> [comment...]`. The comment (if any) is the principal id.
+  const parts = trimmed.split(/\s+/);
+  const [algo, encoded] = parts;
+  const comment = parts.slice(2).join(" ").trim();
 
   if (algo === undefined || encoded === undefined) {
     throw new Error(`Invalid authorized_keys entry: '${line}'`);
@@ -38,11 +47,17 @@ const toAuthorizedKeyEntry = (line: string): AuthorizedKeyEntry | undefined => {
   }
 
   const verifier = key.verify.bind(key) as VerifyFunction;
+  const data = Buffer.from(encoded, "base64");
+  // A comment names the principal; otherwise fall back to a deterministic key fingerprint so every
+  // entry still has a stable, distinct identity the API can authorize.
+  const principalId =
+    comment.length > 0 ? comment : `key:${createHash("sha256").update(data).digest("hex")}`;
 
   return {
     algo,
-    data: Buffer.from(encoded, "base64"),
+    data,
     verify: verifier,
+    principalId,
   };
 };
 

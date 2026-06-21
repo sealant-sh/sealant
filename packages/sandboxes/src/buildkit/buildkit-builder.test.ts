@@ -453,7 +453,7 @@ describe("compileSandboxBuildSpec", () => {
     expect(containerfile).toContain("FROM fedora:41");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/get-sealant/sealantd:0.3.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
@@ -471,6 +471,12 @@ describe("compileSandboxBuildSpec", () => {
     expect(containerfile).toContain(
       `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
     );
+
+    // §4.1: the inner sshd is gone — no openssh-server in the install layer — but the ssh *client*
+    // (git-over-ssh clone) and socat (control-socket relay) are retained.
+    expect(containerfile).not.toContain("openssh-server");
+    expect(containerfile).toContain("openssh-clients");
+    expect(containerfile).toContain("socat");
 
     // The deleted bash entrypoint must be fully gone: no generated script, no inline supervision.
     expect(containerfile).not.toContain("entrypoint.sh");
@@ -630,7 +636,7 @@ describe("compileSandboxBuildSpec", () => {
 
     // sealantd binary + socat relay dependency are always present.
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/get-sealant/sealantd:0.3.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain("socat");
@@ -688,7 +694,7 @@ describe("compileSandboxBuildSpec", () => {
       // socat (the host<->control-socket relay dependency) is always part of the install layer.
       expect(containerfile).toContain(osFamily === "nix" ? sealantdLayer : "socat");
       expect(containerfile).toContain(
-        "COPY --from=ghcr.io/get-sealant/sealantd:0.3.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+        "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
       );
       expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
     }

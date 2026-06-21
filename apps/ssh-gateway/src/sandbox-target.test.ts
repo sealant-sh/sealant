@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSshEndpoint, parseSandboxIdFromUsername } from "./sandbox-target.js";
+import {
+  DEFAULT_CONTROL_SOCKET_PATH,
+  parseSandboxIdFromUsername,
+  toControlTarget,
+  type SandboxSshTarget,
+} from "./sandbox-target.js";
 
 describe("parseSandboxIdFromUsername", () => {
   it("extracts sandbox id from prefixed usernames", () => {
@@ -16,24 +21,32 @@ describe("parseSandboxIdFromUsername", () => {
   });
 });
 
-describe("parseSshEndpoint", () => {
-  it("parses explicit ssh URIs", () => {
-    expect(parseSshEndpoint("ssh://root@172.18.0.10:2222")).toEqual({
-      user: "root",
-      host: "172.18.0.10",
-      port: 2222,
+const dockerTarget = (resourceId: string): SandboxSshTarget => ({
+  sandboxId: "sandbox_123",
+  attemptId: "attempt_456",
+  runtime: {
+    adapter: "docker",
+    resourceId,
+    reference: "sealant-sandbox_123",
+    status: "running",
+    endpoint: "control://docker-exec",
+  },
+});
+
+describe("toControlTarget", () => {
+  it("maps a docker runtime to a docker-exec control target", () => {
+    expect(toControlTarget(dockerTarget("ctr-abc"))).toEqual({
+      kind: "docker-exec",
+      containerId: "ctr-abc",
+      socketPath: DEFAULT_CONTROL_SOCKET_PATH,
     });
   });
 
-  it("defaults to root and port 22", () => {
-    expect(parseSshEndpoint("ssh://10.0.0.5")).toEqual({
-      user: "root",
-      host: "10.0.0.5",
-      port: 22,
-    });
-  });
-
-  it("throws on non-ssh URIs", () => {
-    expect(() => parseSshEndpoint("http://localhost:2222")).toThrow("Expected ssh:// URI.");
+  it("rejects non-docker adapters", () => {
+    const target: SandboxSshTarget = {
+      ...dockerTarget("ctr-abc"),
+      runtime: { ...dockerTarget("ctr-abc").runtime, adapter: "k8s" },
+    };
+    expect(() => toControlTarget(target)).toThrow("Unsupported runtime adapter");
   });
 });

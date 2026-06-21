@@ -2,8 +2,10 @@
 
 `@sealant/ssh-gateway` is the SSH routing gateway for sandbox access.
 
-It accepts client SSH sessions on a single gateway host and resolves the internal sandbox runtime
-SSH target via the API route:
+It accepts client SSH sessions on a single gateway host and, instead of dialing an inner sshd, drives
+the sandbox's sealantd **control socket** (`/run/sealant/control.sock`) over a transport bridge. SSH
+channels are mapped to control commands and daemon byte channels. It resolves the control target via
+the API route:
 
 - `GET /v1/sandboxes/{sandboxId}/ssh-target`
 
@@ -17,12 +19,19 @@ SSH target via the API route:
 ## High-level flow
 
 1. User connects to gateway using alias `sbx-<sandboxId>`.
-2. Gateway authenticates the user key from `SSH_GATEWAY_ALLOWED_KEYS_FILE`.
-3. Gateway extracts `<sandboxId>` from username.
-4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` for current runtime endpoint.
-5. Gateway opens upstream SSH to sandbox runtime and forwards channels.
+2. Gateway authenticates the user key from `SSH_GATEWAY_ALLOWED_KEYS_FILE` and resolves the key's
+   principal id (the key comment, or a stable fingerprint).
+3. Gateway extracts `<sandboxId>` from username (a routing hint only).
+4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` with the gateway token + principal id; the
+   API authorizes principal x sandbox and returns the control target (container id).
+5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
+   - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
+   - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)
+   - `direct-tcpip` -> `openForward` (the VS Code Remote-SSH server path)
+   - `subsystem:sftp` -> `openSftp`
+   - `window-change` -> `resizePty`, `signal` -> `signalProcess`
 
-In short: user connects once to gateway, gateway handles the final hop.
+In short: user connects once to gateway, gateway drives the daemon control protocol on their behalf.
 
 ## Environment
 
@@ -34,9 +43,9 @@ In short: user connects once to gateway, gateway handles the final hop.
 - `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX` (default: `sbx`)
 - `CORE_API_BASE_URL` (default: `http://127.0.0.1:4000`)
 - `SANDBOX_SSH_GATEWAY_TOKEN` (required)
-- `SSH_UPSTREAM_PRIVATE_KEY_PATH` (default: `./.secrets/id_ed25519`)
-- `SSH_UPSTREAM_READY_TIMEOUT_MS` (default: `15000`)
-- `SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING` (default: `false`)
+
+The upstream-SSH env vars (`SSH_UPSTREAM_PRIVATE_KEY_PATH` / `SSH_UPSTREAM_READY_TIMEOUT_MS` /
+`SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING`) are gone — the gateway no longer dials an inner sshd.
 
 ## Username routing contract
 
@@ -117,7 +126,8 @@ ssh sbx-<sandboxId>
 ## VS Code notes
 
 - VS Code Remote SSH relies on dynamic forwarding (`ssh -D ...`).
-- Gateway implements TCP channel forwarding through upstream SSH (`forwardOut`) so VS Code works.
+- Gateway implements TCP channel forwarding by mapping `direct-tcpip` to the daemon `openForward`
+  command (a TCP connection opened from inside the sandbox) so VS Code works.
 - If auth fails, check that the alias resolves to user `sbx-<sandboxId>` (not `127.0.0.1`).
 
 Quick check:

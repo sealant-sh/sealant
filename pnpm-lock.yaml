@@ -645,6 +645,12 @@ importers:
 
   apps/ssh-gateway:
     dependencies:
+      '@sealant/runtime-client':
+        specifier: ^0.4.0
+        version: 0.4.0
+      '@sealant/runtime-protocol':
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -655,6 +661,9 @@ importers:
         specifier: 'catalog:'
         version: 4.3.6
     devDependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.12.0
+        version: 2.12.0
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
@@ -914,11 +923,11 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/runtime-protocol':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -4270,12 +4279,12 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client@0.2.0':
-    resolution: {integrity: sha512-W1M+pQ/p3QZRt/7XhTLSbOWDNdWJvP74tgnlbQrtuVAODghnOphdBAkTx4zQb15JAfLlFgjrV/q7mac1pCluLQ==}
+  '@sealant/runtime-client@0.4.0':
+    resolution: {integrity: sha512-ErDS3QNHbu9R/yu3kAfzuhQelIx87aC+ZM20uZcP3bHuPsY/JXuz6WrI3IsVugGaIsqKuNzfiO7DT6l9nwKdaQ==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-protocol@0.2.0':
-    resolution: {integrity: sha512-RwyZaVTlBr2UIOIAYZ3ClqCv5xl9XopnL024j/fcd7bxkXejeUKg16CRZVSEBEyDY+H+K/hCKXk/SsgXEAv9lQ==}
+  '@sealant/runtime-protocol@0.4.0':
+    resolution: {integrity: sha512-17Z66LI+t9wjnnFvfOHKKMAXBVol2rt5rLdx6eSKPv8OAMGJFxW2VIb7qmako2ZYRMNGZzoYuKzerO2O8cbt3Q==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -13259,12 +13268,12 @@ snapshots:
       type-fest: 5.4.4
       zod: 4.3.6
 
-  '@sealant/runtime-client@0.2.0':
+  '@sealant/runtime-client@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': 0.2.0
+      '@sealant/runtime-protocol': 0.4.0
 
-  '@sealant/runtime-protocol@0.2.0':
+  '@sealant/runtime-protocol@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

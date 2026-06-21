@@ -183,8 +183,11 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       "ca-certificates",
       "coreutils",
       "git",
+      // KEEP openssh-clients: git-over-ssh clone needs the ssh client (GIT_SSH_COMMAND in boot/git.rs).
+      // The inner sshd is gone (gateway reaches the daemon control socket, not an inner sshd), so the
+      // openssh-server package is dropped here. Fedora's standalone sftp-server ships in openssh-server,
+      // so SFTP-via-exec (gateway-spec §1.C) is unavailable on Fedora until that note is resolved.
       "openssh-clients",
-      "openssh-server",
       "shadow-utils",
     ],
     sealantdPackages: ["socat"],
@@ -256,7 +259,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
  * deterministic and easy to bump. The binary is multi-arch (amd64+arm64) so we inherit both without
  * bundling a local build context.
  */
-const sealantdImageReference = "ghcr.io/get-sealant/sealantd:0.3.0";
+const sealantdImageReference = "ghcr.io/get-sealant/sealantd:0.4.0";
 
 /**
  * In-container control socket `sealantd boot` listens on. Build-static; promoted to
