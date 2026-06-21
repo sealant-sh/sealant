@@ -10,7 +10,7 @@
     "./web.json": "./web.json"
   },
   "scripts": {
-    "lint": "oxlint .",
+    "lint": "oxlint . --no-error-on-unmatched-pattern",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   }
 }
