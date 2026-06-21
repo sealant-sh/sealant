@@ -38,11 +38,23 @@ export const docker = (args: readonly string[]): Promise<string> =>
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Returns true when the baked image is present locally (used to skip e2e specs gracefully). */
+/**
+ * Returns true when the baked image is present locally (used to skip e2e specs gracefully). Tries
+ * `docker image inspect` first, then falls back to a reference-filtered `docker image ls`: under the
+ * containerd image store, `inspect <repo:tag>` can fail to resolve a locally-tagged image that is
+ * nonetheless listed and runnable, so the listing fallback avoids skipping a present image.
+ */
 export const isImagePresent = async (imageRef = DEFAULT_IMAGE_REF): Promise<boolean> => {
   try {
     await docker(["image", "inspect", imageRef, "--format", "{{.Id}}"]);
     return true;
+  } catch {
+    // Fall through to the listing fallback below.
+  }
+
+  try {
+    const listed = await docker(["image", "ls", "--format", "{{.Repository}}:{{.Tag}}", imageRef]);
+    return listed.length > 0;
   } catch {
     return false;
   }
