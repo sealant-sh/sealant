@@ -21,6 +21,7 @@
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
     "amqplib": "catalog:",
+    "effect": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
