@@ -90,6 +90,8 @@
 
   <h2>5 · Progress log <span class="mut small">(newest first)</span></h2>
   <div class="card small" id="log">
+    <p><span class="ok">✓</span> <b>P2 done</b>: <code>enableSealantd</code> flag (customization schema, auto-threaded via <code>plan.customization</code>) → <code>COPY --from=ghcr…sealantd:0.1.2</code> + <code>socat</code> + entrypoint launch. <b>12/12 buildkit tests</b>, disabled path byte-identical, adversarially verified <b>no blockers</b>. Commit <code>1b9b6a2</code>. P3 build entry = <code>compileSandboxBuildSpec()</code> (standalone, no worker/DB). Follow-up: tighten the cosmetic arch test. <b>P3</b> (real image + live exec/telemetry proof) running.</p>
+    <p><span class="ok">✓</span> <b>P1 done</b>: <code>SealantClient.fromStream()</code> shipped, e2e 3/3, committed (sealantd <code>integrate/sdk-fromstream</code>). <b>Loop engaged</b>: chained phase-workflows P2→P7, each implements + adversarially verifies + commits. <b>P2</b> (buildkit bake+launch) running.</p>
     <p><span class="mut">—</span> P1 started: added <code>import type Duplex</code> to client.ts; refactoring net.Socket→Duplex + <code>fromStream()</code>.</p>
     <p><span class="mut">—</span> Confirmed GHCR image public/multi-arch/pullable; switched L1 to <code>COPY --from</code>.</p>
     <p><span class="mut">—</span> Spec workflow done; arm64 static binary boots in a clean container (all features present).</p>
