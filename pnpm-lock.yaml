@@ -214,10 +214,6 @@ catalogs:
       specifier: ^4.1.12
       version: 4.3.6
 
-overrides:
-  '@sealant/runtime-protocol': file:../sealantd/packages/runtime-protocol
-  '@sealant/runtime-client': file:../sealantd/packages/runtime-client
-
 packageExtensionsChecksum: sha256-xpU4mJSaAzj0Sf2JXGoePZ47IQmL+5LobCLNrV/X91I=
 
 importers:
@@ -918,11 +914,11 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: file:../../../sealantd/packages/runtime-client
-        version: file:../sealantd/packages/runtime-client
+        specifier: ^0.2.0
+        version: 0.2.0
       '@sealant/runtime-protocol':
-        specifier: file:../../../sealantd/packages/runtime-protocol
-        version: file:../sealantd/packages/runtime-protocol
+        specifier: ^0.2.0
+        version: 0.2.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -4274,12 +4270,12 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client@file:../sealantd/packages/runtime-client':
-    resolution: {directory: ../sealantd/packages/runtime-client, type: directory}
+  '@sealant/runtime-client@0.2.0':
+    resolution: {integrity: sha512-W1M+pQ/p3QZRt/7XhTLSbOWDNdWJvP74tgnlbQrtuVAODghnOphdBAkTx4zQb15JAfLlFgjrV/q7mac1pCluLQ==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-protocol@file:../sealantd/packages/runtime-protocol':
-    resolution: {directory: ../sealantd/packages/runtime-protocol, type: directory}
+  '@sealant/runtime-protocol@0.2.0':
+    resolution: {integrity: sha512-RwyZaVTlBr2UIOIAYZ3ClqCv5xl9XopnL024j/fcd7bxkXejeUKg16CRZVSEBEyDY+H+K/hCKXk/SsgXEAv9lQ==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -13149,7 +13145,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 
@@ -13261,12 +13259,12 @@ snapshots:
       type-fest: 5.4.4
       zod: 4.3.6
 
-  '@sealant/runtime-client@file:../sealantd/packages/runtime-client':
+  '@sealant/runtime-client@0.2.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': file:../sealantd/packages/runtime-protocol
+      '@sealant/runtime-protocol': 0.2.0
 
-  '@sealant/runtime-protocol@file:../sealantd/packages/runtime-protocol':
+  '@sealant/runtime-protocol@0.2.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
