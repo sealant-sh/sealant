@@ -83,6 +83,10 @@ export const sandboxCustomizationSchema = z
     applyDotfiles: z.boolean().default(true),
     dotfilesBootstrap: z.boolean().default(true),
     dotfilesBootstrapCommand: nonEmptyStringSchema.optional(),
+    // Bakes + launches the sealantd runtime daemon. Optional and defaults to disabled when absent,
+    // so existing blueprints/callers stay source-compatible and the disabled build path renders
+    // byte-identically to before.
+    enableSealantd: z.boolean().optional(),
   })
   .prefault({});
 
