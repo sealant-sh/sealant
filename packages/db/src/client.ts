@@ -5,6 +5,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Scope from "effect/Scope";
 
 import { relations } from "./schema/relations.js";
 
@@ -37,11 +38,16 @@ export const makeSealantDBLayer = (databaseUrl: string) => {
 };
 
 export const createSealantDB = async (databaseUrl: string): Promise<DB> => {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      return yield* SealantDB;
-    }).pipe(Effect.provide(makeSealantDBLayer(databaseUrl))),
+  // The Postgres pool is a scoped resource of `PgClient.layer`. Extracting the DB through
+  // `Effect.provide(...)` + `runPromise` would close that scope as soon as the handle is returned,
+  // releasing the pool and breaking every later query/transaction ("Failed to acquire connection
+  // for transaction"). Build the layer into a scope that lives for the whole process instead, so
+  // the pool stays open for the lifetime of the returned handle.
+  const scope = await Effect.runPromise(Scope.make());
+  const context = await Effect.runPromise(
+    Layer.buildWithScope(makeSealantDBLayer(databaseUrl), scope),
   );
+  return Context.get(context, SealantDB);
 };
 
 export const createSealantDBFromEnv = async (
