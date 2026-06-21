@@ -10,6 +10,10 @@ import {
   type NewGitHubInstallationRepository,
 } from "../schema.js";
 
+// Treat a user-provided search term as a literal substring: escape LIKE metacharacters so a term
+// such as "a_b" or "50%" matches literally instead of being interpreted as a wildcard pattern.
+const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, (char) => `\\${char}`);
+
 export interface UpsertGitHubInstallationRepositoryInput {
   readonly id: string;
   readonly installationId: string;
@@ -275,7 +279,12 @@ export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
               ...(input.includeRemoved ? [] : [isNull(githubInstallationRepositories.removedAt)]),
               ...(input.search === undefined || input.search.trim().length === 0
                 ? []
-                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+                : [
+                    like(
+                      githubInstallationRepositories.fullName,
+                      `%${escapeLikePattern(input.search.trim())}%`,
+                    ),
+                  ]),
             ];
 
             return yield* db
@@ -300,7 +309,12 @@ export const GitHubInstallationRepositoryCacheRepoLive = Layer.effect(
                 : [eq(githubInstallationRepositories.installationId, input.installationId)]),
               ...(input.search === undefined || input.search.trim().length === 0
                 ? []
-                : [like(githubInstallationRepositories.fullName, `%${input.search.trim()}%`)]),
+                : [
+                    like(
+                      githubInstallationRepositories.fullName,
+                      `%${escapeLikePattern(input.search.trim())}%`,
+                    ),
+                  ]),
             ];
 
             const rows = yield* db

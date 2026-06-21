@@ -1044,7 +1044,14 @@ export const createSandbox = (input: {
             {
               concurrency: "unbounded",
             },
-          ).pipe(Effect.catchAll(() => Effect.void));
+          ).pipe(
+            Effect.catchAllCause((cause) =>
+              Effect.logWarning(
+                `Sandbox ${sandboxId} rollback writes failed after queue publish failure; state may be inconsistent.`,
+                cause,
+              ),
+            ),
+          );
 
           return yield* new SandboxBadGatewayError({
             message: `Sandbox ${sandboxId} was recorded but could not be queued.`,

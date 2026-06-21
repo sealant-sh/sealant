@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -101,26 +101,18 @@ export const PackageResolutionCacheRepoLive = Layer.effect(
         withPackageResolutionCacheRepoError(
           "getByQuery",
           Effect.gen(function* () {
+            // Atomic read+touch: increment the hit counter in a single statement so concurrent
+            // reads cannot lose updates, and so a "read" never leaves a half-applied write.
             const [entry] = yield* db
-              .select()
-              .from(packageResolutionCacheEntries)
-              .where(eq(packageResolutionCacheEntries.query, query))
-              .limit(1);
-
-            if (entry === undefined) {
-              return null;
-            }
-
-            const [updated] = yield* db
               .update(packageResolutionCacheEntries)
               .set({
                 lastUsedAt: new Date(),
-                hitCount: entry.hitCount + 1,
+                hitCount: sql`${packageResolutionCacheEntries.hitCount} + 1`,
               })
               .where(eq(packageResolutionCacheEntries.query, query))
               .returning();
 
-            return updated ?? entry;
+            return entry ?? null;
           }),
         ),
 
