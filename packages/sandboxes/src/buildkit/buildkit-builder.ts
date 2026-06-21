@@ -1102,7 +1102,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     ...(plan.customization.enableSealantd === true
       ? [
           "",
-          "COPY --from=ghcr.io/get-sealant/sealantd:0.1.2 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+          "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
           "RUN chmod 755 /usr/local/bin/sealantd",
         ]
       : []),
