@@ -198,7 +198,14 @@ describe("ControlClient channel->command mapping", () => {
     const client = ControlClient.fromStream(daemon);
 
     await client.writeSessionInput("sess-1", new Uint8Array([0x03]));
-    expect(lastCommand(daemon)).toMatchObject({ case: "writeStdin", value: { processId: "sess-1" } });
+    // Interactive PTY input must route by *sessionId*, not processId: the daemon's WriteStdinArgs is
+    // an exclusive choice and the session path is what delivers SSH keystrokes to a live PTY.
+    const writeStdin = lastCommand(daemon);
+    expect(writeStdin).toBeDefined();
+    expect(writeStdin).toMatchObject({ case: "writeStdin", value: { sessionId: "sess-1" } });
+    const writeStdinValue = writeStdin?.value as { processId?: string; sessionId?: string };
+    expect(writeStdinValue.processId).toBeUndefined();
+    expect(writeStdinValue.sessionId).toBe("sess-1");
 
     await client.resizePty("sess-1", 100, 30);
     expect(lastCommand(daemon)).toMatchObject({ case: "resizePty", value: { sessionId: "sess-1", cols: 100, rows: 30 } });

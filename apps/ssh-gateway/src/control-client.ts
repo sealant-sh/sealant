@@ -154,8 +154,10 @@ export class ControlClient {
 
   /** Write client keystrokes / stdin bytes to a session's PTY (§3.3 shell input path). */
   async writeSessionInput(sessionId: string, data: Uint8Array): Promise<void> {
-    // Session stdin reuses the process write path keyed by the session id (`writeStdin{sessionId}`).
-    await this.#client.writeStdin(sessionId, data);
+    // Route to the daemon's PTY input path keyed by session id (`writeStdin{sessionId}`). The bare
+    // `writeStdin(string, ...)` form targets a *processId* — wrong for interactive sessions — so use
+    // the session-targeted SDK helper.
+    await this.#client.writeSessionInput(sessionId, data);
   }
 
   /** Resize a session's PTY (§3.3 window-change -> resizePty). */

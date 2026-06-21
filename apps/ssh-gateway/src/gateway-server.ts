@@ -62,16 +62,30 @@ const SIGNAL_NUMBERS: Record<string, number> = {
   TSTP: 20,
 };
 
+// Reverse map (daemon `StreamEnd.signal` number -> POSIX name) so we can relay a process that died
+// from a signal as a proper SSH `exit-signal` rather than collapsing it into a numeric exit-status.
+const SIGNAL_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(SIGNAL_NUMBERS).map(([name, number]) => [number, name]),
+);
+
 /**
  * Bridge an SSH `ServerChannel` to a daemon byte `Channel`: inbound daemon bytes -> client channel,
- * client bytes -> `onClientData`. On the daemon channel's `End` we surface the process exit code to
- * the SSH channel and close it; on the client EOF we half-close the daemon channel.
+ * client bytes -> `onClientData`.
+ *
+ * Teardown is asymmetric on purpose (SSH half-close semantics, gateway-spec §3.3):
+ *   - The daemon channel's remote `End` is the authoritative end-of-stream. We relay the exit status
+ *     (exec/shell) and then `end()` the SSH channel.
+ *   - On client EOF (`end` event) we only HALF-close the daemon channel (`channel.end()`): the client
+ *     has nothing more to send, but the daemon's remaining output + its `End`/exit status must still
+ *     arrive. We do NOT full-close here — that would drop the tail of `ssh host cmd` output.
+ *   - Only on the SSH channel fully closing (`close` event) do we `destroy()` the daemon channel, a
+ *     real local teardown that releases it from the demux table.
  */
 const bridgeChannel = (input: {
   readonly sshChannel: ServerChannel;
   readonly channel: Channel;
   readonly onClientData: (data: Uint8Array) => void;
-  /** Whether to translate the daemon `End.exit_code` into an SSH `exit-status` (exec/shell only). */
+  /** Whether to translate the daemon `End.exit_code`/`signal` into an SSH exit (exec/shell only). */
   readonly relayExit: boolean;
 }): void => {
   const { sshChannel, channel, onClientData, relayExit } = input;
@@ -87,32 +101,40 @@ const bridgeChannel = (input: {
     }
   })();
 
-  // The daemon channel closing is the authoritative end: relay exit status, then close the SSH side.
+  // The daemon channel's full close (the remote `End`) is the authoritative end: relay the process
+  // exit status, then close the SSH side. `closed` only resolves on a *full* close, so a client-side
+  // half-close (`end()`) does not trip this — we wait for the daemon's `End`.
   void channel.closed.then((cause) => {
     if (relayExit && cause.kind === "remote") {
-      const exitCode = cause.end.exitCode;
-      if (typeof exitCode === "number") {
+      const { exitCode, signal } = cause.end;
+      if (typeof signal === "number" && SIGNAL_NAMES[signal] !== undefined) {
+        // Process died from a signal: relay a proper SSH `exit-signal`.
+        sshChannel.exit(SIGNAL_NAMES[signal], false, cause.end.error ?? "");
+      } else if (typeof exitCode === "number") {
         sshChannel.exit(exitCode);
-      } else if (typeof cause.end.signal === "number") {
-        sshChannel.exit(exitCode ?? 1);
+      } else if (typeof signal === "number") {
+        // Unknown signal number: fall back to a non-zero exit-status so the client sees failure.
+        sshChannel.exit(1);
       }
     }
     sshChannel.end();
     return undefined;
   });
 
-  // Client -> daemon. Forward bytes; on client EOF half-close the daemon channel.
+  // Client -> daemon. Forward bytes; the two teardown events map to the two close modes:
   sshChannel.on("data", (data: Buffer) => {
     onClientData(new Uint8Array(data));
   });
+  // Client EOF: half-close outbound only. Inbound (daemon output + End/exit) keeps flowing.
   sshChannel.on("end", () => {
-    if (!channel.isClosed) {
+    if (!channel.isOutboundClosed) {
       channel.end();
     }
   });
+  // SSH channel fully gone: full local teardown of the daemon channel.
   sshChannel.on("close", () => {
     if (!channel.isClosed) {
-      channel.end();
+      channel.destroy();
     }
   });
 };
