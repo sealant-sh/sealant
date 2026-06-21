@@ -255,17 +255,23 @@ describe("compileSandboxBuildSpec", () => {
         commandRunner,
       },
     });
-    const entrypointPath = result.buildkit.spec.containerfilePath.replace(
-      /Containerfile$/,
-      "entrypoint.sh",
-    );
-    const entrypoint = await readFile(entrypointPath, "utf8");
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
 
-    expect(entrypoint).toContain("SEALANT_DOTFILES_HTTP_TOKEN");
-    expect(entrypoint).toContain("DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID");
-    expect(entrypoint).toContain('DOTFILES_SOURCE_DIR="/root/.local/share/chezmoi"');
-    expect(entrypoint).toContain('HOME=/root chezmoi init --source="$DOTFILES_SOURCE_DIR"');
-    expect(entrypoint).toContain('case "$DOTFILES_MANAGER" in');
+    // Runtime dotfiles are no longer baked as entrypoint bash: `boot` performs the clone+apply,
+    // driven by the build-static `SEALANT_DOTFILES_*` env contract emitted into the Containerfile.
+    expect(containerfile).toContain("SEALANT_DOTFILES_RUNTIME_APPLY='1'");
+    expect(containerfile).toContain(
+      "SEALANT_DOTFILES_GITHUB_INSTALLATION_REPOSITORY_ID='gh_installation_repo_1'",
+    );
+    expect(containerfile).toContain(
+      "SEALANT_DOTFILES_REPO_URL='https://github.com/example/dotfiles.git'",
+    );
+    expect(containerfile).toContain("SEALANT_DOTFILES_MANAGER='auto'");
+    expect(containerfile).toContain("SEALANT_DOTFILES_BOOTSTRAP_COMMAND='./install.sh'");
+    // The HTTP token stays run-dynamic (injected by the runtime adapter), never baked into ENV.
+    expect(containerfile).not.toContain("SEALANT_DOTFILES_HTTP_TOKEN");
+    // No generated entrypoint.sh exists anymore.
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
   });
 
   it("installs stow when the dotfiles manager is stow", () => {
@@ -441,25 +447,43 @@ describe("compileSandboxBuildSpec", () => {
     expect(result.buildkit.imagePlan.packageManager).toBe("dnf");
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
-    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
     const containerfile = await readFile(containerfilePath, "utf8");
-    const entrypoint = await readFile(entrypointPath, "utf8");
 
+    // Thin per-distro template: FROM + harness install + sealantd copy + boot ENV + boot entrypoint.
     expect(containerfile).toContain("FROM fedora:41");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
-    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sandbox-entrypoint"]');
-    expect(entrypoint).toContain('mkdir -p "$SANDBOX_ROOT" "$WORKING_DIRECTORY"');
-    expect(entrypoint).toContain("cat > /usr/local/bin/sandbox-ssh-shell <<'EOF'");
-    expect(entrypoint).toContain("ForceCommand /usr/local/bin/sandbox-ssh-shell");
-    expect(entrypoint).toContain("BASH_SHELL='/bin/bash'");
-    expect(entrypoint).toContain('if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then');
-    expect(entrypoint).toContain('exec "$BASH_SHELL" -i');
-    expect(entrypoint).toContain('exec "$LOGIN_SHELL" -i');
-    expect(entrypoint).toContain("cat > \"$REPO_GIT_ASKPASS_PATH\" <<'EOF'");
-    expect(entrypoint).toContain('export GIT_ASKPASS="$REPO_GIT_ASKPASS_PATH"');
-    expect(entrypoint).toContain("cleanup_sandbox_clone_auth");
-    expect(entrypoint).toContain('git clone --branch "$SANDBOX_REPO_REF"');
-    expect(entrypoint).toContain("exec /bin/bash -lc 'pnpm dev'");
+    expect(containerfile).toContain(
+      "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+    );
+    expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+
+    // Build-static orchestration is conveyed via the ENV SEALANT_* contract `boot` reads.
+    expect(containerfile).toContain("SEALANT_OS_FAMILY='fedora'");
+    expect(containerfile).toContain("SEALANT_SANDBOX_ROOT='/sandbox'");
+    expect(containerfile).toContain("SEALANT_WORKING_DIRECTORY='/sandbox/repo'");
+    expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/bin/bash'");
+    expect(containerfile).toContain("SEALANT_SSHD_PATH='/usr/sbin/sshd'");
+    expect(containerfile).toContain("SEALANT_CONTROL_SOCKET='/run/sealant/control.sock'");
+    expect(containerfile).toContain("SEALANT_HARNESS_BANNER='Starting opencode sandbox'");
+    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='opencode'");
+    // The literal `command` foreground is carried as build-static JSON, not baked bash.
+    expect(containerfile).toContain(
+      `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
+    );
+
+    // The deleted bash entrypoint must be fully gone: no generated script, no inline supervision.
+    expect(containerfile).not.toContain("entrypoint.sh");
+    expect(containerfile).not.toContain("sandbox-entrypoint");
+    expect(containerfile).not.toContain("sandbox-ssh-shell");
+    expect(containerfile).not.toContain("set -euo pipefail");
+    expect(containerfile).not.toContain("cleanup_sandbox_clone_auth");
+    expect(containerfile).not.toContain('git clone --branch "$SANDBOX_REPO_REF"');
+    expect(containerfile).not.toContain("exec /bin/bash -lc 'pnpm dev'");
+
+    // The build context no longer materializes an entrypoint.sh next to the Containerfile.
+    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
+    await expect(readFile(entrypointPath, "utf8")).rejects.toThrow();
   });
 
   it("starts the selected harness when startup foreground is harness", async () => {
@@ -495,14 +519,17 @@ describe("compileSandboxBuildSpec", () => {
     });
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
-    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
     const containerfile = await readFile(containerfilePath, "utf8");
-    const entrypoint = await readFile(entrypointPath, "utf8");
     const buildCommandArgs = (commandRunner.mock.calls[0]?.[1] ?? []) as string[];
 
     expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
-    expect(entrypoint).toContain("exec /usr/bin/zsh -lc 'codex'");
+    // Harness foreground carries the launch command + login shell as build-static ENV; `boot`
+    // resolves and supervises the harness child. No `SEALANT_FOREGROUND_RUN_JSON` for harness kind.
+    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='codex'");
+    expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/usr/bin/zsh'");
+    expect(containerfile).not.toContain("SEALANT_FOREGROUND_RUN_JSON");
+    expect(containerfile).not.toContain("exec /usr/bin/zsh -lc 'codex'");
     expect(buildCommandArgs).toContain("--platform");
     expect(buildCommandArgs).toContain("linux/amd64");
   });
@@ -540,9 +567,7 @@ describe("compileSandboxBuildSpec", () => {
     });
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
-    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
     const containerfile = await readFile(containerfilePath, "utf8");
-    const entrypoint = await readFile(entrypointPath, "utf8");
 
     expect(result.builder).toEqual({
       id: "nix",
@@ -560,34 +585,30 @@ describe("compileSandboxBuildSpec", () => {
     expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
     expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
     expect(containerfile).not.toContain("RUN usermod -s");
-    expect(entrypoint.startsWith("#!/root/.nix-profile/bin/bash")).toBe(true);
-    expect(entrypoint).toContain('export PATH="/usr/local/bin:$PATH"');
-    expect(entrypoint).toContain("if [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then");
-    expect(entrypoint).toContain('ln -sf "$GLIBC_LOADER" /lib64/ld-linux-x86-64.so.2');
-    expect(entrypoint).toContain(
-      'export PATH="/usr/local/bin:/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:$PATH"',
-    );
-    expect(entrypoint).toContain(
-      "if [ ! -w /etc/passwd ] || [ ! -w /etc/group ] || [ ! -w /etc/shadow ]; then",
-    );
-    expect(entrypoint).toContain("SHADOW_UPDATED=0");
-    expect(entrypoint).toContain(': > "$SSH_RUNTIME_DIR/shadow.updated"');
-    expect(entrypoint).toContain('printf "root::%s\\n" "${line#root:!:}"');
-    expect(entrypoint).toContain("if ! id -u sshd >/dev/null 2>&1; then");
-    expect(entrypoint).toContain("sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/sh");
-    expect(entrypoint).toContain("/root/.nix-profile/bin/sshd -f");
-    expect(entrypoint).toContain("BASH_SHELL='/root/.nix-profile/bin/bash'");
-    expect(entrypoint).toContain('if [ "${SEALANT_OCI_RUNTIME:-runc}" = "runsc" ]; then');
-    expect(entrypoint).toContain('exec "$BASH_SHELL" -i');
-    expect(entrypoint).toContain("exec /root/.nix-profile/bin/zsh -lc 'codex'");
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+
+    // Nix-specific shell paths flow to `boot` via the build-static ENV contract so the supervisor
+    // (E3 glibc shim, ssh bring-up, harness launch) resolves the right binaries per distro.
+    expect(containerfile).toContain("SEALANT_OS_FAMILY='nix'");
+    expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/root/.nix-profile/bin/bash'");
+    expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/root/.nix-profile/bin/zsh'");
+    expect(containerfile).toContain("SEALANT_SSHD_PATH='/root/.nix-profile/bin/sshd'");
+    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='codex'");
+
+    // The deleted bash entrypoint (glibc shim, shadow rewrite, sshd config, harness exec) is gone.
+    expect(containerfile).not.toContain("/lib64/ld-linux-x86-64.so.2");
+    expect(containerfile).not.toContain("SHADOW_UPDATED");
+    expect(containerfile).not.toContain("sshd -f");
+    expect(containerfile).not.toContain("exec /root/.nix-profile/bin/zsh -lc 'codex'");
   });
 
-  it("does not bake or launch sealantd when enableSealantd is false (default)", async () => {
+  it("always bakes sealantd boot as the entrypoint (clean cut, no enableSealantd gate)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
     const result = await compileSandboxBuildSpec({
       blueprint: createSandboxBuildSpec({
+        // No enableSealantd flag at all: the clean-cut design boots every sandbox via `sealantd boot`.
         target: {
           os: {
             family: "fedora",
@@ -605,105 +626,72 @@ describe("compileSandboxBuildSpec", () => {
     });
 
     const containerfilePath = result.buildkit.spec.containerfilePath;
-    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
     const containerfile = await readFile(containerfilePath, "utf8");
-    const entrypoint = await readFile(entrypointPath, "utf8");
 
-    expect(containerfile).not.toContain("ghcr.io/get-sealant/sealantd");
-    expect(containerfile).not.toContain("/usr/local/bin/sealantd");
-    expect(containerfile).not.toContain("socat");
-    expect(entrypoint).not.toContain("sealantd");
-    expect(entrypoint).not.toContain("/run/sealant");
-    expect(entrypoint).not.toContain("SEALANT_ENABLE_SEALANTD");
-  });
-
-  it("bakes and launches sealantd when enableSealantd is true", async () => {
-    const commandRunner = vi.fn<
-      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "", stderr: "" }));
-    const result = await compileSandboxBuildSpec({
-      blueprint: createSandboxBuildSpec({
-        customization: {
-          defaultShell: "bash",
-          dotfilesManager: "auto",
-          dotfilesTarget: "home",
-          applyDotfiles: true,
-          dotfilesBootstrap: true,
-          enableSealantd: true,
-        },
-        target: {
-          os: {
-            family: "fedora",
-            mode: "prefer",
-          },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      options: {
-        commandRunner,
-      },
-    });
-
-    const containerfilePath = result.buildkit.spec.containerfilePath;
-    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
-    const containerfile = await readFile(containerfilePath, "utf8");
-    const entrypoint = await readFile(entrypointPath, "utf8");
-
-    // Containerfile: COPY --from GHCR + chmod, plus the socat relay dependency.
+    // sealantd binary + socat relay dependency are always present.
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/get-sealant/sealantd:0.1.2 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain("socat");
-    // The COPY/chmod pair must follow the entrypoint COPY/chmod pair.
+    // The sealantd COPY follows the harness install (cache ordering).
     expect(containerfile.indexOf("COPY --from=ghcr.io/get-sealant/sealantd")).toBeGreaterThan(
-      containerfile.indexOf("COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint"),
+      containerfile.indexOf("npm install -g"),
     );
 
-    // Entrypoint: background launch on the control socket, before the foreground exec.
-    expect(entrypoint).toContain("mkdir -p /run/sealant");
-    expect(entrypoint).toContain(
-      'sealantd --socket /run/sealant/control.sock --workspace "$WORKING_DIRECTORY" &',
-    );
-    expect(entrypoint).toContain("trap cleanup_sealantd EXIT INT TERM");
-    expect(entrypoint).toContain('SEALANT_ENABLE_SEALANTD:-1');
-    expect(entrypoint.indexOf("sealantd --socket")).toBeLessThan(
-      entrypoint.indexOf('if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then'),
-    );
+    // PID 1 is `sealantd boot`; the control socket is conveyed via build-static ENV.
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain("SEALANT_CONTROL_SOCKET='/run/sealant/control.sock'");
 
-    // The resolved plan carries the build flag.
-    expect(result.buildkit.imagePlan.customization.enableSealantd).toBe(true);
+    // No generated bash entrypoint, no opt-out flag, no inline `&`+trap supervision.
+    expect(containerfile).not.toContain("entrypoint.sh");
+    expect(containerfile).not.toContain("sandbox-entrypoint");
+    expect(containerfile).not.toContain("SEALANT_ENABLE_SEALANTD");
+    expect(containerfile).not.toContain("trap cleanup_sealantd");
+    expect(containerfile).not.toContain("sealantd --socket");
+
+    // The build context contains a Containerfile but no entrypoint.sh.
+    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
+    await expect(readFile(entrypointPath, "utf8")).rejects.toThrow();
   });
 
-  it("installs the socat relay for arch when enableSealantd is true", () => {
-    const plan = mapBlueprintToBuildkitImagePlan(
-      createSandboxBuildSpec({
-        customization: {
-          defaultShell: "bash",
-          dotfilesManager: "auto",
-          dotfilesTarget: "home",
-          applyDotfiles: true,
-          dotfilesBootstrap: true,
-          enableSealantd: true,
-        },
-        target: {
-          os: {
-            family: "arch",
-            mode: "prefer",
+  it("always installs the socat relay and sealantd binary for every distro", async () => {
+    for (const { osFamily, sealantdLayer } of [
+      {
+        osFamily: "fedora",
+        sealantdLayer: "nixpkgs#socat",
+      },
+      {
+        osFamily: "arch",
+        sealantdLayer: "nixpkgs#socat",
+      },
+      {
+        osFamily: "nix",
+        sealantdLayer: "nixpkgs#socat",
+      },
+    ] as const) {
+      const commandRunner = vi.fn<
+        (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+      >(async () => ({ stdout: "", stderr: "" }));
+      const result = await compileSandboxBuildSpec({
+        blueprint: createSandboxBuildSpec({
+          target: {
+            os: { family: osFamily, mode: "prefer" },
+            runtime: { family: "auto", mode: "prefer" },
           },
-          runtime: {
-            family: "auto",
-            mode: "prefer",
-          },
-        },
-      }),
-      "arch",
-    );
+        }),
+        options: { commandRunner },
+      });
 
-    expect(plan.customization.enableSealantd).toBe(true);
+      const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+      // socat (the host<->control-socket relay dependency) is always part of the install layer.
+      expect(containerfile).toContain(osFamily === "nix" ? sealantdLayer : "socat");
+      expect(containerfile).toContain(
+        "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      );
+      expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    }
   });
 
   it("supports distro package passthrough for unmapped package ids", () => {

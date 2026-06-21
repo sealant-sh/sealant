@@ -3,11 +3,11 @@
  * real sandbox image built by the BuildKit OS builder (P3-Build).
  *
  * What this exercises, against the actual image (no mocks, no DB/queue/worker):
- *   1. BOOT — `docker run` the image so its REAL entrypoint (`/usr/local/bin/sandbox-entrypoint`)
- *      launches `sealantd --socket /run/sealant/control.sock` in the background. We keep the
- *      container alive and skip the git clone without touching the image:
- *        - `SEALANT_FOREGROUND_COMMAND=sleep infinity` makes the foreground long-lived (the
- *          entrypoint `exec`s it after sealantd is already running in the background).
+ *   1. BOOT — `docker run` the image so its PID-1 `sealantd boot` supervisor brings up the
+ *      in-process control server on `/run/sealant/control.sock`. We keep the container alive and
+ *      skip the git clone without touching the image:
+ *        - `SEALANT_FOREGROUND_COMMAND=sleep infinity` overrides the supervised foreground with a
+ *          long-lived process (boot honors this run-dynamic override instead of launching the harness).
  *        - A host dir containing a `.git/` marker is bind-mounted at `/sandbox/repo` (the resolved
  *          `workingDirectory`), satisfying the entrypoint's `[ ! -d "$WORKING_DIRECTORY/.git" ]`
  *          guard so the real clone is skipped. No network, no real repo.
@@ -38,7 +38,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /** Image produced by the P3-Build phase (Fedora + sealantd baked in). */
 const IMAGE_REF = "sealant-sandbox-fedora-claude-code:claude-code";
-/** Control socket path the entrypoint launches sealantd on (matches renderSandboxEntrypoint). */
+/** Control socket path `sealantd boot` serves on (matches SEALANT_CONTROL_SOCKET in the builder). */
 const CONTROL_SOCKET = "/run/sealant/control.sock";
 /** Resolved `workingDirectory` default; the entrypoint checks `<this>/.git` to decide whether to clone. */
 const WORKING_DIRECTORY = "/sandbox/repo";
