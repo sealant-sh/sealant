@@ -913,6 +913,12 @@ importers:
       '@sealant/rabbitmq':
         specifier: workspace:*
         version: link:../rabbitmq
+      '@sealant/runtime-client':
+        specifier: ^0.2.0
+        version: 0.2.0
+      '@sealant/runtime-protocol':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -922,6 +928,9 @@ importers:
       amqplib:
         specifier: 'catalog:'
         version: 0.10.9
+      effect:
+        specifier: 'catalog:'
+        version: 3.21.0
       zod:
         specifier: 'catalog:'
         version: 4.3.6
@@ -1698,6 +1707,9 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
+
+  '@bufbuild/protobuf@2.12.0':
+    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
 
   '@cloudflare/kv-asset-handler@0.4.2':
     resolution: {integrity: sha512-SIOD2DxrRRwQ+jgzlXCqoEFiKOFqaPjhnNTGKXSRLvp1HiOvapLaFG2kEr9dYQTYe8rKrd9uvDUzmAITeNyaHQ==}
@@ -4256,6 +4268,14 @@ packages:
 
   '@scalar/types@0.6.10':
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-client@0.2.0':
+    resolution: {integrity: sha512-W1M+pQ/p3QZRt/7XhTLSbOWDNdWJvP74tgnlbQrtuVAODghnOphdBAkTx4zQb15JAfLlFgjrV/q7mac1pCluLQ==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-protocol@0.2.0':
+    resolution: {integrity: sha512-RwyZaVTlBr2UIOIAYZ3ClqCv5xl9XopnL024j/fcd7bxkXejeUKg16CRZVSEBEyDY+H+K/hCKXk/SsgXEAv9lQ==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -10825,6 +10845,8 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
+  '@bufbuild/protobuf@2.12.0': {}
+
   '@cloudflare/kv-asset-handler@0.4.2': {}
 
   '@cloudflare/unenv-preset@2.16.0(unenv@2.0.0-rc.24)(workerd@1.20260317.1)':
@@ -13236,6 +13258,15 @@ snapshots:
       nanoid: 5.1.7
       type-fest: 5.4.4
       zod: 4.3.6
+
+  '@sealant/runtime-client@0.2.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': 0.2.0
+
+  '@sealant/runtime-protocol@0.2.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
 
   '@sec-ant/readable-stream@0.4.1': {}
 

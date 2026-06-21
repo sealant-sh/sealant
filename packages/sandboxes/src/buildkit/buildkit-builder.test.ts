@@ -582,6 +582,130 @@ describe("compileSandboxBuildSpec", () => {
     expect(entrypoint).toContain("exec /root/.nix-profile/bin/zsh -lc 'codex'");
   });
 
+  it("does not bake or launch sealantd when enableSealantd is false (default)", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const result = await compileSandboxBuildSpec({
+      blueprint: createSandboxBuildSpec({
+        target: {
+          os: {
+            family: "fedora",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
+      }),
+      options: {
+        commandRunner,
+      },
+    });
+
+    const containerfilePath = result.buildkit.spec.containerfilePath;
+    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
+    const containerfile = await readFile(containerfilePath, "utf8");
+    const entrypoint = await readFile(entrypointPath, "utf8");
+
+    expect(containerfile).not.toContain("ghcr.io/get-sealant/sealantd");
+    expect(containerfile).not.toContain("/usr/local/bin/sealantd");
+    expect(containerfile).not.toContain("socat");
+    expect(entrypoint).not.toContain("sealantd");
+    expect(entrypoint).not.toContain("/run/sealant");
+    expect(entrypoint).not.toContain("SEALANT_ENABLE_SEALANTD");
+  });
+
+  it("bakes and launches sealantd when enableSealantd is true", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const result = await compileSandboxBuildSpec({
+      blueprint: createSandboxBuildSpec({
+        customization: {
+          defaultShell: "bash",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: true,
+          dotfilesBootstrap: true,
+          enableSealantd: true,
+        },
+        target: {
+          os: {
+            family: "fedora",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
+      }),
+      options: {
+        commandRunner,
+      },
+    });
+
+    const containerfilePath = result.buildkit.spec.containerfilePath;
+    const entrypointPath = containerfilePath.replace(/Containerfile$/, "entrypoint.sh");
+    const containerfile = await readFile(containerfilePath, "utf8");
+    const entrypoint = await readFile(entrypointPath, "utf8");
+
+    // Containerfile: COPY --from GHCR + chmod, plus the socat relay dependency.
+    expect(containerfile).toContain(
+      "COPY --from=ghcr.io/get-sealant/sealantd:0.1.2 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+    );
+    expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
+    expect(containerfile).toContain("socat");
+    // The COPY/chmod pair must follow the entrypoint COPY/chmod pair.
+    expect(containerfile.indexOf("COPY --from=ghcr.io/get-sealant/sealantd")).toBeGreaterThan(
+      containerfile.indexOf("COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint"),
+    );
+
+    // Entrypoint: background launch on the control socket, before the foreground exec.
+    expect(entrypoint).toContain("mkdir -p /run/sealant");
+    expect(entrypoint).toContain(
+      'sealantd --socket /run/sealant/control.sock --workspace "$WORKING_DIRECTORY" &',
+    );
+    expect(entrypoint).toContain("trap cleanup_sealantd EXIT INT TERM");
+    expect(entrypoint).toContain('SEALANT_ENABLE_SEALANTD:-1');
+    expect(entrypoint.indexOf("sealantd --socket")).toBeLessThan(
+      entrypoint.indexOf('if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then'),
+    );
+
+    // The resolved plan carries the build flag.
+    expect(result.buildkit.imagePlan.customization.enableSealantd).toBe(true);
+  });
+
+  it("installs the socat relay for arch when enableSealantd is true", () => {
+    const plan = mapBlueprintToBuildkitImagePlan(
+      createSandboxBuildSpec({
+        customization: {
+          defaultShell: "bash",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: true,
+          dotfilesBootstrap: true,
+          enableSealantd: true,
+        },
+        target: {
+          os: {
+            family: "arch",
+            mode: "prefer",
+          },
+          runtime: {
+            family: "auto",
+            mode: "prefer",
+          },
+        },
+      }),
+      "arch",
+    );
+
+    expect(plan.customization.enableSealantd).toBe(true);
+  });
+
   it("supports distro package passthrough for unmapped package ids", () => {
     const blueprint = createSandboxBuildSpec({
       tooling: {

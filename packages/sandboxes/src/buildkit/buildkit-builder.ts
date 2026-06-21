@@ -78,6 +78,14 @@ interface DistroDefinition {
   readonly packageManager: BuildkitPackageManager;
   readonly packageMap: Record<string, PackageMapping>;
   readonly internalPackages: readonly string[];
+  /**
+   * Distro-native package ids installed only when the sealantd runtime daemon is enabled.
+   *
+   * sealantd reaches its control socket over a `docker exec` relay that needs `socat`; no base
+   * image ships it, so we install it per-distro. Kept separate from `internalPackages` so the
+   * `enableSealantd === false` build path renders byte-identically to before.
+   */
+  readonly sealantdPackages: readonly string[];
   readonly shellPaths: Record<"bash" | "zsh" | "fish", string>;
   readonly sshdPath: string;
 }
@@ -179,6 +187,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       "openssh-server",
       "shadow-utils",
     ],
+    sealantdPackages: ["socat"],
     shellPaths: {
       bash: "/bin/bash",
       zsh: "/usr/bin/zsh",
@@ -204,6 +213,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       zsh: { installPackages: ["zsh"] },
     },
     internalPackages: ["bash", "ca-certificates", "coreutils", "git", "openssh", "shadow"],
+    sealantdPackages: ["socat"],
     shellPaths: {
       bash: "/bin/bash",
       zsh: "/usr/bin/zsh",
@@ -229,6 +239,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
       zsh: { installPackages: ["zsh"] },
     },
     internalPackages: ["bash", "cacert", "coreutils", "gitMinimal", "openssh", "shadow"],
+    sealantdPackages: ["socat"],
     shellPaths: {
       bash: "/root/.nix-profile/bin/bash",
       zsh: "/root/.nix-profile/bin/zsh",
@@ -572,6 +583,9 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
+    // `socat` (and any other relay deps) only when the sealantd runtime daemon is enabled, so the
+    // disabled path produces the exact same package set as before.
+    ...(plan.customization.enableSealantd === true ? distro.sealantdPackages : []),
     ...plan.packages.flatMap((pkg) => pkg.installPackages),
   ]);
 
@@ -935,6 +949,29 @@ const renderSandboxEntrypoint = (plan: ResolvedImagePlan): string => {
         ]),
     ...(setupSteps.length === 0 ? [] : [setupSteps, ""]),
     ...(startupSteps.length === 0 ? [] : [startupSteps, ""]),
+    // The sealantd runtime daemon is launched in the background before the foreground workload so
+    // it owns its own lifecycle without blocking the harness. A runtime override
+    // (`SEALANT_ENABLE_SEALANTD=0|false`) can suppress the launch even in a sealantd-enabled image.
+    // SEALANTD_PID is pre-declared so the EXIT trap is `set -u`-safe when launch is skipped.
+    ...(plan.customization.enableSealantd === true
+      ? [
+          'SEALANTD_PID=""',
+          "cleanup_sealantd() {",
+          '  if [ -n "$SEALANTD_PID" ]; then',
+          '    kill "$SEALANTD_PID" 2>/dev/null || true',
+          '    wait "$SEALANTD_PID" 2>/dev/null || true',
+          "  fi",
+          "}",
+          "trap cleanup_sealantd EXIT INT TERM",
+          'if [ "${SEALANT_ENABLE_SEALANTD:-1}" != "0" ] && [ "${SEALANT_ENABLE_SEALANTD:-1}" != "false" ]; then',
+          "  mkdir -p /run/sealant",
+          '  sealantd --socket /run/sealant/control.sock --workspace "$WORKING_DIRECTORY" &',
+          "  SEALANTD_PID=$!",
+          '  printf \'%s\\n\' "sealantd started (pid $SEALANTD_PID)"',
+          "fi",
+          "",
+        ]
+      : []),
     'if [ -n "${SEALANT_FOREGROUND_COMMAND:-}" ]; then',
     `  exec ${bashShellPath} -lc "$SEALANT_FOREGROUND_COMMAND"`,
     "fi",
@@ -1059,6 +1096,16 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     "",
     "COPY entrypoint.sh /usr/local/bin/sandbox-entrypoint",
     "RUN chmod 755 /usr/local/bin/sandbox-entrypoint",
+    // The sealantd runtime daemon is baked in from the public GHCR image via a multi-stage
+    // `COPY --from` so we inherit its multi-arch (amd64+arm64) binary without bundling a local
+    // build context. Gated on the build flag so existing sandboxes stay byte-identical.
+    ...(plan.customization.enableSealantd === true
+      ? [
+          "",
+          "COPY --from=ghcr.io/get-sealant/sealantd:0.2.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+          "RUN chmod 755 /usr/local/bin/sealantd",
+        ]
+      : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
     "",
     "WORKDIR /sandbox",
