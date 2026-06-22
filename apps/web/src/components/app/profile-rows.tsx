@@ -12,7 +12,8 @@ export function ProfileRows({ profiles }: ProfileRowsProps) {
       {profiles.map((profile) => (
         <Link
           key={profile.id}
-          to={`/profiles/${encodeURIComponent(profile.id)}` as never}
+          to="/profiles/$profileId"
+          params={{ profileId: profile.id }}
           className="grid gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_auto_auto_auto] lg:items-center"
         >
           <div>

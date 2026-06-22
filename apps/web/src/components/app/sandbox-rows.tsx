@@ -29,7 +29,8 @@ export function SandboxRows({ sandboxes }: SandboxRowsProps) {
       {sandboxes.map((sandbox) => (
         <Link
           key={sandbox.sandboxId}
-          to={`/sandboxes/${encodeURIComponent(sandbox.sandboxId)}` as never}
+          to="/sandboxes/$sandboxId"
+          params={{ sandboxId: sandbox.sandboxId }}
           className="grid grid-cols-1 gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 sm:grid-cols-[1.3fr_1fr_auto] sm:items-center"
         >
           <div>

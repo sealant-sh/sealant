@@ -12,7 +12,8 @@ export function RunRows({ runs }: RunRowsProps) {
       {runs.map((run) => (
         <Link
           key={run.id}
-          to={`/sandboxes/${encodeURIComponent(run.id)}` as never}
+          to="/sandboxes/$sandboxId"
+          params={{ sandboxId: run.id }}
           className="grid grid-cols-3 gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
         >
           <div>
