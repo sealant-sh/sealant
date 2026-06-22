@@ -33,7 +33,7 @@ export const Route = createRootRoute({
       },
       {
         rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Sans:wght@400;500;700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,900;1,9..144,400&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
+        href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
       },
     ],
   }),
@@ -64,12 +64,12 @@ function RootComponent() {
             <div className="hidden items-center gap-2.5 md:inline-flex">
               <ThemeSwitcher />
               <a
-                className="inline-flex min-h-11 items-center justify-center gap-1.5 border border-primary bg-primary px-4 font-sans text-[1rem] font-semibold tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95 md:min-h-9"
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md border border-primary bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline transition duration-200 hover:brightness-95"
                 href="https://github.com/get-sealant/sealant"
                 target="_blank"
                 rel="noreferrer"
               >
-                <Github className="size-[1.3125rem]" aria-hidden="true" />
+                <Github className="size-4" aria-hidden="true" />
                 GitHub
               </a>
             </div>
@@ -79,13 +79,13 @@ function RootComponent() {
           </div>
         </header>
         <Outlet />
-        <footer className="border-t-2 border-[var(--sw-rule)] py-4 pb-5">
+        <footer className="border-t border-border py-5">
           <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
             <p className="m-0 text-sm text-muted-foreground">
               The secure run layer for AI software work.
             </p>
             <a
-              className="m-0 font-mono text-[0.72rem] uppercase tracking-[0.16em] text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
+              className="m-0 text-sm text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
               href="#top"
             >
               Back to top
@@ -101,7 +101,7 @@ function RootComponent() {
 function Brand() {
   return (
     <a
-      className="inline-flex items-center gap-2 font-display text-xl font-bold uppercase tracking-tight text-foreground no-underline"
+      className="inline-flex items-center gap-2 text-xl font-semibold tracking-tight text-foreground no-underline"
       href="/"
       aria-label="Sealant home"
     >
@@ -122,7 +122,7 @@ function TopLevelNavLink({
 
   return (
     <a
-      className="font-sans text-sm font-semibold text-foreground/70 no-underline transition-colors duration-200 hover:text-foreground"
+      className="font-sans text-sm font-medium text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
       href={href}
       {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
     >
@@ -135,7 +135,7 @@ function ThemeSwitcher({ compact = false }: { readonly compact?: boolean }) {
   return (
     <button
       type="button"
-      className="inline-flex min-h-9 items-center justify-center border border-border bg-transparent px-3 font-mono text-[0.62rem] font-bold uppercase tracking-[0.12em] text-foreground/70 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
+      className="inline-flex min-h-9 items-center justify-center rounded-md border border-input bg-transparent px-3 font-sans text-sm text-muted-foreground transition-colors duration-200 hover:border-ring hover:text-foreground"
       aria-label="Toggle color theme"
       onClick={() => {
         document.documentElement.classList.toggle("dark");

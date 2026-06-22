@@ -33,14 +33,11 @@ import {
   CircleAlert,
   FolderGit2,
   LogOut,
-  Monitor,
-  Moon,
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   Search,
-  Sun,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
@@ -50,13 +47,7 @@ import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
 import { authClient } from "@/lib/auth/auth-client";
 import { PROFILES, REPOSITORIES } from "@/lib/navigation/sandbox-data";
-import {
-  accentPresets,
-  defaultAccent,
-  getAccentInputValue,
-  getAccentLabel,
-  isUserTheme,
-} from "@/lib/theme/appearance";
+import { isUserTheme } from "@/lib/theme/appearance";
 import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
@@ -167,16 +158,16 @@ export function AppShell({ session, sidebarSandboxes, children }: AppShellProps)
   };
 
   return (
-    <div className="min-h-svh bg-background text-foreground">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--sw-rule)_16%,transparent)_1px,transparent_0)] [background-size:20px_20px] opacity-15" />
+    <div className="min-h-svh bg-[var(--sw-canvas)] text-foreground">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--sw-rule)_16%,transparent)_1px,transparent_0)] [background-size:22px_22px] opacity-[0.12]" />
 
       <SidebarProvider
         open={isSidebarOpen}
         onOpenChange={setIsSidebarOpen}
-        className="relative min-h-svh border-x border-border"
+        className="relative min-h-svh"
         style={{ "--sidebar-offset": "0px" } as CSSProperties}
       >
-        <Sidebar collapsible="icon" className="z-30 border-r border-sidebar-border bg-card">
+        <Sidebar collapsible="icon" className="z-30 border-r border-sidebar-border bg-sidebar">
           <AppSidebarNav
             activeArea={activeArea}
             pathname={pathname}
@@ -187,7 +178,7 @@ export function AppShell({ session, sidebarSandboxes, children }: AppShellProps)
           />
         </Sidebar>
 
-        <SidebarInset className="min-h-svh border-0 bg-transparent">
+        <SidebarInset className="min-h-svh border-0 bg-background">
           <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
         </SidebarInset>
       </SidebarProvider>
@@ -211,33 +202,15 @@ function AppSidebarNav({
   readonly onSignOut: () => Promise<void>;
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const accentInputRef = useRef<HTMLInputElement | null>(null);
   const { isMobile, openMobile, setOpen, setOpenMobile, state } = useSidebar();
-  const { accent, resetAccent, setAccent, setTheme, userTheme } = useTheme();
+  const { setTheme, userTheme } = useTheme();
   const userLabel = session.user.name || session.user.email;
   const currentTheme = getThemeMenuState(userTheme);
-  const accentLabel = getAccentLabel(accent);
-  const ThemeIcon = currentTheme.icon;
   const isExpanded = isMobile || state === "expanded";
 
   useEffect(() => {
     setOpenMobile(false);
   }, [pathname, setOpenMobile]);
-
-  const openCustomAccentPicker = () => {
-    const accentInput = accentInputRef.current;
-
-    if (accentInput === null) {
-      return;
-    }
-
-    if (typeof accentInput.showPicker === "function") {
-      accentInput.showPicker();
-      return;
-    }
-
-    accentInput.click();
-  };
 
   const handleThemeValueChange = (value: string | null) => {
     if (value !== null && isUserTheme(value)) {
@@ -288,8 +261,8 @@ function AppSidebarNav({
               setOpen(!isExpanded);
             }}
             className={cn(
-              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
-              isExpanded ? "w-10" : "w-full",
+              "inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-muted hover:text-foreground",
+              isExpanded ? "w-9" : "w-full",
             )}
           >
             {isMobile ? (
@@ -337,8 +310,8 @@ function AppSidebarNav({
               }
             }}
             className={cn(
-              "inline-flex h-10 shrink-0 items-center justify-center border border-transparent bg-background text-sidebar-foreground transition-[background-color,border-color] duration-200 hover:border-l-2 hover:border-l-sidebar-border hover:bg-sidebar-accent",
-              isExpanded ? "w-10" : "w-full",
+              "inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-muted hover:text-foreground",
+              isExpanded ? "w-9" : "w-full",
             )}
           >
             <Search className="size-3.5" />
@@ -358,7 +331,7 @@ function AppSidebarNav({
               type="search"
               aria-label="Search sandboxes, repos, profiles"
               placeholder="Search sandboxes, repos, profiles"
-              className="h-10 w-full border border-sidebar-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/80 focus:border-sidebar-foreground focus:outline-none"
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-[0.8125rem] text-foreground placeholder:text-faint focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
           </label>
         </div>
@@ -421,11 +394,11 @@ function AppSidebarNav({
                             <SidebarMenuButton
                               render={<Link to={item.href as never} />}
                               isActive={isActive}
-                              className="px-3 text-sm normal-case tracking-normal"
+                              className="px-3 text-[0.8125rem]"
                             >
                               <span>{item.label}</span>
                               {item.meta === undefined ? null : (
-                                <span className="ml-auto font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
+                                <span className="ml-auto font-mono text-[0.6875rem] text-faint">
                                   {item.meta}
                                 </span>
                               )}
@@ -445,7 +418,7 @@ function AppSidebarNav({
       <SidebarFooter>
         <p
           className={cn(
-            "mb-3 h-4 overflow-hidden font-mono text-[0.58rem] leading-none tracking-[0.12em] text-muted-foreground transition-[opacity,transform] duration-200 ease-out",
+            "mb-3 h-4 overflow-hidden font-mono text-[0.6875rem] leading-none text-faint transition-[opacity,transform] duration-200 ease-out",
             isExpanded ? "translate-y-0 opacity-100" : "text-center -translate-y-0.5 opacity-100",
           )}
         >
@@ -454,11 +427,11 @@ function AppSidebarNav({
         <Link
           to={"/sandboxes/new" as never}
           className={cn(
-            "flex items-center justify-center border border-primary bg-primary text-center text-[0.64rem] font-semibold tracking-[0.14em] text-primary-foreground no-underline transition-all duration-200 ease-out hover:bg-transparent hover:text-foreground",
-            isExpanded ? "h-11 gap-2 px-3 py-3" : "h-11 gap-0 px-2 py-3",
+            "flex items-center justify-center rounded-md border border-primary bg-primary text-center text-[0.8125rem] font-medium text-primary-foreground no-underline transition-colors duration-200 ease-out hover:bg-[var(--primary-hover)]",
+            isExpanded ? "h-10 gap-2 px-3" : "h-10 gap-0 px-2",
           )}
-          title={!isExpanded ? "New Sandbox" : undefined}
-          aria-label="New Sandbox"
+          title={!isExpanded ? "New sandbox" : undefined}
+          aria-label="New sandbox"
         >
           <Plus className="size-4 shrink-0" />
           <span
@@ -470,19 +443,19 @@ function AppSidebarNav({
             )}
             aria-hidden={!isExpanded}
           >
-            New Sandbox
+            New sandbox
           </span>
         </Link>
 
         <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
-              "mt-3 flex w-full items-center border border-border bg-background text-left text-foreground transition-all duration-200 ease-out hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-              isExpanded ? "gap-3 px-3 py-3" : "justify-center gap-0 px-2 py-3",
+              "mt-3 flex w-full items-center rounded-md border border-border bg-popover text-left text-foreground transition-colors duration-200 ease-out hover:border-input hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              isExpanded ? "gap-3 px-3 py-2.5" : "justify-center gap-0 px-2 py-2.5",
             )}
             aria-label="Open profile menu"
           >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-border text-xs font-semibold text-foreground">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-xs font-medium text-foreground">
               {userLabel.slice(0, 1)}
             </div>
             <div
@@ -494,10 +467,8 @@ function AppSidebarNav({
               )}
               aria-hidden={!isExpanded}
             >
-              <p className="truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
-                Operator
-              </p>
-              <p className="truncate text-sm text-foreground">{userLabel}</p>
+              <p className="ev-eyebrow truncate">Operator</p>
+              <p className="truncate text-[0.8125rem] text-foreground">{userLabel}</p>
             </div>
             <ChevronsUpDown
               className={cn(
@@ -509,131 +480,42 @@ function AppSidebarNav({
               aria-hidden={!isExpanded}
             />
           </DropdownMenuTrigger>
-          <input
-            ref={accentInputRef}
-            type="color"
-            tabIndex={-1}
-            aria-hidden="true"
-            className="sr-only"
-            value={getAccentInputValue(accent)}
-            onChange={(event) => {
-              setAccent(event.currentTarget.value);
-            }}
-          />
           <DropdownMenuContent
             side="top"
             align={isExpanded ? "start" : "end"}
             sideOffset={8}
-            className="w-56 min-w-56 border-border bg-card p-0"
+            className="w-56 min-w-56 border-border bg-popover p-0"
           >
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger className="gap-3 border-b border-border px-4 py-3 text-[0.72rem] normal-case tracking-normal">
+              <DropdownMenuSubTrigger className="gap-3 border-b border-border px-4 py-2.5 text-[0.8125rem]">
                 <Palette className="size-4" />
-                <div className="flex min-w-0 flex-1 items-center gap-3">
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate text-foreground">Appearance</span>
-                    <span className="block truncate font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground uppercase">
-                      {`${currentTheme.menuLabel} / ${accentLabel}`}
-                    </span>
-                  </div>
-                  <span
-                    className="size-3 shrink-0 border border-border"
-                    style={{ backgroundColor: accent }}
-                    aria-hidden="true"
-                  />
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate text-foreground">Appearance</span>
+                  <span className="ev-eyebrow block truncate normal-case">
+                    {currentTheme.menuLabel}
+                  </span>
                 </div>
               </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-72 min-w-72 border-border bg-card p-0">
+              <DropdownMenuSubContent className="w-64 min-w-64 border-border bg-popover p-0">
                 <div className="border-b border-border px-4 py-3">
-                  <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
-                    Appearance
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Switch light and dark mode, then set a custom accent for the shell.
+                  <p className="ev-eyebrow">Appearance</p>
+                  <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
+                    Switch between light and dark mode.
                   </p>
                 </div>
 
-                <div className="border-b border-border p-1">
-                  <div className="px-2 pt-2 pb-1">
-                    <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
-                      Theme
-                    </p>
-                  </div>
+                <div className="p-1">
                   <DropdownMenuRadioGroup value={userTheme} onValueChange={handleThemeValueChange}>
                     {APPEARANCE_THEME_OPTIONS.map((option) => (
                       <DropdownMenuRadioItem
                         key={option.value}
                         value={option.value}
-                        className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+                        className="px-4 py-2.5 text-[0.8125rem]"
                       >
                         {option.label}
                       </DropdownMenuRadioItem>
                     ))}
                   </DropdownMenuRadioGroup>
-                </div>
-
-                <div className="border-b border-border px-4 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-mono text-[0.58rem] tracking-[0.14em] text-muted-foreground uppercase">
-                      Accent
-                    </p>
-                    <div className="flex items-center gap-2 text-[0.62rem] text-muted-foreground">
-                      <ThemeIcon className="size-3.5" />
-                      <span>{accentLabel}</span>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {accentPresets.map((preset) => {
-                      const isActive = accent === preset.value;
-
-                      return (
-                        <button
-                          key={preset.value}
-                          type="button"
-                          onClick={() => {
-                            if (preset.value === defaultAccent) {
-                              resetAccent();
-                              return;
-                            }
-
-                            setAccent(preset.value);
-                          }}
-                          className={cn(
-                            "flex items-center gap-2 border px-2 py-2 text-left transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
-                            isActive
-                              ? "border-primary bg-primary/10 text-foreground"
-                              : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
-                          )}
-                          aria-pressed={isActive}
-                        >
-                          <span
-                            className="size-4 shrink-0 border border-border"
-                            style={{ backgroundColor: preset.value }}
-                            aria-hidden="true"
-                          />
-                          <span className="min-w-0 truncate font-mono text-[0.58rem] tracking-[0.12em] uppercase">
-                            {preset.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="p-1">
-                  <DropdownMenuItem
-                    onClick={openCustomAccentPicker}
-                    className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
-                  >
-                    Custom accent...
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={resetAccent}
-                    className="px-4 py-3 text-[0.72rem] normal-case tracking-normal"
-                  >
-                    Reset to default
-                  </DropdownMenuItem>
                 </div>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -643,7 +525,7 @@ function AppSidebarNav({
               onClick={() => {
                 void onSignOut();
               }}
-              className="flex items-center gap-3 px-4 py-3 text-[0.72rem] normal-case tracking-normal"
+              className="flex items-center gap-3 px-4 py-2.5 text-[0.8125rem]"
             >
               <LogOut className="size-4" />
               <span>{isSigningOut ? "Signing out" : "Sign out"}</span>
@@ -655,19 +537,16 @@ function AppSidebarNav({
   );
 }
 
-function getThemeMenuState(theme: UserTheme): {
-  readonly icon: LucideIcon;
-  readonly menuLabel: string;
-} {
+function getThemeMenuState(theme: UserTheme): { readonly menuLabel: string } {
   if (theme === "light") {
-    return { icon: Sun, menuLabel: "Light" };
+    return { menuLabel: "Light" };
   }
 
   if (theme === "dark") {
-    return { icon: Moon, menuLabel: "Dark" };
+    return { menuLabel: "Dark" };
   }
 
-  return { icon: Monitor, menuLabel: "System" };
+  return { menuLabel: "System" };
 }
 
 function normalizePath(pathname: string): string {

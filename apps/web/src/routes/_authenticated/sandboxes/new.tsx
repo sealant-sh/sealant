@@ -768,10 +768,8 @@ function NewSandboxPage() {
           className="border-b border-border xl:border-b-0 xl:border-r"
         >
           <header className="border-b border-border px-6 py-7 sm:px-8 sm:py-8">
-            <p className="font-mono text-[0.68rem] tracking-[0.18em] text-primary">SEQUENCE.01</p>
-            <h1 className="mt-3 font-display text-5xl leading-[0.86] tracking-[0.02em] text-foreground sm:text-6xl">
-              Create Sandbox Spec
-            </h1>
+            <p className="ev-eyebrow">New sandbox</p>
+            <h1 className="mt-3 text-2xl text-foreground sm:text-[1.75rem]">Create sandbox spec</h1>
             <p className="mt-5 max-w-3xl text-sm leading-7 text-muted-foreground">
               Configure operational parameters for a new sandbox and submit one typed launch request
               through the control plane.
@@ -809,16 +807,12 @@ function NewSandboxPage() {
                             }}
                             className={
                               isActive
-                                ? "border border-primary bg-primary/10 px-3 py-2.5 text-left"
-                                : "border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-foreground"
+                                ? "rounded-md border border-primary bg-accent px-3 py-2.5 text-left"
+                                : "rounded-md border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-input"
                             }
                           >
-                            <p className="font-mono text-[0.6rem] tracking-[0.12em] text-muted-foreground">
-                              MODE
-                            </p>
-                            <p className="mt-1.5 font-mono text-[0.72rem] tracking-[0.08em] text-foreground">
-                              {option.title}
-                            </p>
+                            <p className="ev-eyebrow">Mode</p>
+                            <p className="mt-1.5 text-sm text-foreground">{option.title}</p>
                             <p className="mt-1 text-xs leading-5 text-muted-foreground">
                               {option.detail}
                             </p>
@@ -837,7 +831,7 @@ function NewSandboxPage() {
                             setField("sandboxSource", event.target.value);
                           }}
                           placeholder="github.com/sealant-ops/core"
-                          className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -850,14 +844,14 @@ function NewSandboxPage() {
                             setField("branch", event.target.value);
                           }}
                           placeholder="main"
-                          className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           autoComplete="off"
                           spellCheck={false}
                         />
                       </LabeledField>
                     </div>
                   ) : (
-                    <div className="border border-border bg-background">
+                    <div className="rounded-md border border-border bg-background">
                       <button
                         type="button"
                         onClick={() => {
@@ -867,26 +861,22 @@ function NewSandboxPage() {
                         aria-expanded={isSourceGitHubExpanded}
                       >
                         <div>
-                          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                            GITHUB APP SOURCE
-                          </p>
+                          <p className="ev-eyebrow">GitHub app source</p>
                           <p className="mt-2 text-sm leading-6 text-foreground">
                             {sourceGitHubSummary}
                           </p>
                         </div>
-                        <span className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                          {isSourceGitHubExpanded ? "COLLAPSE" : "EXPAND"}
+                        <span className="text-sm text-muted-foreground">
+                          {isSourceGitHubExpanded ? "Collapse" : "Expand"}
                         </span>
                       </button>
 
                       {isSourceGitHubExpanded ? (
                         <div className="space-y-4 border-t border-border px-4 py-4">
                           {availableGitHubInstallations.length === 1 ? null : (
-                            <div className="flex flex-col gap-3 border border-border bg-background px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex flex-col gap-3 rounded-md border border-border bg-background px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
                               <div>
-                                <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                                  INSTALLATION ACCESS
-                                </p>
+                                <p className="ev-eyebrow">Installation access</p>
                                 <p className="mt-2 text-sm leading-7 text-foreground">
                                   Import an installation once, then select any synced repository it
                                   exposes.
@@ -894,23 +884,23 @@ function NewSandboxPage() {
                               </div>
                               <a
                                 href="/github/setup"
-                                className="inline-flex h-10 items-center justify-center border border-border px-4 font-mono text-[0.62rem] tracking-[0.12em] text-foreground no-underline transition-colors hover:border-foreground"
+                                className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm text-foreground no-underline transition-colors hover:border-foreground"
                               >
-                                Manage GitHub Access
+                                Manage GitHub access
                               </a>
                             </div>
                           )}
 
                           {githubInstallationsQuery.isLoading ? (
-                            <div className="border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                            <div className="rounded-md border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
                               Loading granted GitHub installations...
                             </div>
                           ) : githubInstallationsQuery.isError ? (
-                            <div className="border border-destructive/35 bg-destructive/10 px-4 py-4 text-sm leading-7 text-destructive">
+                            <div className="border-l-2 border-danger-dot py-1 pl-3 text-sm leading-7 text-danger">
                               {resolveErrorMessage(githubInstallationsQuery.error)}
                             </div>
                           ) : availableGitHubInstallations.length === 0 ? (
-                            <div className="border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                            <div className="rounded-md border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
                               No granted GitHub installations are available yet. Open GitHub setup,
                               import an installation, then come back here.
                             </div>
@@ -924,7 +914,7 @@ function NewSandboxPage() {
                                       onChange={(event) => {
                                         setField("githubInstallationId", event.target.value);
                                       }}
-                                      className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                                      className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                     >
                                       <option value="">Select installation</option>
                                       {availableGitHubInstallations.map((installation) => (
@@ -956,7 +946,7 @@ function NewSandboxPage() {
                                   <Button
                                     type="button"
                                     variant="outline"
-                                    className="h-11 px-4 text-[0.62rem] tracking-[0.12em]"
+                                    className="h-11 px-4"
                                     disabled={
                                       normalizeRequiredValue(form.githubInstallationId).length ===
                                         0 || syncGitHubInstallationMutation.isPending
@@ -977,7 +967,7 @@ function NewSandboxPage() {
                                   >
                                     {syncGitHubInstallationMutation.isPending
                                       ? "Refreshing..."
-                                      : "Refresh Repos"}
+                                      : "Refresh repos"}
                                   </Button>
                                 </div>
                               </div>
@@ -990,7 +980,7 @@ function NewSandboxPage() {
                                       setGitHubRepositorySearch(event.target.value);
                                     }}
                                     placeholder="Filter by owner or repository"
-                                    className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1005,7 +995,7 @@ function NewSandboxPage() {
                                     placeholder={
                                       selectedGitHubRepository?.defaultBranch ?? "default branch"
                                     }
-                                    className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1013,7 +1003,7 @@ function NewSandboxPage() {
                               </div>
 
                               {syncGitHubInstallationMutation.error instanceof Error ? (
-                                <div className="border border-destructive/35 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                                <div className="border-l-2 border-danger-dot py-1 pl-3 text-sm text-danger">
                                   {syncGitHubInstallationMutation.error.message}
                                 </div>
                               ) : null}
@@ -1061,7 +1051,7 @@ function NewSandboxPage() {
                                             }}
                                             className={
                                               isActive
-                                                ? "grid w-full gap-2 border-b border-border bg-primary/10 px-4 py-4 text-left last:border-b-0"
+                                                ? "grid w-full gap-2 border-b border-border bg-accent px-4 py-4 text-left last:border-b-0"
                                                 : "grid w-full gap-2 border-b border-border bg-card px-4 py-4 text-left transition-colors hover:bg-muted/40 last:border-b-0"
                                             }
                                           >
@@ -1069,13 +1059,13 @@ function NewSandboxPage() {
                                               <p className="font-mono text-[0.72rem] text-foreground">
                                                 {repository.fullName}
                                               </p>
-                                              <span className="font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground">
-                                                {repository.isPrivate ? "PRIVATE" : "PUBLIC"}
+                                              <span className="ev-eyebrow">
+                                                {repository.isPrivate ? "Private" : "Public"}
                                               </span>
                                             </div>
-                                            <p className="font-mono text-[0.58rem] tracking-[0.11em] text-muted-foreground">
-                                              DEFAULT {repository.defaultBranch.toUpperCase()}
-                                              {repository.isArchived ? " // ARCHIVED" : ""}
+                                            <p className="font-mono text-[0.66rem] text-faint">
+                                              default {repository.defaultBranch}
+                                              {repository.isArchived ? " · archived" : ""}
                                             </p>
                                           </button>
                                         );
@@ -1091,7 +1081,7 @@ function NewSandboxPage() {
                     </div>
                   )}
 
-                  <div className="border border-border bg-background">
+                  <div className="rounded-md border border-border bg-background">
                     <button
                       type="button"
                       onClick={() => {
@@ -1101,15 +1091,13 @@ function NewSandboxPage() {
                       aria-expanded={isConfigRepoExpanded}
                     >
                       <div>
-                        <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                          CONFIG REPO (DOTFILES, OPTIONAL)
-                        </p>
+                        <p className="ev-eyebrow">Config repo (dotfiles, optional)</p>
                         <p className="mt-2 text-sm leading-6 text-foreground">
                           {configRepoSummary}
                         </p>
                       </div>
-                      <span className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                        {isConfigRepoExpanded ? "COLLAPSE" : "EXPAND"}
+                      <span className="text-sm text-muted-foreground">
+                        {isConfigRepoExpanded ? "Collapse" : "Expand"}
                       </span>
                     </button>
 
@@ -1134,11 +1122,11 @@ function NewSandboxPage() {
                                     }}
                                     className={
                                       isActive
-                                        ? "h-10 border border-primary bg-primary/10 font-mono text-[0.62rem] tracking-[0.12em] text-primary"
-                                        : "h-10 border border-border bg-card font-mono text-[0.62rem] tracking-[0.12em] text-foreground transition-colors hover:border-foreground"
+                                        ? "h-10 rounded-md border border-primary bg-primary text-sm text-primary-foreground"
+                                        : "h-10 rounded-md border border-input bg-card text-sm text-foreground transition-colors hover:border-foreground"
                                     }
                                   >
-                                    {option.label.toUpperCase()}
+                                    {option.label}
                                   </button>
                                 );
                               })}
@@ -1157,7 +1145,7 @@ function NewSandboxPage() {
                                       setField("configRepoUrl", event.target.value);
                                     }}
                                     placeholder="github.com/owner/dotfiles"
-                                    className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1170,7 +1158,7 @@ function NewSandboxPage() {
                                       setField("configRepoRef", event.target.value);
                                     }}
                                     placeholder="main"
-                                    className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1189,7 +1177,7 @@ function NewSandboxPage() {
                                             event.target.value,
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         <option value="">Select installation</option>
                                         {availableGitHubInstallations.map((installation) => (
@@ -1227,7 +1215,7 @@ function NewSandboxPage() {
                                         selectedConfigGitHubRepository?.defaultBranch ??
                                         "default branch"
                                       }
-                                      className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                       autoComplete="off"
                                       spellCheck={false}
                                     />
@@ -1241,7 +1229,7 @@ function NewSandboxPage() {
                                       setConfigGitHubRepositorySearch(event.target.value);
                                     }}
                                     placeholder="Filter by owner or repository"
-                                    className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1294,7 +1282,7 @@ function NewSandboxPage() {
                                               }}
                                               className={
                                                 isActive
-                                                  ? "grid w-full gap-2 border-b border-border bg-primary/10 px-4 py-3 text-left last:border-b-0"
+                                                  ? "grid w-full gap-2 border-b border-border bg-accent px-4 py-3 text-left last:border-b-0"
                                                   : "grid w-full gap-2 border-b border-border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/40 last:border-b-0"
                                               }
                                             >
@@ -1302,8 +1290,8 @@ function NewSandboxPage() {
                                                 <p className="font-mono text-[0.7rem] text-foreground">
                                                   {repository.fullName}
                                                 </p>
-                                                <span className="font-mono text-[0.56rem] tracking-[0.12em] text-muted-foreground">
-                                                  {repository.isPrivate ? "PRIVATE" : "PUBLIC"}
+                                                <span className="ev-eyebrow">
+                                                  {repository.isPrivate ? "Private" : "Public"}
                                                 </span>
                                               </div>
                                             </button>
@@ -1329,7 +1317,7 @@ function NewSandboxPage() {
                                             parseDotfilesManager(event.target.value),
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         {DOTFILES_MANAGER_OPTIONS.map((option) => (
                                           <option key={option.value} value={option.value}>
@@ -1363,7 +1351,7 @@ function NewSandboxPage() {
                                             parseDotfilesTarget(event.target.value),
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         {DOTFILES_TARGET_OPTIONS.map((option) => (
                                           <option key={option.value} value={option.value}>
@@ -1408,7 +1396,7 @@ function NewSandboxPage() {
                                         setField("configRepoBootstrapCommand", event.target.value);
                                       }}
                                       placeholder="./install.sh"
-                                      className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                       autoComplete="off"
                                       spellCheck={false}
                                     />
@@ -1438,7 +1426,7 @@ function NewSandboxPage() {
                           onChange={(event) => {
                             setField("harness", parseHarnessId(event.target.value));
                           }}
-                          className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                          className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                         >
                           {HARNESS_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
@@ -1468,11 +1456,11 @@ function NewSandboxPage() {
                               }}
                               className={
                                 isActive
-                                  ? "h-11 border border-primary bg-primary px-2 font-mono text-[0.62rem] tracking-[0.13em] text-primary-foreground"
-                                  : "h-11 border border-border bg-card px-2 font-mono text-[0.62rem] tracking-[0.13em] text-foreground transition-colors hover:border-foreground"
+                                  ? "h-11 rounded-md border border-primary bg-primary px-2 text-sm text-primary-foreground"
+                                  : "h-11 rounded-md border border-input bg-card px-2 text-sm text-foreground transition-colors hover:border-foreground"
                               }
                             >
-                              {option.label.toUpperCase()}
+                              {option.label}
                             </button>
                           );
                         })}
@@ -1486,7 +1474,7 @@ function NewSandboxPage() {
                           onChange={(event) => {
                             setField("defaultShell", parseLoginShell(event.target.value));
                           }}
-                          className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-14 text-sm text-foreground focus:border-foreground focus:outline-none"
+                          className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                         >
                           {SHELL_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
@@ -1518,34 +1506,33 @@ function NewSandboxPage() {
                               }}
                               className={
                                 isActive
-                                  ? "border border-primary bg-primary/10 px-4 py-4 text-left"
-                                  : "border border-border bg-background px-4 py-4 text-left transition-colors hover:border-foreground"
+                                  ? "rounded-md border border-primary bg-accent px-4 py-4 text-left"
+                                  : "rounded-md border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
                               }
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
-                                  <p className="font-display text-3xl leading-none text-foreground">
+                                  <p className="font-mono text-lg leading-none text-foreground">
                                     {option.label}
                                   </p>
                                   <p className="mt-3 text-sm leading-6 text-muted-foreground">
                                     {option.detail}
                                   </p>
                                 </div>
-                                <span
-                                  className={
-                                    isActive
-                                      ? "border border-primary bg-primary px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-primary-foreground"
-                                      : "border border-border px-2 py-1 font-mono text-[0.58rem] tracking-[0.12em] text-muted-foreground"
-                                  }
-                                >
-                                  {isActive ? "ACTIVE" : "READY"}
-                                </span>
+                                {isActive ? (
+                                  <span className="inline-flex items-center gap-1.5 text-xs text-primary">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                                    Active
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">Ready</span>
+                                )}
                               </div>
                             </button>
                           );
                         })}
                       </div>
-                      <p className="font-mono text-[0.62rem] leading-6 tracking-[0.11em] text-muted-foreground">
+                      <p className="font-mono text-[0.66rem] leading-6 text-faint">
                         `runsc` launches require the worker Docker host to have the gVisor runtime
                         registered.
                       </p>
@@ -1559,7 +1546,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("registryId", event.target.value);
                         }}
-                        className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
+                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="default"
                         autoComplete="off"
                         spellCheck={false}
@@ -1572,7 +1559,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("artifactRepository", event.target.value);
                         }}
-                        className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="sealant/sandboxes/demo"
                         autoComplete="off"
                         spellCheck={false}
@@ -1585,7 +1572,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("artifactTag", event.target.value);
                         }}
-                        className="h-11 w-full border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="opencode"
                         autoComplete="off"
                         spellCheck={false}
@@ -1612,13 +1599,7 @@ function NewSandboxPage() {
                             <button
                               key={pkg}
                               type="button"
-                              className={
-                                packageState === "invalid"
-                                  ? "inline-flex h-8 items-center gap-2 border border-amber-500/50 bg-amber-950/15 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-amber-300"
-                                  : packageState === "valid"
-                                    ? "inline-flex h-8 items-center gap-2 border border-emerald-500/45 bg-emerald-950/15 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-emerald-300"
-                                    : "inline-flex h-8 items-center gap-2 border border-border bg-muted/50 px-2.5 font-mono text-[0.62rem] tracking-[0.11em] text-foreground"
-                              }
+                              className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-card px-2.5 font-mono text-[0.66rem] text-foreground transition-colors hover:border-foreground"
                               onClick={() => {
                                 setField(
                                   "packages",
@@ -1628,27 +1609,29 @@ function NewSandboxPage() {
                               aria-label={`Remove package ${pkg}`}
                               title={validation?.message}
                             >
-                              <span>{pkg.toUpperCase()}</span>
-                              <span>
-                                {packageState === "valid"
-                                  ? "OK"
-                                  : packageState === "invalid"
-                                    ? "WARN"
-                                    : "..."}
+                              <span
+                                aria-hidden
+                                className={
+                                  packageState === "invalid"
+                                    ? "h-1.5 w-1.5 rounded-full bg-warning-dot"
+                                    : packageState === "valid"
+                                      ? "h-1.5 w-1.5 rounded-full bg-success-dot"
+                                      : "h-1.5 w-1.5 rounded-full border border-input"
+                                }
+                              />
+                              <span>{pkg}</span>
+                              <span aria-hidden className="text-faint">
+                                ×
                               </span>
-                              <span aria-hidden>×</span>
                             </button>
                           );
                         })}
                       </div>
 
                       {packageValidationIssues.length > 0 ? (
-                        <div className="space-y-1 border border-amber-800/40 bg-amber-950/15 px-3 py-2">
+                        <div className="space-y-1 border-l-2 border-warning-dot py-1 pl-3">
                           {packageValidationIssues.map((issue) => (
-                            <p
-                              key={issue}
-                              className="font-mono text-[0.62rem] tracking-[0.11em] text-amber-300"
-                            >
+                            <p key={issue} className="text-sm leading-6 text-warning">
                               {issue}
                             </p>
                           ))}
@@ -1667,7 +1650,7 @@ function NewSandboxPage() {
                               appendPackage();
                             }
                           }}
-                          className="h-10 w-full border border-dashed border-border bg-background px-3 font-mono text-[0.68rem] text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          className="h-10 w-full rounded-md border border-dashed border-input bg-background px-3 font-mono text-[0.7rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           placeholder="Add package (for example: ripgrep)"
                           autoComplete="off"
                           spellCheck={false}
@@ -1675,10 +1658,10 @@ function NewSandboxPage() {
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-10 px-4 text-[0.62rem] tracking-[0.12em]"
+                          className="h-10 px-4"
                           onClick={appendPackage}
                         >
-                          Add Package
+                          Add package
                         </Button>
                       </div>
                     </div>
@@ -1699,7 +1682,7 @@ function NewSandboxPage() {
                           key={`${command}-${index}`}
                           className="grid grid-cols-[2rem_1fr_auto] gap-2"
                         >
-                          <span className="flex h-10 items-center justify-center font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
+                          <span className="flex h-10 items-center justify-center font-mono text-[0.7rem] text-faint">
                             {String(index + 1).padStart(2, "0")}
                           </span>
                           <input
@@ -1709,14 +1692,14 @@ function NewSandboxPage() {
                               nextCommands[index] = event.target.value;
                               setField("setupSteps", nextCommands);
                             }}
-                            className="h-10 w-full border border-border bg-background px-3 font-mono text-[0.72rem] text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                             autoComplete="off"
                             spellCheck={false}
                           />
                           <Button
                             type="button"
                             variant="outline"
-                            className="h-10 px-3 text-[0.62rem] tracking-[0.11em]"
+                            className="h-10 px-3"
                             onClick={() => {
                               setField(
                                 "setupSteps",
@@ -1730,7 +1713,7 @@ function NewSandboxPage() {
                       ))}
 
                       <div className="grid grid-cols-[2rem_1fr_auto] gap-2">
-                        <span className="flex h-10 items-center justify-center font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
+                        <span className="flex h-10 items-center justify-center font-mono text-[0.7rem] text-faint">
                           +
                         </span>
                         <input
@@ -1744,7 +1727,7 @@ function NewSandboxPage() {
                               appendSetupCommand();
                             }
                           }}
-                          className="h-10 w-full border border-dashed border-border bg-background px-3 font-mono text-[0.72rem] text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                          className="h-10 w-full rounded-md border border-dashed border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           placeholder="Append command"
                           autoComplete="off"
                           spellCheck={false}
@@ -1752,7 +1735,7 @@ function NewSandboxPage() {
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-10 px-3 text-[0.62rem] tracking-[0.11em]"
+                          className="h-10 px-3"
                           onClick={appendSetupCommand}
                         >
                           Append
@@ -1767,7 +1750,7 @@ function NewSandboxPage() {
                       onChange={(event) => {
                         setField("entrypoint", event.target.value);
                       }}
-                      className="h-11 w-full border border-border bg-background px-3 font-mono text-[0.72rem] text-foreground placeholder:text-muted-foreground focus:border-foreground focus:outline-none"
+                      className="h-11 w-full rounded-md border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                       placeholder="pnpm dev"
                       autoComplete="off"
                       spellCheck={false}
@@ -1786,14 +1769,12 @@ function NewSandboxPage() {
                   onClick={() => {
                     setField("sshEnabled", !form.sshEnabled);
                   }}
-                  className="flex w-full items-center justify-between border border-border bg-background px-4 py-4 text-left transition-colors hover:border-foreground"
+                  className="flex w-full items-center justify-between rounded-md border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
                   role="switch"
                   aria-checked={form.sshEnabled}
                 >
                   <div>
-                    <p className="font-sans text-sm font-semibold text-foreground">
-                      Enable SSH tunneling
-                    </p>
+                    <p className="text-sm font-medium text-foreground">Enable SSH tunneling</p>
                     <p className="mt-1 text-xs leading-6 text-muted-foreground">
                       Allow direct terminal access to the active sandbox runtime endpoint.
                     </p>
@@ -1801,11 +1782,19 @@ function NewSandboxPage() {
                   <span
                     className={
                       form.sshEnabled
-                        ? "h-7 min-w-7 border border-primary bg-primary text-center font-mono text-[0.58rem] leading-[1.75rem] tracking-[0.12em] text-primary-foreground"
-                        : "h-7 min-w-7 border border-border bg-card text-center font-mono text-[0.58rem] leading-[1.75rem] tracking-[0.12em] text-muted-foreground"
+                        ? "inline-flex items-center gap-1.5 text-sm text-primary"
+                        : "inline-flex items-center gap-1.5 text-sm text-muted-foreground"
                     }
                   >
-                    {form.sshEnabled ? "ON" : "OFF"}
+                    <span
+                      aria-hidden
+                      className={
+                        form.sshEnabled
+                          ? "h-1.5 w-1.5 rounded-full bg-primary"
+                          : "h-1.5 w-1.5 rounded-full border border-input"
+                      }
+                    />
+                    {form.sshEnabled ? "On" : "Off"}
                   </span>
                 </button>
               }
@@ -1813,11 +1802,11 @@ function NewSandboxPage() {
 
             {formErrors.length > 0 ? (
               <div className="border-t border-border px-6 py-5 sm:px-8">
-                <div className="border border-destructive/35 bg-destructive/10 px-4 py-3">
-                  <p className="font-mono text-[0.64rem] tracking-[0.14em] text-destructive">
+                <div className="border-l-2 border-danger-dot py-1 pl-3">
+                  <p className="text-sm font-medium text-danger">
                     Fix the fields below before starting the sandbox
                   </p>
-                  <ul className="mt-2 space-y-1 text-sm leading-6 text-destructive">
+                  <ul className="mt-2 space-y-1 text-sm leading-6 text-ink-2">
                     {formErrors.map((error) => (
                       <li key={error}>• {error}</li>
                     ))}
@@ -1828,11 +1817,9 @@ function NewSandboxPage() {
 
             {submitError === null ? null : (
               <div className="border-t border-border px-6 py-5 sm:px-8">
-                <div className="border border-destructive/35 bg-destructive/10 px-4 py-3">
-                  <p className="font-mono text-[0.64rem] tracking-[0.14em] text-destructive">
-                    Launch request failed
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-destructive">{submitError}</p>
+                <div className="border-l-2 border-danger-dot py-1 pl-3">
+                  <p className="text-sm font-medium text-danger">Launch request failed</p>
+                  <p className="mt-2 text-sm leading-6 text-ink-2">{submitError}</p>
                 </div>
               </div>
             )}
@@ -1841,14 +1828,10 @@ function NewSandboxPage() {
 
         <aside className="border-t border-border bg-background px-6 py-7 sm:px-8 xl:border-t-0 xl:px-6 xl:py-8">
           <div className="xl:sticky xl:top-6">
-            <h2 className="font-display text-4xl leading-[0.9] tracking-[0.02em] text-foreground">
-              Live Preview
-            </h2>
+            <h2 className="text-xl text-foreground">Live preview</h2>
 
             <div className="mt-6 border-t border-border pt-6">
-              <p className="font-mono text-[0.64rem] tracking-[0.14em] text-muted-foreground">
-                Operational Summary
-              </p>
+              <p className="ev-eyebrow">Operational summary</p>
 
               <dl className="mt-4 space-y-2.5 text-sm">
                 <SummaryRow
@@ -1856,15 +1839,9 @@ function NewSandboxPage() {
                   value={previewManifest.spec.sources.sandbox.url}
                   highlighted
                 />
-                <SummaryRow label="Harness" value={previewManifest.spec.harness.id.toUpperCase()} />
-                <SummaryRow
-                  label="Target OS"
-                  value={previewManifest.spec.target.os.family.toUpperCase()}
-                />
-                <SummaryRow
-                  label="OCI runtime"
-                  value={previewManifest.spec.runtime.ociRuntime.toUpperCase()}
-                />
+                <SummaryRow label="Harness" value={previewManifest.spec.harness.id} />
+                <SummaryRow label="Target OS" value={previewManifest.spec.target.os.family} />
+                <SummaryRow label="OCI runtime" value={previewManifest.spec.runtime.ociRuntime} />
                 <SummaryRow
                   label="Packages"
                   value={String(previewManifest.spec.tooling.packages.length)}
@@ -1873,8 +1850,8 @@ function NewSandboxPage() {
                   label="Config repo"
                   value={
                     form.configRepoMode === "none"
-                      ? "DISABLED"
-                      : (previewManifest.spec.sources.inputs[0]?.url ?? "PENDING SELECTION")
+                      ? "disabled"
+                      : (previewManifest.spec.sources.inputs[0]?.url ?? "pending selection")
                   }
                   highlighted={form.configRepoMode !== "none"}
                 />
@@ -1882,31 +1859,27 @@ function NewSandboxPage() {
                   label="Config strategy"
                   value={
                     form.configRepoMode === "none"
-                      ? "N/A"
-                      : `${form.configRepoManager.toUpperCase()} @ ${form.configRepoTarget === "home" ? "HOME" : "CONFIG"}`
+                      ? "n/a"
+                      : `${form.configRepoManager} @ ${form.configRepoTarget === "home" ? "home" : "config"}`
                   }
                 />
                 <SummaryRow
                   label="SSH state"
-                  value={previewManifest.spec.access.ssh.enabled ? "ACTIVE" : "DISABLED"}
+                  value={previewManifest.spec.access.ssh.enabled ? "active" : "disabled"}
                   highlighted={previewManifest.spec.access.ssh.enabled}
                 />
               </dl>
             </div>
 
             <div className="mt-7 border-t border-border pt-6">
-              <p className="font-mono text-[0.64rem] tracking-[0.14em] text-muted-foreground">
-                Raw Manifest (JSON)
-              </p>
-              <pre className="mt-3 max-h-72 overflow-auto border border-border bg-card p-4 font-mono text-[0.66rem] leading-6 text-foreground">
+              <p className="ev-eyebrow">Raw manifest (JSON)</p>
+              <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-card p-4 font-mono text-[0.66rem] leading-6 text-foreground">
                 {JSON.stringify(previewManifest, null, 2)}
               </pre>
             </div>
 
             <div className="mt-7 border-t border-border pt-6">
-              <p className="font-mono text-[0.64rem] tracking-[0.14em] text-muted-foreground">
-                Health Check
-              </p>
+              <p className="ev-eyebrow">Health check</p>
               <div className="mt-3 space-y-2">
                 <HealthRow
                   ok={form.sourceMode === "github" ? githubSourceReady : hasValidRepositoryUrl}
@@ -1951,9 +1924,7 @@ function NewSandboxPage() {
                   }
                 />
                 {compatibilityIssues.length > 0 ? (
-                  <p className="font-mono text-[0.62rem] tracking-[0.11em] text-amber-400">
-                    {compatibilityIssues[0]}
-                  </p>
+                  <p className="text-sm leading-6 text-warning">{compatibilityIssues[0]}</p>
                 ) : null}
               </div>
             </div>
@@ -1961,16 +1932,16 @@ function NewSandboxPage() {
             <div className="mt-10 space-y-3 border-t border-border pt-6">
               <Button
                 type="submit"
-                className="h-12 w-full text-[0.74rem] tracking-[0.14em]"
+                className="h-12 w-full"
                 disabled={createSandboxMutation.isPending}
                 form="new-sandbox-form"
               >
-                {createSandboxMutation.isPending ? "Starting Sandbox..." : "Start Sandbox"}
+                {createSandboxMutation.isPending ? "Starting sandbox..." : "Start sandbox"}
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="h-12 w-full text-[0.7rem] tracking-[0.12em]"
+                className="h-12 w-full"
                 onClick={() => {
                   setForm(createInitialFormState("default"));
                   setIsSourceGitHubExpanded(false);
@@ -1980,7 +1951,7 @@ function NewSandboxPage() {
                 }}
                 disabled={createSandboxMutation.isPending}
               >
-                Reset Spec
+                Reset spec
               </Button>
             </div>
           </div>
@@ -1997,9 +1968,10 @@ function FormSection(props: {
 }) {
   return (
     <section className="border-t border-border px-6 py-6 sm:px-8 sm:py-7">
-      <p className="font-display text-3xl leading-[0.9] tracking-[0.01em] text-foreground sm:text-[2.15rem]">
-        {props.index}. {props.title}
-      </p>
+      <h2 className="flex items-baseline gap-3 text-lg text-foreground">
+        <span className="font-mono text-[0.8rem] font-medium text-primary">{props.index}</span>
+        {props.title}
+      </h2>
       <div className="mt-4">{props.content}</div>
     </section>
   );
@@ -2008,9 +1980,7 @@ function FormSection(props: {
 function LabeledField(props: { readonly label: string; readonly children: ReactNode }) {
   return (
     <label className="flex flex-col gap-2">
-      <span className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-        {props.label}
-      </span>
+      <span className="ev-eyebrow">{props.label}</span>
       {props.children}
     </label>
   );
@@ -2023,14 +1993,12 @@ function SummaryRow(props: {
 }) {
   return (
     <div className="grid grid-cols-[6.4rem_1fr] items-start gap-3">
-      <dt className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-        {props.label}
-      </dt>
+      <dt className="text-xs text-label">{props.label}</dt>
       <dd
         className={
           props.highlighted
-            ? "font-mono text-[0.68rem] text-primary"
-            : "font-mono text-[0.68rem] text-foreground"
+            ? "font-mono text-[0.7rem] text-primary"
+            : "font-mono text-[0.7rem] text-foreground"
         }
       >
         {props.value}
@@ -2041,22 +2009,16 @@ function SummaryRow(props: {
 
 function HealthRow(props: { readonly ok: boolean; readonly text: string }) {
   return (
-    <div
-      className={
-        props.ok
-          ? "border border-emerald-800/40 bg-emerald-950/25 px-3 py-2"
-          : "border border-amber-800/40 bg-amber-950/20 px-3 py-2"
-      }
-    >
-      <p
+    <div className="flex items-center gap-2.5">
+      <span
+        aria-hidden
         className={
           props.ok
-            ? "font-mono text-[0.63rem] tracking-[0.12em] text-emerald-400"
-            : "font-mono text-[0.63rem] tracking-[0.12em] text-amber-400"
+            ? "h-1.5 w-1.5 shrink-0 rounded-full bg-success-dot"
+            : "h-1.5 w-1.5 shrink-0 rounded-full bg-warning-dot"
         }
-      >
-        {props.ok ? "OK" : "WARN"} // {props.text}
-      </p>
+      />
+      <p className={props.ok ? "text-sm text-success" : "text-sm text-warning"}>{props.text}</p>
     </div>
   );
 }

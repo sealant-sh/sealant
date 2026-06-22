@@ -25,10 +25,10 @@ function ProfileEnvVariablesPage() {
         ].map(([key, value]) => (
           <div
             key={key}
-            className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[1fr_2fr] sm:items-center"
+            className="grid gap-2 border-b border-[var(--sw-faint-rule)] px-4 py-3 last:border-b-0 sm:grid-cols-[1fr_2fr] sm:items-center"
           >
             <p className="font-mono text-xs text-foreground">{key}</p>
-            <p className="font-mono text-[0.68rem] text-muted-foreground">{value}</p>
+            <p className="font-mono text-[0.78rem] text-ink-2">{value}</p>
           </div>
         ))}
       </div>

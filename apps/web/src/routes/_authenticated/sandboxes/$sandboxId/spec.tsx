@@ -36,13 +36,13 @@ function SandboxSpecPage() {
       description="Inspect the exact sandbox spec payload submitted during creation."
     >
       {sandbox.spec === undefined ? (
-        <div className="border border-border px-4 py-4">
-          <p className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+        <div className="rounded-md border border-border px-4 py-4">
+          <p className="font-mono text-[0.68rem] text-muted-foreground">
             Spec payload is not available for this sandbox.
           </p>
         </div>
       ) : (
-        <div className="border border-border bg-muted/20 p-4">
+        <div className="rounded-md border border-border bg-card p-4">
           <pre className="overflow-x-auto font-mono text-[0.68rem] leading-6 text-foreground">
             {JSON.stringify(sandbox.spec, null, 2)}
           </pre>

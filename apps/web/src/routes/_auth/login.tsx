@@ -49,12 +49,8 @@ function LoginPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
-            Sign In
-          </p>
-          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground text-balance">
-            Welcome Back
-          </h2>
+          <p className="ev-eyebrow">Sign in</p>
+          <h2 className="text-2xl text-foreground text-balance">Welcome back</h2>
           <p className="text-sm leading-7 text-muted-foreground">
             Sign in with your account details.
           </p>
@@ -62,14 +58,12 @@ function LoginPage() {
 
         <div className="space-y-5">
           <div className="flex items-center justify-between gap-4">
-            <span className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
-              Password
-            </span>
+            <span className="text-sm font-medium text-foreground">Password</span>
             <a
               href="/forgot-password"
-              className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground no-underline hover:text-foreground"
+              className="text-sm text-muted-foreground no-underline hover:text-primary"
             >
-              Reset Password
+              Reset password
             </a>
           </div>
 
@@ -85,11 +79,10 @@ function LoginPage() {
               {(field) => (
                 <field.TextField
                   autoComplete="email"
-                  errorClassName="text-[0.72rem] leading-6 text-destructive"
+                  errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Email"
-                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="you@company.com"
                   required
                   spellCheck={false}
@@ -102,11 +95,10 @@ function LoginPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="current-password"
-                  errorClassName="text-[0.72rem] leading-6 text-destructive"
+                  errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
                   inputClassName="h-12 px-4"
                   label="Password"
-                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Enter your password..."
                   required
                 />
@@ -114,7 +106,7 @@ function LoginPage() {
             </form.AppField>
 
             {errorMessage !== null ? (
-              <div className="border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              <div className="flex gap-3 border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
                 {errorMessage}
               </div>
             ) : null}
@@ -122,7 +114,7 @@ function LoginPage() {
             <form.Subscribe selector={(state) => state.isSubmitting}>
               {(isSubmitting) => (
                 <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
-                  {isSubmitting ? "Signing In..." : "Sign In"}
+                  {isSubmitting ? "Signing in..." : "Sign in"}
                 </Button>
               )}
             </form.Subscribe>
@@ -133,7 +125,7 @@ function LoginPage() {
           <p>Need access?</p>
           <a
             href="/register"
-            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+            className="font-medium text-primary no-underline hover:text-primary"
           >
             Register
           </a>

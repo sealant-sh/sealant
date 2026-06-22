@@ -17,11 +17,11 @@ export const LogoBlob = (props: ComponentPropsWithoutRef<"svg">) => (
       />
       <path
         d="M10.0823 14.2728V21.4741L13.2438 17.8735L10.0823 14.2728ZM0 15.8022V19.9447H10.08V15.8022H0Z"
-        fill="var(--sw-accent, #d92f24)"
+        fill="var(--sw-accent, #2052cc)"
       />
       <path
         d="M27.9679 14.2728V21.4741L24.8064 17.8735L27.9679 14.2728ZM38.0502 15.8022V19.9447H27.9702V15.8022H38.0502Z"
-        fill="var(--sw-accent, #d92f24)"
+        fill="var(--sw-accent, #2052cc)"
       />
     </g>
   </svg>

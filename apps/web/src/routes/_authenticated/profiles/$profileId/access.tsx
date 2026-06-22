@@ -26,12 +26,10 @@ function ProfileAccessPage() {
         ].map(([label, value]) => (
           <div
             key={label}
-            className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
+            className="flex items-center justify-between gap-4 border-b border-[var(--sw-faint-rule)] px-4 py-3 last:border-b-0"
           >
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="text-sm font-semibold text-foreground">{value}</p>
+            <p className="text-sm text-label">{label}</p>
+            <p className="font-mono text-[0.78rem] text-foreground">{value}</p>
           </div>
         ))}
       </div>

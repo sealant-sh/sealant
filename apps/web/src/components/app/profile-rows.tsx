@@ -8,28 +8,20 @@ interface ProfileRowsProps {
 
 export function ProfileRows({ profiles }: ProfileRowsProps) {
   return (
-    <div className="border border-border">
+    <div className="border border-border rounded-md">
       {profiles.map((profile) => (
         <Link
           key={profile.id}
           to={`/profiles/${encodeURIComponent(profile.id)}` as never}
-          className="grid gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_auto_auto_auto] lg:items-center"
+          className="grid gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_auto_auto_auto] lg:items-center"
         >
           <div>
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              Profile
-            </p>
-            <p className="mt-1 text-sm font-semibold text-foreground">{profile.name}</p>
+            <p className="ev-eyebrow">Profile</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{profile.name}</p>
           </div>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.environment}
-          </p>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.packageCount} packages
-          </p>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.secretCount} secrets
-          </p>
+          <p className="font-mono text-xs text-faint">{profile.environment}</p>
+          <p className="font-mono text-xs text-faint">{profile.packageCount} packages</p>
+          <p className="font-mono text-xs text-faint">{profile.secretCount} secrets</p>
         </Link>
       ))}
     </div>

@@ -16,29 +16,23 @@ function CreateProfilePage() {
     >
       <form className="grid gap-4 border border-border p-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2">
-          <span className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            Profile name
-          </span>
+          <span className="text-sm font-medium text-foreground">Profile name</span>
           <input
-            className="h-11 border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
+            className="h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
             placeholder="Nightly refresh"
           />
         </label>
         <label className="flex flex-col gap-2">
-          <span className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            Environment
-          </span>
+          <span className="text-sm font-medium text-foreground">Environment</span>
           <input
-            className="h-11 border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
+            className="h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
             placeholder="Staging"
           />
         </label>
         <label className="sm:col-span-2 flex flex-col gap-2">
-          <span className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            Setup note
-          </span>
+          <span className="text-sm font-medium text-foreground">Setup note</span>
           <textarea
-            className="min-h-28 border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-foreground focus:outline-none"
+            className="min-h-28 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
             placeholder="List package, secret, and access assumptions."
           />
         </label>

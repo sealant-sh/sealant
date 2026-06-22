@@ -1,4 +1,3 @@
-import { Badge } from "@sealant/ui";
 import { Link } from "@tanstack/react-router";
 
 import type { RunRecord } from "@/lib/navigation/sandbox-data";
@@ -9,31 +8,27 @@ interface RunRowsProps {
 
 export function RunRows({ runs }: RunRowsProps) {
   return (
-    <div className="border border-border">
+    <div className="border border-border rounded-md">
       {runs.map((run) => (
         <Link
           key={run.id}
           to={`/sandboxes/${encodeURIComponent(run.id)}` as never}
-          className="grid grid-cols-3 gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
+          className="grid grid-cols-3 gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-center"
         >
-          <div className="">
-            <p className="mt-1 text-sm font-semibold text-foreground">{run.id}</p>
+          <div>
+            <p className="font-mono text-xs text-ink-2">{run.id}</p>
           </div>
           <div>
-            <p className="font-mono text-sm text-muted-foreground">Repository</p>
-            <p className="mt-1 font-mono text-xs text-foreground">{run.repoId}</p>
+            <p className="ev-eyebrow">Repository</p>
+            <p className="mt-1 font-mono text-xs text-ink-2">{run.repoId}</p>
           </div>
           <div>
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              Profile
-            </p>
-            <p className="mt-1 font-mono text-xs text-foreground">{run.profileId}</p>
+            <p className="ev-eyebrow">Profile</p>
+            <p className="mt-1 font-mono text-xs text-ink-2">{run.profileId}</p>
           </div>
           <div className="flex items-center justify-between gap-3 lg:justify-end">
-            <Badge className={badgeClassName(run.status)}>{run.status}</Badge>
-            <span className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {run.startedAt}
-            </span>
+            <RunStatusIndicator status={run.status} />
+            <span className="font-mono text-xs text-faint">{run.startedAt}</span>
           </div>
         </Link>
       ))}
@@ -41,14 +36,28 @@ export function RunRows({ runs }: RunRowsProps) {
   );
 }
 
-function badgeClassName(status: RunRecord["status"]): string {
-  if (status === "active") {
-    return "rounded-none bg-primary text-primary-foreground font-mono text-[0.58rem] tracking-[0.11em] ";
-  }
+function RunStatusIndicator({ status }: { readonly status: RunRecord["status"] }) {
+  const { dotClassName, textClassName, label } = statusPresentation(status);
 
-  if (status === "failed") {
-    return "rounded-none border border-border bg-muted text-foreground font-mono text-[0.58rem] tracking-[0.11em] ";
-  }
+  return (
+    <span className="inline-flex items-center gap-2 text-sm font-medium">
+      <span className={`size-2 shrink-0 rounded-full ${dotClassName}`} aria-hidden="true" />
+      <span className={textClassName}>{label}</span>
+    </span>
+  );
+}
 
-  return "rounded-none border border-border bg-card text-muted-foreground font-mono text-[0.58rem] tracking-[0.11em] ";
+function statusPresentation(status: RunRecord["status"]): {
+  readonly dotClassName: string;
+  readonly textClassName: string;
+  readonly label: string;
+} {
+  switch (status) {
+    case "active":
+      return { dotClassName: "bg-success-dot", textClassName: "text-success", label: "Running" };
+    case "completed":
+      return { dotClassName: "bg-success-dot", textClassName: "text-success", label: "Passed" };
+    case "failed":
+      return { dotClassName: "bg-danger-dot", textClassName: "text-danger", label: "Failed" };
+  }
 }

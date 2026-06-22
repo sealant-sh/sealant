@@ -38,12 +38,8 @@ function ForgotPasswordPage() {
     >
       <div className="space-y-8">
         <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
-            Forgot Password
-          </p>
-          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground">
-            Reset Your Password
-          </h2>
+          <p className="ev-eyebrow">Forgot password</p>
+          <h2 className="text-2xl text-foreground">Reset your password</h2>
           <p className="text-sm leading-7 text-muted-foreground">
             Enter the email for your account.
           </p>
@@ -61,11 +57,10 @@ function ForgotPasswordPage() {
             {(field) => (
               <field.TextField
                 autoComplete="email"
-                errorClassName="text-[0.72rem] leading-6 text-destructive"
+                errorClassName="text-[0.72rem] leading-6 text-danger"
                 fieldClassName="space-y-2"
                 inputClassName="h-12 px-4"
                 label="Email"
-                labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                 placeholder="you@company.com"
                 required
                 spellCheck={false}
@@ -75,11 +70,11 @@ function ForgotPasswordPage() {
           </form.AppField>
 
           {notice !== null ? (
-            <div className="border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
+            <div className="border-l-2 border-border pl-3 text-sm leading-6 text-foreground">
               {notice}
             </div>
           ) : (
-            <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+            <div className="border-l-2 border-border pl-3 text-sm leading-6 text-muted-foreground">
               Password reset email is not available yet.
             </div>
           )}
@@ -87,7 +82,7 @@ function ForgotPasswordPage() {
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
               <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
-                {isSubmitting ? "Requesting..." : "Request Reset"}
+                {isSubmitting ? "Requesting..." : "Request reset"}
               </Button>
             )}
           </form.Subscribe>
@@ -97,9 +92,9 @@ function ForgotPasswordPage() {
           <p>Remembered the password?</p>
           <a
             href="/login"
-            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+            className="font-medium text-primary no-underline hover:text-primary"
           >
-            Sign In
+            Sign in
           </a>
         </div>
       </div>

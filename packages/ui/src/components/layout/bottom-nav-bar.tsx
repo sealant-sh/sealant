@@ -9,10 +9,10 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "LOGS", to: "/sandboxes", icon: ScrollText },
-  { label: "REGISTRY", to: "/registry", icon: Layers },
-  { label: "STATS", to: "/issues", icon: BarChart2 },
-  { label: "CONFIG", to: "/profiles", icon: Settings2 },
+  { label: "Logs", to: "/sandboxes", icon: ScrollText },
+  { label: "Registry", to: "/registry", icon: Layers },
+  { label: "Stats", to: "/issues", icon: BarChart2 },
+  { label: "Config", to: "/profiles", icon: Settings2 },
 ];
 
 interface BottomNavBarProps {
@@ -23,7 +23,7 @@ export function BottomNavBar({ className }: BottomNavBarProps) {
   return (
     <nav
       className={cn(
-        "fixed bottom-0 left-0 right-0 z-50 flex h-16 items-stretch border-t-2 border-foreground bg-card",
+        "fixed bottom-0 left-0 right-0 z-50 flex h-16 items-stretch border-t border-border bg-card",
         className,
       )}
       aria-label="Bottom navigation"
@@ -35,21 +35,17 @@ export function BottomNavBar({ className }: BottomNavBarProps) {
           <Link
             key={label}
             {...options}
-            className="flex flex-1 flex-col items-center justify-center gap-1 border-r border-border text-foreground/40 no-underline transition-colors duration-200 last:border-r-0 hover:bg-muted/40 hover:text-foreground/70"
+            className="flex flex-1 flex-col items-center justify-center gap-1 border-r border-border text-muted-foreground no-underline transition-colors duration-200 last:border-r-0 hover:bg-muted/40 hover:text-foreground"
             activeProps={{
               className:
-                "flex flex-1 flex-col items-center justify-center gap-1 border-r border-border bg-primary text-primary-foreground no-underline last:border-r-0",
+                "flex flex-1 flex-col items-center justify-center gap-1 border-r border-border bg-accent text-primary no-underline last:border-r-0",
             }}
             aria-label={label}
           >
-            {({ isActive }) => (
+            {() => (
               <>
-                <Icon
-                  className={cn("size-5", isActive ? "text-primary-foreground" : "text-current")}
-                />
-                <span className="text-[9px] font-semibold tracking-[0.12em] uppercase">
-                  {label}
-                </span>
+                <Icon className="size-5" />
+                <span className="text-[11px]">{label}</span>
               </>
             )}
           </Link>

@@ -17,7 +17,7 @@ function RepositorySettingsPage() {
       section="Settings"
       description="Adjust repository-level controls with strict defaults so risk stays explicit and reviewable."
     >
-      <div className="border border-border">
+      <div className="rounded-md border border-border">
         {[
           ["Protected branch enforcement", "Enabled"],
           ["Auto rerun on flaky checks", "Disabled"],
@@ -28,10 +28,8 @@ function RepositorySettingsPage() {
             key={label}
             className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
           >
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="text-sm font-semibold text-foreground">{value}</p>
+            <p className="text-sm text-label">{label}</p>
+            <p className="font-mono text-[0.72rem] text-foreground">{value}</p>
           </div>
         ))}
       </div>

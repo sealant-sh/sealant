@@ -17,7 +17,7 @@ function RepositoryOverviewPage() {
       section="Overview"
       description="Review repository ownership, branch posture, and operational health before changing setup or run behavior."
     >
-      <div className="border border-border">
+      <div className="rounded-md border border-border">
         {[
           ["Default branch", repository?.branch ?? "Unknown"],
           ["Policy profile", "Operational strict"],
@@ -28,10 +28,8 @@ function RepositoryOverviewPage() {
             key={label}
             className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
           >
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="text-sm font-semibold text-foreground">{value}</p>
+            <p className="text-sm text-label">{label}</p>
+            <p className="font-mono text-[0.72rem] text-foreground">{value}</p>
           </div>
         ))}
       </div>

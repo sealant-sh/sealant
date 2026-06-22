@@ -30,37 +30,37 @@ function ManifestPage() {
 
   return (
     <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs tracking-[0.1em] text-muted-foreground">
+      <nav className="mb-6 flex flex-wrap items-center gap-2 font-mono text-xs text-faint">
         <Link
           to="/registry"
-          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+          className="text-muted-foreground no-underline transition-colors hover:text-primary"
         >
           Registry
         </Link>
-        <span className="text-muted-foreground/60">/</span>
+        <span className="text-faint">/</span>
         <Link
           to="/registry/$registryId"
           params={{ registryId }}
-          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+          className="text-muted-foreground no-underline transition-colors hover:text-primary"
         >
-          {registry.name.toUpperCase()}
+          {registry.name}
         </Link>
-        <span className="text-muted-foreground/60">/</span>
+        <span className="text-faint">/</span>
         <Link
           to="/registry/$registryId"
           params={{ registryId }}
-          className="text-muted-foreground no-underline transition-colors hover:text-foreground"
+          className="text-muted-foreground no-underline transition-colors hover:text-primary"
         >
           {repository}
         </Link>
-        <span className="text-muted-foreground/60">/</span>
+        <span className="text-faint">/</span>
         <span className="text-foreground">{manifest.reference}</span>
       </nav>
 
       <Link
         to="/registry/$registryId"
         params={{ registryId }}
-        className="mb-6 inline-flex items-center gap-1.5 font-mono text-xs tracking-[0.1em] text-muted-foreground no-underline transition-colors hover:text-foreground"
+        className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline transition-colors hover:text-primary"
       >
         <ArrowLeft className="size-3" />
         Back to registry
@@ -81,31 +81,31 @@ function ManifestPage() {
 function ManifestSkeleton() {
   return (
     <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <Skeleton className="mb-6 h-3 w-64 rounded-none bg-muted" />
-      <Skeleton className="mb-6 h-3 w-32 rounded-none bg-muted" />
+      <Skeleton className="mb-6 h-3 w-64 rounded-md bg-muted" />
+      <Skeleton className="mb-6 h-3 w-32 rounded-md bg-muted" />
       <div className="mb-6 border border-border bg-muted/20 p-6">
-        <Skeleton className="mb-2 h-2 w-16 rounded-none bg-muted" />
-        <Skeleton className="mb-3 h-8 w-3/4 rounded-none bg-muted" />
-        <Skeleton className="h-3 w-48 rounded-none bg-muted" />
+        <Skeleton className="mb-2 h-2 w-16 rounded-md bg-muted" />
+        <Skeleton className="mb-3 h-8 w-3/4 rounded-md bg-muted" />
+        <Skeleton className="h-3 w-48 rounded-md bg-muted" />
       </div>
       <div className="mb-6 grid grid-cols-3 gap-px border border-border bg-border">
         {Array.from({ length: 3 }).map((_, index) => (
           <div key={index} className="bg-card p-4">
-            <Skeleton className="mb-2 h-2 w-20 rounded-none bg-muted" />
-            <Skeleton className="h-4 w-24 rounded-none bg-muted" />
+            <Skeleton className="mb-2 h-2 w-20 rounded-md bg-muted" />
+            <Skeleton className="h-4 w-24 rounded-md bg-muted" />
           </div>
         ))}
       </div>
-      <Skeleton className="mb-3 h-3 w-16 rounded-none bg-muted" />
+      <Skeleton className="mb-3 h-3 w-16 rounded-md bg-muted" />
       <div className="border border-border">
         {Array.from({ length: 3 }).map((_, index) => (
           <div
             key={index}
             className="flex items-center gap-4 border-b border-border px-4 py-2.5 last:border-b-0"
           >
-            <Skeleton className="h-3 flex-1 rounded-none bg-muted" />
-            <Skeleton className="h-3 w-16 rounded-none bg-muted" />
-            <Skeleton className="h-5 w-24 rounded-none bg-muted" />
+            <Skeleton className="h-3 flex-1 rounded-md bg-muted" />
+            <Skeleton className="h-3 w-16 rounded-md bg-muted" />
+            <Skeleton className="h-5 w-24 rounded-md bg-muted" />
           </div>
         ))}
       </div>

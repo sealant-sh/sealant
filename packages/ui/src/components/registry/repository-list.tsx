@@ -18,16 +18,19 @@ export function RepositoryList({
 }: RepositoryListProps) {
   if (repositories.length === 0) {
     return (
-      <div className={cn("flex items-center justify-center border border-border py-16", className)}>
-        <p className="font-mono text-xs tracking-widest uppercase text-muted-foreground/60">
-          NO REPOSITORIES FOUND
-        </p>
+      <div
+        className={cn(
+          "flex items-center justify-center rounded-md border border-border py-16",
+          className,
+        )}
+      >
+        <p className="font-mono text-xs text-muted-foreground">No repositories found</p>
       </div>
     );
   }
 
   return (
-    <div className={cn("border border-border bg-card", className)}>
+    <div className={cn("rounded-md border border-border bg-card", className)}>
       {repositories.map((repo) => (
         <RepositoryRow
           key={repo}

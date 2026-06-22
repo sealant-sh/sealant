@@ -25,10 +25,8 @@ function ProfileSetupPage() {
           ["Issue handoff", "enabled"],
         ].map(([label, value]) => (
           <div key={label} className="bg-card px-4 py-4">
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="mt-2 text-sm font-semibold text-foreground">{value}</p>
+            <p className="text-sm text-label">{label}</p>
+            <p className="mt-2 font-mono text-[0.78rem] text-foreground">{value}</p>
           </div>
         ))}
       </div>

@@ -1,4 +1,3 @@
-import { Badge } from "@sealant/ui/components/ui/badge";
 import { Skeleton } from "@sealant/ui/components/ui/skeleton";
 import { cn } from "@sealant/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
@@ -45,7 +44,7 @@ export function RepositoryRow({
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-[background-color,transform] duration-200 hover:bg-muted/30 hover:translate-x-1 focus-visible:outline-none focus-visible:bg-muted/30"
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
         aria-expanded={expanded}
       >
         <ChevronRight
@@ -54,12 +53,12 @@ export function RepositoryRow({
             expanded && "rotate-90",
           )}
         />
-        <span className="flex-1 font-mono text-sm text-foreground truncate">{repository}</span>
+        <span className="flex-1 truncate font-mono text-sm text-foreground">{repository}</span>
         {tags !== null && (
-          <Badge className="shrink-0 rounded-none border border-border bg-muted text-muted-foreground font-mono text-[10px] tracking-[0.12em]">
-            <Tag className="size-2.5 mr-1" />
+          <span className="flex shrink-0 items-center gap-1 font-mono text-xs text-faint">
+            <Tag className="size-3" />
             {tags.length}
-          </Badge>
+          </span>
         )}
       </button>
 
@@ -69,7 +68,7 @@ export function RepositoryRow({
           {loading ? (
             <div className="flex flex-wrap gap-2">
               {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-6 w-20 rounded-none" />
+                <Skeleton key={i} className="h-6 w-20 rounded-md" />
               ))}
             </div>
           ) : tags && tags.length > 0 ? (
@@ -81,16 +80,14 @@ export function RepositoryRow({
                   params={{ registryId, repo: encodedRepo, tag }}
                   className="no-underline"
                 >
-                  <span className="inline-flex items-center gap-1 border border-border bg-muted/20 px-2.5 py-1 font-mono text-xs uppercase tracking-[0.08em] text-muted-foreground transition-colors duration-200 hover:bg-primary hover:text-primary-foreground hover:border-primary cursor-pointer">
+                  <span className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 py-1 font-mono text-xs text-faint transition-colors duration-200 hover:border-primary hover:text-primary">
                     {tag}
                   </span>
                 </Link>
               ))}
             </div>
           ) : (
-            <p className="font-mono text-xs text-muted-foreground/60 uppercase tracking-widest">
-              NO TAGS FOUND
-            </p>
+            <p className="font-mono text-xs text-muted-foreground">No tags found</p>
           )}
         </div>
       )}
