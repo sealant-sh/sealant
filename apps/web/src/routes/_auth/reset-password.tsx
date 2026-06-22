@@ -37,18 +37,25 @@ function ResetPasswordPage() {
       accent="cyan"
     >
       <div className="space-y-8">
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <p className="ev-eyebrow">Reset password</p>
-          <h2 className="text-2xl text-foreground">New password</h2>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground text-balance">
+            New password
+          </h2>
           <p className="text-sm leading-7 text-muted-foreground">
-            {search.token !== undefined
-              ? `A reset token was detected: ${search.token.slice(0, 8)}…`
-              : "Use the reset link from your email to continue."}
+            {search.token !== undefined ? (
+              <>
+                A reset token was detected:{" "}
+                <span className="font-mono text-ink-2">{search.token.slice(0, 8)}…</span>
+              </>
+            ) : (
+              "Use the reset link from your email to continue."
+            )}
           </p>
         </div>
 
         <form
-          className="space-y-5"
+          className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -62,7 +69,7 @@ function ResetPasswordPage() {
                   autoComplete="new-password"
                   errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="New password"
                   placeholder="Create a password..."
                   required
@@ -76,7 +83,7 @@ function ResetPasswordPage() {
                   autoComplete="new-password"
                   errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="Confirm password"
                   placeholder="Repeat the password..."
                   required
@@ -97,7 +104,11 @@ function ResetPasswordPage() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
+              <Button
+                className="h-12 w-full rounded-xl shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                disabled={isSubmitting}
+                type="submit"
+              >
                 {isSubmitting ? "Setting password..." : "Set password"}
               </Button>
             )}
@@ -108,7 +119,7 @@ function ResetPasswordPage() {
           <p>Need a new link?</p>
           <a
             href="/forgot-password"
-            className="font-medium text-primary no-underline hover:text-primary"
+            className="font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
           >
             Request reset
           </a>

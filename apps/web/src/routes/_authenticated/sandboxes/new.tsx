@@ -758,19 +758,19 @@ function NewSandboxPage() {
       : "Select a GitHub installation");
 
   return (
-    <section className="overflow-hidden border border-border bg-card">
-      <div className="h-1 w-full bg-primary" />
-
+    <section className="overflow-hidden rounded-3xl border border-border bg-popover shadow-[var(--shadow-sm)]">
       <div className="grid min-h-[calc(100svh-9.5rem)] gap-0 xl:grid-cols-[1.45fr_0.65fr]">
         <form
           id="new-sandbox-form"
           onSubmit={handleSubmit}
-          className="border-b border-border xl:border-b-0 xl:border-r"
+          className="border-b border-rule-faint xl:border-b-0 xl:border-r"
         >
-          <header className="border-b border-border px-6 py-7 sm:px-8 sm:py-8">
+          <header className="border-b border-rule-faint px-8 py-10 sm:px-10">
             <p className="ev-eyebrow">New sandbox</p>
-            <h1 className="mt-3 text-2xl text-foreground sm:text-[1.75rem]">Create sandbox spec</h1>
-            <p className="mt-5 max-w-3xl text-sm leading-7 text-muted-foreground">
+            <h1 className="mt-4 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+              Create sandbox spec
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
               Configure operational parameters for a new sandbox and submit one typed launch request
               through the control plane.
             </p>
@@ -807,12 +807,14 @@ function NewSandboxPage() {
                             }}
                             className={
                               isActive
-                                ? "rounded-md border border-primary bg-accent px-3 py-2.5 text-left"
-                                : "rounded-md border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-input"
+                                ? "rounded-2xl border border-primary bg-accent px-4 py-3.5 text-left shadow-[var(--shadow-xs)]"
+                                : "rounded-2xl border border-border bg-card px-4 py-3.5 text-left shadow-[var(--shadow-xs)] transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]"
                             }
                           >
                             <p className="ev-eyebrow">Mode</p>
-                            <p className="mt-1.5 text-sm text-foreground">{option.title}</p>
+                            <p className="mt-1.5 text-sm font-medium text-foreground">
+                              {option.title}
+                            </p>
                             <p className="mt-1 text-xs leading-5 text-muted-foreground">
                               {option.detail}
                             </p>
@@ -831,7 +833,7 @@ function NewSandboxPage() {
                             setField("sandboxSource", event.target.value);
                           }}
                           placeholder="github.com/sealant-ops/core"
-                          className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                          className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -844,14 +846,14 @@ function NewSandboxPage() {
                             setField("branch", event.target.value);
                           }}
                           placeholder="main"
-                          className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                          className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           autoComplete="off"
                           spellCheck={false}
                         />
                       </LabeledField>
                     </div>
                   ) : (
-                    <div className="rounded-md border border-border bg-background">
+                    <div className="rounded-2xl border border-border bg-background">
                       <button
                         type="button"
                         onClick={() => {
@@ -874,7 +876,7 @@ function NewSandboxPage() {
                       {isSourceGitHubExpanded ? (
                         <div className="space-y-4 border-t border-border px-4 py-4">
                           {availableGitHubInstallations.length === 1 ? null : (
-                            <div className="flex flex-col gap-3 rounded-md border border-border bg-background px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex flex-col gap-3 rounded-2xl border border-border bg-background px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
                               <div>
                                 <p className="ev-eyebrow">Installation access</p>
                                 <p className="mt-2 text-sm leading-7 text-foreground">
@@ -884,7 +886,7 @@ function NewSandboxPage() {
                               </div>
                               <a
                                 href="/github/setup"
-                                className="inline-flex h-10 items-center justify-center rounded-md border border-input px-4 text-sm text-foreground no-underline transition-colors hover:border-foreground"
+                                className="inline-flex h-10 items-center justify-center rounded-lg border border-input px-4 text-sm text-foreground no-underline transition-colors hover:border-foreground"
                               >
                                 Manage GitHub access
                               </a>
@@ -892,7 +894,7 @@ function NewSandboxPage() {
                           )}
 
                           {githubInstallationsQuery.isLoading ? (
-                            <div className="rounded-md border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                            <div className="rounded-2xl border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
                               Loading granted GitHub installations...
                             </div>
                           ) : githubInstallationsQuery.isError ? (
@@ -900,7 +902,7 @@ function NewSandboxPage() {
                               {resolveErrorMessage(githubInstallationsQuery.error)}
                             </div>
                           ) : availableGitHubInstallations.length === 0 ? (
-                            <div className="rounded-md border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                            <div className="rounded-2xl border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
                               No granted GitHub installations are available yet. Open GitHub setup,
                               import an installation, then come back here.
                             </div>
@@ -914,7 +916,7 @@ function NewSandboxPage() {
                                       onChange={(event) => {
                                         setField("githubInstallationId", event.target.value);
                                       }}
-                                      className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                                      className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                     >
                                       <option value="">Select installation</option>
                                       {availableGitHubInstallations.map((installation) => (
@@ -980,7 +982,7 @@ function NewSandboxPage() {
                                       setGitHubRepositorySearch(event.target.value);
                                     }}
                                     placeholder="Filter by owner or repository"
-                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -995,7 +997,7 @@ function NewSandboxPage() {
                                     placeholder={
                                       selectedGitHubRepository?.defaultBranch ?? "default branch"
                                     }
-                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1009,7 +1011,7 @@ function NewSandboxPage() {
                               ) : null}
 
                               <LabeledField label="Repository Picker">
-                                <div className="border border-border bg-card">
+                                <div className="overflow-hidden rounded-2xl border border-border bg-card">
                                   {normalizeRequiredValue(form.githubInstallationId).length ===
                                   0 ? (
                                     <div className="px-4 py-4 text-sm text-muted-foreground">
@@ -1081,7 +1083,7 @@ function NewSandboxPage() {
                     </div>
                   )}
 
-                  <div className="rounded-md border border-border bg-background">
+                  <div className="rounded-2xl border border-border bg-background">
                     <button
                       type="button"
                       onClick={() => {
@@ -1122,8 +1124,8 @@ function NewSandboxPage() {
                                     }}
                                     className={
                                       isActive
-                                        ? "h-10 rounded-md border border-primary bg-primary text-sm text-primary-foreground"
-                                        : "h-10 rounded-md border border-input bg-card text-sm text-foreground transition-colors hover:border-foreground"
+                                        ? "h-10 rounded-lg border border-primary bg-primary text-sm text-primary-foreground"
+                                        : "h-10 rounded-lg border border-input bg-card text-sm text-foreground transition-colors hover:border-foreground"
                                     }
                                   >
                                     {option.label}
@@ -1145,7 +1147,7 @@ function NewSandboxPage() {
                                       setField("configRepoUrl", event.target.value);
                                     }}
                                     placeholder="github.com/owner/dotfiles"
-                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1158,7 +1160,7 @@ function NewSandboxPage() {
                                       setField("configRepoRef", event.target.value);
                                     }}
                                     placeholder="main"
-                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
@@ -1177,7 +1179,7 @@ function NewSandboxPage() {
                                             event.target.value,
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         <option value="">Select installation</option>
                                         {availableGitHubInstallations.map((installation) => (
@@ -1215,7 +1217,7 @@ function NewSandboxPage() {
                                         selectedConfigGitHubRepository?.defaultBranch ??
                                         "default branch"
                                       }
-                                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                      className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                       autoComplete="off"
                                       spellCheck={false}
                                     />
@@ -1229,14 +1231,14 @@ function NewSandboxPage() {
                                       setConfigGitHubRepositorySearch(event.target.value);
                                     }}
                                     placeholder="Filter by owner or repository"
-                                    className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                     autoComplete="off"
                                     spellCheck={false}
                                   />
                                 </LabeledField>
 
                                 <LabeledField label="Config Repo Picker">
-                                  <div className="border border-border bg-card">
+                                  <div className="overflow-hidden rounded-2xl border border-border bg-card">
                                     {normalizeRequiredValue(form.configRepoGitHubInstallationId)
                                       .length === 0 ? (
                                       <div className="px-4 py-4 text-sm text-muted-foreground">
@@ -1305,7 +1307,7 @@ function NewSandboxPage() {
                             )}
 
                             {form.configRepoMode === "none" ? null : (
-                              <div className="space-y-4 border border-border bg-card px-4 py-4">
+                              <div className="space-y-4 rounded-2xl border border-border bg-card px-4 py-4">
                                 <div className="grid gap-4 sm:grid-cols-2">
                                   <LabeledField label="Config Strategy">
                                     <div className="relative">
@@ -1317,7 +1319,7 @@ function NewSandboxPage() {
                                             parseDotfilesManager(event.target.value),
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         {DOTFILES_MANAGER_OPTIONS.map((option) => (
                                           <option key={option.value} value={option.value}>
@@ -1351,7 +1353,7 @@ function NewSandboxPage() {
                                             parseDotfilesTarget(event.target.value),
                                           );
                                         }}
-                                        className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                                        className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                                       >
                                         {DOTFILES_TARGET_OPTIONS.map((option) => (
                                           <option key={option.value} value={option.value}>
@@ -1396,7 +1398,7 @@ function NewSandboxPage() {
                                         setField("configRepoBootstrapCommand", event.target.value);
                                       }}
                                       placeholder="./install.sh"
-                                      className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                                      className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                                       autoComplete="off"
                                       spellCheck={false}
                                     />
@@ -1426,7 +1428,7 @@ function NewSandboxPage() {
                           onChange={(event) => {
                             setField("harness", parseHarnessId(event.target.value));
                           }}
-                          className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                          className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                         >
                           {HARNESS_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
@@ -1456,8 +1458,8 @@ function NewSandboxPage() {
                               }}
                               className={
                                 isActive
-                                  ? "h-11 rounded-md border border-primary bg-primary px-2 text-sm text-primary-foreground"
-                                  : "h-11 rounded-md border border-input bg-card px-2 text-sm text-foreground transition-colors hover:border-foreground"
+                                  ? "h-11 rounded-lg border border-primary bg-primary px-2 text-sm text-primary-foreground"
+                                  : "h-11 rounded-lg border border-input bg-card px-2 text-sm text-foreground transition-colors hover:border-foreground"
                               }
                             >
                               {option.label}
@@ -1474,7 +1476,7 @@ function NewSandboxPage() {
                           onChange={(event) => {
                             setField("defaultShell", parseLoginShell(event.target.value));
                           }}
-                          className="h-11 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
+                          className="h-11 w-full appearance-none rounded-lg border border-input bg-background pl-3 pr-14 text-sm text-foreground focus:border-primary focus:outline-none"
                         >
                           {SHELL_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
@@ -1506,8 +1508,8 @@ function NewSandboxPage() {
                               }}
                               className={
                                 isActive
-                                  ? "rounded-md border border-primary bg-accent px-4 py-4 text-left"
-                                  : "rounded-md border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
+                                  ? "rounded-2xl border border-primary bg-accent px-4 py-4 text-left shadow-[var(--shadow-xs)]"
+                                  : "rounded-2xl border border-border bg-card px-4 py-4 text-left shadow-[var(--shadow-xs)] transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]"
                               }
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -1546,7 +1548,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("registryId", event.target.value);
                         }}
-                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                        className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="default"
                         autoComplete="off"
                         spellCheck={false}
@@ -1559,7 +1561,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("artifactRepository", event.target.value);
                         }}
-                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                        className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="sealant/sandboxes/demo"
                         autoComplete="off"
                         spellCheck={false}
@@ -1572,7 +1574,7 @@ function NewSandboxPage() {
                         onChange={(event) => {
                           setField("artifactTag", event.target.value);
                         }}
-                        className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                        className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                         placeholder="opencode"
                         autoComplete="off"
                         spellCheck={false}
@@ -1599,7 +1601,7 @@ function NewSandboxPage() {
                             <button
                               key={pkg}
                               type="button"
-                              className="inline-flex h-8 items-center gap-2 rounded-md border border-input bg-card px-2.5 font-mono text-[0.66rem] text-foreground transition-colors hover:border-foreground"
+                              className="inline-flex h-8 items-center gap-2 rounded-lg border border-input bg-card px-2.5 font-mono text-[0.66rem] text-foreground transition-colors hover:border-foreground"
                               onClick={() => {
                                 setField(
                                   "packages",
@@ -1650,7 +1652,7 @@ function NewSandboxPage() {
                               appendPackage();
                             }
                           }}
-                          className="h-10 w-full rounded-md border border-dashed border-input bg-background px-3 font-mono text-[0.7rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                          className="h-10 w-full rounded-lg border border-dashed border-input bg-background px-3 font-mono text-[0.7rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           placeholder="Add package (for example: ripgrep)"
                           autoComplete="off"
                           spellCheck={false}
@@ -1692,7 +1694,7 @@ function NewSandboxPage() {
                               nextCommands[index] = event.target.value;
                               setField("setupSteps", nextCommands);
                             }}
-                            className="h-10 w-full rounded-md border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                            className="h-10 w-full rounded-lg border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                             autoComplete="off"
                             spellCheck={false}
                           />
@@ -1727,7 +1729,7 @@ function NewSandboxPage() {
                               appendSetupCommand();
                             }
                           }}
-                          className="h-10 w-full rounded-md border border-dashed border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                          className="h-10 w-full rounded-lg border border-dashed border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                           placeholder="Append command"
                           autoComplete="off"
                           spellCheck={false}
@@ -1750,7 +1752,7 @@ function NewSandboxPage() {
                       onChange={(event) => {
                         setField("entrypoint", event.target.value);
                       }}
-                      className="h-11 w-full rounded-md border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                      className="h-11 w-full rounded-lg border border-input bg-background px-3 font-mono text-[0.74rem] text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
                       placeholder="pnpm dev"
                       autoComplete="off"
                       spellCheck={false}
@@ -1769,7 +1771,7 @@ function NewSandboxPage() {
                   onClick={() => {
                     setField("sshEnabled", !form.sshEnabled);
                   }}
-                  className="flex w-full items-center justify-between rounded-md border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
+                  className="flex w-full items-center justify-between rounded-2xl border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
                   role="switch"
                   aria-checked={form.sshEnabled}
                 >
@@ -1801,7 +1803,7 @@ function NewSandboxPage() {
             />
 
             {formErrors.length > 0 ? (
-              <div className="border-t border-border px-6 py-5 sm:px-8">
+              <div className="border-t border-rule-faint px-8 py-6 sm:px-10">
                 <div className="border-l-2 border-danger-dot py-1 pl-3">
                   <p className="text-sm font-medium text-danger">
                     Fix the fields below before starting the sandbox
@@ -1816,7 +1818,7 @@ function NewSandboxPage() {
             ) : null}
 
             {submitError === null ? null : (
-              <div className="border-t border-border px-6 py-5 sm:px-8">
+              <div className="border-t border-rule-faint px-8 py-6 sm:px-10">
                 <div className="border-l-2 border-danger-dot py-1 pl-3">
                   <p className="text-sm font-medium text-danger">Launch request failed</p>
                   <p className="mt-2 text-sm leading-6 text-ink-2">{submitError}</p>
@@ -1826,11 +1828,13 @@ function NewSandboxPage() {
           </div>
         </form>
 
-        <aside className="border-t border-border bg-background px-6 py-7 sm:px-8 xl:border-t-0 xl:px-6 xl:py-8">
+        <aside className="border-t border-rule-faint bg-card px-6 py-8 sm:px-8 xl:border-t-0">
           <div className="xl:sticky xl:top-6">
-            <h2 className="text-xl text-foreground">Live preview</h2>
+            <h2 className="font-display text-xl font-semibold tracking-tight text-foreground">
+              Live preview
+            </h2>
 
-            <div className="mt-6 border-t border-border pt-6">
+            <div className="mt-6 border-t border-rule-faint pt-6">
               <p className="ev-eyebrow">Operational summary</p>
 
               <dl className="mt-4 space-y-2.5 text-sm">
@@ -1871,14 +1875,14 @@ function NewSandboxPage() {
               </dl>
             </div>
 
-            <div className="mt-7 border-t border-border pt-6">
+            <div className="mt-7 border-t border-rule-faint pt-6">
               <p className="ev-eyebrow">Raw manifest (JSON)</p>
-              <pre className="mt-3 max-h-72 overflow-auto rounded-md border border-border bg-card p-4 font-mono text-[0.66rem] leading-6 text-foreground">
+              <pre className="mt-3 max-h-72 overflow-auto rounded-xl border border-border bg-background p-4 font-mono text-[0.66rem] leading-6 text-ink-2">
                 {JSON.stringify(previewManifest, null, 2)}
               </pre>
             </div>
 
-            <div className="mt-7 border-t border-border pt-6">
+            <div className="mt-7 border-t border-rule-faint pt-6">
               <p className="ev-eyebrow">Health check</p>
               <div className="mt-3 space-y-2">
                 <HealthRow
@@ -1929,7 +1933,7 @@ function NewSandboxPage() {
               </div>
             </div>
 
-            <div className="mt-10 space-y-3 border-t border-border pt-6">
+            <div className="mt-10 space-y-3 border-t border-rule-faint pt-6">
               <Button
                 type="submit"
                 className="h-12 w-full"
@@ -1967,12 +1971,12 @@ function FormSection(props: {
   readonly content: ReactNode;
 }) {
   return (
-    <section className="border-t border-border px-6 py-6 sm:px-8 sm:py-7">
-      <h2 className="flex items-baseline gap-3 text-lg text-foreground">
+    <section className="border-t border-rule-faint px-8 py-8 sm:px-10">
+      <h2 className="flex items-baseline gap-3 text-lg font-semibold tracking-tight text-foreground">
         <span className="font-mono text-[0.8rem] font-medium text-primary">{props.index}</span>
         {props.title}
       </h2>
-      <div className="mt-4">{props.content}</div>
+      <div className="mt-5">{props.content}</div>
     </section>
   );
 }

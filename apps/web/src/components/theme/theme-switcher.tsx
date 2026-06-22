@@ -37,7 +37,7 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
         setTheme(getNextTheme(userTheme));
       }}
       className={cn(
-        "inline-flex h-8 items-center gap-2 rounded-md border border-border bg-popover px-2.5 text-[0.8125rem] text-foreground transition-colors duration-200 hover:border-input hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+        "inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-popover px-3 text-[0.8125rem] text-foreground shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color,background-color] duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
         className,
       )}
       aria-label={`Theme: ${currentOption.label}`}

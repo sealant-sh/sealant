@@ -44,7 +44,7 @@ function RootDocument({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: APPEARANCE_INIT_SCRIPT }} />
         <HeadContent />
       </head>
-      <body className="min-h-svh bg-background text-foreground font-sans antialiased [overflow-wrap:anywhere]">
+      <body className="min-h-svh bg-[var(--sw-canvas)] text-foreground font-sans antialiased [overflow-wrap:anywhere]">
         <ThemeProvider>
           {children}
           <TanStackDevtools

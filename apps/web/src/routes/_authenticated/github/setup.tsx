@@ -107,31 +107,29 @@ function GitHubSetupPage() {
   };
 
   return (
-    <section className="overflow-hidden border border-border bg-card">
-      <div className="h-1 w-full bg-primary" />
+    <div className="space-y-8 p-8 lg:p-10">
+      <header>
+        <p className="ev-eyebrow">github.app</p>
+        <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+          Connect GitHub access
+        </h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          Import a GitHub App installation into Sealant, sync its repositories, and make it
+          available for sandbox launches without requiring webhook delivery first.
+        </p>
+      </header>
 
-      <div className="grid min-h-[calc(100svh-9.5rem)] gap-0 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="border-b border-border xl:border-b-0 xl:border-r">
-          <header className="border-b border-border px-6 py-7 sm:px-8 sm:py-8">
-            <p className="ev-eyebrow">github.app</p>
-            <h1 className="mt-3 text-2xl text-foreground sm:text-[1.7rem]">
-              Connect GitHub access
-            </h1>
-            <p className="mt-5 max-w-3xl text-sm leading-7 text-muted-foreground">
-              Import a GitHub App installation into Sealant, sync its repositories, and make it
-              available for sandbox launches without requiring webhook delivery first.
-            </p>
-          </header>
-
-          <section className="border-t border-border px-6 py-6 sm:px-8 sm:py-7">
-            <h2 className="flex items-baseline gap-3 text-lg text-foreground">
-              <span className="font-mono text-sm font-medium text-primary">01</span>
+      <div className="grid gap-8 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="space-y-6">
+          <section className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)] sm:p-8">
+            <h2 className="flex items-baseline gap-3 text-base font-semibold tracking-[-0.01em] text-foreground">
+              <span className="font-mono text-sm text-primary">01</span>
               Callback intake
             </h2>
-            <div className="mt-4 space-y-4">
-              <div className="border border-border bg-background px-4 py-4">
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-rule-faint bg-background px-4 py-4">
                 <p className="ev-eyebrow">Callback status</p>
-                <p className="mt-3 text-sm leading-7 text-foreground">
+                <p className="mt-2.5 text-sm leading-relaxed text-ink-2">
                   {search.installationId === undefined || search.installationId.length === 0
                     ? "Open this page after GitHub redirects back with an installation id, or import manually below."
                     : `Detected installation ${search.installationId}${search.setupAction === undefined ? "" : ` with action '${search.setupAction}'.`}`}
@@ -139,36 +137,34 @@ function GitHubSetupPage() {
               </div>
 
               {importInstallationMutation.isPending && search.installationId !== undefined ? (
-                <div className="border-l-2 border-primary pl-3 text-sm leading-6 text-foreground">
+                <div className="border-l-2 border-primary py-1 pl-3 text-sm leading-6 text-foreground">
                   Importing installation {search.installationId} and syncing repositories...
                 </div>
               ) : null}
 
               {importErrorMessage === null ? null : (
-                <div className="border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
+                <div className="border-l-2 border-danger-dot py-1 pl-3 text-sm leading-6 text-danger">
                   {importErrorMessage}
                 </div>
               )}
             </div>
           </section>
 
-          <section className="border-t border-border px-6 py-6 sm:px-8 sm:py-7">
-            <h2 className="flex items-baseline gap-3 text-lg text-foreground">
-              <span className="font-mono text-sm font-medium text-primary">02</span>
+          <section className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)] sm:p-8">
+            <h2 className="flex items-baseline gap-3 text-base font-semibold tracking-[-0.01em] text-foreground">
+              <span className="font-mono text-sm text-primary">02</span>
               Manual import
             </h2>
-            <form className="mt-4 space-y-4" onSubmit={handleManualImport}>
+            <form className="mt-5 space-y-4" onSubmit={handleManualImport}>
               <label className="flex flex-col gap-2">
-                <span className="text-sm font-medium text-foreground">
-                  External installation id
-                </span>
+                <span className="ev-eyebrow">External installation id</span>
                 <input
                   value={externalInstallationId}
                   onChange={(event) => {
                     setExternalInstallationId(event.target.value);
                     setStatusMessage(null);
                   }}
-                  className="h-11 w-full rounded-md border border-input bg-background px-3 font-mono text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
+                  className="h-11 w-full rounded-lg border border-input bg-background px-3 font-mono text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
                   placeholder="12345678"
                   autoComplete="off"
                   spellCheck={false}
@@ -198,31 +194,33 @@ function GitHubSetupPage() {
           </section>
         </div>
 
-        <aside className="bg-background px-6 py-7 sm:px-8 xl:px-6 xl:py-8">
-          <div className="xl:sticky xl:top-6">
-            <h2 className="text-xl text-foreground">Connected installs</h2>
+        <aside className="xl:sticky xl:top-6 xl:self-start">
+          <div className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)] sm:p-8">
+            <h2 className="text-base font-semibold tracking-[-0.01em] text-foreground">
+              Connected installs
+            </h2>
 
             {statusMessage === null ? null : (
-              <div className="mt-6 border-l-2 border-primary pl-3 text-sm leading-6 text-foreground">
+              <div className="mt-5 border-l-2 border-primary py-1 pl-3 text-sm leading-6 text-foreground">
                 {statusMessage}
               </div>
             )}
 
             {syncErrorMessage === null ? null : (
-              <div className="mt-6 border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
+              <div className="mt-5 border-l-2 border-danger-dot py-1 pl-3 text-sm leading-6 text-danger">
                 {syncErrorMessage}
               </div>
             )}
 
-            <div className="mt-6 border-t border-border pt-6">
+            <div className="mt-6 border-t border-rule-faint pt-6">
               <p className="ev-eyebrow">Installation cache</p>
 
               {installationsQuery.isLoading ? (
-                <div className="mt-4 border border-border bg-card px-4 py-4 text-sm text-muted-foreground">
+                <div className="mt-4 rounded-xl border border-rule-faint bg-background px-4 py-4 text-sm text-muted-foreground">
                   Loading granted installations...
                 </div>
               ) : installations.length === 0 ? (
-                <div className="mt-4 border border-border bg-card px-4 py-4 text-sm leading-7 text-muted-foreground">
+                <div className="mt-4 rounded-xl border border-rule-faint bg-background px-4 py-4 text-sm leading-relaxed text-muted-foreground">
                   No granted installations are available yet. Import one above, then head back to
                   the sandbox builder.
                 </div>
@@ -237,7 +235,7 @@ function GitHubSetupPage() {
                     return (
                       <div
                         key={installation.installationId}
-                        className="border border-border bg-card px-4 py-4"
+                        className="rounded-xl border border-rule-faint bg-background px-4 py-4 transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-sm)]"
                       >
                         <div className="flex items-start justify-between gap-4">
                           <div>
@@ -283,7 +281,7 @@ function GitHubSetupPage() {
           </div>
         </aside>
       </div>
-    </section>
+    </div>
   );
 }
 

@@ -37,16 +37,18 @@ function ForgotPasswordPage() {
       description="Enter your account email to request a reset."
     >
       <div className="space-y-8">
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <p className="ev-eyebrow">Forgot password</p>
-          <h2 className="text-2xl text-foreground">Reset your password</h2>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground text-balance">
+            Reset your password
+          </h2>
           <p className="text-sm leading-7 text-muted-foreground">
             Enter the email for your account.
           </p>
         </div>
 
         <form
-          className="space-y-5"
+          className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -59,7 +61,7 @@ function ForgotPasswordPage() {
                 autoComplete="email"
                 errorClassName="text-[0.72rem] leading-6 text-danger"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 px-4"
+                inputClassName="h-12 rounded-lg px-4"
                 label="Email"
                 placeholder="you@company.com"
                 required
@@ -81,7 +83,11 @@ function ForgotPasswordPage() {
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
+              <Button
+                className="h-12 w-full rounded-xl shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                disabled={isSubmitting}
+                type="submit"
+              >
                 {isSubmitting ? "Requesting..." : "Request reset"}
               </Button>
             )}
@@ -92,7 +98,7 @@ function ForgotPasswordPage() {
           <p>Remembered the password?</p>
           <a
             href="/login"
-            className="font-medium text-primary no-underline hover:text-primary"
+            className="font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
           >
             Sign in
           </a>

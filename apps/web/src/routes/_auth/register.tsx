@@ -46,16 +46,18 @@ function RegisterPage() {
   return (
     <AuthShell title="Create your account." description="Set up your account to get started.">
       <div className="space-y-8">
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <p className="ev-eyebrow">Register</p>
-          <h2 className="text-2xl text-foreground text-balance">Create account</h2>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground text-balance">
+            Create account
+          </h2>
           <p className="text-sm leading-7 text-muted-foreground">
             Use your details to create an account.
           </p>
         </div>
 
         <form
-          className="space-y-5"
+          className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -68,7 +70,7 @@ function RegisterPage() {
                 autoComplete="name"
                 errorClassName="text-[0.72rem] leading-6 text-danger"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 px-4"
+                inputClassName="h-12 rounded-lg px-4"
                 label="Name"
                 placeholder="Full name..."
                 required
@@ -82,7 +84,7 @@ function RegisterPage() {
                 autoComplete="email"
                 errorClassName="text-[0.72rem] leading-6 text-danger"
                 fieldClassName="space-y-2"
-                inputClassName="h-12 px-4"
+                inputClassName="h-12 rounded-lg px-4"
                 label="Email"
                 placeholder="you@company.com"
                 required
@@ -99,7 +101,7 @@ function RegisterPage() {
                   autoComplete="new-password"
                   errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="Password"
                   placeholder="Create a password..."
                   required
@@ -113,7 +115,7 @@ function RegisterPage() {
                   autoComplete="new-password"
                   errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="Confirm"
                   placeholder="Repeat the password..."
                   required
@@ -123,14 +125,18 @@ function RegisterPage() {
           </div>
 
           {errorMessage !== null ? (
-            <div className="flex gap-3 border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
+            <div className="border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
               {errorMessage}
             </div>
           ) : null}
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
+              <Button
+                className="h-12 w-full rounded-xl shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                disabled={isSubmitting}
+                type="submit"
+              >
                 {isSubmitting ? "Creating account..." : "Create account"}
               </Button>
             )}
@@ -141,7 +147,7 @@ function RegisterPage() {
           <p>Already registered?</p>
           <a
             href="/login"
-            className="font-medium text-primary no-underline hover:text-primary"
+            className="font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
           >
             Sign in
           </a>

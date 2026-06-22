@@ -177,29 +177,29 @@ function IssueWorkflowBoardSurface({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid rounded-md border border-border bg-card md:grid-cols-[1fr_minmax(18rem,24rem)]">
-        <div className="p-4 sm:p-5">
+    <div className="space-y-8">
+      <div className="grid overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)] md:grid-cols-[1fr_minmax(18rem,24rem)]">
+        <div className="p-6 sm:p-8">
           <p className="ev-eyebrow">Imported issue workflows</p>
-          <dl className="mt-4 grid gap-x-8 gap-y-5 sm:grid-cols-3">
+          <dl className="mt-5 grid gap-x-8 gap-y-6 sm:grid-cols-3">
             {imports.map((summary) => (
               <div key={summary.provider}>
                 <dt className="ev-eyebrow">{summary.label}</dt>
-                <dd className="mt-1.5 font-mono text-lg text-foreground">{summary.count}</dd>
-                <p className="mt-1 truncate text-xs text-muted-foreground">{summary.source}</p>
+                <dd className="mt-2 font-mono text-2xl text-foreground">{summary.count}</dd>
+                <p className="mt-1.5 truncate font-mono text-xs text-faint">{summary.source}</p>
               </div>
             ))}
             <div>
               <dt className="ev-eyebrow">In motion</dt>
-              <dd className="mt-1.5 font-mono text-lg text-foreground">
+              <dd className="mt-2 font-mono text-2xl text-foreground">
                 {activeCount + reviewCount}
               </dd>
-              <p className="mt-1 text-xs text-muted-foreground">Active and review lanes</p>
+              <p className="mt-1.5 font-mono text-xs text-faint">Active and review lanes</p>
             </div>
           </dl>
         </div>
 
-        <div className="grid gap-4 border-t border-border p-4 md:border-t-0 md:border-l sm:p-5">
+        <div className="grid gap-5 border-t border-rule-faint bg-background/40 p-6 sm:p-8 md:border-t-0 md:border-l">
           <LinearImporterControl
             connectReturnTo={connectReturnTo}
             errorMessage={linearErrorMessage}
@@ -210,7 +210,7 @@ function IssueWorkflowBoardSurface({
             status={linearStatus}
           />
 
-          <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
+          <div className="flex items-center justify-between gap-3 border-t border-rule-faint pt-5">
             <div>
               <p className="ev-eyebrow">Board state</p>
               <p className="mt-2 text-sm text-foreground">{activeCount + reviewCount} in motion</p>
@@ -218,7 +218,7 @@ function IssueWorkflowBoardSurface({
             <button
               type="button"
               onClick={resetBoard}
-              className="inline-flex size-10 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              className="inline-flex size-10 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color,color] duration-200 hover:-translate-y-0.5 hover:border-input hover:text-foreground hover:shadow-[var(--shadow-sm)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               aria-label="Reset issue workflow board"
               title="Reset issue workflow board"
             >
@@ -229,7 +229,7 @@ function IssueWorkflowBoardSurface({
       </div>
 
       <DragDropProvider onDragEnd={handleDragEnd}>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           {DEFAULT_ISSUE_WORKFLOW_COLUMNS.map((column) => (
             <IssueWorkflowColumn
               key={column.id}
@@ -275,7 +275,7 @@ function LinearImporterControl({
           <button
             type="button"
             disabled
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-border px-3 text-sm text-muted-foreground"
           >
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             Checking
@@ -285,7 +285,7 @@ function LinearImporterControl({
             type="button"
             onClick={onImport}
             disabled={isImporting}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
             {isImporting ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -297,7 +297,7 @@ function LinearImporterControl({
         ) : configured ? (
           <a
             href={connectHref}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-input bg-card px-3 text-sm text-foreground transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-input bg-card px-3 text-sm text-foreground shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
             <Cable className="size-4" aria-hidden="true" />
             Connect Linear
@@ -306,7 +306,7 @@ function LinearImporterControl({
           <button
             type="button"
             disabled
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-border px-3 text-sm text-muted-foreground"
             title={status?.reason ?? "Linear OAuth is not configured."}
           >
             <Cable className="size-4" aria-hidden="true" />
@@ -341,24 +341,24 @@ function IssueWorkflowColumn({
     <section
       ref={ref}
       className={cn(
-        "min-h-[28rem] rounded-md border border-border bg-card transition-colors",
-        isDropTarget && "border-primary bg-accent",
+        "min-h-[28rem] rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)] transition-[box-shadow,border-color,background-color] duration-200",
+        isDropTarget && "border-primary bg-accent shadow-[var(--shadow-cobalt)]",
       )}
       aria-label={`${column.title} issue workflows`}
     >
-      <div className="border-b border-border p-3">
+      <div className="border-b border-rule-faint px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-sm font-medium text-foreground">{column.title}</h2>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{column.description}</p>
+            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{column.description}</p>
           </div>
           <span className="font-mono text-xs text-faint">{issues.length}</span>
         </div>
       </div>
 
-      <div className="space-y-2 p-2">
+      <div className="space-y-3 p-3">
         {issues.length === 0 ? (
-          <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed border-border px-3 text-center text-xs leading-5 text-muted-foreground">
+          <div className="flex min-h-32 items-center justify-center rounded-xl border border-dashed border-border px-3 text-center font-mono text-xs leading-5 text-faint">
             Drop an issue workflow here.
           </div>
         ) : (
@@ -395,17 +395,17 @@ function IssueWorkflowCard({
     <article
       ref={ref}
       className={cn(
-        "rounded-md border border-border bg-background transition-[border-color,opacity,transform]",
+        "rounded-xl border border-border bg-popover shadow-[var(--shadow-xs)] transition-[border-color,box-shadow,opacity,transform] duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]",
         isDropTarget && "border-primary",
-        isDragSource && "border-primary",
+        isDragSource && "border-primary shadow-[var(--shadow-cobalt)]",
         isDragging && "opacity-70",
       )}
     >
-      <div className="flex items-start gap-2 border-b border-rule-faint p-3">
+      <div className="flex items-start gap-2 border-b border-rule-faint p-3.5">
         <button
           ref={handleRef}
           type="button"
-          className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           aria-label={`Move ${issue.key}`}
           title="Move issue workflow"
         >
@@ -426,7 +426,7 @@ function IssueWorkflowCard({
             href={issue.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
             aria-label={`Open ${issue.key}`}
             title={`Open ${issue.key}`}
           >
@@ -435,8 +435,8 @@ function IssueWorkflowCard({
         ) : null}
       </div>
 
-      <div className="space-y-3 p-3">
-        <div className="grid gap-2 text-xs text-muted-foreground">
+      <div className="space-y-3 p-3.5">
+        <div className="grid gap-2 font-mono text-xs text-muted-foreground">
           <MetaLine icon={<GitBranch className="size-3.5" aria-hidden="true" />}>
             {issue.repository.name}
           </MetaLine>

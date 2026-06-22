@@ -48,84 +48,89 @@ function LoginPage() {
       description="Use your email and password to continue."
     >
       <div className="space-y-8">
-        <div className="space-y-3">
+        <div className="space-y-2.5">
           <p className="ev-eyebrow">Sign in</p>
-          <h2 className="text-2xl text-foreground text-balance">Welcome back</h2>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground text-balance">
+            Welcome back
+          </h2>
           <p className="text-sm leading-7 text-muted-foreground">
             Sign in with your account details.
           </p>
         </div>
 
-        <div className="space-y-5">
-          <div className="flex items-center justify-between gap-4">
-            <span className="text-sm font-medium text-foreground">Password</span>
-            <a
-              href="/forgot-password"
-              className="text-sm text-muted-foreground no-underline hover:text-primary"
-            >
-              Reset password
-            </a>
-          </div>
+        <form
+          className="space-y-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void form.handleSubmit();
+          }}
+        >
+          <form.AppField name="email">
+            {(field) => (
+              <field.TextField
+                autoComplete="email"
+                errorClassName="text-[0.72rem] leading-6 text-danger"
+                fieldClassName="space-y-2"
+                inputClassName="h-12 rounded-lg px-4"
+                label="Email"
+                placeholder="you@company.com"
+                required
+                spellCheck={false}
+                type="email"
+              />
+            )}
+          </form.AppField>
 
-          <form
-            className="space-y-5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void form.handleSubmit();
-            }}
-          >
-            <form.AppField name="email">
-              {(field) => (
-                <field.TextField
-                  autoComplete="email"
-                  errorClassName="text-[0.72rem] leading-6 text-danger"
-                  fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
-                  label="Email"
-                  placeholder="you@company.com"
-                  required
-                  spellCheck={false}
-                  type="email"
-                />
-              )}
-            </form.AppField>
+          <form.AppField name="password">
+            {(field) => (
+              <field.PasswordField
+                autoComplete="current-password"
+                errorClassName="text-[0.72rem] leading-6 text-danger"
+                fieldClassName="space-y-2"
+                inputClassName="h-12 rounded-lg px-4"
+                label={
+                  <span className="flex items-center justify-between gap-4">
+                    <span>Password</span>
+                    <a
+                      href="/forgot-password"
+                      className="font-normal text-muted-foreground no-underline transition-colors hover:text-primary"
+                    >
+                      Reset password
+                    </a>
+                  </span>
+                }
+                labelClassName="block w-full text-sm font-medium text-foreground"
+                placeholder="Enter your password..."
+                required
+              />
+            )}
+          </form.AppField>
 
-            <form.AppField name="password">
-              {(field) => (
-                <field.PasswordField
-                  autoComplete="current-password"
-                  errorClassName="text-[0.72rem] leading-6 text-danger"
-                  fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
-                  label="Password"
-                  placeholder="Enter your password..."
-                  required
-                />
-              )}
-            </form.AppField>
+          {errorMessage !== null ? (
+            <div className="border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
+              {errorMessage}
+            </div>
+          ) : null}
 
-            {errorMessage !== null ? (
-              <div className="flex gap-3 border-l-2 border-[var(--sw-red)] pl-3 text-sm leading-6 text-danger">
-                {errorMessage}
-              </div>
-            ) : null}
-
-            <form.Subscribe selector={(state) => state.isSubmitting}>
-              {(isSubmitting) => (
-                <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
-                  {isSubmitting ? "Signing in..." : "Sign in"}
-                </Button>
-              )}
-            </form.Subscribe>
-          </form>
-        </div>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <Button
+                className="h-12 w-full rounded-xl shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                disabled={isSubmitting}
+                type="submit"
+              >
+                {isSubmitting ? "Signing in..." : "Sign in"}
+              </Button>
+            )}
+          </form.Subscribe>
+        </form>
 
         <div className="flex flex-col gap-3 border-t border-border pt-6 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <p>Need access?</p>
           <a
             href="/register"
-            className="font-medium text-primary no-underline hover:text-primary"
+            className="font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
           >
             Register
           </a>

@@ -18,38 +18,40 @@ interface SandboxRowsProps {
 export function SandboxRows({ sandboxes }: SandboxRowsProps) {
   if (sandboxes.length === 0) {
     return (
-      <div className="border border-border rounded-md px-6 py-12 text-center">
+      <div className="rounded-2xl border border-border bg-card px-6 py-16 text-center shadow-[var(--shadow-sm)]">
         <p className="font-mono text-xs text-faint">No sandboxes found</p>
       </div>
     );
   }
 
   return (
-    <div className="border border-border rounded-md">
+    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)]">
       {sandboxes.map((sandbox) => (
         <Link
           key={sandbox.sandboxId}
           to="/sandboxes/$sandboxId"
           params={{ sandboxId: sandbox.sandboxId }}
-          className="grid grid-cols-1 gap-3 border-b border-rule-faint px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 sm:grid-cols-[1.3fr_1fr_auto] sm:items-center"
+          className="group grid grid-cols-1 gap-4 border-b border-rule-faint px-6 py-5 no-underline transition-[transform,box-shadow,background-color] duration-200 last:border-b-0 hover:-translate-y-0.5 hover:bg-accent/40 hover:shadow-[var(--shadow-md)] sm:grid-cols-[1.3fr_1fr_auto] sm:items-center"
         >
-          <div>
+          <div className="min-w-0">
             <p className="ev-eyebrow">Sandbox</p>
-            <p className="mt-1 text-sm font-medium text-foreground">{sandbox.name}</p>
+            <p className="mt-1.5 truncate text-sm font-medium text-foreground transition-colors group-hover:text-primary">
+              {sandbox.name}
+            </p>
             <p className="mt-1 font-mono text-xs text-faint">{sandbox.sandboxId}</p>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <p className="ev-eyebrow">Repository</p>
-            <p className="mt-1 font-mono text-xs text-ink-2">{sandbox.repository ?? "Unknown"}</p>
+            <p className="mt-1.5 truncate font-mono text-xs text-ink-2">
+              {sandbox.repository ?? "Unknown"}
+            </p>
             <p className="mt-1 font-mono text-xs text-faint">Tag: {sandbox.tag ?? "n/a"}</p>
           </div>
 
-          <div className="flex items-center justify-between gap-3 sm:justify-end">
+          <div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end sm:gap-2">
             <SandboxStatusIndicator status={sandbox.status} />
-            <span className="font-mono text-xs text-faint">
-              {toRelativeTime(sandbox.createdAt)}
-            </span>
+            <span className="font-mono text-xs text-faint">{toRelativeTime(sandbox.createdAt)}</span>
           </div>
         </Link>
       ))}
@@ -61,7 +63,7 @@ function SandboxStatusIndicator({ status }: { readonly status: SandboxStatus }) 
   const { dotClassName, textClassName, label } = statusPresentation(status);
 
   return (
-    <span className="inline-flex items-center gap-2 font-medium text-sm">
+    <span className="inline-flex items-center gap-2 text-sm font-medium">
       <span className={`size-2 shrink-0 rounded-full ${dotClassName}`} aria-hidden="true" />
       <span className={textClassName}>{label}</span>
     </span>

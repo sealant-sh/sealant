@@ -26,7 +26,7 @@ import {
   useSidebar,
 } from "@sealant/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { Link, useRouter, useRouterState, type LinkProps } from "@tanstack/react-router";
 import {
   Activity,
   ChevronsUpDown,
@@ -66,14 +66,21 @@ interface SidebarSandbox {
 
 type GlobalArea = "sandboxes" | "issues" | "repositories" | "profiles";
 
+type GlobalNavHref = "/sandboxes" | "/issues" | "/repositories" | "/profiles";
+
 interface GlobalNavItem {
-  readonly href: string;
+  readonly href: GlobalNavHref;
   readonly label: string;
   readonly icon: LucideIcon;
 }
 
 interface SidebarLink {
-  readonly href: string;
+  /** Route pattern (or static path) passed straight to {@link Link}. */
+  readonly to: NonNullable<LinkProps["to"]>;
+  /** Path params when {@link SidebarLink.to} is a dynamic route pattern. */
+  readonly params?: NonNullable<LinkProps["params"]>;
+  /** Concrete, interpolated path used for active matching and as the React key. */
+  readonly match: string;
   readonly label: string;
   readonly meta?: string;
   readonly exact?: boolean;
@@ -93,24 +100,24 @@ const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
 
 const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
   {
-    label: "Sandbox Views",
+    label: "Sandbox views",
     links: [
-      { href: "/sandboxes/new", label: "Create Sandbox", exact: true },
-      { href: "/github/setup", label: "GitHub Access", exact: true },
-      { href: "/sandboxes", label: "All Sandboxes", exact: true },
-      { href: "/sandboxes/active", label: "Running", exact: true },
-      { href: "/sandboxes/failed", label: "Failed", exact: true },
+      { to: "/sandboxes/new", match: "/sandboxes/new", label: "Create sandbox", exact: true },
+      { to: "/github/setup", match: "/github/setup", label: "GitHub access", exact: true },
+      { to: "/sandboxes", match: "/sandboxes", label: "All sandboxes", exact: true },
+      { to: "/sandboxes/active", match: "/sandboxes/active", label: "Running", exact: true },
+      { to: "/sandboxes/failed", match: "/sandboxes/failed", label: "Failed", exact: true },
     ],
   },
 ];
 
 const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
   {
-    label: "Issue Views",
+    label: "Issue views",
     links: [
-      { href: "/issues", label: "All Issues", exact: true },
-      { href: "/issues/assigned", label: "Assigned to me", exact: true },
-      { href: "/issues/ready", label: "Ready for workflow", exact: true },
+      { to: "/issues", match: "/issues", label: "All issues", exact: true },
+      { to: "/issues/assigned", match: "/issues/assigned", label: "Assigned to me", exact: true },
+      { to: "/issues/ready", match: "/issues/ready", label: "Ready for workflow", exact: true },
     ],
   },
 ];
@@ -159,15 +166,16 @@ export function AppShell({ session, sidebarSandboxes, children }: AppShellProps)
 
   return (
     <div className="min-h-svh bg-[var(--sw-canvas)] text-foreground">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_oklab,var(--sw-rule)_16%,transparent)_1px,transparent_0)] [background-size:22px_22px] opacity-[0.12]" />
-
       <SidebarProvider
         open={isSidebarOpen}
         onOpenChange={setIsSidebarOpen}
         className="relative min-h-svh"
         style={{ "--sidebar-offset": "0px" } as CSSProperties}
       >
-        <Sidebar collapsible="icon" className="z-30 border-r border-sidebar-border bg-sidebar">
+        <Sidebar
+          collapsible="icon"
+          className="z-30 border-r border-sidebar-border bg-sidebar shadow-[var(--shadow-sm)]"
+        >
           <AppSidebarNav
             activeArea={activeArea}
             pathname={pathname}
@@ -179,7 +187,7 @@ export function AppShell({ session, sidebarSandboxes, children }: AppShellProps)
         </Sidebar>
 
         <SidebarInset className="min-h-svh border-0 bg-background">
-          <main className="min-h-svh min-w-0 overflow-auto p-4 sm:p-6">{children}</main>
+          <main className="min-h-svh min-w-0 overflow-auto p-6 sm:p-8 lg:p-10">{children}</main>
         </SidebarInset>
       </SidebarProvider>
     </div>
@@ -237,7 +245,7 @@ function AppSidebarNav({
             aria-hidden={!isExpanded}
           >
             <Link
-              to={"/sandboxes" as never}
+              to="/sandboxes"
               className="inline-flex items-center gap-3 text-foreground no-underline"
               aria-label="Sealant home"
             >
@@ -261,7 +269,7 @@ function AppSidebarNav({
               setOpen(!isExpanded);
             }}
             className={cn(
-              "inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-muted hover:text-foreground",
+              "inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-foreground",
               isExpanded ? "w-9" : "w-full",
             )}
           >
@@ -310,7 +318,7 @@ function AppSidebarNav({
               }
             }}
             className={cn(
-              "inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-muted hover:text-foreground",
+              "inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-foreground",
               isExpanded ? "w-9" : "w-full",
             )}
           >
@@ -331,7 +339,7 @@ function AppSidebarNav({
               type="search"
               aria-label="Search sandboxes, repos, profiles"
               placeholder="Search sandboxes, repos, profiles"
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-[0.8125rem] text-foreground placeholder:text-faint focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[0.8125rem] text-foreground placeholder:text-faint focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
           </label>
         </div>
@@ -349,7 +357,7 @@ function AppSidebarNav({
               return (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton
-                    render={<Link to={item.href as never} />}
+                    render={<Link to={item.href} />}
                     isActive={isActive}
                     tooltip={item.label}
                     aria-label={item.label}
@@ -387,12 +395,18 @@ function AppSidebarNav({
                   <SidebarGroupContent className="mt-2">
                     <SidebarMenu className="space-y-1">
                       {group.links.map((item) => {
-                        const isActive = isPathActive(pathname, item.href, item.exact ?? false);
+                        const isActive = isPathActive(pathname, item.match, item.exact ?? false);
 
                         return (
-                          <SidebarMenuItem key={item.href}>
+                          <SidebarMenuItem key={item.match}>
                             <SidebarMenuButton
-                              render={<Link to={item.href as never} />}
+                              render={
+                                item.params === undefined ? (
+                                  <Link to={item.to} />
+                                ) : (
+                                  <Link to={item.to} params={item.params} />
+                                )
+                              }
                               isActive={isActive}
                               className="px-3 text-[0.8125rem]"
                             >
@@ -425,9 +439,9 @@ function AppSidebarNav({
           {`v${packageJson.version}`}
         </p>
         <Link
-          to={"/sandboxes/new" as never}
+          to="/sandboxes/new"
           className={cn(
-            "flex items-center justify-center rounded-md border border-primary bg-primary text-center text-[0.8125rem] font-medium text-primary-foreground no-underline transition-colors duration-200 ease-out hover:bg-[var(--primary-hover)]",
+            "flex items-center justify-center rounded-xl bg-primary text-center text-[0.8125rem] font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 ease-out hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]",
             isExpanded ? "h-10 gap-2 px-3" : "h-10 gap-0 px-2",
           )}
           title={!isExpanded ? "New sandbox" : undefined}
@@ -450,12 +464,12 @@ function AppSidebarNav({
         <DropdownMenu>
           <DropdownMenuTrigger
             className={cn(
-              "mt-3 flex w-full items-center rounded-md border border-border bg-popover text-left text-foreground transition-colors duration-200 ease-out hover:border-input hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+              "mt-3 flex w-full items-center rounded-xl border border-border bg-popover text-left text-foreground shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color,background-color] duration-200 ease-out hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
               isExpanded ? "gap-3 px-3 py-2.5" : "justify-center gap-0 px-2 py-2.5",
             )}
             aria-label="Open profile menu"
           >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-xs font-medium text-foreground">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-xs font-medium text-accent-foreground">
               {userLabel.slice(0, 1)}
             </div>
             <div
@@ -627,15 +641,27 @@ function getSidebarGroups({
   readonly selectedProfile: string | null;
 }): readonly SidebarGroup[] {
   if (sandboxDetail !== null) {
-    const encodedSandboxId = encodeURIComponent(sandboxDetail.sandboxId);
-    const sandboxBase = `/sandboxes/${encodedSandboxId}`;
+    const { sandboxId } = sandboxDetail;
+    const sandboxBase = `/sandboxes/${encodeURIComponent(sandboxId)}`;
 
     return [
       {
-        label: "Sandbox Navigation",
+        label: "Sandbox navigation",
         links: [
-          { href: sandboxBase, label: "Summary", exact: true },
-          { href: `${sandboxBase}/spec`, label: "Spec", exact: true },
+          {
+            to: "/sandboxes/$sandboxId",
+            params: { sandboxId },
+            match: sandboxBase,
+            label: "Summary",
+            exact: true,
+          },
+          {
+            to: "/sandboxes/$sandboxId/spec",
+            params: { sandboxId },
+            match: `${sandboxBase}/spec`,
+            label: "Spec",
+            exact: true,
+          },
         ],
       },
     ];
@@ -646,62 +672,89 @@ function getSidebarGroups({
   }
 
   if (activeArea === "repositories") {
-    const repositoryLinks = REPOSITORIES.map((repository) => ({
-      href: `/repositories/${encodeURIComponent(repository.id)}`,
+    const repositoryLinks: readonly SidebarLink[] = REPOSITORIES.map((repository) => ({
+      to: "/repositories/$repoId",
+      params: { repoId: repository.id },
+      match: `/repositories/${encodeURIComponent(repository.id)}`,
       label: repository.id,
       exact: false,
     }));
 
+    const viewsGroup: SidebarGroup = {
+      label: "Repository views",
+      links: [{ to: "/repositories", match: "/repositories", label: "Repo list", exact: true }],
+    };
+
     if (selectedRepository === null) {
-      return [
-        {
-          label: "Repository Views",
-          links: [{ href: "/repositories", label: "Repo list", exact: true }],
-        },
-        { label: "Repository List", links: repositoryLinks },
-      ];
+      return [viewsGroup, { label: "Repository list", links: repositoryLinks }];
     }
 
-    const repositoryBase = `/repositories/${encodeURIComponent(selectedRepository)}`;
+    const repoId = selectedRepository;
+    const repositoryBase = `/repositories/${encodeURIComponent(repoId)}`;
 
     return [
-      {
-        label: "Repository Views",
-        links: [{ href: "/repositories", label: "Repo list", exact: true }],
-      },
-      {
-        label: "Repository List",
-        links: repositoryLinks,
-      },
+      viewsGroup,
+      { label: "Repository list", links: repositoryLinks },
       {
         label: selectedRepository,
         links: [
-          { href: repositoryBase, label: "Overview", exact: true },
-          { href: `${repositoryBase}/setup`, label: "Setup", exact: true },
-          { href: `${repositoryBase}/sandboxes`, label: "Sandboxes", exact: true },
-          { href: `${repositoryBase}/settings`, label: "Settings", exact: true },
+          {
+            to: "/repositories/$repoId",
+            params: { repoId },
+            match: repositoryBase,
+            label: "Overview",
+            exact: true,
+          },
+          {
+            to: "/repositories/$repoId/setup",
+            params: { repoId },
+            match: `${repositoryBase}/setup`,
+            label: "Setup",
+            exact: true,
+          },
+          {
+            to: "/repositories/$repoId/sandboxes",
+            params: { repoId },
+            match: `${repositoryBase}/sandboxes`,
+            label: "Sandboxes",
+            exact: true,
+          },
+          {
+            to: "/repositories/$repoId/settings",
+            params: { repoId },
+            match: `${repositoryBase}/settings`,
+            label: "Settings",
+            exact: true,
+          },
         ],
       },
     ];
   }
 
   if (activeArea === "profiles") {
-    const profileLinks = PROFILES.map((profile) => ({
-      href: `/profiles/${encodeURIComponent(profile.id)}`,
+    const profileLinks: readonly SidebarLink[] = PROFILES.map((profile) => ({
+      to: "/profiles/$profileId",
+      params: { profileId: profile.id },
+      match: `/profiles/${encodeURIComponent(profile.id)}`,
       label: profile.name,
       exact: false,
     }));
 
     const baseGroups: SidebarGroup[] = [
       {
-        label: "Profile Views",
+        label: "Profile views",
         links: [
-          { href: "/profiles", label: "All Profiles", exact: true },
-          { href: "/profiles/create", label: "Create Profile", exact: true },
+          { to: "/profiles", match: "/profiles", label: "All profiles", exact: true },
+          {
+            to: "/profiles/create",
+            match: "/profiles/create",
+            label: "Create profile",
+            exact: true,
+          },
         ],
       },
       {
-        label: "Profile List",
+        label: "Profile list",
         links: profileLinks,
       },
     ];
@@ -710,19 +763,56 @@ function getSidebarGroups({
       return baseGroups;
     }
 
-    const profileBase = `/profiles/${encodeURIComponent(selectedProfile)}`;
+    const profileId = selectedProfile;
+    const profileBase = `/profiles/${encodeURIComponent(profileId)}`;
 
     return [
       ...baseGroups,
       {
         label: selectedProfile,
         links: [
-          { href: profileBase, label: "Overview", exact: true },
-          { href: `${profileBase}/env-variables`, label: "Env Variables", exact: true },
-          { href: `${profileBase}/secrets`, label: "Secrets", exact: true },
-          { href: `${profileBase}/access`, label: "SSH / Access", exact: true },
-          { href: `${profileBase}/packages`, label: "Packages", exact: true },
-          { href: `${profileBase}/setup`, label: "Setup", exact: true },
+          {
+            to: "/profiles/$profileId",
+            params: { profileId },
+            match: profileBase,
+            label: "Overview",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/env-variables",
+            params: { profileId },
+            match: `${profileBase}/env-variables`,
+            label: "Env variables",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/secrets",
+            params: { profileId },
+            match: `${profileBase}/secrets`,
+            label: "Secrets",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/access",
+            params: { profileId },
+            match: `${profileBase}/access`,
+            label: "SSH / access",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/packages",
+            params: { profileId },
+            match: `${profileBase}/packages`,
+            label: "Packages",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/setup",
+            params: { profileId },
+            match: `${profileBase}/setup`,
+            label: "Setup",
+            exact: true,
+          },
         ],
       },
     ];
@@ -736,9 +826,11 @@ function getSidebarGroups({
     return [
       ...SANDBOX_OVERVIEW_SIDEBAR,
       {
-        label: "Recent Sandboxes",
+        label: "Recent sandboxes",
         links: sidebarSandboxes.map((sandbox) => ({
-          href: `/sandboxes/${encodeURIComponent(sandbox.sandboxId)}`,
+          to: "/sandboxes/$sandboxId",
+          params: { sandboxId: sandbox.sandboxId },
+          match: `/sandboxes/${encodeURIComponent(sandbox.sandboxId)}`,
           label: sandbox.name,
           meta: formatSandboxStatus(sandbox.status),
           exact: false,

@@ -17,21 +17,23 @@ function RepositorySettingsPage() {
       section="Settings"
       description="Adjust repository-level controls with strict defaults so risk stays explicit and reviewable."
     >
-      <div className="rounded-md border border-border">
-        {[
-          ["Protected branch enforcement", "Enabled"],
-          ["Auto rerun on flaky checks", "Disabled"],
-          ["Artifact signing", "Enabled"],
-          ["Escalation channel", "#sealant-ops"],
-        ].map(([label, value]) => (
-          <div
-            key={label}
-            className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
-          >
-            <p className="text-sm text-label">{label}</p>
-            <p className="font-mono text-[0.72rem] text-foreground">{value}</p>
-          </div>
-        ))}
+      <div className="overflow-hidden rounded-2xl border border-border bg-popover shadow-[var(--shadow-sm)]">
+        <dl className="divide-y divide-rule-faint">
+          {[
+            ["Protected branch enforcement", "Enabled"],
+            ["Auto rerun on flaky checks", "Disabled"],
+            ["Artifact signing", "Enabled"],
+            ["Escalation channel", "#sealant-ops"],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-baseline justify-between gap-4 px-5 py-3.5"
+            >
+              <dt className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{label}</dt>
+              <dd className="font-mono text-xs text-ink-2">{value}</dd>
+            </div>
+          ))}
+        </dl>
       </div>
     </RepositoryDetailSection>
   );

@@ -17,7 +17,7 @@ function ProfileSecretsPage() {
       section="Secrets"
       description="Keep secret bindings minimal and auditable so profile behavior is secure and reproducible."
     >
-      <div className="border border-border">
+      <div className="divide-y divide-rule-faint rounded-2xl border border-border bg-popover px-5 shadow-[var(--shadow-sm)]">
         {(
           [
             ["AWS_ACCESS_KEY_ID", "Mapped"],
@@ -26,10 +26,7 @@ function ProfileSecretsPage() {
             ["SLACK_WEBHOOK", "Missing"],
           ] as const
         ).map(([key, value]) => (
-          <div
-            key={key}
-            className="flex items-center justify-between gap-4 border-b border-[var(--sw-faint-rule)] px-4 py-3 last:border-b-0"
-          >
+          <div key={key} className="flex items-baseline justify-between gap-4 py-3.5">
             <p className="font-mono text-xs text-foreground">{key}</p>
             <SecretBindingStatus value={value} />
           </div>

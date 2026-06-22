@@ -1,12 +1,14 @@
 # Evidence Review — Design Language
 
-Version: 2.0 · Owner: Product Design + Frontend · Applies to: `@sealant/ui`, web app,
-marketing site, content style.
+Version: 3.0 (depth & polish) · Owner: Product Design + Frontend · Applies to: `@sealant/ui`,
+web app, marketing site, content style.
 
-This is the visual language of an **evidence-backed review surface**: the tokens, the type
-split, the four-color discipline, the components, and the rules that keep it a review tool
-instead of a dashboard. The canonical reference artifact is `design-system.html` at the repo
-root; this document is its implementation contract.
+This is the visual language of an **evidence-backed review surface** for AI software runs:
+warm + premium, with real depth. It keeps the colour discipline and the "evidence beside the
+claim" ethos of the original review tool, but trades the flat/structural look for a polished,
+elevated, dev-infra aesthetic (think Linear / Vercel / Stripe-grade). The canonical built
+reference is **`apps/marketing/src/routes/index.tsx`** — match its depth, spacing, type, and the
+run-record motif. This document is the implementation contract.
 
 ---
 
@@ -16,11 +18,12 @@ root; this document is its implementation contract.
    in another. The thing and its proof share one viewport.
 2. **The tool reports, it does not judge.** Show observations, never verdicts. No confidence
    scores, no "safe to merge," no risk dials. The reviewer decides.
-3. **Hierarchy without containers.** Structure comes from spacing, alignment, and thin rules —
-   not cards, pills, chips, or shadows.
+3. **Hierarchy from depth and space.** Panels lift off the warm canvas; generous whitespace and
+   elevation group content. Avoid decorative containers (pills, chips, metric tiles) that
+   manufacture hierarchy the layout already has.
 4. **Color is earned.** Each accent marks exactly one meaning. No region is ever flooded with it.
-5. **Type does the work.** Inter for human language, JetBrains Mono for machine facts. The split
-   is semantic, not decorative.
+5. **Type does the work.** Space Grotesk for display, Inter for UI, JetBrains Mono for machine
+   facts. The split is semantic, not decorative.
 
 ---
 
@@ -93,12 +96,14 @@ a different layout or component geometry. The accent meanings are unchanged.
 
 ## 2. Typography
 
-One neutral sans for everything human; monospace for everything the machine observed or executed.
+Three voices. Display carries personality; UI stays neutral; mono is the recorder's voice.
 
-- **Inter** (`--font-sans`) — labels, prose, headings, the reviewer's own judgment. Weights 400 /
-  500 / 600. Headings are Inter 600 with tight tracking (`-0.016em`), **not** a display face.
-- **JetBrains Mono** (`--font-mono`) — values, paths, SHAs, commands, numeric output, IDs, status
-  meta. Weights 400 / 500.
+- **Space Grotesk** (`--font-display`, use the `font-display` class) — display headlines and large
+  page titles only, used with restraint. An engineered, technical grotesque with real presence.
+  Weights 500 / 600 / 700, tight tracking (`-0.02em` to `-0.03em`).
+- **Inter** (`--font-sans`) — all UI, labels, prose, controls, small headings. Weights 400/500/600.
+- **JetBrains Mono** (`--font-mono`) — everything the recorder observed or executed: values, paths,
+  SHAs, commands, numeric output, IDs, status meta. Weights 400 / 500.
 
 ### Scale
 
@@ -117,12 +122,17 @@ utility: mono, uppercase, `letter-spacing: .06em`, `--sw-label`). Everything els
 
 ## 3. Spacing & geometry
 
-- 8px rhythm: `6 (label↔value) · 12 (related) · 16 (group) · 24 (region) · 32 (major) · 44 (view pad)`.
-- **Radius ceiling is 3px** (`--radius`). `0` for diff edges and dividers. **No pills, no
-  `rounded-full`** on buttons/badges/tabs. (A `rounded-full` status *dot* is fine — it is a dot.)
-- Whitespace shows relationships; it is never empty padding.
-- Flat by default. Cards carry **no shadow**. Only true floating overlays (dialog, popover,
-  dropdown, tooltip, sheet) get one restrained shadow (`--shadow-overlay`) on the white panel.
+- 8px rhythm, used generously: `6 · 12 · 16 · 24 · 32 · 48 · 64`. Whitespace is the primary
+  structure, ahead of rules; sections breathe (≈96px desktop). It is never empty padding.
+- **Soft radius scale** (`--radius` = 12px): controls/inputs `rounded-lg`, cards `rounded-2xl`
+  (~22px), hero/feature panels `rounded-3xl` (~28px). `rounded-full` only for genuine circles
+  (avatars, status dots, the recording pulse) — never on buttons/badges/tabs.
+- **Depth is real.** Panels lift off the warm canvas via the elevation scale (`shadow-xs`→`xl`).
+  Cards rest at `shadow-sm` and rise on hover (`-translate-y-1` + `shadow-md`); floating overlays
+  use `shadow-overlay`/`shadow-lg`. The signature **cobalt-lift** (`shadow-cobalt`) is reserved for
+  the hero run-record and primary CTAs.
+- Diff edges and dividers stay at radius `0`. Prefer space + a soft shadow over drawing yet
+  another hairline rule.
 
 ---
 
@@ -141,16 +151,19 @@ Triage states are a colored dot plus a word. Never a tinted row, never a filled 
 
 ## 5. Components — how they must read
 
-- **Buttons** are a weight hierarchy, sentence case, 3px radius:
-  - `default` — filled cobalt, for the one consequential action.
-  - `outline` — white panel + `--sw-rule` border, for a real secondary action.
-  - `ghost` / `link` — quiet text actions for cheap, frequent things that should not shout.
-- **Segmented control** — exclusive disposition; one cobalt-filled segment, the rest white with
-  `--sw-rule` borders. 3px outer radius only.
-- **Navigators / lists** — type and alignment, not widgets. A mono index, a sans label, a
-  dot+word status, separated by `--sw-faint-rule` hairlines. Mild hover, never flashy motion.
+- **Page header** — an `.ev-eyebrow` kicker, a Space Grotesk title (`font-display`, ~28–40px,
+  tight tracking), a one-line description, and an optional action on the right. Generous space below.
+- **Buttons** — a weight hierarchy, sentence case, `rounded-xl`: `default` filled cobalt with the
+  cobalt-lift shadow and a hover rise; `outline` a white panel + border that rises on hover;
+  `ghost` / `link` quiet text actions. The one consequential action is filled; cheaper ones stay quiet.
+- **Cards & panels** — white, `rounded-2xl`, resting on `shadow-sm`, lifting on hover. Group with
+  space, not borders. Never a flat bordered slab.
+- **The run-record panel (signature)** — the recurring evidence motif: a lifted white panel with a
+  recording pulse + mono id in the header, a dot+word status, hairline-divided mono evidence rows,
+  and (where relevant) a diff peek with 2px colored edge-marks. Build sandbox/run detail from it.
+- **Navigators / lists** — an elevated panel of rows: a mono index/id, a sans label, a dot+word
+  status. Mild hover lift, never flashy motion.
 - **Diff block** — mono, hairline header on `--sw-sunken`, 2px colored edge + faint wash per line.
-- **Evidence table** — alignment and one colored word per cell carry meaning; no boxes.
 - **Callouts** — a 2px colored left edge + text. Amber for an open question, red for breakage.
 
 ---
@@ -162,11 +175,12 @@ Each was a live option, rejected. These are hard guardrails for every component 
 - **No panel tinted green, amber, or red.** Color marks a value or a word; it never floods a
   region, because a tinted panel renders a verdict.
 - **No more than one prominent warning** in a viewport. Two of equal weight means neither matters.
-- **No card grids, metric tiles, pills, or chips.** Containers manufacture hierarchy that
-  alignment and type already provide.
+- **No vanity metric tiles, no pills/chips as containers.** Depth and type carry hierarchy; don't
+  manufacture it with decorative boxes. (Real cards that group content are fine.)
 - **No confidence score or risk dashboard.** A number invents precision the evidence lacks.
-- **No display/condensed type, no uppercase prose, no heavy black rules, no flooded accent
-  backgrounds, no decorative gradients, no glow/blur.**
+- **No uppercase prose, no heavy black rules, no flooded accent backgrounds, no decorative
+  gradients, no glassmorphism.** Depth is one restrained soft shadow — never a hard drop shadow,
+  neon, or blur-heavy glass.
 - **No banned register** in copy: _strong proof, high confidence, all checks passed, safe to
   merge_ — each substitutes the tool's verdict for the reviewer's. Write direct, concrete,
   testable claims.
