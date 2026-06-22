@@ -8,6 +8,7 @@ export default defineConfig({
     "./src/schema/auth.ts",
     "./src/schema/control-plane.ts",
     "./src/schema/sandbox-build-jobs.ts",
+    "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",
   dialect: "postgresql",

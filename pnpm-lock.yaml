@@ -801,9 +801,15 @@ importers:
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
+      '@sealant/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
     devDependencies:
       '@sealant/typescript':
         specifier: workspace:*
@@ -940,6 +946,37 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-beta.85
     devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+
+  packages/telemetry:
+    dependencies:
+      '@sealant/db':
+        specifier: workspace:*
+        version: link:../db
+      '@sealant/runtime-client':
+        specifier: ^0.4.0
+        version: 0.4.0
+      '@sealant/runtime-protocol':
+        specifier: ^0.4.0
+        version: 0.4.0
+      '@sealant/sandboxes':
+        specifier: workspace:*
+        version: link:../sandboxes
+      drizzle-orm:
+        specifier: 1.0.0-rc.3
+        version: 1.0.0-rc.3(@effect/sql-pg@4.0.0-beta.85(effect@4.0.0-beta.85))(@types/pg@8.20.0)(effect@4.0.0-beta.85)(pg@8.22.0)(zod@4.4.3)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
+    devDependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.12.0
+        version: 2.12.0
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85(effect@4.0.0-beta.85)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(jiti@2.7.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
