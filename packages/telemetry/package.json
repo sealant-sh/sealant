@@ -1,0 +1,28 @@
+{
+  "name": "@sealant/telemetry",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Append-only, event-sourced run-telemetry log (system of record) + pluggable storage seam for sealantd EventEnvelope ingestion",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sealant/db": "workspace:*",
+    "@sealant/runtime-client": "^0.4.0",
+    "@sealant/runtime-protocol": "^0.4.0",
+    "@sealant/sandboxes": "workspace:*",
+    "drizzle-orm": "1.0.0-rc.3",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@effect/vitest": "catalog:",
+    "@sealant/typescript": "workspace:*"
+  }
+}

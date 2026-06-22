@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -35,19 +35,26 @@ export type SandboxRuntimeInstanceRepository = SandboxRuntimeInstanceRepoService
 const sandboxRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
+  "listRunningDockerInstances",
   "upsertRuntimeInstance",
 ]);
 
-export class SandboxRuntimeInstanceRepoInvariantError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoInvariantError>()("SandboxRuntimeInstanceRepoInvariantError", {
-  operation: sandboxRuntimeInstanceRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class SandboxRuntimeInstanceRepoInvariantError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoInvariantError>()(
+  "SandboxRuntimeInstanceRepoInvariantError",
+  {
+    operation: sandboxRuntimeInstanceRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class SandboxRuntimeInstanceRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoUnexpectedError>()("SandboxRuntimeInstanceRepoUnexpectedError", {
-  operation: sandboxRuntimeInstanceRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class SandboxRuntimeInstanceRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRuntimeInstanceRepoUnexpectedError>()(
+  "SandboxRuntimeInstanceRepoUnexpectedError",
+  {
+    operation: sandboxRuntimeInstanceRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const sandboxRuntimeInstanceRepoErrorSchema = Schema.Union([
   SandboxRuntimeInstanceRepoInvariantError,
@@ -95,6 +102,11 @@ export interface SandboxRuntimeInstanceRepoService {
   readonly listRuntimeInstancesByRunIds: (
     runIds: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, SandboxRuntimeInstance>, SandboxRuntimeInstanceRepoError>;
+  /** All runtime instances currently `running` on the docker adapter (reachable by the telemetry ingester). */
+  readonly listRunningDockerInstances: () => Effect.Effect<
+    readonly SandboxRuntimeInstance[],
+    SandboxRuntimeInstanceRepoError
+  >;
 }
 
 export class SandboxRuntimeInstanceRepo extends Context.Service<
@@ -187,6 +199,21 @@ export const SandboxRuntimeInstanceRepoLive = Layer.effect(
               }),
             );
           }),
+        ),
+
+      listRunningDockerInstances: () =>
+        withSandboxRuntimeInstanceRepoError(
+          "listRunningDockerInstances",
+          db
+            .select()
+            .from(sandboxRuntimeInstances)
+            .where(
+              and(
+                eq(sandboxRuntimeInstances.status, "running"),
+                eq(sandboxRuntimeInstances.adapter, "docker"),
+              ),
+            )
+            .orderBy(desc(sandboxRuntimeInstances.updatedAt)),
         ),
     } satisfies SandboxRuntimeInstanceRepoService;
   }),

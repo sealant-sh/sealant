@@ -310,6 +310,36 @@ export {
   type SandboxBuildJobStatus,
 } from "./schema.js";
 
+export {
+  type NewTelemetryArtifact,
+  type NewTelemetryEvent,
+  type NewTelemetryLossSpan,
+  type NewTelemetryRunEpoch,
+  type NewTelemetryScrollbackRow,
+  type NewTelemetryTimelineRow,
+  type TelemetryArtifact,
+  telemetryArtifacts,
+  telemetryArtifactStorageBackendValues,
+  type TelemetryEpochCloseReason,
+  telemetryEpochCloseReasonValues,
+  type TelemetryEvent,
+  telemetryEvents,
+  type TelemetryLossSpan,
+  type TelemetryLossSpanDetectedVia,
+  telemetryLossSpanDetectedViaValues,
+  type TelemetryLossSpanKind,
+  telemetryLossSpanKindValues,
+  telemetryLossSpans,
+  type TelemetryRunEpoch,
+  type TelemetryRunEpochStatus,
+  telemetryRunEpochs,
+  telemetryRunEpochStatusValues,
+  type TelemetryScrollbackRow,
+  telemetryScrollback,
+  type TelemetryTimelineRow,
+  telemetryTimeline,
+} from "./schema.js";
+
 export * as schema from "./schema/index.js";
 
 export {
