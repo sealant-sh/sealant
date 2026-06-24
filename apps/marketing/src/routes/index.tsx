@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
 import {
   Activity,
-  ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Boxes,
@@ -14,9 +13,7 @@ import {
   Database,
   Eye,
   Gauge,
-  GitBranch,
   GitPullRequest,
-  Globe,
   KeyRound,
   Laptop,
   Layers,
@@ -197,97 +194,87 @@ function MonoRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// ── Hero diagram — task → Sealant run → execution record ──────────────────────
+// ── Hero code panel — sandbox + run, established in code ──────────────────────
 
-const RUN_CAPABILITIES: ReadonlyArray<{
-  readonly icon: ComponentType<{ className?: string }>;
-  readonly label: string;
-  readonly value: string;
-  readonly mono?: boolean;
+const FIX_CI_CODE: ReadonlyArray<{
+  readonly code: string;
+  readonly comment?: string;
+  readonly member?: boolean;
 }> = [
-  { icon: Terminal, label: "Terminal", value: "pnpm dev", mono: true },
-  { icon: Globe, label: "Browser", value: "Checkout complete" },
-  { icon: GitBranch, label: "Repository", value: "2 files changed" },
-  { icon: Server, label: "Services", value: "App + database running" },
+  { code: "const sandbox = await sealant.sandboxes.create({" },
+  { code: '  repository: "acme/storefront",' },
+  { code: '  harness: "opencode",' },
+  { code: "});" },
+  { code: "" },
+  { code: "const {" },
+  { code: "  harness,", comment: "run the configured harness", member: true },
+  { code: "  ssh,", comment: "inspect or take over the live environment", member: true },
+  { code: "  files,", comment: "access the workspace", member: true },
+  { code: "  processes,", comment: "start and supervise development services", member: true },
+  { code: "} = sandbox;" },
+  { code: "" },
+  { code: "const run = await harness.run(" },
+  { code: '  "Reproduce the CI failure, fix it, and run the checks.",' },
+  { code: ");" },
+  { code: "" },
+  { code: "const {" },
+  { code: "  result,", comment: "final harness output", member: true },
+  { code: "  changes,", comment: "files created, modified, or deleted", member: true },
+  { code: "  artifacts,", comment: "logs, reports, screenshots, and downloads", member: true },
+  { code: "  record,", comment: "commands, I/O, files, and network — replayable", member: true },
+  { code: "} = run;" },
 ];
 
-function FlowArrow() {
-  return (
-    <div className="flex justify-center py-3" aria-hidden="true">
-      <ArrowDown className="size-5 text-faint" />
-    </div>
-  );
-}
-
-function HeroDiagram() {
+function HeroCode() {
   const reduce = useReducedMotion();
   return (
-    <motion.div
-      initial={reduce ? false : { opacity: 0, y: 24 }}
-      animate={reduce ? {} : { opacity: 1, y: 0 }}
-      transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-      className="mx-auto w-full max-w-md min-w-0"
-    >
-      {/* Stage 1 — the task */}
-      <div className="mx-auto max-w-[20rem] rounded-2xl border border-border bg-panel px-5 py-4 shadow-[var(--shadow-sm)]">
-        <p className="ev-eyebrow">Agent task</p>
-        <div className="mt-2 flex items-center gap-2.5">
-          <GitPullRequest className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="text-sm font-medium text-foreground">Fix checkout redirect</span>
-        </div>
-      </div>
-
-      <FlowArrow />
-
-      {/* Stage 2 — the Sealant run: the environment around the agent */}
-      <div className="rounded-3xl border border-primary/30 bg-panel p-5 shadow-[var(--shadow-cobalt)]">
-        <div className="flex items-center justify-between gap-3">
-          <p className="ev-eyebrow text-primary">Sealant run</p>
-          <span className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <span className="relative inline-flex size-2 items-center justify-center">
-              <span className="absolute inline-flex size-2 rounded-full bg-primary/40 motion-safe:animate-ping" />
-              <span className="relative size-1.5 rounded-full bg-primary" />
-            </span>
-            Agent working
+    <div className="relative">
+      <div
+        className="absolute -inset-x-3 -bottom-4 top-6 rounded-[1.75rem] border border-border bg-panel/60 shadow-[var(--shadow-sm)]"
+        aria-hidden="true"
+      />
+      <motion.div
+        initial={reduce ? false : { opacity: 0, y: 24 }}
+        animate={reduce ? {} : { opacity: 1, y: 0 }}
+        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
+        className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-[#1c1c1f] shadow-[var(--shadow-cobalt)]"
+      >
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+          <span className="font-mono text-xs text-white/55">fix-ci.ts</span>
+          <span className="flex items-center gap-1.5" aria-hidden="true">
+            <span className="size-2.5 rounded-full bg-white/15" />
+            <span className="size-2.5 rounded-full bg-white/15" />
+            <span className="size-2.5 rounded-full bg-primary/70" />
           </span>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          {RUN_CAPABILITIES.map((c) => {
-            const Icon = c.icon;
-            return (
-              <div key={c.label} className="rounded-xl border border-rule-faint bg-background p-3.5">
-                <div className="flex items-center gap-2">
-                  <Icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
-                  <span className="text-xs font-medium text-label">{c.label}</span>
-                </div>
-                <p className={`mt-1.5 text-sm text-ink-2 ${c.mono ? "font-mono" : ""}`}>{c.value}</p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
 
-      <FlowArrow />
+        <pre className="overflow-x-auto px-5 py-5 font-mono text-[0.8rem] leading-[1.7]">
+          <code>
+            {FIX_CI_CODE.map((line, i) => (
+              <span key={i} className="block">
+                {line.member ? (
+                  <span className="text-[#9db4f0]">{line.code}</span>
+                ) : (
+                  <span className="text-[#e6e6ea]">{line.code === "" ? " " : line.code}</span>
+                )}
+                {line.comment ? (
+                  <span className="text-white/35">
+                    {`${" ".repeat(Math.max(2, 14 - line.code.length))}// ${line.comment}`}
+                  </span>
+                ) : null}
+              </span>
+            ))}
+          </code>
+        </pre>
 
-      {/* Stage 3 — the inspectable record */}
-      <div className="mx-auto max-w-[22rem] rounded-2xl border border-border bg-panel px-5 py-4 shadow-[var(--shadow-sm)]">
-        <p className="ev-eyebrow">Execution record</p>
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-ink-2">
-          <span>
-            <span className="font-semibold text-foreground">12</span> commands
-          </span>
-          <span>
-            <span className="font-semibold text-foreground">4</span> browser actions
-          </span>
-          <span>
-            <span className="font-semibold text-foreground">2</span> file changes
+        <div className="flex items-center gap-2.5 border-t border-white/10 px-5 py-3.5">
+          <span className="size-1.5 shrink-0 rounded-full bg-success-dot" aria-hidden="true" />
+          <span className="font-mono text-xs text-white/70">
+            Completed · 3 files changed · Checks passed · 184 events recorded
           </span>
         </div>
-        <p className="mt-3 border-t border-rule-faint pt-3 font-mono text-xs text-faint">
-          Video · Logs · Diff · Timeline · Replay
-        </p>
-      </div>
-    </motion.div>
+      </motion.div>
+    </div>
   );
 }
 
@@ -312,21 +299,21 @@ function Hero() {
       <Container className="relative grid flex-1 items-center gap-12 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:gap-16">
         <motion.div className="min-w-0" {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>Runtime for AI developer agents</Eyebrow>
+            <Eyebrow>Execution infrastructure for AI agents</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
-            className="mt-6 font-display text-[2.3rem] leading-[1.08] font-semibold tracking-[-0.025em] text-foreground text-balance sm:text-[2.8rem] lg:text-[3.15rem]"
+            className="mt-6 font-display text-[2.6rem] leading-[1.04] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.6rem]"
           >
-            Give AI agents a real dev environment. See everything they do inside it.
+            Give AI agents a real development environment.
           </motion.h1>
           <motion.p
             {...childMotion}
-            className="mt-6 max-w-[50ch] text-lg leading-relaxed text-muted-foreground"
+            className="mt-6 max-w-[52ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant runs agents with a browser, terminal, repository, and development services —
-            then captures every command, browser action, file change, and network request as a{" "}
-            <span className="text-primary">replayable run</span>.
+            Create an isolated sandbox for any repository. Run its harness, inspect or take over the
+            workspace over SSH, and get back the result with a{" "}
+            <span className="text-primary">complete record</span> of how it was produced.
           </motion.p>
           <motion.div {...childMotion} className="mt-9 flex flex-wrap items-center gap-3">
             <PrimaryCTA href={REPO_URL}>
@@ -336,15 +323,15 @@ function Hero() {
                 aria-hidden="true"
               />
             </PrimaryCTA>
-            <SecondaryCTA href="#observability">
-              See an example run
+            <SecondaryCTA href="#integration">
+              Explore the SDK
               <ArrowRight className="size-4" aria-hidden="true" />
             </SecondaryCTA>
           </motion.div>
         </motion.div>
 
         <div className="min-w-0">
-          <HeroDiagram />
+          <HeroCode />
         </div>
       </Container>
 
