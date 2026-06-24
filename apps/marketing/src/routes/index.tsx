@@ -254,23 +254,22 @@ function Hero() {
       <Container className="relative grid items-center gap-14 py-20 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:py-28">
         <motion.div {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>The secure run layer for AI software work</Eyebrow>
+            <Eyebrow>Sandboxed, recorded runs for AI coding agents</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
             className="mt-6 font-display text-[2.9rem] leading-[1.02] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-6xl lg:text-[4.1rem]"
           >
-            Every AI run, a record
+            Every agent run, recorded
             <br />
-            you can <span className="text-primary">actually trust</span>.
+            and <span className="text-primary">reviewable</span>.
           </motion.h1>
           <motion.p
             {...childMotion}
             className="mt-6 max-w-[46ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant runs repositories, issues, and agent tasks inside isolated sandboxes, records
-            exactly what happened from inside the runtime, and turns every run into a fast,
-            evidence-backed review.
+            Sealant runs repos, issues, and agent tasks in isolated sandboxes and records what
+            happened from inside the runtime — every command, file change, and check.
           </motion.p>
           <motion.div
             {...childMotion}
@@ -292,7 +291,7 @@ function Hero() {
             {...childMotion}
             className="mt-8 font-mono text-xs text-faint"
           >
-            Open source · self-hostable · GitHub-native
+            Open source · self-hostable · runs on Docker or Kubernetes
           </motion.p>
         </motion.div>
 
@@ -333,9 +332,9 @@ function Problem() {
             AI can write the code. Teams still have to trust the work.
           </Display>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            AI coding agents are powerful, but their work is often invisible. A reviewer sees a
-            diff and a summary — not the environment it ran in, the commands it executed, what
-            changed, what failed, and what access it had.
+            An agent's work is mostly invisible. A reviewer sees a diff and a summary — not the
+            environment it ran in, the commands it executed, what changed, what failed, or what
+            access it had.
           </p>
         </Reveal>
 
@@ -381,7 +380,7 @@ function CoreProduct() {
     <section id="product" className="bg-panel py-24 lg:py-32">
       <Container>
         <Reveal className="max-w-[56ch]">
-          <Eyebrow>The core product</Eyebrow>
+          <Eyebrow>How it works</Eyebrow>
           <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
             Every run gets a sandbox and a recorder.
           </Display>
@@ -480,8 +479,8 @@ function Security() {
             Agents run with boundaries.
           </Display>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Sealant gives AI coding work a controlled place to execute. Each run can be isolated,
-            scoped, observed, and shut down — without depending on a developer machine.
+            Each run is isolated, scoped, observed, and torn down when it ends — so an agent never
+            touches a developer's machine, network, or long-lived secrets.
           </p>
         </Reveal>
 
@@ -596,9 +595,9 @@ function PrReview() {
             Review the run before you review the diff.
           </Display>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Sealant compresses review by showing what happened during the run: the objective, the
-            commands, test results, file changes, risky areas, and validation status — in plain
-            language, next to the evidence.
+            Instead of inferring from a diff, you see what the run actually did: the objective, the
+            commands, test results, file changes, the risky spots, and validation — next to the
+            evidence.
           </p>
           <div className="mt-8">
             <PrimaryCTA href={REPO_URL}>
@@ -657,11 +656,11 @@ function RunFromAnywhere() {
         <Reveal>
           <Eyebrow>Run from anywhere</Eyebrow>
           <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Start work wherever the issue finds you.
+            Trigger runs from where you already work.
           </Display>
           <p className="mt-5 max-w-[46ch] text-lg leading-relaxed text-muted-foreground">
-            Kick off a sandbox or issue workflow from the web app, GitHub, Slack, Linear, the CLI,
-            the SDK, or your phone. The run happens in Sealant infrastructure — not on your laptop.
+            Start a sandbox or issue workflow from the web app, GitHub, Slack, Linear, the CLI, the
+            SDK, or your phone. The run executes on your infrastructure, not your laptop.
           </p>
           <ul className="mt-7 flex flex-wrap gap-2">
             {["Web app", "GitHub", "Slack", "Linear", "CLI", "SDK", "Phone"].map((source) => (
@@ -818,7 +817,7 @@ function FinalCta() {
             />
             <div className="relative">
               <Display className="mx-auto max-w-[20ch] text-[2.3rem] leading-[1.05] sm:text-5xl lg:text-[3.5rem]">
-                Give AI coding work a place to run and a record to trust.
+                A sandbox to run agents in. A record to review them by.
               </Display>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <PrimaryCTA href={REPO_URL}>

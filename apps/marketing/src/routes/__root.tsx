@@ -12,12 +12,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant — Secure AI coding runs, reviewable from first command to final PR",
+        title: "Sealant — sandboxed, recorded runs for AI coding agents",
       },
       {
         name: "description",
         content:
-          "The secure run layer for AI software work. Sealant runs agents inside isolated sandboxes and turns every run into a reviewable record — from issue intake to pull request.",
+          "Sealant runs AI coding agents in isolated sandboxes and records what happened from inside the runtime — every command, file change, and check — so each run is reproducible and reviewable.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -69,7 +69,7 @@ function RootComponent() {
             <div className="flex items-center gap-2.5">
               <LogoBlob className="size-6" aria-hidden="true" />
               <p className="m-0 text-sm text-muted-foreground">
-                The secure run layer for AI software work.
+                Sandboxed, recorded runs for AI coding agents.
               </p>
             </div>
             <a
