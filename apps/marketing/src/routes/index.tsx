@@ -198,24 +198,30 @@ function MonoRow({ label, children }: { label: string; children: ReactNode }) {
 // ── Hero code panel — SDK + event capture (the signature) ─────────────────────
 
 const HERO_CODE: ReadonlyArray<{ readonly t: string; readonly tone?: "comment" | "accent" }> = [
-  { t: "const run = await sealant.runs.create({" },
-  { t: '  workspace: { repo: "acme/storefront", ref: "checkout-fix" },' },
+  { t: "// run an agent in a sandbox, record the execution", tone: "comment" },
+  { t: "const sandbox = await sdk.sandboxes.create({ repository, harness })" },
+  { t: "" },
+  { t: "const execution = await sdk.executions.start({" },
+  { t: "  sandboxId: sandbox.id," },
+  { t: "  objective: `Resolve issue #${issue.number} and open a PR`," },
   { t: "})" },
   { t: "" },
-  { t: 'await run.processes.start({ command: ["pnpm", "test", "checkout"] })' },
+  { t: "const task = await sdk.harnesses.runTask({ sandboxId: sandbox.id, harness })" },
   { t: "" },
-  { t: "// every action is captured as a structured, replayable event", tone: "comment" },
-  { t: "for await (const event of run.events()) {", tone: "accent" },
-  { t: "  record(event)", tone: "accent" },
-  { t: "}" },
+  { t: "// every action becomes a structured, replayable event", tone: "comment" },
+  { t: "for (const command of task.commands) await execution.command(command)" },
+  { t: "for (const change of task.fileChanges) await execution.fileChange(change)" },
+  { t: "for (const check of task.validations) await execution.validation(check)" },
+  { t: "" },
+  { t: 'await execution.complete({ outcome: "succeeded" })' },
+  { t: "const analysis = await sdk.executions.analyze(execution.id)", tone: "accent" },
 ];
 
 const HERO_EVENTS: ReadonlyArray<{ readonly k: string; readonly v: string; readonly dot: string }> =
   [
-    { k: "process.started", v: "pnpm test checkout", dot: "bg-faint" },
-    { k: "file.changed", v: "src/checkout.ts", dot: "bg-warning-dot" },
-    { k: "net.request", v: "api.stripe.test", dot: "bg-primary" },
-    { k: "process.exited", v: "status 0", dot: "bg-success-dot" },
+    { k: "command", v: "pnpm test checkout", dot: "bg-faint" },
+    { k: "file.change", v: "src/checkout.ts", dot: "bg-warning-dot" },
+    { k: "validation", v: "typecheck · passed", dot: "bg-success-dot" },
   ];
 
 function HeroCode() {
@@ -233,7 +239,7 @@ function HeroCode() {
         className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-[#1c1c1f] shadow-[var(--shadow-cobalt)]"
       >
         <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-          <span className="font-mono text-xs text-white/55">runs.ts</span>
+          <span className="font-mono text-xs text-white/55">issue-to-pr.ts</span>
           <span className="flex items-center gap-1.5" aria-hidden="true">
             <span className="size-2.5 rounded-full bg-white/15" />
             <span className="size-2.5 rounded-full bg-white/15" />
@@ -262,7 +268,7 @@ function HeroCode() {
 
         <div className="border-t border-white/10 px-5 py-4">
           <p className="font-mono text-[0.62rem] tracking-[0.1em] text-white/40 uppercase">
-            Captured events
+            Execution record
           </p>
           <ul className="mt-2.5 space-y-1.5">
             {HERO_EVENTS.map((e) => (
@@ -277,7 +283,7 @@ function HeroCode() {
 
         <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
           <Activity className="size-3.5 text-primary" aria-hidden="true" />
-          <span className="font-mono text-xs text-white/55">2,418 events · fully replayable</span>
+          <span className="font-mono text-xs text-white/55">Replayable · analyzable · summarizable</span>
         </div>
       </motion.div>
     </div>
@@ -302,25 +308,25 @@ function Hero() {
         className="sealant-dot-grid pointer-events-none absolute inset-0 opacity-50 [mask-image:radial-gradient(ellipse_at_30%_20%,black,transparent_70%)]"
         aria-hidden="true"
       />
-      <Container className="relative grid items-center gap-14 py-20 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:py-28">
+      <Container className="relative grid min-h-[calc(100svh-4rem)] items-center gap-12 py-16 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
         <motion.div className="min-w-0" {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>Execution infrastructure for developer software</Eyebrow>
+            <Eyebrow>Record, replay &amp; analyze agent executions</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
             className="mt-6 font-display text-[2.6rem] leading-[1.04] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.6rem]"
           >
-            Give AI agents a real <span className="text-primary">development environment</span> to
-            work in.
+            Give AI agents a real environment — and a{" "}
+            <span className="text-primary">replayable record</span> of everything they do.
           </motion.h1>
           <motion.p
             {...childMotion}
             className="mt-6 max-w-[52ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant captures every command, process, file change, and network request as a
-            structured event stream — a complete, replayable record of a run that your product can
-            observe live or replay later, exactly as it happened.
+            Sealant runs the agent in a sandbox and records the execution as structured data —
+            every command, tool call, file change, and validation. A complete, replayable record
+            you can analyze and summarize, not a wall of logs.
           </motion.p>
           <motion.div {...childMotion} className="mt-9 flex flex-wrap items-center gap-3">
             <PrimaryCTA href={REPO_URL}>
@@ -336,14 +342,14 @@ function Hero() {
             </SecondaryCTA>
           </motion.div>
           <motion.p {...childMotion} className="mt-8 font-mono text-xs text-faint">
-            TypeScript SDK · Structured event stream · Replayable runs · Local runtime
+            TypeScript SDK · Structured execution record · Replay, analyze, summarize
           </motion.p>
         </motion.div>
 
         <div className="min-w-0">
           <HeroCode />
           <p className="mt-5 text-center font-mono text-xs text-faint">
-            Capture a run as a replayable event stream — observe it live or replay it later.
+            Each execution is captured as a structured event stream — stream it live, replay it after.
           </p>
         </div>
       </Container>
@@ -371,7 +377,7 @@ const problemCards: ReadonlyArray<{
   {
     icon: Activity,
     title: "Record",
-    body: "Receive a structured event stream covering commands, output, file changes, network activity, lifecycle events, and resulting artifacts.",
+    body: "Capture the execution as a structured record — commands, tool calls, file changes, and validations — that you can replay, analyze, and summarize.",
   },
 ];
 
@@ -393,7 +399,10 @@ function Problem() {
                 process supervisor, terminal service, policy layer, observability system, and
                 artifact store.
               </p>
-              <p className="text-foreground">Sealant provides the execution layer as one coherent platform.</p>
+              <p className="text-foreground">
+                Sealant is that layer — the sandbox, the supervision, and the structured execution
+                record, from one SDK.
+              </p>
             </>
           }
         />
@@ -423,14 +432,14 @@ function Problem() {
 // ── Core concept ────────────────────────────────────────────────────────────
 
 const runPrimitives = [
-  "Workspace",
-  "Processes",
-  "Terminal",
+  "Sandbox",
+  "Harness",
+  "Commands",
   "Files",
   "Network",
-  "Policies",
-  "Secrets",
-  "Lifecycle",
+  "Tool calls",
+  "Validations",
+  "Record",
 ];
 
 function FlowLabel({ children }: { children: ReactNode }) {
@@ -447,16 +456,17 @@ function CoreConcept() {
       <Container>
         <SectionHead
           eyebrow="Core concept"
-          title="Everything happens inside a Sealant Run."
+          title="Every execution runs inside a sandbox."
           intro={
             <>
               <p>
-                A run contains the environment, the work performed inside it, execution policies,
-                event history, and generated artifacts.
+                A sandbox is an isolated dev environment built from a repository and a harness. The
+                work performed inside it is captured as an execution — a structured record of every
+                command, file change, and validation.
               </p>
               <p>
-                Your application can observe the run live, intervene when necessary, and retain its
-                history after execution has ended.
+                Your application can stream the execution live, intervene when needed, and keep the
+                record after it ends.
               </p>
             </>
           }
@@ -470,7 +480,7 @@ function CoreConcept() {
             <ArrowRight className="size-4 rotate-90 text-faint" aria-hidden="true" />
 
             <div className="w-full max-w-2xl rounded-3xl border border-border bg-background p-6 shadow-[var(--shadow-md)] sm:p-8">
-              <p className="ev-eyebrow text-center">Sealant Run</p>
+              <p className="ev-eyebrow text-center">Execution · sandbox</p>
               <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                 {runPrimitives.map((p) => (
                   <span
@@ -485,7 +495,7 @@ function CoreConcept() {
 
             <ArrowRight className="size-4 rotate-90 text-faint" aria-hidden="true" />
             <div className="flex flex-wrap justify-center gap-2">
-              {["Events", "Diffs", "Logs", "Artifacts", "Timeline"].map((o) => (
+              {["Record", "Replay", "Analysis", "Summary", "Artifacts"].map((o) => (
                 <span
                   key={o}
                   className="rounded-lg bg-[var(--sw-wash)] px-3 py-1.5 font-mono text-xs text-primary"
@@ -500,8 +510,8 @@ function CoreConcept() {
         <Reveal delay={0.12} className="mt-12">
           <div className="mx-auto flex max-w-3xl items-start gap-4 rounded-2xl border-l-2 border-l-primary bg-background py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
             <p className="text-base leading-relaxed text-foreground">
-              Model the work as one run with full history — not a sequence of independent shell
-              calls.
+              Model the work as one execution with a full record — not a sequence of independent
+              shell calls.
             </p>
           </div>
         </Reveal>
@@ -516,7 +526,7 @@ function HowItWorks() {
   return (
     <section id="how" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
       <Container>
-        <SectionHead eyebrow="How it works" title="From request to inspectable result." />
+        <SectionHead eyebrow="How it works" title="From an objective to a replayable execution record." />
 
         <div className="mt-14 grid gap-12 lg:grid-cols-[1fr_1fr] lg:gap-16">
           <Reveal className="min-w-0 space-y-10">
@@ -545,7 +555,7 @@ function HowItWorks() {
           <Reveal delay={0.1} className="min-w-0 lg:pt-12">
             <MonoPanel
               label="01 · example configuration"
-              right={<span className="font-mono text-[0.7rem] text-faint">create-run.json</span>}
+              right={<span className="font-mono text-[0.7rem] text-faint">start-execution.ts</span>}
             >
               <div className="space-y-4 px-5 py-5">
                 <MonoRow label="Repository">acme/storefront</MonoRow>
@@ -638,7 +648,7 @@ const capabilities: ReadonlyArray<{
   {
     icon: Database,
     title: "Durable history",
-    body: "Persist event logs and replay the history of a completed run without relying on transient terminal output.",
+    body: "Persist the event log and replay a completed execution without relying on transient terminal output.",
   },
   {
     icon: KeyRound,
@@ -648,7 +658,7 @@ const capabilities: ReadonlyArray<{
   {
     icon: RefreshCw,
     title: "Runtime lifecycle",
-    body: "Run Sealant as the primary process inside a containerized development environment and reliably manage its complete lifecycle.",
+    body: "Run Sealant as PID 1 in a container and manage the full lifecycle of the work inside — startup, supervision, and clean shutdown.",
   },
   {
     icon: Code2,
@@ -706,11 +716,11 @@ function Differentiation() {
       <Container>
         <SectionHead
           eyebrow="Differentiation"
-          title="More than sandbox infrastructure."
+          title="The sandbox is commodity. The record isn't."
           intro={
             <p>
-              A sandbox gives code somewhere to execute. Sealant gives developer software an
-              environment it can operate, observe, and explain.
+              A sandbox gives code somewhere to run. Sealant records the execution as structured
+              events you can replay and analyze.
             </p>
           }
         />
@@ -723,7 +733,7 @@ function Differentiation() {
               </div>
               <div className="border-l border-rule-faint bg-[var(--sw-wash)] px-6 py-4">
                 <p className="font-mono text-xs font-medium tracking-[0.04em] text-primary uppercase">
-                  Sealant Platform
+                  Sealant
                 </p>
               </div>
             </div>
@@ -751,7 +761,7 @@ function Differentiation() {
 // ── Observability ──────────────────────────────────────────────────────────────
 
 const timeline: ReadonlyArray<readonly [string, string, "info" | "ok" | "net" | "file"]> = [
-  ["00:00.000", "Run started", "info"],
+  ["00:00.000", "Execution started", "info"],
   ["00:00.184", "Workspace ready", "info"],
   ["00:01.102", "Process started: pnpm install", "info"],
   ["00:14.638", "Process exited: status 0", "ok"],
@@ -761,7 +771,7 @@ const timeline: ReadonlyArray<readonly [string, string, "info" | "ok" | "net" | 
   ["00:20.018", "Process started: pnpm test checkout", "info"],
   ["00:24.322", "Network request: api.stripe.test", "net"],
   ["00:28.119", "Test suite passed", "ok"],
-  ["00:29.406", "Run completed", "ok"],
+  ["00:29.406", "Execution completed", "ok"],
 ];
 
 const obsTabs = ["Timeline", "Processes", "Terminal", "Files", "Network", "Artifacts"];
@@ -772,12 +782,12 @@ function Observability() {
       <Container>
         <SectionHead
           eyebrow="Observability"
-          title="Every run is one ordered timeline."
+          title="Every execution is one ordered timeline."
           intro={
             <p>
-              Sealant turns low-level execution activity into a single ordered timeline. Your
-              product can present the level of detail appropriate for its users — from a concise
-              summary to a complete forensic view.
+              Sealant turns low-level execution activity into structured, ordered events. Your
+              product can present the right level of detail — from a one-line summary to the full
+              event-by-event record.
             </p>
           }
         />
@@ -823,11 +833,6 @@ function Observability() {
           </div>
         </Reveal>
 
-        <Reveal delay={0.12} className="mt-6">
-          <p className="text-base text-muted-foreground">
-            Reconstruct a run from its event stream — not from scattered logs and final messages.
-          </p>
-        </Reveal>
       </Container>
     </section>
   );
@@ -848,7 +853,7 @@ const policyNow: ReadonlyArray<{
   {
     icon: Network,
     title: "Network boundaries",
-    body: "Control which external services a run may contact and record the requests it makes.",
+    body: "Control which external services an execution may contact, and record the requests it makes.",
   },
   {
     icon: Lock,
@@ -857,8 +862,8 @@ const policyNow: ReadonlyArray<{
   },
   {
     icon: ListTree,
-    title: "Complete accountability",
-    body: "Retain the actions performed, policies applied, and exceptions granted as part of the run history.",
+    title: "Recorded in the execution",
+    body: "Keep the actions performed, policies applied, and exceptions granted as part of the execution record.",
   },
 ];
 
@@ -868,7 +873,7 @@ function PolicyAccess() {
       <Container>
         <SectionHead
           eyebrow="Policy & access"
-          title="Give software the access it needs — not unrestricted credentials."
+          title="Scoped access and redacted secrets — not raw credentials."
           intro={
             <p>
               Define the environment's permitted resources before execution begins. Provide approved
@@ -907,7 +912,7 @@ function PolicyAccess() {
             </h3>
             <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
               Require approval before sensitive commands, dependency changes, or other high-risk
-              operations — with the decision retained in the run history.
+              operations — with the decision retained in the execution record.
             </p>
           </div>
         </Reveal>
@@ -941,7 +946,7 @@ const useCases: ReadonlyArray<{
   {
     icon: RefreshCw,
     title: "CI debugging",
-    body: "Preserve failed execution state, inspect what changed, rerun selected commands, and compare successful and failed runs.",
+    body: "Preserve failed execution state, inspect what changed, rerun selected commands, and compare successful and failed executions.",
   },
   {
     icon: Workflow,
@@ -956,7 +961,7 @@ function BuildWith() {
       <Container>
         <SectionHead
           eyebrow="Build with Sealant"
-          title="Build the product. Don't rebuild the execution layer."
+          title="What teams build on Sealant."
         />
         <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {useCases.map((uc, i) => {
@@ -995,12 +1000,12 @@ const products: ReadonlyArray<{
   },
   {
     name: "Sealant Repro",
-    body: "Turn bug reports and failed runs into executable cases another developer can immediately rerun.",
+    body: "Turn bug reports and failed executions into executable cases another developer can immediately rerun.",
     cta: "Explore Repro",
   },
   {
     name: "Sealant Handoff",
-    body: "Delegate engineering work and receive a tested change with a complete, inspectable handoff.",
+    body: "Delegate engineering work and receive a tested change plus the execution record showing how it was made.",
     cta: "Explore Handoff",
   },
 ];
@@ -1011,12 +1016,9 @@ function ProductFamily() {
       <Container>
         <SectionHead
           eyebrow="Product family"
-          title="Build your own product — or use ours."
+          title="Products we built on Sealant."
           intro={
-            <p>
-              Sealant's applications use the same execution platform available to other product
-              teams.
-            </p>
+            <p>Verify, Repro, and Handoff are built on the same SDK you would use.</p>
           }
         />
         <div className="mt-14 grid gap-5 lg:grid-cols-3">
@@ -1043,8 +1045,8 @@ function ProductFamily() {
         <Reveal delay={0.12} className="mt-10">
           <div className="rounded-2xl border-l-2 border-l-primary bg-panel py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
             <p className="text-base leading-relaxed text-foreground">
-              The applications are opinionated workflows. The platform gives you the underlying
-              execution primitives.
+              Each is a Sealant module — a packaged workflow. The SDK gives you the primitives to
+              build your own.
             </p>
           </div>
         </Reveal>
@@ -1063,12 +1065,12 @@ const integrations: ReadonlyArray<{
   {
     icon: Code2,
     title: "TypeScript SDK",
-    body: "Create runs, control processes, open terminal sessions, consume events, and retrieve resulting artifacts from a TypeScript application.",
+    body: "Create sandboxes and executions, control processes, open terminal sessions, consume events, and retrieve artifacts from a TypeScript application.",
   },
   {
     icon: Terminal,
     title: "Local Protobuf protocol",
-    body: "Communicate directly with the runtime from another language or build a custom SDK around the protocol.",
+    body: "Drive the runtime directly from another language over its Protobuf-based control protocol. Schema is internal for now.",
   },
   {
     icon: Activity,
@@ -1078,28 +1080,43 @@ const integrations: ReadonlyArray<{
   {
     icon: GitPullRequest,
     title: "Artifact integrations",
-    body: "Attach run results to pull requests, issues, support tickets, test reports, or internal developer portals.",
+    body: "Attach execution results to pull requests, issues, support tickets, test reports, or internal developer portals.",
   },
 ];
 
 const SDK_CODE_LINES: ReadonlyArray<string> = [
-  "const run = await sealant.runs.create({",
-  "  workspace: {",
-  '    repository: "acme/storefront",',
-  '    ref: "feature/checkout-fix",',
+  "export const issueToPr: SealantModule = {",
+  '  key: "issue-to-pr",',
+  "",
+  "  async run({ sdk }, input) {",
+  "    const sandbox = await sdk.sandboxes.create({",
+  "      repository: input.repository,",
+  "      harness: input.harness,",
+  "    });",
+  "",
+  "    const execution = await sdk.executions.start({",
+  "      sandboxId: sandbox.id,",
+  "      objective: `Resolve issue #${input.issue.number} and open a PR`,",
+  "    });",
+  "",
+  "    const task = await sdk.harnesses.runTask({",
+  "      sandboxId: sandbox.id,",
+  "      harness: input.harness.id,",
+  "    });",
+  "",
+  "    // record every action as a structured execution event",
+  "    for (const command of task.commands) await execution.command(command);",
+  "    for (const change of task.fileChanges) await execution.fileChange(change);",
+  "    for (const check of task.validations) await execution.validation(check);",
+  "",
+  '    await execution.complete({ outcome: task.pullRequestUrl ? "succeeded" : "partial" });',
+  "",
+  "    const analysis = await sdk.executions.analyze(execution.id);",
+  "    const summary = await sdk.llms.summarizeExecution({ analysis, audience: \"user\" });",
+  "",
+  "    return { executionId: execution.id, analysis, summary, pr: task.pullRequestUrl };",
   "  },",
-  "});",
-  "",
-  "const process = await run.processes.start({",
-  '  command: ["pnpm", "test", "checkout"],',
-  "});",
-  "",
-  "for await (const event of run.events()) {",
-  "  handleExecutionEvent(event);",
-  "}",
-  "",
-  "const result = await process.wait();",
-  "const artifacts = await run.artifacts.list();",
+  "};",
 ];
 
 function Integration() {
@@ -1131,7 +1148,7 @@ function Integration() {
           <Reveal delay={0.08} className="min-w-0">
             <div className="overflow-hidden rounded-3xl border border-border bg-[#1c1c1f] shadow-[var(--shadow-lg)]">
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-                <span className="font-mono text-xs text-white/55">runs.ts</span>
+                <span className="font-mono text-xs text-white/55">modules/issue-to-pr.ts</span>
                 <div className="flex items-center gap-1.5" aria-hidden="true">
                   <span className="size-2.5 rounded-full bg-white/15" />
                   <span className="size-2.5 rounded-full bg-white/15" />
@@ -1149,7 +1166,7 @@ function Integration() {
               </pre>
             </div>
             <p className="mt-4 font-mono text-xs text-faint">
-              Illustrative API shape; the published example matches the actual SDK.
+              Illustrative module — the SDK surface is still in design.
             </p>
           </Reveal>
         </div>
@@ -1164,7 +1181,10 @@ function Deployment() {
   return (
     <section id="deploy" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
       <Container>
-        <SectionHead eyebrow="Run it anywhere" title="One execution model, wherever the work runs." />
+        <SectionHead
+          eyebrow="Local &amp; self-managed"
+          title="The same SDK and execution record, local or self-hosted."
+        />
 
         <div className="mt-14 grid gap-5 lg:grid-cols-3">
           <Reveal>
@@ -1222,7 +1242,7 @@ function Deployment() {
 
         <Reveal delay={0.12} className="mt-10">
           <p className="text-base text-muted-foreground">
-            Build locally without designing a second architecture for hosted execution.
+            Build locally; the same model runs self-hosted — no rewrite.
           </p>
         </Reveal>
       </Container>
@@ -1239,16 +1259,16 @@ function ProjectContext() {
         <Reveal className="min-w-0">
           <Eyebrow>Project context</Eyebrow>
           <Display className="mt-5 text-[2rem] leading-[1.08] sm:text-4xl lg:text-5xl">
-            Let useful project knowledge survive the run.
+            Reuse project setup across executions.
           </Display>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
             Associate repositories with reusable setup, services, verification commands, conventions,
-            and approved access. New runs can begin from established project knowledge rather than
-            rediscovering the same environment repeatedly.
+            and approved access. New executions begin from established project knowledge instead of
+            rediscovering the environment each time.
           </p>
           <p className="mt-4 leading-relaxed text-muted-foreground">
-            Project context should remain explicit, versioned, and reviewable. It is infrastructure
-            for better outcomes — not a mysterious memory layer.
+            Project context stays explicit, versioned, and reviewable — a file in the repo, not a
+            hidden memory store.
           </p>
         </Reveal>
 
@@ -1321,7 +1341,7 @@ function DeveloperExperience() {
       <Container>
         <SectionHead
           eyebrow="Developer experience"
-          title="Built for systems that need to understand what happened."
+          title="Structured data first, human views on top."
         />
         <div className="mt-14 grid gap-5 lg:grid-cols-3">
           {dxPoints.map((d, i) => {
@@ -1342,13 +1362,6 @@ function DeveloperExperience() {
           })}
         </div>
 
-        <Reveal delay={0.1} className="mt-10">
-          <div className="rounded-2xl border-l-2 border-l-primary bg-panel py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
-            <p className="text-base leading-relaxed text-foreground">
-              Models decide what to do. Sealant provides where it happens and how it is observed.
-            </p>
-          </div>
-        </Reveal>
       </Container>
     </section>
   );
@@ -1368,21 +1381,21 @@ function FinalCta() {
             />
             <div className="relative">
               <Eyebrow>Build on Sealant</Eyebrow>
-              <Display className="mx-auto mt-5 max-w-[24ch] text-[2.1rem] leading-[1.06] sm:text-5xl lg:text-[3.25rem]">
-                Add an execution layer without building one.
+              <Display className="mx-auto mt-5 max-w-[20ch] text-[2.1rem] leading-[1.06] sm:text-5xl lg:text-[3.25rem]">
+                Start recording your agents&apos; executions.
               </Display>
               <p className="mx-auto mt-5 max-w-[60ch] text-lg leading-relaxed text-muted-foreground">
-                Add supervised execution, interactive terminals, filesystem and network observation,
-                and durable run history without assembling the infrastructure yourself.
+                Run an agent in a sandbox and get a replayable, analyzable execution record —
+                commands, file changes, network, and validations — from one TypeScript SDK.
               </p>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <PrimaryCTA href={REPO_URL}>
                   Start building
                   <ArrowUpRight className="size-4" aria-hidden="true" />
                 </PrimaryCTA>
-                <SecondaryCTA href={DOCS_URL} external>
+                <SecondaryCTA href={REPO_URL} external>
                   <GitHubLogo className="size-4" />
-                  Read the architecture guide
+                  View on GitHub
                 </SecondaryCTA>
               </div>
               <p className="mt-7 font-mono text-xs text-faint">

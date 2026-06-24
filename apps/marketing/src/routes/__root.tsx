@@ -12,12 +12,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant Platform — Execution infrastructure for developer software",
+        title: "Sealant — record, replay & analyze agent executions",
       },
       {
         name: "description",
         content:
-          "Give developer agents and automation products isolated workspaces, terminal and process control, filesystem and network observation, and durable execution history.",
+          "Run AI agents in a sandbox and record every execution as structured, replayable, analyzable data — commands, file changes, network, and validations — from one TypeScript SDK.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -42,7 +42,7 @@ function RootComponent() {
                 <TopLevelNavLink href="https://github.com/get-sealant/sealant">
                   Documentation
                 </TopLevelNavLink>
-                <TopLevelNavLink href="#integration">SDKs</TopLevelNavLink>
+                <TopLevelNavLink href="#integration">SDK</TopLevelNavLink>
                 <TopLevelNavLink href="#core-concept">Architecture</TopLevelNavLink>
               </nav>
             </div>
@@ -77,7 +77,7 @@ function RootComponent() {
             <div className="flex items-center gap-2.5">
               <LogoBlob className="size-6" aria-hidden="true" />
               <p className="m-0 text-sm text-muted-foreground">
-                Execution infrastructure for developer software.
+                Record, replay, and analyze every agent execution.
               </p>
             </div>
             <a
