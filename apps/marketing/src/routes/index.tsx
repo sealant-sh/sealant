@@ -744,8 +744,8 @@ function Sdk() {
           </p>
         </Reveal>
 
-        <div className="mt-14 grid gap-6 lg:grid-cols-[1fr_1fr] lg:gap-10">
-          <Reveal className="grid gap-4 sm:grid-cols-2">
+        <div className="mt-14 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-10">
+          <Reveal className="grid min-w-0 gap-4 sm:grid-cols-2">
             {sdkModules.map((module) => {
               const Icon = module.icon;
               return (
@@ -776,7 +776,7 @@ function Sdk() {
             })}
           </Reveal>
 
-          <Reveal delay={0.08}>
+          <Reveal delay={0.08} className="min-w-0">
             <div className="overflow-hidden rounded-3xl border border-border bg-[#1c1c1f] shadow-[var(--shadow-lg)]">
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
                 <span className="font-mono text-xs text-white/55">sealant.ts</span>
@@ -839,7 +839,7 @@ function FinalCta() {
 
 function MarketingPage() {
   return (
-    <main>
+    <main className="overflow-x-clip">
       <Hero />
       <Problem />
       <CoreProduct />
