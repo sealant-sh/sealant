@@ -2,20 +2,19 @@ import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
 import {
   Activity,
+  ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Boxes,
   Bug,
   Check,
-  Clock,
   Cloud,
   Code2,
   Cpu,
   Database,
   Eye,
-  Folder,
   Gauge,
-  GitCompare,
+  GitBranch,
   GitPullRequest,
   Globe,
   KeyRound,
@@ -24,14 +23,12 @@ import {
   ListTree,
   Lock,
   Network,
-  Play,
   Radio,
   RefreshCw,
   ScrollText,
   Server,
   ShieldCheck,
   Terminal,
-  Video,
   Workflow,
 } from "lucide-react";
 import { type ComponentType, type ReactNode } from "react";
@@ -200,140 +197,97 @@ function MonoRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// ── Hero run inspector — the product at a glance ──────────────────────────────
+// ── Hero diagram — task → Sealant run → execution record ──────────────────────
 
-const RUN_TABS = ["Browser", "Terminal", "Files", "Timeline"] as const;
-
-const RUN_TAB_ICONS: Record<string, ComponentType<{ className?: string }>> = {
-  Browser: Globe,
-  Terminal: Terminal,
-  Files: Folder,
-  Timeline: Clock,
-};
-
-const RUN_TIMELINE: ReadonlyArray<{ readonly verb: string; readonly token?: string; readonly done?: boolean }> = [
-  { verb: "Started", token: "pnpm dev" },
-  { verb: "Opened", token: "localhost:3000" },
-  { verb: "Updated", token: "src/checkout.ts" },
-  { verb: "Clicked", token: "Pay now" },
-  { verb: "Checkout flow passed", done: true },
-];
-
-const RUN_ARTIFACTS: ReadonlyArray<{
+const RUN_CAPABILITIES: ReadonlyArray<{
   readonly icon: ComponentType<{ className?: string }>;
   readonly label: string;
+  readonly value: string;
+  readonly mono?: boolean;
 }> = [
-  { icon: Video, label: "Video" },
-  { icon: ScrollText, label: "Logs" },
-  { icon: GitCompare, label: "File diff" },
-  { icon: Play, label: "Replay" },
+  { icon: Terminal, label: "Terminal", value: "pnpm dev", mono: true },
+  { icon: Globe, label: "Browser", value: "Checkout complete" },
+  { icon: GitBranch, label: "Repository", value: "2 files changed" },
+  { icon: Server, label: "Services", value: "App + database running" },
 ];
 
-function RunInspector() {
+function FlowArrow() {
+  return (
+    <div className="flex justify-center py-3" aria-hidden="true">
+      <ArrowDown className="size-5 text-faint" />
+    </div>
+  );
+}
+
+function HeroDiagram() {
   const reduce = useReducedMotion();
   return (
-    <div className="relative">
-      <div
-        className="absolute -inset-x-3 -bottom-4 top-6 rounded-[1.75rem] border border-border bg-panel/60 shadow-[var(--shadow-sm)]"
-        aria-hidden="true"
-      />
-      <motion.div
-        initial={reduce ? false : { opacity: 0, y: 24 }}
-        animate={reduce ? {} : { opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-        className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-panel shadow-[var(--shadow-cobalt)]"
-      >
-        {/* run header */}
-        <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-5 py-4">
-          <span className="truncate text-sm font-semibold text-foreground">Fix checkout redirect</span>
-          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-success">
-            <span className="size-1.5 rounded-full bg-success-dot" aria-hidden="true" />
-            Completed
+    <motion.div
+      initial={reduce ? false : { opacity: 0, y: 24 }}
+      animate={reduce ? {} : { opacity: 1, y: 0 }}
+      transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
+      className="mx-auto w-full max-w-md min-w-0"
+    >
+      {/* Stage 1 — the task */}
+      <div className="mx-auto max-w-[20rem] rounded-2xl border border-border bg-panel px-5 py-4 shadow-[var(--shadow-sm)]">
+        <p className="ev-eyebrow">Agent task</p>
+        <div className="mt-2 flex items-center gap-2.5">
+          <GitPullRequest className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="text-sm font-medium text-foreground">Fix checkout redirect</span>
+        </div>
+      </div>
+
+      <FlowArrow />
+
+      {/* Stage 2 — the Sealant run: the environment around the agent */}
+      <div className="rounded-3xl border border-primary/30 bg-panel p-5 shadow-[var(--shadow-cobalt)]">
+        <div className="flex items-center justify-between gap-3">
+          <p className="ev-eyebrow text-primary">Sealant run</p>
+          <span className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span className="relative inline-flex size-2 items-center justify-center">
+              <span className="absolute inline-flex size-2 rounded-full bg-primary/40 motion-safe:animate-ping" />
+              <span className="relative size-1.5 rounded-full bg-primary" />
+            </span>
+            Agent working
           </span>
         </div>
-
-        {/* tabs */}
-        <div className="flex items-center gap-1 border-b border-rule-faint px-3">
-          {RUN_TABS.map((tab, i) => {
-            const Icon = RUN_TAB_ICONS[tab]!;
-            const active = i === 0;
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          {RUN_CAPABILITIES.map((c) => {
+            const Icon = c.icon;
             return (
-              <span
-                key={tab}
-                className={`relative inline-flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium ${
-                  active ? "text-primary" : "text-muted-foreground"
-                }`}
-              >
-                <Icon className="size-3.5" aria-hidden="true" />
-                {tab}
-                {active ? (
-                  <span
-                    className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary"
-                    aria-hidden="true"
-                  />
-                ) : null}
-              </span>
+              <div key={c.label} className="rounded-xl border border-rule-faint bg-background p-3.5">
+                <div className="flex items-center gap-2">
+                  <Icon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="text-xs font-medium text-label">{c.label}</span>
+                </div>
+                <p className={`mt-1.5 text-sm text-ink-2 ${c.mono ? "font-mono" : ""}`}>{c.value}</p>
+              </div>
             );
           })}
         </div>
+      </div>
 
-        {/* browser preview — the agent did real work */}
-        <div className="p-4">
-          <div className="overflow-hidden rounded-xl border border-border bg-background">
-            <div className="flex items-center gap-2 border-b border-rule-faint bg-muted/60 px-3 py-2">
-              <Lock className="size-3 text-faint" aria-hidden="true" />
-              <span className="font-mono text-[0.72rem] text-muted-foreground">localhost:3000</span>
-            </div>
-            <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
-              <span className="inline-flex size-12 items-center justify-center rounded-full bg-[var(--sw-add-bg)] text-success">
-                <Check className="size-6" aria-hidden="true" />
-              </span>
-              <p className="text-base font-semibold text-foreground">Checkout complete</p>
-              <p className="font-mono text-xs text-faint">Order #1042 · $79.00</p>
-            </div>
-          </div>
-        </div>
+      <FlowArrow />
 
-        {/* execution timeline — Sealant recorded what happened */}
-        <div className="border-t border-rule-faint px-5 py-4">
-          <p className="ev-eyebrow">Execution timeline</p>
-          <ul className="mt-3 space-y-2.5">
-            {RUN_TIMELINE.map((e) => (
-              <li key={e.verb} className="flex items-center gap-3 text-sm">
-                {e.done ? (
-                  <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
-                ) : (
-                  <span
-                    className="inline-flex size-4 shrink-0 items-center justify-center"
-                    aria-hidden="true"
-                  >
-                    <span className="size-1.5 rounded-full bg-primary/50" />
-                  </span>
-                )}
-                <span className={e.done ? "font-medium text-success" : "text-ink-2"}>{e.verb}</span>
-                {e.token ? <span className="font-mono text-xs text-faint">{e.token}</span> : null}
-              </li>
-            ))}
-          </ul>
+      {/* Stage 3 — the inspectable record */}
+      <div className="mx-auto max-w-[22rem] rounded-2xl border border-border bg-panel px-5 py-4 shadow-[var(--shadow-sm)]">
+        <p className="ev-eyebrow">Execution record</p>
+        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-sm text-ink-2">
+          <span>
+            <span className="font-semibold text-foreground">12</span> commands
+          </span>
+          <span>
+            <span className="font-semibold text-foreground">4</span> browser actions
+          </span>
+          <span>
+            <span className="font-semibold text-foreground">2</span> file changes
+          </span>
         </div>
-
-        {/* artifacts */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-rule-faint bg-background px-5 py-3.5">
-          {RUN_ARTIFACTS.map((a) => {
-            const Icon = a.icon;
-            return (
-              <span
-                key={a.label}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-panel px-2.5 py-1 text-xs text-muted-foreground"
-              >
-                <Icon className="size-3.5" aria-hidden="true" />
-                {a.label}
-              </span>
-            );
-          })}
-        </div>
-      </motion.div>
-    </div>
+        <p className="mt-3 border-t border-rule-faint pt-3 font-mono text-xs text-faint">
+          Video · Logs · Diff · Timeline · Replay
+        </p>
+      </div>
+    </motion.div>
   );
 }
 
@@ -358,21 +312,21 @@ function Hero() {
       <Container className="relative grid flex-1 items-center gap-12 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:gap-16">
         <motion.div className="min-w-0" {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>Execution infrastructure for AI agents</Eyebrow>
+            <Eyebrow>Runtime for AI developer agents</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
-            className="mt-6 font-display text-[2.7rem] leading-[1.03] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.7rem]"
+            className="mt-6 font-display text-[2.3rem] leading-[1.08] font-semibold tracking-[-0.025em] text-foreground text-balance sm:text-[2.8rem] lg:text-[3.15rem]"
           >
-            Give AI agents a real development environment.
+            Give AI agents a real dev environment. See everything they do inside it.
           </motion.h1>
           <motion.p
             {...childMotion}
-            className="mt-6 max-w-[48ch] text-lg leading-relaxed text-muted-foreground"
+            className="mt-6 max-w-[50ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant gives agents an isolated workspace with a terminal, browser, files, and
-            development services — while recording every action as an{" "}
-            <span className="text-primary">inspectable execution history</span>.
+            Sealant runs agents with a browser, terminal, repository, and development services —
+            then captures every command, browser action, file change, and network request as a{" "}
+            <span className="text-primary">replayable run</span>.
           </motion.p>
           <motion.div {...childMotion} className="mt-9 flex flex-wrap items-center gap-3">
             <PrimaryCTA href={REPO_URL}>
@@ -383,27 +337,24 @@ function Hero() {
               />
             </PrimaryCTA>
             <SecondaryCTA href="#observability">
-              View an example run
+              See an example run
               <ArrowRight className="size-4" aria-hidden="true" />
             </SecondaryCTA>
           </motion.div>
         </motion.div>
 
         <div className="min-w-0">
-          <RunInspector />
+          <HeroDiagram />
         </div>
       </Container>
 
       <Container className="relative pb-10">
-        <div className="flex flex-col items-center gap-3 border-t border-border/60 pt-6 text-center sm:flex-row sm:justify-between sm:text-left">
-          <p className="font-mono text-xs tracking-[0.02em] text-faint">
-            Browser · Terminal · Processes · Files · Network · Execution history
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Built on Sealant:{" "}
-            <span className="font-medium text-foreground">Verify · Repro · Handoff</span>
-          </p>
-        </div>
+        <p className="border-t border-border/60 pt-6 text-center text-sm text-muted-foreground">
+          Built with Sealant:{" "}
+          <span className="font-medium text-foreground">
+            verified coding tasks · autonomous QA · runnable bug reproductions
+          </span>
+        </p>
       </Container>
     </section>
   );
