@@ -1,21 +1,34 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { motion, useReducedMotion, type Variants } from "framer-motion";
 import {
+  Activity,
   ArrowRight,
   ArrowUpRight,
+  Boxes,
+  Bug,
   Check,
-  CircleDot,
+  Cloud,
   Code2,
+  Cpu,
+  Database,
   Eye,
+  Gauge,
   GitPullRequest,
-  Key,
+  KeyRound,
+  Laptop,
   Layers,
+  ListTree,
   Lock,
   Network,
-  Shield,
+  Radio,
+  RefreshCw,
+  ScrollText,
+  Server,
+  ShieldCheck,
   Terminal,
+  Workflow,
 } from "lucide-react";
-import { type ReactNode } from "react";
+import { type ComponentType, type ReactNode } from "react";
 
 import { GitHubLogo } from "#/components/github";
 
@@ -24,6 +37,7 @@ export const Route = createFileRoute("/")({
 });
 
 const REPO_URL = "https://github.com/get-sealant/sealant";
+const DOCS_URL = "https://github.com/get-sealant/sealant";
 
 // ── Motion ──────────────────────────────────────────────────────────────────
 
@@ -47,11 +61,7 @@ function Reveal({
   delay?: number;
 }) {
   const reduce = useReducedMotion();
-
-  if (reduce) {
-    return <div className={className}>{children}</div>;
-  }
-
+  if (reduce) return <div className={className}>{children}</div>;
   return (
     <motion.div
       className={className}
@@ -90,19 +100,34 @@ function Display({ children, className = "" }: { children: ReactNode; className?
   );
 }
 
-function PrimaryCTA({
-  href,
-  children,
-  external = true,
+function SectionHead({
+  eyebrow,
+  title,
+  intro,
+  className = "max-w-[58ch]",
 }: {
-  href: string;
-  children: ReactNode;
-  external?: boolean;
+  eyebrow: string;
+  title: ReactNode;
+  intro?: ReactNode;
+  className?: string;
 }) {
+  return (
+    <Reveal className={className}>
+      <Eyebrow>{eyebrow}</Eyebrow>
+      <Display className="mt-5 text-[2rem] leading-[1.08] sm:text-4xl lg:text-5xl">{title}</Display>
+      {intro ? (
+        <div className="mt-5 space-y-4 text-lg leading-relaxed text-muted-foreground">{intro}</div>
+      ) : null}
+    </Reveal>
+  );
+}
+
+function PrimaryCTA({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a
       href={href}
-      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+      target="_blank"
+      rel="noreferrer"
       className="group inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
     >
       {children}
@@ -130,102 +155,129 @@ function SecondaryCTA({
   );
 }
 
-// ── The signature: a run record that lifts off the canvas ─────────────────────
-
-function RecordingPulse() {
-  const reduce = useReducedMotion();
-  return (
-    <span className="relative inline-flex size-2.5 items-center justify-center" aria-hidden="true">
-      {!reduce && (
-        <motion.span
-          className="absolute inset-0 rounded-full bg-primary"
-          animate={{ scale: [1, 2.4], opacity: [0.5, 0] }}
-          transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
-        />
-      )}
-      <span className="relative size-2 rounded-full bg-primary" />
-    </span>
-  );
-}
-
-function EvidenceRow({
+// Elevated mono "evidence" panel chrome.
+function MonoPanel({
   label,
+  right,
   children,
+  className = "",
+  lift = false,
 }: {
   label: string;
+  right?: ReactNode;
   children: ReactNode;
+  className?: string;
+  lift?: boolean;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-2.5">
-      <span className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{label}</span>
-      <span className="text-right font-mono text-xs text-ink-2">{children}</span>
+    <div
+      className={`min-w-0 overflow-hidden rounded-3xl border border-border bg-panel ${
+        lift ? "shadow-[var(--shadow-cobalt)]" : "shadow-[var(--shadow-md)]"
+      } ${className}`}
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-5 py-3.5">
+        <span className="font-mono text-xs tracking-[0.02em] text-label">{label}</span>
+        {right}
+      </div>
+      {children}
     </div>
   );
 }
 
-function RunRecordCard() {
+function MonoRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[7rem_1fr] gap-3 py-3">
+      <span className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{label}</span>
+      <span className="min-w-0 font-mono text-xs leading-relaxed break-words text-ink-2">
+        {children}
+      </span>
+    </div>
+  );
+}
+
+// ── Hero code panel — SDK + event capture (the signature) ─────────────────────
+
+const HERO_CODE: ReadonlyArray<{ readonly t: string; readonly tone?: "comment" | "accent" }> = [
+  { t: "const run = await sealant.runs.create({" },
+  { t: '  workspace: { repo: "acme/storefront", ref: "checkout-fix" },' },
+  { t: "})" },
+  { t: "" },
+  { t: 'await run.processes.start({ command: ["pnpm", "test", "checkout"] })' },
+  { t: "" },
+  { t: "// every action is captured as a structured, replayable event", tone: "comment" },
+  { t: "for await (const event of run.events()) {", tone: "accent" },
+  { t: "  record(event)", tone: "accent" },
+  { t: "}" },
+];
+
+const HERO_EVENTS: ReadonlyArray<{ readonly k: string; readonly v: string; readonly dot: string }> =
+  [
+    { k: "process.started", v: "pnpm test checkout", dot: "bg-faint" },
+    { k: "file.changed", v: "src/checkout.ts", dot: "bg-warning-dot" },
+    { k: "net.request", v: "api.stripe.test", dot: "bg-primary" },
+    { k: "process.exited", v: "status 0", dot: "bg-success-dot" },
+  ];
+
+function HeroCode() {
   const reduce = useReducedMotion();
   return (
     <div className="relative">
-      {/* depth: a back panel peeking behind */}
       <div
         className="absolute -inset-x-3 -bottom-4 top-6 rounded-[1.75rem] border border-border bg-panel/60 shadow-[var(--shadow-sm)]"
         aria-hidden="true"
       />
       <motion.div
-        initial={reduce ? false : { opacity: 0, y: 24, rotateX: 6 }}
-        animate={reduce ? {} : { opacity: 1, y: 0, rotateX: 0 }}
-        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-        className="relative overflow-hidden rounded-[1.75rem] border border-border bg-panel shadow-[var(--shadow-cobalt)]"
+        initial={reduce ? false : { opacity: 0, y: 24 }}
+        animate={reduce ? {} : { opacity: 1, y: 0 }}
+        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
+        className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-[#1c1c1f] shadow-[var(--shadow-cobalt)]"
       >
-        {/* header */}
-        <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-5 py-4">
-          <span className="inline-flex items-center gap-2.5">
-            <RecordingPulse />
-            <span className="font-mono text-xs text-ink-2">run · wf_482</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-            <span className="size-1.5 rounded-full bg-success-dot" aria-hidden="true" />
-            Reviewable
+        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+          <span className="font-mono text-xs text-white/55">runs.ts</span>
+          <span className="flex items-center gap-1.5" aria-hidden="true">
+            <span className="size-2.5 rounded-full bg-white/15" />
+            <span className="size-2.5 rounded-full bg-white/15" />
+            <span className="size-2.5 rounded-full bg-primary/70" />
           </span>
         </div>
 
-        {/* objective */}
-        <div className="px-5 pt-4">
-          <p className="ev-eyebrow">Objective</p>
-          <p className="mt-1.5 text-sm font-medium text-foreground">
-            Fix retry handling for failed invoices
+        <pre className="overflow-x-auto px-5 py-5 font-mono text-[0.78rem] leading-[1.75]">
+          <code>
+            {HERO_CODE.map((line, i) => (
+              <span
+                key={i}
+                className={`block ${
+                  line.tone === "comment"
+                    ? "text-white/40"
+                    : line.tone === "accent"
+                      ? "text-[#9db4f0]"
+                      : "text-[#e6e6ea]"
+                }`}
+              >
+                {line.t.length === 0 ? " " : line.t}
+              </span>
+            ))}
+          </code>
+        </pre>
+
+        <div className="border-t border-white/10 px-5 py-4">
+          <p className="font-mono text-[0.62rem] tracking-[0.1em] text-white/40 uppercase">
+            Captured events
           </p>
+          <ul className="mt-2.5 space-y-1.5">
+            {HERO_EVENTS.map((e) => (
+              <li key={e.k} className="flex items-center gap-3 font-mono text-xs">
+                <span className={`size-1.5 shrink-0 rounded-full ${e.dot}`} aria-hidden="true" />
+                <span className="text-[#9db4f0]">{e.k}</span>
+                <span className="ml-auto truncate pl-3 text-white/45">{e.v}</span>
+              </li>
+            ))}
+          </ul>
         </div>
 
-        {/* evidence */}
-        <div className="mt-2 divide-y divide-rule-faint px-5">
-          <EvidenceRow label="Repository">acme/billing · #482</EvidenceRow>
-          <EvidenceRow label="Ref">main @ 8f3c20a</EvidenceRow>
-          <EvidenceRow label="Tests">
-            <span className="text-success">11 passed</span>
-            <span className="text-faint"> · </span>
-            <span className="text-danger">1 failed</span>
-          </EvidenceRow>
-        </div>
-
-        {/* a diff peek — edge marks, not floods */}
-        <div className="m-5 mt-3 overflow-hidden rounded-xl border border-border bg-background">
-          <div className="border-b border-rule-faint px-3 py-2 font-mono text-[0.7rem] text-label">
-            lib/invoice/round.ts
-          </div>
-          <div className="font-mono text-[0.72rem] leading-6">
-            <div className="flex bg-[var(--sw-del-bg)]">
-              <span className="w-0.5 shrink-0 bg-[var(--sw-del-edge)]" />
-              <span className="w-5 shrink-0 text-center text-[var(--sw-del-edge)]">-</span>
-              <span className="text-ink-2">return Math.round(amountMinor)</span>
-            </div>
-            <div className="flex bg-[var(--sw-add-bg)]">
-              <span className="w-0.5 shrink-0 bg-[var(--sw-add-edge)]" />
-              <span className="w-5 shrink-0 text-center text-[var(--sw-add-edge)]">+</span>
-              <span className="text-ink-2">return roundHalfEven(amountMinor, scale)</span>
-            </div>
-          </div>
+        <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
+          <Activity className="size-3.5 text-primary" aria-hidden="true" />
+          <span className="font-mono text-xs text-white/55">2,418 events · fully replayable</span>
         </div>
       </motion.div>
     </div>
@@ -242,7 +294,6 @@ function Hero() {
   const childMotion = reduce ? {} : { variants: riseChild };
   return (
     <section className="relative overflow-hidden bg-[var(--sw-canvas)]">
-      {/* soft cobalt glow + faint grid, very low contrast */}
       <div
         className="pointer-events-none absolute -top-40 right-[-10%] size-[42rem] rounded-full bg-[radial-gradient(circle,rgba(32,82,204,0.16),transparent_62%)] blur-2xl"
         aria-hidden="true"
@@ -252,50 +303,49 @@ function Hero() {
         aria-hidden="true"
       />
       <Container className="relative grid items-center gap-14 py-20 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:py-28">
-        <motion.div {...parentMotion}>
+        <motion.div className="min-w-0" {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>Sandboxed, recorded runs for AI coding agents</Eyebrow>
+            <Eyebrow>Execution infrastructure for developer software</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
-            className="mt-6 font-display text-[2.9rem] leading-[1.02] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-6xl lg:text-[4.1rem]"
+            className="mt-6 font-display text-[2.6rem] leading-[1.04] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.6rem]"
           >
-            Every agent run, recorded
-            <br />
-            and <span className="text-primary">reviewable</span>.
+            Give AI agents a real <span className="text-primary">development environment</span> to
+            work in.
           </motion.h1>
           <motion.p
             {...childMotion}
-            className="mt-6 max-w-[46ch] text-lg leading-relaxed text-muted-foreground"
+            className="mt-6 max-w-[52ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant runs repos, issues, and agent tasks in isolated sandboxes and records what
-            happened from inside the runtime — every command, file change, and check.
+            Sealant captures every command, process, file change, and network request as a
+            structured event stream — a complete, replayable record of a run that your product can
+            observe live or replay later, exactly as it happened.
           </motion.p>
-          <motion.div
-            {...childMotion}
-            className="mt-9 flex flex-wrap items-center gap-3"
-          >
+          <motion.div {...childMotion} className="mt-9 flex flex-wrap items-center gap-3">
             <PrimaryCTA href={REPO_URL}>
-              Run an issue
+              Start building
               <ArrowUpRight
                 className="size-4 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
                 aria-hidden="true"
               />
             </PrimaryCTA>
-            <SecondaryCTA href="#review">
-              See a run record
+            <SecondaryCTA href={DOCS_URL} external>
+              Read the documentation
               <ArrowRight className="size-4" aria-hidden="true" />
             </SecondaryCTA>
           </motion.div>
-          <motion.p
-            {...childMotion}
-            className="mt-8 font-mono text-xs text-faint"
-          >
-            Open source · self-hostable · runs on Docker or Kubernetes
+          <motion.p {...childMotion} className="mt-8 font-mono text-xs text-faint">
+            TypeScript SDK · Structured event stream · Replayable runs · Local runtime
           </motion.p>
         </motion.div>
 
-        <RunRecordCard />
+        <div className="min-w-0">
+          <HeroCode />
+          <p className="mt-5 text-center font-mono text-xs text-faint">
+            Capture a run as a replayable event stream — observe it live or replay it later.
+          </p>
+        </div>
       </Container>
     </section>
   );
@@ -303,22 +353,25 @@ function Hero() {
 
 // ── Problem ───────────────────────────────────────────────────────────────────
 
-const painPoints: ReadonlyArray<{ readonly title: string; readonly body: string }> = [
+const problemCards: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
+}> = [
   {
-    title: "Agents need disposable environments",
-    body: "Running an agent on a laptop hands it your files, your secrets, and your network. Runs need a controlled place that can be torn down after.",
+    icon: Boxes,
+    title: "Environment",
+    body: "Give software a persistent workspace with real files, terminals, commands, and long-running services.",
   },
   {
-    title: "Runs must be reproducible",
-    body: "A diff without its environment is a guess. Reviewers need the exact repo ref, tooling, and policy a run used.",
+    icon: Gauge,
+    title: "Control",
+    body: "Start, inspect, interrupt, and terminate work without losing track of child processes or leaving resources behind.",
   },
   {
-    title: "PRs need evidence, not summaries",
-    body: "A reviewer gets a diff and a blurb — but not what commands ran, what changed, what failed, or what access the agent had.",
-  },
-  {
-    title: "Work starts from anywhere",
-    body: "Issues arrive in GitHub, Linear, Slack, or your phone. Waiting to be at a laptop to kick off a run slows the whole loop.",
+    icon: Activity,
+    title: "Record",
+    body: "Receive a structured event stream covering commands, output, file changes, network activity, lifecycle events, and resulting artifacts.",
   },
 ];
 
@@ -326,182 +379,38 @@ function Problem() {
   return (
     <section id="problem" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
       <Container>
-        <Reveal className="max-w-[58ch]">
-          <Eyebrow>The problem</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            AI can write the code. Teams still have to trust the work.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            An agent's work is mostly invisible. A reviewer sees a diff and a summary — not the
-            environment it ran in, the commands it executed, what changed, what failed, or what
-            access it had.
-          </p>
-        </Reveal>
-
-        <div className="mt-14 grid gap-5 sm:grid-cols-2">
-          {painPoints.map((point, index) => (
-            <Reveal key={point.title} delay={(index % 2) * 0.06}>
-              <motion.div
-                whileHover={{ y: -4 }}
-                transition={{ duration: 0.2 }}
-                className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)] transition-shadow duration-200 hover:shadow-[var(--shadow-md)]"
-              >
-                <span className="font-mono text-sm text-faint">{`0${index + 1}`}</span>
-                <h3 className="mt-4 text-lg font-semibold tracking-[-0.01em] text-foreground">
-                  {point.title}
-                </h3>
-                <p className="mt-2.5 leading-relaxed text-muted-foreground">{point.body}</p>
-              </motion.div>
-            </Reveal>
-          ))}
-        </div>
-      </Container>
-    </section>
-  );
-}
-
-// ── Core product: the pipeline ─────────────────────────────────────────────────
-
-const pipelineStages: ReadonlyArray<{
-  readonly step: string;
-  readonly label: string;
-  readonly items: ReadonlyArray<string>;
-}> = [
-  { step: "01", label: "Trigger", items: ["issue", "repo", "PR", "SDK", "phone"] },
-  { step: "02", label: "Policy", items: ["secrets", "network", "tools", "approvals"] },
-  { step: "03", label: "Sandbox", items: ["isolated runtime"] },
-  { step: "04", label: "Recorder", items: ["commands", "processes", "files", "events"] },
-  { step: "05", label: "Validation", items: ["tests", "lint", "typecheck", "checks"] },
-  { step: "06", label: "Review", items: ["summary", "diff", "evidence"] },
-];
-
-function CoreProduct() {
-  return (
-    <section id="product" className="bg-panel py-24 lg:py-32">
-      <Container>
-        <Reveal className="max-w-[56ch]">
-          <Eyebrow>How it works</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Every run gets a sandbox and a recorder.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            A run starts from a repo, issue, PR, SDK call, or phone. Sealant launches an isolated
-            sandbox, runs the human or AI workflow, and records the execution from inside the
-            runtime.
-          </p>
-        </Reveal>
-
-        <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {pipelineStages.map((stage, index) => (
-            <Reveal key={stage.step} delay={(index % 3) * 0.05}>
-              <motion.div
-                whileHover={{ y: -4 }}
-                transition={{ duration: 0.2 }}
-                className="group h-full rounded-2xl border border-border bg-background p-6 shadow-[var(--shadow-xs)] transition-shadow duration-200 hover:shadow-[var(--shadow-md)]"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-xs text-primary">{stage.step}</span>
-                  <span className="text-base font-semibold tracking-[-0.01em] text-foreground">
-                    {stage.label}
-                  </span>
-                </div>
-                <ul className="mt-4 flex flex-wrap gap-1.5">
-                  {stage.items.map((item) => (
-                    <li
-                      key={item}
-                      className="rounded-lg bg-muted px-2.5 py-1 font-mono text-[0.7rem] text-muted-foreground"
-                    >
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </motion.div>
-            </Reveal>
-          ))}
-        </div>
-
-        <Reveal delay={0.1} className="mt-8">
-          <p className="font-mono text-xs text-faint">
-            Trigger&nbsp;→&nbsp;Policy&nbsp;→&nbsp;Sandbox&nbsp;→&nbsp;Recorder&nbsp;→&nbsp;Validation&nbsp;→&nbsp;Reviewable&nbsp;PR
-          </p>
-        </Reveal>
-      </Container>
-    </section>
-  );
-}
-
-// ── Security ────────────────────────────────────────────────────────────────
-
-const securityCaps: ReadonlyArray<{
-  readonly icon: typeof Shield;
-  readonly label: string;
-  readonly detail: string;
-}> = [
-  {
-    icon: Shield,
-    label: "Disposable sandboxes",
-    detail: "Each run gets a fresh runtime, torn down when the run ends. Nothing persists by default.",
-  },
-  {
-    icon: Key,
-    label: "Scoped repository access",
-    detail: "A run sees only the repo and ref it was given. Access is resolved per run, not inherited.",
-  },
-  {
-    icon: Lock,
-    label: "Scoped secrets and SSH keys",
-    detail: "Secrets are injected per run and scoped to the policy. They never live in the image.",
-  },
-  {
-    icon: Network,
-    label: "Network and runtime policy",
-    detail: "Restrict outbound network, pick the isolation level, and bound what a run can do.",
-  },
-  {
-    icon: Eye,
-    label: "Per-run environment records",
-    detail: "Every run records the environment it ran in: tooling, harness, policy, and runtime config.",
-  },
-  {
-    icon: Lock,
-    label: "Approval gates for risky actions",
-    detail: "Hold a run for a human decision before risky changes, secret access, or PR creation.",
-  },
-];
-
-function Security() {
-  return (
-    <section id="security" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
-      <Container>
-        <Reveal className="max-w-[56ch]">
-          <Eyebrow>Security</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Agents run with boundaries.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Each run is isolated, scoped, observed, and torn down when it ends — so an agent never
-            touches a developer's machine, network, or long-lived secrets.
-          </p>
-        </Reveal>
-
-        <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {securityCaps.map((cap, index) => {
-            const Icon = cap.icon;
+        <SectionHead
+          eyebrow="The problem"
+          title="Developer agents need more than a shell."
+          intro={
+            <>
+              <p>
+                Real engineering work crosses terminals, background servers, process trees, files,
+                local services, network requests, credentials, timeouts, signals, and cleanup.
+              </p>
+              <p>
+                Building all of that around an agent or developer tool means assembling a sandbox,
+                process supervisor, terminal service, policy layer, observability system, and
+                artifact store.
+              </p>
+              <p className="text-foreground">Sealant provides the execution layer as one coherent platform.</p>
+            </>
+          }
+        />
+        <div className="mt-14 grid gap-5 lg:grid-cols-3">
+          {problemCards.map((card, i) => {
+            const Icon = card.icon;
             return (
-              <Reveal key={cap.label} delay={(index % 3) * 0.05}>
-                <motion.div
-                  whileHover={{ y: -4 }}
-                  transition={{ duration: 0.2 }}
-                  className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)] transition-shadow duration-200 hover:shadow-[var(--shadow-md)]"
-                >
+              <Reveal key={card.title} delay={(i % 3) * 0.05}>
+                <div className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)] transition-[transform,box-shadow] duration-200 hover:-translate-y-1 hover:shadow-[var(--shadow-md)]">
                   <span className="inline-flex size-10 items-center justify-center rounded-xl bg-[var(--sw-wash)] text-primary">
-                    <Icon className="size-5" aria-hidden="true" />
+                    <Icon className="size-5" />
                   </span>
-                  <h3 className="mt-5 text-base font-semibold tracking-[-0.01em] text-foreground">
-                    {cap.label}
+                  <h3 className="mt-5 text-lg font-semibold tracking-[-0.01em] text-foreground">
+                    {card.title}
                   </h3>
-                  <p className="mt-2 leading-relaxed text-muted-foreground">{cap.detail}</p>
-                </motion.div>
+                  <p className="mt-2.5 leading-relaxed text-muted-foreground">{card.body}</p>
+                </div>
               </Reveal>
             );
           })}
@@ -511,192 +420,326 @@ function Security() {
   );
 }
 
-// ── Reproducibility ────────────────────────────────────────────────────────────
+// ── Core concept ────────────────────────────────────────────────────────────
 
-const fingerprint: ReadonlyArray<{ readonly label: string; readonly value: string }> = [
-  { label: "Repository", value: "acme/billing" },
-  { label: "Ref", value: "main @ 8f3c20a" },
-  { label: "Sandbox image", value: "sha256:c1d9…" },
-  { label: "Harness", value: "Codex / Claude Code / OpenCode" },
-  { label: "Runtime", value: "Docker / Kubernetes" },
-  { label: "Policy", value: "restricted network, scoped secrets" },
-  { label: "Validation", value: "12 checks · 11 passed · 1 warning" },
+const runPrimitives = [
+  "Workspace",
+  "Processes",
+  "Terminal",
+  "Files",
+  "Network",
+  "Policies",
+  "Secrets",
+  "Lifecycle",
 ];
 
-function Reproducibility() {
+function FlowLabel({ children }: { children: ReactNode }) {
   return (
-    <section id="reproducibility" className="bg-panel py-24 lg:py-32">
-      <Container className="grid gap-12 lg:grid-cols-[1fr_1fr] lg:items-center lg:gap-20">
-        <Reveal>
-          <Eyebrow>Reproducibility</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            A run is a real artifact, not a chat transcript.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Sealant captures the inputs that matter: repo ref, issue context, environment profile,
-            packages, runtime, harness, commands, logs, artifacts, validation, and final diff.
-          </p>
-          <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
-            So teams can rerun, resume, compare, debug, and explain software work.
-          </p>
-        </Reveal>
-
-        <Reveal delay={0.1}>
-          <div className="overflow-hidden rounded-3xl border border-border bg-background shadow-[var(--shadow-md)]">
-            <div className="flex items-center gap-2.5 border-b border-rule-faint px-6 py-4">
-              <CircleDot className="size-4 text-primary" aria-hidden="true" />
-              <span className="font-mono text-xs text-label">Run fingerprint</span>
-            </div>
-            <dl className="divide-y divide-rule-faint px-6">
-              {fingerprint.map((row) => (
-                <div key={row.label} className="grid grid-cols-[8rem_1fr] gap-3 py-3.5">
-                  <dt className="font-mono text-[0.7rem] tracking-[0.02em] text-label">
-                    {row.label}
-                  </dt>
-                  <dd className="font-mono text-xs leading-relaxed text-ink-2">{row.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </Reveal>
-      </Container>
-    </section>
+    <span className="rounded-lg border border-border bg-panel px-4 py-2 font-mono text-xs text-ink-2 shadow-[var(--shadow-xs)]">
+      {children}
+    </span>
   );
 }
 
-// ── PR review ─────────────────────────────────────────────────────────────────
-
-const reviewRows: ReadonlyArray<{ readonly label: string; readonly value: ReactNode }> = [
-  { label: "Objective", value: "Fix retry handling for failed invoices" },
-  { label: "Commands", value: "pnpm test · pnpm typecheck · pnpm lint" },
-  { label: "Files changed", value: "3 files, grouped by intent" },
-  {
-    label: "Tests",
-    value: (
-      <span>
-        <span className="text-success">11 passed</span>
-        <span className="text-faint"> · </span>
-        <span className="text-danger">1 failed</span>
-        <span className="text-faint"> · 0 skipped</span>
-      </span>
-    ),
-  },
-  { label: "Agent notes", value: "Assumptions and uncertainties recorded by the agent" },
-  { label: "Evidence", value: "Raw logs and runtime events, kept" },
-];
-
-function PrReview() {
+function CoreConcept() {
   return (
-    <section id="review" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
-      <Container className="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-20">
-        <Reveal>
-          <Eyebrow>PR review</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Review the run before you review the diff.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Instead of inferring from a diff, you see what the run actually did: the objective, the
-            commands, test results, file changes, the risky spots, and validation — next to the
-            evidence.
-          </p>
-          <div className="mt-8">
-            <PrimaryCTA href={REPO_URL}>
-              Open a run record
-              <ArrowUpRight className="size-4" aria-hidden="true" />
-            </PrimaryCTA>
-          </div>
-        </Reveal>
+    <section id="core-concept" className="bg-panel py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Core concept"
+          title="Everything happens inside a Sealant Run."
+          intro={
+            <>
+              <p>
+                A run contains the environment, the work performed inside it, execution policies,
+                event history, and generated artifacts.
+              </p>
+              <p>
+                Your application can observe the run live, intervene when necessary, and retain its
+                history after execution has ended.
+              </p>
+            </>
+          }
+        />
 
-        <Reveal delay={0.1}>
-          <div className="overflow-hidden rounded-3xl border border-border bg-panel shadow-[var(--shadow-lg)]">
-            <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-6 py-4">
-              <span className="inline-flex items-center gap-2.5">
-                <RecordingPulse />
-                <span className="font-mono text-xs text-ink-2">run record · wf_482</span>
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success">
-                <Check className="size-3.5" aria-hidden="true" />
-                Reviewable
-              </span>
-            </div>
-            <dl className="divide-y divide-rule-faint px-6">
-              {reviewRows.map((row) => (
-                <div key={row.label} className="grid grid-cols-[7.5rem_1fr] gap-3 py-3.5">
-                  <dt className="font-mono text-[0.7rem] tracking-[0.02em] text-label">
-                    {row.label}
-                  </dt>
-                  <dd className="text-sm leading-relaxed text-ink-2">{row.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </Reveal>
-      </Container>
-    </section>
-  );
-}
+        <Reveal delay={0.08} className="mt-14">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <FlowLabel>Your product</FlowLabel>
+            <ArrowRight className="size-4 rotate-90 text-faint" aria-hidden="true" />
+            <FlowLabel>Sealant SDK or API</FlowLabel>
+            <ArrowRight className="size-4 rotate-90 text-faint" aria-hidden="true" />
 
-// ── Run from anywhere ───────────────────────────────────────────────────────────
-
-const phoneNotifications: ReadonlyArray<{
-  readonly icon: typeof Terminal;
-  readonly title: string;
-  readonly detail: string;
-}> = [
-  { icon: Terminal, title: "Run issue in sandbox", detail: "acme/billing · #482" },
-  { icon: Key, title: "Approve secret access", detail: "STRIPE_SECRET_KEY" },
-  { icon: Check, title: "Validation finished", detail: "11 / 12 checks passed" },
-  { icon: GitPullRequest, title: "PR ready for review", detail: "fix: retry handling" },
-];
-
-function RunFromAnywhere() {
-  return (
-    <section id="anywhere" className="bg-panel py-24 lg:py-32">
-      <Container className="grid gap-12 lg:grid-cols-[1fr_auto] lg:items-center lg:gap-20">
-        <Reveal>
-          <Eyebrow>Run from anywhere</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Trigger runs from where you already work.
-          </Display>
-          <p className="mt-5 max-w-[46ch] text-lg leading-relaxed text-muted-foreground">
-            Start a sandbox or issue workflow from the web app, GitHub, Slack, Linear, the CLI, the
-            SDK, or your phone. The run executes on your infrastructure, not your laptop.
-          </p>
-          <ul className="mt-7 flex flex-wrap gap-2">
-            {["Web app", "GitHub", "Slack", "Linear", "CLI", "SDK", "Phone"].map((source) => (
-              <li
-                key={source}
-                className="rounded-lg border border-border bg-background px-3 py-1.5 font-mono text-xs text-muted-foreground"
-              >
-                {source}
-              </li>
-            ))}
-          </ul>
-        </Reveal>
-
-        <Reveal delay={0.1}>
-          <div className="mx-auto w-[17rem] rounded-[2.25rem] border border-border bg-background p-3 shadow-[var(--shadow-lg)]">
-            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-muted" aria-hidden="true" />
-            <div className="space-y-2.5">
-              {phoneNotifications.map((n) => {
-                const Icon = n.icon;
-                return (
-                  <div
-                    key={n.title}
-                    className="rounded-2xl border border-rule-faint bg-panel px-4 py-3 shadow-[var(--shadow-xs)]"
+            <div className="w-full max-w-2xl rounded-3xl border border-border bg-background p-6 shadow-[var(--shadow-md)] sm:p-8">
+              <p className="ev-eyebrow text-center">Sealant Run</p>
+              <div className="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                {runPrimitives.map((p) => (
+                  <span
+                    key={p}
+                    className="rounded-lg border border-rule-faint bg-panel px-3 py-2.5 text-center font-mono text-xs text-ink-2"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <span className="inline-flex size-7 items-center justify-center rounded-lg bg-[var(--sw-wash)] text-primary">
-                        <Icon className="size-3.5" aria-hidden="true" />
-                      </span>
-                      <span className="text-xs font-medium text-foreground">{n.title}</span>
-                    </div>
-                    <p className="mt-1.5 pl-9 font-mono text-[0.7rem] text-muted-foreground">
-                      {n.detail}
-                    </p>
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <ArrowRight className="size-4 rotate-90 text-faint" aria-hidden="true" />
+            <div className="flex flex-wrap justify-center gap-2">
+              {["Events", "Diffs", "Logs", "Artifacts", "Timeline"].map((o) => (
+                <span
+                  key={o}
+                  className="rounded-lg bg-[var(--sw-wash)] px-3 py-1.5 font-mono text-xs text-primary"
+                >
+                  {o}
+                </span>
+              ))}
+            </div>
+          </div>
+        </Reveal>
+
+        <Reveal delay={0.12} className="mt-12">
+          <div className="mx-auto flex max-w-3xl items-start gap-4 rounded-2xl border-l-2 border-l-primary bg-background py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
+            <p className="text-base leading-relaxed text-foreground">
+              Model the work as one run with full history — not a sequence of independent shell
+              calls.
+            </p>
+          </div>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── How it works ─────────────────────────────────────────────────────────────
+
+function HowItWorks() {
+  return (
+    <section id="how" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead eyebrow="How it works" title="From request to inspectable result." />
+
+        <div className="mt-14 grid gap-12 lg:grid-cols-[1fr_1fr] lg:gap-16">
+          <Reveal className="min-w-0 space-y-10">
+            <Step
+              n="01"
+              title="Create the environment"
+              body="Start from a repository, project profile, or prepared workspace. Configure the services, access, and boundaries the work requires."
+            />
+            <Step
+              n="02"
+              title="Execute real developer work"
+              body="Run commands, open interactive terminals, start background processes, provide input, and keep application services alive across multiple operations."
+            />
+            <Step
+              n="03"
+              title="Observe and control"
+              body="Stream structured events while the work is happening. React to output, inspect process state, enforce timeouts, send signals, or stop the complete process group."
+            />
+            <Step
+              n="04"
+              title="Retain the result"
+              body="Store logs, file changes, artifacts, and the ordered execution history. Make them available for review, debugging, comparison, or later product workflows."
+            />
+          </Reveal>
+
+          <Reveal delay={0.1} className="min-w-0 lg:pt-12">
+            <MonoPanel
+              label="01 · example configuration"
+              right={<span className="font-mono text-[0.7rem] text-faint">create-run.json</span>}
+            >
+              <div className="space-y-4 px-5 py-5">
+                <MonoRow label="Repository">acme/storefront</MonoRow>
+                <MonoRow label="Branch">feature/checkout-fix</MonoRow>
+                <div className="border-t border-rule-faint pt-3.5">
+                  <p className="ev-eyebrow">Services</p>
+                  <ul className="mt-2 space-y-1.5 font-mono text-xs text-ink-2">
+                    <li className="flex items-center gap-2">
+                      <Check className="size-3.5 text-success" aria-hidden="true" /> PostgreSQL
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="size-3.5 text-success" aria-hidden="true" /> Redis
+                    </li>
+                  </ul>
+                </div>
+                <div className="border-t border-rule-faint pt-3.5">
+                  <p className="ev-eyebrow">Access</p>
+                  <ul className="mt-2 space-y-1.5 font-mono text-xs text-ink-2">
+                    <li className="flex items-center gap-2">
+                      <Check className="size-3.5 text-success" aria-hidden="true" /> GitHub
+                      development app
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="size-3.5 text-success" aria-hidden="true" /> Stripe test
+                      environment
+                    </li>
+                  </ul>
+                </div>
+                <div className="border-t border-rule-faint pt-3.5">
+                  <MonoRow label="Policy">Approved network hosts only</MonoRow>
+                </div>
+              </div>
+            </MonoPanel>
+          </Reveal>
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+function Step({ n, title, body }: { n: string; title: string; body: string }) {
+  return (
+    <div className="flex gap-5">
+      <span className="font-mono text-sm text-primary">{n}</span>
+      <div className="min-w-0">
+        <h3 className="text-xl font-semibold tracking-[-0.01em] text-foreground">{title}</h3>
+        <p className="mt-2 leading-relaxed text-muted-foreground">{body}</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Capabilities grid ──────────────────────────────────────────────────────────
+
+const capabilities: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
+}> = [
+  {
+    icon: Cpu,
+    title: "Process supervision",
+    body: "Start foreground and background commands, track their process trees, enforce timeouts, send signals, and clean up child processes reliably.",
+  },
+  {
+    icon: Terminal,
+    title: "Interactive terminals",
+    body: "Open PTY-backed sessions for tools that expect a real terminal rather than a basic command-execution endpoint.",
+  },
+  {
+    icon: ScrollText,
+    title: "Standard input and output",
+    body: "Capture stdin, stdout, and stderr as structured, ordered events while retaining their original relationship to the execution.",
+  },
+  {
+    icon: Layers,
+    title: "Filesystem observation",
+    body: "Watch the workspace and produce before-and-after diffs showing what the work created, modified, or removed.",
+  },
+  {
+    icon: Network,
+    title: "Network observation",
+    body: "Record proxied network activity and make external interactions part of the execution history.",
+  },
+  {
+    icon: Activity,
+    title: "Structured events",
+    body: "Consume process, terminal, filesystem, network, and lifecycle activity through a consistent event model.",
+  },
+  {
+    icon: Database,
+    title: "Durable history",
+    body: "Persist event logs and replay the history of a completed run without relying on transient terminal output.",
+  },
+  {
+    icon: KeyRound,
+    title: "Secret protection",
+    body: "Redact configured secret values from captured output before they become logs or artifacts.",
+  },
+  {
+    icon: RefreshCw,
+    title: "Runtime lifecycle",
+    body: "Run Sealant as the primary process inside a containerized development environment and reliably manage its complete lifecycle.",
+  },
+  {
+    icon: Code2,
+    title: "SDK and protocol access",
+    body: "Integrate through the TypeScript SDK or build directly against the local Protobuf control protocol.",
+  },
+];
+
+function Capabilities() {
+  return (
+    <section id="capabilities" className="bg-panel py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Capabilities"
+          title="The primitives developer products repeatedly rebuild."
+        />
+        <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {capabilities.map((cap, i) => {
+            const Icon = cap.icon;
+            return (
+              <Reveal key={cap.title} delay={(i % 3) * 0.04}>
+                <div className="h-full rounded-2xl border border-border bg-background p-6 shadow-[var(--shadow-xs)] transition-[transform,box-shadow] duration-200 hover:-translate-y-1 hover:shadow-[var(--shadow-md)]">
+                  <span className="inline-flex size-9 items-center justify-center rounded-lg bg-[var(--sw-wash)] text-primary">
+                    <Icon className="size-4.5" />
+                  </span>
+                  <h3 className="mt-4 text-base font-semibold tracking-[-0.01em] text-foreground">
+                    {cap.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{cap.body}</p>
+                </div>
+              </Reveal>
+            );
+          })}
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+// ── Differentiation ────────────────────────────────────────────────────────────
+
+const comparison: ReadonlyArray<readonly [string, string]> = [
+  ["Execute a command", "Supervise complete development workflows"],
+  ["Return stdout", "Emit structured execution events"],
+  ["One process per request", "Persistent processes and interactive sessions"],
+  ["Ephemeral console output", "Durable logs, artifacts, and timelines"],
+  ["Limited workspace visibility", "Before-and-after filesystem changes"],
+  ["Caller handles cleanup", "Process-group and child cleanup"],
+  ["Execution succeeds or fails", "Inspectable history of how it succeeded or failed"],
+];
+
+function Differentiation() {
+  return (
+    <section id="compare" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Differentiation"
+          title="More than sandbox infrastructure."
+          intro={
+            <p>
+              A sandbox gives code somewhere to execute. Sealant gives developer software an
+              environment it can operate, observe, and explain.
+            </p>
+          }
+        />
+
+        <Reveal delay={0.08} className="mt-12">
+          <div className="overflow-hidden rounded-3xl border border-border bg-panel shadow-[var(--shadow-md)]">
+            <div className="hidden grid-cols-2 border-b border-rule-faint sm:grid">
+              <div className="px-6 py-4">
+                <p className="ev-eyebrow">Basic command sandbox</p>
+              </div>
+              <div className="border-l border-rule-faint bg-[var(--sw-wash)] px-6 py-4">
+                <p className="font-mono text-xs font-medium tracking-[0.04em] text-primary uppercase">
+                  Sealant Platform
+                </p>
+              </div>
+            </div>
+            <div className="divide-y divide-rule-faint">
+              {comparison.map(([basic, sealant]) => (
+                <div key={sealant} className="grid sm:grid-cols-2">
+                  <div className="flex items-start gap-2.5 px-6 py-4 max-sm:pb-2">
+                    <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-faint" aria-hidden="true" />
+                    <span className="text-sm text-muted-foreground">{basic}</span>
                   </div>
-                );
-              })}
+                  <div className="flex items-start gap-2.5 px-6 py-4 max-sm:pt-0 sm:border-l sm:border-rule-faint sm:bg-[color-mix(in_oklab,var(--sw-wash)_55%,transparent)]">
+                    <Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="text-sm font-medium text-foreground">{sealant}</span>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </Reveal>
@@ -705,73 +748,382 @@ function RunFromAnywhere() {
   );
 }
 
-// ── SDK ─────────────────────────────────────────────────────────────────────
+// ── Observability ──────────────────────────────────────────────────────────────
 
-const sdkModules: ReadonlyArray<{
-  readonly name: string;
-  readonly icon: typeof Code2;
-  readonly methods: ReadonlyArray<string>;
+const timeline: ReadonlyArray<readonly [string, string, "info" | "ok" | "net" | "file"]> = [
+  ["00:00.000", "Run started", "info"],
+  ["00:00.184", "Workspace ready", "info"],
+  ["00:01.102", "Process started: pnpm install", "info"],
+  ["00:14.638", "Process exited: status 0", "ok"],
+  ["00:15.021", "Process started: pnpm dev", "info"],
+  ["00:16.412", "Port 3000 available", "ok"],
+  ["00:18.705", "File modified: src/checkout.ts", "file"],
+  ["00:20.018", "Process started: pnpm test checkout", "info"],
+  ["00:24.322", "Network request: api.stripe.test", "net"],
+  ["00:28.119", "Test suite passed", "ok"],
+  ["00:29.406", "Run completed", "ok"],
+];
+
+const obsTabs = ["Timeline", "Processes", "Terminal", "Files", "Network", "Artifacts"];
+
+function Observability() {
+  return (
+    <section id="observability" className="bg-panel py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Observability"
+          title="Every run is one ordered timeline."
+          intro={
+            <p>
+              Sealant turns low-level execution activity into a single ordered timeline. Your
+              product can present the level of detail appropriate for its users — from a concise
+              summary to a complete forensic view.
+            </p>
+          }
+        />
+
+        <Reveal delay={0.08} className="mt-12">
+          <div className="overflow-hidden rounded-3xl border border-border bg-background shadow-[var(--shadow-md)]">
+            <div className="flex gap-1 overflow-x-auto border-b border-rule-faint px-3 py-2.5">
+              {obsTabs.map((tab, i) => (
+                <span
+                  key={tab}
+                  className={`shrink-0 rounded-lg px-3 py-1.5 font-mono text-xs ${
+                    i === 0
+                      ? "bg-[var(--sw-wash)] text-primary"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {tab}
+                </span>
+              ))}
+            </div>
+            <div className="overflow-x-auto px-5 py-5">
+              <ul className="min-w-[26rem] space-y-2">
+                {timeline.map(([t, label, kind]) => (
+                  <li key={t + label} className="flex items-center gap-4 font-mono text-xs">
+                    <span className="shrink-0 text-faint tabular-nums">{t}</span>
+                    <span
+                      className={`size-1.5 shrink-0 rounded-full ${
+                        kind === "ok"
+                          ? "bg-success-dot"
+                          : kind === "net"
+                            ? "bg-primary"
+                            : kind === "file"
+                              ? "bg-warning-dot"
+                              : "bg-faint"
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span className="text-ink-2">{label}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </Reveal>
+
+        <Reveal delay={0.12} className="mt-6">
+          <p className="text-base text-muted-foreground">
+            Reconstruct a run from its event stream — not from scattered logs and final messages.
+          </p>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── Policy & access ────────────────────────────────────────────────────────────
+
+const policyNow: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
 }> = [
-  { name: "Sandboxes", icon: Layers, methods: ["create", "connect", "inspect", "stop"] },
-  { name: "Issue Workflows", icon: GitPullRequest, methods: ["run", "observe", "validate", "report"] },
-  { name: "Runtime Events", icon: Terminal, methods: ["commands", "output", "artifacts"] },
-  { name: "Policies", icon: Shield, methods: ["secrets", "network", "approvals"] },
+  {
+    icon: KeyRound,
+    title: "Governed secrets",
+    body: "Expose approved credentials through controlled references and redact configured values from captured output.",
+  },
+  {
+    icon: Network,
+    title: "Network boundaries",
+    body: "Control which external services a run may contact and record the requests it makes.",
+  },
+  {
+    icon: Lock,
+    title: "Filesystem boundaries",
+    body: "Restrict the locations a workflow may read or modify.",
+  },
+  {
+    icon: ListTree,
+    title: "Complete accountability",
+    body: "Retain the actions performed, policies applied, and exceptions granted as part of the run history.",
+  },
+];
+
+function PolicyAccess() {
+  return (
+    <section id="policy" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Policy & access"
+          title="Give software the access it needs — not unrestricted credentials."
+          intro={
+            <p>
+              Define the environment's permitted resources before execution begins. Provide approved
+              service access while keeping secret values out of prompts, logs, and generated
+              artifacts.
+            </p>
+          }
+        />
+
+        <div className="mt-14 grid gap-5 sm:grid-cols-2">
+          {policyNow.map((cap, i) => {
+            const Icon = cap.icon;
+            return (
+              <Reveal key={cap.title} delay={(i % 2) * 0.05}>
+                <div className="flex h-full gap-4 rounded-2xl border border-border bg-panel p-6 shadow-[var(--shadow-sm)]">
+                  <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-[var(--sw-wash)] text-primary">
+                    <Icon className="size-4.5" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold tracking-[-0.01em] text-foreground">
+                      {cap.title}
+                    </h3>
+                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{cap.body}</p>
+                  </div>
+                </div>
+              </Reveal>
+            );
+          })}
+        </div>
+
+        <Reveal delay={0.1} className="mt-10">
+          <div className="rounded-2xl border border-dashed border-border bg-panel/60 p-6">
+            <p className="ev-eyebrow">Coming to the managed platform</p>
+            <h3 className="mt-2 text-base font-semibold tracking-[-0.01em] text-foreground">
+              Action policies
+            </h3>
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              Require approval before sensitive commands, dependency changes, or other high-risk
+              operations — with the decision retained in the run history.
+            </p>
+          </div>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── Build with Sealant (use cases) ──────────────────────────────────────────────
+
+const useCases: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
+}> = [
+  {
+    icon: Terminal,
+    title: "Coding agents",
+    body: "Give an agent terminals, processes, files, networked development services, and a complete history of its work.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Autonomous QA",
+    body: "Start the application, exercise it with development tools, connect user actions to server behavior, and retain reviewable evidence.",
+  },
+  {
+    icon: Bug,
+    title: "Bug reproduction",
+    body: "Recreate reported conditions, execute exact commands, collect artifacts, and package the failure as a rerunnable case.",
+  },
+  {
+    icon: RefreshCw,
+    title: "CI debugging",
+    body: "Preserve failed execution state, inspect what changed, rerun selected commands, and compare successful and failed runs.",
+  },
+  {
+    icon: Workflow,
+    title: "Internal developer automation",
+    body: "Safely automate migrations, repository maintenance, dependency updates, release preparation, and other environment-dependent workflows.",
+  },
+];
+
+function BuildWith() {
+  return (
+    <section id="use-cases" className="bg-panel py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Build with Sealant"
+          title="Build the product. Don't rebuild the execution layer."
+        />
+        <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {useCases.map((uc, i) => {
+            const Icon = uc.icon;
+            return (
+              <Reveal key={uc.title} delay={(i % 3) * 0.04}>
+                <div className="h-full rounded-2xl border border-border bg-background p-6 shadow-[var(--shadow-xs)] transition-[transform,box-shadow] duration-200 hover:-translate-y-1 hover:shadow-[var(--shadow-md)]">
+                  <span className="inline-flex size-9 items-center justify-center rounded-lg bg-[var(--sw-wash)] text-primary">
+                    <Icon className="size-4.5" />
+                  </span>
+                  <h3 className="mt-4 text-base font-semibold tracking-[-0.01em] text-foreground">
+                    {uc.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{uc.body}</p>
+                </div>
+              </Reveal>
+            );
+          })}
+        </div>
+      </Container>
+    </section>
+  );
+}
+
+// ── Product family ──────────────────────────────────────────────────────────────
+
+const products: ReadonlyArray<{
+  readonly name: string;
+  readonly body: string;
+  readonly cta: string;
+}> = [
+  {
+    name: "Sealant Verify",
+    body: "Exercise expected behavior in the real application and turn a successful flow into reviewable proof and a reusable test.",
+    cta: "Explore Verify",
+  },
+  {
+    name: "Sealant Repro",
+    body: "Turn bug reports and failed runs into executable cases another developer can immediately rerun.",
+    cta: "Explore Repro",
+  },
+  {
+    name: "Sealant Handoff",
+    body: "Delegate engineering work and receive a tested change with a complete, inspectable handoff.",
+    cta: "Explore Handoff",
+  },
+];
+
+function ProductFamily() {
+  return (
+    <section id="products" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Product family"
+          title="Build your own product — or use ours."
+          intro={
+            <p>
+              Sealant's applications use the same execution platform available to other product
+              teams.
+            </p>
+          }
+        />
+        <div className="mt-14 grid gap-5 lg:grid-cols-3">
+          {products.map((p, i) => (
+            <Reveal key={p.name} delay={(i % 3) * 0.05}>
+              <div className="flex h-full flex-col rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)] transition-[transform,box-shadow] duration-200 hover:-translate-y-1 hover:shadow-[var(--shadow-md)]">
+                <h3 className="font-display text-xl font-semibold tracking-[-0.01em] text-foreground">
+                  {p.name}
+                </h3>
+                <p className="mt-3 grow leading-relaxed text-muted-foreground">{p.body}</p>
+                <a
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-5 inline-flex items-center gap-1.5 font-sans text-sm font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
+                >
+                  {p.cta}
+                  <ArrowRight className="size-4" aria-hidden="true" />
+                </a>
+              </div>
+            </Reveal>
+          ))}
+        </div>
+        <Reveal delay={0.12} className="mt-10">
+          <div className="rounded-2xl border-l-2 border-l-primary bg-panel py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
+            <p className="text-base leading-relaxed text-foreground">
+              The applications are opinionated workflows. The platform gives you the underlying
+              execution primitives.
+            </p>
+          </div>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── Integration ──────────────────────────────────────────────────────────────
+
+const integrations: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
+}> = [
+  {
+    icon: Code2,
+    title: "TypeScript SDK",
+    body: "Create runs, control processes, open terminal sessions, consume events, and retrieve resulting artifacts from a TypeScript application.",
+  },
+  {
+    icon: Terminal,
+    title: "Local Protobuf protocol",
+    body: "Communicate directly with the runtime from another language or build a custom SDK around the protocol.",
+  },
+  {
+    icon: Activity,
+    title: "Event consumers",
+    body: "Stream execution activity into your own interface, database, policy engine, or observability system.",
+  },
+  {
+    icon: GitPullRequest,
+    title: "Artifact integrations",
+    body: "Attach run results to pull requests, issues, support tickets, test reports, or internal developer portals.",
+  },
 ];
 
 const SDK_CODE_LINES: ReadonlyArray<string> = [
-  "const run = await sealant.issueWorkflows.run({",
-  '  repo: "acme/billing",',
-  "  issue: 482,",
-  '  harness: "codex",',
-  '  policy: "review-required",',
+  "const run = await sealant.runs.create({",
+  "  workspace: {",
+  '    repository: "acme/storefront",',
+  '    ref: "feature/checkout-fix",',
+  "  },",
   "});",
   "",
-  'await run.waitUntil("pr.ready");',
+  "const process = await run.processes.start({",
+  '  command: ["pnpm", "test", "checkout"],',
+  "});",
+  "",
+  "for await (const event of run.events()) {",
+  "  handleExecutionEvent(event);",
+  "}",
+  "",
+  "const result = await process.wait();",
+  "const artifacts = await run.artifacts.list();",
 ];
 
-function Sdk() {
+function Integration() {
   return (
-    <section id="sdk" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+    <section id="integration" className="bg-panel py-24 lg:py-32">
       <Container>
-        <Reveal className="max-w-[56ch]">
-          <Eyebrow>SDK & platform</Eyebrow>
-          <Display className="mt-5 text-[2.1rem] leading-[1.06] sm:text-4xl lg:text-5xl">
-            Build your own workflows on the run layer.
-          </Display>
-          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
-            Sealant exposes sandboxes, issue workflows, runtime events, profiles, policies, and
-            harnesses as programmable modules.
-          </p>
-        </Reveal>
-
-        <div className="mt-14 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-10">
+        <SectionHead eyebrow="Integration" title="Integrate at the level your product needs." />
+        <div className="mt-14 grid gap-6 lg:grid-cols-[1fr_1fr] lg:gap-10">
           <Reveal className="grid min-w-0 gap-4 sm:grid-cols-2">
-            {sdkModules.map((module) => {
-              const Icon = module.icon;
+            {integrations.map((it) => {
+              const Icon = it.icon;
               return (
-                <motion.div
-                  key={module.name}
-                  whileHover={{ y: -4 }}
-                  transition={{ duration: 0.2 }}
-                  className="rounded-2xl border border-border bg-panel p-5 shadow-[var(--shadow-sm)] transition-shadow duration-200 hover:shadow-[var(--shadow-md)]"
+                <div
+                  key={it.title}
+                  className="rounded-2xl border border-border bg-background p-5 shadow-[var(--shadow-xs)]"
                 >
                   <div className="flex items-center gap-2.5">
                     <Icon className="size-4 text-primary" aria-hidden="true" />
                     <span className="text-sm font-semibold tracking-[-0.01em] text-foreground">
-                      {module.name}
+                      {it.title}
                     </span>
                   </div>
-                  <ul className="mt-3 flex flex-wrap gap-1.5">
-                    {module.methods.map((method) => (
-                      <li
-                        key={method}
-                        className="rounded-md bg-muted px-2 py-0.5 font-mono text-[0.68rem] text-muted-foreground"
-                      >
-                        {method}
-                      </li>
-                    ))}
-                  </ul>
-                </motion.div>
+                  <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">{it.body}</p>
+                </div>
               );
             })}
           </Reveal>
@@ -779,25 +1131,224 @@ function Sdk() {
           <Reveal delay={0.08} className="min-w-0">
             <div className="overflow-hidden rounded-3xl border border-border bg-[#1c1c1f] shadow-[var(--shadow-lg)]">
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-                <span className="font-mono text-xs text-white/55">sealant.ts</span>
+                <span className="font-mono text-xs text-white/55">runs.ts</span>
                 <div className="flex items-center gap-1.5" aria-hidden="true">
                   <span className="size-2.5 rounded-full bg-white/15" />
                   <span className="size-2.5 rounded-full bg-white/15" />
                   <span className="size-2.5 rounded-full bg-primary/70" />
                 </div>
               </div>
-              <pre className="overflow-x-auto px-5 py-5 font-mono text-[0.8rem] leading-[1.85]">
+              <pre className="overflow-x-auto px-5 py-5 font-mono text-[0.8rem] leading-[1.8]">
                 <code>
                   {SDK_CODE_LINES.map((line, index) => (
                     <span key={index} className="block text-[#e6e6ea]">
-                      {line.length === 0 ? " " : line}
+                      {line.length === 0 ? " " : line}
                     </span>
                   ))}
                 </code>
               </pre>
             </div>
+            <p className="mt-4 font-mono text-xs text-faint">
+              Illustrative API shape; the published example matches the actual SDK.
+            </p>
           </Reveal>
         </div>
+      </Container>
+    </section>
+  );
+}
+
+// ── Local & managed ────────────────────────────────────────────────────────────
+
+function Deployment() {
+  return (
+    <section id="deploy" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead eyebrow="Run it anywhere" title="One execution model, wherever the work runs." />
+
+        <div className="mt-14 grid gap-5 lg:grid-cols-3">
+          <Reveal>
+            <div className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)]">
+              <span className="inline-flex size-10 items-center justify-center rounded-xl bg-[var(--sw-wash)] text-primary">
+                <Laptop className="size-5" />
+              </span>
+              <h3 className="mt-5 text-lg font-semibold tracking-[-0.01em] text-foreground">
+                Local runtime
+              </h3>
+              <p className="mt-2.5 leading-relaxed text-muted-foreground">
+                Develop against Sealant on your own machine or inside an environment you control.
+                Keep source code and development services inside your infrastructure.
+              </p>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.05}>
+            <div className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)]">
+              <span className="inline-flex size-10 items-center justify-center rounded-xl bg-[var(--sw-wash)] text-primary">
+                <Server className="size-5" />
+              </span>
+              <h3 className="mt-5 text-lg font-semibold tracking-[-0.01em] text-foreground">
+                Self-managed environments
+              </h3>
+              <p className="mt-2.5 leading-relaxed text-muted-foreground">
+                Place the runtime inside your existing container or workspace system while retaining
+                the Sealant control and event model.
+              </p>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.1}>
+            <div className="flex h-full flex-col rounded-2xl border border-dashed border-border bg-panel/60 p-7">
+              <span className="inline-flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                <Cloud className="size-5" />
+              </span>
+              <p className="ev-eyebrow mt-5">Managed platform — coming later</p>
+              <p className="mt-2.5 grow leading-relaxed text-muted-foreground">
+                Join the design program for managed workspaces, durable artifacts, concurrency, and
+                team controls.
+              </p>
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 inline-flex items-center gap-1.5 font-sans text-sm font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
+              >
+                Join the platform program
+                <ArrowRight className="size-4" aria-hidden="true" />
+              </a>
+            </div>
+          </Reveal>
+        </div>
+
+        <Reveal delay={0.12} className="mt-10">
+          <p className="text-base text-muted-foreground">
+            Build locally without designing a second architecture for hosted execution.
+          </p>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── Project context ────────────────────────────────────────────────────────────
+
+function ProjectContext() {
+  return (
+    <section id="context" className="bg-panel py-24 lg:py-32">
+      <Container className="grid gap-12 lg:grid-cols-[1fr_1fr] lg:items-center lg:gap-16">
+        <Reveal className="min-w-0">
+          <Eyebrow>Project context</Eyebrow>
+          <Display className="mt-5 text-[2rem] leading-[1.08] sm:text-4xl lg:text-5xl">
+            Let useful project knowledge survive the run.
+          </Display>
+          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
+            Associate repositories with reusable setup, services, verification commands, conventions,
+            and approved access. New runs can begin from established project knowledge rather than
+            rediscovering the same environment repeatedly.
+          </p>
+          <p className="mt-4 leading-relaxed text-muted-foreground">
+            Project context should remain explicit, versioned, and reviewable. It is infrastructure
+            for better outcomes — not a mysterious memory layer.
+          </p>
+        </Reveal>
+
+        <Reveal delay={0.1} className="min-w-0">
+          <MonoPanel
+            label="project profile"
+            right={<span className="font-mono text-[0.7rem] text-faint">acme/storefront</span>}
+          >
+            <div className="space-y-4 px-5 py-5">
+              <div>
+                <p className="ev-eyebrow">Setup</p>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-ink-2">
+                  <li>pnpm install</li>
+                  <li>pnpm db:migrate</li>
+                </ul>
+              </div>
+              <div className="border-t border-rule-faint pt-3.5">
+                <MonoRow label="Services">PostgreSQL · Redis</MonoRow>
+                <MonoRow label="Checks">Lint · Typecheck · Unit · E2E</MonoRow>
+              </div>
+              <div className="border-t border-rule-faint pt-3.5">
+                <p className="ev-eyebrow">Conventions</p>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-ink-2">
+                  <li>docs/architecture.md</li>
+                  <li>docs/testing.md</li>
+                </ul>
+              </div>
+              <div className="border-t border-rule-faint pt-3.5">
+                <p className="ev-eyebrow">Approved access</p>
+                <ul className="mt-2 space-y-1 font-mono text-xs text-ink-2">
+                  <li>GitHub development app</li>
+                  <li>Stripe test environment</li>
+                </ul>
+              </div>
+            </div>
+          </MonoPanel>
+        </Reveal>
+      </Container>
+    </section>
+  );
+}
+
+// ── Developer experience ────────────────────────────────────────────────────────
+
+const dxPoints: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly title: string;
+  readonly body: string;
+}> = [
+  {
+    icon: Cpu,
+    title: "Machine-readable by default",
+    body: "Execution activity is emitted as structured events rather than only human-formatted terminal text.",
+  },
+  {
+    icon: Eye,
+    title: "Human-inspectable when needed",
+    body: "The same data can power timelines, terminal playback, change summaries, debugging interfaces, and audit views.",
+  },
+  {
+    icon: Radio,
+    title: "Independent of the agent",
+    body: "Keep the environment, policies, and execution record stable even as models and agent frameworks change.",
+  },
+];
+
+function DeveloperExperience() {
+  return (
+    <section id="dx" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+      <Container>
+        <SectionHead
+          eyebrow="Developer experience"
+          title="Built for systems that need to understand what happened."
+        />
+        <div className="mt-14 grid gap-5 lg:grid-cols-3">
+          {dxPoints.map((d, i) => {
+            const Icon = d.icon;
+            return (
+              <Reveal key={d.title} delay={(i % 3) * 0.05}>
+                <div className="h-full rounded-2xl border border-border bg-panel p-7 shadow-[var(--shadow-sm)]">
+                  <span className="inline-flex size-10 items-center justify-center rounded-xl bg-[var(--sw-wash)] text-primary">
+                    <Icon className="size-5" />
+                  </span>
+                  <h3 className="mt-5 text-base font-semibold tracking-[-0.01em] text-foreground">
+                    {d.title}
+                  </h3>
+                  <p className="mt-2 leading-relaxed text-muted-foreground">{d.body}</p>
+                </div>
+              </Reveal>
+            );
+          })}
+        </div>
+
+        <Reveal delay={0.1} className="mt-10">
+          <div className="rounded-2xl border-l-2 border-l-primary bg-panel py-5 pr-6 pl-5 shadow-[var(--shadow-sm)]">
+            <p className="text-base leading-relaxed text-foreground">
+              Models decide what to do. Sealant provides where it happens and how it is observed.
+            </p>
+          </div>
+        </Reveal>
       </Container>
     </section>
   );
@@ -807,7 +1358,7 @@ function Sdk() {
 
 function FinalCta() {
   return (
-    <section id="opensource" className="bg-panel py-24 lg:py-32">
+    <section id="cta" className="bg-panel py-24 lg:py-32">
       <Container>
         <Reveal>
           <div className="relative overflow-hidden rounded-[2.25rem] border border-border bg-[var(--sw-canvas)] px-8 py-16 text-center shadow-[var(--shadow-md)] sm:px-12 lg:py-24">
@@ -816,19 +1367,27 @@ function FinalCta() {
               aria-hidden="true"
             />
             <div className="relative">
-              <Display className="mx-auto max-w-[20ch] text-[2.3rem] leading-[1.05] sm:text-5xl lg:text-[3.5rem]">
-                A sandbox to run agents in. A record to review them by.
+              <Eyebrow>Build on Sealant</Eyebrow>
+              <Display className="mx-auto mt-5 max-w-[24ch] text-[2.1rem] leading-[1.06] sm:text-5xl lg:text-[3.25rem]">
+                Add an execution layer without building one.
               </Display>
+              <p className="mx-auto mt-5 max-w-[60ch] text-lg leading-relaxed text-muted-foreground">
+                Add supervised execution, interactive terminals, filesystem and network observation,
+                and durable run history without assembling the infrastructure yourself.
+              </p>
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <PrimaryCTA href={REPO_URL}>
-                  Run an issue
+                  Start building
                   <ArrowUpRight className="size-4" aria-hidden="true" />
                 </PrimaryCTA>
-                <SecondaryCTA href={REPO_URL} external>
+                <SecondaryCTA href={DOCS_URL} external>
                   <GitHubLogo className="size-4" />
-                  Read the docs
+                  Read the architecture guide
                 </SecondaryCTA>
               </div>
+              <p className="mt-7 font-mono text-xs text-faint">
+                Begin with the local runtime and TypeScript SDK.
+              </p>
             </div>
           </div>
         </Reveal>
@@ -842,12 +1401,18 @@ function MarketingPage() {
     <main className="overflow-x-clip">
       <Hero />
       <Problem />
-      <CoreProduct />
-      <Security />
-      <Reproducibility />
-      <PrReview />
-      <RunFromAnywhere />
-      <Sdk />
+      <CoreConcept />
+      <HowItWorks />
+      <Capabilities />
+      <Differentiation />
+      <Observability />
+      <PolicyAccess />
+      <BuildWith />
+      <ProductFamily />
+      <Integration />
+      <Deployment />
+      <ProjectContext />
+      <DeveloperExperience />
       <FinalCta />
     </main>
   );

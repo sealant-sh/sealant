@@ -12,12 +12,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant — sandboxed, recorded runs for AI coding agents",
+        title: "Sealant Platform — Execution infrastructure for developer software",
       },
       {
         name: "description",
         content:
-          "Sealant runs AI coding agents in isolated sandboxes and records what happened from inside the runtime — every command, file change, and check — so each run is reproducible and reviewable.",
+          "Give developer agents and automation products isolated workspaces, terminal and process control, filesystem and network observation, and durable execution history.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -36,26 +36,34 @@ function RootComponent() {
           <div className="mx-auto flex min-h-16 max-w-[1200px] items-center justify-between gap-3 px-6 sm:px-8">
             <div className="flex items-center gap-9">
               <Brand />
-              <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
-                <TopLevelNavLink href="#product">Product</TopLevelNavLink>
-                <TopLevelNavLink href="#security">Security</TopLevelNavLink>
-                <TopLevelNavLink href="#review">Review</TopLevelNavLink>
-                <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
+              <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
+                <TopLevelNavLink href="#products">Products</TopLevelNavLink>
+                <TopLevelNavLink href="#use-cases">Use cases</TopLevelNavLink>
                 <TopLevelNavLink href="https://github.com/get-sealant/sealant">
-                  Docs
+                  Documentation
                 </TopLevelNavLink>
+                <TopLevelNavLink href="#integration">SDKs</TopLevelNavLink>
+                <TopLevelNavLink href="#core-concept">Architecture</TopLevelNavLink>
               </nav>
             </div>
             <div className="hidden items-center gap-2.5 md:inline-flex">
               <ThemeSwitcher />
               <a
-                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-border bg-panel px-3 font-sans text-sm font-medium text-foreground no-underline shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)]"
                 href="https://github.com/get-sealant/sealant"
                 target="_blank"
                 rel="noreferrer"
               >
                 <Github className="size-4" aria-hidden="true" />
                 GitHub
+              </a>
+              <a
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                href="https://github.com/get-sealant/sealant"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Start building
               </a>
             </div>
             <div className="inline-flex items-center gap-2 md:hidden">
@@ -69,7 +77,7 @@ function RootComponent() {
             <div className="flex items-center gap-2.5">
               <LogoBlob className="size-6" aria-hidden="true" />
               <p className="m-0 text-sm text-muted-foreground">
-                Sandboxed, recorded runs for AI coding agents.
+                Execution infrastructure for developer software.
               </p>
             </div>
             <a
@@ -91,10 +99,10 @@ function Brand() {
     <a
       className="inline-flex items-center gap-2.5 font-display text-xl font-semibold tracking-[-0.01em] text-foreground no-underline"
       href="/"
-      aria-label="Sealant home"
+      aria-label="Sealant Platform home"
     >
       <LogoBlob className="size-7" aria-hidden="true" />
-      Sealant
+      Sealant Platform
     </a>
   );
 }
