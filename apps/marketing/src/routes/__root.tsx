@@ -1,10 +1,11 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import { Github } from "lucide-react";
 import { type ReactNode } from "react";
 
 import { LogoBlob } from "#/components/logo";
 
 import appCss from "../styles.css?url";
+
+const REPO = "https://github.com/get-sealant/sealant";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -12,12 +13,12 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
-        title: "Sealant — record, replay & analyze agent executions",
+        title: "Sealant — the runtime for AI developer agents",
       },
       {
         name: "description",
         content:
-          "Run AI agents in a sandbox and record every execution as structured, replayable, analyzable data — commands, file changes, network, and validations — from one TypeScript SDK.",
+          "Create an isolated sandbox for any repository, run its harness, connect over SSH, and get back the result with a complete, replayable record of how it was produced.",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
@@ -37,29 +38,17 @@ function RootComponent() {
             <div className="flex items-center gap-9">
               <Brand />
               <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
+                <TopLevelNavLink href="#platform">Platform</TopLevelNavLink>
                 <TopLevelNavLink href="#products">Products</TopLevelNavLink>
-                <TopLevelNavLink href="#use-cases">Use cases</TopLevelNavLink>
-                <TopLevelNavLink href="https://github.com/get-sealant/sealant">
-                  Documentation
-                </TopLevelNavLink>
-                <TopLevelNavLink href="#integration">SDK</TopLevelNavLink>
-                <TopLevelNavLink href="#core-concept">Architecture</TopLevelNavLink>
+                <TopLevelNavLink href={REPO}>Documentation</TopLevelNavLink>
+                <TopLevelNavLink href={REPO}>GitHub</TopLevelNavLink>
               </nav>
             </div>
             <div className="hidden items-center gap-2.5 md:inline-flex">
               <ThemeSwitcher />
               <a
-                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl border border-border bg-panel px-3 font-sans text-sm font-medium text-foreground no-underline shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color] duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)]"
-                href="https://github.com/get-sealant/sealant"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Github className="size-4" aria-hidden="true" />
-                GitHub
-              </a>
-              <a
                 className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
-                href="https://github.com/get-sealant/sealant"
+                href={REPO}
                 target="_blank"
                 rel="noreferrer"
               >
@@ -72,20 +61,55 @@ function RootComponent() {
           </div>
         </header>
         <Outlet />
-        <footer className="border-t border-border bg-[var(--sw-canvas)] py-9">
-          <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
-            <div className="flex items-center gap-2.5">
-              <LogoBlob className="size-6" aria-hidden="true" />
-              <p className="m-0 text-sm text-muted-foreground">
-                Record, replay, and analyze every agent execution.
-              </p>
+        <footer className="border-t border-border bg-[var(--sw-canvas)]">
+          <div className="mx-auto max-w-[1200px] px-6 py-14 sm:px-8">
+            <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr_1fr] lg:gap-8">
+              <div className="min-w-0">
+                <a
+                  href="/"
+                  className="inline-flex items-center gap-2.5 font-display text-lg font-semibold tracking-[-0.01em] text-foreground no-underline"
+                >
+                  <LogoBlob className="size-6" aria-hidden="true" />
+                  Sealant
+                </a>
+                <p className="mt-4 max-w-[34ch] text-sm leading-relaxed text-muted-foreground">
+                  Sealant gives developer software a real environment in which to work — and makes
+                  the resulting work inspectable and reusable.
+                </p>
+              </div>
+              <FooterCol
+                title="Platform"
+                links={[
+                  ["Documentation", REPO],
+                  ["SDK reference", REPO],
+                  ["Architecture", REPO],
+                  ["GitHub", REPO],
+                ]}
+              />
+              <FooterCol
+                title="Products"
+                links={[
+                  ["Sealant Verify", "#products"],
+                  ["Sealant Repro", "#products"],
+                  ["Sealant Handoff", "#products"],
+                ]}
+              />
+              <FooterCol
+                title="Resources"
+                links={[
+                  ["Examples", REPO],
+                  ["Changelog", REPO],
+                  ["Roadmap", REPO],
+                ]}
+              />
+              <FooterCol
+                title="Company"
+                links={[
+                  ["About", "#"],
+                  ["Contact", "#"],
+                ]}
+              />
             </div>
-            <a
-              className="m-0 text-sm text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
-              href="#top"
-            >
-              Back to top
-            </a>
           </div>
         </footer>
         <Scripts />
@@ -99,10 +123,10 @@ function Brand() {
     <a
       className="inline-flex items-center gap-2.5 font-display text-xl font-semibold tracking-[-0.01em] text-foreground no-underline"
       href="/"
-      aria-label="Sealant Platform home"
+      aria-label="Sealant home"
     >
       <LogoBlob className="size-7" aria-hidden="true" />
-      Sealant Platform
+      Sealant
     </a>
   );
 }
@@ -124,6 +148,36 @@ function TopLevelNavLink({
     >
       {children}
     </a>
+  );
+}
+
+function FooterCol({
+  title,
+  links,
+}: {
+  readonly title: string;
+  readonly links: ReadonlyArray<readonly [string, string]>;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="ev-eyebrow">{title}</p>
+      <ul className="mt-4 space-y-2.5">
+        {links.map(([label, href]) => {
+          const external = href.startsWith("http");
+          return (
+            <li key={label}>
+              <a
+                href={href}
+                {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+                className="text-sm text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
+              >
+                {label}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
