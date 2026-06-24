@@ -7,25 +7,31 @@ import {
   Boxes,
   Bug,
   Check,
+  Clock,
   Cloud,
   Code2,
   Cpu,
   Database,
   Eye,
+  Folder,
   Gauge,
+  GitCompare,
   GitPullRequest,
+  Globe,
   KeyRound,
   Laptop,
   Layers,
   ListTree,
   Lock,
   Network,
+  Play,
   Radio,
   RefreshCw,
   ScrollText,
   Server,
   ShieldCheck,
   Terminal,
+  Video,
   Workflow,
 } from "lucide-react";
 import { type ComponentType, type ReactNode } from "react";
@@ -37,7 +43,6 @@ export const Route = createFileRoute("/")({
 });
 
 const REPO_URL = "https://github.com/get-sealant/sealant";
-const DOCS_URL = "https://github.com/get-sealant/sealant";
 
 // ── Motion ──────────────────────────────────────────────────────────────────
 
@@ -195,36 +200,36 @@ function MonoRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// ── Hero code panel — SDK + event capture (the signature) ─────────────────────
+// ── Hero run inspector — the product at a glance ──────────────────────────────
 
-const HERO_CODE: ReadonlyArray<{ readonly t: string; readonly tone?: "comment" | "accent" }> = [
-  { t: "// run an agent in a sandbox, record the execution", tone: "comment" },
-  { t: "const sandbox = await sdk.sandboxes.create({ repository, harness })" },
-  { t: "" },
-  { t: "const execution = await sdk.executions.start({" },
-  { t: "  sandboxId: sandbox.id," },
-  { t: "  objective: `Resolve issue #${issue.number} and open a PR`," },
-  { t: "})" },
-  { t: "" },
-  { t: "const task = await sdk.harnesses.runTask({ sandboxId: sandbox.id, harness })" },
-  { t: "" },
-  { t: "// every action becomes a structured, replayable event", tone: "comment" },
-  { t: "for (const command of task.commands) await execution.command(command)" },
-  { t: "for (const change of task.fileChanges) await execution.fileChange(change)" },
-  { t: "for (const check of task.validations) await execution.validation(check)" },
-  { t: "" },
-  { t: 'await execution.complete({ outcome: "succeeded" })' },
-  { t: "const analysis = await sdk.executions.analyze(execution.id)", tone: "accent" },
+const RUN_TABS = ["Browser", "Terminal", "Files", "Timeline"] as const;
+
+const RUN_TAB_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+  Browser: Globe,
+  Terminal: Terminal,
+  Files: Folder,
+  Timeline: Clock,
+};
+
+const RUN_TIMELINE: ReadonlyArray<{ readonly verb: string; readonly token?: string; readonly done?: boolean }> = [
+  { verb: "Started", token: "pnpm dev" },
+  { verb: "Opened", token: "localhost:3000" },
+  { verb: "Updated", token: "src/checkout.ts" },
+  { verb: "Clicked", token: "Pay now" },
+  { verb: "Checkout flow passed", done: true },
 ];
 
-const HERO_EVENTS: ReadonlyArray<{ readonly k: string; readonly v: string; readonly dot: string }> =
-  [
-    { k: "command", v: "pnpm test checkout", dot: "bg-faint" },
-    { k: "file.change", v: "src/checkout.ts", dot: "bg-warning-dot" },
-    { k: "validation", v: "typecheck · passed", dot: "bg-success-dot" },
-  ];
+const RUN_ARTIFACTS: ReadonlyArray<{
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly label: string;
+}> = [
+  { icon: Video, label: "Video" },
+  { icon: ScrollText, label: "Logs" },
+  { icon: GitCompare, label: "File diff" },
+  { icon: Play, label: "Replay" },
+];
 
-function HeroCode() {
+function RunInspector() {
   const reduce = useReducedMotion();
   return (
     <div className="relative">
@@ -236,54 +241,96 @@ function HeroCode() {
         initial={reduce ? false : { opacity: 0, y: 24 }}
         animate={reduce ? {} : { opacity: 1, y: 0 }}
         transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1], delay: 0.15 }}
-        className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-[#1c1c1f] shadow-[var(--shadow-cobalt)]"
+        className="relative min-w-0 overflow-hidden rounded-[1.75rem] border border-border bg-panel shadow-[var(--shadow-cobalt)]"
       >
-        <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
-          <span className="font-mono text-xs text-white/55">issue-to-pr.ts</span>
-          <span className="flex items-center gap-1.5" aria-hidden="true">
-            <span className="size-2.5 rounded-full bg-white/15" />
-            <span className="size-2.5 rounded-full bg-white/15" />
-            <span className="size-2.5 rounded-full bg-primary/70" />
+        {/* run header */}
+        <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-5 py-4">
+          <span className="truncate text-sm font-semibold text-foreground">Fix checkout redirect</span>
+          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-success">
+            <span className="size-1.5 rounded-full bg-success-dot" aria-hidden="true" />
+            Completed
           </span>
         </div>
 
-        <pre className="overflow-x-auto px-5 py-5 font-mono text-[0.78rem] leading-[1.75]">
-          <code>
-            {HERO_CODE.map((line, i) => (
+        {/* tabs */}
+        <div className="flex items-center gap-1 border-b border-rule-faint px-3">
+          {RUN_TABS.map((tab, i) => {
+            const Icon = RUN_TAB_ICONS[tab]!;
+            const active = i === 0;
+            return (
               <span
-                key={i}
-                className={`block ${
-                  line.tone === "comment"
-                    ? "text-white/40"
-                    : line.tone === "accent"
-                      ? "text-[#9db4f0]"
-                      : "text-[#e6e6ea]"
+                key={tab}
+                className={`relative inline-flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium ${
+                  active ? "text-primary" : "text-muted-foreground"
                 }`}
               >
-                {line.t.length === 0 ? " " : line.t}
+                <Icon className="size-3.5" aria-hidden="true" />
+                {tab}
+                {active ? (
+                  <span
+                    className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary"
+                    aria-hidden="true"
+                  />
+                ) : null}
               </span>
-            ))}
-          </code>
-        </pre>
+            );
+          })}
+        </div>
 
-        <div className="border-t border-white/10 px-5 py-4">
-          <p className="font-mono text-[0.62rem] tracking-[0.1em] text-white/40 uppercase">
-            Execution record
-          </p>
-          <ul className="mt-2.5 space-y-1.5">
-            {HERO_EVENTS.map((e) => (
-              <li key={e.k} className="flex items-center gap-3 font-mono text-xs">
-                <span className={`size-1.5 shrink-0 rounded-full ${e.dot}`} aria-hidden="true" />
-                <span className="text-[#9db4f0]">{e.k}</span>
-                <span className="ml-auto truncate pl-3 text-white/45">{e.v}</span>
+        {/* browser preview — the agent did real work */}
+        <div className="p-4">
+          <div className="overflow-hidden rounded-xl border border-border bg-background">
+            <div className="flex items-center gap-2 border-b border-rule-faint bg-muted/60 px-3 py-2">
+              <Lock className="size-3 text-faint" aria-hidden="true" />
+              <span className="font-mono text-[0.72rem] text-muted-foreground">localhost:3000</span>
+            </div>
+            <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+              <span className="inline-flex size-12 items-center justify-center rounded-full bg-[var(--sw-add-bg)] text-success">
+                <Check className="size-6" aria-hidden="true" />
+              </span>
+              <p className="text-base font-semibold text-foreground">Checkout complete</p>
+              <p className="font-mono text-xs text-faint">Order #1042 · $79.00</p>
+            </div>
+          </div>
+        </div>
+
+        {/* execution timeline — Sealant recorded what happened */}
+        <div className="border-t border-rule-faint px-5 py-4">
+          <p className="ev-eyebrow">Execution timeline</p>
+          <ul className="mt-3 space-y-2.5">
+            {RUN_TIMELINE.map((e) => (
+              <li key={e.verb} className="flex items-center gap-3 text-sm">
+                {e.done ? (
+                  <Check className="size-4 shrink-0 text-success" aria-hidden="true" />
+                ) : (
+                  <span
+                    className="inline-flex size-4 shrink-0 items-center justify-center"
+                    aria-hidden="true"
+                  >
+                    <span className="size-1.5 rounded-full bg-primary/50" />
+                  </span>
+                )}
+                <span className={e.done ? "font-medium text-success" : "text-ink-2"}>{e.verb}</span>
+                {e.token ? <span className="font-mono text-xs text-faint">{e.token}</span> : null}
               </li>
             ))}
           </ul>
         </div>
 
-        <div className="flex items-center gap-2 border-t border-white/10 px-5 py-3">
-          <Activity className="size-3.5 text-primary" aria-hidden="true" />
-          <span className="font-mono text-xs text-white/55">Replayable · analyzable · summarizable</span>
+        {/* artifacts */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-rule-faint bg-background px-5 py-3.5">
+          {RUN_ARTIFACTS.map((a) => {
+            const Icon = a.icon;
+            return (
+              <span
+                key={a.label}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-panel px-2.5 py-1 text-xs text-muted-foreground"
+              >
+                <Icon className="size-3.5" aria-hidden="true" />
+                {a.label}
+              </span>
+            );
+          })}
         </div>
       </motion.div>
     </div>
@@ -299,7 +346,7 @@ function Hero() {
     : { variants: riseParent, initial: "hidden" as const, animate: "show" as const };
   const childMotion = reduce ? {} : { variants: riseChild };
   return (
-    <section className="relative overflow-hidden bg-[var(--sw-canvas)]">
+    <section className="relative flex min-h-[calc(100svh-4rem)] flex-col overflow-hidden bg-[var(--sw-canvas)]">
       <div
         className="pointer-events-none absolute -top-40 right-[-10%] size-[42rem] rounded-full bg-[radial-gradient(circle,rgba(32,82,204,0.16),transparent_62%)] blur-2xl"
         aria-hidden="true"
@@ -308,25 +355,24 @@ function Hero() {
         className="sealant-dot-grid pointer-events-none absolute inset-0 opacity-50 [mask-image:radial-gradient(ellipse_at_30%_20%,black,transparent_70%)]"
         aria-hidden="true"
       />
-      <Container className="relative grid min-h-[calc(100svh-4rem)] items-center gap-12 py-16 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
+      <Container className="relative grid flex-1 items-center gap-12 py-16 lg:grid-cols-[0.95fr_1.05fr] lg:gap-16">
         <motion.div className="min-w-0" {...parentMotion}>
           <motion.div {...childMotion}>
-            <Eyebrow>Record, replay &amp; analyze agent executions</Eyebrow>
+            <Eyebrow>Execution infrastructure for AI agents</Eyebrow>
           </motion.div>
           <motion.h1
             {...childMotion}
-            className="mt-6 font-display text-[2.6rem] leading-[1.04] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.6rem]"
+            className="mt-6 font-display text-[2.7rem] leading-[1.03] font-semibold tracking-[-0.03em] text-foreground text-balance sm:text-5xl lg:text-[3.7rem]"
           >
-            Give AI agents a real environment — and a{" "}
-            <span className="text-primary">replayable record</span> of everything they do.
+            Give AI agents a real development environment.
           </motion.h1>
           <motion.p
             {...childMotion}
-            className="mt-6 max-w-[52ch] text-lg leading-relaxed text-muted-foreground"
+            className="mt-6 max-w-[48ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant runs the agent in a sandbox and records the execution as structured data —
-            every command, tool call, file change, and validation. A complete, replayable record
-            you can analyze and summarize, not a wall of logs.
+            Sealant gives agents an isolated workspace with a terminal, browser, files, and
+            development services — while recording every action as an{" "}
+            <span className="text-primary">inspectable execution history</span>.
           </motion.p>
           <motion.div {...childMotion} className="mt-9 flex flex-wrap items-center gap-3">
             <PrimaryCTA href={REPO_URL}>
@@ -336,20 +382,26 @@ function Hero() {
                 aria-hidden="true"
               />
             </PrimaryCTA>
-            <SecondaryCTA href={DOCS_URL} external>
-              Read the documentation
+            <SecondaryCTA href="#observability">
+              View an example run
               <ArrowRight className="size-4" aria-hidden="true" />
             </SecondaryCTA>
           </motion.div>
-          <motion.p {...childMotion} className="mt-8 font-mono text-xs text-faint">
-            TypeScript SDK · Structured execution record · Replay, analyze, summarize
-          </motion.p>
         </motion.div>
 
         <div className="min-w-0">
-          <HeroCode />
-          <p className="mt-5 text-center font-mono text-xs text-faint">
-            Each execution is captured as a structured event stream — stream it live, replay it after.
+          <RunInspector />
+        </div>
+      </Container>
+
+      <Container className="relative pb-10">
+        <div className="flex flex-col items-center gap-3 border-t border-border/60 pt-6 text-center sm:flex-row sm:justify-between sm:text-left">
+          <p className="font-mono text-xs tracking-[0.02em] text-faint">
+            Browser · Terminal · Processes · Files · Network · Execution history
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Built on Sealant:{" "}
+            <span className="font-medium text-foreground">Verify · Repro · Handoff</span>
           </p>
         </div>
       </Container>
