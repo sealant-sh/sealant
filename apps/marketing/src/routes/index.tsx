@@ -6,9 +6,9 @@ import { FinalCta } from "#/sections/final-cta";
 import { Hero } from "#/sections/hero";
 import { ModelStrip } from "#/sections/thesis-strip";
 import { OpenSource } from "#/sections/opensource";
+import { Products } from "#/sections/products";
 import { RunSurface } from "#/sections/record";
 import { Sandboxes } from "#/sections/sandboxes";
-import { Versatility } from "#/sections/versatility";
 
 export const Route = createFileRoute("/")({
   component: MarketingPage,
@@ -26,7 +26,7 @@ function MarketingPage() {
       <BuildOnSdk />
       <RecordCaptures />
       <Sandboxes />
-      <Versatility />
+      <Products />
       <OpenSource />
       <FinalCta />
     </main>

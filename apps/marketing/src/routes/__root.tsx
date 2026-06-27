@@ -48,6 +48,7 @@ function RootComponent() {
                 <TopLevelNavLink href="#records">The run</TopLevelNavLink>
                 <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
                 <TopLevelNavLink href="#sandboxes">Sandboxes</TopLevelNavLink>
+                <TopLevelNavLink href="#products">Products</TopLevelNavLink>
                 <TopLevelNavLink href={REPO}>Docs</TopLevelNavLink>
               </nav>
             </div>
@@ -99,10 +100,11 @@ function RootComponent() {
                 ]}
               />
               <FooterCol
-                title="Build on it"
+                title="Products"
                 links={[
+                  ["Mend (by Sealant)", "#products"],
+                  ["All products", "#products"],
                   ["Open-source & self-hosted", "#open-source"],
-                  ["Handoff (by Sealant)", REPO],
                 ]}
               />
               <FooterCol
