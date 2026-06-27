@@ -455,6 +455,12 @@ importers:
       '@fontsource/bebas-neue':
         specifier: ^5.2.7
         version: 5.2.7
+      '@fontsource/inter':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/jetbrains-mono':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@fontsource/plus-jakarta-sans':
         specifier: 'catalog:'
         version: 5.2.8
@@ -666,6 +672,9 @@ importers:
         specifier: ^0.5.0
         version: 0.5.0(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@fontsource/inter':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8
       '@fontsource/plus-jakarta-sans':
@@ -2457,6 +2466,9 @@ packages:
 
   '@fontsource/inter@5.2.8':
     resolution: {integrity: sha512-P6r5WnJoKiNVV+zvW2xM13gNdFhAEpQ9dQJHt3naLvfg+LkF2ldgSLiF4T41lf1SQCM9QmkqPTn4TH568IRagg==}
+
+  '@fontsource/jetbrains-mono@5.2.8':
+    resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
 
   '@fontsource/plus-jakarta-sans@5.2.8':
     resolution: {integrity: sha512-P5qE49fqdeD+7DXH1KBxmMPlB17LTz1zvBhFH0tFzfnYTKVJVyb0pR6plh0ZGXxcB+Oayb54FZZw3V42/DawTw==}
@@ -10531,6 +10543,8 @@ snapshots:
 
   '@fontsource/inter@5.2.8': {}
 
+  '@fontsource/jetbrains-mono@5.2.8': {}
+
   '@fontsource/plus-jakarta-sans@5.2.8': {}
 
   '@fontsource/space-grotesk@5.2.10': {}
@@ -11659,9 +11673,7 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 

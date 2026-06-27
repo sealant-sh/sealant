@@ -1,41 +1,34 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import { Github } from "lucide-react";
+import { SunMoon } from "lucide-react";
 import { type ReactNode } from "react";
 
+import { GitHubLogo } from "#/components/github";
 import { LogoBlob } from "#/components/logo";
+import { RunHeaderClock } from "#/components/run-header";
 
 import appCss from "../styles.css?url";
+
+const REPO = "https://github.com/get-sealant/sealant";
+
+const TITLE = "Sealant — the open-source runtime for AI dev agents";
+const DESCRIPTION =
+  "Sealant is the open-source, self-hosted runtime under your AI agent. One call spins up a real sandbox around your repo, runs your harness, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.";
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      {
-        title: "Sealant — Secure AI coding runs, reviewable from first command to final PR",
-      },
-      {
-        name: "description",
-        content:
-          "The secure run layer for AI software work. Sealant runs agents inside isolated sandboxes and turns every run into a reviewable record — from issue intake to pull request.",
-      },
+      { title: TITLE },
+      { name: "description", content: DESCRIPTION },
+      { property: "og:title", content: TITLE },
+      { property: "og:description", content: DESCRIPTION },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: TITLE },
+      { name: "twitter:description", content: DESCRIPTION },
     ],
-    links: [
-      { rel: "stylesheet", href: appCss },
-      {
-        rel: "preconnect",
-        href: "https://fonts.googleapis.com",
-      },
-      {
-        rel: "preconnect",
-        href: "https://fonts.gstatic.com",
-        crossOrigin: "anonymous",
-      },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Sans:wght@400;500;700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,900;1,9..144,400&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
-      },
-    ],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
   component: RootComponent,
 });
@@ -47,49 +40,83 @@ function RootComponent() {
         <HeadContent />
       </head>
       <body className="marketing-body" id="top">
-        <header className="sticky top-0 z-40 border-b border-border bg-background text-foreground">
-          <div className="mx-auto flex min-h-16 max-w-[1320px] items-center justify-between gap-3 px-4 sm:px-6 md:gap-4 md:px-8">
-            <div className="flex items-center gap-8 lg:gap-10">
+        <header className="sticky top-0 z-40 border-b border-border/60 bg-[color-mix(in_oklab,var(--sw-canvas)_82%,transparent)] backdrop-blur-md">
+          <div className="mx-auto flex min-h-16 max-w-[1200px] items-center justify-between gap-3 px-6 sm:px-8">
+            <div className="flex items-center gap-9">
               <Brand />
-              <nav className="mt-0.5 hidden items-center gap-6 md:flex" aria-label="Primary">
-                <TopLevelNavLink href="#product">Product</TopLevelNavLink>
-                <TopLevelNavLink href="#security">Security</TopLevelNavLink>
-                <TopLevelNavLink href="#review">Review</TopLevelNavLink>
+              <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
+                <TopLevelNavLink href="#records">The run</TopLevelNavLink>
                 <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
-                <TopLevelNavLink href="https://github.com/get-sealant/sealant">
-                  Docs
-                </TopLevelNavLink>
+                <TopLevelNavLink href="#sandboxes">Sandboxes</TopLevelNavLink>
+                <TopLevelNavLink href="#products">Products</TopLevelNavLink>
+                <TopLevelNavLink href={REPO}>Docs</TopLevelNavLink>
               </nav>
             </div>
-            <div className="hidden items-center gap-2.5 md:inline-flex">
-              <ThemeSwitcher />
-              <a
-                className="inline-flex min-h-11 items-center justify-center gap-1.5 border border-primary bg-primary px-4 font-sans text-[1rem] font-semibold tracking-wider text-primary-foreground no-underline transition duration-200 hover:-translate-y-px hover:brightness-95 md:min-h-9"
-                href="https://github.com/get-sealant/sealant"
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Github className="size-[1.3125rem]" aria-hidden="true" />
-                GitHub
-              </a>
-            </div>
-            <div className="inline-flex items-center gap-2 md:hidden">
-              <ThemeSwitcher compact />
+            <div className="flex items-center gap-2.5">
+              <RunHeaderClock />
+              <div className="hidden items-center gap-2.5 md:inline-flex">
+                <ThemeSwitcher />
+                <a
+                  className="group inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                  href={REPO}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <GitHubLogo className="size-4" />
+                  GitHub
+                </a>
+              </div>
+              <div className="inline-flex items-center md:hidden">
+                <ThemeSwitcher />
+              </div>
             </div>
           </div>
         </header>
         <Outlet />
-        <footer className="border-t-2 border-[var(--sw-rule)] py-4 pb-5">
-          <div className="mx-auto flex max-w-[1320px] items-center justify-between gap-4 px-6 max-md:flex-col max-md:items-start sm:px-8">
-            <p className="m-0 text-sm text-muted-foreground">
-              The secure run layer for AI software work.
-            </p>
-            <a
-              className="m-0 font-mono text-[0.72rem] uppercase tracking-[0.16em] text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
-              href="#top"
-            >
-              Back to top
-            </a>
+        <footer className="border-t border-border bg-[var(--sw-canvas)]">
+          <div className="mx-auto max-w-[1200px] px-6 py-14 sm:px-8">
+            <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr] lg:gap-8">
+              <div className="min-w-0">
+                <a
+                  href="/"
+                  className="inline-flex items-center gap-2.5 font-display text-lg font-semibold tracking-[-0.01em] text-foreground no-underline"
+                >
+                  <LogoBlob className="size-6" aria-hidden="true" />
+                  Sealant
+                </a>
+                <p className="mt-4 max-w-[34ch] text-sm leading-relaxed text-muted-foreground">
+                  The runtime the agent era skipped — a real environment to work in, and a
+                  trustworthy, replayable record of what happened. Open-source, self-hosted, yours.
+                </p>
+              </div>
+              <FooterCol
+                title="Platform"
+                links={[
+                  ["The run", "#records"],
+                  ["SDK", "#sdk"],
+                  ["What it captures", "#capture"],
+                  ["Sandboxes", "#sandboxes"],
+                  ["GitHub", REPO],
+                ]}
+              />
+              <FooterCol
+                title="Products"
+                links={[
+                  ["Mend (by Sealant)", "#products"],
+                  ["All products", "#products"],
+                  ["Open-source & self-hosted", "#open-source"],
+                ]}
+              />
+              <FooterCol
+                title="Project"
+                links={[
+                  ["License", REPO],
+                  ["Roadmap", REPO],
+                  ["Changelog", REPO],
+                  ["Discussions", REPO],
+                ]}
+              />
+            </div>
           </div>
         </footer>
         <Scripts />
@@ -101,11 +128,11 @@ function RootComponent() {
 function Brand() {
   return (
     <a
-      className="inline-flex items-center gap-2 font-display text-xl font-bold uppercase tracking-tight text-foreground no-underline"
+      className="inline-flex items-center gap-2.5 font-display text-xl font-semibold tracking-[-0.01em] text-foreground no-underline"
       href="/"
       aria-label="Sealant home"
     >
-      <LogoBlob className="size-8" aria-hidden="true" />
+      <LogoBlob className="size-7" aria-hidden="true" />
       Sealant
     </a>
   );
@@ -119,10 +146,9 @@ function TopLevelNavLink({
   readonly children: ReactNode;
 }) {
   const external = href.startsWith("http");
-
   return (
     <a
-      className="font-sans text-sm font-semibold text-foreground/70 no-underline transition-colors duration-200 hover:text-foreground"
+      className="font-sans text-sm font-medium text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
       href={href}
       {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
     >
@@ -131,17 +157,48 @@ function TopLevelNavLink({
   );
 }
 
-function ThemeSwitcher({ compact = false }: { readonly compact?: boolean }) {
+function FooterCol({
+  title,
+  links,
+}: {
+  readonly title: string;
+  readonly links: ReadonlyArray<readonly [string, string]>;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="ev-eyebrow">{title}</p>
+      <ul className="mt-4 space-y-2.5">
+        {links.map(([label, href]) => {
+          const external = href.startsWith("http");
+          return (
+            <li key={label}>
+              <a
+                href={href}
+                {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+                className="text-sm text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
+              >
+                {label}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function ThemeSwitcher() {
   return (
     <button
       type="button"
-      className="inline-flex min-h-9 items-center justify-center border border-border bg-transparent px-3 font-mono text-[0.62rem] font-bold uppercase tracking-[0.12em] text-foreground/70 transition-colors duration-200 hover:border-ring hover:bg-accent/40 hover:text-foreground"
+      className="inline-flex size-9 items-center justify-center rounded-xl border border-border bg-panel text-muted-foreground shadow-[var(--shadow-xs)] transition-colors duration-200 hover:border-input hover:text-foreground"
       aria-label="Toggle color theme"
+      title="Toggle theme"
       onClick={() => {
         document.documentElement.classList.toggle("dark");
       }}
     >
-      {compact ? "Mode" : "Theme"}
+      <SunMoon className="size-4" aria-hidden="true" />
     </button>
   );
 }

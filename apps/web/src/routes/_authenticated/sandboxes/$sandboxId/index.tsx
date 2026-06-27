@@ -1,4 +1,4 @@
-import { Badge, Button } from "@sealant/ui";
+import { Button } from "@sealant/ui";
 import { type NewSandbox } from "@sealant/validators";
 import {
   useMutation,
@@ -230,200 +230,195 @@ function SandboxSummaryPage() {
   };
 
   return (
-    <section className="overflow-hidden border border-border bg-card">
-      <div className="h-1 w-full bg-primary" />
+    <div className="space-y-8">
+      {/* Page header — the run-record header lives on a lifted white panel */}
+      <section className="overflow-hidden rounded-3xl border border-border bg-popover shadow-[var(--shadow-cobalt)]">
+        <div className="grid gap-0 lg:grid-cols-[1fr_auto]">
+          <div className="p-8 lg:p-10">
+            <div className="flex items-center gap-2.5">
+              <RecordingPulse />
+              <span className="font-mono text-xs text-ink-2">sandbox · {sandbox.sandboxId}</span>
+            </div>
+            <h1 className="mt-5 max-w-3xl font-display text-2xl font-semibold tracking-tight text-foreground text-balance sm:text-4xl">
+              {sandbox.name}
+            </h1>
+            <p className="mt-3 font-mono text-xs text-faint">
+              {(sandbox.repository ?? "unknown-repository") + " / " + (sandbox.tag ?? "unknown-tag")}
+            </p>
 
-      <div className="grid gap-0 border-b border-border lg:grid-cols-[1fr_auto]">
-        <div className="px-6 py-6 sm:px-8">
-          <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">
-            Operational Log // Sandbox Detail
-          </p>
-          <h1 className="mt-4 max-w-4xl font-display text-6xl leading-[0.86] tracking-[0.02em] text-foreground sm:text-7xl">
-            {sandbox.name}
-          </h1>
-          <p className="mt-4 font-mono text-[0.72rem] text-muted-foreground">
-            Sandbox ID: {sandbox.sandboxId}
-          </p>
-          <p className="mt-2 font-mono text-[0.72rem] text-muted-foreground">
-            {(sandbox.repository ?? "unknown-repository") + " / " + (sandbox.tag ?? "unknown-tag")}
-          </p>
-
-          <div className="mt-5 border border-border px-4 py-4">
-            <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">Name</p>
-            <div className="mt-3 flex flex-col gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <input
-                  key={`${sandbox.sandboxId}:${sandbox.name}`}
-                  ref={nameInputRef}
-                  defaultValue={sandbox.name}
-                  className="h-10 w-full border border-border bg-background px-3 text-sm text-foreground focus:border-foreground focus:outline-none"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-10 shrink-0 px-4 text-[0.64rem] tracking-[0.1em]"
-                  onClick={() => {
-                    void saveSandboxName();
-                  }}
-                  disabled={renameSandboxMutation.isPending}
-                >
-                  {renameSandboxMutation.isPending ? "Saving" : "Save Name"}
-                </Button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {nameSuggestions.map((suggestion) => (
+            <div className="mt-6 rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-xs)]">
+              <p className="ev-eyebrow">Name</p>
+              <div className="mt-3 flex flex-col gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <input
+                    key={`${sandbox.sandboxId}:${sandbox.name}`}
+                    ref={nameInputRef}
+                    defaultValue={sandbox.name}
+                    className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+                  />
                   <Button
-                    key={suggestion}
                     type="button"
                     variant="outline"
-                    className="h-8 px-3 text-[0.58rem] tracking-[0.1em]"
+                    className="h-11 shrink-0 px-4"
                     onClick={() => {
-                      if (nameInputRef.current !== null) {
-                        nameInputRef.current.value = suggestion;
-                      }
+                      void saveSandboxName();
                     }}
+                    disabled={renameSandboxMutation.isPending}
                   >
-                    {suggestion}
+                    {renameSandboxMutation.isPending ? "Saving" : "Save name"}
                   </Button>
-                ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {nameSuggestions.map((suggestion) => (
+                    <Button
+                      key={suggestion}
+                      type="button"
+                      variant="outline"
+                      className="h-8 px-3 text-xs"
+                      onClick={() => {
+                        if (nameInputRef.current !== null) {
+                          nameInputRef.current.value = suggestion;
+                        }
+                      }}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
+                {nameMutationError === null ? null : (
+                  <p className="border-l-2 border-danger-dot pl-3 text-sm text-danger">
+                    {nameMutationError}
+                  </p>
+                )}
               </div>
-              {nameMutationError === null ? null : (
-                <p className="font-mono text-[0.62rem] tracking-[0.11em] text-destructive">
-                  {nameMutationError}
-                </p>
-              )}
             </div>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-rule-faint p-8 sm:flex-row sm:border-l sm:border-t-0 sm:p-10 lg:flex-col">
+            <Button
+              className="h-11 px-5"
+              onClick={() => {
+                openSandboxInVsCode();
+              }}
+              disabled={vscodeOpenUri === null}
+            >
+              Open in VS Code
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-5"
+              onClick={() => {
+                openSandboxInCursor();
+              }}
+              disabled={cursorOpenUri === null}
+            >
+              Open in Cursor
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-5"
+              onClick={() => {
+                void rerunSandbox();
+              }}
+              disabled={rerunSandboxMutation.isPending || !canRerunSandbox}
+            >
+              {rerunSandboxMutation.isPending ? "Rerunning" : "Rerun sandbox"}
+            </Button>
+            <Button variant="outline" className="h-11 px-5">
+              View spec
+            </Button>
+            {rerunMutationError === null ? null : (
+              <p className="border-l-2 border-danger-dot pl-3 text-sm text-danger">
+                {rerunMutationError}
+              </p>
+            )}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-border p-6 sm:flex-row sm:border-l sm:border-t-0 sm:p-8 lg:flex-col">
-          <Button
-            className="h-11 px-5"
-            onClick={() => {
-              openSandboxInVsCode();
-            }}
-            disabled={vscodeOpenUri === null}
-          >
-            Open in VS Code
-          </Button>
-          <Button
-            variant="outline"
-            className="h-11 px-5"
-            onClick={() => {
-              openSandboxInCursor();
-            }}
-            disabled={cursorOpenUri === null}
-          >
-            Open in Cursor
-          </Button>
-          <Button
-            variant="outline"
-            className="h-11 px-5"
-            onClick={() => {
-              void rerunSandbox();
-            }}
-            disabled={rerunSandboxMutation.isPending || !canRerunSandbox}
-          >
-            {rerunSandboxMutation.isPending ? "Rerunning" : "Rerun Sandbox"}
-          </Button>
-          <Button variant="outline" className="h-11 px-5">
-            View Spec
-          </Button>
-          {rerunMutationError === null ? null : (
-            <p className="font-mono text-[0.62rem] tracking-[0.11em] text-destructive">
-              {rerunMutationError}
-            </p>
-          )}
-        </div>
-      </div>
+        {/* run facts — hairline-divided evidence rows */}
+        <dl className="grid grid-cols-2 divide-x divide-y divide-rule-faint border-t border-rule-faint sm:grid-cols-4 sm:divide-y-0">
+          <MetricCell label="Status" value={<StatusIndicator status={sandbox.status} />} />
+          <MetricCell
+            label="Attempts"
+            value={<p className="mt-2 font-mono text-lg text-foreground">{attempts.length}</p>}
+          />
+          <MetricCell
+            label="Created"
+            value={
+              <p className="mt-2 font-mono text-sm text-foreground">
+                {toShortDateTime(sandbox.createdAt)}
+              </p>
+            }
+          />
+          <MetricCell
+            label="Updated"
+            value={
+              <p className="mt-2 font-mono text-sm text-foreground">
+                {toShortDateTime(sandbox.updatedAt)}
+              </p>
+            }
+          />
+        </dl>
+      </section>
 
-      <div className="grid gap-px border-b border-border bg-border sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCell
-          label="Status"
-          value={<Badge className={statusBadgeClassName(sandbox.status)}>{sandbox.status}</Badge>}
-        />
-        <MetricCell
-          label="Attempts"
-          value={<p className="mt-2 text-2xl font-semibold text-foreground">{attempts.length}</p>}
-        />
-        <MetricCell
-          label="Created"
-          value={
-            <p className="mt-2 text-2xl font-semibold text-foreground">
-              {toShortDateTime(sandbox.createdAt)}
-            </p>
-          }
-        />
-        <MetricCell
-          label="Updated"
-          value={
-            <p className="mt-2 text-2xl font-semibold text-foreground">
-              {toShortDateTime(sandbox.updatedAt)}
-            </p>
-          }
-        />
-      </div>
-
-      <div className="grid gap-px border-border xl:grid-cols-[1.35fr_1fr]">
-        <div className="border-r border-border">
-          <section className="border-b border-border px-6 py-6 sm:px-8">
-            <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">
-              01 // Attempt History
-            </p>
-            <h2 className="mt-4 font-display text-4xl text-foreground sm:text-5xl">
+      <div className="grid gap-8 xl:grid-cols-[1.35fr_1fr]">
+        <div className="space-y-8">
+          <Panel>
+            <p className="ev-eyebrow">01 · Attempt history</p>
+            <h2 className="mt-3 font-display text-xl font-semibold tracking-tight text-foreground">
               Execution attempts
             </h2>
-            <div className="mt-6 border border-border">
+            <div className="mt-6 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
               {attempts.length === 0 ? (
-                <p className="px-4 py-6 font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+                <p className="px-4 py-6 font-mono text-[0.68rem] text-muted-foreground">
                   No attempts recorded.
                 </p>
               ) : (
-                attempts.map((attempt) => (
-                  <div
-                    key={attempt.attemptId}
-                    className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[1fr_auto_auto] sm:items-center"
-                  >
-                    <div>
-                      <p className="font-mono text-[0.64rem] tracking-[0.12em] text-muted-foreground">
-                        {attempt.attemptId}
+                <div className="divide-y divide-rule-faint">
+                  {attempts.map((attempt) => (
+                    <div
+                      key={attempt.attemptId}
+                      className="grid gap-2 px-4 py-3.5 transition-colors hover:bg-muted/40 sm:grid-cols-[1fr_auto_auto] sm:items-center"
+                    >
+                      <div>
+                        <p className="font-mono text-[0.66rem] text-faint">{attempt.attemptId}</p>
+                        <p className="mt-1 text-sm text-foreground">
+                          {attempt.relation} via {attempt.triggerType}
+                        </p>
+                      </div>
+                      <p className="font-mono text-[0.66rem] text-muted-foreground">
+                        {toShortDateTime(attempt.createdAt)}
                       </p>
-                      <p className="mt-1 text-sm text-foreground">
-                        {attempt.relation} via {attempt.triggerType}
-                      </p>
+                      <StatusIndicator status={attempt.status} />
                     </div>
-                    <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                      {toShortDateTime(attempt.createdAt)}
-                    </p>
-                    <Badge className={statusBadgeClassName(attempt.status)}>{attempt.status}</Badge>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
-          </section>
+          </Panel>
 
-          <section className="px-6 py-6 sm:px-8">
-            <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">02 // Runtime</p>
-            <div className="mt-5 grid gap-px border border-border bg-border sm:grid-cols-2">
-              <RuntimeCell label="Adapter" value={sandbox.runtime?.adapter ?? "n/a"} />
-              <RuntimeCell label="Runtime status" value={sandbox.runtime?.status ?? "n/a"} />
-              <RuntimeCell label="Resource" value={sandbox.runtime?.resourceId ?? "n/a"} />
-              <RuntimeCell label="Endpoint" value={sandbox.runtime?.endpoint ?? "n/a"} />
+          <Panel>
+            <p className="ev-eyebrow">02 · Runtime</p>
+            <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
+              <dl className="grid divide-y divide-rule-faint sm:grid-cols-2 sm:divide-x">
+                <RuntimeCell label="Adapter" value={sandbox.runtime?.adapter ?? "n/a"} />
+                <RuntimeCell label="Runtime status" value={sandbox.runtime?.status ?? "n/a"} />
+                <RuntimeCell label="Resource" value={sandbox.runtime?.resourceId ?? "n/a"} />
+                <RuntimeCell label="Endpoint" value={sandbox.runtime?.endpoint ?? "n/a"} />
+              </dl>
             </div>
 
             {sshCommand === null ? null : (
-              <div className="mt-5 border border-border px-4 py-4">
-                <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                  SSH access
-                </p>
+              <div className="mt-5 rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-xs)]">
+                <p className="ev-eyebrow">SSH access</p>
                 <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <code className="break-all font-mono text-[0.68rem] text-foreground">
+                  <code className="break-all font-mono text-[0.68rem] text-ink-2">
                     {sshCommand}
                   </code>
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 shrink-0 px-4 text-[0.64rem] tracking-[0.1em]"
+                    className="h-10 shrink-0 px-4"
                     onClick={() => {
                       void copySshCommand();
                     }}
@@ -432,55 +427,51 @@ function SandboxSummaryPage() {
                       ? "Copied"
                       : sshCopyState === "error"
                         ? "Copy failed"
-                        : "Copy SSH Command"}
+                        : "Copy SSH command"}
                   </Button>
                 </div>
               </div>
             )}
-          </section>
+          </Panel>
 
-          <section className="border-t border-border px-6 py-6 sm:px-8">
-            <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">
-              03 // Sandbox Spec
-            </p>
+          <Panel>
+            <p className="ev-eyebrow">03 · Sandbox spec</p>
             {sandboxSpecDetails === null ? (
-              <p className="mt-5 border border-border px-4 py-4 font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+              <p className="mt-5 rounded-2xl border border-border bg-card px-4 py-4 font-mono text-[0.68rem] text-muted-foreground shadow-[var(--shadow-xs)]">
                 Spec details are not available for this sandbox.
               </p>
             ) : (
               <>
-                <div className="mt-5 grid gap-px border border-border bg-border sm:grid-cols-2">
-                  <RuntimeCell
-                    label="Repository"
-                    value={
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="break-all">{sandboxSpecDetails.repositoryUrl}</span>
-                        {sandboxSpecDetails.isGitHubSource ? (
-                          <Badge className="rounded-none border border-border bg-card font-mono text-[0.56rem] tracking-[0.11em] text-foreground">
-                            GITHUB
-                          </Badge>
-                        ) : null}
-                      </span>
-                    }
-                  />
-                  <RuntimeCell label="Branch" value={sandboxSpecDetails.branch} />
-                  <RuntimeCell label="Provider" value={sandboxSpecDetails.provider} />
-                  <RuntimeCell label="Config repo" value={sandboxSpecDetails.configRepo} />
-                  <RuntimeCell label="Harness" value={sandboxSpecDetails.harness} />
-                  <RuntimeCell label="Runtime target" value={sandboxSpecDetails.runtimeTarget} />
-                  <RuntimeCell label="OCI runtime" value={sandboxSpecDetails.ociRuntime} />
-                  <RuntimeCell label="OS target" value={sandboxSpecDetails.osTarget} />
-                  <RuntimeCell
-                    label="Working directory"
-                    value={sandboxSpecDetails.workingDirectory}
-                  />
-                  <RuntimeCell label="SSH" value={sandboxSpecDetails.ssh} />
+                <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
+                  <dl className="grid divide-y divide-rule-faint sm:grid-cols-2 sm:divide-x">
+                    <RuntimeCell
+                      label="Repository"
+                      value={
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="break-all">{sandboxSpecDetails.repositoryUrl}</span>
+                          {sandboxSpecDetails.isGitHubSource ? (
+                            <span className="ev-eyebrow">GitHub</span>
+                          ) : null}
+                        </span>
+                      }
+                    />
+                    <RuntimeCell label="Branch" value={sandboxSpecDetails.branch} />
+                    <RuntimeCell label="Provider" value={sandboxSpecDetails.provider} />
+                    <RuntimeCell label="Config repo" value={sandboxSpecDetails.configRepo} />
+                    <RuntimeCell label="Harness" value={sandboxSpecDetails.harness} />
+                    <RuntimeCell label="Runtime target" value={sandboxSpecDetails.runtimeTarget} />
+                    <RuntimeCell label="OCI runtime" value={sandboxSpecDetails.ociRuntime} />
+                    <RuntimeCell label="OS target" value={sandboxSpecDetails.osTarget} />
+                    <RuntimeCell
+                      label="Working directory"
+                      value={sandboxSpecDetails.workingDirectory}
+                    />
+                    <RuntimeCell label="SSH" value={sandboxSpecDetails.ssh} />
+                  </dl>
                 </div>
 
-                <div className="mt-5 border border-border px-4 py-4">
-                  <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                    Selected packages
-                  </p>
+                <div className="mt-5 rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-xs)]">
+                  <p className="ev-eyebrow">Selected packages</p>
                   {sandboxSpecDetails.selectedPackages.length === 0 ? (
                     <p className="mt-2 text-sm text-muted-foreground">
                       No packages selected during sandbox creation.
@@ -490,7 +481,7 @@ function SandboxSummaryPage() {
                       {sandboxSpecDetails.selectedPackages.map((pkg) => (
                         <span
                           key={pkg}
-                          className="inline-flex h-8 items-center border border-border bg-card px-2.5 font-mono text-[0.62rem] tracking-[0.1em] text-foreground"
+                          className="inline-flex h-8 items-center rounded-lg border border-input bg-background px-2.5 font-mono text-[0.66rem] text-ink-2"
                         >
                           {pkg}
                         </span>
@@ -500,65 +491,78 @@ function SandboxSummaryPage() {
                 </div>
               </>
             )}
-          </section>
+          </Panel>
         </div>
 
-        <div>
-          <section className="border-b border-border px-6 py-6 sm:px-8">
-            <p className="font-mono text-[0.62rem] tracking-[0.16em] text-primary">Recent events</p>
-            <div className="mt-5 border border-border">
+        <div className="space-y-8">
+          <Panel>
+            <p className="ev-eyebrow">Recent events</p>
+            <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
               {events.length === 0 ? (
-                <p className="px-4 py-6 font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
+                <p className="px-4 py-6 font-mono text-[0.68rem] text-muted-foreground">
                   No events recorded.
                 </p>
               ) : (
-                events.map((event) => (
-                  <div
-                    key={event.eventId}
-                    className="border-b border-border px-4 py-3 last:border-b-0"
-                  >
-                    <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-                      {toShortDateTime(event.occurredAt)}
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-foreground">{event.type}</p>
-                    <p className="mt-1 text-sm text-foreground/80">
-                      {event.message ?? "No event message."}
-                    </p>
-                  </div>
-                ))
+                <div className="divide-y divide-rule-faint">
+                  {events.map((event) => (
+                    <div
+                      key={event.eventId}
+                      className="px-4 py-3.5 transition-colors hover:bg-muted/40"
+                    >
+                      <p className="font-mono text-[0.66rem] text-faint">
+                        {toShortDateTime(event.occurredAt)}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-foreground">{event.type}</p>
+                      <p className="mt-1 text-sm text-ink-2">
+                        {event.message ?? "No event message."}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-          </section>
+          </Panel>
 
-          <section className="px-6 py-6 sm:px-8">
-            <p className="font-mono text-[0.62rem] tracking-[0.16em] text-muted-foreground">
-              Image output
-            </p>
-            <div className="mt-5 border border-border px-4 py-4">
-              <p className="font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                Reference
-              </p>
+          <Panel>
+            <p className="ev-eyebrow">Image output</p>
+            <div className="mt-5 rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-xs)]">
+              <p className="ev-eyebrow">Reference</p>
               <p className="mt-2 break-all text-sm text-foreground">
                 {sandbox.publishedImage?.reference ?? "No image published"}
               </p>
-              <p className="mt-4 font-mono text-[0.62rem] tracking-[0.12em] text-muted-foreground">
-                Digest
-              </p>
-              <p className="mt-2 break-all font-mono text-[0.68rem] text-foreground/90">
+              <p className="mt-4 ev-eyebrow">Digest</p>
+              <p className="mt-2 break-all font-mono text-[0.68rem] text-ink-2">
                 {sandbox.publishedImage?.digestReference ?? "n/a"}
               </p>
             </div>
-          </section>
+          </Panel>
         </div>
       </div>
+    </div>
+  );
+}
+
+function RecordingPulse() {
+  return (
+    <span className="relative inline-flex size-2.5 items-center justify-center" aria-hidden="true">
+      <span className="absolute inset-0 rounded-full bg-primary motion-safe:animate-ping" />
+      <span className="relative size-2 rounded-full bg-primary" />
+    </span>
+  );
+}
+
+function Panel({ children }: { children: ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)] sm:p-8">
+      {children}
     </section>
   );
 }
 
 function MetricCell({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="bg-card px-4 py-4">
-      <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">{label}</p>
+    <div className="px-5 py-5 lg:px-8">
+      <p className="ev-eyebrow">{label}</p>
       {value}
     </div>
   );
@@ -566,23 +570,44 @@ function MetricCell({ label, value }: { label: string; value: ReactNode }) {
 
 function RuntimeCell({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="bg-card px-4 py-4">
-      <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">{label}</p>
+    <div className="px-4 py-4">
+      <p className="ev-eyebrow">{label}</p>
       <p className="mt-2 text-sm text-foreground">{value}</p>
     </div>
   );
 }
 
-function statusBadgeClassName(status: string): string {
+// Status reads as a colored dot + a word (DESIGN.md §4): green for an observed
+// result, red for a failure, cobalt for in-flight, hollow ring for not-yet-run.
+function statusIndicatorClassName(status: string): { readonly dot: string; readonly text: string } {
   if (status === "running") {
-    return "mt-2 rounded-none bg-primary text-primary-foreground font-mono text-[0.58rem] tracking-[0.11em]";
+    return { dot: "bg-primary", text: "text-primary" };
+  }
+
+  if (status === "ready") {
+    return { dot: "bg-success-dot", text: "text-success" };
   }
 
   if (status === "failed") {
-    return "mt-2 rounded-none border border-border bg-muted text-foreground font-mono text-[0.58rem] tracking-[0.11em]";
+    return { dot: "bg-danger-dot", text: "text-danger" };
   }
 
-  return "mt-2 rounded-none border border-border bg-card text-muted-foreground font-mono text-[0.58rem] tracking-[0.11em]";
+  if (status === "cancelled") {
+    return { dot: "bg-warning-dot", text: "text-warning" };
+  }
+
+  return { dot: "border border-input", text: "text-muted-foreground" };
+}
+
+function StatusIndicator({ status }: { status: string }) {
+  const { dot, text } = statusIndicatorClassName(status);
+
+  return (
+    <span className={`mt-2 inline-flex items-center gap-1.5 text-sm ${text}`}>
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {status}
+    </span>
+  );
 }
 
 function toShortDateTime(value: string): string {

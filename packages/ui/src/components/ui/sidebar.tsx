@@ -254,7 +254,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       size="icon-sm"
       className={cn(
-        "h-10 w-10 rounded-none border border-sidebar-border bg-background text-sidebar-foreground transition-colors duration-200 hover:border-sidebar-foreground hover:bg-sidebar-accent",
+        "h-10 w-10 rounded-md border border-sidebar-border bg-background text-sidebar-foreground transition-colors duration-200 hover:border-input hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         className,
       )}
       onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
@@ -313,7 +313,7 @@ function SidebarInput({ className, ...props }: React.ComponentProps<typeof Input
       data-slot="sidebar-input"
       data-sidebar="input"
       className={cn(
-        "h-9 w-full rounded-none border-sidebar-border bg-background shadow-none",
+        "h-9 w-full rounded-md border-sidebar-border bg-background shadow-none",
         className,
       )}
       {...props}
@@ -398,7 +398,7 @@ function SidebarGroupLabel({
     props: mergeProps<"div">(
       {
         className: cn(
-          "flex shrink-0 items-center border-b border-sidebar-border pb-2 font-mono text-[0.62rem] tracking-[0.13em] text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-[margin,opacity,max-height] duration-200 ease-out group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:opacity-0 focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+          "flex h-8 shrink-0 items-center text-xs font-medium text-label ring-sidebar-ring outline-hidden transition-[margin,opacity,max-height] duration-200 ease-out group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:opacity-0 focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
           className,
         ),
       },
@@ -422,7 +422,7 @@ function SidebarGroupAction({
     props: mergeProps<"button">(
       {
         className: cn(
-          "absolute top-3.5 right-3 flex aspect-square w-5 items-center justify-center rounded-none p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform group-data-[collapsible=icon]:hidden after:absolute after:-inset-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 md:after:hidden [&>svg]:size-4 [&>svg]:shrink-0",
+          "absolute top-3.5 right-3 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform group-data-[collapsible=icon]:hidden after:absolute after:-inset-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 md:after:hidden [&>svg]:size-4 [&>svg]:shrink-0",
           className,
         ),
       },
@@ -470,13 +470,13 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button group/menu-button flex h-11 w-full items-center overflow-hidden rounded-none border border-transparent text-left text-sm text-sidebar-foreground ring-sidebar-ring outline-hidden transition-[padding,gap,background-color,border-color] duration-200 ease-out group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-active:border-l-2 data-active:border-l-sidebar-primary data-active:bg-sidebar-accent data-active:text-sidebar-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate",
+  "peer/menu-button group/menu-button flex h-11 w-full items-center overflow-hidden rounded-md border-l-2 border-transparent text-left text-sm text-ink-2 ring-sidebar-ring outline-hidden transition-[padding,gap,background-color,border-color,color] duration-200 ease-out group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2 hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-active:border-l-sidebar-primary data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&>span:last-child]:truncate",
   {
     variants: {
       variant: {
         default: "gap-3 px-3 group-data-[collapsible=icon]:gap-0",
         outline:
-          "gap-3 border-sidebar-border bg-background px-3 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-2",
+          "gap-3 rounded-md border border-l-2 border-sidebar-border bg-background px-3 hover:bg-sidebar-accent hover:text-sidebar-foreground group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-2",
       },
       size: {
         default: "text-sm",
@@ -559,7 +559,7 @@ function SidebarMenuAction({
     props: mergeProps<"button">(
       {
         className: cn(
-          "absolute top-1/2 right-2 flex aspect-square w-5 -translate-y-1/2 items-center justify-center rounded-none p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-sidebar-accent-foreground after:absolute after:-inset-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 md:after:hidden [&>svg]:size-4 [&>svg]:shrink-0",
+          "absolute top-1/2 right-2 flex aspect-square w-5 -translate-y-1/2 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-sidebar-accent-foreground after:absolute after:-inset-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 md:after:hidden [&>svg]:size-4 [&>svg]:shrink-0",
           showOnHover &&
             "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-active/menu-button:text-sidebar-accent-foreground aria-expanded:opacity-100 md:opacity-0",
           className,
@@ -581,7 +581,7 @@ function SidebarMenuBadge({ className, ...props }: React.ComponentProps<"div">) 
       data-slot="sidebar-menu-badge"
       data-sidebar="menu-badge"
       className={cn(
-        "pointer-events-none absolute top-1/2 right-2 flex h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-none px-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-sidebar-foreground tabular-nums select-none group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-sidebar-accent-foreground peer-data-active/menu-button:text-sidebar-accent-foreground",
+        "pointer-events-none absolute top-1/2 right-2 flex h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-md px-1 font-mono text-[0.7rem] text-muted-foreground tabular-nums select-none group-data-[collapsible=icon]:hidden peer-hover/menu-button:text-sidebar-accent-foreground peer-data-active/menu-button:text-sidebar-accent-foreground",
         className,
       )}
       {...props}
@@ -605,10 +605,10 @@ function SidebarMenuSkeleton({
     <div
       data-slot="sidebar-menu-skeleton"
       data-sidebar="menu-skeleton"
-      className={cn("flex h-8 items-center gap-2 rounded-none px-2", className)}
+      className={cn("flex h-8 items-center gap-2 rounded-md px-2", className)}
       {...props}
     >
-      {showIcon && <Skeleton className="size-4 rounded-none" data-sidebar="menu-skeleton-icon" />}
+      {showIcon && <Skeleton className="size-4 rounded-md" data-sidebar="menu-skeleton-icon" />}
       <Skeleton
         className="h-4 max-w-[var(--skeleton-width)] flex-1"
         data-sidebar="menu-skeleton-text"
@@ -663,7 +663,7 @@ function SidebarMenuSubButton({
     props: mergeProps<"a">(
       {
         className: cn(
-          "flex min-w-0 items-center gap-2 overflow-hidden rounded-none border border-transparent px-3 py-2 text-sidebar-foreground ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:hidden hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-sm data-[size=sm]:text-[0.72rem] data-active:border-l-2 data-active:border-l-sidebar-primary data-active:bg-sidebar-accent data-active:text-sidebar-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+          "flex min-w-0 items-center gap-2 overflow-hidden rounded-md border-l-2 border-transparent px-3 py-2 text-ink-2 ring-sidebar-ring outline-hidden group-data-[collapsible=icon]:hidden hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[size=md]:text-sm data-[size=sm]:text-[0.72rem] data-active:border-l-sidebar-primary data-active:bg-sidebar-accent data-active:font-medium data-active:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
           className,
         ),
       },

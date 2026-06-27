@@ -17,21 +17,16 @@ function ProfileAccessPage() {
       section="SSH / Access"
       description="Define SSH and access posture once so every run launched with this profile inherits the same control boundaries."
     >
-      <div className="border border-border">
+      <div className="divide-y divide-rule-faint rounded-2xl border border-border bg-popover px-5 shadow-[var(--shadow-sm)]">
         {[
           ["Access mode", profile?.access ?? "Unknown"],
           ["SSH key set", "ops-default"],
           ["Host allowlist", "10.20.0.0/16"],
           ["Session timeout", "45m"],
         ].map(([label, value]) => (
-          <div
-            key={label}
-            className="flex items-center justify-between gap-4 border-b border-border px-4 py-3 last:border-b-0"
-          >
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="text-sm font-semibold text-foreground">{value}</p>
+          <div key={label} className="flex items-baseline justify-between gap-4 py-3.5">
+            <p className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{label}</p>
+            <p className="font-mono text-xs text-ink-2">{value}</p>
           </div>
         ))}
       </div>

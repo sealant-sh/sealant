@@ -13,25 +13,23 @@ function RegistryListPage() {
   const registries = Route.useLoaderData();
 
   return (
-    <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <div className="mb-8">
-        <p className="font-mono text-xs tracking-[0.12em] text-muted-foreground">Instances</p>
-        <h1 className="mt-3 font-display text-6xl tracking-[0.02em] text-foreground leading-none">
+    <div className="space-y-8 p-8 lg:p-10">
+      <header>
+        <p className="ev-eyebrow">Instances</p>
+        <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
           Registry
         </h1>
-        <p className="mt-4 font-mono text-xs tracking-[0.1em] text-muted-foreground">
+        <p className="mt-2 font-mono text-xs text-faint">
           {registries.length} configured instance{registries.length !== 1 ? "s" : ""}
         </p>
-      </div>
+      </header>
 
       {registries.length === 0 ? (
-        <div className="flex items-center justify-center border border-border bg-muted/30 py-24">
-          <p className="font-mono text-xs tracking-[0.1em] text-muted-foreground">
-            No registries configured
-          </p>
+        <div className="flex items-center justify-center rounded-2xl border border-border bg-popover py-24 shadow-[var(--shadow-sm)]">
+          <p className="text-sm text-muted-foreground">No registries configured</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {registries.map((registry) => (
             <RegistryCard
               key={registry.id}
@@ -50,19 +48,22 @@ function RegistryListPage() {
 
 function RegistryListSkeleton() {
   return (
-    <div className="overflow-hidden border border-border bg-card p-6 sm:p-8">
-      <div className="mb-8">
-        <Skeleton className="mb-2 h-3 w-24 rounded-none bg-muted" />
-        <Skeleton className="h-12 w-48 rounded-none bg-muted" />
-        <Skeleton className="mt-4 h-3 w-40 rounded-none bg-muted" />
+    <div className="space-y-8 p-8 lg:p-10">
+      <div>
+        <Skeleton className="mb-2 h-3 w-24 rounded-lg bg-muted" />
+        <Skeleton className="h-9 w-48 rounded-lg bg-muted" />
+        <Skeleton className="mt-3 h-3 w-40 rounded-lg bg-muted" />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 3 }).map((_, index) => (
-          <div key={index} className="border border-border bg-muted/20 p-4">
-            <Skeleton className="h-5 w-32 rounded-none bg-muted" />
-            <Skeleton className="mt-4 h-3 w-full rounded-none bg-muted" />
-            <Skeleton className="mt-2 h-3 w-3/4 rounded-none bg-muted" />
-            <Skeleton className="mt-6 h-9 w-full rounded-none bg-muted" />
+          <div
+            key={index}
+            className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)]"
+          >
+            <Skeleton className="h-5 w-32 rounded-lg bg-muted" />
+            <Skeleton className="mt-4 h-3 w-full rounded-lg bg-muted" />
+            <Skeleton className="mt-2 h-3 w-3/4 rounded-lg bg-muted" />
+            <Skeleton className="mt-6 h-9 w-full rounded-lg bg-muted" />
           </div>
         ))}
       </div>

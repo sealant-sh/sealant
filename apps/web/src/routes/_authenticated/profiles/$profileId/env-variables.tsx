@@ -17,7 +17,7 @@ function ProfileEnvVariablesPage() {
       section="Env Variables"
       description="Use explicit environment variables so run behavior remains predictable under operational pressure."
     >
-      <div className="border border-border">
+      <div className="divide-y divide-rule-faint rounded-2xl border border-border bg-popover px-5 shadow-[var(--shadow-sm)]">
         {[
           ["NODE_ENV", "production"],
           ["SEALANT_REGION", "eu-west-1"],
@@ -25,10 +25,10 @@ function ProfileEnvVariablesPage() {
         ].map(([key, value]) => (
           <div
             key={key}
-            className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[1fr_2fr] sm:items-center"
+            className="grid gap-2 py-3.5 sm:grid-cols-[1fr_2fr] sm:items-baseline"
           >
             <p className="font-mono text-xs text-foreground">{key}</p>
-            <p className="font-mono text-[0.68rem] text-muted-foreground">{value}</p>
+            <p className="font-mono text-xs text-ink-2">{value}</p>
           </div>
         ))}
       </div>

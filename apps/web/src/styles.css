@@ -1,10 +1,12 @@
-@import "@fontsource/plus-jakarta-sans/400.css";
-@import "@fontsource/plus-jakarta-sans/500.css";
-@import "@fontsource/plus-jakarta-sans/600.css";
-@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
 
-@import "@fontsource/space-grotesk/400.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
 @import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
 @import "@fontsource/space-grotesk/700.css";
 
 @import "tailwindcss";
@@ -12,90 +14,30 @@
 
 @source "../node_modules/@sealant/ui/src";
 
+/*
+  Evidence Review type split: Inter for human language, JetBrains Mono for
+  machine facts. Tokens (colors, radius, themes) are owned by
+  @sealant/ui/styles/globals.css — do not redeclare them here.
+*/
 @theme inline {
-  --font-sans: "Plus Jakarta Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "Space Grotesk", ui-monospace, monospace;
-  --font-display: "Bebas Neue", "Oswald", "Impact", sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
-:root {
-  --sw-bg: #fbfbfa;
-  --sw-panel: #ffffff;
-  --sw-ink: #111111;
-  --sw-muted: #767676;
-  --sw-rule: #141414;
-  --sw-soft-rule: #e4e4e4;
-  --secondary: #f1f1f0;
-  --secondary-foreground: var(--sw-ink);
-  --muted: #f3f3f2;
-  --muted-foreground: var(--sw-muted);
-  --accent: #f3f3f2;
-  --accent-foreground: var(--sw-ink);
-  --destructive: #b42318;
-  --destructive-foreground: #ffffff;
-  --border: var(--sw-soft-rule);
-  --input: var(--sw-soft-rule);
-  --ring: var(--sw-rule);
-  --chart-2: #222222;
-  --chart-3: #555555;
-  --chart-4: #848484;
-  --chart-5: #b0b0b0;
-  --sidebar: var(--sw-panel);
-  --sidebar-foreground: var(--sw-ink);
-  --sidebar-accent: #f3f3f2;
-  --sidebar-accent-foreground: var(--sw-ink);
-  --sidebar-border: var(--sw-soft-rule);
-  --sidebar-ring: var(--sw-rule);
-  color-scheme: light;
-}
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
 
-.dark {
-  --sw-bg: #121211;
-  --sw-panel: #191917;
-  --sw-ink: #f1f1ef;
-  --sw-muted: #afaea9;
-  --sw-rule: #f1f1ee;
-  --sw-soft-rule: #383835;
-  --secondary: #222220;
-  --secondary-foreground: var(--sw-ink);
-  --muted: #20201e;
-  --muted-foreground: var(--sw-muted);
-  --accent: #232321;
-  --accent-foreground: var(--sw-ink);
-  --destructive: #dc4f43;
-  --destructive-foreground: #ffffff;
-  --border: var(--sw-soft-rule);
-  --input: var(--sw-soft-rule);
-  --ring: #e5e5e1;
-  --chart-2: #f1f1ee;
-  --chart-3: #d0d0ca;
-  --chart-4: #a9a9a2;
-  --chart-5: #7d7d77;
-  --sidebar: #161615;
-  --sidebar-foreground: var(--sw-ink);
-  --sidebar-accent: #21211f;
-  --sidebar-accent-foreground: var(--sw-ink);
-  --sidebar-border: var(--sw-soft-rule);
-  --sidebar-ring: #e5e5e1;
-  color-scheme: dark;
-}
+  /* The warm canvas sits behind the working sheet painted by the app shell. */
+  html {
+    background: var(--sw-canvas);
+  }
 
-* {
-  box-sizing: border-box;
-}
-
-html {
-  background: var(--sw-bg);
-}
-
-body {
-  min-height: 100svh;
-  background:
-    linear-gradient(90deg, color-mix(in oklab, var(--sw-rule) 6%, transparent) 1px, transparent 1px)
-      0 0 / calc(100% / 12) 100%,
-    linear-gradient(
-      180deg,
-      color-mix(in oklab, var(--sw-panel) 70%, var(--sw-bg)) 0%,
-      var(--sw-bg) 100%
-    );
+  body {
+    min-height: 100svh;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
 }

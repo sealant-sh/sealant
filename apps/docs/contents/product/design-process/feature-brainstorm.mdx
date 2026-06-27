@@ -1,0 +1,314 @@
+---
+title: Feature brainstorm
+description: Stage 2 of Sealant's design process — a divergent, developer-first feature brainstorm grounding what the product could be in what the code already does.
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+This page captures Stage 2 of Sealant's design process: a deliberately wide, divergent feature brainstorm written from the perspective of a developer who *uses* the platform. Each feature records whether a seed already exists in the codebase, whether it belongs to the platform or to a product built on top of it, a rough priority, and the open design question it raises.
+
+<Callout type="info">
+This is an exploration, not a roadmap. It spans nine feature areas — sandboxes, the execution record, browser support, access, networking, security, reliability, the SDK, and product loops — and is intentionally honest about the gap between the narrative and the shipped code. The point is to surface decisions, not to commit to them.
+</Callout>
+
+## How to read this brainstorm
+
+Every feature carries two tags: a **priority** and a **scope**.
+
+| Priority | Meaning |
+| --- | --- |
+| Table-stakes | Must exist for the category to be credible |
+| Differentiator | Why someone picks Sealant over raw Docker or a headless service |
+| Future | Real, but later |
+
+**Scope** marks whether a feature lives in the *platform* (the runtime, SDK, and execution record), a *product* (an experience built on top — launcher, inspector, workflows), or *both*.
+
+<Cards>
+  <Card title="A · Sandbox & harness" description="The front door: lifecycle SDK, harness as a first-class verb, build pipeline DX." />
+  <Card title="B · The execution record" description="The platform's soul: read models, live delivery, diffs and artifacts, the inspector." />
+  <Card title="C · Browser support" description="The flagged primitive: in-sandbox browser sessions captured as evidence." />
+  <Card title="D · Access & interactivity" description="Interactive PTY sessions and collaboration / sharing." />
+  <Card title="E · Networking & control" description="Egress observation and egress policy enforcement." />
+  <Card title="F · Security, identity & tenancy" description="Auth, multi-tenant isolation, secrets, and record integrity." />
+  <Card title="G · Reliability & operability" description="Reconnection, retries and DLQ, observability, runtime backends." />
+  <Card title="H · SDK & ecosystem" description="Multi-language SDK generation and capability-aware clients." />
+  <Card title="I · Product loops" description="The issue-to-PR workflow execution engine." />
+</Cards>
+
+## A. Sandbox & harness — the front door
+
+### A1. Sandbox lifecycle SDK (create / inspect / stop / TTL)
+
+**Priority:** Table-stakes · **Scope:** Platform & Product
+
+> "`sealant.sandboxes.create({ repository, harness })` gives me a live disposable env and a handle I can stop, restart, or let expire — no Dockerfiles, no container babysitting."
+
+This is the promise the marketing hero makes. The create path is real but REST-shaped today (it needs `registryId` plus `tag` plus a GitHub `sourceSelection`), and there is no stop, terminate, restart, TTL, or GC anywhere — launched containers leak. Without a close-out path, cost and capacity are unbounded.
+
+**Open question —** What is the canonical create API: the fluent one-liner or the REST contract? And who owns teardown, idle-timeout, and GC, since nothing does today?
+
+### A2. Harness execution as a first-class verb
+
+**Priority:** Differentiator · **Scope:** Platform & Product
+
+> "Hand a configured coding harness a task, get back `{ result, changes, artifacts, record }` — the agent worker lifecycle managed for me."
+
+The headline differentiator is running a harness instead of building your own agent worker loop. The boot supervisor already launches the harness as a managed PID-1 child with full I/O capture, but there is no SDK-level `run(prompt)` that returns a structured result; the harness is baked into the image boot contract rather than driven interactively.
+
+**Open question —** Is the harness driven once at boot, or repeatedly via interactive `run(prompt)` during a sandbox's life? Where do harness API keys get injected? Is bring-your-own-harness a hard requirement?
+
+### A3. Build pipeline DX: caching, reproducibility, build-to-ready SLA
+
+**Priority:** Table-stakes · **Scope:** Platform
+
+> "Fast, reproducible builds — cached layers, pinned harness/tool versions, predictable build-to-ready time — not a cold `dnf` or `npm install` on every job."
+
+Every build recompiles with no image cache or dedup; harnesses install `@latest` (a supply-chain and reproducibility risk); registry publish runs host-side `docker load`/`tag`/`push` on a shared daemon.
+
+**Open question —** What are the build-to-ready SLA targets? Do we need caching/dedup, pinned harness versions, and isolated builders before GA? Is reproducibility a marketed guarantee?
+
+## B. The execution record — the platform's soul
+
+### B1. Trustworthy execution-record SDK (read models over the event log)
+
+**Priority:** Differentiator · **Scope:** Product
+
+> "Query a run's record — timeline, scrollback, file diff, process tree, network-in-flight — at any `(runId, sequence)` coordinate, as structured data, not raw terminal text."
+
+The append-only log plus pure-fold projections are production-shaped and tested, but the north-star read models throw `TelemetryQueryUnimplementedError`, and none of it is exposed via API or SDK.
+
+**Open question —** What is the developer-facing read surface: a REST/SDK query API, a streaming tail, or both? What is the priority order for the unimplemented folds — file tree, process tree, network, or live tail?
+
+### B2. Live event stream with at-least-once delivery
+
+**Priority:** Table-stakes · **Scope:** Platform
+
+> "Subscribe to a run's typed event stream and trust I can reconnect and resume from a sequence without losing events."
+
+The entire record value proposition rests on delivery integrity, but `high_water` advances on the first broadcast attempt regardless of receipt, after which segments are deleted — a slow or reconnecting client silently loses events, with no resume-from-sequence command.
+
+**Open question —** Does the platform need true at-least-once delivery (client ack plus resume) before deleting spool segments, or is "durable until first broadcast attempt" the accepted boundary? This determines whether the record can be marketed as authoritative.
+
+### B3. File diff and artifacts as run output
+
+**Priority:** Table-stakes · **Scope:** Platform & Product
+
+> "A clean before/after diff (added, modified, deleted, renamed, plus line-level patches) and retained artifacts (logs, reports, generated files, screenshots) addressable by content hash."
+
+The filesystem crate gives sizes, hashes, paths, and a net-change summary, but no line-level patch text is generated. External artifact backends (S3, GCS) are enumerated but only inline-bytea is wired, which will not scale to real logs and diffs.
+
+**Open question —** Do we need real line-level patch artifacts, and when does an external (S3) artifact backend ship?
+
+### B4. Browsable run-inspector UI
+
+**Priority:** Differentiator · **Scope:** Product
+
+> "A web run-inspector that renders diff-peek, trace timeline, scrollback, and validation views for a finished or live run — the evidence-review experience the design system was built for."
+
+The signature motif is mostly aspirational: diff, trace, and validation routes redirect to a raw JSON spec dump. The launcher is real, but the inspector — the thing that makes the record valuable to a human — is not shipped.
+
+**Open question —** Is the inspector the core product surface for v1, and which views ship first, given that the read models they depend on are themselves unimplemented?
+
+## C. Browser support — the flagged primitive
+
+### C1. Remote browser sessions in-sandbox (CDP relay + browser-as-evidence)
+
+**Priority:** Differentiator · **Scope:** Platform & Product
+
+> "A harness (or human) drives a real Chromium in the sandbox — web-app auth flows, browser dev tools, UI verification — and the browsing is captured as part of the same recorded run (screenshots, DOM snapshots, navigations, network)."
+
+This is the one primitive that is marketed but unbuilt ("Browser sessions", *in development*). The differentiated shape for an isolated-sandbox plus execution-record platform composes existing primitives:
+
+1. a headless or headful browser running **in-sandbox**;
+2. its CDP/devtools port exposed to the developer's tools via the existing `direct-tcpip` `openForward` channel — exactly how VS Code Remote-SSH already tunnels;
+3. browsing artifacts (screenshots, traces, HAR, DOM) written to the content-addressed artifact store and stitched into the run record;
+4. network egress, already observed by the proxy, correlated to the browsing session.
+
+This turns browser activity into first-class evidence, which is unique versus a plain headless-browser service. Strong transport seeds already exist — `openForward` as a ready-made CDP relay, the artifact CAS, the egress proxy — but no browser process management, CDP relay, or browser-evidence schema exists yet.
+
+**Open question —** What does "browser support" mean for v1: (a) an in-sandbox headless browser the harness drives via CDP, (b) a remote interactive browser a human views and controls, (c) browser activity captured as evidence, or all three? Which is the wedge? Does it ride the existing `openForward` plus artifact store, or need a new browser-session subsystem?
+
+## D. Access & interactivity
+
+### D1. Interactive PTY / web terminal sessions
+
+**Priority:** Table-stakes · **Scope:** Platform & Product
+
+> "Open a PTY-backed shell in a running sandbox (create, resize, close, attach), stream bytes to a real terminal or web terminal, with correct job-control so Ctrl-C hits the whole pipeline."
+
+The daemon PTY runtime is solid (setsid, TIOCSCTTY, a lossless attach channel) and the gateway maps the SSH shell to `openSession`. But the TypeScript SDK is missing typed methods for `openSession`, `closeSession`, `resizePty`, and `listSessions` — the interactive lifecycle is only reachable via the low-level `request()` escape hatch.
+
+**Open question —** Is a web-based terminal a committed surface? Should the SDK ship typed session-lifecycle methods plus a Node `stream.Duplex` over `Channel`?
+
+### D2. Collaboration & sharing (sandbox access, session sharing, principal RBAC)
+
+**Priority:** Future · **Scope:** Product
+
+> "Share a running sandbox or a recorded run with a teammate, grant scoped SSH/terminal access, and have access decisions audited."
+
+The gateway is a real choke point doing principal × sandbox authorization, but the API check is owner-only, keys have no provisioning, revocation, or hot-reload, and there is no sharing surface. A session OBSERVE mode exists in the protocol but is not surfaced.
+
+**Open question —** Is cross-user/team sharing (scoped and audited) a launch requirement?
+
+## E. Networking & control
+
+### E1. Egress observation + egress policy / enforcement
+
+**Priority:** Differentiator · **Scope:** Platform
+
+> "See every outbound request a run made, and set an allow/deny policy so an untrusted agent can't exfiltrate or reach disallowed destinations."
+
+"Policy belongs to the environment, not the prompt" is a stated stance, but today the proxy only observes — no allowlist, denylist, block, or rate-limit — and it is cooperative, so it can be bypassed. Privileged transparent-capture and per-process attribution do not exist yet.
+
+**Open question —** Is egress enforcement a product requirement, or is best-effort observation enough? Do we commit to the privileged transparent-capture path (eBPF, netns) that the orchestrator cannot even convey capabilities for today?
+
+## F. Security, identity & tenancy
+
+This cluster is systematically deferred and tightly interlocking. For any hosted, B2B, or compliance positioning these are blocking, and they cannot be bolted on late.
+
+### F1. Authentication & authorization (control plane + control socket)
+
+**Priority:** Table-stakes · **Scope:** Platform & Product
+
+This is the number-one gap. The control-plane API has no user-auth middleware — `ownerUserId` is a trusted input, so any caller can create or read sandboxes for any user. The socket trusts every uid-passing peer equally. Better Auth exists but is not integrated.
+
+**Open question —** What is the control-plane auth model (a Better Auth session, API keys, gateway-injected identity?) and where does it live? Does the socket need a token or capability layer for least-privilege callers?
+
+### F2. Multi-tenant isolation & tenancy model
+
+**Priority:** Differentiator · **Scope:** Product
+
+The data model is per-user only (no org or team table), daemon limits are global rather than per-tenant, and the build queue is a single shared FIFO, so a noisy tenant starves others.
+
+**Open question —** What is the unit of tenancy and isolation: single-tenant per host, gVisor-enforced, one container equals one daemon equals one harness? Org-level ownership? Per-tenant quotas plus queue fairness?
+
+### F3. Secrets management (encryption, redaction, injection)
+
+**Priority:** Table-stakes · **Scope:** Platform & Product
+
+The database stores ciphertext plus a key-id but performs no encryption (KMS is a caller TODO); runtime tokens are passed as plaintext `-e` env to `docker run`; redaction is heuristic prefix-based and misses custom or opaque secrets; PTY keystroke input is recorded raw.
+
+**Open question —** Is redaction best-effort hygiene or a compliance control? Where does the encryption key live? Is plaintext env injection acceptable, or do we need a file-mount or secrets-manager path?
+
+### F4. Tamper-evident vs audit-grade integrity
+
+**Priority:** Differentiator · **Scope:** Platform
+
+This is the defining tension. The record is marketed as "authoritative evidence" but is explicitly tamper-evident only, not tamper-proof against the default (root, shared-namespace) deployment. CRC32 is not cryptographic.
+
+**Open question —** Is a "tamper-evident best-effort recorder" acceptable go-to-market, or does the product require the privilege boundary (a separate unprivileged UID, user-namespaced containers, cryptographic per-record digests) before claiming audit-grade integrity? This single decision splits the GTM between a compliance/security buyer and a developer-convenience one.
+
+## G. Platform reliability & operability
+
+### G1. Reconnection / session resumption / resilience
+
+**Priority:** Table-stakes · **Scope:** Platform
+
+Everything is connection-scoped: a dropped control connection kills all PTY attaches, forwards, and SFTP bridges, fails pending requests, and ends the event stream. The SDK only retries the initial connect.
+
+**Open question —** Is reconnect-and-reattach required, or is fail-closed acceptable for v1?
+
+### G2. Job retry, DLQ handling & stuck-lease reclamation
+
+**Priority:** Table-stakes · **Scope:** Platform
+
+`maxAttempts` is stored but no code enforces it; failures nack straight to the DLQ with no backoff; the lease-reclaim function exists but is called by zero production code; nothing consumes the DLQ; and at-least-once redelivery re-runs non-idempotent publish/launch, creating orphans.
+
+**Open question —** What is the failure policy and DLQ runbook? How do we make registry-push and launch idempotent?
+
+### G3. Observability & operability (health, metrics, command audit log)
+
+**Priority:** Table-stakes · **Scope:** Platform
+
+`HealthReport` hardcodes several fields to zero or None; there is no structured audit log of control commands; feature kill-switches are in-memory, unauthenticated, and non-persistent, so any peer can flip network collection.
+
+**Open question —** Which health fields are real versus placeholder? Is a tamper-evident audit log of control commands required? Should feature toggles be access-controlled and persisted?
+
+### G4. Runtime backends beyond single-host Docker (k8s/k3s, persistence)
+
+**Priority:** Future · **Scope:** Platform
+
+The k8s/k3s adapters are 37-line throwing stubs despite being first-class in the spec, DB, worker, and marketing; the Docker adapter refuses persistent and no-network sandboxes; telemetry ingestion is Docker-only.
+
+**Open question —** Single-host Docker per worker at launch, or real cluster orchestration for GA? Are persistent/stateful workspaces committed?
+
+## H. SDK & ecosystem
+
+### H1. Multi-language SDK generation from the wire contract
+
+**Priority:** Differentiator · **Scope:** Platform
+
+The single-source proto3 schema makes Go, Python, and Java clients codegen-only work. But `buf.yaml` has no lint or breaking-change config, schema negotiation is exact-match (a v2 daemon hard-rejects v1 clients), and there is no version handshake — external SDKs cannot ship safely yet.
+
+**Open question —** Is a public multi-language SDK a committed product? What backward/forward-compat policy do we commit to before the first external client ships?
+
+### H2. Capability-aware SDK & pre-flight negotiation
+
+**Priority:** Future · **Scope:** Platform
+
+Capabilities are honestly reported (`FeatureMatrix`), but the SDK does not gate calls by capability — a consumer can call `openSftp` or `openForward` against a daemon lacking the feature and fail at runtime. Some reports overstate reality (pidfd is reported "supported" but signaling still uses `killpg`).
+
+**Open question —** Should the SDK surface capability-aware typing and pre-flight gating, and distinguish "supported by kernel" from "actually wired and used"?
+
+## I. Product loops
+
+### I1. Issue-to-PR workflow execution engine
+
+**Priority:** Differentiator · **Scope:** Product
+
+This is a flagship loop (Sealant Handoff) with a complete DB lineage schema, issue import, and a board UI — but zero execution engine consumes the tables. The board is client-side `useState` (lost on reload), GitHub intake is fixtures (only Linear is end-to-end), and no worker opens a PR.
+
+**Open question —** Is issue-to-PR in scope for launch? What is the MVP execution engine — who runs the change, who opens the PR, how is validation defined? Is the imported board a transient view or the system of record?
+
+## Cross-cutting themes
+
+A handful of patterns recur across every area above. They matter more than any single feature, because they shape what can credibly be claimed at all.
+
+<Accordions>
+  <Accordion title="Narrative is ahead of implementation across the board">
+    Marketing, the README, and the shipped reality tell three different product stories. The single biggest pre-build decision is picking one canonical positioning and reconciling the docs before any external claim ships.
+  </Accordion>
+  <Accordion title="Doc/code drift signals immaturity to anyone onboarding">
+    Trustworthiness of the platform hinges on the docs being trustworthy. Pervasive drift between what is documented and what is built undermines that on first contact.
+  </Accordion>
+  <Accordion title="The execution record is the soul, but its trust chain has three weak links">
+    (1) Delivery is not true at-least-once — there is no ack or resume. (2) The record is tamper-evident, not tamper-proof, in the default deployment. (3) The read API and inspector that make the record valuable are largely unbuilt. All three must be addressed coherently, or the central claim is hollow.
+  </Accordion>
+  <Accordion title="A clean platform/product split exists and should be leaned into">
+    The open question is which products are GA-committed versus positioning, and whether the SDK and runtime are publicly supported.
+  </Accordion>
+  <Accordion title="Security and multi-tenancy are systematically deferred and interlock">
+    For any hosted, B2B, or compliance positioning these are blocking and cannot be bolted on late.
+  </Accordion>
+  <Accordion title="Lifecycle close-out is missing everywhere">
+    No sandbox stop, TTL, or GC; no build retry; no DLQ consumer; no retention or GC. The system is good at starting and recording things, with no story for reaping them — which becomes acute the moment it runs unattended at scale.
+  </Accordion>
+  <Accordion title="Linux-first / Docker-only / amd64 is the real operating envelope">
+    Despite the spec and marketing implying k8s, arm64, persistence, and clusters, the honest near-term product is narrower than the enums suggest.
+  </Accordion>
+  <Accordion title="Browser support is net-new but has unusually strong transport seeds">
+    The differentiated framing — browsing as recorded evidence in the same run — is achievable by composing existing primitives, if the v1 scope is pinned.
+  </Accordion>
+</Accordions>
+
+## The twelve decisions that shape the product most
+
+The brainstorm converges on twelve questions whose answers cascade through everything else. Stage 3 of the design process works through these to reach alignment.
+
+1. **The one canonical product story** — a harness-neutral "runtime for AI developer agents", or "isolated sandboxes plus issue-workflow review"? Which is the primary noun set (sandbox + run + harness, or sandbox + issue workflow)? Everything hangs on this.
+2. **What is the developer-facing product** — the launcher, the run inspector, or the SDK/runtime — and which is GA at launch versus aspirational?
+3. **What does "browser support" mean for v1** concretely, and does it ride existing primitives?
+4. **The control-plane auth and authz model** — and where it lives. Today any caller can be any user.
+5. **Is the execution record audit-grade or best-effort tamper-evident?** This splits the GTM.
+6. **True at-least-once telemetry delivery (ack plus resume), or "durable until first broadcast"?**
+7. **Is issue-to-PR (Handoff) in scope for launch, and what is the MVP engine?**
+8. **The runtime and scaling target** — single-host Docker, or real k8s/k3s? Persistent workspaces?
+9. **Who owns lifecycle close-out** — sandbox stop/TTL/GC, build retry, DLQ, retention?
+10. **A public, supported multi-language SDK/CLI, or an internal-only runtime?** What compat policy?
+11. **The tenancy model** — per-user today; orgs and teams plus quotas, sharing, and RBAC for B2B?
+12. **Are Verify, Repro, and Handoff committed products or naming placeholders** — and which marketed primitives are GA versus "in development", so we stop selling vaporware?
+
+<Callout type="idea">
+These twelve are the convergence agenda. The next stage of the design process narrows this divergent set into an aligned product definition: a single positioning, a committed surface, and an honest map of what ships at GA versus what is still in development.
+</Callout>

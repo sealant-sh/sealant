@@ -16,7 +16,7 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
     <CommandPrimitive
       data-slot="command"
       className={cn(
-        "flex size-full flex-col overflow-hidden rounded-none border border-border bg-popover p-1 text-popover-foreground",
+        "flex size-full flex-col overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground",
         className,
       )}
       {...props}
@@ -46,7 +46,7 @@ function CommandDialog({
       </DialogHeader>
       <DialogContent
         className={cn(
-          "top-1/3 translate-y-0 overflow-hidden rounded-none border border-border p-0",
+          "top-1/3 translate-y-0 overflow-hidden rounded-md border border-border p-0",
           className,
         )}
         showCloseButton={showCloseButton}
@@ -63,7 +63,7 @@ function CommandInput({
 }: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
-      <InputGroup className="h-9! rounded-none! border-input bg-background shadow-none! *:data-[slot=input-group-addon]:pl-2!">
+      <InputGroup className="h-9! rounded-md! border-input bg-background shadow-none! *:data-[slot=input-group-addon]:pl-2!">
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
@@ -144,7 +144,7 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "group/command-item relative flex cursor-default items-center gap-2 rounded-none border-b border-border/70 px-2 py-1.5 text-[0.72rem] font-medium uppercase tracking-[0.08em] outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-muted data-selected:text-foreground last:border-b-0 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-foreground",
+        "group/command-item relative flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] text-ink-2 outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent data-selected:text-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-primary",
         className,
       )}
       {...props}
@@ -160,7 +160,7 @@ function CommandShortcut({ className, ...props }: React.ComponentProps<"span">) 
     <span
       data-slot="command-shortcut"
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground group-data-selected/command-item:text-foreground",
+        "ml-auto font-mono text-xs text-faint group-data-selected/command-item:text-primary",
         className,
       )}
       {...props}

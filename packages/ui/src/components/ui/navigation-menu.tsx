@@ -51,7 +51,7 @@ function NavigationMenuItem({
 }
 
 const navigationMenuTriggerStyle = cva(
-  "group/navigation-menu-trigger inline-flex h-9 w-max items-center justify-center rounded-none border border-transparent bg-background px-2.5 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.08em] transition-all outline-none hover:bg-muted focus:bg-muted focus-visible:ring-2 focus-visible:ring-ring/20 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-muted/50 data-popup-open:hover:bg-muted data-open:bg-muted/50 data-open:hover:bg-muted data-open:focus:bg-muted",
+  "group/navigation-menu-trigger inline-flex h-9 w-max items-center justify-center rounded-md border border-transparent bg-background px-2.5 py-1.5 text-[0.8125rem] font-medium text-ink-2 transition-colors outline-none hover:bg-muted hover:text-foreground focus:bg-muted focus-visible:ring-2 focus-visible:ring-ring/20 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-muted/50 data-popup-open:hover:bg-muted data-open:bg-muted/50 data-open:hover:bg-muted data-open:focus:bg-muted",
 );
 
 function NavigationMenuTrigger({
@@ -121,7 +121,7 @@ function NavigationMenuLink({ className, ...props }: NavigationMenuPrimitive.Lin
     <NavigationMenuPrimitive.Link
       data-slot="navigation-menu-link"
       className={cn(
-        "flex items-center gap-2 rounded-none border-b border-border/70 p-2 text-[0.72rem] font-medium uppercase tracking-[0.08em] transition-all outline-none hover:bg-muted focus:bg-muted focus-visible:ring-2 focus-visible:ring-ring/20 in-data-[slot=navigation-menu-content]:border-b data-active:bg-muted/50 data-active:hover:bg-muted data-active:focus:bg-muted last:border-b-0 [&_svg:not([class*='size-'])]:size-4",
+        "flex items-center gap-2 rounded-md border-b border-border p-2 text-[0.8125rem] font-medium text-ink-2 transition-colors outline-none hover:bg-muted hover:text-foreground focus:bg-muted focus-visible:ring-2 focus-visible:ring-ring/20 in-data-[slot=navigation-menu-content]:border-b data-active:bg-accent data-active:text-primary data-active:hover:bg-accent data-active:focus:bg-accent last:border-b-0 [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}

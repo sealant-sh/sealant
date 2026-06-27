@@ -8,30 +8,41 @@ interface ProfileRowsProps {
 
 export function ProfileRows({ profiles }: ProfileRowsProps) {
   return (
-    <div className="border border-border">
+    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)]">
       {profiles.map((profile) => (
         <Link
           key={profile.id}
-          to={`/profiles/${encodeURIComponent(profile.id)}` as never}
-          className="grid gap-3 border-b border-border px-4 py-3 no-underline transition-colors duration-200 last:border-b-0 hover:bg-muted/40 lg:grid-cols-[1fr_auto_auto_auto] lg:items-center"
+          to="/profiles/$profileId"
+          params={{ profileId: profile.id }}
+          className="group grid gap-4 border-b border-rule-faint px-6 py-5 no-underline transition-[transform,box-shadow,background-color] duration-200 last:border-b-0 hover:-translate-y-0.5 hover:bg-accent/40 hover:shadow-[var(--shadow-md)] lg:grid-cols-[1fr_auto_auto_auto] lg:items-center"
         >
-          <div>
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              Profile
+          <div className="min-w-0">
+            <p className="ev-eyebrow">Profile</p>
+            <p className="mt-1.5 truncate text-sm font-medium text-foreground transition-colors group-hover:text-primary">
+              {profile.name}
             </p>
-            <p className="mt-1 text-sm font-semibold text-foreground">{profile.name}</p>
+            <p className="mt-1 font-mono text-xs text-faint">{profile.id}</p>
           </div>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.environment}
-          </p>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.packageCount} packages
-          </p>
-          <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-            {profile.secretCount} secrets
-          </p>
+          <ProfileFact label="Environment">{profile.environment}</ProfileFact>
+          <ProfileFact label="Packages">{`${profile.packageCount}`}</ProfileFact>
+          <ProfileFact label="Secrets">{`${profile.secretCount}`}</ProfileFact>
         </Link>
       ))}
+    </div>
+  );
+}
+
+function ProfileFact({
+  label,
+  children,
+}: {
+  readonly label: string;
+  readonly children: string;
+}) {
+  return (
+    <div className="lg:text-right">
+      <p className="ev-eyebrow">{label}</p>
+      <p className="mt-1.5 font-mono text-xs text-ink-2">{children}</p>
     </div>
   );
 }

@@ -37,17 +37,15 @@ export function ThemeSwitcher({ className }: ThemeSwitcherProps) {
         setTheme(getNextTheme(userTheme));
       }}
       className={cn(
-        "inline-flex h-8 items-center gap-2 border border-border bg-background px-2.5 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground transition-colors duration-200 hover:border-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+        "inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-popover px-3 text-[0.8125rem] text-foreground shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color,background-color] duration-200 hover:-translate-y-0.5 hover:border-input hover:shadow-[var(--shadow-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
         className,
       )}
       aria-label={`Theme: ${currentOption.label}`}
       title={`Theme: ${currentOption.label}`}
     >
-      <span className="font-mono text-[0.58rem] tracking-[0.16em] text-muted-foreground">
-        Theme
-      </span>
+      <span className="ev-eyebrow">Theme</span>
       <span
-        className="inline-flex items-center gap-1.5 text-[0.62rem] font-semibold tracking-[0.12em] text-foreground"
+        className="inline-flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground"
         aria-hidden="true"
       >
         <Icon className="size-3.5" />

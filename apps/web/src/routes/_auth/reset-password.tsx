@@ -37,20 +37,25 @@ function ResetPasswordPage() {
       accent="cyan"
     >
       <div className="space-y-8">
-        <div className="space-y-3">
-          <p className="font-mono text-[0.68rem] tracking-[0.16em] text-muted-foreground">
-            Reset Password
-          </p>
-          <h2 className="font-display text-4xl tracking-[0.02em] text-foreground">New Password</h2>
+        <div className="space-y-2.5">
+          <p className="ev-eyebrow">Reset password</p>
+          <h2 className="font-display text-2xl font-semibold tracking-tight text-foreground text-balance">
+            New password
+          </h2>
           <p className="text-sm leading-7 text-muted-foreground">
-            {search.token !== undefined
-              ? `A reset token was detected: ${search.token.slice(0, 8)}…`
-              : "Use the reset link from your email to continue."}
+            {search.token !== undefined ? (
+              <>
+                A reset token was detected:{" "}
+                <span className="font-mono text-ink-2">{search.token.slice(0, 8)}…</span>
+              </>
+            ) : (
+              "Use the reset link from your email to continue."
+            )}
           </p>
         </div>
 
         <form
-          className="space-y-5"
+          className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -62,11 +67,10 @@ function ResetPasswordPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-destructive"
+                  errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="New password"
-                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Create a password..."
                   required
                 />
@@ -77,11 +81,10 @@ function ResetPasswordPage() {
               {(field) => (
                 <field.PasswordField
                   autoComplete="new-password"
-                  errorClassName="text-[0.72rem] leading-6 text-destructive"
+                  errorClassName="text-[0.72rem] leading-6 text-danger"
                   fieldClassName="space-y-2"
-                  inputClassName="h-12 px-4"
+                  inputClassName="h-12 rounded-lg px-4"
                   label="Confirm password"
-                  labelClassName="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground"
                   placeholder="Repeat the password..."
                   required
                 />
@@ -89,20 +92,24 @@ function ResetPasswordPage() {
             </form.AppField>
           </div>
 
-          <div className="border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          <div className="border-l-2 border-border pl-3 text-sm leading-6 text-muted-foreground">
             Reset token verification is not available yet.
           </div>
 
           {notice !== null ? (
-            <div className="border border-border bg-muted/40 px-4 py-3 text-sm text-foreground">
+            <div className="border-l-2 border-border pl-3 text-sm leading-6 text-foreground">
               {notice}
             </div>
           ) : null}
 
           <form.Subscribe selector={(state) => state.isSubmitting}>
             {(isSubmitting) => (
-              <Button className="h-12 w-full" disabled={isSubmitting} type="submit">
-                {isSubmitting ? "Setting Password..." : "Set Password"}
+              <Button
+                className="h-12 w-full rounded-xl shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                disabled={isSubmitting}
+                type="submit"
+              >
+                {isSubmitting ? "Setting password..." : "Set password"}
               </Button>
             )}
           </form.Subscribe>
@@ -112,9 +119,9 @@ function ResetPasswordPage() {
           <p>Need a new link?</p>
           <a
             href="/forgot-password"
-            className="font-semibold tracking-[0.1em] text-foreground no-underline hover:text-primary"
+            className="font-medium text-primary no-underline transition-colors hover:text-[var(--primary-hover)]"
           >
-            Request Reset
+            Request reset
           </a>
         </div>
       </div>

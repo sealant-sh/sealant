@@ -17,18 +17,19 @@ function ProfileSetupPage() {
       section="Setup"
       description="Capture setup defaults once and apply them across issue delegation and run execution workflows."
     >
-      <div className="grid gap-px border border-border bg-border sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         {[
           ["Startup script", "bootstrap.sh"],
           ["Validation profile", "strict"],
           ["Artifact retention", "7 days"],
           ["Issue handoff", "enabled"],
         ].map(([label, value]) => (
-          <div key={label} className="bg-card px-4 py-4">
-            <p className="font-mono text-[0.62rem] tracking-[0.13em] text-muted-foreground">
-              {label}
-            </p>
-            <p className="mt-2 text-sm font-semibold text-foreground">{value}</p>
+          <div
+            key={label}
+            className="rounded-2xl border border-border bg-popover px-5 py-5 shadow-[var(--shadow-sm)] transition-[transform,box-shadow] duration-200 hover:-translate-y-1 hover:shadow-[var(--shadow-md)]"
+          >
+            <p className="ev-eyebrow">{label}</p>
+            <p className="mt-2 font-mono text-xs text-foreground">{value}</p>
           </div>
         ))}
       </div>

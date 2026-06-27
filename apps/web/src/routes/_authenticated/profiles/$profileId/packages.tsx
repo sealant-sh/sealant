@@ -17,7 +17,7 @@ function ProfilePackagesPage() {
       section="Packages"
       description="Package constraints belong to the profile so repository runs can stay lightweight and consistent."
     >
-      <div className="border border-border">
+      <div className="divide-y divide-rule-faint rounded-2xl border border-border bg-popover px-5 shadow-[var(--shadow-sm)]">
         {[
           ["node", "22.4.1"],
           ["pnpm", "10.32.1"],
@@ -26,10 +26,10 @@ function ProfilePackagesPage() {
         ].map(([name, version]) => (
           <div
             key={name}
-            className="grid gap-2 border-b border-border px-4 py-3 last:border-b-0 sm:grid-cols-[1fr_auto] sm:items-center"
+            className="grid gap-2 py-3.5 sm:grid-cols-[1fr_auto] sm:items-baseline"
           >
             <p className="font-mono text-xs text-foreground">{name}</p>
-            <p className="font-mono text-[0.68rem] text-muted-foreground">{version}</p>
+            <p className="font-mono text-xs text-ink-2">{version}</p>
           </div>
         ))}
       </div>

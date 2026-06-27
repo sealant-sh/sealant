@@ -9,19 +9,19 @@ interface TopAppBarProps {
   className?: string;
 }
 
-const statusConfig: Record<SystemStatus, { label: string; color: string }> = {
-  online: { label: "ONLINE", color: "bg-foreground" },
-  degraded: { label: "DEGRADED", color: "bg-muted-foreground" },
-  offline: { label: "OFFLINE", color: "bg-red-500" },
+const statusConfig: Record<SystemStatus, { label: string; dot: string; text: string }> = {
+  online: { label: "Online", dot: "bg-success-dot", text: "text-success" },
+  degraded: { label: "Degraded", dot: "bg-warning-dot", text: "text-warning" },
+  offline: { label: "Offline", dot: "bg-danger-dot", text: "text-danger" },
 };
 
 export function TopAppBar({ status = "online", className }: TopAppBarProps) {
-  const { label, color } = statusConfig[status];
+  const { label, dot, text } = statusConfig[status];
 
   return (
     <header
       className={cn(
-        "fixed top-0 left-0 right-0 z-50 flex h-16 items-center border-b-2 border-foreground bg-card px-6",
+        "fixed top-0 left-0 right-0 z-50 flex h-16 items-center border-b border-border bg-card px-6",
         className,
       )}
     >
@@ -31,22 +31,18 @@ export function TopAppBar({ status = "online", className }: TopAppBarProps) {
         className="flex shrink-0 items-center gap-3 no-underline"
         aria-label="Sealant home"
       >
-        <span className="font-display text-3xl tracking-[0.04em] uppercase text-foreground">
-          SEALANT
-        </span>
+        <span className="text-lg font-semibold tracking-tight text-foreground">Sealant</span>
       </Link>
 
       {/* Navigation */}
       <nav className="ml-10 flex items-center gap-1" aria-label="Main navigation">
-        <TopNavLink to="/registry">REGISTRY</TopNavLink>
+        <TopNavLink to="/registry">Registry</TopNavLink>
       </nav>
 
       {/* System status — right aligned */}
       <div className="ml-auto flex items-center gap-2">
-        <div className={cn("h-2 w-2 rounded-full", color)} aria-hidden="true" />
-        <span className="font-mono text-[0.68rem] tracking-[0.12em] text-muted-foreground">
-          {label}
-        </span>
+        <div className={cn("h-1.5 w-1.5 rounded-full", dot)} aria-hidden="true" />
+        <span className={cn("font-mono text-xs", text)}>{label}</span>
       </div>
     </header>
   );
@@ -63,10 +59,10 @@ function TopNavLink({ to, children }: TopNavLinkProps) {
   return (
     <Link
       {...options}
-      className="px-3 py-1.5 font-semibold text-[0.68rem] tracking-[0.12em] uppercase text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
+      className="px-3 py-1.5 text-[13px] text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
       activeProps={{
         className:
-          "px-3 py-1.5 font-semibold text-[0.68rem] tracking-[0.12em] uppercase text-primary no-underline transition-colors",
+          "px-3 py-1.5 text-[13px] font-medium text-primary no-underline transition-colors",
       }}
     >
       {children}

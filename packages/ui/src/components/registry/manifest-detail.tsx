@@ -1,4 +1,3 @@
-import { Badge } from "@sealant/ui/components/ui/badge";
 import { Button } from "@sealant/ui/components/ui/button";
 import { cn } from "@sealant/ui/lib/utils";
 import { Copy, Check } from "lucide-react";
@@ -54,76 +53,64 @@ export function ManifestDetail({
   return (
     <div className={cn("flex flex-col gap-6", className)}>
       {/* Image identity */}
-      <div className="border border-border bg-card p-6">
-        <p className="mb-2 font-mono text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground/60">
-          IMAGE
-        </p>
-        <h2 className="font-display text-4xl leading-[0.88] uppercase tracking-[0.02em] text-foreground break-all">
+      <div className="rounded-md border border-border bg-card p-6">
+        <p className="ev-eyebrow mb-2">Image</p>
+        <h2 className="break-all text-2xl font-semibold tracking-tight text-foreground">
           {repository}
           <span className="text-primary">:{reference}</span>
         </h2>
         {digest && (
           <div className="mt-3 flex items-center gap-2">
-            <span className="font-mono text-xs text-foreground truncate">
-              {truncateDigest(digest)}
-            </span>
+            <span className="truncate font-mono text-xs text-faint">{truncateDigest(digest)}</span>
             <Button
               variant="ghost"
               size="icon-xs"
               onClick={handleCopyDigest}
               aria-label="Copy full digest"
-              className="shrink-0 rounded-none border border-border text-muted-foreground hover:text-foreground"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
             >
-              {copied ? <Check className="size-3 text-secondary" /> : <Copy className="size-3" />}
+              {copied ? <Check className="size-3 text-primary" /> : <Copy className="size-3" />}
             </Button>
           </div>
         )}
       </div>
 
       {/* Metadata grid */}
-      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-3">
-        <MetaCell label="CONTENT TYPE" value={contentType ?? "UNKNOWN"} mono />
-        <MetaCell label="LAYERS" value={String(layers.length)} />
-        <MetaCell label="TOTAL SIZE" value={formatBytes(totalSize)} mono />
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3">
+        <MetaCell label="Content type" value={contentType ?? "Unknown"} mono />
+        <MetaCell label="Layers" value={String(layers.length)} />
+        <MetaCell label="Total size" value={formatBytes(totalSize)} mono />
       </div>
 
       {/* Layers table */}
       {layers.length > 0 && (
         <div>
-          <p className="mb-3 font-semibold text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground">
-            LAYERS
-          </p>
-          <div className="border border-border">
+          <p className="ev-eyebrow mb-3">Layers</p>
+          <div className="rounded-md border border-border">
             {/* Header */}
-            <div className="grid grid-cols-[1fr_auto_auto] gap-4 border-b border-border bg-muted/30 px-4 py-2">
-              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60">
-                DIGEST
-              </span>
-              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60 text-right">
-                SIZE
-              </span>
-              <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60 text-right w-24">
-                MEDIA TYPE
-              </span>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-4 border-b border-border bg-muted/40 px-4 py-2">
+              <span className="text-xs text-label">Digest</span>
+              <span className="text-right text-xs text-label">Size</span>
+              <span className="w-24 text-right text-xs text-label">Media type</span>
             </div>
             {layers.map((layer, i) => (
               <div
                 key={layer.digest}
                 className={cn(
-                  "grid grid-cols-[1fr_auto_auto] gap-4 px-4 py-2.5 items-center",
+                  "grid grid-cols-[1fr_auto_auto] items-center gap-4 px-4 py-2.5",
                   i < layers.length - 1 && "border-b border-border",
                 )}
               >
-                <span className="font-mono text-xs text-foreground truncate">
+                <span className="truncate font-mono text-xs text-faint">
                   {truncateDigest(layer.digest)}
                 </span>
-                <span className="font-mono text-xs text-muted-foreground text-right tabular-nums">
+                <span className="text-right font-mono text-xs tabular-nums text-muted-foreground">
                   {formatBytes(layer.size)}
                 </span>
-                <Badge className="w-24 justify-center rounded-none border border-border bg-muted text-muted-foreground font-mono text-[9px] tracking-[0.11em] truncate">
+                <span className="w-24 truncate text-right font-mono text-xs text-faint">
                   {layer.mediaType.split("/").pop()?.replace("vnd.oci.image.layer.v1.", "") ??
                     layer.mediaType}
-                </Badge>
+                </span>
               </div>
             ))}
           </div>
@@ -132,10 +119,8 @@ export function ManifestDetail({
 
       {/* Raw manifest JSON */}
       <div>
-        <p className="mb-3 font-semibold text-[0.66rem] tracking-[0.12em] uppercase text-muted-foreground">
-          RAW MANIFEST
-        </p>
-        <pre className="overflow-auto max-h-80 border border-border bg-card p-4 font-mono text-xs text-foreground leading-relaxed">
+        <p className="ev-eyebrow mb-3">Raw manifest</p>
+        <pre className="max-h-80 overflow-auto rounded-md border border-border bg-card p-4 font-mono text-xs leading-relaxed text-foreground">
           {JSON.stringify(manifest, null, 2)}
         </pre>
       </div>
@@ -152,10 +137,10 @@ interface MetaCellProps {
 function MetaCell({ label, value, mono }: MetaCellProps) {
   return (
     <div className="bg-card p-4">
-      <p className="mb-1 font-mono text-[10px] tracking-[0.12em] uppercase text-muted-foreground/60">
-        {label}
+      <p className="mb-1 text-xs text-label">{label}</p>
+      <p className={cn("break-all text-sm text-foreground", mono && "font-mono text-faint")}>
+        {value}
       </p>
-      <p className={cn("text-sm text-foreground break-all", mono && "font-mono")}>{value}</p>
     </div>
   );
 }
