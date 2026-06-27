@@ -1,233 +1,108 @@
 # Sealant
 
-Sealant is a product built around two core ideas:
+Sealant is an open-source, self-hosted **runtime for agentic development**. It gives coding
+harnesses a real sandbox to work in, then turns every run into a structured, replayable
+**execution record** — the change, the checks, the terminal output, the artifacts, the browser
+evidence, and the source trail behind the result.
 
-1. Fast, highly customizable, isolated sandboxes (ready-to-code microVM environments).
-2. Detailed, reproducible issue-to-PR workflows with clear reporting of what happened.
+Bring your own harness. Keep your code. Read the evidence yourself.
 
-Everything else in the architecture exists to serve those two product loops.
+## The model
 
-## Product terminology contract
+Three nouns carry the whole system:
 
-To keep the product clear for users, we use exactly two primary domain terms in product-facing
-surfaces and API contracts:
+- **Sandbox** — a live, disposable development environment around a real repository (code,
+  dependencies, harness, processes, services). Where the work happens.
+- **Run** — a single harness execution inside a sandbox. What you keep.
+- **Execution record** — the durable, append-only, replayable history of a run: one ordered,
+  correlated stream of process lifecycle, byte-exact I/O, file changes, network activity, and
+  artifacts. The soul of the product.
 
-- `sandbox`: a launched, isolated coding environment
-- `issue workflow`: an issue-to-PR execution flow with lifecycle and reporting
+The core loop is the same everywhere: **create a sandbox → run a harness → replay the record →
+review the change.**
 
-Implementation terms are still valid internally, but are not primary product nouns:
+## Platform and products
 
-- `sandbox run`: internal execution record
-- `sandbox build job`: internal queue/worker build task
+Sealant is a **platform** — programmable infrastructure exposed through a public SDK — and a small
+family of **products** built on top of it, each its own open-source repo branded "by Sealant"
+(coding agents, browser QA, CI repros, dependency updates). The platform is the point; the products
+are the proof that it is real.
 
-If an API endpoint serves product UI, prefer naming and resource modeling around `sandboxes` and
-`issue-workflows`.
+It is **open-source and self-hosted**: run the daemon (`sealantd`) inside your own infrastructure,
+connect the harnesses you already trust (OpenCode, custom agents, CI workers, or your own loop), and
+build on the same public SDK. Your code never leaves your infrastructure.
 
-## Two core product loops
+## What Sealant is not
 
-### 1. Sandboxes / coding environments
+- **Not an agent or a model** — bring your own harness.
+- **Not just a container runtime** — containers isolate; Sealant adds the work model and the record.
+- **Not a hosted service** — self-hosted only.
+- **Not a judge** — it reports evidence, never verdicts. You decide what it means.
 
-A user picks a Git repository, an AI coding harness, and optional personalization inputs like
-dotfiles or Nix flakes. Sealant turns those inputs into a composed environment and provisions a
-disposable runtime that feels personal, reproducible, and isolated.
+## Documentation
 
-These environments are meant to be launched quickly and used however the user wants: AI-assisted
-coding, manual development with their own tooling, testing ideas, or other focused tasks.
+The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and covers getting started, the
+architecture (sandbox lifecycle, the execution record & telemetry, `sealantd` integration), the
+packages, and the product and design notes.
 
-### 2. Issue-to-PR workflows
+Two canonical reference docs sit at the repo root:
 
-Sealant uses the same sandbox and composition engine to run structured issue-to-PR execution flows.
-Each workflow execution is isolated, tracked, and reproducible, with clear lineage and reporting on
-what the system did from issue intake through code changes and pull request output.
-
-## Status
-
-This repository is now scaffolded as a `Turborepo` monorepo using `pnpm` sandboxes, with a root Nix
-flake for a reproducible `direnv`-powered development shell.
-
-Today the repo contains the initial sandbox layout, the first sandbox composition implementation,
-and the target architecture for splitting composition, OS integrations, runtime adapters, and app
-surfaces into separate sandboxes. Several of the sandboxes below are intentionally lightweight
-placeholders so the intended boundaries are visible in the repo before every implementation lands.
+- [`SEALANT-PLAN.md`](SEALANT-PLAN.md) — the core product plan: what is being built, and why.
+- [`design-system.html`](design-system.html) — the "Evidence Review" design language shared by the
+  web app, the marketing site, and `@sealant/ui`.
 
 ## Monorepo layout
 
 ```text
 .
-├── apps/                 # deployable apps and services
-│   ├── README.md
-│   ├── api/
-│   ├── docs/
-│   ├── electron/
-│   ├── marketing/
-│   └── web/
-├── packages/             # shared libraries, domain modules, and reusable code
-│   ├── README.md
-│   ├── rabbitmq/
-│   ├── sandboxes/
-│   ├── source-integrations/
-│   ├── validators/
-│   └── ...
-├── tooling/              # shared config packages and developer tooling
-│   └── README.md
-├── .envrc                # direnv entrypoint for the Nix dev shell
-├── .gitignore
-├── .oxfmtrc.json         # repo-wide formatter config
-├── .oxlintrc.json        # repo-wide linter config
-├── flake.nix             # Nix development shell definition
-├── flake.lock            # pinned flake inputs
-├── package.json          # root scripts and Turbo dependency
-├── pnpm-sandbox.yaml   # sandbox discovery
-├── tsconfig.json         # root TypeScript and tsgo config
-├── turbo.json            # task graph and caching config
+├── apps/                      # deployable apps and services
+│   ├── api/                   # control-plane API (Effect)
+│   ├── docs/                  # documentation site (fumadocs)
+│   ├── electron/              # desktop client surface
+│   ├── marketing/             # public marketing site
+│   ├── mobile/                # mobile client surface
+│   ├── ssh-gateway/           # SSH access into live sandboxes
+│   ├── web/                   # main product web app (the review surface)
+│   └── worker/                # background worker
+├── packages/                  # shared libraries and domain modules
+│   ├── api-contracts/         # wire contracts — the single source of truth
+│   ├── auth/                  # shared auth
+│   ├── db/                    # Effect + PostgreSQL control-plane state
+│   ├── issues/                # issue-workflow domain
+│   ├── rabbitmq/              # message transport
+│   ├── sandboxes/             # sandbox domain: build, publish, launch, lifecycle
+│   ├── source-integrations/   # repo/provider integrations (GitHub first)
+│   ├── telemetry/             # execution-record ingestion and persistence
+│   ├── ui/                    # @sealant/ui — the design system and components
+│   └── validators/            # shared schemas
+├── tooling/                   # shared config and developer tooling
+├── flake.nix                  # Nix development shell
+├── turbo.json                 # task graph and caching
 └── README.md
 ```
 
-### Sandbox roles
+- `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker,
+  and access gateways.
+- `packages/`: shared code — the wire contracts, sandbox/issue domains, the telemetry/execution
+  record, the design system, and reusable utilities.
+- `tooling/`: centralized configs and tooling packages (TypeScript, lint, format, test, Tailwind).
 
-- `apps/`: user-facing and deployable surfaces such as the website, API, docs, and desktop clients
-- `packages/`: shared code such as composition models, OS integrations, runtime adapters, source
-  integrations, harness orchestration, SDKs, and reusable utilities
-- `tooling/`: centralized configs and tooling packages such as TypeScript, ESLint, Prettier, Vitest,
-  Tailwind, or internal scripts
+## Architecture at a glance
 
-## Architecture flow
+The runtime is built around explicit contracts and a daemon that does the work.
 
-The long-term architecture is built around explicit contracts and shared infrastructure that power
-both core loops.
+1. A product surface or the SDK submits a sandbox spec (repository, harness, runtime).
+2. The control plane (`apps/api`, Effect) normalizes it and provisions an isolated sandbox.
+3. The `sealantd` daemon supervises the sandbox and the harness run inside it, emitting a typed
+   telemetry firehose.
+4. `packages/telemetry` consumes that firehose and persists it as an append-only, event-sourced
+   log — the execution record, keyed on `(runId, sequence)` and replayable as a pure fold.
+5. The web app (`apps/web`) renders the run as reviewable evidence; access is available over SSH,
+   VS Code, or Cursor via `apps/ssh-gateway`.
 
-Sandbox flow:
-
-1. The product surfaces submit a `UserSandboxSpec`.
-2. The control plane normalizes that into a `SandboxBlueprint`.
-3. Sandbox composition selects an OS integration and produces a concrete build plan.
-4. The selected OS integration produces one or more build artifacts.
-5. Runtime adapters launch those artifacts on Docker, Kubernetes, K3s, or future targets.
-
-Issue-to-PR flow:
-
-1. The product surfaces submit issue context, repository details, and execution preferences.
-2. The control plane resolves inputs, composes the execution request, and provisions an isolated
-   environment.
-3. The worker executes the workflow, coordinates builds/tooling/harness actions, and records
-   execution lineage.
-4. The system persists artifacts, state transitions, and issue-to-PR reporting for auditability and
-   reproducibility.
-
-Supporting integrations feed into both flows without owning either flow:
-
-- source integrations resolve repositories, refs, and provider-specific access details
-- AI harness integrations describe harness requirements and launch behavior
-- registry integrations publish, tag, and retrieve produced artifacts
-
-### Current implementation status
-
-- `packages/db/`: shared Drizzle + PostgreSQL package for durable control-plane state including
-  auth, repositories, profiles, workflow execution state, issue-to-PR lineage, and build-job
-  coordination
-- `packages/auth/`: shared Better Auth package for future product-app authentication, backed by the
-  shared PostgreSQL database package
-- `apps/api/`: initial Hono-based control-plane API scaffold with generated OpenAPI docs, Scalar
-  reference UI, and the first registry-backed route group
-- `apps/worker/`: first background worker scaffold for consuming queued sandbox image build jobs,
-  with worker-kind modules under `src/workers/`
-- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package
-- `packages/sandboxes/`: sandbox domain package for BuildKit compile, registry publish, runtime
-  launch, queue wiring, and lifecycle orchestration
-- `packages/validators/`: shared API and worker message contracts
-- the other package and app sandboxes are scaffolded so the intended architecture is explicit before
-  each implementation is filled in
-
-## Planned product shape
-
-Sealant still has three major product areas, but each one exists to support the two core loops
-(sandboxes and issue-to-PR):
-
-### 1. Website
-
-The website is the user-facing product surface. It should make both sandbox launch and issue-to-PR
-execution feel fast, obvious, and trustworthy.
-
-Core responsibilities:
-
-- collect repo, environment, and issue inputs
-- present available AI harnesses and runtime options
-- show sandbox launch status and environment lifecycle state
-- show issue workflow progress, outcomes, and reporting
-- eventually manage saved templates, profiles, and histories
-
-### 2. Backend / control plane
-
-The backend turns user intent into sandbox sessions and issue workflows.
-
-Core responsibilities:
-
-- validate and normalize sandbox and issue-to-PR inputs
-- produce `SandboxBlueprint` values from validated requests
-- resolve repos and configuration sources
-- select OS integrations and runtime adapters
-- compose final build and execution requests
-- coordinate provisioning, execution, and lifecycle
-- talk to runtime adapters
-- track environment state, logs, failures, and issue-to-PR lineage/reporting
-
-### 3. Runtime / infra layer
-
-The infrastructure side contains the deployment and execution model for isolated environments and
-repeatable issue workflows:
-
-- Kubernetes manifests and platform configuration
-- runtime and scheduling integration
-- networking, storage, and secrets wiring
-- adapter implementations for different deployment targets
-
-The architecture should stay adapter-oriented so Sealant can target different execution backends
-over time.
-
-## Defined package architecture
-
-- `packages/db/`: shared PostgreSQL database package for durable control-plane state, Drizzle
-  schema, migrations, and repositories for build-job processing
-- `packages/auth/`: shared Better Auth package for shared auth configuration, clients, and session
-  helpers across product apps
-- `packages/validators/`: shared contract schemas used by API routes and worker messaging
-- `packages/rabbitmq/`: business-agnostic RabbitMQ transport package for connection lifecycle,
-  generic JSON publish/consume helpers, and topology assertion
-- `packages/sandboxes/`: sandbox domain package for BuildKit image creation, registry publishing,
-  runtime adapters, queue topology, worker orchestration, harness integrations, and package
-  resolution utilities
-- `packages/source-integrations/`: source-provider integration package for repository selection, ref
-  resolution, and provider-specific access flows; GitHub will be the first provider here
-
-## Defined app architecture
-
-- `apps/web/`: main product web app for creating and managing sandboxes
-- `apps/api/`: control-plane API for validation, orchestration, lifecycle, and state
-- `apps/worker/`: background worker for consuming queued sandbox image build jobs and driving
-  compile/publish work
-- `apps/docs/`: user and contributor documentation site
-- `apps/marketing/`: public website and launch surfaces
-- `apps/electron/`: desktop client surface if desktop becomes a first-class client
-
-## Why the monorepo uses Turbo + pnpm
-
-- `pnpm` sandboxes keep dependency management fast, strict, and centralized
-- `Turborepo` gives us task orchestration, caching, and a clean way to scale builds across apps and
-  shared packages
-- shared tooling in `tooling/` keeps config consistent without copy-pasting setup across apps
-
-## Tooling baseline
-
-- `direnv` + Nix provide a reproducible shell with `nodejs_24` and `pnpm`
-- `oxlint` handles repo-wide linting
-- `oxlint-tsgolint` enables type-aware Oxlint rules backed by TypeScript Go
-- `oxfmt` handles repo-wide formatting
-- `@typescript/native-preview` provides the `tsgo` CLI at the root alongside regular `typescript`
-
-## Sandbox contracts
-
-The canonical sandbox build contract now lives in `packages/validators/`, and the concrete BuildKit
-compile/publish/launch path lives in `packages/sandboxes/`.
+Supporting integrations feed both the sandbox and run flows without owning either: source
+integrations resolve repositories and refs, harness integrations describe launch behavior, and
+registry integrations publish and retrieve artifacts.
 
 ## Getting started
 
@@ -237,7 +112,7 @@ Allow direnv to load the flake shell:
 direnv allow
 ```
 
-If you are not using direnv, you can enter the same shell manually:
+If you are not using direnv, enter the same shell manually:
 
 ```bash
 nix develop
@@ -249,84 +124,51 @@ Then install dependencies:
 pnpm install
 ```
 
+Run common tasks from the repo root (wired through Turbo):
+
+```bash
+pnpm dev          # run apps in development
+pnpm build        # build everything
+pnpm lint         # repo-wide lint (oxlint)
+pnpm typecheck    # type-aware checks (tsgo)
+pnpm test         # run tests
+pnpm format       # format (oxfmt)
+```
+
 ### Playwright on NixOS
 
-Use the Playwright-specific shell when you want browser automation without relying on Playwright's
-Ubuntu/Debian browser installer:
+Use the Playwright-specific shell to run browser automation against the Nix-provided Chromium,
+without Playwright's Ubuntu/Debian browser installer:
 
 ```bash
 nix develop .#playwright
 pnpm install
-pnpm playwright:open-google
-```
-
-That shell points Playwright at the Nix-provided Chromium binary through
-`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and disables Playwright's normal browser download flow, which
-is the part that fails on NixOS.
-
-The repo now includes root Playwright tooling:
-
-```bash
 pnpm test:e2e
-pnpm test:e2e:ui
-pnpm playwright:open-google
 ```
 
-Set `PLAYWRIGHT_HEADLESS=0` if you want `pnpm playwright:open-google` to keep a visible browser open
-for 30 seconds.
+That shell points Playwright at the Nix Chromium through `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` and
+disables the normal download flow (the part that fails on NixOS). Place end-to-end specs in
+`tests/e2e/`.
 
-Place end-to-end specs in `tests/e2e/`.
+## Tooling baseline
 
-Run common sandbox tasks from the repo root:
+- `direnv` + Nix provide a reproducible shell with `nodejs_24` and `pnpm`.
+- `Turborepo` + `pnpm` give task orchestration, caching, and strict, centralized dependencies.
+- `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles formatting.
+- `@typescript/native-preview` provides the `tsgo` CLI alongside regular `typescript`.
 
-```bash
-pnpm dev
-pnpm dev:tui
-pnpm build
-pnpm build:tui
-pnpm format
-pnpm format:check
-pnpm lint
-pnpm lint:fix
-pnpm lint:types
-pnpm typecheck
-pnpm typecheck:tui
-pnpm typecheck:tsc
-pnpm test
-pnpm test:tui
-```
+## Design principles
 
-`pnpm build`, `pnpm dev`, `pnpm test`, and `pnpm typecheck` are wired through Turbo. Use the `*:tui`
-variants to force Turbo's terminal UI.
-
-## Contributor notes
-
-### Design principles
-
-- Keep the user flow simple even if the underlying system is complex.
+- Keep the user flow simple even when the underlying system is complex.
 - Prefer reproducibility over hidden mutable state.
 - Keep runtime adapters narrow and replaceable.
 - Separate product concerns from execution concerns.
 - Treat isolation as a first-class architectural requirement.
 - Build around disposable environments, not hand-maintained pets.
-
-### Early engineering priorities
-
-- stand up the first app sandboxes under `apps/`
-- define shared domain packages under `packages/`
-- centralize config and standards under `tooling/`
-- extract the first OS integration boundary from the current Nix implementation
-- define the runtime adapter interface
-- define source and harness integration contracts
-- document the security model and trust boundaries
+- The tool reports; it does not judge. Show observations, never verdicts.
 
 ## Why this repo exists
 
-Sealant exists to make two outcomes feel easy, fast, and trustworthy without giving up isolation or
-reproducibility:
-
-- launching personal, highly customizable, AI-ready coding sandboxes
-- running detailed, tracked, reproducible issue workflows with clear reporting
-
-The goal is a product experience that feels simple on the surface while staying disciplined
-underneath.
+Sealant exists to make one outcome feel easy, fast, and trustworthy without giving up isolation or
+reproducibility: **let a harness do real work in a real environment, and get back a record worth
+reviewing.** Simple on the surface, disciplined underneath.

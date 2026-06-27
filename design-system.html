@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#edeae4;font-family:Inter,system-ui,sans-serif;color:#1b1b1d;-webkit-font-smoothing:antialiased;}
+  .dsx button{font-family:inherit;cursor:pointer;}
+  .dsx ::selection{background:rgba(32,82,204,0.16);}
+</style>
+</helmet>
+
+<div class="dsx" style="min-height:100vh;padding:56px 24px 120px;">
+<div style="max-width:1000px;margin:0 auto;background:#faf9f7;border:1px solid #ddd9d2;border-radius:3px;padding:64px clamp(28px,5vw,72px) 88px;">
+
+  <!-- ===== MASTHEAD ===== -->
+  <div style="display:flex;align-items:center;gap:9px;margin-bottom:18px;">
+    <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#2052cc;font-weight:500;">acme/billing-service</span>
+    <span style="color:#c4c1ba;font-size:13px;">/</span>
+    <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#9a9aa2;">design-system</span>
+  </div>
+  <h1 style="font-size:33px;line-height:1.12;font-weight:600;letter-spacing:-0.022em;margin:0 0 16px;max-width:18ch;">Evidence Review — Design System</h1>
+  <p style="font-size:16px;line-height:1.6;color:#54545b;margin:0;max-width:62ch;">The visual language of Sealant&rsquo;s evidence-backed review surface &mdash; shared by the web app, the marketing site, and <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:14px;">@sealant/ui</span>. Warm and premium, with real depth: the tokens, the three-voice type split, the four-color discipline, the lifted components, and the rules that keep it a review tool, not a dashboard.</p>
+  <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;letter-spacing:0.02em;margin:26px 0 0;display:flex;gap:20px;flex-wrap:wrap;border-top:1px solid #e7e5e1;padding-top:16px;">
+    <span>Surface: desktop 1440 × 900</span><span>Space Grotesk · Inter · JetBrains Mono</span><span>4 semantic accents</span><span>v3 · depth &amp; polish</span>
+  </div>
+
+  <!-- ===== 00 PRINCIPLES ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 20px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">00</span>Principles</h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:none;">
+    <div style="border-left:2px solid #2052cc;background:#f4f6fd;padding:15px 18px;border-radius:0 3px 3px 0;">
+      <span style="display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:#2052cc;margin-bottom:7px;">Evidence beside code</span>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:#21314e;">A reviewer never carries a number from one page to verify it on another. The change and its proof share one viewport.</p>
+    </div>
+    <div style="border-left:2px solid #2052cc;background:#f4f6fd;padding:15px 18px;border-radius:0 3px 3px 0;">
+      <span style="display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:#2052cc;margin-bottom:7px;">The tool reports</span>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:#21314e;">It shows observations, never verdicts. No confidence scores, no “safe to merge.” The reviewer judges.</p>
+    </div>
+    <div style="border-left:2px solid #2052cc;background:#f4f6fd;padding:15px 18px;border-radius:0 3px 3px 0;">
+      <span style="display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:#2052cc;margin-bottom:7px;">Hierarchy without containers</span>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:#21314e;">Structure comes from spacing, alignment, and thin rules — not cards, pills, or chips.</p>
+    </div>
+    <div style="border-left:2px solid #2052cc;background:#f4f6fd;padding:15px 18px;border-radius:0 3px 3px 0;">
+      <span style="display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:#2052cc;margin-bottom:7px;">Color is earned</span>
+      <p style="margin:0;font-size:13.5px;line-height:1.55;color:#21314e;">Each accent marks one specific meaning. No panel is ever flooded with it.</p>
+    </div>
+  </div>
+
+  <!-- ===== 01 COLOR ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 6px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">01</span>Color</h2>
+  <p style="font-size:15px;line-height:1.6;color:#54545b;margin:0 0 26px;max-width:64ch;">A warm near-white canvas, near-black text, pale gray rules. Four accents carry meaning and nothing decorative does.</p>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;text-transform:none;margin:0 0 13px;">Surfaces &amp; neutrals</h3>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:30px;">
+    <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;"><div style="height:54px;background:#faf9f7;"></div><div style="padding:8px 10px;"><div style="font-size:12.5px;font-weight:500;">Canvas</div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:2px;">#faf9f7</div></div></div>
+    <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;"><div style="height:54px;background:#f7f5f2;"></div><div style="padding:8px 10px;"><div style="font-size:12.5px;font-weight:500;">Sunken bar</div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:2px;">#f7f5f2</div></div></div>
+    <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;"><div style="height:54px;background:#ffffff;border-bottom:1px solid #eceae4;"></div><div style="padding:8px 10px;"><div style="font-size:12.5px;font-weight:500;">Overlay / drawer</div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:2px;">#ffffff</div></div></div>
+    <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;"><div style="height:54px;background:#f4f6fd;"></div><div style="padding:8px 10px;"><div style="font-size:12.5px;font-weight:500;">Cobalt wash</div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:2px;">#f4f6fd</div></div></div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 12px;">Text &amp; rule ramp</h3>
+  <div style="display:flex;flex-direction:column;border-top:1px solid #eceae4;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#1b1b1d;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#1b1b1d;">Primary text</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#1b1b1d</span></div>
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#3b3b40;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#3b3b40;">Secondary text</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#3b3b40</span></div>
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#6e6e76;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#6e6e76;">Tertiary / quiet action</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#6e6e76</span></div>
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#8a8a92;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#8a8a92;">Section label</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#8a8a92</span></div>
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#9a9aa2;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#9a9aa2;">Muted / monospace dim</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#9a9aa2</span></div>
+    <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eceae4;"><span style="width:22px;height:22px;border-radius:3px;background:#faf9f7;border:1px solid #e4e1db;flex:none;"></span><span style="flex:1;font-size:13.5px;color:#6e6e76;">Hairline rule</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">#e4e1db</span></div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:30px 0 13px;">Semantic accents — one meaning each</h3>
+  <div style="display:flex;flex-direction:column;border:1px solid #e4e1db;border-radius:3px;overflow:hidden;">
+    <div style="display:grid;grid-template-columns:150px 150px 1fr;gap:0;padding:9px 16px;background:#f7f5f2;border-bottom:1px solid #e4e1db;font-size:12px;color:#8a8a92;font-weight:500;"><span>Color</span><span>Means</span><span>Discipline</span></div>
+    <div style="display:grid;grid-template-columns:150px 150px 1fr;gap:0;padding:13px 16px;border-bottom:1px solid #eceae4;align-items:center;"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;"><span style="width:11px;height:11px;border-radius:50%;background:#2052cc;"></span>Cobalt</span><span style="font-size:13px;color:#3b3b40;">Interaction, selection</span><span style="font-size:13px;color:#54545b;line-height:1.5;">The only “brand” color. Marks what is active or clickable — <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#2052cc</span>.</span></div>
+    <div style="display:grid;grid-template-columns:150px 150px 1fr;gap:0;padding:13px 16px;border-bottom:1px solid #eceae4;align-items:center;"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;"><span style="width:11px;height:11px;border-radius:50%;background:#cf9a18;"></span>Amber</span><span style="font-size:13px;color:#3b3b40;">Unresolved judgment</span><span style="font-size:13px;color:#54545b;line-height:1.5;">One prominent use at a time. Dot <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#cf9a18</span> · text <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#9a6700</span>.</span></div>
+    <div style="display:grid;grid-template-columns:150px 150px 1fr;gap:0;padding:13px 16px;border-bottom:1px solid #eceae4;align-items:center;"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;"><span style="width:11px;height:11px;border-radius:50%;background:#c0362c;"></span>Red</span><span style="font-size:13px;color:#3b3b40;">Demonstrated breakage</span><span style="font-size:13px;color:#54545b;line-height:1.5;">Only an observed failure — never generic warning. Dot <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#c0362c</span> · text <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#b3261e</span>.</span></div>
+    <div style="display:grid;grid-template-columns:150px 150px 1fr;gap:0;padding:13px 16px;align-items:center;"><span style="display:flex;align-items:center;gap:9px;font-size:13.5px;"><span style="width:11px;height:11px;border-radius:50%;background:#2e7d46;"></span>Green</span><span style="font-size:13px;color:#3b3b40;">Observed success</span><span style="font-size:13px;color:#54545b;line-height:1.5;">Only a result that was actually run. Text <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#2e7d46</span> · dot <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">#5f9e77</span>.</span></div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:30px 0 13px;">Diff tints — edge marks, never floods</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px;">
+      <div style="display:flex;background:rgba(46,125,70,0.07);"><span style="width:2px;background:#2e7d46;flex:none;"></span><span style="width:14px;text-align:center;color:#2e7d46;flex:none;">+</span><span style="padding-left:8px;color:#262629;">addition · tint 0.07 · edge #2e7d46</span></div>
+      <div style="display:flex;background:rgba(192,54,44,0.06);"><span style="width:2px;background:#c0362c;flex:none;"></span><span style="width:14px;text-align:center;color:#c0362c;flex:none;">-</span><span style="padding-left:8px;color:#262629;">deletion · tint 0.06 · edge #c0362c</span></div>
+      <div style="display:flex;"><span style="width:2px;background:transparent;flex:none;"></span><span style="width:14px;text-align:center;color:#c4c1ba;flex:none;"></span><span style="padding-left:8px;color:#262629;">context · transparent</span></div>
+    </div>
+    <div style="display:flex;align-items:center;padding:14px 16px;border:1px solid #e4e1db;border-radius:3px;font-size:13px;color:#54545b;line-height:1.55;">A 2px colored edge plus a faint wash carries the signal. Saturated blocks would render a verdict before the reviewer decides.</div>
+  </div>
+
+  <!-- ===== 02 TYPOGRAPHY ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 6px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">02</span>Typography</h2>
+  <p style="font-size:15px;line-height:1.6;color:#54545b;margin:0 0 26px;max-width:64ch;">Three voices. Space Grotesk for display headlines, used with restraint; Inter for everything human and UI; JetBrains Mono for everything the machine observed or executed. The split is semantic, not decorative.</p>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:30px;">
+    <div style="border:1px solid #e4e1db;border-radius:14px;padding:18px 20px;box-shadow:0 2px 8px -3px rgba(27,27,29,0.1);">
+      <div style="font-family:'Space Grotesk',Inter,sans-serif;font-size:30px;font-weight:600;letter-spacing:-0.02em;line-height:1;">Space Grotesk</div>
+      <div style="font-size:13px;color:#6e6e76;margin-top:8px;line-height:1.5;">Display — page titles and large headlines, used with restraint. Weights 500 · 600 · 700.</div>
+    </div>
+    <div style="border:1px solid #e4e1db;border-radius:14px;padding:18px 20px;box-shadow:0 2px 8px -3px rgba(27,27,29,0.1);">
+      <div style="font-size:30px;font-weight:600;letter-spacing:-0.01em;line-height:1;">Inter</div>
+      <div style="font-size:13px;color:#6e6e76;margin-top:8px;line-height:1.5;">Human language and UI — labels, prose, controls, the reviewer’s judgment. Weights 400 · 450 · 500 · 600.</div>
+    </div>
+    <div style="border:1px solid #e4e1db;border-radius:14px;padding:18px 20px;box-shadow:0 2px 8px -3px rgba(27,27,29,0.1);">
+      <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:26px;font-weight:500;line-height:1;">JetBrains Mono</div>
+      <div style="font-size:13px;color:#6e6e76;margin-top:8px;line-height:1.5;">Machine fact — values, paths, SHAs, commands, output. Weights 400 · 500.</div>
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 6px;">Scale</h3>
+  <div style="display:flex;flex-direction:column;border-top:1px solid #eceae4;margin-bottom:30px;">
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-family:'Space Grotesk',Inter,sans-serif;font-size:30px;font-weight:600;letter-spacing:-0.02em;">Display headline</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">Space Grotesk · 28–40px / 600</span></div>
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-size:22px;font-weight:600;letter-spacing:-0.01em;">Change title</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">22px / 600 / -0.01em</span></div>
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-size:14.5px;">Body &amp; statements</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">14.5px / 400 / 1.55</span></div>
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-size:13px;">Interface text &amp; controls</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">13px / 400–500</span></div>
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-size:12px;color:#8a8a92;font-weight:500;">Section label</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">12px / 500 / #8a8a92</span></div>
+    <div style="display:flex;align-items:baseline;gap:18px;padding:13px 0;border-bottom:1px solid #eceae4;"><span style="flex:1;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#3b3b40;">$50.97 · a9f3c20 · round.ts</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px;color:#9a9aa2;flex:none;">mono 12.5px / value</span></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+    <div style="border:1px solid #e4e1db;border-radius:3px;padding:14px 16px;"><div style="font-size:11px;font-weight:500;color:#2e7d46;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Sans signals</div><div style="font-size:13px;color:#3b3b40;line-height:1.5;Human language: a label, an expectation, a judgment.">Human language: a label, an expectation, a judgment.</div></div>
+    <div style="border:1px solid #e4e1db;border-radius:3px;padding:14px 16px;"><div style="font-size:11px;font-weight:500;color:#2052cc;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">Mono signals</div><div style="font-size:13px;color:#3b3b40;line-height:1.5;">A value the system observed or executed.</div></div>
+  </div>
+
+  <!-- ===== 03 SPACING & SURFACES ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 6px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">03</span>Spacing, surfaces &amp; depth</h2>
+  <p style="font-size:15px;line-height:1.6;color:#54545b;margin:0 0 26px;max-width:64ch;">An 8-pixel rhythm, used generously. Soft, modern radii — panels lift off the warm canvas on a restrained shadow; nothing is a flat slab. Whitespace shows relationships; it is never empty padding.</p>
+  <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:30px;flex-wrap:wrap;">
+    <div style="text-align:center;"><div style="width:6px;height:6px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">6 · label↔value</div></div>
+    <div style="text-align:center;"><div style="width:12px;height:12px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">12 · related</div></div>
+    <div style="text-align:center;"><div style="width:16px;height:16px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">16 · group</div></div>
+    <div style="text-align:center;"><div style="width:24px;height:24px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">24 · region</div></div>
+    <div style="text-align:center;"><div style="width:32px;height:32px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">32 · major</div></div>
+    <div style="text-align:center;"><div style="width:44px;height:44px;background:#2052cc;margin:0 auto 7px;"></div><div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">44 · view pad</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+    <div style="border:1px solid #e4e1db;background:#fff;border-radius:0;padding:16px;font-size:12.5px;color:#54545b;">radius 0 — diff edges, dividers</div>
+    <div style="border:1px solid #e4e1db;background:#fff;border-radius:12px;padding:16px;font-size:12.5px;color:#54545b;">rounded-lg 12px — controls, inputs</div>
+    <div style="border:1px solid #e4e1db;background:#fff;border-radius:22px;padding:16px;font-size:12.5px;color:#54545b;">rounded-2xl 22px — cards, panels</div>
+    <div style="border:1px solid #e4e1db;background:#fff;border-radius:28px;padding:16px;font-size:12.5px;color:#54545b;">rounded-3xl 28px — hero panels</div>
+  </div>
+  <p style="font-size:13px;line-height:1.55;color:#7b7b83;margin:0 0 26px;max-width:64ch;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">border-radius: 9999px</span> is reserved for genuine circles — avatars, status dots, the recording pulse — never buttons, badges, or tabs.</p>
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Elevation — panels lift off the warm canvas</h3>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;">
+    <div style="background:#fff;border:1px solid #e4e1db;border-radius:18px;padding:18px 16px;box-shadow:0 1px 2px 0 rgba(27,27,29,0.05);font-size:12.5px;color:#54545b;">shadow-xs<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:4px;">hairline rest</div></div>
+    <div style="background:#fff;border:1px solid #e4e1db;border-radius:18px;padding:18px 16px;box-shadow:0 2px 8px -3px rgba(27,27,29,0.1);font-size:12.5px;color:#54545b;">shadow-sm<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:4px;">cards at rest</div></div>
+    <div style="background:#fff;border:1px solid #e4e1db;border-radius:18px;padding:18px 16px;box-shadow:0 14px 34px -16px rgba(27,27,29,0.18);font-size:12.5px;color:#54545b;">shadow-md<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:4px;">hover lift</div></div>
+    <div style="background:#fff;border:1px solid #e4e1db;border-radius:18px;padding:18px 16px;box-shadow:0 24px 64px -26px rgba(32,82,204,0.34);font-size:12.5px;color:#54545b;">cobalt-lift<div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;margin-top:4px;">hero &amp; primary CTA</div></div>
+  </div>
+
+  <!-- ===== 04 STATUS ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 6px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">04</span>Status</h2>
+  <p style="font-size:15px;line-height:1.6;color:#54545b;margin:0 0 24px;max-width:64ch;">Four states triage the queue. A colored dot plus a word — never a glowing badge, never a tinted row.</p>
+  <div style="display:flex;flex-direction:column;border-top:1px solid #eceae4;max-width:560px;">
+    <div style="display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid #eceae4;"><span style="width:7px;height:7px;border-radius:50%;background:#5f9e77;flex:none;"></span><span style="font-size:13.5px;color:#3f7d54;font-weight:500;flex:none;width:130px;">Direct evidence</span><span style="font-size:13px;color:#7b7b83;">A result the system ran and observed.</span></div>
+    <div style="display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid #eceae4;"><span style="width:7px;height:7px;border-radius:50%;background:#cf9a18;flex:none;"></span><span style="font-size:13.5px;color:#9a6700;font-weight:500;flex:none;width:130px;">Not executed</span><span style="font-size:13px;color:#7b7b83;">A scenario reasoned about but not run.</span></div>
+    <div style="display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid #eceae4;"><span style="width:7px;height:7px;border-radius:50%;background:#c0362c;flex:none;"></span><span style="font-size:13.5px;color:#b3261e;font-weight:500;flex:none;width:130px;">Unrelated change</span><span style="font-size:13px;color:#7b7b83;">An observed problem or out-of-scope edit.</span></div>
+    <div style="display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid #eceae4;"><span style="width:7px;height:7px;border-radius:50%;border:1.5px solid #b3b0a8;background:transparent;flex:none;box-sizing:border-box;"></span><span style="font-size:13.5px;color:#5b5b62;font-weight:500;flex:none;width:130px;">Not started</span><span style="font-size:13px;color:#7b7b83;">A reviewer disposition not yet made.</span></div>
+  </div>
+
+  <!-- ===== 05 COMPONENTS ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 26px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">05</span>Components</h2>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Buttons — a weight hierarchy</h3>
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:20px;border:1px solid #e4e1db;border-radius:18px;margin-bottom:14px;">
+    <button style="font-size:13px;color:#fff;padding:9px 18px;border:none;border-radius:10px;background:#2052cc;font-weight:500;box-shadow:0 10px 24px -10px rgba(32,82,204,0.45);">Approve <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">a9f3c20</span></button>
+    <button style="font-size:13px;color:#3b3b40;padding:9px 16px;border:1px solid #cdcac3;border-radius:10px;background:#fff;box-shadow:0 1px 2px 0 rgba(27,27,29,0.05);">Request changes</button>
+    <button style="font-size:13px;color:#2052cc;font-weight:450;border:none;background:none;padding:8px 4px;">Full diff</button>
+    <button style="font-size:13px;color:#6e6e76;border:none;background:none;padding:8px 6px;">Ask for proof</button>
+  </div>
+  <p style="font-size:13px;line-height:1.55;color:#7b7b83;margin:0 0 30px;max-width:64ch;">One filled button for the consequential, irreversible act — the cobalt-lift shadow earns it. Outlined for a real secondary action. Text actions for cheap, frequent ones that should not shout.</p>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Run-record panel — the signature</h3>
+  <div style="max-width:560px;background:#fff;border:1px solid #e4e1db;border-radius:18px;box-shadow:0 24px 64px -26px rgba(32,82,204,0.34);overflow:hidden;margin-bottom:14px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid #eceae4;">
+      <span style="display:flex;align-items:center;gap:8px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#2052cc;flex:none;"></span>
+        <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#3b3b40;">run_sbx_8m2k</span>
+        <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#9a9aa2;">· 14:02</span>
+      </span>
+      <span style="display:flex;align-items:center;gap:12px;">
+        <span style="display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;border-radius:50%;background:#5f9e77;"></span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#3f7d54;">Completed · observed</span></span>
+        <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#2052cc;">Replay ▸</span>
+      </span>
+    </div>
+    <div style="display:grid;grid-template-columns:2.6rem 1fr;gap:0 12px;padding:8px 16px;border-bottom:1px solid #f1eee8;align-items:baseline;">
+      <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#b3b0a8;text-align:right;">0012</span>
+      <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#3b3b40;">00:17.406 &nbsp;file.modified&nbsp; <span style="color:#7b7b83;">src/checkout.ts</span></span>
+    </div>
+    <div style="display:grid;grid-template-columns:2.6rem 1fr;gap:0 12px;padding:8px 16px;align-items:baseline;">
+      <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#b3b0a8;text-align:right;">0018</span>
+      <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#3b3b40;">00:24.802 &nbsp;process.exited&nbsp; <span style="color:#7b7b83;">14 tests passed</span></span>
+    </div>
+    <div style="border-top:1px solid #eceae4;">
+      <div style="background:#f7f5f2;padding:6px 16px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">src/checkout.ts</div>
+      <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:22px;padding:6px 0;">
+        <div style="display:flex;background:rgba(192,54,44,0.06);"><span style="width:2px;background:#c0362c;flex:none;"></span><span style="width:16px;text-align:center;color:#c0362c;flex:none;">-</span><span style="padding-left:8px;color:#262629;white-space:pre;">  return charge(cart.total)</span></div>
+        <div style="display:flex;background:rgba(46,125,70,0.07);"><span style="width:2px;background:#2e7d46;flex:none;"></span><span style="width:16px;text-align:center;color:#2e7d46;flex:none;">+</span><span style="padding-left:8px;color:#262629;white-space:pre;">  if (cart.isEmpty) throw new EmptyCartError()</span></div>
+      </div>
+    </div>
+    <div style="border-top:1px solid #eceae4;padding:8px 16px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:#9a9aa2;">184 events · 3 files changed · 4 artifacts</div>
+  </div>
+  <p style="font-size:13px;line-height:1.55;color:#7b7b83;margin:0 0 30px;max-width:64ch;">The recurring evidence motif: a lifted white panel with a recording pulse and mono id, a dot-plus-word status, hairline-divided mono evidence rows, and a diff peek with 2px colored edge marks. Sandbox and run detail are built from it.</p>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Segmented control — exclusive disposition</h3>
+  <div style="max-width:420px;margin-bottom:30px;">
+    <div style="display:flex;">
+      <button style="flex:1;padding:7px 0;font-size:12.5px;text-align:center;border:1px solid #2052cc;background:#2052cc;color:#fff;border-radius:3px 0 0 3px;font-weight:500;">Reviewed</button>
+      <button style="flex:1;padding:7px 0;font-size:12.5px;text-align:center;border:1px solid #d8d6d1;border-left:none;background:#fff;color:#6e6e76;">Needs change</button>
+      <button style="flex:1;padding:7px 0;font-size:12.5px;text-align:center;border:1px solid #d8d6d1;border-left:none;background:#fff;color:#6e6e76;border-radius:0 3px 3px 0;">Accept w/ follow-up</button>
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Review-item navigator — type, not widgets</h3>
+  <div style="border:1px solid #e4e1db;border-radius:3px;padding:6px 18px;margin-bottom:30px;">
+    <div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #eceae4;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#b3b0a8;width:18px;flex:none;">01</span><span style="flex:1;font-size:13px;color:#1b1b1d;">Reported discrepancy</span><span style="display:flex;align-items:center;gap:7px;font-size:12px;color:#3f7d54;"><span style="width:6px;height:6px;border-radius:50%;background:#5f9e77;"></span>Direct evidence</span></div>
+    <div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #eceae4;position:relative;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#b3b0a8;width:18px;flex:none;">03</span><span style="flex:1;font-size:13px;color:#1b1b1d;font-weight:500;">Currency rounding<span style="display:block;height:2px;width:118px;background:#2052cc;margin-top:7px;"></span></span><span style="display:flex;align-items:center;gap:7px;font-size:12px;color:#9a6700;"><span style="width:6px;height:6px;border-radius:50%;background:#cf9a18;"></span>Not executed</span></div>
+    <div style="display:flex;align-items:center;gap:12px;padding:11px 0;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#b3b0a8;width:18px;flex:none;">04</span><span style="flex:1;font-size:13px;color:#1b1b1d;">Unrelated edit</span><span style="display:flex;align-items:center;gap:7px;font-size:12px;color:#b3261e;"><span style="width:6px;height:6px;border-radius:50%;background:#c0362c;"></span>Unrelated change</span></div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Diff block</h3>
+  <div style="border:1px solid #e4e1db;border-radius:3px;overflow:hidden;margin-bottom:30px;">
+    <div style="display:flex;justify-content:space-between;padding:8px 13px;border-bottom:1px solid #e9e6e0;background:#f7f5f2;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:#6e6e76;"><span>lib/invoice/round.ts</span><span>3 additions · 1 deletion</span></div>
+    <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;line-height:24px;">
+      <div style="display:flex;"><span style="width:2px;background:transparent;flex:none;"></span><span style="width:36px;text-align:right;color:#b8b5ad;flex:none;padding-right:10px;">5</span><span style="width:14px;text-align:center;color:#c4c1ba;flex:none;"></span><span style="padding-left:6px;color:#262629;white-space:pre;">function round(amountMinor, currency = "USD") {</span></div>
+      <div style="display:flex;background:rgba(192,54,44,0.06);"><span style="width:2px;background:#c0362c;flex:none;"></span><span style="width:36px;text-align:right;color:#b8b5ad;flex:none;padding-right:10px;"></span><span style="width:14px;text-align:center;color:#c0362c;flex:none;">-</span><span style="padding-left:6px;color:#262629;white-space:pre;">  return Math.round(amountMinor)</span></div>
+      <div style="display:flex;background:rgba(46,125,70,0.07);"><span style="width:2px;background:#2e7d46;flex:none;"></span><span style="width:36px;text-align:right;color:#b8b5ad;flex:none;padding-right:10px;">6</span><span style="width:14px;text-align:center;color:#2e7d46;flex:none;">+</span><span style="padding-left:6px;color:#262629;white-space:pre;">  const scale = minorUnits(currency)</span></div>
+      <div style="display:flex;background:rgba(46,125,70,0.07);"><span style="width:2px;background:#2e7d46;flex:none;"></span><span style="width:36px;text-align:right;color:#b8b5ad;flex:none;padding-right:10px;">7</span><span style="width:14px;text-align:center;color:#2e7d46;flex:none;">+</span><span style="padding-left:6px;color:#262629;white-space:pre;">  return roundHalfEven(amountMinor, scale)</span></div>
+      <div style="display:flex;"><span style="width:2px;background:transparent;flex:none;"></span><span style="width:36px;text-align:right;color:#b8b5ad;flex:none;padding-right:10px;">8</span><span style="width:14px;text-align:center;color:#c4c1ba;flex:none;"></span><span style="padding-left:6px;color:#262629;white-space:pre;">}</span></div>
+    </div>
+  </div>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Causal evidence table — Base / Head / Reverted</h3>
+  <div style="margin-bottom:14px;">
+    <table style="border-collapse:collapse;max-width:440px;font-size:13.5px;">
+      <thead><tr><th style="text-align:left;font-weight:500;color:#8a8a92;font-size:12px;border-bottom:1px solid #d8d6d1;padding:0 18px 9px 0;"></th><th style="text-align:right;font-weight:500;color:#8a8a92;font-size:12px;border-bottom:1px solid #d8d6d1;padding:0 18px 9px 0;">Base</th><th style="text-align:right;font-weight:500;color:#8a8a92;font-size:12px;border-bottom:1px solid #d8d6d1;padding:0 18px 9px 0;">Head</th><th style="text-align:right;font-weight:500;color:#8a8a92;font-size:12px;border-bottom:1px solid #d8d6d1;padding:0 0 9px 0;">Reverted</th></tr></thead>
+      <tbody>
+        <tr><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;color:#2c2c30;">Invoice</td><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.98</td><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.97</td><td style="border-bottom:1px solid #eceae4;padding:10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.98</td></tr>
+        <tr><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;color:#2c2c30;">Captured</td><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.97</td><td style="border-bottom:1px solid #eceae4;padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.97</td><td style="border-bottom:1px solid #eceae4;padding:10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;">$50.97</td></tr>
+        <tr><td style="padding:10px 18px 10px 0;color:#2c2c30;">Result</td><td style="padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#b3261e;">Fails</td><td style="padding:10px 18px 10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#2e7d46;">Passes</td><td style="padding:10px 0;text-align:right;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12.5px;color:#b3261e;">Fails</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:13px;line-height:1.55;color:#7b7b83;margin:0 0 30px;max-width:64ch;">Alignment and a single colored word per cell carry the meaning — no boxes. Fails → Passes → Fails shows causation, not correlation.</p>
+
+  <h3 style="font-size:13px;font-weight:600;color:#8a8a92;margin:0 0 13px;">Open question &amp; warning accent</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:8px;">
+    <div style="border:1px solid #e4e1db;border-radius:3px;padding:16px 18px;">
+      <div style="font-size:12.5px;color:#9a6700;font-weight:500;margin-bottom:6px;">Open question</div>
+      <div style="font-size:13px;color:#1b1b1d;line-height:1.5;margin-bottom:6px;">Exact half-cent behavior was not executed.</div>
+      <div style="font-size:12.5px;color:#6e6e76;line-height:1.55;">The implementation calls <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">roundHalfEven</span>, but no test lands a total on <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;">.005</span>.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:11px;justify-content:center;border:1px solid #e4e1db;border-radius:3px;padding:16px 18px;">
+      <div style="display:flex;gap:10px;align-items:stretch;"><span style="width:2px;background:#cf9a18;flex:none;border-radius:1px;"></span><span style="font-size:13px;color:#3b3b40;line-height:1.5;">Exact half-cent scenario was not run.</span></div>
+      <div style="display:flex;gap:10px;align-items:stretch;"><span style="width:2px;background:#c0362c;flex:none;border-radius:1px;"></span><span style="font-size:13px;color:#3b3b40;line-height:1.5;">One edit is unrelated to issue #5187.</span></div>
+    </div>
+  </div>
+
+  <!-- ===== 06 REFUSALS ===== -->
+  <h2 style="font-size:21px;font-weight:600;letter-spacing:-0.016em;margin:62px 0 6px;padding-top:30px;border-top:1px solid #e7e5e1;display:flex;align-items:baseline;gap:14px;"><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;font-weight:500;color:#2052cc;flex:none;">06</span>What the system refuses</h2>
+  <p style="font-size:15px;line-height:1.6;color:#54545b;margin:0 0 24px;max-width:64ch;">An equal part of the system is what it never renders. Each was a live option, rejected.</p>
+  <div style="display:flex;flex-direction:column;gap:0;border-top:1px solid #eceae4;">
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No panel tinted green, amber, or red.</strong> Color marks a value or a word — it never floods a region, because a tinted panel renders a verdict.</span></div>
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No more than one prominent warning.</strong> Two warnings of equal weight means neither is the one that matters.</span></div>
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No vanity metric tiles, no pills or chips as containers.</strong> Depth and type carry hierarchy — though real cards that group content are fine.</span></div>
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No confidence score or risk dashboard.</strong> A number invents precision the evidence does not have.</span></div>
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No glassmorphism, neon, or heavy drop shadows.</strong> Depth is one restrained soft shadow — never a hard, blurry, or glassy one.</span></div>
+    <div style="display:grid;grid-template-columns:30px 1fr;gap:12px;padding:12px 0;border-bottom:1px solid #eceae4;align-items:start;"><span style="color:#c0362c;font-size:15px;line-height:1.4;">✕</span><span style="font-size:13.5px;color:#3b3b40;line-height:1.5;"><strong style="font-weight:600;color:#1b1b1d;">No banned register.</strong> <em style="font-style:italic;color:#54545b;">strong proof, high confidence, all checks passed, safe to merge</em> — each substitutes the tool’s verdict for the reviewer’s.</span></div>
+  </div>
+
+  <p style="margin-top:40px;border-top:1px solid #e7e5e1;padding-top:24px;color:#54545b;font-size:14px;line-height:1.6;max-width:64ch;">Every token and component above reduces to one rule: show the reviewer the code and its proof in the same place, in plain language, and let them decide.</p>
+
+</div>
+</div>
+</x-dc>
+</body>
+</html>
