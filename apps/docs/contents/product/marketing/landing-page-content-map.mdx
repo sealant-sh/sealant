@@ -1,0 +1,357 @@
+---
+title: Landing page content map
+description: The information architecture for the Sealant homepage — section order, the copy in each slot, and the visual that sits beside it.
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+This is the information architecture and copy spec for the Sealant homepage: the section order, the copy that lives in each slot, and the visual that sits beside it. It is the IA and copy reference, not the visual system and not the narrative rationale behind the redesign.
+
+<Callout type="info">
+The page is ordered by **value**, not by implementation. Readers meet reviewable agent work first, the replayable run record second, and the runtime and sandbox plumbing afterward. Editor access (SSH, VS Code, Cursor) is a path *into* the sandbox, never the headline.
+</Callout>
+
+## Organizing principle
+
+The homepage sells the **run review** and treats the sandbox console as the runtime underneath it. The reading order moves from the value a developer keeps toward the machinery that produces it:
+
+<Steps>
+<Step>Reviewable agent work</Step>
+<Step>Replayable run record</Step>
+<Step>SDK and runtime</Step>
+<Step>What the record captures</Step>
+<Step>Live sandboxes and console</Step>
+<Step>SSH, VS Code, and Cursor access</Step>
+</Steps>
+
+Three nouns anchor everything on the page:
+
+| Noun | Role |
+|------|------|
+| **Sandbox** | Where the work happens — the platform object. |
+| **Run** | What you keep. |
+| **Execution record** | The durable, replayable history. |
+
+## Section map
+
+The homepage is ten ordered sections. Each one has a fixed job; the rest of this page details the copy and visual for each.
+
+| # | Section | What goes here |
+|---|---------|----------------|
+| 1 | **Header** | Logo, developer-native nav, Star CTA |
+| 2 | **Hero** | One-line definition + happy-state run-review visual |
+| 3 | **Model strip** | Sandbox → Harness → Record → Review |
+| 4 | **The run is the product surface** | Run-review detail screenshot + evidence bullets |
+| 5 | **Build on the SDK** | Runtime-not-glue copy + SDK code block |
+| 6 | **What the record captures** | Six-card grid of captured signals |
+| 7 | **Real sandboxes & console** | Sandbox console screenshots + access paths |
+| 8 | **One runtime, many shapes of work** | Four work-type cards |
+| 9 | **Open-source & self-hosted** | Three trust cards |
+| 10 | **Final CTA** | Adoption asks |
+
+## 1. Header
+
+The header carries the logo, a developer-native nav, and the primary Star CTA.
+
+```text
+Sealant                          Docs   SDK   Examples   Runs   GitHub
+                                                         [Star on GitHub]
+```
+
+**Nav items:** Docs · SDK · Examples · Runs · GitHub. Add **Console** only once the console is public and useful.
+
+**Not in the nav:** dev containers, workspaces, VS Code, or a cloud IDE. The nav stays focused on the runtime and the record.
+
+## 2. Hero
+
+### Copy
+
+- **Eyebrow** — Open-source runtime for agentic development
+- **H1** — Turn agent work into reviewable engineering work.
+- **Subhead** — Sealant gives coding harnesses a self-hosted sandbox to work in, then turns every run into a structured record: code changes, checks, terminal output, artifacts, browser evidence, and the source trail behind the result.
+- **Primary CTA** — Star on GitHub
+- **Secondary CTA** — Run the demo
+- **Tertiary link** — Read the SDK docs
+- **Trust chips** — `Open source · Self-hosted · Bring your own harness · Replayable runs`
+
+CTAs stay developer-native (star, docs, SDK), never "book a demo" or "sign up."
+
+### Visual — happy-state run review
+
+Use the **review overview** screenshot style (not the sandbox-creation UI), in a confident happy state. Soften or remove red and yellow items here.
+
+The header strip:
+
+```text
+acme/billing-service / #5204
+
+Rounding fix ready for review
+
+Checks passing
+Evidence current
+Diff ready
+Run audit available
+```
+
+The main panel:
+
+```text
+What changed
+
+Computed the discount on the subtotal and rounded the final total once,
+using each currency's minor-unit scale and the provider's round-half-even rule.
+
+3 files · +41 / -22 · no schema, dependency, or provider-contract changes
+```
+
+The review questions:
+
+```text
+01 Reported discrepancy       Direct evidence
+02 Unaffected orders          Direct evidence
+03 Currency rounding          Verified
+04 Regression coverage        Added
+```
+
+The right rail:
+
+```text
+Evidence used
+
+Stripe currency documentation
+Payment-provider rounding specification
+Issue #5187 reproduction
+Baseline order snapshot
+
+8 sources · 5 checks · 200 repeated runs
+View source trail
+```
+
+The in-screenshot CTA:
+
+```text
+Review run
+```
+
+<Callout type="warn">
+**Not in the hero:** "Open in VS Code," "SSH," or any editor and access plumbing. Those belong in section 7.
+</Callout>
+
+## 3. Model strip
+
+Directly under the hero, the simplest model on one line:
+
+```text
+Create a sandbox  →  Run a harness  →  Replay the record  →  Review the change
+```
+
+Supporting copy:
+
+> One runtime model for code agents, QA agents, CI repros, dependency updates, and custom harnesses.
+
+## 4. The run is the product surface
+
+**Layout:** review/detail screenshot left, feature copy right.
+
+- **H2** — Every run comes back with the evidence attached.
+- **Body** — A Sealant run is more than a transcript. It keeps the change, the commands, the checks, the artifacts, the source trail, and the observations that explain how the result was produced.
+
+### Feature bullets
+
+| Bullet | Copy |
+|--------|------|
+| **Full diff** | See exactly what changed, with file context and generated patches. |
+| **Run audit** | Replay the ordered history of commands, output, processes, files, and artifacts. |
+| **Evidence trail** | Link the result back to the sources, snapshots, browser traces, and commands used. |
+| **Review questions** | Turn ambiguous parts of the run into focused human review instead of another wall of logs. |
+
+**Visual:** the "Currency rounding" detail screen. Nuanced statuses ("not executed," "needs follow-up") are fine here — this section is about review depth.
+
+## 5. Build on the SDK
+
+**Layout:** copy left, code block right.
+
+- **H2** — Build your agent on a runtime, not container glue.
+- **Body** — Create a live sandbox around a real repository, run the harness you already use, stream progress while it works, and keep the record after the sandbox is gone.
+
+The code block:
+
+```ts
+const sandbox = await sealant.sandboxes.create({
+  repository: "github.com/acme/billing-service",
+  harness: opencode(),
+})
+
+const run = await sandbox.harness.run(
+  "Round invoice totals once, after applying the discount."
+)
+
+await run.record.replay()
+```
+
+Below the code block:
+
+```text
+Bring OpenCode, a custom harness, a CI worker, or your own agent loop.
+```
+
+## 6. What the record captures
+
+**Layout:** six-card grid.
+
+- **H2** — A structured record, not a pile of logs.
+
+<Cards>
+  <Card title="Terminal I/O" description="Byte-exact command output, attached to the run that produced it." />
+  <Card title="File changes" description="Added, modified, deleted, and renamed files with reviewable patches." />
+  <Card title="Processes" description="Lifecycle, exit codes, signals, timeouts, and supervised child processes." />
+  <Card title="Artifacts" description="Reports, logs, screenshots, generated files, and other retained outputs." />
+  <Card title="Network activity" description="Outbound requests associated with the run that made them." />
+  <Card title="Browser evidence" description="Screenshots, DOM snapshots, navigations, and browser-generated network traces." />
+</Cards>
+
+<Callout type="idea">
+Make the **Browser evidence** card visually special — it is a key wedge. The story is browser evidence *inside the recorded run*, not browser automation as a side product.
+</Callout>
+
+## 7. Real sandboxes & console
+
+The sandbox GUI lives here — on the page, but below the fold and below the run.
+
+**Layout:** sandbox console screenshots left (the Create-sandbox spec plus the sandbox summary and runtime), copy and feature list right.
+
+- **H2** — The sandbox is a real development environment.
+- **Body** — Sealant creates a live, disposable environment around a repository: code, dependencies, harness, processes, runtime commands, and services. Use the SDK for automation or the console to create, inspect, restart, and enter sandboxes.
+
+### Feature list
+
+```text
+Create from repo, branch, or commit
+Choose harness, OS, runtime, packages, and launch commands
+Stream lifecycle events and runtime status
+Open the live sandbox over SSH, VS Code, or Cursor
+Stop, restart, expire, or garbage-collect when done
+```
+
+**Human-access line:** Open the live sandbox whenever you want to inspect, guide, or extend the run.
+
+### Phrasing
+
+The console copy positions the sandbox as a real environment a developer can enter, never as a competitor feature checklist.
+
+| Use this | Not this |
+|----------|----------|
+| Open the live sandbox in your editor. | Dev containers for VS Code. |
+| Create sandboxes from familiar repository specs. | Daytona alternative. |
+
+## 8. One runtime, many shapes of work
+
+**Layout:** tabs or cards.
+
+- **H2** — The same loop fits many kinds of agent work.
+
+<Tabs items={['Coding agents', 'Browser QA', 'CI repros', 'Dependency updates']}>
+<Tab value="Coding agents">
+Give a harness an issue, get back a change, checks, artifacts, and the full run record.
+
+```text
+sandbox → harness run → reviewable change
+```
+</Tab>
+<Tab value="Browser QA">
+Run the app, exercise a real browser flow, and keep screenshots, DOM snapshots, and network evidence.
+
+```text
+sandbox → browser run → evidence-backed test
+```
+</Tab>
+<Tab value="CI repros">
+Recreate a failing job in a clean environment and keep the commands, logs, files, and failure state.
+
+```text
+sandbox → failing command → replayable repro
+```
+</Tab>
+<Tab value="Dependency updates">
+Let a harness update packages, run checks, collect artifacts, and present the exact diff.
+
+```text
+sandbox → update run → reviewed patch
+```
+</Tab>
+</Tabs>
+
+## 9. Open-source & self-hosted
+
+Framed positively, not as a fear or lock-in section.
+
+- **H2** — Run it where your code already lives.
+- **Body** — Sealant is open-source and self-hosted. Run the daemon inside your own infrastructure, connect the harnesses you already trust, and build products on top of the same public SDK.
+
+<Cards>
+  <Card title="Open source" description="Inspect it, fork it, self-host it, and build on it." />
+  <Card title="Harness-neutral" description="Use OpenCode, custom agents, CI workers, or your own loop." />
+  <Card title="Product-ready records" description="Expose the run record through your own UI, PR flow, QA tool, or internal platform." />
+</Cards>
+
+## 10. Final CTA
+
+- **H2** — Give your next agent run a real environment — and a record worth reviewing.
+
+**Buttons:** Star on GitHub · Read the docs · Run the demo
+
+**Footer links:** GitHub · Docs · SDK · Examples · Discord / Community (if you have it).
+
+## Full page in one wireframe
+
+The whole homepage in a single sketch, top to bottom:
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Sealant                         Docs SDK Examples GitHub     │
+├──────────────────────────────────────────────────────────────┤
+│ Eyebrow: Open-source runtime for agentic development          │
+│                                                              │
+│ Turn agent work into reviewable engineering work.             │
+│                                                              │
+│ Sealant gives coding harnesses a self-hosted sandbox to       │
+│ work in, then turns every run into a structured record...     │
+│                                                              │
+│ [Star on GitHub] [Run the demo] [Read SDK docs]               │
+│                                                              │
+│                       [Hero: happy-state run review UI]       │
+├──────────────────────────────────────────────────────────────┤
+│ Create a sandbox → Run a harness → Replay the record → Review │
+├──────────────────────────────────────────────────────────────┤
+│ Every run comes back with the evidence attached.              │
+│ [Run review detail screenshot] [Full diff / audit / evidence] │
+├──────────────────────────────────────────────────────────────┤
+│ Build your agent on a runtime, not container glue.            │
+│ [Copy]                                  [SDK code block]      │
+├──────────────────────────────────────────────────────────────┤
+│ A structured record, not a pile of logs.                      │
+│ [Terminal] [Diffs] [Processes] [Artifacts] [Network] [Browser]│
+├──────────────────────────────────────────────────────────────┤
+│ The sandbox is a real development environment.                │
+│ [Sandbox console screenshots] [SSH / VS Code / runtime copy]  │
+├──────────────────────────────────────────────────────────────┤
+│ The same loop fits many kinds of agent work.                  │
+│ [Coding agents] [Browser QA] [CI repros] [Dependency updates] │
+├──────────────────────────────────────────────────────────────┤
+│ Run it where your code already lives.                         │
+│ [Open source] [Harness-neutral] [Product-ready records]       │
+├──────────────────────────────────────────────────────────────┤
+│ Give your next agent run a real environment — and a record     │
+│ worth reviewing.                                              │
+│ [Star on GitHub] [Read the docs] [Run the demo]               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+<Accordions>
+<Accordion title="Where this fits with the other marketing docs">
+This page is the IA and copy spec. It does not define the visual system (colors, type, components) and does not carry the narrative rationale behind the redesign. Use it to know *what* goes in each slot and *which words* live there; use the design and redesign-plan docs for *how it looks* and *why it is ordered this way*.
+</Accordion>
+</Accordions>

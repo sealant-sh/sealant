@@ -1,19 +1,66 @@
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap");
-@import "@fontsource/plus-jakarta-sans/400.css";
-@import "@fontsource/plus-jakarta-sans/500.css";
-@import "@fontsource/plus-jakarta-sans/600.css";
-@import "@fontsource/plus-jakarta-sans/700.css";
-@import "@fontsource/plus-jakarta-sans/800.css";
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap");
 @import "tailwindcss";
-@import "fumadocs-ui/css/black.css";
 @import "fumadocs-ui/css/preset.css";
+@import "fumadocs-ui/css/black.css";
 
 @theme {
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+  Sealant "Evidence Review" design language, mapped onto fumadocs-ui — the same
+  palette and type the marketing site (apps/marketing) and web app (apps/web)
+  render in: a warm near-white canvas, near-black ink, hairline rules, and one
+  cobalt brand accent. Tokens mirror @sealant/ui/styles/globals.css.
+*/
+:root {
+  --color-fd-background: #faf9f7;
+  --color-fd-foreground: #1b1b1d;
+  --color-fd-muted: #f1eee8;
+  --color-fd-muted-foreground: #6e6e76;
+  --color-fd-popover: #ffffff;
+  --color-fd-popover-foreground: #1b1b1d;
+  --color-fd-card: #ffffff;
+  --color-fd-card-foreground: #1b1b1d;
+  --color-fd-border: #e4e1db;
+  --color-fd-primary: #2052cc;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #f1eee8;
+  --color-fd-secondary-foreground: #1b1b1d;
+  --color-fd-accent: #f4f6fd;
+  --color-fd-accent-foreground: #2052cc;
+  --color-fd-ring: #2052cc;
+}
+
+.dark {
+  --color-fd-background: #1c1c1f;
+  --color-fd-foreground: #eceae6;
+  --color-fd-muted: #26262b;
+  --color-fd-muted-foreground: #9a978f;
+  --color-fd-popover: #232327;
+  --color-fd-popover-foreground: #eceae6;
+  --color-fd-card: #232327;
+  --color-fd-card-foreground: #eceae6;
+  --color-fd-border: #2e2c28;
+  --color-fd-primary: #5781ea;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #26262b;
+  --color-fd-secondary-foreground: #eceae6;
+  --color-fd-accent: #1a2238;
+  --color-fd-accent-foreground: #c9d6f7;
+  --color-fd-ring: #5781ea;
 }
 
 @layer base {
   body {
     font-family: var(--font-sans);
+  }
+
+  /* Display headings echo the marketing site's Space Grotesk titles. */
+  h1 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
   }
 }

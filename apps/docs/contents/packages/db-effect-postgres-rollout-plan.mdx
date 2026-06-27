@@ -1,0 +1,345 @@
+---
+title: DB Effect/Postgres rollout plan
+description: A staged, small-PR plan to move @sealant/db from SQLite to PostgreSQL with an Effect-first service boundary using Drizzle's Effect integrations.
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+This plan moves `@sealant/db` from SQLite to PostgreSQL and adopts an Effect-first database service boundary, built on Drizzle's Effect integrations (`drizzle-orm/effect-postgres` and `drizzle-orm/effect-schema`). It is deliberately split into small, targeted pull requests, each with a narrow blast radius and explicit acceptance criteria so the migration stays reviewable and reversible at every step.
+
+<Callout type="info">
+The cutover is a clean break to PostgreSQL: there is no SQLite-to-Postgres data migration tooling and no long-lived dual-database mode. The work lands as nine focused PRs that move the stack from dependencies, through schema and runtime, into an Effect service contract, and finally across all consumers and local infrastructure.
+</Callout>
+
+## Objective
+
+Replace the SQLite backend in `@sealant/db` with PostgreSQL and introduce an explicit Effect service boundary for the database, using Drizzle's Effect integrations:
+
+- `drizzle-orm/effect-postgres` for the connection and runtime path
+- `drizzle-orm/effect-schema` for validation generation
+
+The service contract is defined first; the live implementation is layered separately, mirroring the Effect service patterns already used across the repo.
+
+## Delivery constraints
+
+<Cards>
+  <Card title="Clean cutover">
+    A clean break to PostgreSQL. No SQLite-to-Postgres data migration tooling and no dual-database runtime.
+  </Card>
+  <Card title="Contract first">
+    Define the service contract first, then provide the live implementation as a separate layer.
+  </Card>
+  <Card title="Stable product language">
+    Keep product-facing terms centered on `sandboxes` and `issue workflows`.
+  </Card>
+  <Card title="Repo defaults">
+    Run `pnpm format:fix` after changes and typecheck with `pnpm typecheck` (`tsgo`).
+  </Card>
+</Cards>
+
+### Non-goals
+
+- No backward compatibility for SQLite runtime paths.
+- No long-lived dual-database mode.
+- No broad API behavior changes beyond what the DB backend migration requires.
+
+### PR sizing rules
+
+- Keep each PR focused on one boundary: the db package, its consumers, or infra/docs.
+- Keep PRs independently reviewable and buildable.
+- Avoid mixing schema conversion and app behavior changes in the same PR where possible.
+
+## Targeted PR sequence
+
+The migration proceeds as nine PRs. Each one lists its goal, primary targets, key changes where relevant, acceptance criteria, and the validation command(s) that gate it.
+
+<Steps>
+
+<Step>
+
+### PR 1 — Drizzle beta and dependency baseline
+
+Upgrade the DB package stack to a Drizzle version that supports Effect Postgres and Effect Schema.
+
+**Primary targets**
+
+- `packages/db/package.json`
+- Workspace dependency catalog entries (if needed)
+
+**Acceptance criteria**
+
+- `@sealant/db` installs with the packages required for the Effect Postgres path.
+- The DB package still typechecks before the functional migration starts.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 2 — Env contract migration to PostgreSQL
+
+Replace the SQLite env contract with a PostgreSQL URL contract at the validators boundary.
+
+**Primary targets**
+
+- `packages/validators/src/env.ts`
+- Env-focused tests in the API and worker
+
+**Key changes**
+
+- Replace `DATABASE_FILE_PATH` and `DATABASE_BUSY_TIMEOUT_MS` with `DATABASE_URL`.
+- Keep parser ergonomics and defaults suitable for local development.
+
+**Acceptance criteria**
+
+- App and worker env parsers compile with the PostgreSQL contract.
+- Env tests are updated and passing.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/api test -- env.test.ts
+pnpm --filter @sealant/worker test -- env.test.ts
+```
+
+</Step>
+
+<Step>
+
+### PR 3 — Schema dialect conversion (SQLite → PostgreSQL)
+
+Convert the DB schema declarations to Postgres core types and table builders.
+
+**Primary targets**
+
+- `packages/db/src/schema/auth.ts`
+- `packages/db/src/schema/control-plane.ts`
+- `packages/db/src/schema/sandbox-build-jobs.ts`
+
+**Key changes**
+
+- `sqliteTable` → `pgTable`
+- Type conversions for booleans, timestamps, JSON, and defaults
+- Index and constraint name normalization for PostgreSQL identifier limits
+
+**Acceptance criteria**
+
+- The schema compiles under the postgres dialect.
+- No PostgreSQL identifier-length collisions.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 4 — Fresh PostgreSQL migration baseline
+
+Create a clean PostgreSQL migration lineage for the new schema.
+
+**Primary targets**
+
+- `packages/db/drizzle.config.ts`
+- `packages/db/drizzle/*`
+- `packages/db/drizzle/meta/*`
+
+**Key changes**
+
+- Switch the drizzle config to `dialect: "postgresql"`.
+- Replace the SQLite migration history with fresh PostgreSQL baseline files.
+
+**Acceptance criteria**
+
+- `db:generate` produces PostgreSQL-valid artifacts.
+- Migration metadata is internally consistent.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db db:generate
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 5 — DB client and migrator PostgreSQL runtime
+
+Switch the runtime client and migrator from libsql/sqlite to PostgreSQL.
+
+**Primary targets**
+
+- `packages/db/src/client.ts`
+- `packages/db/src/migrate.ts`
+- `packages/db/src/runtime-env.ts`
+- `packages/db/src/index.ts`
+
+**Key changes**
+
+- Use the PostgreSQL Drizzle driver.
+- Update the migration runner to the PostgreSQL migrator path.
+- Keep the stable public factory API where practical.
+
+**Acceptance criteria**
+
+- DB client creation uses `DATABASE_URL`.
+- The migration runner works with PostgreSQL.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db db:migrate
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 6 — Effect DB service boundary
+
+Introduce an explicit DB service contract and layer composition in `@sealant/db`, aligned with existing Effect service patterns in the repo.
+
+**Primary targets**
+
+- `packages/db/src/service.ts` (new)
+- `packages/db/src/index.ts`
+
+**Key changes**
+
+- A `Context.Tag` for the DB service contract
+- A config service/tag for URL-driven wiring
+- A live layer and a helper constructor for imperative call-sites
+
+**Acceptance criteria**
+
+- The service contract is separated from the live implementation.
+- Consumers can acquire the DB via layer-based composition.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 7 — Validation layer migration to Effect Schema
+
+Move DB validation generation from `drizzle-zod` to `drizzle-orm/effect-schema`.
+
+**Primary targets**
+
+- `packages/db/src/validation.ts`
+- `packages/db/package.json`
+- `packages/db/src/index.ts`
+
+**Acceptance criteria**
+
+- Generated DB-facing schemas use Effect Schema.
+- Exports remain clear and consumable.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/db typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 8 — Consumer integration (API, worker, auth, web server context)
+
+Migrate DB consumers to the PostgreSQL env and DB service usage where appropriate.
+
+**Primary targets**
+
+- `apps/api/src/app.ts`, `apps/api/src/index.ts`
+- `apps/worker/src/workers/sandboxes.ts`, `apps/worker/src/index.ts`
+- `packages/auth/src/server.ts`
+- `apps/web/src/lib/trpc/context.ts`
+
+**Key changes**
+
+- Remove SQLite-specific logs, messages, and config usage.
+- Update the Better Auth Drizzle adapter provider to PostgreSQL.
+- Ensure startup/bootstrap does not force an unwanted DB connection in unit tests.
+
+**Acceptance criteria**
+
+- API, worker, auth, and web server context compile against the PostgreSQL DB contract.
+- Existing tests are updated for the new env contract and startup behavior.
+
+**Validation**
+
+```bash
+pnpm --filter @sealant/api typecheck
+pnpm --filter @sealant/worker typecheck
+pnpm --filter @sealant/auth typecheck
+pnpm --filter @sealant/web typecheck
+```
+
+</Step>
+
+<Step>
+
+### PR 9 — Local infra and docs cutover
+
+Align local development and documentation with the PostgreSQL runtime.
+
+**Primary targets**
+
+- `compose.yaml`
+- `packages/db/README.md`
+- `apps/docs/contents/packages/db.md`
+- `apps/docs/contents/getting-started/environment-variables.md`
+- `apps/docs/contents/getting-started/local-development.md`
+- App readmes referencing SQLite
+
+**Acceptance criteria**
+
+- Local dev docs reflect the PostgreSQL setup and env vars.
+- The compose stack includes and uses PostgreSQL for the app runtime.
+
+**Validation**
+
+A docs consistency pass plus a smoke runbook check.
+
+</Step>
+
+</Steps>
+
+## Cross-PR risk controls
+
+- Keep migrations and schema changes isolated from app logic changes.
+- Update tests in the same PR that changes an env or runtime contract.
+- Prefer additive service APIs before deleting legacy helpers, then clean up in a follow-up PR.
+
+## Definition of done
+
+<Accordions>
+  <Accordion title="What 'done' means for this rollout">
+    The migration is complete when all of the following hold:
+
+    - `@sealant/db` runs on PostgreSQL with the Drizzle Effect Postgres connection path.
+    - The DB service contract and layer are available and used by runtime boundaries.
+    - DB validation generation uses Drizzle Effect Schema.
+    - API, worker, auth, and web server contexts compile and run with `DATABASE_URL`.
+    - Docs and local dev instructions no longer reference SQLite as the default backend.
+  </Accordion>
+</Accordions>

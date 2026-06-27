@@ -1,0 +1,321 @@
+---
+title: Marketing redesign
+description: The content, IA, and copy plan for re-spinning the Sealant marketing site onto the locked product decisions, anchored by a signature run-record exhibit.
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+This is the plan for re-spinning the marketing site onto Sealant's locked product decisions. The existing page is well-built but sells the wrong story: a hosted cloud, umbrella-named products, and a two-sided SaaS funnel. The fix is a content, information-architecture, and copy re-spine on the existing visual system. The design language stays; the narrative changes.
+
+<Callout type="info">
+The redesign was produced by exploring five divergent approaches, judging them through three lenses (a first-time developer, a skeptical open-source hacker, and a design steward), then synthesizing one blueprint. The winning spine is **"the missing runtime" manifesto**, with a **one-liner → live-to-recorded hero** grafted in to fix five-second clarity, and **the execution record as the climax**.
+</Callout>
+
+## What this redesign optimizes
+
+For an adoption play, the page has exactly two jobs. Everything below serves them. The call to action being optimized is **a GitHub star**, not a signup.
+
+<Cards>
+  <Card title="Clarity in 5 seconds">
+    A first-time developer understands what Sealant is within five seconds and hits a "whoa" within one viewport.
+  </Card>
+  <Card title="Trust for the skeptic">
+    A skeptical open-source hacker trusts it: no vaporware sold as shipped, no SaaS smell, no lock-in.
+  </Card>
+</Cards>
+
+## The spine
+
+A builder-to-builder argument: the agent era shipped frameworks that decide *what* to do, but left a hole where the work should happen and a void where the truth should be. **Sealant is the open-source, self-hosted runtime that fills both.**
+
+The page leads with the plain definition, *then* picks the fight, and proves it instantly with a hero panel that types the canonical one-liner and resolves it into a real recorded run. The execution record is the soul and the climax; the one-liner is the literal spine, repeated across many jobs to show versatility.
+
+## The shape at a glance
+
+| # | Section | Job |
+|---|---------|-----|
+| 1 | **Hero** — defined, then argued, shown as a live run | What it is in 5s plus the wow above the fold |
+| 2 | **Thesis strip** — "Frameworks decide. The runtime delivers." | One quotable line; the three nouns |
+| 3 | **The indictment** — what you hand-roll today | Make the gap felt; wall-of-logs vs record |
+| 4 | **The model** — a sandbox you enter, a run you keep | The two-noun mental model |
+| 5 | **One call, many jobs** — versatility gallery | The adoption wedge as a repeatable pattern |
+| 6 | **The record** — it reports, it does not judge | The soul; the signature panel; the climax |
+| 7 | **Browsing as recorded evidence** — the differentiator | The wedge nobody frames, honestly in-progress |
+| 8 | **Not a black box** — step in over SSH | Anti-black-box, anchored in a shipping capability |
+| 9 | **One contract, one SDK** — the platform backbone | Composable, multi-language, lock-in-free |
+| 10 | **What Sealant is NOT** — boundaries are the feature | The credibility climax |
+| 11 | **Built in the open** — Handoff (by Sealant) | The product split as strategy and proof |
+| 12 | **Quickstart** — your first recorded run | Convert understanding into action |
+| 13 | **Final CTA** — adopt the runtime | Close on adoption asks only |
+
+<Callout type="warn" title="Editorial note on length">
+Thirteen argued sections is longer than today's already-long page and risks fatigue. The hero must carry the wow alone. If a leaner v1 is wanted, the minimum-shippable core is sections 1 through 6 plus 10 through 13, deferring the browser, SSH, and contract sections to a fast-follow. The recommendation is to ship the full arc while keeping sections 7 through 9 tight.
+</Callout>
+
+## Section-by-section spec
+
+<Accordions>
+  <Accordion title="1 · Hero — the runtime, defined then argued, shown as a live run">
+    The headline leads with the **definition, not the accusation**: *"The runtime under your agent. A sandbox to work in, a recorded run to keep."* The subhead lands the gap, then the promise — one call spins up a real sandbox around your repo, runs your harness in it, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.
+
+    Left side: copy plus calls to action (**primary "Star on GitHub"**, secondary "Read the quickstart") and a quiet mono trust line. Right side: the signature run-record panel. On load it scroll-types the canonical call, then resolves in place into the recorded run.
+
+    ```ts
+    sealant.sandboxes
+      .create({ repository, harness })
+      .harness.run(prompt)
+    // → { result, changes, artifacts, record }
+    ```
+
+    The resolved record shows a dot-plus-word status (`Completed · observed`), a few hairline mono evidence rows each with an **Observed** provenance tag, a diff peek with 2px green/red edge-marks, and a quiet `Replay ▸` control.
+
+    Two mandatory fixes versus the current hero: remove the decorative cobalt radial behind the text (decorative gradients are banned), and replace the banned verdict footer "Checks passed" with observation-only copy. Under no-JS or reduced-motion, render the resolved record statically and fully legible — the static panel must carry the whole argument with zero animation.
+  </Accordion>
+  <Accordion title="2 · Thesis strip">
+    Replaces the neutral capability word-list with an argument: one typeset sentence — *"Planners and harnesses decide WHAT. Sealant owns WHERE it runs and WHAT actually happened."* — plus the three nouns in mono: `sandbox · run · harness`. A full-width band with hairline top and bottom and generous space. Not pills or chips; type does the work.
+  </Accordion>
+  <Accordion title="3 · The indictment — what you're doing today">
+    Make the normalized pain felt: you `docker run` and hope it is isolated; you scrape a wall of terminal text to learn what the agent did; you have no clean before/after; when it hangs, you cannot step in; you rebuild this for every agent, every model, every project. Close with: *"Containers give you isolation. They don't give you the developer-work model around it."*
+
+    Visually, the pain lines are a rhythm of cobalt left-edge callouts — no red or amber flooding. Beside them, a deliberately dimmed wall-of-`agent.log` fragment sits against the lifted record motif, joined by one quiet label: *"same run, read instead of scraped."*
+  </Accordion>
+  <Accordion title="4 · The model — a sandbox you enter, a run you keep">
+    The constructive resolution: *"Two nouns. Everything else serves them."* A sandbox is the live disposable environment (code, harness, processes, files, services) you can SSH into; a run is the durable output — what it produced plus the structured history of how. Tagline: *"The sandbox is where the work happens. The run is what you keep."*
+
+    Reuse the two-card model pattern with the `{ harness, ssh, files, processes } = sandbox` and `{ result, changes, artifacts, record } = run` mocks, subtly emphasizing `record` as the spine.
+  </Accordion>
+  <Accordion title="5 · One call, many jobs — the versatility gallery">
+    The adoption wedge as a repeatable pattern. Header: *"One runtime. Many shapes of work."* The `create → run → replay` scaffold stays byte-for-byte fixed and highlighted; only `repository`, `harness`, and `prompt` re-type per job — the invariance of the call is the argument.
+
+    Jobs run as tabs (a mono segment selector, not filled pills): a coding agent fixes a failing test; autonomous QA drives a checkout flow in a browser; reproduce a failed CI run; land a dependency update; investigate a flaky build. The record footer re-resolves to job-appropriate observed evidence, never a verdict — for example QA shows `screenshots: 4`, repro shows `failure reproduced`, a dependency update shows `lockfile changed · checks observed`. A small inline one-shot ↔ interactive toggle surfaces both harness modes. Under no-JS, degrade to a labeled vertical stack of all five snippets.
+  </Accordion>
+  <Accordion title="6 · The record — the soul">
+    The climax: *"A wall of terminal text is not a record."* Sealant captures process lifecycle, byte-exact I/O, file changes, network, and artifacts as one ordered, correlated, replayable stream — queried, not parsed. Principled lines: *"It reports; it does not judge. No scores. No safe-to-merge. You decide what the evidence means."* and *"Every fact carries how it was captured — Observed, Inferred, or Unknown. Replay is a pure re-fold of an append-only log — not a promise to recreate arbitrary external systems."* Carry a near-term honesty note: the run inspector and replay UI are being built now.
+
+    This is the one net-new build that matters most: render the signature light/warm run-record panel that the design language calls "signature" but the current page never builds. Build it once as a reusable `@sealant/ui` component — it unlocks the hero, the versatility footers, the browser variant, and the final CTA.
+  </Accordion>
+  <Accordion title="7 · Browsing as recorded evidence — the differentiator (in-progress)">
+    The wedge nobody frames, placed mid-page, never the hero. *"The agent needs the web. The web should leave evidence."* A headless Chromium that the harness drives inside the sandbox — auth flows, UI checks — captured into the same run: screenshots, DOM snapshots, navigations, and the network it generated. Honest line: *"It composes primitives we already have — the tunneling channel, the artifact store, the egress proxy. In progress, and we say so."*
+
+    The visual is a record-panel variant whose timeline interleaves browser evidence under one run id: a navigation event, a small screenshot artifact thumbnail beside its correlated `net.request` rows, a DOM-snapshot row, and one amber `DOM assertion: not run` edge to demonstrate honest provenance. An in-development badge sits in the header, not hidden.
+  </Accordion>
+  <Accordion title="8 · Not a black box — step in over SSH">
+    Advance the anti-black-box stance into a genuinely-shipping capability to anchor credibility. *"Automation when it works. Direct access when it doesn't."* SSH into the same live sandbox, fix the missing dependency, occupied port, or hung process, and let the work continue — *"Same repo, same processes, same task, same record. Your keystrokes land in the same run."* Editor Remote-SSH works through the same path.
+
+    Reuse the existing SSH terminal panel (`git diff --stat`, `ps -ef`, `pnpm test → 14 tests passed`) largely as-is, plus a cobalt left-edge callout for the tagline.
+  </Accordion>
+  <Accordion title="9 · One contract, one SDK — the platform backbone">
+    The architecture that makes the runtime composable, multi-language, and lock-in-free. *"You import the SDK; the SDK speaks the contract; the contract is the single source of truth."* The primitives are defined once in the Protobuf control protocol over the local socket; the fluent SDK is the public surface on top of the low-level client; the same schema generates typed clients in other languages.
+
+    Reuse the missing-runtime vertical-stack geometry: `Your code → Fluent SDK (@sealant/*) → Wire contract (.proto) → sealantd runtime`. Beside the contract layer, a fan of language tags: TypeScript solid; Go, Python, and Java dashed and marked "planned, from the same contract."
+  </Accordion>
+  <Accordion title="10 · What Sealant is NOT — the boundaries are the feature">
+    The credibility climax; the page's most quotable, lowest-decoration moment. Sentence-case denials, each one line plus a mono qualifier:
+
+    - Not an agent or a model — bring your own.
+    - Not just Docker — containers isolate; we add the work model.
+    - Not a hosted service — self-hosted only, your code never leaves your infra.
+    - Not a judge — evidence, not verdicts.
+    - Not yet tamper-proof — tamper-evident, and we say so.
+    - Not a deterministic time machine — replay re-folds the run's own history.
+
+    A clean two-column hairline-divided list. No tinted panels, no alarm color — depth and type only, cobalt on linked terms.
+  </Accordion>
+  <Accordion title="11 · Built in the open — Handoff (by Sealant)">
+    The product split as strategy, not a catalog: *"The platform is the point. The products are the proof."* Each product is its own open-source repo on the public SDK, tagged "by Sealant."
+
+    **Handoff (flagship, building now)** gets one prominent card: a small mono `by Sealant` tag, an amber "Building now" status, a chip-row of the primitives it consumes (sandbox, harness, files, checks, artifacts, record), a snippet that is visibly the same `create`/`run` pattern wrapped and ending in a PR link, and a single "Watch the repo" call to action. Framed as proof: *"if Handoff works, the platform is real."*
+
+    **Verify** and **Repro** are two visibly quieter cards below with a hollow-ring "On the roadmap" status, one line each, and no use-it call to action — they have zero code today. This kills the page's biggest honesty violation (three co-equal products with "Explore" links implying all ship today) and drops the umbrella naming entirely.
+  </Accordion>
+  <Accordion title="12 · Quickstart — your first recorded run">
+    Convert understanding into action while the one-liner is fresh — the real conversion event for an adoption play. Numbered, copyable, and truthful to what runs today: clone and run `sealantd` locally on Docker, install the SDK, paste the hero one-liner, open the run. End: *"Five minutes to your first recorded run."*
+
+    A dark terminal panel, each block independently copyable, mirroring the hero panel geometry so the page visually closes the loop it opened.
+
+    <Callout type="warn" title="Load-bearing for credibility">
+    These commands must be copy-paste-correct against the current codebase. Verify the package name and the daemon launch command before ship.
+    </Callout>
+  </Accordion>
+  <Accordion title="13 · Final CTA — adopt the runtime">
+    Close on adoption asks only. Headline: *"The runtime layer the agent era skipped. Build on it."* Calls to action: "Star on GitHub" (primary) and "Read the docs" (secondary), plus a mono trust line. Echo the record motif faintly with a single inert resolved run-record card so the page ends on the artifact it sold. Reuse the existing rounded panel at `shadow-md` (not the reserved cobalt-lift) and remove the decorative cobalt radial.
+  </Accordion>
+</Accordions>
+
+## The shell: nav, footer, meta
+
+**Nav.** Keep the brand mark and theme switcher. Replace the header "Start building" with "Star on GitHub" (GitHub mark, cobalt-lift kept, optional live star count). Replace the link set with spine-aligned anchors: Why, Versatility, Products, Docs (external), GitHub (external). No nav link may imply hosting.
+
+**Footer.** Remove the "Company" column (About and Contact dead links read as a sales org). Replace it with a Project column: License, Roadmap, Changelog, Discussions. Replace the umbrella Products links with "Handoff (by Sealant) — building now" plus a single muted "Verify · Repro — roadmap" line. Keep the Platform column, leading with Quickstart and SDK reference and adding Execution record and Architecture. Re-spine the brand blurb to foreground the record. Net shape: brand, Platform, Products (by Sealant), Project — no company, contact, sales surface, or hosted hints.
+
+**Meta and social.** Keep the strong title. Re-spine the description to the new hero promise plus record-as-payoff. Add OG and Twitter card meta (currently absent) using `summary_large_image`, with an `og:image` of the signature run-record panel.
+
+## CTA system
+
+One call to action, repeated with discipline. The implied funnel is: understand the runtime → copy the one-liner → star the repo.
+
+<Cards>
+  <Card title="Primary, everywhere">
+    "Star on GitHub" — the single filled cobalt-lift button with the GitHub mark and an optional live star count. The shareable action that compounds mindshare.
+  </Card>
+  <Card title="Secondary">
+    "Read the docs" or "Read the quickstart" as an outline button.
+  </Card>
+  <Card title="Tertiary, contextual">
+    Always watch, read, or replay — never use or buy. "Replay this run ▸", "See the SDK reference", "Watch the repo" on Handoff, "Follow on GitHub" on Verify and Repro.
+  </Card>
+  <Card title="Banned entirely">
+    Pricing, "book a demo", "contact sales", "sign up", "join early access", email capture, and "Start building" as a button verb.
+  </Card>
+</Cards>
+
+## Cut, keep, add
+
+<Tabs items={['Cut', 'Keep', 'Add']}>
+  <Tab value="Cut">
+    - The entire "Where it runs" section — the Sealant Cloud card, "Join early access", the cloud icon, every hosted, managed, or two-sided hint. Self-hosted is restated as a boundary in section 10 and made real in the Quickstart.
+    - The umbrella product naming, the three co-equal "Explore" cards, and "Explore all products".
+    - "Start building" as the primary CTA verb in the header, hero, and final CTA.
+    - The neutral capability word-list, replaced by the thesis strip.
+    - The standalone "Controlled execution" dark section — its points fold into sections 6 and 10 so the record stays the page's single dark climax.
+    - The standalone harness-neutral section, which folds into sections 5 and 9.
+    - The use-cases chip-cloud, superseded by the runnable versatility gallery.
+    - The standalone FAQ, absorbed into section 10 and inline asides; delete the FAQ line that hints at hosting.
+    - The decorative cobalt radials behind hero text and the final CTA.
+    - The banned "Checks passed" hero footer.
+  </Tab>
+  <Tab value="Keep">
+    - The dark terminal code panel and aesthetic — but narrowed to SSH, the Quickstart, and the indictment foil only. Everywhere it currently appears as the hero or feature visual, it is replaced by the run-record exhibit.
+    - The execution-record timeline mock and dot-plus-word footer, promoted to the climax.
+    - The SSH terminal peek and "Automation when it works" callout — today-real and on-message.
+    - The two-card sandbox/run model pattern with the destructure mocks and cobalt member highlighting.
+    - The missing-runtime stack geometry, repurposed as the contract backbone.
+    - The hero one-liner content, verbatim, as the page's literal spine.
+    - The motion primitives, type system, warm canvas with dot-grid, reserved cobalt-lift, reduced-motion discipline, the in-development badge, and the left-edge callout primitive.
+  </Tab>
+  <Tab value="Add">
+    - The definition-first headline clause before the accusation (the clarity fix).
+    - The live-to-recorded hero panel: type the one-liner, resolve into a real record with `Replay ▸` and Observed tags.
+    - The signature light run-record panel as a real reusable `@sealant/ui` component, which unlocks the hero, versatility footers, browser variant, and final CTA.
+    - Provenance tags (Observed, Inferred, Unknown) as a tiny mono micro-component.
+    - The thesis strip, the indictment, the versatility gallery, the browser-as-evidence variant, the contract backbone, the "What Sealant is NOT" section, and the copyable Quickstart.
+    - Per-capability status markers (in development, observe-only today, planned from the same contract, building now, on the roadmap), reusing the in-development badge as a status vocabulary.
+    - OG and Twitter social-card meta.
+  </Tab>
+</Tabs>
+
+## Build sequencing and risks
+
+The honest framing: this is **not** a pure re-spine. The emotional payload — the hero live-to-record panel, the signature light inspector, the replay re-fold, and the versatility re-type — is net-new stateful and animated code on a page that today has zero client interactivity. Treated carelessly, it reads as the exact vaporware this audience punishes.
+
+<Steps>
+  <Step>
+    **Build the signature run-record panel first**, as a reusable component. It is the spine of four sections; everything else is cheaper once it exists.
+  </Step>
+  <Step>
+    **Static-legible first.** Every animation must degrade to a fully-legible static panel under reduced-motion and no-JS. The static panels must carry the argument alone. Consider shipping static and layering motion later.
+  </Step>
+  <Step>
+    **Loud "building now" framing** on the inspector, replay, and Handoff surfaces. If a developer clones the repo and finds replay or Handoff not real, it inverts the page's own honesty thesis. Mocked records are labeled illustrative; the Quickstart promises only what runs today.
+  </Step>
+</Steps>
+
+Other risks: the manifesto voice can tip into preachy, so every opinion must cash out immediately in copy-pasteable SDK code; thirteen sections risk fatigue, so the hero must carry the wow and the leaner core ships first if needed; cobalt-lift must stay reserved (final CTA at `shadow-md`); and Quickstart correctness is load-bearing and must be verified against the codebase before ship.
+
+## Open decisions
+
+<Accordions>
+  <Accordion title="Animation now, or static-first?">
+    The single biggest build call. Recommendation: ship the static-legible record panels first and layer the type-on, resolve, and replay motion as a fast-follow — lower vaporware risk, faster to live.
+  </Accordion>
+  <Accordion title="Product names">
+    Keep the working names Verify and Repro on the page, or hold them until their repos exist? Brand convention is standalone names plus "by Sealant." And does a Handoff repo exist yet for "Watch the repo" to point at, or should it point at the main repo or a roadmap issue?
+  </Accordion>
+  <Accordion title="Repo and star count">
+    Confirm the canonical public repo, and whether to wire a live star-count badge into the primary CTA.
+  </Accordion>
+  <Accordion title="Quickstart truth">
+    Verify the exact commands that run today (clone and launch `sealantd` on Docker, the SDK package name, the one-liner) against the codebase so the conversion event is copy-paste-correct.
+  </Accordion>
+  <Accordion title="Demo embed?">
+    Recommendation: no live or recorded product demo (it would lean on the unbuilt inspector) — keep the page entirely code and record-panel driven.
+  </Accordion>
+</Accordions>
+
+## Design direction — "Evidence on file"
+
+This direction came out of running the redesign through a distinctive-design lens (three subject-grounded visual identities, a templated-default critique, then synthesis). It governs the visual identity and overrides the per-section visual notes above where they conflict.
+
+### The realization
+
+Run the templated-default test honestly: for any dev-infra brief, the default hero is a dark terminal code block — which is exactly what the current page is. That dark code panel is the single most templated thing on the page. So distinctiveness does not come from a new palette or font (the warm-canvas, cobalt, three-voice system is a pinned brief — keep it). It comes from finally shipping the one artifact the design language literally names "signature" but the page has never built: the **warm-light run-record exhibit**. No other dev tool can render an "exhibit" because no other dev tool keeps a sequenced, provenance-tagged, replayable record. The signature is the product's own data model, rendered.
+
+### The signature instrument — the run-record exhibit
+
+Build it once as a reusable `@sealant/ui` exhibit component, parameterized by fidelity (full, inline-strip, or inert). It is the hero, the versatility footers, the record climax, the browser variant, and the final closer — and it replaces the dark code panel as the page's main instrument. Four traits, each mined directly from the real data model, that no dark code block has:
+
+<Cards>
+  <Card title="Corner seal">
+    A cobalt recording pulse, a mono `run-id`, and a capture timestamp. Marks it as filed evidence — the durable telemetry spool plus correlation id.
+  </Card>
+  <Card title="Sequence rail">
+    Mono per-event numbers (`0001 0002 0003 …`) down the left margin, like a ledger — the real monotonic `(runId, sequence)` coordinate.
+  </Card>
+  <Card title="Provenance as dot-plus-word">
+    Observed, Inferred, or Unknown on each fact — the real `captureMethod` confidence field, rendered in the status grammar, never a boxed pill.
+  </Card>
+  <Card title="Evidence rows and diff peek">
+    Hairline mono evidence rows plus a diff peek (2px green/red edge-marks, never floods) and a `Replay ▸` control that re-folds the append-only rows in place — replay as a pure fold of the log.
+  </Card>
+</Cards>
+
+<Callout type="idea">
+Build order is unchanged: still "build the signature panel first" — but the panel is the light exhibit, not a dark terminal. It is the vertical slice everything else depends on.
+</Callout>
+
+### Where the dark code panel still lives
+
+Only three places, because in each a terminal is honest: the **SSH** section (a real interactive session), the **Quickstart** (literal copy-paste commands), and the **indictment foil** (the dimmed wall of `agent.log` that fails to parse, shown as the thing the record beats). Everywhere else the dark panel currently appears as a hero or feature visual, it becomes the light exhibit.
+
+### Catalog IA — eyebrows that reference real runs
+
+Structure encodes truth: each section's eyebrow becomes a real artifact reference, not a decorative label — for example `EXHIBIT C · run sbx_8m2k · 184 events`. Hard rule: an eyebrow must reference a real run primitive (run-id plus event count), never a generic word. The page reads as a small, numbered dossier of evidence you could file. The literal `EXHIBIT A–H` lettering is an optional flourish; the run-id reference is always on.
+
+### Typography move
+
+Keep the three voices and the semantic split. The move: mono carries the evidence (sequence numbers, event names, offsets, run-id seal, provenance) inside the exhibit; Inter carries five-second comprehension in the claim that sits beside every exhibit; Space Grotesk names the exhibit, one headline per section, with restraint. The core law — the claim never carries a value the exhibit does not show — is promoted from principle to layout law: reject any section where the claim asserts a value the visible record does not prove. That is "reports, not judges" made structural.
+
+### Palette
+
+100% inherited, zero new hexes. The warm canvas is the gallery wall (exhibits float as objects via soft shadow, never borders); pure white is reserved for the kept-record card; cobalt is the only brand color (the seal and pulse, the active provenance link, the one primary CTA), never flooded. Green-dot Observed dominates, amber marks exactly one Inferred or not-run moment (the browser "DOM assertion: not run" edge, and the boundaries honesty), and red appears only for demonstrated breakage.
+
+### Motion budget — exactly two, static-first as a hard floor
+
+Every record renders fully legible with no JS and under reduced-motion (offsets show final values, the pulse becomes a static dot, replay shows the already-folded rows). Exactly two motions ship:
+
+<Cards>
+  <Card title="Hero resolve">
+    The hero one-liner resolving into the exhibit.
+  </Card>
+  <Card title="Sticky run-header playhead">
+    A persistent run-header in the sticky nav (run-id, recording pulse, and an advancing `mm:ss.mmm` offset) so scroll subliminally reads as replaying one run — opening on `sandbox.ready` at the hero and closing on `run.completed` at the final CTA, where the pulse stops and status resolves to `Completed · observed`.
+  </Card>
+</Cards>
+
+No per-section reveals beyond these, no scroll-jacking, no full-height gutter. Ship static; layer the two motions as a fast-follow.
+
+### The one risk, and the one accessory removed
+
+- **The risk (spend boldness here, nowhere else):** the sticky run-header playhead. Justified because it is the product's actual data model used as navigation, not metaphor — but it must stay hairline-quiet, single-accent, fully static-degradable, and never required to understand what Sealant is. Removable without breaking the page if it does not land.
+- **Removed (the disciplined cut):** the deckled, torn-paper top edge on the record card. It is kitsch and fights the "depth is one restrained soft shadow, no decorative chrome" rule. The "kept artifact" read is already carried by the seal, rail, and provenance dots. The record should look filed, not distressed.
+
+### Net deltas to the plan
+
+- The main instrument is the run-record exhibit, not the dark code panel.
+- Eyebrows become real run references (`run <id> · <N> events`).
+- The record build is the exhibit component with the four required traits above.
+- Add the sticky run-header playhead (ambient, optional, static-degradable).
+- The motion budget is exactly two motions; static-first is a hard floor, not a recommendation.
