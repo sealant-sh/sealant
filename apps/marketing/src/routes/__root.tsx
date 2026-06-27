@@ -1,25 +1,31 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 
+import { GitHubLogo } from "#/components/github";
 import { LogoBlob } from "#/components/logo";
+import { RunHeaderClock } from "#/components/run-header";
 
 import appCss from "../styles.css?url";
 
 const REPO = "https://github.com/get-sealant/sealant";
+
+const TITLE = "Sealant — the open-source runtime for AI dev agents";
+const DESCRIPTION =
+  "Sealant is the open-source, self-hosted runtime under your AI agent. One call spins up a real sandbox around your repo, runs your harness, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.";
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      {
-        title: "Sealant — the runtime for AI developer agents",
-      },
-      {
-        name: "description",
-        content:
-          "Create an isolated sandbox for any repository, run its harness, connect over SSH, and get back the result with a complete, replayable record of how it was produced.",
-      },
+      { title: TITLE },
+      { name: "description", content: DESCRIPTION },
+      { property: "og:title", content: TITLE },
+      { property: "og:description", content: DESCRIPTION },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: TITLE },
+      { name: "twitter:description", content: DESCRIPTION },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),
@@ -38,32 +44,37 @@ function RootComponent() {
             <div className="flex items-center gap-9">
               <Brand />
               <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
-                <TopLevelNavLink href="#platform">Platform</TopLevelNavLink>
+                <TopLevelNavLink href="#indictment">Why</TopLevelNavLink>
+                <TopLevelNavLink href="#jobs">Versatility</TopLevelNavLink>
                 <TopLevelNavLink href="#products">Products</TopLevelNavLink>
-                <TopLevelNavLink href={REPO}>Documentation</TopLevelNavLink>
+                <TopLevelNavLink href={REPO}>Docs</TopLevelNavLink>
                 <TopLevelNavLink href={REPO}>GitHub</TopLevelNavLink>
               </nav>
             </div>
-            <div className="hidden items-center gap-2.5 md:inline-flex">
-              <ThemeSwitcher />
-              <a
-                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
-                href={REPO}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Start building
-              </a>
-            </div>
-            <div className="inline-flex items-center gap-2 md:hidden">
-              <ThemeSwitcher compact />
+            <div className="flex items-center gap-2.5">
+              <RunHeaderClock />
+              <div className="hidden items-center gap-2.5 md:inline-flex">
+                <ThemeSwitcher />
+                <a
+                  className="group inline-flex min-h-9 items-center justify-center gap-1.5 rounded-xl bg-primary px-4 font-sans text-sm font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,background-color] duration-200 hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]"
+                  href={REPO}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <GitHubLogo className="size-4" />
+                  Star on GitHub
+                </a>
+              </div>
+              <div className="inline-flex items-center md:hidden">
+                <ThemeSwitcher compact />
+              </div>
             </div>
           </div>
         </header>
         <Outlet />
         <footer className="border-t border-border bg-[var(--sw-canvas)]">
           <div className="mx-auto max-w-[1200px] px-6 py-14 sm:px-8">
-            <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr_1fr] lg:gap-8">
+            <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr] lg:gap-8">
               <div className="min-w-0">
                 <a
                   href="/"
@@ -73,15 +84,16 @@ function RootComponent() {
                   Sealant
                 </a>
                 <p className="mt-4 max-w-[34ch] text-sm leading-relaxed text-muted-foreground">
-                  Sealant gives developer software a real environment in which to work — and makes
-                  the resulting work inspectable and reusable.
+                  The runtime the agent era skipped — a real environment to work in, and a
+                  trustworthy, replayable record of what happened. Open-source, self-hosted, yours.
                 </p>
               </div>
               <FooterCol
                 title="Platform"
                 links={[
-                  ["Documentation", REPO],
+                  ["Quickstart", "#quickstart"],
                   ["SDK reference", REPO],
+                  ["Execution record", "#records"],
                   ["Architecture", REPO],
                   ["GitHub", REPO],
                 ]}
@@ -89,24 +101,17 @@ function RootComponent() {
               <FooterCol
                 title="Products"
                 links={[
-                  ["Sealant Verify", "#products"],
-                  ["Sealant Repro", "#products"],
-                  ["Sealant Handoff", "#products"],
+                  ["Handoff (by Sealant)", REPO],
+                  ["Verify · Repro — roadmap", "#products"],
                 ]}
               />
               <FooterCol
-                title="Resources"
+                title="Project"
                 links={[
-                  ["Examples", REPO],
-                  ["Changelog", REPO],
+                  ["License", REPO],
                   ["Roadmap", REPO],
-                ]}
-              />
-              <FooterCol
-                title="Company"
-                links={[
-                  ["About", "#"],
-                  ["Contact", "#"],
+                  ["Changelog", REPO],
+                  ["Discussions", REPO],
                 ]}
               />
             </div>
@@ -139,7 +144,6 @@ function TopLevelNavLink({
   readonly children: ReactNode;
 }) {
   const external = href.startsWith("http");
-
   return (
     <a
       className="font-sans text-sm font-medium text-muted-foreground no-underline transition-colors duration-200 hover:text-foreground"
