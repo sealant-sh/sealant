@@ -15,8 +15,8 @@ type Tone = "kw" | "str" | "fn" | "member" | "comment" | "plain";
 const TONE: Record<Tone, string> = {
   kw: "text-primary",
   str: "text-success",
-  fn: "text-[#9db4f0]",
-  member: "text-[#9db4f0]",
+  fn: "text-primary",
+  member: "text-primary",
   comment: "text-faint",
   plain: "text-ink-2",
 };

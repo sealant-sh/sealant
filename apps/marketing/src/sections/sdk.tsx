@@ -54,7 +54,7 @@ const CODE: ReadonlyArray<ReadonlyArray<readonly [string, Tone]>> = [
 const TONE_CLASS: Record<Tone, string> = {
   kw: "text-primary",
   str: "text-success",
-  fn: "text-[#9db4f0]",
+  fn: "text-primary",
   comment: "text-faint",
   plain: "text-ink-2",
 };
