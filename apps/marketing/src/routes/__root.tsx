@@ -1,4 +1,5 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { SunMoon } from "lucide-react";
 import { type ReactNode } from "react";
 
 import { GitHubLogo } from "#/components/github";
@@ -44,11 +45,10 @@ function RootComponent() {
             <div className="flex items-center gap-9">
               <Brand />
               <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
-                <TopLevelNavLink href="#indictment">Why</TopLevelNavLink>
-                <TopLevelNavLink href="#jobs">Versatility</TopLevelNavLink>
-                <TopLevelNavLink href="#products">Products</TopLevelNavLink>
+                <TopLevelNavLink href="#records">The run</TopLevelNavLink>
+                <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
+                <TopLevelNavLink href="#sandboxes">Sandboxes</TopLevelNavLink>
                 <TopLevelNavLink href={REPO}>Docs</TopLevelNavLink>
-                <TopLevelNavLink href={REPO}>GitHub</TopLevelNavLink>
               </nav>
             </div>
             <div className="flex items-center gap-2.5">
@@ -62,11 +62,11 @@ function RootComponent() {
                   rel="noreferrer"
                 >
                   <GitHubLogo className="size-4" />
-                  Star on GitHub
+                  GitHub
                 </a>
               </div>
               <div className="inline-flex items-center md:hidden">
-                <ThemeSwitcher compact />
+                <ThemeSwitcher />
               </div>
             </div>
           </div>
@@ -91,18 +91,18 @@ function RootComponent() {
               <FooterCol
                 title="Platform"
                 links={[
-                  ["Quickstart", "#quickstart"],
-                  ["SDK reference", REPO],
-                  ["Execution record", "#records"],
-                  ["Architecture", REPO],
+                  ["The run", "#records"],
+                  ["SDK", "#sdk"],
+                  ["What it captures", "#capture"],
+                  ["Sandboxes", "#sandboxes"],
                   ["GitHub", REPO],
                 ]}
               />
               <FooterCol
-                title="Products"
+                title="Build on it"
                 links={[
+                  ["Open-source & self-hosted", "#open-source"],
                   ["Handoff (by Sealant)", REPO],
-                  ["Verify · Repro — roadmap", "#products"],
                 ]}
               />
               <FooterCol
@@ -185,17 +185,18 @@ function FooterCol({
   );
 }
 
-function ThemeSwitcher({ compact = false }: { readonly compact?: boolean }) {
+function ThemeSwitcher() {
   return (
     <button
       type="button"
-      className="inline-flex min-h-9 items-center justify-center rounded-xl border border-border bg-panel px-3 font-sans text-sm text-muted-foreground shadow-[var(--shadow-xs)] transition-colors duration-200 hover:border-input hover:text-foreground"
+      className="inline-flex size-9 items-center justify-center rounded-xl border border-border bg-panel text-muted-foreground shadow-[var(--shadow-xs)] transition-colors duration-200 hover:border-input hover:text-foreground"
       aria-label="Toggle color theme"
+      title="Toggle theme"
       onClick={() => {
         document.documentElement.classList.toggle("dark");
       }}
     >
-      {compact ? "Mode" : "Theme"}
+      <SunMoon className="size-4" aria-hidden="true" />
     </button>
   );
 }
