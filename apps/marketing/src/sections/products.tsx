@@ -92,7 +92,7 @@ function ProductCard({ product }: { product: Product }) {
 
 export function Products() {
   return (
-    <section id="products" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
+    <section id="products" className="bg-panel py-24 lg:py-32">
       <Container>
         <SectionHead
           eyebrow={<Eyebrow>Products by Sealant</Eyebrow>}

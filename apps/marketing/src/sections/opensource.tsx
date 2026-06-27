@@ -32,7 +32,7 @@ const PILLARS: ReadonlyArray<Pillar> = [
 
 export function OpenSource() {
   return (
-    <section id="open-source" className="bg-panel py-24 lg:py-32">
+    <section id="open-source" className="bg-[var(--sw-canvas)] py-24 lg:py-32">
       <Container>
         <SectionHead
           eyebrow={<Eyebrow>Open-source and self-hosted</Eyebrow>}
