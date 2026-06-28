@@ -4,6 +4,15 @@ packages/*/node_modules
 tooling/*/node_modules
 .git
 .turbo
+
+# Never bake secrets/local config into images (COPY . . would otherwise include them).
+.env
+.env.local
+.env.*.local
+.secrets
+*.log
+SDK-REPORT.html
+SEALANT-ASYNC-STRATEGY.md
 .node_modules.root-owned
 .deps-root-owned
 ..bin.root-owned
