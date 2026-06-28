@@ -320,6 +320,7 @@ export {
   type IssueWorkflowStatus,
   type PackageResolutionCacheEntry,
   type Run,
+  type RunFileChange,
   type RunMode,
   type RunStatus,
   type SandboxAttempt,

@@ -147,8 +147,15 @@ export const createRun = (payload: CreateRunRequest) =>
     const command = payload.command;
     if (command !== undefined) {
       const publisher = yield* RunExecPublisherService;
+      // Construct the command explicitly so an absent cwd is omitted (not passed as `cwd: undefined`),
+      // matching RunExecCommand under exactOptionalPropertyTypes.
+      const execCommand = {
+        executable: command.executable,
+        args: [...command.args],
+        ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+      };
       yield* Effect.tryPromise({
-        try: () => publisher.publishRequested({ runId: run.id, command }),
+        try: () => publisher.publishRequested({ runId: run.id, command: execCommand }),
         catch: (error) =>
           new RunInternalServerError({
             message: toErrorMessage(error, "Failed to enqueue run execution."),
