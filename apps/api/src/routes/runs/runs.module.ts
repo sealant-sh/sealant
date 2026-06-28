@@ -30,6 +30,8 @@ import { RunRepo } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { Context, Effect, Stream } from "effect";
 
+import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
+
 // StreamKind numerics from @sealant/runtime-protocol (avoid a runtime dep for two constants).
 const STREAM_KIND_STDOUT = 2;
 const STREAM_KIND_STDERR = 3;
@@ -138,6 +140,21 @@ export const createRun = (payload: CreateRunRequest) =>
           return new RunInternalServerError({ message: toErrorMessage(error, "Failed to create run.") });
         }),
       );
+
+    // When a command is provided, EXECUTE the run server-side: enqueue a run-exec job for the worker
+    // (it docker-execs the harness + ingests telemetry). Absent a command, the run row is created but
+    // not executed (the legacy host-local caller-runs-it path).
+    const command = payload.command;
+    if (command !== undefined) {
+      const publisher = yield* RunExecPublisherService;
+      yield* Effect.tryPromise({
+        try: () => publisher.publishRequested({ runId: run.id, command }),
+        catch: (error) =>
+          new RunInternalServerError({
+            message: toErrorMessage(error, "Failed to enqueue run execution."),
+          }),
+      });
+    }
     return mapRun(run);
   });
 
