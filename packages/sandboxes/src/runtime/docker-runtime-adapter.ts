@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { join as joinPath } from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,12 @@ const execFileAsync = promisify(execFile);
  */
 const CONTROL_SOCKET_CONTAINER_PATH = "/run/sealant/control.sock";
 
+/** Readiness-probe cadence and default budget (overridable via DockerRuntimeAdapterOptions). */
+const READINESS_POLL_INTERVAL_MS = 250;
+const DEFAULT_READINESS_TIMEOUT_MS = 120_000;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 export interface DockerCommandResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -52,6 +58,12 @@ export interface DockerRuntimeAdapterOptions {
   readonly containerNamePrefix?: string;
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
+  /**
+   * Max time to wait for the in-sandbox daemon's control socket to start accepting after the container
+   * is up (the readiness probe in `launch`). Must exceed the worst-case `git clone` + boot; defaults to
+   * 120s. Probing is gated on `verifyRunning`.
+   */
+  readonly readinessTimeoutMs?: number;
   readonly defaultSshAuthorizedKeysFile?: string;
   /**
    * @deprecated The inner sshd was removed (gateway-spec §4.3): the gateway reaches the daemon control
@@ -180,6 +192,14 @@ const normalizeContainerToken = (value: string): string => {
 };
 
 const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): string => {
+  // Deterministic per-run name: a redelivered / reaper-republished / concurrent launch of the SAME
+  // run resolves to the SAME container (find-or-create/adopt), never a duplicate (#4 double-launch).
+  // We deliberately key on runId ONLY (no image/epoch suffix) so there is exactly one container per run.
+  if (input.runId !== undefined) {
+    const runToken = normalizeContainerToken(input.runId) || "run";
+    return `${prefix}-${runToken}`;
+  }
+  // Fallback (no runId, e.g. ad-hoc/test launches): keep the legacy unique-per-launch name.
   const repositoryToken = normalizeContainerToken(input.publishedImage.repository) || "sandbox";
   const tagToken = normalizeContainerToken(input.publishedImage.tag) || "latest";
   const suffix = Date.now().toString(36);
@@ -246,6 +266,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly verifyRunning: boolean;
 
+  private readonly readinessTimeoutMs: number;
+
   private readonly defaultSshAuthorizedKeysFile: string | undefined;
 
   private readonly controlSocketHostDir: string | undefined;
@@ -259,6 +281,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
+    this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.controlSocketHostDir = options.controlSocketHostDir;
   }
@@ -446,6 +469,134 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
+  private async forceRemoveContainer(containerId: string): Promise<void> {
+    await this.commandRunner("docker", ["rm", "-f", containerId]).catch(() => undefined);
+  }
+
+  private async inspectContainerByName(
+    containerName: string,
+  ): Promise<{ id: string; running: boolean } | undefined> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Id}}\t{{.State.Running}}",
+        containerName,
+      ]);
+      const [id, running] = result.stdout.trim().split("\t");
+      if (id === undefined || id.length === 0) {
+        return undefined;
+      }
+      return { id, running: running === "true" };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * `docker run` the container, or ADOPT an existing one bearing the same (deterministic, per-run)
+   * name. A redelivered / reaper-republished / concurrent launch of the same run hits a `--name`
+   * conflict; rather than spawn a duplicate — or fail and trip cleanup that clobbers the good runtime
+   * row — we adopt the live container, or clear a dead one and retry the run exactly once. This makes
+   * launch idempotent per run (#4) and is the safety net that lets Stage 2's reaper republish freely.
+   */
+  private async runOrAdoptContainer(args: Array<string>, containerName: string): Promise<string> {
+    const runOnce = async (): Promise<string> => {
+      const result = await this.commandRunner("docker", args);
+      const id = result.stdout.trim();
+      if (id.length === 0) {
+        throw createAdapterError("adapter-unavailable", "Docker run did not return a container id.");
+      }
+      return id;
+    };
+    try {
+      return await runOnce();
+    } catch (error) {
+      // The most likely cause is a `--name` conflict from a prior launch of this run. If a container
+      // with that name exists, adopt it (live) or clear it and retry once (dead). Otherwise re-raise.
+      const existing = await this.inspectContainerByName(containerName);
+      if (existing === undefined) {
+        throw error;
+      }
+      if (existing.running) {
+        return existing.id;
+      }
+      await this.forceRemoveContainer(existing.id);
+      return runOnce();
+    }
+  }
+
+  /**
+   * True once the daemon control socket is ACCEPTING. The default reach probes inside the container
+   * (`docker exec test -S`); the §2.2 bind-mount fast path stats the socket on the host instead.
+   */
+  private async isControlSocketAccepting(
+    containerId: string,
+    containerName: string,
+  ): Promise<boolean> {
+    if (this.controlSocketHostDir !== undefined) {
+      try {
+        const stats = await stat(joinPath(this.controlSocketHostDir, containerName, "control.sock"));
+        return stats.isSocket();
+      } catch {
+        return false;
+      }
+    }
+    try {
+      await this.commandRunner("docker", [
+        "exec",
+        containerId,
+        "test",
+        "-S",
+        CONTROL_SOCKET_CONTAINER_PATH,
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Block until the sandbox's control socket is accepting — the HONEST readiness signal. `sealantd`
+   * binds the socket only after `rm -rf` + `git clone` + runtime-health, so "container running"
+   * precedes "socket accepting" by (mostly) the clone duration. Polls within a bounded budget; fails
+   * fast if the container exits during boot (e.g. clone failure -> daemon exit 1). On any failure the
+   * orphan container is force-removed so a recorded "failed" runtime instance has no dangling container.
+   */
+  private async awaitControlSocketReady(containerId: string, containerName: string): Promise<void> {
+    const deadline = Date.now() + this.readinessTimeoutMs;
+    for (;;) {
+      if (await this.isControlSocketAccepting(containerId, containerName)) {
+        return;
+      }
+
+      const state = await this.inspectContainerState(containerId).catch(() => undefined);
+      if (state !== undefined && !state.running) {
+        const logs = await this.readContainerLogs(containerId);
+        await this.forceRemoveContainer(containerId);
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Sandbox container '${containerName}' exited during boot before its control socket was ready (status: ${state.status}, exitCode: ${state.exitCode}).${
+            logs === undefined ? "" : ` Logs:\n${logs}`
+          }`,
+        );
+      }
+
+      if (Date.now() > deadline) {
+        const logs = await this.readContainerLogs(containerId);
+        await this.forceRemoveContainer(containerId);
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Sandbox container '${containerName}' control socket did not become ready within ${this.readinessTimeoutMs}ms.${
+            logs === undefined ? "" : ` Logs:\n${logs}`
+          }`,
+        );
+      }
+
+      await delay(READINESS_POLL_INTERVAL_MS);
+    }
+  }
+
   public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
     const parsed = parseRuntimeAdapterSupportInput(input);
     const support = supportForInput(parsed);
@@ -528,15 +679,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (this.autoRemove) {
       args.splice(2, 0, "--rm");
     }
-    const runResult = await this.commandRunner("docker", args);
-    const containerId = runResult.stdout.trim();
-
-    if (containerId.length === 0) {
-      throw createAdapterError("adapter-unavailable", "Docker run did not return a container id.");
-    }
+    const containerId = await this.runOrAdoptContainer(args, containerName);
 
     if (this.verifyRunning) {
       await this.assertContainerRunning(containerId, containerName);
+      // Don't report a launch as done until the daemon's control socket is actually accepting —
+      // otherwise the control plane reports "ready" before the socket binds (the readiness TOCTOU
+      // that surfaced as intermittent "connection closed" in harness.run()).
+      await this.awaitControlSocketReady(containerId, containerName);
     }
 
     // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still
@@ -549,7 +699,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       adapter: this.id,
       resourceId: containerId,
       reference: containerName,
-      status: "running",
+      // "ready" (not "running"): the readiness probe above proved the control socket accepts.
+      status: "ready",
       ...(endpoint === undefined ? {} : { endpoint }),
     });
   }

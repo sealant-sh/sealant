@@ -27,10 +27,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import {
-  issueWorkflowExecutionArtifactStorageBackendValues,
-  sandboxAttempts,
-} from "./control-plane.js";
+import { issueWorkflowExecutionArtifactStorageBackendValues, runs } from "./control-plane.js";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the table level
 // to keep implicit column names mapping to snake_case db columns (matches control-plane.ts).
@@ -71,7 +68,7 @@ export const telemetryEvents = pgTable(
     eventId: text("event_id").primaryKey(), // envelope.eventId (f2) — absolute global dedup
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     runtimeId: text("runtime_id").notNull(), // f3 — persisted for the first time
     executionId: text("execution_id"), // f4 — persisted for the first time
     sessionId: text("session_id"), // f5
@@ -115,7 +112,7 @@ export const telemetryRunEpochs = pgTable(
     id: text("id").primaryKey(), // 'tep_<runId>_<rtShort>'
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     runtimeId: text("runtime_id").notNull(),
     schemaVersion: integer("schema_version").notNull(),
     status: text("status", { enum: telemetryRunEpochStatusValues }).notNull().default("open"),
@@ -140,7 +137,7 @@ export const telemetryArtifacts = pgTable(
     id: text("id").primaryKey(), // 'tart_<...>'
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     algo: text("algo").notNull(), // 'sha256' (ours) or ArtifactRef.algo
     hash: text("hash").notNull(),
     byteSize: bigint("byte_size", { mode: "bigint" }).notNull(), // == IoChunk.byteCount / ArtifactRef.bytes
@@ -164,7 +161,7 @@ export const telemetryScrollback = pgTable(
     eventId: text("event_id").primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     processId: text("process_id"),
     sessionId: text("session_id"),
     stream: integer("stream").notNull(), // StreamKind numeric
@@ -198,7 +195,7 @@ export const telemetryTimeline = pgTable(
     eventId: text("event_id").primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     sequence: bigint("sequence", { mode: "bigint" }).notNull(),
     kind: text("kind").notNull(), // == payloadCase
     occurredAt: bigint("occurred_at", { mode: "bigint" }).notNull(), // monotonicTimestamp
@@ -217,7 +214,7 @@ export const telemetryLossSpans = pgTable(
     id: text("id").primaryKey(),
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
+      .references(() => runs.id, { onDelete: "cascade" }),
     runtimeId: text("runtime_id").notNull(),
     kind: text("kind", { enum: telemetryLossSpanKindValues }).notNull(),
     fromSequence: bigint("from_sequence", { mode: "bigint" }),

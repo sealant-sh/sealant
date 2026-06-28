@@ -12,7 +12,7 @@
  */
 import { create } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
-import { makeSealantDBLayer, sandboxAttempts, SealantDB, telemetryEvents, user } from "@sealant/db";
+import { makeSealantDBLayer, runs, sandboxes, SealantDB, telemetryEvents, user } from "@sealant/db";
 import { EventPriority, ExitReason, StreamKind } from "@sealant/runtime-client";
 import { EventEnvelopeSchema, HealthReportSchema } from "@sealant/runtime-protocol";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
@@ -149,6 +149,7 @@ const buildTestLayer = (db: NonNullable<typeof dbLayer>) => {
 };
 
 const runId = `run_it_${RUNTIME_ID}`;
+const sandboxId = `sbx_it_${RUNTIME_ID}`;
 const userId = `user_it_${RUNTIME_ID}`;
 
 describe.skipIf(DATABASE_URL === undefined)(
@@ -159,7 +160,7 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     const seed = Effect.gen(function* () {
       const handle = yield* SealantDB;
-      yield* handle.delete(sandboxAttempts).where(eq(sandboxAttempts.id, runId));
+      yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
       yield* handle.delete(user).where(eq(user.id, userId));
       const now = new Date();
       yield* handle
@@ -173,14 +174,25 @@ describe.skipIf(DATABASE_URL === undefined)(
         })
         .onConflictDoNothing();
       yield* handle
-        .insert(sandboxAttempts)
-        .values({ id: runId, ownerUserId: userId, queuedAt: now, createdAt: now, updatedAt: now })
+        .insert(sandboxes)
+        .values({ id: sandboxId, ownerUserId: userId, createdAt: now, updatedAt: now })
+        .onConflictDoNothing();
+      yield* handle
+        .insert(runs)
+        .values({
+          id: runId,
+          sandboxId,
+          ownerUserId: userId,
+          harnessId: "opencode",
+          createdAt: now,
+          updatedAt: now,
+        })
         .onConflictDoNothing();
     });
 
     const cleanup = Effect.gen(function* () {
       const handle = yield* SealantDB;
-      yield* handle.delete(sandboxAttempts).where(eq(sandboxAttempts.id, runId)); // cascades telemetry_*
+      yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
       yield* handle.delete(user).where(eq(user.id, userId));
     });
 

@@ -16,7 +16,7 @@ export const sandboxRuntimeSchema = Schema.Struct({
   adapter: Schema.Literals(["docker", "k8s", "k3s"]),
   resourceId: NonEmptyString,
   reference: NonEmptyString,
-  status: Schema.Literals(["pending", "running", "failed", "stopped"]),
+  status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
   endpoint: Schema.optional(Schema.String),
 });
 export type SandboxRuntime = typeof sandboxRuntimeSchema.Type;
@@ -28,7 +28,7 @@ export const sandboxSshTargetSchema = Schema.Struct({
     adapter: Schema.Literals(["docker", "k8s", "k3s"]),
     resourceId: NonEmptyString,
     reference: NonEmptyString,
-    status: Schema.Literals(["pending", "running", "failed", "stopped"]),
+    status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: Schema.String,
   }),
 });
@@ -186,6 +186,7 @@ export const sandboxEventTypeSchema = Schema.Literals([
   "image.published",
   "runtime.pending",
   "runtime.running",
+  "runtime.ready",
   "runtime.failed",
   "runtime.stopped",
 ]);

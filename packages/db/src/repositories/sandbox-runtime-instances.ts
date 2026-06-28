@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -124,44 +124,55 @@ export const SandboxRuntimeInstanceRepoLive = Layer.effect(
         withSandboxRuntimeInstanceRepoError(
           "upsertRuntimeInstance",
           Effect.gen(function* () {
+            const mutableColumns = {
+              status: input.status,
+              ...(input.adapter === undefined ? {} : { adapter: input.adapter }),
+              ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
+              ...(input.reference === undefined ? {} : { reference: input.reference }),
+              ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
+              ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
+              ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
+              ...(input.launchedAt === undefined ? {} : { launchedAt: input.launchedAt }),
+              ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
+            };
+
+            // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
+            // interleaving after a newer launch already went "ready") must NOT clobber a live
+            // "ready" instance — guard the conflict update so a "failed" write is skipped when ready.
+            const guardAgainstReady = input.status === "failed";
+
             const [runtimeInstance] = yield* db
               .insert(sandboxRuntimeInstances)
-              .values({
-                runId: input.runId,
-                status: input.status,
-                ...(input.adapter === undefined ? {} : { adapter: input.adapter }),
-                ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
-                ...(input.reference === undefined ? {} : { reference: input.reference }),
-                ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
-                ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
-                ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
-                ...(input.launchedAt === undefined ? {} : { launchedAt: input.launchedAt }),
-                ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
-              } satisfies NewSandboxRuntimeInstance)
+              .values({ runId: input.runId, ...mutableColumns } satisfies NewSandboxRuntimeInstance)
               .onConflictDoUpdate({
                 target: sandboxRuntimeInstances.runId,
-                set: {
-                  status: input.status,
-                  ...(input.adapter === undefined ? {} : { adapter: input.adapter }),
-                  ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
-                  ...(input.reference === undefined ? {} : { reference: input.reference }),
-                  ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
-                  ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
-                  ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
-                  ...(input.launchedAt === undefined ? {} : { launchedAt: input.launchedAt }),
-                  ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
-                },
+                set: mutableColumns,
+                ...(guardAgainstReady
+                  ? { setWhere: ne(sandboxRuntimeInstances.status, "ready") }
+                  : {}),
               })
               .returning();
 
-            if (runtimeInstance === undefined) {
-              return yield* new SandboxRuntimeInstanceRepoInvariantError({
-                operation: "upsertRuntimeInstance",
-                message: `Failed to upsert runtime instance for run ${input.runId}.`,
-              });
+            if (runtimeInstance !== undefined) {
+              return runtimeInstance;
             }
 
-            return runtimeInstance;
+            // No row returned: with the ready-guard this means the conflict update was skipped because
+            // the existing instance is already "ready" — that row won, so return it instead of erroring.
+            if (guardAgainstReady) {
+              const [existing] = yield* db
+                .select()
+                .from(sandboxRuntimeInstances)
+                .where(eq(sandboxRuntimeInstances.runId, input.runId));
+              if (existing !== undefined) {
+                return existing;
+              }
+            }
+
+            return yield* new SandboxRuntimeInstanceRepoInvariantError({
+              operation: "upsertRuntimeInstance",
+              message: `Failed to upsert runtime instance for run ${input.runId}.`,
+            });
           }),
         ),
 
@@ -209,7 +220,9 @@ export const SandboxRuntimeInstanceRepoLive = Layer.effect(
             .from(sandboxRuntimeInstances)
             .where(
               and(
-                eq(sandboxRuntimeInstances.status, "running"),
+                // "ready" = control socket accepting. The launch path no longer emits "running", so
+                // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
+                eq(sandboxRuntimeInstances.status, "ready"),
                 eq(sandboxRuntimeInstances.adapter, "docker"),
               ),
             )

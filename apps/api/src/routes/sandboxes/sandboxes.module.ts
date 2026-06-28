@@ -1540,7 +1540,7 @@ export const listSandboxEvents = (input: {
 
       if (runtimeInstance !== undefined) {
         const runtimeOccurredAt =
-          runtimeInstance.status === "running"
+          runtimeInstance.status === "running" || runtimeInstance.status === "ready"
             ? (runtimeInstance.launchedAt ?? runtimeInstance.updatedAt)
             : runtimeInstance.status === "pending"
               ? runtimeInstance.createdAt

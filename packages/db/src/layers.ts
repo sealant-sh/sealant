@@ -8,6 +8,7 @@ import { IssueWorkflowRepoLive } from "./repositories/issue-workflows.js";
 import { PackageResolutionCacheRepoLive } from "./repositories/package-resolution-cache.js";
 import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
+import { RunRepoLive } from "./repositories/runs.js";
 import { SandboxAttemptRepoLive } from "./repositories/sandbox-attempts.js";
 import { SandboxBuildJobRepoLive } from "./repositories/sandbox-build-jobs.js";
 import { SandboxRuntimeInstanceRepoLive } from "./repositories/sandbox-runtime-instances.js";
@@ -43,6 +44,7 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   SandboxAttemptRepoLive,
   SandboxRuntimeInstanceRepoLive,
   SandboxBuildJobRepoLive,
+  RunRepoLive,
   ProfileRepoLive,
   IssueWorkflowRepoLive,
   IssueWorkflowExecutionRepoLive,

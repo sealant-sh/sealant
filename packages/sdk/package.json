@@ -1,0 +1,27 @@
+{
+  "name": "@sealant/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The fluent public SDK for Sealant — create a sandbox, run a harness, replay the record.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sealant/api-contracts": "workspace:*",
+    "@sealant/db": "workspace:*",
+    "@sealant/sandboxes": "workspace:*",
+    "@sealant/telemetry": "workspace:*",
+    "@sealant/validators": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@sealant/typescript": "workspace:*"
+  }
+}

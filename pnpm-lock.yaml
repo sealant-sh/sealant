@@ -288,6 +288,9 @@ importers:
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../../packages/source-integrations
+      '@sealant/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -948,6 +951,34 @@ importers:
       '@types/amqplib':
         specifier: 'catalog:'
         version: 0.10.8
+
+  packages/sdk:
+    dependencies:
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../api-contracts
+      '@sealant/db':
+        specifier: workspace:*
+        version: link:../db
+      '@sealant/sandboxes':
+        specifier: workspace:*
+        version: link:../sandboxes
+      '@sealant/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      '@sealant/validators':
+        specifier: workspace:*
+        version: link:../validators
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85(effect@4.0.0-beta.85)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(jiti@2.7.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
 
   packages/source-integrations:
     dependencies:
@@ -11673,7 +11704,9 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 

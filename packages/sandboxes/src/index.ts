@@ -6,3 +6,4 @@ export * from "./queue/index.js";
 export * from "./package-standardization.js";
 export * from "./api/sandbox.js";
 export * from "./worker/process-sandbox-build-job.js";
+export * from "./worker/reap-stale-sandbox-build-jobs.js";

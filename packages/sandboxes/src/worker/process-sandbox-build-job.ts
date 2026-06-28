@@ -86,6 +86,7 @@ const launchPublishedImage = async (input: {
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
   readonly sandboxCloneAuth?: SandboxCloneAuth;
+  readonly runId?: string;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.spec,
@@ -97,6 +98,8 @@ const launchPublishedImage = async (input: {
     blueprint: input.spec,
     publishedImage: input.publishedImage,
     ...(input.sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth: input.sandboxCloneAuth }),
+    // Deterministic per-run container name -> idempotent launch/adopt (#4).
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
   });
 };
 
@@ -285,6 +288,7 @@ export const processSandboxBuildJobEffect = Effect.fn("processSandboxBuildJob")(
           defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
           publishedImage,
           ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
+          ...(job.runId === null ? {} : { runId: job.runId }),
         }),
       catch: toSandboxBuildJobProcessingError,
     });

@@ -13,7 +13,12 @@ export type OciImageBuildJobStatus = (typeof ociImageBuildJobStatusValues)[numbe
 
 export const sandboxRuntimeInstanceStatusValues = [
   "pending",
+  // "running": legacy — the container is up but its control socket may not be accepting yet. Retained
+  // for rows written before the readiness probe landed; the launch path no longer emits it.
   "running",
+  // "ready": the control socket is accepting (readiness probe passed). This is the honest "reachable"
+  // signal the SDK gates on — see resolveSandboxStatus + DockerRuntimeAdapter.launch.
+  "ready",
   "failed",
   "stopped",
 ] as const;

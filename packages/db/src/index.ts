@@ -206,6 +206,20 @@ export {
 } from "./repositories/sandbox-build-jobs.js";
 
 export {
+  RunRepo,
+  RunRepoInvariantError,
+  RunRepoLive,
+  RunRepoUnexpectedError,
+  type CreateRunInput,
+  type ListRunsInput,
+  type MarkRunCompletedInput,
+  type MarkRunFailedInput,
+  type MarkRunRunningInput,
+  type RunRepoError,
+  type RunRepoService,
+} from "./repositories/runs.js";
+
+export {
   githubAppInstallations,
   githubInstallationAccountTypeValues,
   githubInstallationRepositories,
@@ -232,6 +246,10 @@ export {
   issueWorkflows,
   issueWorkflowStatusValues,
   packageResolutionCacheEntries,
+  runModeValues,
+  runs,
+  runStatusValues,
+  sandboxes,
   sandboxAttempts,
   sandboxAttemptStatusValues,
   sandboxAttemptTriggerTypeValues,
@@ -275,6 +293,7 @@ export {
   type NewIssueWorkflowExecutionSummary,
   type NewIssueWorkflowExecutionValidationResult,
   type NewPackageResolutionCacheEntry,
+  type NewRun,
   type NewSandboxAttempt,
   type NewSandboxAttemptSnapshot,
   type NewOciImageBuildJob,
@@ -300,6 +319,9 @@ export {
   type IssueWorkflowExecutionValidationStatus,
   type IssueWorkflowStatus,
   type PackageResolutionCacheEntry,
+  type Run,
+  type RunMode,
+  type RunStatus,
   type SandboxAttempt,
   type SandboxAttemptSnapshot,
   type SandboxAttemptStatus,
