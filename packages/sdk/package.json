@@ -14,10 +14,6 @@
   },
   "dependencies": {
     "@sealant/api-contracts": "workspace:*",
-    "@sealant/db": "workspace:*",
-    "@sealant/sandboxes": "workspace:*",
-    "@sealant/telemetry": "workspace:*",
-    "@sealant/validators": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

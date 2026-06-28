@@ -8,7 +8,7 @@ const config: SealantInternalConfig = {
   baseUrl: "http://localhost:4000",
   apiKey: undefined,
   fetch: undefined,
-  hostLocal: { ownerUserId: "usr_local", registryId: "default", databaseUrl: "postgres://x" },
+  hostLocal: { ownerUserId: "usr_local", registryId: "default" },
 };
 
 interface SpecShape {

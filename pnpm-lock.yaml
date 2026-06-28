@@ -957,18 +957,6 @@ importers:
       '@sealant/api-contracts':
         specifier: workspace:*
         version: link:../api-contracts
-      '@sealant/db':
-        specifier: workspace:*
-        version: link:../db
-      '@sealant/sandboxes':
-        specifier: workspace:*
-        version: link:../sandboxes
-      '@sealant/telemetry':
-        specifier: workspace:*
-        version: link:../telemetry
-      '@sealant/validators':
-        specifier: workspace:*
-        version: link:../validators
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.85
