@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import {
   createRun,
   getRun,
+  getRunChanges,
   getRunLoss,
   getRunScrollback,
   getRunTimeline,
@@ -23,5 +24,6 @@ export const RunsHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "runs", (h
     .handle("getRunScrollback", ({ params, query }) =>
       getRunScrollback({ runId: params.runId, query }),
     )
-    .handle("getRunLoss", ({ params }) => getRunLoss(params.runId));
+    .handle("getRunLoss", ({ params }) => getRunLoss(params.runId))
+    .handle("getRunChanges", ({ params }) => getRunChanges(params.runId));
 });

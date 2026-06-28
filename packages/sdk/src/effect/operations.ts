@@ -12,6 +12,7 @@ import type {
   ListRunsQuery,
   ListSandboxesQuery,
   Run as WireRun,
+  RunChangesResponse,
   RunLossReport,
   RunScrollbackResponse,
   SandboxDetails,
@@ -75,3 +76,8 @@ export const getRunScrollbackOp = (
 
 export const getRunLossOp = (runId: string): Effect.Effect<RunLossReport, unknown, SealantApiClient> =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunLoss({ params: { runId } }));
+
+export const getRunChangesOp = (
+  runId: string,
+): Effect.Effect<RunChangesResponse, unknown, SealantApiClient> =>
+  Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));

@@ -1,5 +1,10 @@
 import { PackageResolutionCacheRepo } from "@sealant/db";
-import type { PackageStandardizer, RegistryClient } from "@sealant/sandboxes";
+import {
+  publishRunExecRequested,
+  type PackageStandardizer,
+  type RegistryClient,
+  type RunExecCommand,
+} from "@sealant/sandboxes";
 import { Effect, Layer, Context } from "effect";
 
 import { createApiPackageStandardizer } from "../lib/create-package-standardizer.js";
@@ -23,6 +28,18 @@ export class SandboxBuildJobPublisherService extends Context.Service<
   SandboxBuildJobPublisher
 >()("@sealant/api/SandboxBuildJobPublisherService") {}
 
+export interface RunExecPublisher {
+  readonly publishRequested: (input: {
+    readonly runId: string;
+    readonly command: RunExecCommand;
+  }) => Promise<void>;
+}
+
+export class RunExecPublisherService extends Context.Service<
+  RunExecPublisherService,
+  RunExecPublisher
+>()("@sealant/api/RunExecPublisherService") {}
+
 export const PackageStandardizerServiceLive = Layer.effect(
   PackageStandardizerService,
   Effect.gen(function* () {
@@ -45,8 +62,13 @@ export const SandboxBuildJobPublisherServiceLive = Layer.succeed(
   createSandboxBuildJobPublisher(env),
 );
 
+export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService, {
+  publishRequested: (input) => publishRunExecRequested(env.RABBITMQ_URL, input),
+});
+
 export const ControlPlaneCapabilitiesLive = Layer.mergeAll(
   PackageStandardizerServiceLive,
   RegistryClientServiceLive,
   SandboxBuildJobPublisherServiceLive,
+  RunExecPublisherServiceLive,
 );

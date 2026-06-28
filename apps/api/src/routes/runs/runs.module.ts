@@ -18,6 +18,7 @@ import {
   type ListRunsResponse,
   type LossSpan,
   type Run,
+  type RunChangesResponse,
   type RunLossReport,
   type RunScrollbackResponse,
   type RunStatusWire,
@@ -28,6 +29,8 @@ import {
 import { RunRepo } from "@sealant/db";
 import { TelemetryQuery } from "@sealant/telemetry";
 import { Context, Effect, Stream } from "effect";
+
+import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
 
 // StreamKind numerics from @sealant/runtime-protocol (avoid a runtime dep for two constants).
 const STREAM_KIND_STDOUT = 2;
@@ -137,6 +140,28 @@ export const createRun = (payload: CreateRunRequest) =>
           return new RunInternalServerError({ message: toErrorMessage(error, "Failed to create run.") });
         }),
       );
+
+    // When a command is provided, EXECUTE the run server-side: enqueue a run-exec job for the worker
+    // (it docker-execs the harness + ingests telemetry). Absent a command, the run row is created but
+    // not executed (the legacy host-local caller-runs-it path).
+    const command = payload.command;
+    if (command !== undefined) {
+      const publisher = yield* RunExecPublisherService;
+      // Construct the command explicitly so an absent cwd is omitted (not passed as `cwd: undefined`),
+      // matching RunExecCommand under exactOptionalPropertyTypes.
+      const execCommand = {
+        executable: command.executable,
+        args: [...command.args],
+        ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+      };
+      yield* Effect.tryPromise({
+        try: () => publisher.publishRequested({ runId: run.id, command: execCommand }),
+        catch: (error) =>
+          new RunInternalServerError({
+            message: toErrorMessage(error, "Failed to enqueue run execution."),
+          }),
+      });
+    }
     return mapRun(run);
   });
 
@@ -160,6 +185,19 @@ export const getRun = (runId: string) =>
   Effect.gen(function* () {
     const run = yield* requireRun(runId);
     return mapRun(run);
+  });
+
+export const getRunChanges = (runId: string) =>
+  Effect.gen(function* () {
+    const run = yield* requireRun(runId);
+    return {
+      files: (run.changedFiles ?? []).map((file) => ({
+        path: file.path,
+        change: file.change,
+        ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+      })),
+      diff: run.diff ?? "",
+    } satisfies RunChangesResponse;
   });
 
 export const updateRun = (input: { readonly runId: string; readonly payload: UpdateRunRequest }) =>

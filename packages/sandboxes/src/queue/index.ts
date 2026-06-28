@@ -28,3 +28,16 @@ export {
   sandboxBuildDeadLetterQueueName,
   sandboxBuildQueueName,
 } from "./topology.js";
+
+export {
+  consumeRunExecJobs,
+  parseRunExecRequestedMessage,
+  publishRunExecRequested,
+  runExecQueueName,
+  runExecQueueTopology,
+  runExecRequestedMessageKind,
+  type ConsumeRunExecJobsOptions,
+  type RunExecCommand,
+  type RunExecConsumerMessage,
+  type RunExecRequestedMessage,
+} from "./run-exec-queue.js";

@@ -12,7 +12,6 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/db": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

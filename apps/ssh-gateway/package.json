@@ -5,6 +5,7 @@
   "description": "SSH gateway service for sandbox routing",
   "type": "module",
   "scripts": {
+    "build": "BUNDLE_EXTERNAL=ssh2,cpu-features node ../../tooling/scripts/bundle-app.mjs",
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run",

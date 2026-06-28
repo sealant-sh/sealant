@@ -234,6 +234,9 @@ importers:
       effect-solutions:
         specifier: ^0.5.2
         version: 0.5.3
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       oxfmt:
         specifier: ^0.40.0
         version: 0.40.0
@@ -832,9 +835,6 @@ importers:
 
   packages/api-contracts:
     dependencies:
-      '@sealant/db':
-        specifier: workspace:*
-        version: link:../db
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.85
@@ -957,18 +957,6 @@ importers:
       '@sealant/api-contracts':
         specifier: workspace:*
         version: link:../api-contracts
-      '@sealant/db':
-        specifier: workspace:*
-        version: link:../db
-      '@sealant/sandboxes':
-        specifier: workspace:*
-        version: link:../sandboxes
-      '@sealant/telemetry':
-        specifier: workspace:*
-        version: link:../telemetry
-      '@sealant/validators':
-        specifier: workspace:*
-        version: link:../validators
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.85

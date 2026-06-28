@@ -51,6 +51,14 @@ export const runSchema = Schema.Struct({
 });
 export type Run = typeof runSchema.Type;
 
+/** The one-shot harness invocation the control plane execs in the sandbox. */
+export const runCommandSchema = Schema.Struct({
+  executable: NonEmptyString,
+  args: Schema.Array(Schema.String),
+  cwd: Schema.optional(NonEmptyString),
+});
+export type RunCommandWire = typeof runCommandSchema.Type;
+
 export const createRunRequestSchema = Schema.Struct({
   sandboxId: NonEmptyString,
   harnessId: NonEmptyString,
@@ -58,6 +66,11 @@ export const createRunRequestSchema = Schema.Struct({
   mode: Schema.optional(runModeSchema),
   prompt: Schema.optional(Schema.String),
   attemptId: Schema.optional(NonEmptyString),
+  // When present, the control plane EXECUTES the run SERVER-SIDE: the worker docker-execs this command
+  // in the sandbox, ingests telemetry, and captures the diff. When absent, the run row is created but
+  // not executed (the legacy host-local path where the caller runs it itself). This field is the gate
+  // that lets the thin SDK opt into server-side execution without a breaking contract change.
+  command: Schema.optional(runCommandSchema),
 });
 export type CreateRunRequest = typeof createRunRequestSchema.Type;
 
@@ -150,6 +163,24 @@ export const runLossReportSchema = Schema.Struct({
 export type RunLossReport = typeof runLossReportSchema.Type;
 
 // ---------------------------------------------------------------------------------------------
+// Run changes — the file diff the run produced (captured server-side)
+// ---------------------------------------------------------------------------------------------
+
+export const runFileChangeSchema = Schema.Struct({
+  path: NonEmptyString,
+  change: Schema.Literals(["added", "modified", "deleted", "renamed"]),
+  oldPath: Schema.optional(NonEmptyString),
+});
+export type RunFileChangeWire = typeof runFileChangeSchema.Type;
+
+export const runChangesResponseSchema = Schema.Struct({
+  files: Schema.Array(runFileChangeSchema),
+  /** Unified diff of everything that changed (empty until the run has produced changes). */
+  diff: Schema.String,
+});
+export type RunChangesResponse = typeof runChangesResponseSchema.Type;
+
+// ---------------------------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------------------------
 
@@ -227,6 +258,13 @@ export const RunsGroup = HttpApiGroup.make("runs")
     HttpApiEndpoint.get("getRunLoss", "/:runId/loss", {
       params: runIdParams,
       success: runLossReportSchema,
+      error: [RunNotFoundError, RunInternalServerError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getRunChanges", "/:runId/changes", {
+      params: runIdParams,
+      success: runChangesResponseSchema,
       error: [RunNotFoundError, RunInternalServerError],
     }),
   )

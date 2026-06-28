@@ -1,0 +1,137 @@
+# Sealant self-host — the whole control plane in one `docker compose up`.
+#
+# Brings up Postgres + RabbitMQ + the zot OCI registry + a one-shot DB migration + the API + the build
+# worker. Driven by ./install.sh (the curl one-liner), but you can also run it directly:
+#
+#   docker compose -f compose.selfhost.yaml up -d --build
+#
+# Requirements: a running Docker daemon (the worker drives it, via the mounted socket, to build images
+# and launch sandboxes) and Docker Compose v2. Only the API (4000) and the registry (5000) are exposed
+# on the host; Postgres/RabbitMQ stay internal. Private GitHub repos need GITHUB_APP_* (see README) —
+# public repos (the default demo) need nothing.
+name: sealant
+
+x-db-url: &db-url postgresql://sealant:${SEALANT_DB_PASSWORD:-sealant}@postgres:5432/sealant_control_plane
+x-amqp-url: &amqp-url amqp://sealant:${SEALANT_RABBITMQ_PASSWORD:-sealant}@rabbitmq:5672
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: sealant
+      POSTGRES_PASSWORD: ${SEALANT_DB_PASSWORD:-sealant}
+      POSTGRES_DB: sealant_control_plane
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sealant -d sealant_control_plane"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    environment:
+      RABBITMQ_DEFAULT_USER: sealant
+      RABBITMQ_DEFAULT_PASS: ${SEALANT_RABBITMQ_PASSWORD:-sealant}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # Host-exposed on 5000: the worker drives the HOST Docker daemon (via the socket) to push built
+  # sandbox images here and pull them when launching, so the registry must be reachable at 127.0.0.1:5000.
+  zot:
+    image: ghcr.io/project-zot/zot-minimal:v2.1.15
+    command: ["serve", "/etc/zot/config.json"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - ./packages/sandboxes/dev/zot/config.json:/etc/zot/config.json:ro
+      - zot-data:/var/lib/registry
+    restart: unless-stopped
+
+  # One-shot: apply DB migrations before the API/worker start, then exit. Uses the API image's `builder`
+  # stage (it has pnpm + drizzle-kit + the committed migrations; the slim runtime stage does not).
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: builder
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: *db-url
+    # Apply migrations, then seed the default owner principal (a fresh DB has no users).
+    command:
+      - "sh"
+      - "-c"
+      - "pnpm --filter @sealant/db db:migrate && pnpm --filter @sealant/db db:seed"
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${SEALANT_API_PORT:-4000}:4000"
+    environment:
+      PORT: "4000"
+      DATABASE_URL: *db-url
+      RABBITMQ_URL: *amqp-url
+      REGISTRY_BASE_URL: http://zot:5000
+      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+      CORS_ALLOWED_ORIGINS: ${SEALANT_CORS_ALLOWED_ORIGINS:-*}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      zot:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    # The worker drives the host Docker daemon to build images + launch sandboxes.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DATABASE_URL: *db-url
+      RABBITMQ_URL: *amqp-url
+      REGISTRY_BASE_URL: http://zot:5000
+      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  zot-data:

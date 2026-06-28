@@ -1,6 +1,7 @@
 import { createSealantDB, type DB } from "@sealant/db";
 import { createRabbitMqService } from "@sealant/rabbitmq";
 import {
+  consumeRunExecJobs,
   consumeSandboxBuildJobs,
   createZotRegistryClient,
   DockerRuntimeAdapter,
@@ -9,6 +10,8 @@ import {
   processSandboxBuildJob,
   reapStaleSandboxBuildJobs,
 } from "@sealant/sandboxes";
+
+import { processRunExecJob } from "./process-run-exec-job.js";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
 
@@ -70,6 +73,22 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     },
   });
 
+  // Run-exec consumer: execute harness runs server-side (docker-exec + telemetry ingest), so the SDK
+  // can be a thin HTTP client. The API enqueues here when a run is created with a `command`.
+  const runExecConsumer = await consumeRunExecJobs({
+    connectionUrl: env.RABBITMQ_URL,
+    prefetch: env.SANDBOX_BUILD_QUEUE_PREFETCH,
+    onMessage: async ({ message, ack, nack }) => {
+      try {
+        await processRunExecJob({ runId: message.runId, command: message.command, db });
+        ack();
+      } catch (error) {
+        console.error("Run exec job failed", { error, runId: message.runId });
+        nack(false);
+      }
+    },
+  });
+
   // Reaper (#5): periodically re-drive build jobs stranded by a dead lease holder. The normal path is
   // RabbitMQ delivery; this is the recovery net for deliveries that were acked-and-discarded when a
   // worker died mid-build. Safe to repeat (idempotent build + container adopt, Stage 1). Retired once
@@ -94,6 +113,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
   return {
     stop: async () => {
       clearInterval(reaperTimer);
+      await runExecConsumer.cancel();
       await consumer.cancel();
       await rabbitMq.close();
     },

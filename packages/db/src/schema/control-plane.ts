@@ -833,6 +833,12 @@ export const sandboxRunLinks = pgTable(
 // run_id FK here. A run references the sandbox it ran in and the provisioning attempt that hosted
 // it. One sandbox can host many runs; a one-shot run maps 1:1 to its launch attempt.
 // ---------------------------------------------------------------------------------------------
+export interface RunFileChange {
+  readonly path: string;
+  readonly change: "added" | "modified" | "deleted" | "renamed";
+  readonly oldPath?: string;
+}
+
 export const runs = pgTable(
   "runs",
   {
@@ -850,6 +856,9 @@ export const runs = pgTable(
     prompt: text(),
     exitCode: integer("exit_code"),
     errorMessage: text("error_message"),
+    // The run's resulting file diff + change list, captured server-side when the run executes.
+    diff: text(),
+    changedFiles: jsonb("changed_files").$type<RunFileChange[]>(),
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
