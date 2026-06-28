@@ -170,6 +170,7 @@ export {
   type RepositoryProfileProfileLink,
   type RepositoryProfileRevision,
   type Run,
+  type RunFileChange,
   type RunMode,
   type RunStatus,
   type SandboxAttempt,
