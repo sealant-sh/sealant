@@ -54,11 +54,13 @@ services:
       - zot-data:/var/lib/registry
     restart: unless-stopped
 
-  # One-shot: apply DB migrations before the API/worker start, then exit.
+  # One-shot: apply DB migrations before the API/worker start, then exit. Uses the API image's `builder`
+  # stage (it has pnpm + drizzle-kit + the committed migrations; the slim runtime stage does not).
   migrate:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      target: builder
     depends_on:
       postgres:
         condition: service_healthy

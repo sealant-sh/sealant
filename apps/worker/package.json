@@ -5,6 +5,7 @@
   "description": "Background worker for sandbox image build jobs",
   "type": "module",
   "scripts": {
+    "build": "node ../../tooling/scripts/bundle-app.mjs",
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run --passWithNoTests",
