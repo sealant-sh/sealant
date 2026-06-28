@@ -1,12 +1,3 @@
-import {
-  githubAppInstallationInsertSchema,
-  githubInstallationAccountTypeValues,
-  githubInstallationRepositoryInsertSchema,
-  githubInstallationRepositorySelectionValues,
-  githubInstallationStatusValues,
-  githubWebhookDeliveryInsertSchema,
-  githubWebhookDeliveryStatusValues,
-} from "@sealant/db";
 import { Schema } from "effect";
 import {
   HttpApi,
@@ -16,16 +7,18 @@ import {
   OpenApi,
 } from "effect/unstable/httpapi";
 
-export const GitHubAppInstallationDbInsertSchema = githubAppInstallationInsertSchema;
-export const GitHubInstallationRepositoryDbInsertSchema = githubInstallationRepositoryInsertSchema;
-export const GitHubWebhookDeliveryDbInsertSchema = githubWebhookDeliveryInsertSchema;
-
-const GitHubInstallationAccountTypeSchema = Schema.Literals(githubInstallationAccountTypeValues);
-const GitHubInstallationStatusSchema = Schema.Literals(githubInstallationStatusValues);
-const GitHubInstallationRepositorySelectionSchema = Schema.Literals(
-  githubInstallationRepositorySelectionValues,
-);
-const GitHubWebhookDeliveryStatusSchema = Schema.Literals(githubWebhookDeliveryStatusValues);
+// These literal sets mirror the control-plane DB enums (packages/db `control-plane.ts`). They are
+// INLINED here so the public contract package carries NO @sealant/db dependency — which keeps
+// consumers like @sealant/sdk free of drizzle/pg. Keep them in sync with the db schema.
+const GitHubInstallationAccountTypeSchema = Schema.Literals(["organization", "user"]);
+const GitHubInstallationStatusSchema = Schema.Literals(["active", "suspended", "deleted"]);
+const GitHubInstallationRepositorySelectionSchema = Schema.Literals(["all", "selected"]);
+const GitHubWebhookDeliveryStatusSchema = Schema.Literals([
+  "received",
+  "processed",
+  "failed",
+  "ignored",
+]);
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
