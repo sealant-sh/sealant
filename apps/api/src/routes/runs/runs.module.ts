@@ -18,6 +18,7 @@ import {
   type ListRunsResponse,
   type LossSpan,
   type Run,
+  type RunChangesResponse,
   type RunLossReport,
   type RunScrollbackResponse,
   type RunStatusWire,
@@ -160,6 +161,19 @@ export const getRun = (runId: string) =>
   Effect.gen(function* () {
     const run = yield* requireRun(runId);
     return mapRun(run);
+  });
+
+export const getRunChanges = (runId: string) =>
+  Effect.gen(function* () {
+    const run = yield* requireRun(runId);
+    return {
+      files: (run.changedFiles ?? []).map((file) => ({
+        path: file.path,
+        change: file.change,
+        ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+      })),
+      diff: run.diff ?? "",
+    } satisfies RunChangesResponse;
   });
 
 export const updateRun = (input: { readonly runId: string; readonly payload: UpdateRunRequest }) =>

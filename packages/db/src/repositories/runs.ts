@@ -9,7 +9,14 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
-import { runs, type NewRun, type Run, type RunMode, type RunStatus } from "../schema.js";
+import {
+  runs,
+  type NewRun,
+  type Run,
+  type RunFileChange,
+  type RunMode,
+  type RunStatus,
+} from "../schema.js";
 
 export interface CreateRunInput {
   readonly id: string;
@@ -30,6 +37,8 @@ export interface MarkRunCompletedInput {
   readonly id: string;
   readonly exitCode: number;
   readonly finishedAt?: Date;
+  readonly diff?: string;
+  readonly changedFiles?: readonly RunFileChange[];
 }
 
 export interface MarkRunFailedInput {
@@ -37,6 +46,8 @@ export interface MarkRunFailedInput {
   readonly exitCode?: number;
   readonly errorMessage?: string;
   readonly finishedAt?: Date;
+  readonly diff?: string;
+  readonly changedFiles?: readonly RunFileChange[];
 }
 
 export interface ListRunsInput {
@@ -207,6 +218,10 @@ export const RunRepoLive = Layer.effect(
                 status: "completed",
                 exitCode: input.exitCode,
                 finishedAt: input.finishedAt ?? new Date(),
+                ...(input.diff === undefined ? {} : { diff: input.diff }),
+                ...(input.changedFiles === undefined
+                  ? {}
+                  : { changedFiles: [...input.changedFiles] }),
               })
               .where(eq(runs.id, input.id))
               .returning();
@@ -225,6 +240,10 @@ export const RunRepoLive = Layer.effect(
                 ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
                 ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
                 finishedAt: input.finishedAt ?? new Date(),
+                ...(input.diff === undefined ? {} : { diff: input.diff }),
+                ...(input.changedFiles === undefined
+                  ? {}
+                  : { changedFiles: [...input.changedFiles] }),
               })
               .where(eq(runs.id, input.id))
               .returning();
