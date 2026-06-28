@@ -224,6 +224,8 @@ export const workerRuntimeEnvSchema = z.object({
     sshEndpointExposureStrategySchema.default("host-published"),
   WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
   SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+  // How often the worker re-drives sandbox build jobs stranded by a dead lease holder (#5 reaper).
+  SANDBOX_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
 });
 
 export const workerServerEnvSchema = databaseEnvSchema

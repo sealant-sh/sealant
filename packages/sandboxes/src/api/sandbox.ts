@@ -6,7 +6,7 @@ export interface SandboxRuntimeDetails {
   readonly adapter: "docker" | "k8s" | "k3s";
   readonly resourceId: string;
   readonly reference: string;
-  readonly status: "pending" | "running" | "failed" | "stopped";
+  readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
   readonly endpoint?: string;
 }
 
@@ -51,8 +51,10 @@ export const resolveSandboxStatus = (input: {
   if (
     attempt.status === "succeeded" &&
     (latestJob === undefined || latestJob.status === "succeeded") &&
-    runtimeInstance?.status === "running"
+    runtimeInstance?.status === "ready"
   ) {
+    // Coarse "ready" is gated on the runtime being "ready" (control socket accepting), NOT merely
+    // "running" (container up). This closes the readiness TOCTOU: the SDK's ready() trusts this.
     return "ready";
   }
 

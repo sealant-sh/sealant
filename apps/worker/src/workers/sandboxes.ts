@@ -7,6 +7,7 @@ import {
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
   processSandboxBuildJob,
+  reapStaleSandboxBuildJobs,
 } from "@sealant/sandboxes";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
@@ -69,8 +70,30 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     },
   });
 
+  // Reaper (#5): periodically re-drive build jobs stranded by a dead lease holder. The normal path is
+  // RabbitMQ delivery; this is the recovery net for deliveries that were acked-and-discarded when a
+  // worker died mid-build. Safe to repeat (idempotent build + container adopt, Stage 1). Retired once
+  // pg-boss (Stage 4) provides native per-job lease expiry + single-owner recovery.
+  const runReaperTick = (): void => {
+    reapStaleSandboxBuildJobs({
+      db,
+      workerId: env.WORKER_ID,
+      leaseDurationMs: env.SANDBOX_BUILD_JOB_LEASE_DURATION_MS,
+      runtimeAdapters,
+      defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
+      gitHubSourceIntegration,
+      registryClient,
+    }).catch((error: unknown) => {
+      console.error("Sandbox build job reaper tick failed", { error });
+    });
+  };
+  const reaperTimer = setInterval(runReaperTick, env.SANDBOX_BUILD_JOB_REAPER_INTERVAL_MS);
+  // Don't let the reaper interval keep the process alive on its own.
+  reaperTimer.unref();
+
   return {
     stop: async () => {
+      clearInterval(reaperTimer);
       await consumer.cancel();
       await rabbitMq.close();
     },

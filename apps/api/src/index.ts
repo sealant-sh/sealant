@@ -5,6 +5,7 @@ import * as PgClient from "@effect/sql-pg/PgClient";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
+import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
 import { Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
 import { HttpApiScalar } from "effect/unstable/httpapi";
@@ -91,9 +92,26 @@ const sourceIntegrationLayer = gitHubSourceIntegrationLayer({
  * so we provide `databaseLayer` into it while still re-exporting the repos for
  * the handlers via `Layer.provideMerge`.
  */
+/**
+ * Telemetry read layer:
+ *
+ * `TelemetryQuery` folds the append-only telemetry log into the run record (timeline, byte-exact
+ * scrollback, loss report) for the runs handlers. It needs `SealantDB` and an `ArtifactStore`; both
+ * are provided here over the same Postgres client so the layer is self-contained when merged in.
+ */
+const telemetryQueryLayer = TelemetryQueryLive.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      databaseClientLayer,
+      InlineByteaArtifactStoreLive.pipe(Layer.provide(databaseClientLayer)),
+    ),
+  ),
+);
+
 const requestDependenciesLayer = Layer.mergeAll(
   sourceIntegrationLayer,
   ControlPlaneCapabilitiesLive,
+  telemetryQueryLayer,
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**

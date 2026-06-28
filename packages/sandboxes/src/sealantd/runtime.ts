@@ -324,9 +324,16 @@ export class SealantRuntime extends Context.Service<
 
 /** Builds the per-connection session handle around a connected `SealantClient`. */
 const makeSession = (client: SealantClient): SealantSession => ({
-  health: withSealantError("health", Effect.promise(() => client.health())),
+  // `health`/`capabilities` are round-trip control requests that REJECT when the connection drops
+  // (e.g. a flaky docker-exec bridge). Use `tryPromise` so the rejection lands on the typed
+  // `SealantError` channel (retryable) — `Effect.promise` would turn it into a defect that escapes
+  // `withSealantError` and bypasses `Effect.retry`.
+  health: withSealantError("health", Effect.tryPromise(() => client.health())),
 
-  capabilities: withSealantError("capabilities", Effect.promise(() => client.getCapabilities())),
+  capabilities: withSealantError(
+    "capabilities",
+    Effect.tryPromise(() => client.getCapabilities()),
+  ),
 
   exec: (options) =>
     withSealantError(

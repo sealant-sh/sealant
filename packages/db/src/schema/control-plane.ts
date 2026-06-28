@@ -51,6 +51,13 @@ export const sandboxStatusValues = ["queued", "running", "ready", "failed", "sto
 export type SandboxStatus = (typeof sandboxStatusValues)[number];
 
 export const sandboxRunLinkRelationValues = ["launch", "rebuild", "retry", "resume"] as const;
+
+// A `run` is one HARNESS EXECUTION inside a sandbox (the SDK's `harness.run()`), distinct from a
+// `sandbox_attempt` (one sandbox *provisioning*). Runs own the execution record: the telemetry tables
+// key their `run_id` FK here. One sandbox can host many runs (interactive sessions); a one-shot run
+// maps 1:1 to its launch attempt.
+export const runStatusValues = ["queued", "running", "completed", "failed", "cancelled"] as const;
+export const runModeValues = ["one-shot", "interactive"] as const;
 export type SandboxRunLinkRelation = (typeof sandboxRunLinkRelationValues)[number];
 
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
@@ -821,6 +828,49 @@ export const sandboxRunLinks = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------------------------
+// RUNS — one harness execution inside a sandbox. The execution record (telemetry_*) keys its
+// run_id FK here. A run references the sandbox it ran in and the provisioning attempt that hosted
+// it. One sandbox can host many runs; a one-shot run maps 1:1 to its launch attempt.
+// ---------------------------------------------------------------------------------------------
+export const runs = pgTable(
+  "runs",
+  {
+    id: text().primaryKey(),
+    sandboxId: text("sandbox_id")
+      .notNull()
+      .references(() => sandboxes.id, { onDelete: "cascade" }),
+    attemptId: text("attempt_id").references(() => sandboxAttempts.id, { onDelete: "set null" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    harnessId: text("harness_id").notNull(),
+    mode: text({ enum: runModeValues }).notNull().default("one-shot"),
+    status: text({ enum: runStatusValues }).notNull().default("queued"),
+    prompt: text(),
+    exitCode: integer("exit_code"),
+    errorMessage: text("error_message"),
+    startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
+    finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index("runs_sandbox_id_created_at_idx").on(table.sandboxId, table.createdAt),
+    index("runs_owner_user_id_status_created_at_idx").on(
+      table.ownerUserId,
+      table.status,
+      table.createdAt,
+    ),
+    index("runs_attempt_id_idx").on(table.attemptId),
+  ],
+);
+
 export const sandboxAttemptSnapshots = pgTable("sandbox_attempt_snapshots", {
   runId: text("run_id")
     .primaryKey()
@@ -1202,6 +1252,11 @@ export type NewSandbox = typeof sandboxes.$inferInsert;
 
 export type SandboxRunLink = typeof sandboxRunLinks.$inferSelect;
 export type NewSandboxRunLink = typeof sandboxRunLinks.$inferInsert;
+
+export type Run = typeof runs.$inferSelect;
+export type NewRun = typeof runs.$inferInsert;
+export type RunStatus = (typeof runStatusValues)[number];
+export type RunMode = (typeof runModeValues)[number];
 
 export type SandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferSelect;
 export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferInsert;

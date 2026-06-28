@@ -54,13 +54,17 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
   publishedImage: publishedImageSchema,
   sandboxCloneAuth: sandboxCloneAuthSchema.optional(),
+  // The run (sandbox attempt) this launch belongs to. When present the docker adapter derives a
+  // DETERMINISTIC per-run container name, so a redelivered/reaper-republished or concurrent launch
+  // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).
+  runId: z.string().trim().min(1).optional(),
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({
   adapter: runtimeAdapterIdSchema,
   resourceId: z.string().trim().min(1),
   reference: z.string().trim().min(1),
-  status: z.enum(["pending", "running"]),
+  status: z.enum(["pending", "running", "ready"]),
   endpoint: z.string().trim().min(1).optional(),
 });
 

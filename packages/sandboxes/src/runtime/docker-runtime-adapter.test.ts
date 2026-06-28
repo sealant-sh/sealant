@@ -225,9 +225,9 @@ describe("DockerRuntimeAdapter", () => {
       }),
     );
 
-    // `run` + a single running-state `inspect`. The previously-redundant second `assertContainerRunning`
-    // (vestigial of the removed ssh:// endpoint-discovery block, §4.3) is gone.
-    expect(commandRunner).toHaveBeenCalledTimes(2);
+    // `run`, a single running-state `inspect` (assertContainerRunning), then one `exec test -S`
+    // control-socket readiness probe — the mock's default branch answers the probe as "accepting".
+    expect(commandRunner).toHaveBeenCalledTimes(3);
     const firstCall = commandRunner.mock.calls[0];
     const command = firstCall?.[0];
     const args = firstCall?.[1];
@@ -251,7 +251,147 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("SEALANT_OCI_RUNTIME=runc");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
-    expect(result.status).toBe("running");
+    expect(result.status).toBe("ready");
+  });
+
+  it("waits for the control socket to accept before reporting the sandbox ready", async () => {
+    let socketProbes = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-ready\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        socketProbes += 1;
+        // The control socket only appears after the (mock) clone+boot — fail the first probes.
+        if (socketProbes < 3) {
+          throw new Error("test: control socket not present yet");
+        }
+        return { stdout: "", stderr: "" };
+      }
+      // inspect: the container stays up throughout.
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      readinessTimeoutMs: 5_000,
+    });
+
+    const result = await adapter.launch(createLaunchInput());
+
+    expect(result.status).toBe("ready");
+    expect(socketProbes).toBeGreaterThanOrEqual(3);
+    const probeArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "exec")?.[1];
+    expect(probeArgs).toEqual([
+      "exec",
+      "container-id-ready",
+      "test",
+      "-S",
+      "/run/sealant/control.sock",
+    ]);
+  });
+
+  it("fails launch and force-removes the container when the control socket never becomes ready", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-stuck\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        throw new Error("test: control socket never appears");
+      }
+      if (args[0] === "logs") {
+        return { stdout: "cloning sandbox repository...\n", stderr: "" };
+      }
+      // inspect: still running (so it isn't treated as a fast-fail container exit).
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      readinessTimeoutMs: 150,
+    });
+
+    await expect(adapter.launch(createLaunchInput())).rejects.toThrow(
+      /control socket did not become ready/,
+    );
+    const forceRemoved = commandRunner.mock.calls.some(
+      (call) => call[1]?.[0] === "rm" && call[1]?.includes("-f"),
+    );
+    expect(forceRemoved).toBe(true);
+  });
+
+  it("derives a deterministic per-run container name from runId", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-run\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }));
+
+    const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
+    const nameIndex = runArgs.indexOf("--name");
+    expect(runArgs[nameIndex + 1]).toBe("sealant-run-xyz");
+  });
+
+  it("adopts an existing live container instead of double-launching the same run (#4)", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        // Simulate `docker run --name` conflicting with a container from a prior launch of this run.
+        throw new Error(
+          'Conflict. The container name "/sealant-run-abc" is already in use by another container',
+        );
+      }
+      if (args[0] === "inspect" && args.includes("{{.Id}}\t{{.State.Running}}")) {
+        // inspect-by-name (the adopt path): the prior container is still live.
+        return { stdout: "existing-container-id\ttrue\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      // inspectContainerState (assertContainerRunning) + any other inspect.
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "abc" }),
+    );
+
+    // Adopted the existing container rather than creating a duplicate.
+    expect(result.resourceId).toBe("existing-container-id");
+    expect(result.status).toBe("ready");
   });
 
   it("uses runsc when the blueprint requests it", async () => {
@@ -545,6 +685,9 @@ describe("DockerRuntimeAdapter", () => {
       defaultSshAuthorizedKeysFile: keyFile,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
       controlSocketHostDir: socketHostDir,
+      // This test exercises endpoint resolution, not readiness; no real daemon binds the bind-mounted
+      // socket, so skip the control-socket probe (covered by dedicated probe tests).
+      verifyRunning: false,
     });
 
     try {
@@ -612,7 +755,7 @@ describe("DockerRuntimeAdapter", () => {
       }),
     );
 
-    expect(result.status).toBe("running");
+    expect(result.status).toBe("ready");
     expect(result.endpoint).toBeUndefined();
   });
 });
