@@ -23,6 +23,10 @@ export const githubSandboxSourceSelectionSchema = z.strictObject({
   ref: z.string().trim().min(1).optional(),
 });
 
+export const sandboxCredentialSelectionSchema = z.strictObject({
+  credentialId: z.string().trim().min(1),
+});
+
 export const createSandboxRequestSchema = z.object({
   ownerUserId: z.string().trim().min(1),
   registryId: z.string().trim().min(1),
@@ -31,6 +35,8 @@ export const createSandboxRequestSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   sourceSelection: githubSandboxSourceSelectionSchema.optional(),
   dotfilesSelection: githubSandboxSourceSelectionSchema.optional(),
+  // Stored credentials to forward into the sandbox; resolved server-side to spec.runtime.credentialRefs.
+  credentialSelections: z.array(sandboxCredentialSelectionSchema).optional(),
   spec: newSandboxSchema,
 });
 

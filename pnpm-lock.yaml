@@ -332,6 +332,15 @@ importers:
         specifier: 'catalog:'
         version: 11.0.0
 
+  apps/cli:
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+      dotenv-cli:
+        specifier: 'catalog:'
+        version: 11.0.0
+
   apps/docs:
     dependencies:
       '@fontsource/plus-jakarta-sans':

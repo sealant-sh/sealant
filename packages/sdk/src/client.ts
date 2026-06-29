@@ -10,12 +10,7 @@
  * Until then the operations are TYPED against the stable surface and reject with
  * `SealantNotImplementedError` so callers can compile and wire against the final shape today.
  */
-import {
-  createSandboxOp,
-  getRunOp,
-  getSandboxOp,
-  listSandboxesOp,
-} from "./effect/operations.js";
+import { createSandboxOp, getRunOp, getSandboxOp, listSandboxesOp } from "./effect/operations.js";
 import { runHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
@@ -24,6 +19,7 @@ import { makeRun } from "./facade/run.js";
 import { makeSandbox, registerRunHarness } from "./facade/sandbox.js";
 import { buildCreateSandboxRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
+import { prepareForward } from "./internal/host-forward.js";
 import type { CreateOptions, ListOptions, Run, Sandbox, SealantConfig } from "./types.js";
 
 // Wire the host-local run-execution implementation into the Sandbox facade (the injection point
@@ -53,7 +49,11 @@ export class Sealant {
   /** Sandbox lifecycle: create, fetch, and list live environments. */
   readonly sandboxes = {
     create: async (options: CreateOptions): Promise<Sandbox> => {
-      const { payload } = buildCreateSandboxRequest(options, this.#ctx.config);
+      // Capture any forwarded host logins (`forward: [...]`) on THIS machine before building the
+      // request, so the sandbox carries the developer's auth (scoped tokens + subscription credential
+      // files) and the agent inside is logged in as them.
+      const forward = await prepareForward(options);
+      const { payload } = buildCreateSandboxRequest(options, this.#ctx.config, forward);
       const created = await this.#runtime.run(createSandboxOp(payload));
       const sandbox = makeSandbox(this.#ctx, {
         id: created.sandboxId,

@@ -16,6 +16,17 @@ export {
 export { ControlPlaneDataAccessLive, GitHubDataAccessLive } from "./layers.js";
 
 export {
+  EnvKeyProvider,
+  decryptEnvelope,
+  decryptEnvelopeText,
+  encryptEnvelope,
+  makeEnvKeyProvider,
+  valueSha256,
+  type KeyProvider,
+  type WrappedKey,
+} from "./crypto/index.js";
+
+export {
   GitHubInstallationRepo,
   GitHubInstallationRepoInvariantError,
   GitHubInstallationRepoLive,
@@ -30,6 +41,19 @@ export {
   type SetGitHubInstallationStatusInput,
   type UpsertGitHubInstallationInput,
 } from "./repositories/github-installations.js";
+
+export {
+  PrincipalCredentialRepo,
+  PrincipalCredentialRepoInvariantError,
+  PrincipalCredentialRepoLive,
+  PrincipalCredentialRepoUnexpectedError,
+  principalCredentialRepoErrorSchema,
+  type AddCredentialVersionInput,
+  type ConnectCredentialInput,
+  type PrincipalCredentialRepoError,
+  type PrincipalCredentialRepoService,
+  type ResolvedCredential,
+} from "./repositories/principal-credentials.js";
 
 export {
   GitHubInstallationRepositoryCacheRepo,
@@ -331,6 +355,20 @@ export {
   type SandboxRuntimeInstanceStatus,
   type SandboxBuildJob,
   type SandboxBuildJobStatus,
+  principalCredentials,
+  principalCredentialVersions,
+  principalCredentialProviderValues,
+  principalCredentialKindValues,
+  principalCredentialStatusValues,
+  principalCredentialPayloadShapeValues,
+  type PrincipalCredential,
+  type NewPrincipalCredential,
+  type PrincipalCredentialVersion,
+  type NewPrincipalCredentialVersion,
+  type PrincipalCredentialProvider,
+  type PrincipalCredentialKind,
+  type PrincipalCredentialStatus,
+  type PrincipalCredentialPayloadShape,
 } from "./schema.js";
 
 export {

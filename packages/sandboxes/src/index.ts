@@ -7,3 +7,4 @@ export * from "./package-standardization.js";
 export * from "./api/sandbox.js";
 export * from "./worker/process-sandbox-build-job.js";
 export * from "./worker/reap-stale-sandbox-build-jobs.js";
+export * from "./worker/credential-resolver.js";

@@ -93,6 +93,9 @@ services:
       REGISTRY_BASE_URL: http://zot:5000
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
       CORS_ALLOWED_ORIGINS: ${SEALANT_CORS_ALLOWED_ORIGINS:-*}
+      # Master key (base64 of 32 bytes) for the credential store's envelope encryption. Required to
+      # connect/forward gh/claude/codex logins; leave unset to disable the credential store.
+      SEALANT_SECRETS_KEY: ${SEALANT_SECRETS_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -128,6 +131,8 @@ services:
       RABBITMQ_URL: *amqp-url
       REGISTRY_BASE_URL: http://zot:5000
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+      # Must match the API's key — the worker decrypts forwarded credentials at launch.
+      SEALANT_SECRETS_KEY: ${SEALANT_SECRETS_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

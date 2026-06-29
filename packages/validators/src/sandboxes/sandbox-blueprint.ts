@@ -129,9 +129,18 @@ export const sandboxSpecNetworkSchema = z
   })
   .prefault({});
 
+// A reference to a stored credential to inject at launch. Carries only an opaque id ("sealant-
+// credential:<id>"), never the secret — the worker resolves + decrypts it at harness-exec time.
+export const sandboxCredentialRefSchema = z.strictObject({
+  ref: nonEmptyStringSchema,
+  // Optional override for the env var name to inject as; otherwise the resolver picks by provider.
+  targetEnv: nonEmptyStringSchema.optional(),
+});
+
 export const sandboxSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
+    credentialRefs: z.array(sandboxCredentialRefSchema).optional(),
     sandboxRoot: nonEmptyStringSchema.default("/sandbox"),
     workingDirectory: nonEmptyStringSchema.default("/sandbox/repo"),
     persistence: sandboxPersistenceSchema.default("ephemeral"),

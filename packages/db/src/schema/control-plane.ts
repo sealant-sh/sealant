@@ -443,6 +443,113 @@ export const secretVersions = pgTable(
   ],
 );
 
+export const principalCredentialProviderValues = ["github", "claude", "codex"] as const;
+export type PrincipalCredentialProvider = (typeof principalCredentialProviderValues)[number];
+
+export const principalCredentialKindValues = ["oauth", "api_key", "session_file"] as const;
+export type PrincipalCredentialKind = (typeof principalCredentialKindValues)[number];
+
+export const principalCredentialStatusValues = ["active", "needs_reauth", "revoked"] as const;
+export type PrincipalCredentialStatus = (typeof principalCredentialStatusValues)[number];
+
+/**
+ * A principal's live, forwardable connection to a coding tool (gh / claude / codex). Distinct from
+ * `secrets` (plain "inject value X as env var KEY") because these carry provider/expiry/refresh
+ * semantics. Metadata only — the secret bytes live exclusively in `principal_credential_versions`,
+ * so the API can list/render credentials without ever decrypting.
+ */
+export const principalCredentials = pgTable(
+  "principal_credentials",
+  {
+    id: text().primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    provider: text().notNull().$type<PrincipalCredentialProvider>(),
+    kind: text().notNull().$type<PrincipalCredentialKind>(),
+    label: text(),
+    status: text().notNull().$type<PrincipalCredentialStatus>().default("active"),
+    scopes: text().array(),
+    accountIdentifier: text("account_identifier"),
+    last4: text(),
+    expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
+    connectedAt: timestamp("connected_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastRefreshedAt: timestamp("last_refreshed_at", { mode: "date", withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { mode: "date", withTimezone: true }),
+    // Rotating-token bookkeeping (codex single-use refresh tokens).
+    tokenFamily: text("token_family"),
+    rotationCount: integer("rotation_count").notNull().default(0),
+    // Denormalised pointer to the active version. Plain text (no FK) to avoid a circular constraint
+    // with principal_credential_versions; integrity is maintained in the repository.
+    currentVersionId: text("current_version_id"),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+  },
+  (table) => [
+    index("principal_credentials_owner_provider_kind_account_idx").on(
+      table.ownerUserId,
+      table.provider,
+      table.kind,
+      table.accountIdentifier,
+    ),
+    index("principal_credentials_owner_user_id_idx").on(table.ownerUserId),
+    index("principal_credentials_owner_provider_idx").on(table.ownerUserId, table.provider),
+  ],
+);
+
+export const principalCredentialPayloadShapeValues = [
+  "oauth_token_set",
+  "api_key",
+  "raw_file",
+] as const;
+export type PrincipalCredentialPayloadShape =
+  (typeof principalCredentialPayloadShapeValues)[number];
+
+/** The only place credential secret bytes live: an AES-256-GCM envelope per version. Never returned by any API. */
+export const principalCredentialVersions = pgTable(
+  "principal_credential_versions",
+  {
+    id: text().primaryKey(),
+    credentialId: text("credential_id")
+      .notNull()
+      .references(() => principalCredentials.id, { onDelete: "cascade" }),
+    version: integer().notNull(),
+    // Self-describing AES-256-GCM envelope (ciphertext + nonce + tag + wrapped DEK), see crypto/envelope.ts.
+    envelope: text().notNull(),
+    // Which master key wrapped the DEK, duplicated out of the envelope for rotation queries.
+    kekId: text("kek_id").notNull(),
+    valueSha256: text("value_sha256").notNull(),
+    payloadShape: text("payload_shape").notNull().$type<PrincipalCredentialPayloadShape>(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("principal_credential_versions_credential_id_version_idx").on(
+      table.credentialId,
+      table.version,
+    ),
+    index("principal_credential_versions_credential_id_created_at_idx").on(
+      table.credentialId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export type PrincipalCredential = typeof principalCredentials.$inferSelect;
+export type NewPrincipalCredential = typeof principalCredentials.$inferInsert;
+export type PrincipalCredentialVersion = typeof principalCredentialVersions.$inferSelect;
+export type NewPrincipalCredentialVersion = typeof principalCredentialVersions.$inferInsert;
+
 export const profileSecretBindings = pgTable(
   "profile_secret_bindings",
   {

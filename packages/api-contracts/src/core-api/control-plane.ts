@@ -1,5 +1,6 @@
 import { HttpApi, OpenApi } from "effect/unstable/httpapi";
 
+import { CredentialsGroup } from "./credentials.js";
 import { GitHubGroup } from "./github.js";
 import { PackagesGroup } from "./packages.js";
 import { RegistriesGroup } from "./registries.js";
@@ -14,6 +15,7 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(RunsGroup.prefix("/v1/runs"))
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
+  .add(CredentialsGroup.prefix("/v1/credentials"))
   .annotate(OpenApi.Title, "Sealant Control Plane API")
   .annotate(OpenApi.Version, "0.0.0")
   .annotate(OpenApi.Description, "Sealant control-plane HTTP API.");

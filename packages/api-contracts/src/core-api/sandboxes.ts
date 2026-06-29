@@ -53,6 +53,11 @@ export const githubSandboxSourceSelectionSchema = Schema.Struct({
 });
 export type GitHubSandboxSourceSelection = typeof githubSandboxSourceSelectionSchema.Type;
 
+export const sandboxCredentialSelectionSchema = Schema.Struct({
+  credentialId: NonEmptyString,
+});
+export type SandboxCredentialSelection = typeof sandboxCredentialSelectionSchema.Type;
+
 export const createSandboxRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   registryId: NonEmptyString,
@@ -61,6 +66,7 @@ export const createSandboxRequestSchema = Schema.Struct({
   name: Schema.optional(NonEmptyString),
   sourceSelection: Schema.optional(githubSandboxSourceSelectionSchema),
   dotfilesSelection: Schema.optional(githubSandboxSourceSelectionSchema),
+  credentialSelections: Schema.optional(Schema.Array(sandboxCredentialSelectionSchema)),
   spec: Schema.Unknown,
 });
 export type CreateSandboxRequest = typeof createSandboxRequestSchema.Type;

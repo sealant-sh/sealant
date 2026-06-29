@@ -16,6 +16,8 @@ interface SpecShape {
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
   readonly target: { readonly runtime: { readonly family: string } };
+  readonly runtime?: { readonly env?: Readonly<Record<string, string>> };
+  readonly lifecycle?: { readonly setup?: ReadonlyArray<{ readonly run: string }> };
 }
 
 describe("buildCreateSandboxRequest", () => {
@@ -45,5 +47,29 @@ describe("buildCreateSandboxRequest", () => {
     const spec = payload.spec as unknown as SpecShape;
     expect(spec.sources.sandbox.url).toBe("https://gitlab.com/x/y.git");
     expect(spec.sources.sandbox.ref).toBe("master");
+  });
+
+  it("omits spec.runtime and lifecycle.setup when nothing is forwarded", () => {
+    const { payload } = buildCreateSandboxRequest(
+      { repository: "github.com/acme/x", harness: opencode() },
+      config,
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.runtime).toBeUndefined();
+    expect(spec.lifecycle?.setup).toBeUndefined();
+  });
+
+  it("lowers forwarded env + boot steps onto spec.runtime.env and spec.lifecycle.setup", () => {
+    const { payload } = buildCreateSandboxRequest(
+      { repository: "github.com/acme/x", harness: opencode() },
+      config,
+      {
+        env: { GH_TOKEN: "ghp_x", SEALANT_FWD_CODEX_0: "YmFzZTY0" },
+        setupSteps: [{ run: 'printf %s "$SEALANT_FWD_CODEX_0" | base64 -d > /root/.codex/auth.json', shell: "bash" }],
+      },
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.runtime?.env).toEqual({ GH_TOKEN: "ghp_x", SEALANT_FWD_CODEX_0: "YmFzZTY0" });
+    expect(spec.lifecycle?.setup?.[0]?.run).toMatch(/base64 -d > \/root\/\.codex\/auth\.json/);
   });
 });

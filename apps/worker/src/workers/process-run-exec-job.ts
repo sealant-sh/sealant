@@ -2,7 +2,8 @@
  * Server-side harness run execution — the worker counterpart of what the SDK used to do host-local.
  *
  * Given a run id + the harness command, it: resolves the sandbox's docker container, marks the run
- * running, docker-execs the harness over the sealantd control connection while draining its telemetry
+ * running, resolves+injects any forwarded credentials (spec.runtime.credentialRefs) into the harness
+ * process, docker-execs the harness over the sealantd control connection while draining its telemetry
  * into the {@link TelemetrySink} (bounded to the harness process, epoch bracketed + suspicious-flagged
  * on a dropped bridge), captures the git diff, and marks the run completed/failed with the changes.
  *
@@ -11,9 +12,14 @@
  */
 import {
   type DB,
+  makeEnvKeyProvider,
+  PrincipalCredentialRepo,
+  PrincipalCredentialRepoLive,
   type RunFileChange,
   RunRepo,
   RunRepoLive,
+  SandboxAttemptRepo,
+  SandboxAttemptRepoLive,
   SandboxRepo,
   SandboxRepoLive,
   SandboxRuntimeInstanceRepo,
@@ -21,10 +27,13 @@ import {
   SealantDB,
 } from "@sealant/db";
 import {
+  type CredentialInjectables,
   execInSandbox,
+  resolveCredentialInjectables,
   type RunExecCommand,
   SealantRuntime,
   SealantRuntimeDockerExecLive,
+  type SealantSession,
   sealantTargetForDockerContainer,
   type SealantTarget,
 } from "@sealant/sandboxes";
@@ -36,13 +45,19 @@ import {
 } from "@sealant/telemetry";
 import { Effect, Layer, Schedule, Stream } from "effect";
 
+import { env } from "../runtime-env.js";
+
 const WORKDIR = "/sandbox/repo";
 const BATCH_SIZE = 256;
 const BATCH_WINDOW = "250 millis";
+/** In-container path of the sourced env-file holding forwarded credential env vars (0600). */
+const HARNESS_ENV_FILE = "/run/sealant/harness.env";
 // The docker-exec/socat bridge can flake while a freshly-launched daemon's socket comes up; retry the
 // connect+health+exec unit with a spaced window. exec resolves on process-accept, so retry can't
 // double-run the harness.
 const BRIDGE_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
+
+const EMPTY_INJECTABLES: CredentialInjectables = { env: {}, files: [] };
 
 export interface ProcessRunExecJobOptions {
   readonly runId: string;
@@ -79,8 +94,90 @@ const shellExec = (target: SealantTarget, script: string) =>
     Effect.retry(BRIDGE_RETRY),
   );
 
-/** Execs the harness and records its telemetry, bounded to the harness process. Returns the exit code. */
-const captureRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
+/** Single-quote-escape a string for safe inclusion in an `sh -lc` script. */
+const shq = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Write `content` to `path` (0`mode`) inside the sandbox WITHOUT the bytes ever appearing in argv or
+ * the telemetry event log: the script reads exactly N bytes from stdin (`head -c N`, which exits on
+ * its own once N bytes arrive — no stdin-close needed), and the bytes travel over writeStdin. Best-
+ * effort (bounded + ignored): a failed materialization leaves the harness unauthenticated, never stuck.
+ */
+const writeFileViaStdin = (
+  session: SealantSession,
+  path: string,
+  mode: string,
+  content: string,
+): Effect.Effect<void, never> =>
+  Effect.gen(function* () {
+    const bytes = new TextEncoder().encode(content);
+    const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+    const script = `umask 077; mkdir -p ${shq(dir)}; head -c ${bytes.length} > ${shq(path)}; chmod ${mode} ${shq(path)}`;
+    const accepted = yield* session.exec({
+      executable: "sh",
+      args: ["-lc", script],
+      cwd: WORKDIR,
+      stdin: true,
+    });
+    const awaitExit = session.events.pipe(
+      Stream.takeUntil(
+        (event) =>
+          event.payload.case === "processExited" && event.processId === accepted.processId,
+      ),
+      Stream.runDrain,
+    );
+    yield* Effect.all([awaitExit, session.writeStdin(accepted.processId, bytes)], {
+      concurrency: "unbounded",
+    });
+  }).pipe(Effect.timeout("10 seconds"), Effect.ignore);
+
+/**
+ * Materialize forwarded credentials into the running sandbox. Files land at their native paths; env
+ * tokens go into a 0600 env-file the harness wrapper sources (so they reach the harness process only,
+ * never container-wide env which sealantd strips). Returns the env-file path when env was written.
+ */
+const injectCredentials = (
+  session: SealantSession,
+  injectables: CredentialInjectables,
+): Effect.Effect<string | undefined, never> =>
+  Effect.gen(function* () {
+    for (const file of injectables.files) {
+      yield* writeFileViaStdin(session, file.path, file.mode, file.content);
+    }
+    const keys = Object.keys(injectables.env);
+    if (keys.length === 0) {
+      return undefined;
+    }
+    const body = `${keys.map((key) => `export ${key}=${shq(injectables.env[key]!)}`).join("\n")}\n`;
+    yield* writeFileViaStdin(session, HARNESS_ENV_FILE, "600", body);
+    return HARNESS_ENV_FILE;
+  });
+
+/** Build the harness exec, wrapped to source the credential env-file when one was materialized. */
+const harnessExecOptions = (command: RunExecCommand, envFile: string | undefined) =>
+  envFile === undefined
+    ? { executable: command.executable, args: [...command.args], cwd: WORKDIR, stdin: false }
+    : {
+        executable: "sh",
+        // `exec "$@"` replaces the shell with the harness (same pid → processExited still fires for it).
+        args: [
+          "-lc",
+          `set -a; . ${shq(envFile)}; set +a; exec "$@"`,
+          "sh",
+          command.executable,
+          ...command.args,
+        ],
+        cwd: WORKDIR,
+        stdin: false,
+      };
+
+/** Execs the harness (after injecting creds) and records its telemetry, bounded to the harness process. */
+const captureRun = (
+  runId: string,
+  target: SealantTarget,
+  command: RunExecCommand,
+  injectables: CredentialInjectables,
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const runtime = yield* SealantRuntime;
@@ -90,12 +187,8 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
         Effect.flatMap((connected) =>
           Effect.gen(function* () {
             const health = yield* connected.health;
-            const started = yield* connected.exec({
-              executable: command.executable,
-              args: [...command.args],
-              cwd: WORKDIR,
-              stdin: false,
-            });
+            const envFile = yield* injectCredentials(connected, injectables);
+            const started = yield* connected.exec(harnessExecOptions(command, envFile));
             return { session: connected, runtimeId: health.runtimeId, accepted: started };
           }),
         ),
@@ -167,23 +260,71 @@ const resolveContainerResourceId = (runId: string) =>
     return instance.resourceId;
   });
 
-/** The Effect pipeline: resolve container, mark running, exec+capture, diff, mark terminal. */
+/**
+ * Resolve the forwarded credentials to inject for this run from the attempt's spec snapshot. No store
+ * key configured or no refs on the spec → nothing to inject (the harness runs as before).
+ */
+const resolveInjectables = (runId: string): Effect.Effect<
+  CredentialInjectables,
+  unknown,
+  RunRepo | SandboxRepo | SandboxAttemptRepo | PrincipalCredentialRepo
+> =>
+  Effect.gen(function* () {
+    const masterKey = env.SEALANT_SECRETS_KEY;
+    if (masterKey === undefined) {
+      return EMPTY_INJECTABLES;
+    }
+    const runs = yield* RunRepo;
+    const sandboxes = yield* SandboxRepo;
+    const attempts = yield* SandboxAttemptRepo;
+
+    const run = yield* runs.getRunById(runId);
+    if (run === undefined) {
+      return EMPTY_INJECTABLES;
+    }
+    const sandbox = yield* sandboxes.getSandboxById(run.sandboxId);
+    if (sandbox === undefined || sandbox.latestRunId === null) {
+      return EMPTY_INJECTABLES;
+    }
+    const snapshot = yield* attempts.getAttemptSnapshotByRunId(sandbox.latestRunId);
+    const refs = snapshot?.userSpecPayload.runtime?.credentialRefs ?? [];
+    if (refs.length === 0) {
+      return EMPTY_INJECTABLES;
+    }
+    return yield* resolveCredentialInjectables({
+      refs,
+      ownerUserId: sandbox.ownerUserId,
+      keyProvider: makeEnvKeyProvider(masterKey),
+    });
+  });
+
+/** The Effect pipeline: resolve container, mark running, inject creds + exec+capture, diff, mark terminal. */
 export const processRunExecJobEffect = (
   options: Omit<ProcessRunExecJobOptions, "db">,
 ): Effect.Effect<
   void,
   unknown,
-  RunRepo | SandboxRepo | SandboxRuntimeInstanceRepo | SealantRuntime | TelemetrySink
+  | RunRepo
+  | SandboxRepo
+  | SandboxAttemptRepo
+  | SandboxRuntimeInstanceRepo
+  | PrincipalCredentialRepo
+  | SealantRuntime
+  | TelemetrySink
 > =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const resourceId = yield* resolveContainerResourceId(options.runId);
     const target = sealantTargetForDockerContainer(resourceId);
+    // Best-effort: a credential-resolution failure must not block the run.
+    const injectables = yield* resolveInjectables(options.runId).pipe(
+      Effect.catch(() => Effect.succeed(EMPTY_INJECTABLES)),
+    );
 
     yield* runs.markRunRunning({ id: options.runId });
 
     const produce = Effect.gen(function* () {
-      const exitCode = yield* captureRun(options.runId, target, options.command);
+      const exitCode = yield* captureRun(options.runId, target, options.command, injectables);
       const diff = yield* shellExec(
         target,
         `git add -A >/dev/null 2>&1; git --no-pager diff --cached`,
@@ -215,7 +356,9 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
   const dataAccessLayer = Layer.mergeAll(
     RunRepoLive,
     SandboxRepoLive,
+    SandboxAttemptRepoLive,
     SandboxRuntimeInstanceRepoLive,
+    PrincipalCredentialRepoLive,
   ).pipe(Layer.provide(dbLayer));
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(dbLayer));
   const sinkLayer = PostgresTelemetrySinkLive.pipe(

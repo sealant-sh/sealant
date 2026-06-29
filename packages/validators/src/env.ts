@@ -155,9 +155,17 @@ export const appCoreEnvSchema = httpServerEnvSchema
   .merge(githubEnvSchema)
   .merge(sandboxSshGatewayEnvSchema);
 
+// Master key for the credential store's envelope encryption (base64 of 32 random bytes). Optional so
+// deployments not using the credential store boot unchanged; the credential API/worker fail clearly
+// at use-time if it is absent.
+export const secretsEncryptionEnvSchema = z.object({
+  SEALANT_SECRETS_KEY: z.string().trim().min(1).optional(),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
-  .merge(appCoreEnvSchema);
+  .merge(appCoreEnvSchema)
+  .merge(secretsEncryptionEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
@@ -234,7 +242,8 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(registryCredentialsEnvSchema)
   .merge(githubApiEnvSchema)
   .merge(githubAppEnvSchema)
-  .merge(workerRuntimeEnvSchema);
+  .merge(workerRuntimeEnvSchema)
+  .merge(secretsEncryptionEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);

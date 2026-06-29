@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sealant SDK — Implementation Report</title>
+    <style>
+      :root {
+        --canvas: #f7f5f1;
+        --sunken: #efece6;
+        --card: #fffdfa;
+        --ink: #1d1b18;
+        --ink-2: #45413b;
+        --muted: #6b655c;
+        --faint: #958f84;
+        --rule: #e4ded4;
+        --primary: #1f6f6b;
+        --primary-soft: #e2efed;
+        --success: #2f7d4f;
+        --success-soft: #e3f1e8;
+        --warn: #9a6b1f;
+        --warn-soft: #f6ecd9;
+        --danger: #9b3b3b;
+        --mono: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: var(--sans);
+        line-height: 1.6;
+        font-size: 16px;
+      }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 0 24px 96px; }
+      header.hero {
+        background: linear-gradient(180deg, #fffdfa, var(--canvas));
+        border-bottom: 1px solid var(--rule);
+        padding: 56px 0 40px;
+      }
+      .eyebrow {
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--primary);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--primary); }
+      h1 { font-size: 2.5rem; line-height: 1.08; letter-spacing: -0.025em; margin: 14px 0 10px; }
+      h2 { font-size: 1.5rem; letter-spacing: -0.02em; margin: 52px 0 14px; padding-top: 16px; border-top: 1px solid var(--rule); }
+      h3 { font-size: 1.12rem; margin: 28px 0 8px; letter-spacing: -0.01em; }
+      p { color: var(--ink-2); margin: 12px 0; }
+      .lede { font-size: 1.18rem; color: var(--ink-2); max-width: 70ch; }
+      .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; font-family: var(--mono); font-size: 12.5px; }
+      .chip { background: var(--sunken); border: 1px solid var(--rule); border-radius: 999px; padding: 5px 12px; color: var(--ink-2); }
+      .chip strong { color: var(--ink); font-weight: 600; }
+      .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-family: var(--mono); font-weight: 600; }
+      .badge.ok { background: var(--success-soft); color: var(--success); }
+      .badge.warn { background: var(--warn-soft); color: var(--warn); }
+      .badge.info { background: var(--primary-soft); color: var(--primary); }
+      a { color: var(--primary); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      code { font-family: var(--mono); font-size: 0.86em; background: var(--sunken); padding: 1.5px 6px; border-radius: 5px; color: var(--ink); }
+      pre {
+        background: #faf8f4; border: 1px solid var(--rule); border-radius: 12px;
+        padding: 16px 18px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+        line-height: 1.7; color: var(--ink-2); box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+      }
+      pre.term { background: #1c1a17; color: #d8d2c6; border-color: #2c2925; }
+      pre.term .g { color: #7fc99a; }
+      pre.term .b { color: #6fb3c9; }
+      pre.term .y { color: #d8b878; }
+      pre.term .d { color: #8a847a; }
+      .card { background: var(--card); border: 1px solid var(--rule); border-radius: 14px; padding: 20px 22px; margin: 16px 0; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } h1 { font-size: 2rem; } }
+      table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+      th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+      th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); font-weight: 600; }
+      td code { font-size: 12px; }
+      .tick { color: var(--success); font-weight: 700; }
+      .flow { font-family: var(--mono); font-size: 13px; background: var(--sunken); border: 1px solid var(--rule); border-radius: 12px; padding: 18px; overflow-x: auto; color: var(--ink-2); }
+      .flow b { color: var(--primary); }
+      ul.tight { margin: 8px 0; padding-left: 22px; }
+      ul.tight li { margin: 5px 0; color: var(--ink-2); }
+      .why { border-left: 3px solid var(--primary); padding: 2px 0 2px 16px; margin: 10px 0; color: var(--muted); font-size: 14.5px; }
+      .note { background: var(--warn-soft); border: 1px solid #ecd9b4; border-radius: 12px; padding: 14px 18px; margin: 14px 0; font-size: 14.5px; color: #6f4e16; }
+      .note strong { color: #5a3f10; }
+      footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--rule); color: var(--faint); font-size: 13px; font-family: var(--mono); }
+      .kicker { font-family: var(--mono); font-size: 12px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
+      .layer { display: flex; gap: 14px; align-items: baseline; }
+      .layer .n { font-family: var(--mono); color: var(--primary); font-weight: 700; min-width: 26px; }
+      .toc { columns: 2; column-gap: 28px; font-size: 14px; }
+      .toc a { display: block; padding: 3px 0; color: var(--ink-2); }
+      @media (max-width: 720px) { .toc { columns: 1; } }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <div class="wrap">
+        <span class="eyebrow">Sealant · Implementation Report</span>
+        <h1>The fluent public TypeScript SDK</h1>
+        <p class="lede">
+          <code>create a sandbox → run a harness → replay the recorded run</code> — the one-liner the
+          marketing site promises, now real and validated end-to-end against a live, self-hosted
+          deployment with a real coding agent making a real change.
+        </p>
+        <div class="meta">
+          <span class="chip">Date <strong>2026-06-28</strong></span>
+          <span class="chip">Branch <strong>feat/typescript-sdk</strong></span>
+          <span class="chip">Commits <strong>10 (local, not pushed)</strong></span>
+          <span class="chip">New package <strong>@sealant/sdk</strong></span>
+          <span class="chip">Status <span class="badge ok">end-to-end green</span></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section>
+        <h2 id="tldr">In one paragraph</h2>
+        <p>
+          The goal was to finish the TypeScript SDK — <em>“the single most important build”</em> per
+          <code>SEALANT-PLAN.md §12</code> — and to implement the “getting details out of runs” read
+          path <strong>from the bottom up</strong>: query repository → contract → API layer → SDK. All
+          of that is done. A new <code>@sealant/sdk</code> package exposes the exact fluent surface the
+          marketing site commits to; underneath it, a new first-class <code>runs</code> entity, a
+          <code>RunRepo</code>, run/record wire contracts, and control-plane API routes form a clean
+          network read path. The whole loop was then run for real: the SDK built and launched a Docker
+          sandbox, <strong>opencode (its free provider) executed inside it and edited a file</strong>,
+          the telemetry ingester captured <strong>16 timeline entries</strong>, and
+          <code>run.record.replay()</code> returned them — all green.
+        </p>
+        <div class="card">
+          <div class="kicker">Table of contents</div>
+          <nav class="toc">
+            <a href="#what">1 · What you asked for</a>
+            <a href="#arch">2 · Architecture &amp; the bottom-up read path</a>
+            <a href="#built">3 · What was built, layer by layer</a>
+            <a href="#api">4 · The complete SDK API</a>
+            <a href="#decisions">5 · The two decisions &amp; the model correction</a>
+            <a href="#proof">6 · The end-to-end proof</a>
+            <a href="#verify">7 · Verification</a>
+            <a href="#status">8 · Honest status &amp; what’s deferred</a>
+            <a href="#run">9 · How to run it</a>
+            <a href="#git">10 · Git state &amp; file inventory</a>
+          </nav>
+        </div>
+      </section>
+
+      <section>
+        <h2 id="what">1 · What you asked for</h2>
+        <p>Three things, all delivered:</p>
+        <ul class="tight">
+          <li><strong>Finish the TypeScript SDK</strong> — the fluent client from the README and marketing copy.</li>
+          <li>
+            Implement run-detail reads (which “had not been implemented yet”)
+            <strong>from the bottom up</strong>: <code>query repo → contract in api package → api layer → sdk</code>.
+          </li>
+          <li>A <strong>full HTML report</strong> (this document) explaining what was done, why, and what purpose it serves.</li>
+        </ul>
+        <div class="note">
+          <strong>Autonomy &amp; safety.</strong> Per your instructions I made the major decisions myself and
+          <strong>did not push anything</strong>. All work is committed locally to the
+          <code>feat/typescript-sdk</code> branch (10 commits) for safe review. opencode’s free provider
+          meant the demo is a <em>real</em> agent run, not a synthetic stand-in.
+        </div>
+      </section>
+
+      <section>
+        <h2 id="arch">2 · Architecture &amp; the bottom-up read path</h2>
+        <p>
+          The SDK is a thin, ergonomic facade over the existing platform. Reads of run details flow
+          through four layers you can build and test independently — exactly the order requested:
+        </p>
+        <div class="flow">
+<b>READ PATH (run details / execution record)</b>
+
+  SDK facade          <b>@sealant/sdk</b>      run.record.replay() / timeline() / scrollback() / loss()
+       │  HTTP (contract-derived client)
+       ▼
+  API layer           <b>apps/api</b>          GET /v1/runs/:id, /timeline, /scrollback, /loss
+       │
+       ▼
+  Contract            <b>@sealant/api-contracts</b>   RunsGroup (Effect HttpApi + Schema)
+       │
+       ▼
+  Query repo          <b>@sealant/db</b>        RunRepo  +  RunTelemetry (folds the telemetry log)
+       │
+       ▼
+  Postgres            runs · telemetry_events · telemetry_timeline · telemetry_scrollback · …
+        </div>
+        <p>The write/exec path (create + run) reuses the platform spine and the proven docker-exec transport:</p>
+        <div class="flow">
+<b>WRITE / EXEC PATH</b>
+
+  sandboxes.create({repository, harness})  ──HTTP──▶  POST /v1/sandboxes  ──▶  worker builds image
+                                                                              + launches container
+  sandbox.harness.run(prompt)              ──┬─ POST /v1/runs  (register the run)
+                                             ├─ docker exec ─▶ sealantd ─▶ <b>opencode run "&lt;prompt&gt;"</b>
+                                             ├─ fork TelemetryIngester (2nd connection) ─▶ persist record
+                                             └─ capture git diff ─▶ PATCH /v1/runs/:id (completed)
+        </div>
+        <h3>The SDK’s three strata</h3>
+        <div class="grid2">
+          <div class="card">
+            <div class="kicker">1 · Promise facade</div>
+            <p style="margin:6px 0 0">Plain <code>async/await</code> objects (<code>Sealant</code>, <code>Sandbox</code>, <code>Run</code>, <code>RunRecord</code>). The public surface. No Effect leaks: tagged failures are mapped to plain <code>Error</code>s.</p>
+          </div>
+          <div class="card">
+            <div class="kicker">2 · Effect core</div>
+            <p style="margin:6px 0 0">The app <code>Layer</code> (wire client + sealantd runtime + telemetry ingester) built once into a memoized <code>Scope</code>; operations run against it and surface plain errors.</p>
+          </div>
+          <div class="card">
+            <div class="kicker">3 · Wire (derived, not written)</div>
+            <p style="margin:6px 0 0"><code>HttpApiClient.make(ControlPlaneAPI)</code> — a fully-typed client generated from the <code>@sealant/api-contracts</code> contract. No codegen artifact, no drift; it replaces the hand-rolled fetch+zod client.</p>
+          </div>
+          <div class="card">
+            <div class="kicker">Harness-neutral</div>
+            <p style="margin:6px 0 0"><code>opencode()</code>, <code>codex()</code>, <code>claudeCode()</code>, <code>customHarness()</code> — thin values describing how to invoke a harness one-shot.</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 id="built">3 · What was built, layer by layer</h2>
+
+        <h3>① Query repository — <code>@sealant/db</code></h3>
+        <div class="layer"><span class="n">↳</span><div>
+          <code>packages/db/src/repositories/runs.ts</code> — <code>RunRepo</code>: create / get / list runs +
+          <code>markRunning</code>/<code>markCompleted</code>/<code>markFailed</code>, on a typed
+          <code>TaggedError</code> channel (mirrors <code>SandboxAttemptRepo</code>). The execution record
+          (<code>RunTelemetry</code>) already folds the append-only telemetry log.
+        </div></div>
+        <div class="why">Why: a run is one harness execution and needs first-class storage so its record survives the sandbox and is queryable, not parsed.</div>
+
+        <h3>② Contract — <code>@sealant/api-contracts</code></h3>
+        <div class="layer"><span class="n">↳</span><div>
+          <code>packages/api-contracts/src/core-api/runs.ts</code> — the <code>RunsGroup</code> Effect
+          <code>HttpApi</code> group: <code>POST/GET/PATCH /v1/runs</code> and
+          <code>GET /v1/runs/:id/{timeline,scrollback,loss}</code>, with <code>Schema</code> request/response
+          types and tagged errors. Added to <code>ControlPlaneAPI</code>.
+        </div></div>
+        <div class="why">Why: the single source of truth. The SDK client is <em>derived</em> from this; uint64 sequences travel as decimal strings to survive JSON.</div>
+
+        <h3>③ API layer — <code>apps/api</code></h3>
+        <div class="layer"><span class="n">↳</span><div>
+          <code>apps/api/src/routes/runs/</code> — handlers backed by <code>RunRepo</code> (metadata) and
+          <code>TelemetryQuery</code> (timeline / byte-exact scrollback / provenance-honest loss report),
+          wired into the server with a self-contained telemetry layer.
+        </div></div>
+        <div class="why">Why: makes the record a network resource, so the SDK is a real client and the record outlives the sandbox.</div>
+
+        <h3>④ SDK — <code>@sealant/sdk</code> (new package, ~1,660 LoC)</h3>
+        <div class="layer"><span class="n">↳</span><div>
+          The full fluent surface (<code>src/types.ts</code>), the derived wire client + runtime
+          (<code>src/effect/</code>), the facade objects (<code>src/facade/</code>), <code>create()</code>’s
+          blueprint lowering (<code>src/internal/blueprint.ts</code>), and the host-local
+          <code>harness.run()</code> orchestration (<code>src/effect/run-harness.ts</code>): resolve the
+          container → register the run → fork the ingester → exec the harness → capture the diff → close the
+          record → return a queryable <code>Run</code>.
+        </div></div>
+        <div class="why">Why: this is the public product surface — the thing developers <code>import</code> and build on.</div>
+
+        <h3>Data-model change: the first-class <code>runs</code> table</h3>
+        <p>
+          A new <code>runs</code> table (one row per harness execution) was added, and all six telemetry
+          foreign keys were re-pointed from <code>sandbox_attempts.id</code> to <code>runs.id</code>
+          (migration <code>20260627205522_runs_table_and_telemetry_fk</code>, applied + verified). Telemetry
+          ingestion is now <em>run-initiator-owned</em>: the SDK forks the ingester per run, so the worker’s
+          old per-sandbox auto-ingest was retired to a Phase-3 rework.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="api">4 · The complete SDK API</h2>
+        <p>
+          Everything the package exports, with status. Operations marked <span class="badge warn">Phase N</span>
+          are typed against the final shape but reject with <code>SealantNotImplementedError</code> today, so
+          callers compile against the finished surface now.
+        </p>
+        <pre><code>import {
+  Sealant,                                  // the client
+  opencode, codex, claudeCode, customHarness,  // harness factories
+  SealantError, SealantApiError, SealantRuntimeError, SealantNotImplementedError,
+} from "@sealant/sdk";</code></pre>
+
+        <h3>Client — <code>new Sealant(config)</code></h3>
+        <table>
+          <tr><th>Member</th><th>Description</th><th>Status</th></tr>
+          <tr><td><code>new Sealant({ baseUrl, apiKey?, fetch? })</code></td><td>Create a client bound to a control-plane deployment.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.baseUrl</code></td><td>The configured control-plane base URL.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.sandboxes.create(options)</code> → <code>Promise&lt;Sandbox&gt;</code></td><td>Build + launch a sandbox around a repository; resolves once the runtime is live (unless <code>wait:false</code>).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.sandboxes.get(id)</code> → <code>Promise&lt;Sandbox&gt;</code></td><td>Fetch an existing sandbox handle.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.sandboxes.list(options?)</code> → <code>Promise&lt;Sandbox[]&gt;</code></td><td>List sandboxes (filter by <code>status</code>/<code>limit</code>).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.runs.get(runId)</code> → <code>Promise&lt;Run&gt;</code></td><td>Fetch a past run and its record — replay long after the sandbox is gone.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sealant.close()</code> · <code>Symbol.asyncDispose</code></td><td>Release resources (HTTP client, DB pool, daemon connections). Supports <code>await using</code>.</td><td><span class="badge ok">live</span></td></tr>
+        </table>
+        <p style="font-size:13.5px;color:var(--muted)"><code>CreateOptions</code>: <code>{ repository, harness, ref?, name?, os?, packages?, wait?, onEvent? }</code>.</p>
+
+        <h3>Sandbox</h3>
+        <table>
+          <tr><th>Member</th><th>Description</th><th>Status</th></tr>
+          <tr><td><code>sandbox.id</code> · <code>sandbox.name</code></td><td>Identity of the live environment.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sandbox.status()</code> → <code>Promise&lt;SandboxStatus&gt;</code></td><td>Current lifecycle status.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sandbox.ready()</code> → <code>Promise&lt;this&gt;</code></td><td>Resolve once the runtime container is launched and live.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sandbox.harness</code></td><td>The <code>HarnessRunner</code> for this sandbox.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>sandbox.events()</code> → <code>AsyncIterable&lt;SandboxEvent&gt;</code></td><td>Provisioning/lifecycle events.</td><td><span class="badge warn">Phase 1</span></td></tr>
+          <tr><td><code>sandbox.stop()</code> · <code>restart()</code> · <code>expire(opts?)</code></td><td>Lifecycle control.</td><td><span class="badge warn">Phase 3</span></td></tr>
+        </table>
+
+        <h3>HarnessRunner — <code>sandbox.harness</code></h3>
+        <table>
+          <tr><th>Member</th><th>Description</th><th>Status</th></tr>
+          <tr><td><code>harness.run(prompt, options?)</code> → <code>Promise&lt;Run&gt;</code></td><td>BLOCKING one-shot: execute the harness, resolve when it terminally completes (result/changes/record settled).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>harness.start(prompt, options?)</code> → <code>Promise&lt;Run&gt;</code></td><td>NON-BLOCKING: return a live handle immediately for streaming.</td><td><span class="badge warn">Phase 2</span></td></tr>
+          <tr><td><code>harness.session(options?)</code> → <code>Promise&lt;InteractiveSession&gt;</code></td><td>Interactive PTY session over the live sandbox.</td><td><span class="badge warn">Phase 3</span></td></tr>
+        </table>
+
+        <h3>Run</h3>
+        <table>
+          <tr><th>Member</th><th>Description</th><th>Status</th></tr>
+          <tr><td><code>run.id</code></td><td>Stable run id (the record outlives the sandbox).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>run.result</code></td><td><code>{ status, outcome, exitCode, summary? }</code> — terminal result.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>run.changes.files</code> · <code>run.changes.diff()</code></td><td>The file changes (<code>{path, change, oldPath?}</code>) and the unified diff.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>run.artifacts.list()</code> → <code>Promise&lt;ArtifactRef[]&gt;</code></td><td>Retained artifacts.</td><td><span class="badge ok">live</span> <span style="color:var(--faint)">(empty until store exposed)</span></td></tr>
+          <tr><td><code>run.artifacts.get(name)</code> → <code>Promise&lt;Uint8Array&gt;</code></td><td>Fetch one artifact's bytes.</td><td><span class="badge warn">Phase 1</span></td></tr>
+          <tr><td><code>run.record</code></td><td>The execution record (see below).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>run.wait()</code> → <code>Promise&lt;Run&gt;</code></td><td>Poll until terminal (bounded deadline).</td><td><span class="badge ok">live</span></td></tr>
+        </table>
+
+        <h3>RunRecord — <code>run.record</code></h3>
+        <table>
+          <tr><th>Member</th><th>Description</th><th>Status</th></tr>
+          <tr><td><code>record.transcript()</code> → <code>Promise&lt;string&gt;</code></td><td>Human-readable replay — the actual terminal commands + outcomes, padded with <code>$</code> prompts, no event noise.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.commands()</code> → <code>Promise&lt;RunCommand[]&gt;</code></td><td>The structured commands the run executed (executable, args, exit/signal, duration, stdout/stderr bytes).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.replay(options?)</code> → <code>Promise&lt;RunReplay&gt;</code></td><td>Low-level scrubable re-fold; <code>replay.entries</code> + <code>replay.at(sequence)</code>.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.timeline(options?)</code> → <code>AsyncIterable&lt;TimelineEntry&gt;</code></td><td>Iterate the structured timeline (“what happened”).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.scrollback(processId, stream)</code> → <code>AsyncIterable&lt;Uint8Array&gt;</code></td><td>Byte-exact terminal output for a process stream.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.loss()</code> → <code>Promise&lt;LossReport&gt;</code></td><td>Provenance-honest report of any gaps in the stream.</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.summary()</code> → <code>Promise&lt;RunSummary&gt;</code></td><td>Compact summary (outcome, entry count, duration).</td><td><span class="badge ok">live</span></td></tr>
+          <tr><td><code>record.stream(options?)</code> → <code>AsyncIterable&lt;TimelineEntry&gt;</code></td><td>Live tail of the record while the run is in progress.</td><td><span class="badge warn">Phase 2</span></td></tr>
+          <tr><td><code>record.fileTreeAt(seq)</code> · <code>processTreeAt(seq)</code></td><td>Time-travel folds (file/process tree at a point in time).</td><td><span class="badge warn">Phase 1</span></td></tr>
+        </table>
+
+        <h3>Harness factories</h3>
+        <table>
+          <tr><th>Factory</th><th>One-shot command</th><th>Status</th></tr>
+          <tr><td><code>opencode()</code></td><td><code>opencode run &lt;prompt&gt;</code></td><td><span class="badge ok">live · verified</span></td></tr>
+          <tr><td><code>codex()</code></td><td><code>codex exec &lt;prompt&gt;</code></td><td><span class="badge info">typed</span></td></tr>
+          <tr><td><code>claudeCode({ profile? })</code></td><td><code>claude -p &lt;prompt&gt;</code></td><td><span class="badge info">typed</span></td></tr>
+          <tr><td><code>customHarness({ id, invoke, executable?, install?, launchCommand? })</code></td><td>bring-your-own — you supply <code>invoke(prompt) → string[]</code></td><td><span class="badge ok">live</span></td></tr>
+        </table>
+
+        <h3>Errors &amp; shell commands</h3>
+        <p style="margin-bottom:6px">
+          All operations reject with a plain <code>Error</code> subclass: <code>SealantError</code> (base, carries
+          <code>.code</code>), <code>SealantApiError</code> (carries <code>.status</code>),
+          <code>SealantRuntimeError</code>, and <code>SealantNotImplementedError</code>. The shell/CLI commands to
+          stand up the stack and run the demo are in <a href="#run">§9 · How to run it</a>.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="decisions">5 · The two decisions &amp; the model correction</h2>
+        <table>
+          <tr><th>Decision</th><th>Choice</th><th>Why it mattered</th></tr>
+          <tr>
+            <td><strong>Slice-1 scope</strong></td>
+            <td>Host-local thin slice</td>
+            <td>Fastest path to a real demo: SDK on the Docker host, telemetry ingested in-process, no auth. Network/auth deferred behind unchanged public types.</td>
+          </tr>
+          <tr>
+            <td><strong>Run identity</strong></td>
+            <td>First-class <code>runs</code> entity, now</td>
+            <td>A harness <em>run</em> is distinct from a sandbox <em>provisioning attempt</em>; modelling it properly up front keeps <code>runs.get(id)</code> correct and lets one sandbox host many runs.</td>
+          </tr>
+        </table>
+        <div class="note">
+          <strong>A correction worth surfacing:</strong> the plan framed <code>runId == attempt</code> as a
+          “hacky conflation.” Reading the code showed it’s actually a <em>pervasive, intentional</em>
+          convention (runtime instances, build jobs, run-links all key on the attempt id). So re-pointing
+          <em>only</em> telemetry to a new table was done deliberately — telemetry now belongs to a
+          harness run; everything else keeps the existing convention. No split-brain.
+        </div>
+      </section>
+
+      <section>
+        <h2 id="proof">6 · The end-to-end proof</h2>
+        <p>The verbatim public API — unchanged from the marketing copy:</p>
+        <pre><code>import { Sealant, opencode } from "@sealant/sdk";
+
+const sealant  = new Sealant({ baseUrl: "http://localhost:4000" });
+const sandbox  = await sealant.sandboxes.create({ repository, harness: opencode() });
+const run      = await sandbox.harness.run("Append a line … to the README file.");
+await run.record.replay();                         // scrubable timeline entries
+console.log(await run.record.transcript());        // …or the readable replay (commands, not noise)</code></pre>
+        <p>Run for real against the live stack (Postgres + RabbitMQ + zot + control-plane API + worker), it produced:</p>
+        <pre class="term">→ creating sandbox (build + launch)…
+<span class="g">✓</span> sandbox ready: d1fdd600-9f49-4914-9d9e-f433e4c2f9c1 (ready)
+→ running harness…
+<span class="g">✓</span> run run_26e00421-99fb-4f58-b19d-2d3a4beee43d — <span class="g">completed (exit 0)</span>
+→ changes:
+   modified  README
+   <span class="d">| @@ -1 +1,2 @@</span>
+   <span class="d">|  Hello World!</span>
+   <span class="g">| +Hello from Sealant.</span>
+→ replaying the record — what the harness actually ran:
+  $ <span class="b">opencode run "Append a line that says: Hello from Sealant. to the README file."</span>
+      ↳ stdout 6 B · stderr 307 B · <span class="g">completed (exit 0)</span> · 9.67 s
+
+  $ <span class="b">sh -lc "git add -A …; git --no-pager diff --cached"</span>
+      ↳ stdout 134 B · <span class="g">completed (exit 0)</span> · 9 ms
+
+<span class="g">✓</span> summary: {"outcome":"completed","entries":16,"durationMs":10096}
+<span class="g">✓</span> done</pre>
+        <p>
+          That output is the whole thesis in one screen: a coding agent did real work in a real,
+          disposable environment, and the run came back as <strong>structured, replayable evidence</strong> —
+          the file change, the process lifecycle, the byte-exact I/O — queryable as data, not scraped from logs.
+          opencode ran on its built-in free provider; no key was needed.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="verify">7 · Verification</h2>
+        <p>Every layer was validated as it was built — type-checked, linted, and exercised live against the running API and a real Docker sandbox.</p>
+        <table>
+          <tr><th>Check</th><th>Scope</th><th>Result</th></tr>
+          <tr><td>Type-check</td><td>api-contracts · db · telemetry · sandboxes · sdk · api · worker · <strong>web</strong></td><td><span class="tick">✓ 8/8 clean</span> (incl. the web app — no regressions)</td></tr>
+          <tr><td>Lint (oxlint)</td><td>all 7 touched packages</td><td><span class="tick">✓ clean</span></td></tr>
+          <tr><td>Migration</td><td>runs table + 6 FK re-point</td><td><span class="tick">✓ applied</span>, verified in live Postgres</td></tr>
+          <tr><td>Telemetry integration test</td><td>real Postgres, new FK + fixture</td><td><span class="tick">✓ 13 pass</span></td></tr>
+          <tr><td>Sandboxes unit tests</td><td>build/launch domain</td><td><span class="tick">✓ 62 pass</span> (4 e2e skipped)</td></tr>
+          <tr><td>SDK live tests</td><td>derived client · runs.get + record · create()</td><td><span class="tick">✓ 3 pass</span> against :4000</td></tr>
+          <tr><td>API round-trip</td><td>POST/GET/PATCH /v1/runs + timeline/loss</td><td><span class="tick">✓</span> verified via curl</td></tr>
+          <tr><td>End-to-end</td><td>create → run (opencode) → replay</td><td><span class="tick">✓ green</span> (16 entries, real diff)</td></tr>
+          <tr><td>Adversarial self-review</td><td>18-agent workflow over the new code (4 lenses, each finding verified against the source)</td><td><span class="tick">✓ 5 findings</span> confirmed &amp; fixed, then re-validated green</td></tr>
+        </table>
+        <p style="font-size:14px;color:var(--muted)">
+          The self-review found and fixed: a run left pinned <code>running</code> on a failure path; an
+          unbounded <code>wait()</code> poll; fabricated <code>{0,0}</code> loss spans; a dead-code FK
+          check that 500’d instead of 400’d; and a silently-swallowed telemetry-ingest error. None
+          affected the happy path — the end-to-end was re-run green after the fixes.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="status">8 · Honest status &amp; what’s deferred</h2>
+        <p>The SDK is feature-complete for the host-local slice. In the spirit of the product (“it reports; it does not judge — and it’s honest about provenance”), here is exactly what is and isn’t real yet:</p>
+        <div class="grid2">
+          <div class="card">
+            <div class="kicker" style="color:var(--success)">Real &amp; validated</div>
+            <ul class="tight">
+              <li><code>sandboxes.create / get / list</code></li>
+              <li><code>harness.run()</code> one-shot (real agent)</li>
+              <li><code>run.record.replay / timeline / scrollback / loss / summary</code></li>
+              <li><code>runs.get()</code> — read a past run</li>
+              <li>derived, type-safe wire client</li>
+              <li>full run-detail read path through all 4 layers</li>
+            </ul>
+          </div>
+          <div class="card">
+            <div class="kicker" style="color:var(--warn)">Typed now, deferred by phase</div>
+            <ul class="tight">
+              <li><code>record.stream()</code> live tail — Phase 2 (delivery integrity)</li>
+              <li><code>harness.start()</code> / <code>session()</code> — Phase 2/3</li>
+              <li><code>stop / restart / expire</code>, <code>sandbox.events()</code> — Phase 1/3</li>
+              <li><code>fileTreeAt / processTreeAt</code> folds — Phase 1</li>
+              <li>publishable <code>dist</code> + <code>/effect</code> subpath — Phase 4</li>
+            </ul>
+            <p style="margin:8px 0 0;font-size:13px;color:var(--muted)">All reject with a clear <code>SealantNotImplementedError</code>, so callers compile against the final shape today.</p>
+          </div>
+        </div>
+        <div class="note">
+          <strong>One honest provenance note.</strong> In the demo <code>loss.complete</code> reads
+          <code>false</code>. This is <em>not</em> dropped data — the 16 entries are all captured. The
+          host-local ingester connects to the daemon mid-life and the run’s epoch closes via
+          <code>stream-end</code> rather than an observed clean daemon <code>STOPPED</code>, so the record
+          conservatively flags that it couldn’t <em>prove</em> clean closure. True clean-close + ack/resume
+          is precisely the Phase-2 “delivery integrity” work the plan scopes. The record reporting its own
+          uncertainty is the product behaving correctly.
+        </div>
+        <p style="font-size:14px;color:var(--muted)">
+          Slice-1 is host-local and unauthenticated by design (the SDK runs on the Docker host with
+          DB access for in-process ingestion). The public constructor is already <code>{ baseUrl, apiKey }</code>;
+          host-local needs (<code>ownerUserId</code>, registry, <code>databaseUrl</code>) live in an internal config
+          and never leak into the published type, so adding auth + remote reads later changes nothing for callers.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="run">9 · How to run it</h2>
+        <pre><code># 1 · infra (Postgres 5433, RabbitMQ 5673, zot 5000)
+docker compose up -d
+
+# 2 · apply migrations
+DATABASE_URL=postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane \
+  pnpm --filter @sealant/db db:migrate
+
+# 3 · control-plane API (host, :4000)
+pnpm --filter @sealant/api dev
+
+# 4 · build/launch worker (host; needs docker + buildx)
+DEFAULT_SSH_AUTHORIZED_KEYS_FILE=$PWD/.secrets/authorized_keys \
+  pnpm --filter @sealant/worker dev
+
+# 5 · seed a local owner once (slice-1 has no auth yet)
+#   INSERT INTO "user"(id,name,email,created_at,updated_at)
+#   VALUES('usr_local','Local','local@example.test',now(),now());
+
+# 6 · the end-to-end demo
+cd packages/sdk && pnpm exec tsx examples/e2e-run.ts</code></pre>
+        <p style="font-size:14px;color:var(--muted)">
+          <code>examples/wow.ts</code> is the verbatim public-API showcase (type-checks against the published
+          surface); <code>examples/e2e-run.ts</code> is the runnable end-to-end proven above. The gated live
+          tests run with <code>SEALANT_SMOKE_BASE_URL=http://127.0.0.1:4000 pnpm --filter @sealant/sdk test</code>.
+        </p>
+      </section>
+
+      <section>
+        <h2 id="git">10 · Git state &amp; file inventory</h2>
+        <p>Branch <code>feat/typescript-sdk</code> · <span class="badge info">10 commits</span> · <span class="badge warn">not pushed</span> (no upstream configured — your review, your call).</p>
+        <pre><code>0285349 feat(sdk): end-to-end green — create → run → replay validated live
+85c7557 feat(sdk): harness.run() one-shot + telemetry ingest, full facade
+81c72ad feat(sdk): sandboxes.create() + Sandbox facade
+1d3eac5 feat(sdk): run/record read path consumed by the fluent facade
+4956af1 feat(api): run + execution-record routes (RunsGroup handlers)
+763b2f1 feat(api-contracts): run + execution-record contracts (RunsGroup)
+f4b01a3 feat(db): RunRepo — runs query/command layer
+2a7b7a1 test(sdk): live smoke — derived client reaches /healthz
+c7d28db feat(sdk): Effect core — derived wire client + runtime
+6b716de feat(sdk): scaffold @sealant/sdk + first-class runs table</code></pre>
+        <h3>New &amp; changed (selected)</h3>
+        <table>
+          <tr><th>Area</th><th>Path</th></tr>
+          <tr><td>SDK (new)</td><td><code>packages/sdk/</code> — types, errors, harness factories, effect core (api-client, runtime, operations, run-harness), facade (sandbox, run, record), internal (config, blueprint, map-error), examples, live tests</td></tr>
+          <tr><td>DB</td><td><code>packages/db/src/repositories/runs.ts</code>, <code>schema/control-plane.ts</code> (runs table), <code>schema/telemetry.ts</code> (FK re-point), <code>drizzle/20260627205522_…</code></td></tr>
+          <tr><td>Contracts</td><td><code>packages/api-contracts/src/core-api/runs.ts</code>, <code>control-plane.ts</code></td></tr>
+          <tr><td>API</td><td><code>apps/api/src/routes/runs/</code>, <code>index.ts</code> (telemetry layer), <code>control-plane.http-api.ts</code></td></tr>
+          <tr><td>Worker</td><td><code>apps/worker/src/workers/index.ts</code> (telemetry-kind gated to Phase 3)</td></tr>
+        </table>
+      </section>
+
+      <footer>
+        Sealant · @sealant/sdk implementation report · feat/typescript-sdk · generated 2026-06-28 ·
+        nothing pushed.
+      </footer>
+    </main>
+  </body>
+</html>

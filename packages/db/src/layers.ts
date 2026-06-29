@@ -6,6 +6,7 @@ import { GitHubWebhookDeliveryRepoLive } from "./repositories/github-webhook-del
 import { IssueWorkflowExecutionRepoLive } from "./repositories/issue-workflow-executions.js";
 import { IssueWorkflowRepoLive } from "./repositories/issue-workflows.js";
 import { PackageResolutionCacheRepoLive } from "./repositories/package-resolution-cache.js";
+import { PrincipalCredentialRepoLive } from "./repositories/principal-credentials.js";
 import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
 import { RunRepoLive } from "./repositories/runs.js";
@@ -46,6 +47,7 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   SandboxBuildJobRepoLive,
   RunRepoLive,
   ProfileRepoLive,
+  PrincipalCredentialRepoLive,
   IssueWorkflowRepoLive,
   IssueWorkflowExecutionRepoLive,
 );

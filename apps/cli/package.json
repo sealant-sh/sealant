@@ -1,0 +1,22 @@
+{
+  "name": "@sealant/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The `sealant` CLI — list sandboxes and connect tool logins (gh/claude/codex) to the credential store",
+  "type": "module",
+  "bin": {
+    "sealant": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "node ../../tooling/scripts/bundle-app.mjs",
+    "dev": "dotenv -e ../../.env -- tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "lint": "oxlint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*",
+    "dotenv-cli": "catalog:"
+  }
+}

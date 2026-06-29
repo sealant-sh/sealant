@@ -86,6 +86,21 @@ export interface SandboxEvent {
 /** The supported sandbox OS families (maps to the blueprint target). */
 export type SandboxOs = "fedora" | "arch" | "nix";
 
+/**
+ * Local tool setups the SDK can forward into a sandbox via `create({ forward })`, so the agent
+ * inside is already authenticated as you. Each id maps to a host-side auth-token capture and a
+ * runtime env var the corresponding CLI already honors:
+ *
+ *   - `"gh"`          → `GH_TOKEN`               (captured on your machine with `gh auth token`)
+ *   - `"claude-code"` → `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (from your env)
+ *   - `"codex"`       → `OPENAI_API_KEY`         (from your env, or the api-key field of `~/.codex/auth.json`)
+ *
+ * Only a scoped token is forwarded — never a credential file or a whole `~/.config` directory — and
+ * it travels as a runtime env var, so nothing is baked into the sandbox image. This union is also the
+ * seam a future profiles/policies layer reuses to bundle credential forwarding.
+ */
+export type HostForwardTool = "gh" | "claude-code" | "codex";
+
 export interface CreateOptions {
   /** Source git repository to build the sandbox around (e.g. `"github.com/acme/billing-service"`). */
   readonly repository: string;
@@ -99,6 +114,27 @@ export interface CreateOptions {
   readonly os?: SandboxOs;
   /** Extra OS packages to install in the sandbox. */
   readonly packages?: readonly string[];
+  /**
+   * Forward your LOCAL tool logins into the sandbox so the agent inside is authenticated as you.
+   * Opt-in by tool id (see `HostForwardTool`); at create time the SDK captures a scoped auth token on
+   * YOUR machine (e.g. runs `gh auth token`, reads `CLAUDE_CODE_OAUTH_TOKEN`/`OPENAI_API_KEY`) and
+   * injects it as a runtime env var. No credential files are copied and nothing is baked into the
+   * image. A tool that is not logged in is skipped with a warning — never fatal.
+   */
+  readonly forward?: readonly HostForwardTool[];
+  /**
+   * Extra environment variables for the sandbox runtime (merged into the blueprint `runtime.env`).
+   * The explicit escape hatch behind `forward`: inject any var yourself. An explicit key here wins
+   * over the same key produced by `forward`.
+   */
+  readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Stored credential ids (from `sealant login`) to forward into the sandbox. Each is resolved and
+   * decrypted server-side at launch and injected into the harness process — so claude/codex/gh are
+   * authenticated as you with no re-login. Unlike `forward` (capture a live host login for this run),
+   * `use` references durable credentials kept in the encrypted store.
+   */
+  readonly use?: readonly string[];
   /** When true (default), resolve only once the sandbox runtime is live. */
   readonly wait?: boolean;
   /** Observe provisioning events as they happen. */
