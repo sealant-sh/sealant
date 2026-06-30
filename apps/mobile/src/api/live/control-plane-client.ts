@@ -11,7 +11,7 @@ interface LiveSandboxRuntime {
   readonly adapter: "docker" | "k8s" | "k3s";
   readonly resourceId: string;
   readonly reference: string;
-  readonly status: "pending" | "running" | "failed" | "stopped";
+  readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
   readonly endpoint?: string;
 }
 
