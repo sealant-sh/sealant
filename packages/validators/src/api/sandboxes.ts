@@ -154,6 +154,7 @@ export const sandboxEventTypeSchema = z.enum([
   "image.published",
   "runtime.pending",
   "runtime.running",
+  "runtime.ready",
   "runtime.failed",
   "runtime.stopped",
 ]);

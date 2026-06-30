@@ -84,6 +84,7 @@ export interface SandboxEvent {
     | "image.published"
     | "runtime.pending"
     | "runtime.running"
+    | "runtime.ready"
     | "runtime.failed"
     | "runtime.stopped";
   readonly occurredAt: string;
