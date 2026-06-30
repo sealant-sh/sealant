@@ -20,7 +20,7 @@ const sandboxSshTargetSchema = z.object({
     adapter: z.enum(["docker", "k8s", "k3s"]),
     resourceId: z.string().trim().min(1),
     reference: z.string().trim().min(1),
-    status: z.enum(["pending", "running", "failed", "stopped"]),
+    status: z.enum(["pending", "running", "ready", "failed", "stopped"]),
     endpoint: z.string().trim().min(1),
   }),
 });
