@@ -57,6 +57,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./.secrets:/app/.secrets:ro
+      # §2.2: shared host dir where each sandbox's control socket is exposed, so the gateway reaches
+      # the daemon directly (and needs no Docker socket). Same path is mounted read-only into the gateway.
+      - /run/sealant/sockets:/run/sealant/sockets
     environment:
       RABBITMQ_URL: amqp://sealant:sealant@rabbitmq:5672
       REGISTRY_BASE_URL: http://zot:5000
@@ -64,6 +67,7 @@ services:
       DATABASE_URL: postgresql://sealant:sealant@postgres:5432/sealant_control_plane
       DEFAULT_SSH_AUTHORIZED_KEYS_FILE: /app/.secrets/authorized_keys
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
+      SANDBOX_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
       GITHUB_APP_ID: ${GITHUB_APP_ID}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY}
 
@@ -84,10 +88,14 @@ services:
       - "127.0.0.1:2222:2222"
     volumes:
       - ./.secrets:/app/.secrets:ro
+      # §2.2: read-only access to the per-sandbox control sockets the worker exposes here. The gateway
+      # connects to them directly (unix://) — NO Docker socket, so a gateway compromise cannot reach the
+      # host Docker daemon (which would be host root). The worker still has the socket; the gateway must not.
+      - /run/sealant/sockets:/run/sealant/sockets:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
-      - ./.env.local
+      - ./.env
     environment:
       SSH_GATEWAY_HOST: 0.0.0.0
       SSH_GATEWAY_PORT: 2222

@@ -135,6 +135,9 @@ pnpm test         # run tests
 pnpm format       # format (oxfmt)
 ```
 
+To run the full stack locally — infra, the web app, launching a sandbox, and SSHing into it — see
+[DEVELOPMENT.md](DEVELOPMENT.md).
+
 ### Playwright on NixOS
 
 Use the Playwright-specific shell to run browser automation against the Nix-provided Chromium,

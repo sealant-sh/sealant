@@ -213,6 +213,11 @@ const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
 export const workerRuntimeEnvSchema = z.object({
   DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
+  // When set, the docker adapter bind-mounts each sandbox's /run/sealant control socket dir to
+  // <dir>/<container> on the host, so the gateway can reach the daemon socket directly (unix://) with
+  // NO Docker access. Leave unset to keep the universal docker-exec reach. Must be a host path shared
+  // (same path) into both the worker (rw) and the ssh-gateway (ro).
+  SANDBOX_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
   DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
     .string()

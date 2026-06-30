@@ -64,17 +64,23 @@ export const parseSandboxIdFromUsername = (
   return sandboxId;
 };
 
+const UNIX_ENDPOINT_PREFIX = "unix://";
+
 /**
- * Map a resolved API target to a transport `ControlTarget`. Docker adapters reach the daemon socket
- * via `docker exec` into the container (resourceId). A bind-mounted-socket fast path (§2.2) would
- * arrive as an explicit host socketPath, which the API does not advertise yet — so we default to the
- * docker-exec reach.
+ * Map a resolved API target to a transport `ControlTarget`, driven by the runtime `endpoint`:
+ *  - `unix://<host path>` (§2.2): the adapter bind-mounted the daemon socket to a host path the
+ *    gateway can `net.connect` directly — NO Docker access needed. Preferred.
+ *  - anything else (`docker-exec://…`, §2.1): bridge in with `docker exec … socat` into the container.
  */
 export const toControlTarget = (target: SandboxSshTarget): ControlTarget => {
   if (target.runtime.adapter !== "docker") {
     throw new Error(
       `Unsupported runtime adapter '${target.runtime.adapter}' for control transport.`,
     );
+  }
+  const endpoint = target.runtime.endpoint.trim();
+  if (endpoint.startsWith(UNIX_ENDPOINT_PREFIX)) {
+    return { kind: "unix-socket", socketPath: endpoint.slice(UNIX_ENDPOINT_PREFIX.length) };
   }
   return {
     kind: "docker-exec",

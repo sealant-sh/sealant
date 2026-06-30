@@ -42,6 +42,35 @@ describe("toControlTarget", () => {
     });
   });
 
+  it("maps a unix:// endpoint to a direct unix-socket target (§2.2 — no Docker)", () => {
+    const target: SandboxSshTarget = {
+      ...dockerTarget("ctr-abc"),
+      runtime: {
+        ...dockerTarget("ctr-abc").runtime,
+        endpoint: "unix:///run/sealant/sockets/sealant-sandbox_123/control.sock",
+      },
+    };
+    expect(toControlTarget(target)).toEqual({
+      kind: "unix-socket",
+      socketPath: "/run/sealant/sockets/sealant-sandbox_123/control.sock",
+    });
+  });
+
+  it("falls back to docker-exec for a docker-exec:// endpoint", () => {
+    const target: SandboxSshTarget = {
+      ...dockerTarget("ctr-xyz"),
+      runtime: {
+        ...dockerTarget("ctr-xyz").runtime,
+        endpoint: "docker-exec://ctr-xyz/run/sealant/control.sock",
+      },
+    };
+    expect(toControlTarget(target)).toEqual({
+      kind: "docker-exec",
+      containerId: "ctr-xyz",
+      socketPath: DEFAULT_CONTROL_SOCKET_PATH,
+    });
+  });
+
   it("rejects non-docker adapters", () => {
     const target: SandboxSshTarget = {
       ...dockerTarget("ctr-abc"),
