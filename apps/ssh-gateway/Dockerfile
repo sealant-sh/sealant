@@ -15,6 +15,8 @@ RUN pnpm --filter @sealant/ssh-gateway build
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+# No Docker CLI and no docker.sock: the gateway reaches sandboxes only through the §2.2 bind-mounted
+# control sockets (unix://), so a gateway compromise can never touch the host Docker daemon.
 # ssh2 has native bindings and is kept out of the bundle; install just it (skip the optional
 # cpu-features native addon — ssh2 runs without it).
 RUN npm install --omit=dev --omit=optional ssh2@^1.17.0 && npm cache clean --force

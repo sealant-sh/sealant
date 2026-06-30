@@ -42,6 +42,11 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
       defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
       sshBindHost: env.DEFAULT_SSH_BIND_HOST,
       sshEndpointExposureStrategy: env.DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY,
+      // §2.2: when set, sandboxes expose their control socket on the host so the gateway reaches them
+      // directly (unix://) and needs no Docker socket.
+      ...(env.SANDBOX_CONTROL_SOCKET_HOST_DIR === undefined
+        ? {}
+        : { controlSocketHostDir: env.SANDBOX_CONTROL_SOCKET_HOST_DIR }),
     }),
     new K8sRuntimeAdapter(),
     new K3sRuntimeAdapter(),

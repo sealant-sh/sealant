@@ -1301,7 +1301,8 @@ export const getSandboxSshTarget = (input: {
       runtimeInstance.adapter === null ||
       runtimeInstance.resourceId === null ||
       runtimeInstance.reference === null ||
-      runtimeInstance.status !== "running"
+      // "ready" is the honest-readiness state (control socket accepting) — SSH-able, like "running".
+      (runtimeInstance.status !== "running" && runtimeInstance.status !== "ready")
     ) {
       return yield* new SandboxConflictError({
         message: `Sandbox ${input.sandboxId} runtime SSH target is not available.`,

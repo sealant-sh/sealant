@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 /*
 This script bootstraps a local dev environment for gateway-based SSH:
 - generates key material if missing,
-- updates .env.local with gateway vars,
+- updates .env with gateway vars (managed block),
 - wires SSH host aliases so `ssh sbx-<sandboxId>` works,
 - avoids clobbering user-managed config by writing managed blocks only.
 */
 
 const repoRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const secretsDirectory = resolve(repoRoot, ".secrets");
-const envLocalPath = resolve(repoRoot, ".env.local");
+const envPath = resolve(repoRoot, ".env");
 
 const managedBlockStart = "# >>> sealant ssh-gateway dev >>>";
 const managedBlockEnd = "# <<< sealant ssh-gateway dev <<<";
@@ -194,7 +194,7 @@ const main = () => {
   // authorized_keys controls what key the gateway can use against sandbox runtimes.
   ensureAuthorizedKeyLine(sandboxAuthorizedKeysPath, gatewayUpstreamPublicKey);
 
-  const existingEnvLocal = readTextFileIfExists(envLocalPath);
+  const existingEnvLocal = readTextFileIfExists(envPath);
   const unmanagedContent = removeManagedBlock(existingEnvLocal);
   const token =
     readEnvValue(existingEnvLocal, "SANDBOX_SSH_GATEWAY_TOKEN") ?? randomBytes(24).toString("hex");
@@ -209,7 +209,7 @@ const main = () => {
     SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: prefix,
   });
 
-  writeFileSync(envLocalPath, nextEnvLocal, "utf8");
+  writeFileSync(envPath, nextEnvLocal, "utf8");
 
   const homeDirectory = process.env.HOME ?? homedir();
   const userSshDirectory = resolve(homeDirectory, ".ssh");
@@ -285,7 +285,7 @@ const main = () => {
   }
 
   console.log("[ssh-gateway-setup] prepared local gateway dev assets");
-  console.log(`[ssh-gateway-setup] env file: ${envLocalPath}`);
+  console.log(`[ssh-gateway-setup] env file: ${envPath}`);
   console.log(`[ssh-gateway-setup] secrets dir: ${secretsDirectory}`);
   console.log("[ssh-gateway-setup] generated/verified keys:");
   console.log(`  - ${gatewayHostKeyPath}`);
@@ -300,13 +300,15 @@ const main = () => {
   if (includeDirectiveConfigured) {
     console.log(`  - ${userSshConfigPath} (Include directive ensured)`);
   } else {
-    console.log(`  - unable to update ${userSshConfigPath}; add this manually:`);
-    console.log(`    ${includeDirective}`);
+    console.log(`  - ${userSshConfigPath} is read-only; skipped the Include (connect with -F instead — see below).`);
+    console.log(`    To enable the short \`ssh sbx-<id>\` form, add this line yourself: ${includeDirective}`);
   }
   console.log("[ssh-gateway-setup] next steps:");
-  console.log("  1) Start API: pnpm --filter @sealant/api dev");
-  console.log("  2) Start app profile: docker compose --profile apps up -d --build");
-  console.log("  3) Connect: ssh sbx-<sandboxId>");
+  console.log("  1) Infra:          docker compose up -d");
+  console.log("  2) Migrate DB:     pnpm db:migrate");
+  console.log("  3) API + web:      pnpm --filter @sealant/api dev   (and --filter @sealant/web)");
+  console.log("  4) Worker+gateway: docker compose --profile apps up -d --build");
+  console.log(`  5) Connect:        ssh -F ${effectiveSshConfigPath} sbx-<sandboxId>`);
 };
 
 main();
