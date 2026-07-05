@@ -2,7 +2,6 @@ import { Link } from "@tanstack/react-router";
 
 import { LogoBlob, LogoText } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
-import { Button } from "./ui/button";
 
 function TopLevelNavItem({
   to,
@@ -50,18 +49,14 @@ export default function Header() {
       <div className="flex items-center gap-5">
         <nav className="flex items-center">
           <ul role="list" className="flex items-center gap-8">
-            <TopLevelNavItem to="/">Documenation</TopLevelNavItem>
-            <TopLevelNavItem to="/blog">Blog</TopLevelNavItem>
-            <TopLevelNavItem href="https://discord.gg">Community</TopLevelNavItem>
+            <TopLevelNavItem to="/">Documentation</TopLevelNavItem>
+            <TopLevelNavItem href="https://github.com/sealant-sh/sealant">GitHub</TopLevelNavItem>
           </ul>
         </nav>
       </div>
       <div className="hidden md:h-5 md:w-px md:bg-zinc-900/10 md:dark:bg-white/15" />
       <div className="flex gap-4">
         <ThemeToggle />
-      </div>
-      <div className="hidden min-[450px]:contents">
-        <Button>Dashboard</Button>
       </div>
     </header>
   );

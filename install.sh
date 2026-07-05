@@ -10,9 +10,11 @@
 # RabbitMQ, registry). The only host requirements are a running Docker daemon and curl — no git, no
 # node, no firewall changes. Everything binds to loopback by default.
 #
-#   SEALANT_VERSION=0.2.0 …| sh   install/switch to an exact release
-#   SEALANT_VERSION=latest …| sh  upgrade an existing install to the newest release
-#   (re-running with no version keeps the installed version — a safe repair/reconcile)
+#   …| SEALANT_VERSION=0.1.3 sh   install/switch to an exact release
+#   …| SEALANT_VERSION=latest sh  upgrade an existing install to the newest release
+#   (re-running with no version keeps the installed version — a safe repair/reconcile;
+#   the variable must be set on the sh side of the pipe — prefixed to curl it only
+#   applies to the download and this script never sees it)
 #
 # Uninstall: docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
 set -eu
@@ -221,5 +223,5 @@ printf '\n  API for the SDK:  http://localhost:%s\n' "$API_PORT"
 printf '\n  Manage it:\n'
 printf '    docker compose --project-directory %s logs -f\n' "$INSTALL_DIR"
 printf '    docker compose --project-directory %s down\n' "$INSTALL_DIR"
-printf '    upgrade:    SEALANT_VERSION=latest curl -fsSL https://get.sealant.dev | sh\n'
+printf '    upgrade:    curl -fsSL https://get.sealant.dev | SEALANT_VERSION=latest sh\n'
 printf '    uninstall:  docker compose --project-directory %s down -v && rm -rf %s\n\n' "$INSTALL_DIR" "$INSTALL_DIR"

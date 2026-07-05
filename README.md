@@ -41,9 +41,11 @@ build on the same public SDK. Your code never leaves your infrastructure.
 
 ## Documentation
 
-The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and covers getting started, the
-architecture (sandbox lifecycle, the execution record & telemetry, `sealantd` integration), the
-packages, and the product and design notes.
+The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and addresses users of the platform:
+getting started (install, first sandbox), task guides (GitHub App, SSH access, sandboxes, upgrades),
+reference (environment variables, ports, the HTTP API, the SDK), the core concepts, and a
+contributing section for working on Sealant itself. Retired planning artifacts are archived under
+[`docs/archive/`](docs/archive).
 
 Two canonical reference docs sit at the repo root:
 
@@ -103,7 +105,8 @@ registry integrations publish and retrieve artifacts.
 
 ## Install (self-host)
 
-Everything you need is a running Docker daemon — no git, no node, no firewall changes:
+Everything you need is a running Docker daemon with Compose v2 — no git, no node, no firewall
+changes:
 
 ```bash
 curl -fsSL https://get.sealant.dev | sh
@@ -118,8 +121,9 @@ to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a
 ssh -p 2222 sbx-<sandbox-id>@localhost
 ```
 
-Upgrade by re-running the installer with `SEALANT_VERSION=latest`; re-running without it repairs the
-current install (secrets and data are never regenerated). Uninstall:
+Upgrade with `curl -fsSL https://get.sealant.dev | SEALANT_VERSION=latest sh` (the variable goes on
+the `sh` side of the pipe); re-running plain repairs the current install (secrets and data are never
+regenerated). Uninstall:
 
 ```bash
 docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant

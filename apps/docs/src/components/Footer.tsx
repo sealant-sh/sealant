@@ -4,31 +4,19 @@ export default function Footer() {
   return (
     <footer className="mt-20 border-t border-[var(--line)] px-4 pb-14 pt-10 text-[var(--sea-ink-soft)]">
       <div className="page-wrap flex flex-col items-center justify-between gap-4 text-center sm:flex-row sm:text-left">
-        <p className="m-0 text-sm">&copy; {year} Your name here. All rights reserved.</p>
-        <p className="island-kicker m-0">Built with TanStack Start</p>
+        <p className="m-0 text-sm">&copy; {year} Sealant.</p>
+        <p className="island-kicker m-0">
+          Open-source, self-hosted runtime for agentic development
+        </p>
       </div>
       <div className="mt-4 flex justify-center gap-4">
         <a
-          href="https://x.com/tan_stack"
+          href="https://github.com/sealant-sh/sealant"
           target="_blank"
           rel="noreferrer"
           className="rounded-xl p-2 text-[var(--sea-ink-soft)] transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
         >
-          <span className="sr-only">Follow TanStack on X</span>
-          <svg viewBox="0 0 16 16" aria-hidden="true" width="32" height="32">
-            <path
-              fill="currentColor"
-              d="M12.6 1h2.2L10 6.48 15.64 15h-4.41L7.78 9.82 3.23 15H1l5.14-5.84L.72 1h4.52l3.12 4.73L12.6 1zm-.77 12.67h1.22L4.57 2.26H3.26l8.57 11.41z"
-            />
-          </svg>
-        </a>
-        <a
-          href="https://github.com/TanStack"
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-xl p-2 text-[var(--sea-ink-soft)] transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
-        >
-          <span className="sr-only">Go to TanStack GitHub</span>
+          <span className="sr-only">Sealant on GitHub</span>
           <svg viewBox="0 0 16 16" aria-hidden="true" width="32" height="32">
             <path
               fill="currentColor"
