@@ -130,6 +130,12 @@ else
   [ -n "$VERSION" ] || die "Could not resolve the latest release of $REPO from the GitHub API."
 fi
 ok "Installing Sealant $VERSION"
+# Compose gives OS env precedence over .env: re-export the NORMALIZED version so a caller's
+# tag-form value (SEALANT_VERSION=v0.1.2) or "latest" can't leak into compose interpolation and
+# resolve images to a tag that doesn't exist. (This was the root cause of the v0.1.0–v0.1.2 CI
+# smoke failures: images are tagged without the leading v.)
+SEALANT_VERSION="$VERSION"
+export SEALANT_VERSION
 
 # --- Fetch the compose file ---------------------------------------------------------------------------
 mkdir -p "$INSTALL_DIR"
