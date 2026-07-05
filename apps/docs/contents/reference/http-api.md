@@ -51,9 +51,9 @@ The execution record is read through the run endpoints: `/timeline` is the order
 `/scrollback` returns byte-exact process I/O, `/changes` is the file diff, and `/loss` reports any
 gaps. See [Execution records](/docs/concepts/execution-records) for what these mean.
 
-Not yet part of the API: issue workflows, a repositories or profiles resource, artifact-bundle
-endpoints, outbound webhook subscriptions, and API-token management. Do not build against them —
-they are not shipped. See [What ships today](/docs/introduction/what-ships-today).
+Not yet part of the API: a repositories or profiles resource, artifact-bundle endpoints, outbound
+webhook subscriptions, and API-token management. Do not build against them — they are not shipped.
+See [What ships today](/docs/introduction/what-ships-today).
 
 ## Authentication
 

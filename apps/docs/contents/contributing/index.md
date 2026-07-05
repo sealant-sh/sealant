@@ -7,14 +7,14 @@ description:
 
 Sealant is a `pnpm` + `turbo` monorepo. Everything you need to build or change the runtime lives in
 one repo: the control-plane API, the web app, the background worker, the SSH gateway, and the shared
-packages that carry the sandbox and issue-workflow domains between them.
+packages that carry the sandbox domain and the execution record between them.
 
 ## Where things live
 
 - **`apps/`** — deployable surfaces: the product web app, the control-plane API, the worker, the SSH
-  gateway, this docs site, the marketing site, and early-stage electron/mobile clients. See
+  gateway, this docs site, and the marketing site. See
   [Monorepo layout](/docs/contributing/monorepo-layout) for a one-paragraph map of each.
-- **`packages/`** — shared libraries: wire contracts, the sandbox and issue-workflow domains, the
+- **`packages/`** — shared libraries: wire contracts, the sandbox domain, the
   telemetry/execution-record log, auth, the design system, and the (unpublished, preview) SDK. Same
   page as above.
 - **`tooling/`** — centralized TypeScript, lint, format, and test config shared by every workspace.

@@ -67,8 +67,8 @@ owner. See [SSH access](/docs/guides/ssh-access) for how key resolution and auth
   rebuild with `docker compose --profile apps up -d --build <service>` — a plain `restart` runs
   stale code.
 - **`db:seed` needs `DATABASE_URL`.** Run it from the Nix shell, or set it inline.
-- **Bare `pnpm dev` starts every workspace** (web and docs both bind `:3000`, plus mobile/expo).
-  Scope with `--filter`.
+- **Bare `pnpm dev` starts every workspace** (web and docs both bind `:3000`). Scope with
+  `--filter`.
 - **"Connection closed" right after the SSH banner** is authorization, not SSH — check
   `docker compose logs --tail=5 ssh-gateway`. Usually the resolved principal doesn't own the
   sandbox, the key isn't registered, or the sandbox isn't running yet.

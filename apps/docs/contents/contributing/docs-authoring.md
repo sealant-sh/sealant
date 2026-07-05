@@ -82,7 +82,7 @@ Sealant's docs describe a system that is still being built. Concretely:
 - If a feature is mock or static-data-backed in the UI (for example, some
   repository/profile/registry views), say so plainly rather than writing instructions as if it
   persisted anything.
-- If something is a preview (the SDK, the issue-workflow board), label it as preview and say what
+- If something is a preview (the SDK, the runs review surface), label it as preview and say what
   that means in practice — what works end to end today versus what's typed but not wired up.
 - If a security/auth property doesn't exist yet (there are no API tokens; there is no bearer-auth
   enforcement on the control-plane API; identity is currently a passed-through `ownerUserId`), state
