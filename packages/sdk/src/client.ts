@@ -4,26 +4,26 @@
  *   import { Sealant, opencode } from "@sealant/sdk"
  *   const sealant = new Sealant({ baseUrl: "http://localhost:8080" })
  *
- * This is the plain-Promise facade. The Effect-native core (an app `Layer` built once in the
- * constructor, the wire client over `@sealant/api-contracts`, the run/record services) lands in the
- * implementation phases and will be reachable via the `@sealant/sdk/effect` subpath for power users.
- * Until then the operations are TYPED against the stable surface and reject with
- * `SealantNotImplementedError` so callers can compile and wire against the final shape today.
+ * This is the plain-Promise facade over the Effect core: an app `Layer` built once in the
+ * constructor providing the wire client derived from `@sealant/api-contracts`. Everything is a plain
+ * HTTP call to `baseUrl`. Operations whose endpoints have not landed yet stay TYPED against the
+ * stable surface and reject with `SealantNotImplementedError` so callers can compile and wire
+ * against the final shape today.
  */
 import { createSandboxOp, getRunOp, getSandboxOp, listSandboxesOp } from "./effect/operations.js";
-import { runHarness } from "./effect/run-harness.js";
+import { runHarness, startHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
-import { makeSandbox, registerRunHarness } from "./facade/sandbox.js";
+import { makeSandbox, registerHarnessExecutors } from "./facade/sandbox.js";
 import { buildCreateSandboxRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import type { CreateOptions, ListOptions, Run, Sandbox, SealantConfig } from "./types.js";
 
-// Wire the host-local run-execution implementation into the Sandbox facade (the injection point
-// exists to break the sandbox <-> run-harness import cycle; the client is the composition root).
-registerRunHarness(runHarness);
+// Wire the run-execution implementations into the Sandbox facade (the injection point exists to
+// break the sandbox <-> run-harness import cycle; the client is the composition root).
+registerHarnessExecutors({ run: runHarness, start: startHarness });
 
 export class Sealant {
   readonly #config: SealantConfig;

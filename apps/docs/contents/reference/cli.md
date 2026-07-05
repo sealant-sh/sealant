@@ -28,7 +28,7 @@ Until a CLI exists, drive Sealant programmatically through:
 
 - **The [HTTP API](/docs/reference/http-api)** — the control plane on `http://localhost:4000`, with
   a live OpenAPI spec at `/openapi.json` you can generate a client from.
-- **The [SDK](/docs/reference/sdk)** — `@sealant/sdk`, a fluent TypeScript client. It is preview and
-  monorepo-only for now (not yet published to npm).
+- **The [SDK](/docs/reference/sdk)** — `@sealant/sdk`, a fluent TypeScript client. It is preview;
+  the first npm release is in flight, so it is monorepo-only until that lands.
 
 See [What ships today](/docs/introduction/what-ships-today) for the current state of every surface.

@@ -50,6 +50,12 @@ and injects them at launch.
 
 ## Status
 
-Scaffold. The public surface compiles and the harness factories are real; the client operations are
-typed stubs pending the implementation phases (Effect core → `create()` → `harness.run()` →
-`record.replay()`). See the SDK build plan for the phased sequence.
+The core loop is real: `sandboxes.create()`/`get()`/`list()`, `ready()`, blocking `harness.run()`
+and non-blocking `harness.start()` (run execution happens server-side; the SDK is a thin HTTP
+client), `runs.get()`, and the record read surface — `replay()`, `timeline()`, `scrollback()`,
+`commands()`, `transcript()`, `stream()` (poll-backed), `loss()`, `summary()`, plus captured
+`changes` (files + diff) settled by `run()`/`wait()`.
+
+Still typed stubs pending their read models / endpoints: `artifacts.get()` and the time-travel folds
+`fileTreeAt()`/`processTreeAt()` (Phase 1), and `harness.session()` + sandbox lifecycle
+`stop()`/`restart()`/`expire()` (Phase 3).

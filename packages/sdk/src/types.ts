@@ -278,8 +278,8 @@ export type IoStream = "stdout" | "stderr";
 
 /**
  * The execution record for a run: the durable, replayable history. Backed by the telemetry read
- * facade. `replay()`/`timeline()`/`scrollback()` are available in the current slice; the time-travel
- * folds (`fileTreeAt`/`processTreeAt`) and the live `stream()` reject until their read models land.
+ * facade. `replay()`/`timeline()`/`scrollback()`/`stream()` are available in the current slice; the
+ * time-travel folds (`fileTreeAt`/`processTreeAt`) reject until their read models land.
  */
 export interface RunRecord {
   readonly runId: string;
@@ -292,7 +292,7 @@ export interface RunRecord {
   commands(): Promise<readonly RunCommand[]>;
   /** A human-readable transcript: the commands and their outcomes, nicely laid out (no event noise). */
   transcript(): Promise<string>;
-  /** Subscribe to the live event stream while the run is in progress (Phase 2). */
+  /** Subscribe to the live event stream while the run is in progress (poll-backed; SSE later). */
   stream(options?: { readonly from?: bigint }): AsyncIterable<TimelineEntry>;
   /** Iterate the full timeline as structured data. */
   timeline(options?: { readonly from?: bigint }): AsyncIterable<TimelineEntry>;

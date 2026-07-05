@@ -1,0 +1,47 @@
+# Versioning (no publish): on push to main, consume pending changesets and open/update the
+# "Version Packages" PR that bumps @sealant/sdk + @sealant/api-contracts and writes CHANGELOGs.
+# Publishing is tag-triggered in release.yml — this workflow deliberately has no `publish:` key
+# and no npm credentials. Mirrors sealantd's version workflow.
+name: Version
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Open version PR
+    # Forks must not open version PRs.
+    if: github.repository == 'sealant-sh/sealant'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Create or update the Version Packages PR
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset version
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

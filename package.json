@@ -5,6 +5,7 @@
   "scripts": {
     "build": "turbo build",
     "build:tui": "turbo build --ui=tui",
+    "changeset": "changeset",
     "clean": "pnpm run clean:workspaces && rm -rf node_modules .turbo",
     "clean:sandboxes": "node tooling/scripts/clean-sandboxes.mjs",
     "clean:turbo": "turbo clean",
@@ -37,6 +38,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.5",
     "@effect/language-service": "^0.86.2",
     "@playwright/test": "^1.56.1",
     "@types/node": "^24.0.0",

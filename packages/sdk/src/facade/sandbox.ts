@@ -1,8 +1,8 @@
 /**
- * The `Sandbox` facade — a live, disposable environment as the SDK exposes it. `status()`/`ready()`
- * poll the control-plane sandbox endpoint; `harness.run()` is the host-local exec path (filled in by
- * the run-execution module). `events()` and the lifecycle verbs are typed now and reject until their
- * endpoints land (Phase 1 / Phase 3).
+ * The `Sandbox` facade — a live, disposable environment as the SDK exposes it. `status()`/`ready()`/
+ * `events()` poll the control-plane sandbox endpoint; `harness.run()`/`harness.start()` are the
+ * server-side execution paths (filled in by the run-execution module). `harness.session()` and the
+ * lifecycle verbs are typed now and reject until their endpoints land (Phase 3).
  */
 import type { SandboxDetails } from "@sealant/api-contracts";
 
@@ -26,9 +26,9 @@ const READY_TIMEOUT_MS = 10 * 60 * 1_000;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The host-local `harness.run()` implementation is injected by the run-execution module to avoid a
- * static dependency cycle (sandbox <-> run execution). Until it is registered, `run()` reports that
- * the feature is not wired in this build.
+ * The `harness.run()`/`harness.start()` implementations are injected by the run-execution module to
+ * avoid a static dependency cycle (sandbox <-> run execution). Until they are registered, both
+ * report that the feature is not wired in this build.
  */
 export type RunHarnessFn = (
   ctx: SdkContext,
@@ -37,23 +37,36 @@ export type RunHarnessFn = (
   options?: import("../types.js").RunOptions,
 ) => Promise<import("../types.js").Run>;
 
-let runHarnessImpl: RunHarnessFn | undefined;
-export const registerRunHarness = (fn: RunHarnessFn): void => {
-  runHarnessImpl = fn;
+export interface HarnessExecutors {
+  /** BLOCKING `harness.run()`: resolves once the run is terminal. */
+  readonly run: RunHarnessFn;
+  /** NON-BLOCKING `harness.start()`: returns the live handle immediately. */
+  readonly start: RunHarnessFn;
+}
+
+let harnessExecutors: HarnessExecutors | undefined;
+export const registerHarnessExecutors = (executors: HarnessExecutors): void => {
+  harnessExecutors = executors;
 };
 
 export const makeSandbox = (ctx: SdkContext, init: SandboxInit): Sandbox => {
   const harness: HarnessRunner = {
     run: (prompt, options) => {
-      if (runHarnessImpl === undefined) {
+      if (harnessExecutors === undefined) {
         return Promise.reject(
           new SealantNotImplementedError("harness.run (run execution not wired in this build)"),
         );
       }
-      return runHarnessImpl(ctx, init, prompt, options);
+      return harnessExecutors.run(ctx, init, prompt, options);
     },
-    start: () =>
-      Promise.reject(new SealantNotImplementedError("harness.start (non-blocking run, Phase 2)")),
+    start: (prompt, options) => {
+      if (harnessExecutors === undefined) {
+        return Promise.reject(
+          new SealantNotImplementedError("harness.start (run execution not wired in this build)"),
+        );
+      }
+      return harnessExecutors.start(ctx, init, prompt, options);
+    },
     session: () =>
       Promise.reject(new SealantNotImplementedError("harness.session (interactive, Phase 3)")),
   };

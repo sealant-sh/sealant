@@ -7,6 +7,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { GitHubLogo } from "#/components/github";
 import {
   Container,
+  InstallCommand,
   PrimaryCTA,
   REPO_URL,
   riseChild,
@@ -65,7 +66,10 @@ export function Hero() {
               Read the SDK docs
             </a>
           </motion.div>
-          <motion.p {...child} className="mt-7 font-mono text-xs text-faint">
+          <motion.div {...child} className="mt-7 flex justify-center">
+            <InstallCommand />
+          </motion.div>
+          <motion.p {...child} className="mt-5 font-mono text-xs text-faint">
             Open source · Self-hosted · Bring your own harness · Replayable runs
           </motion.p>
         </motion.div>

@@ -4,10 +4,10 @@
 // Exhibit (see run-record.tsx).
 
 import { motion, useReducedMotion, type Variants } from "framer-motion";
-import { ArrowRight, ArrowUpRight } from "lucide-react";
-import { type ComponentType, type ReactNode } from "react";
+import { ArrowRight, ArrowUpRight, Check, Copy } from "lucide-react";
+import { type ComponentType, type ReactNode, useState } from "react";
 
-export const REPO_URL = "https://github.com/get-sealant/sealant";
+export const REPO_URL = "https://github.com/sealant-sh/sealant";
 
 export const riseParent: Variants = {
   hidden: {},
@@ -139,6 +139,41 @@ export function SecondaryCTA({
       {children}
       <ArrowRight className="size-4" aria-hidden="true" />
     </a>
+  );
+}
+
+export const INSTALL_COMMAND = "curl -fsSL https://get.sealant.dev | sh";
+
+// The self-host installer as a copyable one-liner — the whole install, in the page's
+// quiet light-mono idiom (not a dark terminal panel).
+export function InstallCommand({ className = "" }: { className?: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    await navigator.clipboard.writeText(INSTALL_COMMAND);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div
+      className={`inline-flex min-h-11 max-w-full items-center gap-3 rounded-xl border border-rule bg-[var(--sw-sunken)] py-2 pr-2 pl-4 shadow-[var(--shadow-xs)] ${className}`}
+    >
+      <code className="overflow-x-auto font-mono text-[0.8rem] whitespace-nowrap text-ink-2">
+        <span className="text-faint select-none">$ </span>
+        {INSTALL_COMMAND}
+      </code>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? "Copied" : "Copy install command"}
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-[var(--sw-wash)] hover:text-primary"
+      >
+        {copied ? (
+          <Check className="size-4 text-success" aria-hidden="true" />
+        ) : (
+          <Copy className="size-4" aria-hidden="true" />
+        )}
+      </button>
+    </div>
   );
 }
 

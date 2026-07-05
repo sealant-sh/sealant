@@ -4,7 +4,14 @@
 
 import { Boxes, Code2, LayoutTemplate } from "lucide-react";
 
-import { Container, Eyebrow, type IconType, Reveal, SectionHead } from "#/components/primitives";
+import {
+  Container,
+  Eyebrow,
+  type IconType,
+  InstallCommand,
+  Reveal,
+  SectionHead,
+} from "#/components/primitives";
 
 interface Pillar {
   readonly icon: IconType;
@@ -45,6 +52,13 @@ export function OpenSource() {
             </p>
           }
         />
+        <Reveal className="mx-auto mt-10 flex max-w-2xl flex-col items-center gap-3">
+          <InstallCommand />
+          <p className="text-center font-mono text-xs text-faint">
+            A running Docker daemon with Compose v2 is the whole prerequisite — web on :3000, API on
+            :4000, SSH gateway on :2222.
+          </p>
+        </Reveal>
         <Reveal className="mt-12 grid gap-5 sm:grid-cols-3">
           {PILLARS.map((pillar) => {
             const Icon = pillar.icon;
