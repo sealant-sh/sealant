@@ -28,7 +28,12 @@ import {
   type UpdateRunRequest,
 } from "@sealant/api-contracts";
 import { RunRepo } from "@sealant/db";
-import { payloadCaseValues, TelemetryQuery, type PayloadCase } from "@sealant/telemetry";
+import {
+  payloadCaseValues,
+  TelemetryQuery,
+  TelemetryQueryInvariantError,
+  type PayloadCase,
+} from "@sealant/telemetry";
 import { Context, Effect, Stream } from "effect";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
@@ -321,7 +326,7 @@ export const getRunEvent = (input: { readonly runId: string; readonly sequence: 
     // A missing sequence is an InvariantError from TelemetryQuery — surface it as a 404, not a 500.
     const row = yield* query.getEvent(input.runId, sequence).pipe(
       Effect.mapError((error) =>
-        error._tag === "TelemetryQueryInvariantError"
+        error instanceof TelemetryQueryInvariantError
           ? new RunNotFoundError({
               message: `No event at sequence ${input.sequence} for run ${input.runId}.`,
             })

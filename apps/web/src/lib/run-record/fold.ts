@@ -245,7 +245,9 @@ const accumulateNetwork = (
 };
 
 const finishNetwork = (bucket: Map<string, MutableNetwork>): RecordNetworkActivity[] =>
-  [...bucket.values()].sort((a, b) => (BigInt(a.firstSequence) < BigInt(b.firstSequence) ? -1 : 1));
+  [...bucket.values()].toSorted((a, b) =>
+    BigInt(a.firstSequence) < BigInt(b.firstSequence) ? -1 : 1,
+  );
 
 const finishCommand = (draft: CommandDraft): RecordCommand => ({
   type: "command",
@@ -534,7 +536,7 @@ const gapLabel = (span: RunLossSpan): string => {
 const mergeBySequence = (items: RecordItem[], gaps: RecordGap[]): RecordItem[] => {
   const positioned = gaps
     .flatMap((gap) => (gap.sequence === undefined ? [] : [{ gap, at: BigInt(gap.sequence) }]))
-    .sort((a, b) => (a.at < b.at ? -1 : 1));
+    .toSorted((a, b) => (a.at < b.at ? -1 : 1));
   if (positioned.length === 0) {
     return [...items];
   }

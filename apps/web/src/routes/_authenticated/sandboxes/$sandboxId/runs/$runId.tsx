@@ -105,9 +105,9 @@ function RunRecordPage() {
       return seq;
     }
     if (run.status === "failed") {
-      const failing = [...model.commands]
-        .reverse()
-        .find((command) => command.exit?.exitCode !== undefined && command.exit.exitCode !== 0);
+      const failing = model.commands.findLast(
+        (command) => command.exit?.exitCode !== undefined && command.exit.exitCode !== 0,
+      );
       return failing?.sequence;
     }
     return undefined;
