@@ -486,17 +486,21 @@ function NumberedStep({
 function CopyableCommand({ command }: { readonly command: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    void navigator.clipboard?.writeText(command).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
+  const handleCopy = async () => {
+    await navigator.clipboard?.writeText(command);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   };
 
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-rule-faint bg-background px-3 py-2.5">
       <code className="font-mono text-xs text-foreground break-all">{command}</code>
-      <Button type="button" variant="ghost" className="h-8 shrink-0 px-2.5" onClick={handleCopy}>
+      <Button
+        type="button"
+        variant="ghost"
+        className="h-8 shrink-0 px-2.5"
+        onClick={() => void handleCopy()}
+      >
         {copied ? "Copied" : "Copy"}
       </Button>
     </div>
