@@ -123,10 +123,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The attached compose file is what install.sh downloads; creating the release is also what
-      # moves `releases/latest` (the installer's default version) to this tag.
-      - name: Create release with compose asset
+      # The attached compose file is what install.sh downloads, and install.sh itself is attached so
+      # `releases/latest/download/install.sh` (the get.sealant.dev redirect target) always serves
+      # the exact script shipped with the release. Creating the release is also what moves
+      # `releases/latest` (the installer's default version) to this tag.
+      - name: Create release with compose + installer assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run:
-          gh release create "$GITHUB_REF_NAME" compose.selfhost.yaml --generate-notes --verify-tag
+          gh release create "$GITHUB_REF_NAME" compose.selfhost.yaml install.sh --generate-notes
+          --verify-tag

@@ -1,7 +1,9 @@
 #!/bin/sh
 # Sealant self-host installer — bring up the whole product with one command:
 #
-#   curl -fsSL https://raw.githubusercontent.com/sealant-sh/sealant/main/install.sh | sh
+#   curl -fsSL https://get.sealant.dev | sh
+#
+# (get.sealant.dev redirects to this script's release asset; the raw GitHub URL works too.)
 #
 # It checks Docker, downloads the versioned compose file for the latest release, generates secrets,
 # pulls the prebuilt images, and starts the stack (web app, API, build worker, SSH gateway, Postgres,
@@ -209,5 +211,5 @@ printf '\n  API for the SDK:  http://localhost:%s\n' "$API_PORT"
 printf '\n  Manage it:\n'
 printf '    docker compose --project-directory %s logs -f\n' "$INSTALL_DIR"
 printf '    docker compose --project-directory %s down\n' "$INSTALL_DIR"
-printf '    upgrade:    SEALANT_VERSION=latest curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sh\n' "$REPO"
+printf '    upgrade:    SEALANT_VERSION=latest curl -fsSL https://get.sealant.dev | sh\n'
 printf '    uninstall:  docker compose --project-directory %s down -v && rm -rf %s\n\n' "$INSTALL_DIR" "$INSTALL_DIR"
