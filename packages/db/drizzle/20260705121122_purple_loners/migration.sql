@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ssh_keys_fingerprint_active_idx" ON "ssh_keys" ("fingerprint") WHERE archived_at IS NULL;

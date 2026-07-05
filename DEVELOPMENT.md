@@ -57,16 +57,17 @@ regenerating the gateway key (so no "host identification changed" warnings).
 
 ### Authorization (current ACL)
 
-The gateway authorizes by **owner**: the principal on your gateway key — the trailing comment of the
-line in `.secrets/gateway_allowed_keys` — must equal the sandbox's `ownerUserId`. The web app owns
-sandboxes by your logged-in user id, so set the comment to that id once:
+The gateway authorizes by **owner**: the principal your SSH key resolves to must equal the
+sandbox's `ownerUserId`. Keys resolve two ways, in this order:
 
-```bash
-docker compose exec postgres psql -U sealant -d sealant_control_plane \
-  -c "select owner_user_id from sandboxes order by created_at desc limit 1;"
-sed -i 's/ [^ ]*$/ <owner_user_id>/' .secrets/gateway_allowed_keys
-docker compose --profile apps up -d --build ssh-gateway   # rebuild to reload the allowlist
-```
+1. **DB-registered keys** (the normal path): the gateway looks the offered key up in the
+   `ssh_keys` table via the API (`POST /v1/ssh-keys/resolve-principal`) on every connection — no
+   restart needed. Web users register keys under **Settings → SSH keys** (profile dropdown) or
+   inline when creating a sandbox; `db:seed` registers `.secrets/dev_client_key.pub` under
+   `usr_local` for the SDK/self-host flow.
+2. **The static file `.secrets/gateway_allowed_keys`** (operator break-glass): loaded once at
+   gateway start; the trailing comment is the principal. Works even when the API is down, but
+   requires a rebuild/restart to change.
 
 ## Gotchas
 
@@ -76,7 +77,7 @@ docker compose --profile apps up -d --build ssh-gateway   # rebuild to reload th
 - **Bare `pnpm dev`** starts *every* workspace (web + docs both bind :3000, mobile/expo, …). Scope with
   `--filter`.
 - **"Connection closed" right after the gateway banner** is authorization, not SSH: check
-  `docker compose logs --tail=5 ssh-gateway`. Usually the principal ≠ owner (above), or the sandbox
-  isn't running.
+  `docker compose logs --tail=5 ssh-gateway`. Usually the principal ≠ owner (above), the key isn't
+  registered (web: Settings → SSH keys; SDK: re-run `db:seed`), or the sandbox isn't running.
 - **"Host identification has changed"** means you regenerated the gateway key. The `-F` form avoids it;
   if you used the global known_hosts, run `ssh-keygen -R "[localhost]:2222"`.

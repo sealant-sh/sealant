@@ -1,4 +1,5 @@
 import type { NewSandbox as NewSandboxSpec } from "@sealant/validators";
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -494,6 +495,12 @@ export const sshKeys = pgTable(
   (table) => [
     uniqueIndex("ssh_keys_owner_user_id_fingerprint_idx").on(table.ownerUserId, table.fingerprint),
     index("ssh_keys_owner_user_id_name_idx").on(table.ownerUserId, table.name),
+    // The gateway resolves an offered key to its owner by fingerprint alone, so an active
+    // fingerprint must be globally unique — otherwise key -> principal is ambiguous. Partial so
+    // archived keys don't block re-registration (including by a different user).
+    uniqueIndex("ssh_keys_fingerprint_active_idx")
+      .on(table.fingerprint)
+      .where(sql`archived_at IS NULL`),
   ],
 );
 

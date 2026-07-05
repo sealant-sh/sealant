@@ -84,25 +84,25 @@ services:
     depends_on:
       worker:
         condition: service_started
-    ports:
-      - "127.0.0.1:2222:2222"
+    # Host networking: the gateway reaches the Core API over plain loopback (127.0.0.1:4000) instead of
+    # crossing the docker bridge via host.docker.internal, which required a host firewall rule to admit
+    # bridge-subnet traffic. It also listens on 127.0.0.1:2222 directly — no port publish needed.
+    network_mode: host
     volumes:
       - ./.secrets:/app/.secrets:ro
       # §2.2: read-only access to the per-sandbox control sockets the worker exposes here. The gateway
       # connects to them directly (unix://) — NO Docker socket, so a gateway compromise cannot reach the
       # host Docker daemon (which would be host root). The worker still has the socket; the gateway must not.
       - /run/sealant/sockets:/run/sealant/sockets:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     env_file:
       - ./.env
     environment:
-      SSH_GATEWAY_HOST: 0.0.0.0
+      SSH_GATEWAY_HOST: 127.0.0.1
       SSH_GATEWAY_PORT: 2222
       SSH_GATEWAY_HOST_KEY_PATH: /app/.secrets/ssh_gateway_host_key
       SSH_GATEWAY_ALLOWED_KEYS_FILE: /app/.secrets/gateway_allowed_keys
       SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
-      CORE_API_BASE_URL: http://host.docker.internal:4000
+      CORE_API_BASE_URL: http://127.0.0.1:4000
       SSH_UPSTREAM_PRIVATE_KEY_PATH: /app/.secrets/gateway_upstream_key
       SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING: "false"
     restart: unless-stopped

@@ -35,7 +35,8 @@ For complete contracts, see each app/package env module:
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`
 - `GITHUB_APP_WEBHOOK_SECRET`
-- `SANDBOX_SSH_GATEWAY_TOKEN` (for internal gateway lookup route)
+- `SANDBOX_SSH_GATEWAY_TOKEN` (gates the internal gateway routes: `ssh-target` lookup and
+  `ssh-keys/resolve-principal`)
 - `SANDBOX_SSH_GATEWAY_HOST`
 
 ## Worker (`@sealant/worker`)

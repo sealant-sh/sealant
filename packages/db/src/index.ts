@@ -206,6 +206,16 @@ export {
 } from "./repositories/sandbox-build-jobs.js";
 
 export {
+  SshKeyRepo,
+  SshKeyRepoInvariantError,
+  SshKeyRepoLive,
+  SshKeyRepoUnexpectedError,
+  type CreateSshKeyInput,
+  type SshKeyRepoError,
+  type SshKeyRepoService,
+} from "./repositories/ssh-keys.js";
+
+export {
   RunRepo,
   RunRepoInvariantError,
   RunRepoLive,
@@ -331,6 +341,8 @@ export {
   type SandboxRuntimeInstanceStatus,
   type SandboxBuildJob,
   type SandboxBuildJobStatus,
+  type NewSshKey,
+  type SshKey,
 } from "./schema.js";
 
 export {

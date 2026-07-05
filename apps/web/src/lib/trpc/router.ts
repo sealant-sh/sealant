@@ -1,5 +1,6 @@
 import {
   createSandboxRequestSchema,
+  createSshKeyRequestSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
@@ -10,11 +11,14 @@ import {
   listSandboxAttemptsQuerySchema,
   listSandboxEventsQuerySchema,
   listSandboxesQuerySchema,
+  listSshKeysResponseSchema,
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
   sandboxIdParamsSchema,
+  sshKeyIdParamsSchema,
+  sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
 } from "@sealant/validators";
@@ -67,6 +71,10 @@ const createSandboxForSessionSchema = createSandboxRequestSchema.omit({
 });
 
 const renameSandboxInputSchema = sandboxIdParamsSchema.merge(renameSandboxRequestSchema);
+
+const createSshKeyForSessionSchema = createSshKeyRequestSchema.omit({
+  ownerUserId: true,
+});
 
 export const appRouter = router({
   auth: router({
@@ -190,6 +198,29 @@ export const appRouter = router({
       .output(renameSandboxResponseSchema)
       .mutation(async ({ ctx, input }) => {
         return ctx.coreApi.sandboxes.rename(input);
+      }),
+  }),
+  sshKey: router({
+    list: protectedProcedure.output(listSshKeysResponseSchema).query(async ({ ctx }) => {
+      return ctx.coreApi.sshKeys.list({ ownerUserId: ctx.session.user.id });
+    }),
+    add: protectedProcedure
+      .input(createSshKeyForSessionSchema)
+      .output(sshKeySummarySchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.sshKeys.create({
+          ...input,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    remove: protectedProcedure
+      .input(sshKeyIdParamsSchema)
+      .output(sshKeySummarySchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.sshKeys.archive({
+          sshKeyId: input.sshKeyId,
+          ownerUserId: ctx.session.user.id,
+        });
       }),
   }),
 });

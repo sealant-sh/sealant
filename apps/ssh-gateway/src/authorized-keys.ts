@@ -4,7 +4,7 @@ import ssh2 from "ssh2";
 
 const { utils } = ssh2;
 
-type VerifyFunction = (blob: Buffer, signature: Buffer, hashAlgo?: string) => boolean;
+export type VerifyFunction = (blob: Buffer, signature: Buffer, hashAlgo?: string) => boolean;
 
 export interface AuthorizedKeyEntry {
   readonly algo: string;

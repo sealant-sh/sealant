@@ -19,8 +19,11 @@ the API route:
 ## High-level flow
 
 1. User connects to gateway using alias `sbx-<sandboxId>`.
-2. Gateway authenticates the user key from `SSH_GATEWAY_ALLOWED_KEYS_FILE` and resolves the key's
-   principal id (the key comment, or a stable fingerprint).
+2. Gateway authenticates the user key and resolves its principal id: first from the static
+   allowlist `SSH_GATEWAY_ALLOWED_KEYS_FILE` (principal = key comment; operator break-glass), then
+   by asking the API (`POST /v1/ssh-keys/resolve-principal`) to match the key's fingerprint against
+   user-registered keys in the `ssh_keys` table (principal = key owner). DB keys work immediately
+   after registration — no gateway restart.
 3. Gateway extracts `<sandboxId>` from username (a routing hint only).
 4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` with the gateway token + principal id; the
    API authorizes principal x sandbox and returns the control target (container id).
@@ -35,11 +38,13 @@ In short: user connects once to gateway, gateway drives the daemon control proto
 
 ## Environment
 
-- `SSH_GATEWAY_HOST` (default: `0.0.0.0`)
+- `SSH_GATEWAY_HOST` (default: `127.0.0.1` — the gateway runs with host networking in compose, so
+  binding wider exposes it publicly; opt in explicitly)
 - `SSH_GATEWAY_PORT` (default: `2222`)
 - `SSH_GATEWAY_BANNER` (default: welcome message shown during SSH handshake)
 - `SSH_GATEWAY_HOST_KEY_PATH` (default: `./.secrets/ssh_gateway_host_key`)
-- `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `./.secrets/authorized_keys`)
+- `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `./.secrets/authorized_keys`; optional — a missing or
+  empty file is fine, user keys resolve via the API)
 - `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX` (default: `sbx`)
 - `CORE_API_BASE_URL` (default: `http://127.0.0.1:4000`)
 - `SANDBOX_SSH_GATEWAY_TOKEN` (required)
@@ -146,7 +151,10 @@ Expected shape:
 ## Troubleshooting
 
 - `Permission denied (publickey)`:
-  - confirm your public key is in `.secrets/gateway_allowed_keys`.
+  - confirm your public key is registered (web: Settings → SSH keys; SDK/self-host: `db:seed`
+    registers `.secrets/dev_client_key.pub`) or present in `.secrets/gateway_allowed_keys`.
+  - if the API is down, only static-file keys authenticate — check the gateway logs for
+    `principal lookup failed`.
   - confirm SSH config uses `User %n` for `Host sbx-*`.
 - `Connection refused`:
   - confirm `ssh-gateway` container is up and listening on `2222`.
