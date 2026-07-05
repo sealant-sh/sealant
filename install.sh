@@ -174,8 +174,12 @@ compose pull --quiet --ignore-pull-failures 2>/dev/null || true
 image_ns_pinned="$(sed -n 's/^SEALANT_IMAGE_NS=//p' "$ENV_FILE" 2>/dev/null | head -n 1)"
 IMAGE_NS="${SEALANT_IMAGE_NS:-${image_ns_pinned:-ghcr.io/${REPO%/*}}}"
 for image_name in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
-  docker image inspect "$IMAGE_NS/$image_name:$VERSION" >/dev/null 2>&1 ||
+  if ! docker image inspect "$IMAGE_NS/$image_name:$VERSION" >/dev/null 2>&1; then
+    # Re-pull loudly so the actual registry error (auth, 404, network) reaches the user.
+    err "Image $IMAGE_NS/$image_name:$VERSION is missing after the pull; retrying to show why:"
+    docker pull "$IMAGE_NS/$image_name:$VERSION" || true
     die "Image $IMAGE_NS/$image_name:$VERSION is unavailable. Are you offline, or is that release not published (or not public) yet?"
+  fi
 done
 
 info "Applying database migrations…"
