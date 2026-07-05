@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 /**
  * Bundle a Sealant app server (api / worker / ssh-gateway) into a single self-contained JS file with
  * esbuild, so production images run plain `node dist/index.js` — no tsx, no monorepo install, no
@@ -5,10 +8,11 @@
  *
  * BUNDLE_EXTERNAL (comma-separated) keeps native/unbundleable deps external (e.g. ssh2 for the gateway);
  * those must be installed in the runtime image.
+ *
+ * BUNDLE_ENTRIES (comma-separated, default src/index.ts) bundles extra entrypoints — each lands in
+ * dist/ under its basename (src/migrate.ts -> dist/migrate.js).
  */
 import { build } from "esbuild";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 
 // This repo uses NodeNext-style `.js` import specifiers that point at `.ts` source files. esbuild does
 // not rewrite `.js` -> `.ts`, so map relative `./foo.js` (and `.jsx`) imports to the real `.ts`/`.tsx`.
@@ -32,13 +36,19 @@ const external = (process.env.BUNDLE_EXTERNAL ?? "")
   .map((value) => value.trim())
   .filter(Boolean);
 
+const entryPoints = (process.env.BUNDLE_ENTRIES ?? "src/index.ts")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
 await build({
-  entryPoints: ["src/index.ts"],
+  entryPoints,
   bundle: true,
   platform: "node",
   format: "esm",
   target: "node24",
-  outfile: "dist/index.js",
+  // Entries land in dist/ by basename (outbase is the entries' common ancestor, src/).
+  outdir: "dist",
   sourcemap: true,
   external,
   plugins: [tsJsResolvePlugin],

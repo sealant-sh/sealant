@@ -1,9 +1,9 @@
 # Sealant
 
 Sealant is an open-source, self-hosted **runtime for agentic development**. It gives coding
-harnesses a real sandbox to work in, then turns every run into a structured, replayable
-**execution record** — the change, the checks, the terminal output, the artifacts, the browser
-evidence, and the source trail behind the result.
+harnesses a real sandbox to work in, then turns every run into a structured, replayable **execution
+record** — the change, the checks, the terminal output, the artifacts, the browser evidence, and the
+source trail behind the result.
 
 Bring your own harness. Keep your code. Read the evidence yourself.
 
@@ -81,8 +81,8 @@ Two canonical reference docs sit at the repo root:
 └── README.md
 ```
 
-- `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker,
-  and access gateways.
+- `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker, and
+  access gateways.
 - `packages/`: shared code — the wire contracts, sandbox/issue domains, the telemetry/execution
   record, the design system, and reusable utilities.
 - `tooling/`: centralized configs and tooling packages (TypeScript, lint, format, test, Tailwind).
@@ -95,16 +95,42 @@ The runtime is built around explicit contracts and a daemon that does the work.
 2. The control plane (`apps/api`, Effect) normalizes it and provisions an isolated sandbox.
 3. The `sealantd` daemon supervises the sandbox and the harness run inside it, emitting a typed
    telemetry firehose.
-4. `packages/telemetry` consumes that firehose and persists it as an append-only, event-sourced
-   log — the execution record, keyed on `(runId, sequence)` and replayable as a pure fold.
-5. The web app (`apps/web`) renders the run as reviewable evidence; access is available over SSH,
-   VS Code, or Cursor via `apps/ssh-gateway`.
+4. `packages/telemetry` consumes that firehose and persists it as an append-only, event-sourced log
+   — the execution record, keyed on `(runId, sequence)` and replayable as a pure fold.
+5. The web app (`apps/web`) renders the run as reviewable evidence; access is available over SSH, VS
+   Code, or Cursor via `apps/ssh-gateway`.
 
 Supporting integrations feed both the sandbox and run flows without owning either: source
 integrations resolve repositories and refs, harness integrations describe launch behavior, and
 registry integrations publish and retrieve artifacts.
 
-## Getting started
+## Install (self-host)
+
+Everything you need is a running Docker daemon — no git, no node, no firewall changes:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/get-sealant/sealant/main/install.sh | sh
+```
+
+That downloads the compose file for the latest release, generates secrets into `~/.sealant/.env`,
+pulls the prebuilt images, and starts the whole product: the web app on
+[http://localhost:3000](http://localhost:3000), the API on 4000, the SSH gateway on 2222 (all bound
+to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a sandbox, then:
+
+```bash
+ssh -p 2222 sbx-<sandbox-id>@localhost
+```
+
+Upgrade by re-running the installer with `SEALANT_VERSION=latest`; re-running without it repairs the
+current install (secrets and data are never regenerated). Uninstall:
+
+```bash
+docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
+```
+
+Private GitHub repos need `GITHUB_APP_*` configured in the api + worker environment.
+
+## Getting started (development)
 
 Allow direnv to load the flake shell:
 
@@ -157,7 +183,8 @@ disables the normal download flow (the part that fails on NixOS). Place end-to-e
 
 - `direnv` + Nix provide a reproducible shell with `nodejs_24` and `pnpm`.
 - `Turborepo` + `pnpm` give task orchestration, caching, and strict, centralized dependencies.
-- `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles formatting.
+- `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles
+  formatting.
 - `@typescript/native-preview` provides the `tsgo` CLI alongside regular `typescript`.
 
 ## Design principles

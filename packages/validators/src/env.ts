@@ -142,7 +142,7 @@ const addGitHubAppCredentialsIssue = (
   }
 };
 
-const expandEnvironmentPath = (value: string): string => {
+export const expandEnvironmentPath = (value: string): string => {
   const homeDirectory = process.env.HOME ?? homedir();
 
   return value.replace(/^~(?=\/|$)/, homeDirectory).replace(/^\$HOME(?=\/|$)/, homeDirectory);
@@ -289,6 +289,10 @@ export const sshGatewayCoreEnvSchema = z.object({
       "Welcome to Sealant Sandbox Gateway. This session is routed through Sealant infrastructure.",
     ),
   SSH_GATEWAY_HOST_KEY_PATH: z.string().trim().min(1).default("./.secrets/ssh_gateway_host_key"),
+  // Opt-in first-boot provisioning (packaged self-host): generate an ed25519 host key at
+  // SSH_GATEWAY_HOST_KEY_PATH when the file is missing instead of refusing to start. An existing
+  // key is never overwritten, so the gateway's host identity is stable once created.
+  SSH_GATEWAY_HOST_KEY_AUTOGENERATE: z.stringbool().default(false),
   SSH_GATEWAY_ALLOWED_KEYS_FILE: z.string().trim().min(1).default("./.secrets/authorized_keys"),
   SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: z.string().trim().min(1).default("sbx"),
   CORE_API_BASE_URL: z.string().url().default("http://127.0.0.1:4000"),
@@ -346,13 +350,15 @@ const hydrateSshGatewayFileContents = (input: SshGatewayEnv): HydratedSshGateway
 };
 
 export const parseSshGatewayEnv = (input: NodeJS.ProcessEnv): HydratedSshGatewayEnv => {
+  // createEnv already validates against the full schema shape (there are no cross-field
+  // refinements here) — re-parsing its output would double-apply transforms like z.stringbool().
   const runtimeEnv = createEnv({
     server: sshGatewayServerEnvSchema.shape,
     runtimeEnv: input,
     emptyStringAsUndefined: true,
   });
 
-  return hydrateSshGatewayFileContents(sshGatewayEnvSchema.parse(runtimeEnv));
+  return hydrateSshGatewayFileContents(runtimeEnv);
 };
 
 const parseCsv = (value: string): Array<string> => {

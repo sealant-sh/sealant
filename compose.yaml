@@ -103,8 +103,6 @@ services:
       SSH_GATEWAY_ALLOWED_KEYS_FILE: /app/.secrets/gateway_allowed_keys
       SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
       CORE_API_BASE_URL: http://127.0.0.1:4000
-      SSH_UPSTREAM_PRIVATE_KEY_PATH: /app/.secrets/gateway_upstream_key
-      SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING: "false"
     restart: unless-stopped
 
 volumes:

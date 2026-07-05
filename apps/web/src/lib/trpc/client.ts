@@ -13,12 +13,15 @@ const getServerBaseUrl = () => {
     return "";
   }
 
-  const baseUrl = process.env.BETTER_AUTH_URL;
-  if (baseUrl !== undefined) {
-    return baseUrl;
+  // SSR fetches this process's own /api/trpc handler, so the base must be where THIS process
+  // listens: loopback + PORT. BETTER_AUTH_URL is the PUBLIC origin — in packaged deploys the
+  // published host port can differ from the in-container port, making it unreachable from inside.
+  const port = process.env.PORT;
+  if (port !== undefined) {
+    return `http://127.0.0.1:${port}`;
   }
 
-  return "http://localhost:3000";
+  return process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 };
 
 const getTrpcUrl = () => {
