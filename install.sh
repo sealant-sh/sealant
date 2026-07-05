@@ -166,19 +166,19 @@ ok "Secrets ready ($ENV_FILE)"
 
 # --- Pull images, migrate, start ----------------------------------------------------------------------
 info "Pulling images (first run downloads a few hundred MB)…"
-# Best-effort: a failed pull is fine when the images are already present (local builds, air-gapped
-# re-runs) — the presence check below is what actually gates the install.
-compose pull --quiet --ignore-pull-failures 2>/dev/null || true
+# Best-effort bulk pull: only progress is quieted — real errors stay visible. Any image it misses
+# is recovered below with a direct docker pull, so a flaky bulk pull can never fail the install on
+# its own (seen in CI: compose pull came up empty while direct pulls of the same images succeeded).
+compose pull --quiet --ignore-pull-failures || true
 # Same namespace resolution as the compose file: explicit env > .env from a previous run > the
 # default derived from REPO. SEALANT_IMAGE_NS is the fork/mirror escape hatch.
 image_ns_pinned="$(sed -n 's/^SEALANT_IMAGE_NS=//p' "$ENV_FILE" 2>/dev/null | head -n 1)"
 IMAGE_NS="${SEALANT_IMAGE_NS:-${image_ns_pinned:-ghcr.io/${REPO%/*}}}"
 for image_name in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
   if ! docker image inspect "$IMAGE_NS/$image_name:$VERSION" >/dev/null 2>&1; then
-    # Re-pull loudly so the actual registry error (auth, 404, network) reaches the user.
-    err "Image $IMAGE_NS/$image_name:$VERSION is missing after the pull; retrying to show why:"
-    docker pull "$IMAGE_NS/$image_name:$VERSION" || true
-    die "Image $IMAGE_NS/$image_name:$VERSION is unavailable. Are you offline, or is that release not published (or not public) yet?"
+    info "Pulling $IMAGE_NS/$image_name:$VERSION directly…"
+    docker pull "$IMAGE_NS/$image_name:$VERSION" ||
+      die "Image $IMAGE_NS/$image_name:$VERSION is unavailable. Are you offline, or is that release not published (or not public) yet?"
   fi
 done
 

@@ -94,7 +94,11 @@ jobs:
         env:
           SEALANT_VERSION: ${{ github.ref_name }}
           SEALANT_COMPOSE_URL: ${{ github.workspace }}/compose.selfhost.yaml
-        run: sh install.sh
+        # compose version first: the runner's compose behaved differently from local ones during the
+        # v0.1.x releases — keep it in the logs for debugging.
+        run: |
+          docker compose version
+          sh install.sh
 
       - name: Assert SSH gateway is listening
         run: |
