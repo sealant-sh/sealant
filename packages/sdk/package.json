@@ -1,23 +1,45 @@
 {
   "name": "@sealant/sdk",
   "version": "0.0.0",
-  "private": true,
   "description": "The fluent public SDK for Sealant — create a sandbox, run a harness, replay the record.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sealant-sh/sealant.git",
+    "directory": "packages/sdk"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
+    "build": "tsgo -p tsconfig.build.json",
     "lint": "oxlint .",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/api-contracts": "workspace:*",
+    "@sealant/api-contracts": "workspace:^",
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

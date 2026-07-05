@@ -1,7 +1,10 @@
 # Release: on a v*.*.* tag, build + push the multi-arch product images to GHCR, smoke-test the
-# packaged install end-to-end (install.sh against the just-pushed images), then publish the GitHub
+# packaged install end-to-end (install.sh against the just-pushed images), publish the GitHub
 # release with the compose file attached — which is what makes `releases/latest` (and therefore the
-# curl|sh installer) resolve to this version. Mirrors sealantd's release workflow.
+# curl|sh installer) resolve to this version — and publish @sealant/sdk + @sealant/api-contracts to
+# npm. Mirrors sealantd's release workflow. The npm job runs in parallel with the image pipeline;
+# if only one side fails, re-run just the failed jobs (`gh run rerun <id> --failed`) — a full re-run
+# would hit npm's "cannot republish an existing version".
 name: Release
 
 on:
@@ -113,6 +116,54 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: docker compose --project-directory ~/.sealant logs
+
+  npm:
+    name: Publish npm packages
+    # Kept on a github-hosted runner: OIDC Trusted Publishing (tokenless npm auth + provenance)
+    # should mint its id-token on infrastructure GitHub controls, not a third-party runner.
+    runs-on: ubuntu-latest
+    # Protected environment: configure required reviewers on `release` in repo settings, and
+    # register both packages' npm Trusted Publishers against this repo + release.yml + this
+    # environment. (The very first publish of a brand-new package name must be done manually with
+    # an npm token/OTP — trusted publishing attaches to an existing package.)
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # The git tag is the single version authority: overwrite both package.json versions from it
+      # so the published versions always match the release, regardless of what is committed.
+      - name: Sync package versions from the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
+            exec npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        run: pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" run build
+
+      # Tokenless OIDC Trusted Publishing: `registry-url` + `id-token: write` is the whole auth
+      # mechanism (no NPM_TOKEN secret). `--provenance` attaches the public build attestation.
+      - name: Publish to npm
+        run: |
+          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
+            publish --access public --no-git-checks --provenance
 
   release:
     name: Publish GitHub release
