@@ -13,6 +13,7 @@ import { SandboxAttemptRepoLive } from "./repositories/sandbox-attempts.js";
 import { SandboxBuildJobRepoLive } from "./repositories/sandbox-build-jobs.js";
 import { SandboxRuntimeInstanceRepoLive } from "./repositories/sandbox-runtime-instances.js";
 import { SandboxRepoLive } from "./repositories/sandboxes.js";
+import { SshKeyRepoLive } from "./repositories/ssh-keys.js";
 
 /**
  * GitHub-focused data access layer.
@@ -48,4 +49,5 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   ProfileRepoLive,
   IssueWorkflowRepoLive,
   IssueWorkflowExecutionRepoLive,
+  SshKeyRepoLive,
 );

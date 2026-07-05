@@ -5,12 +5,14 @@ import { PackagesGroup } from "./packages.js";
 import { RegistriesGroup } from "./registries.js";
 import { RunsGroup } from "./runs.js";
 import { SandboxesGroup } from "./sandboxes.js";
+import { SshKeysGroup } from "./ssh-keys.js";
 import { SystemGroup } from "./system.js";
 
 export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(SystemGroup)
   .add(PackagesGroup.prefix("/v1/packages"))
   .add(SandboxesGroup.prefix("/v1/sandboxes"))
+  .add(SshKeysGroup.prefix("/v1/ssh-keys"))
   .add(RunsGroup.prefix("/v1/runs"))
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))

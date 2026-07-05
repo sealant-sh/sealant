@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
   SandboxBadGatewayError,
@@ -175,6 +175,22 @@ const readIdempotencyKey = (headers: CreateSandboxHeaders): string | undefined =
 
 const readGatewayToken = (headers: SandboxGatewayHeaders): string | undefined => {
   return headers["x-sealant-gateway-token"];
+};
+
+/** Constant-time shared-token comparison; length mismatch still returns false. */
+const gatewayTokenMatches = (provided: string | undefined, expected: string): boolean => {
+  if (provided === undefined) {
+    return false;
+  }
+
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
 const readPrincipalId = (headers: SandboxGatewayHeaders): string | undefined => {
@@ -1250,7 +1266,7 @@ export const getSandboxSshTarget = (input: {
       });
     }
 
-    if (readGatewayToken(input.headers) !== expectedGatewayToken) {
+    if (!gatewayTokenMatches(readGatewayToken(input.headers), expectedGatewayToken)) {
       return yield* new SandboxUnauthorizedError({
         message: "Invalid sandbox SSH gateway token.",
       });

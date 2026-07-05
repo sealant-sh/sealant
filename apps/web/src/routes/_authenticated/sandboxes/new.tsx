@@ -140,6 +140,23 @@ function NewSandboxPage() {
   const loggedPackageValidationErrorsRef = useRef<Set<string>>(new Set());
 
   const createSandboxMutation = useMutation(trpc.sandbox.create.mutationOptions());
+  // Gateway SSH access authorizes by sandbox OWNER, so the create flow only needs to make sure
+  // the user has at least one registered key — the key is account-level, not per-sandbox.
+  const [sshKeyInput, setSshKeyInput] = useState("");
+  const sshKeysQuery = useQuery({
+    ...trpc.sshKey.list.queryOptions(),
+    enabled: form.sshEnabled,
+    staleTime: 1000 * 30,
+  });
+  const addSshKeyMutation = useMutation(
+    trpc.sshKey.add.mutationOptions({
+      onSuccess: async () => {
+        setSshKeyInput("");
+        await queryClient.invalidateQueries({ queryKey: trpc.sshKey.list.pathKey() });
+      },
+    }),
+  );
+  const registeredSshKeyCount = sshKeysQuery.data?.items.length ?? 0;
   const syncGitHubInstallationMutation = useMutation(
     trpc.github.syncInstallation.mutationOptions({
       onSuccess: async () => {
@@ -1766,39 +1783,101 @@ function NewSandboxPage() {
               index="05"
               title="Security & Access"
               content={
-                <button
-                  type="button"
-                  onClick={() => {
-                    setField("sshEnabled", !form.sshEnabled);
-                  }}
-                  className="flex w-full items-center justify-between rounded-2xl border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
-                  role="switch"
-                  aria-checked={form.sshEnabled}
-                >
-                  <div>
-                    <p className="text-sm font-medium text-foreground">Enable SSH tunneling</p>
-                    <p className="mt-1 text-xs leading-6 text-muted-foreground">
-                      Allow direct terminal access to the active sandbox runtime endpoint.
-                    </p>
-                  </div>
-                  <span
-                    className={
-                      form.sshEnabled
-                        ? "inline-flex items-center gap-1.5 text-sm text-primary"
-                        : "inline-flex items-center gap-1.5 text-sm text-muted-foreground"
-                    }
+                <div className="space-y-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setField("sshEnabled", !form.sshEnabled);
+                    }}
+                    className="flex w-full items-center justify-between rounded-2xl border border-border bg-background px-4 py-4 text-left transition-colors hover:border-input"
+                    role="switch"
+                    aria-checked={form.sshEnabled}
                   >
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Enable SSH tunneling</p>
+                      <p className="mt-1 text-xs leading-6 text-muted-foreground">
+                        Allow direct terminal access to the active sandbox runtime endpoint.
+                      </p>
+                    </div>
                     <span
-                      aria-hidden
                       className={
                         form.sshEnabled
-                          ? "h-1.5 w-1.5 rounded-full bg-primary"
-                          : "h-1.5 w-1.5 rounded-full border border-input"
+                          ? "inline-flex items-center gap-1.5 text-sm text-primary"
+                          : "inline-flex items-center gap-1.5 text-sm text-muted-foreground"
                       }
-                    />
-                    {form.sshEnabled ? "On" : "Off"}
-                  </span>
-                </button>
+                    >
+                      <span
+                        aria-hidden
+                        className={
+                          form.sshEnabled
+                            ? "h-1.5 w-1.5 rounded-full bg-primary"
+                            : "h-1.5 w-1.5 rounded-full border border-input"
+                        }
+                      />
+                      {form.sshEnabled ? "On" : "Off"}
+                    </span>
+                  </button>
+
+                  {form.sshEnabled ? (
+                    sshKeysQuery.isLoading ? (
+                      <div className="rounded-2xl border border-rule-faint bg-background px-4 py-4 text-sm text-muted-foreground">
+                        Checking your registered SSH keys...
+                      </div>
+                    ) : registeredSshKeyCount > 0 ? (
+                      <div className="flex items-center gap-2 rounded-2xl border border-rule-faint bg-background px-4 py-4">
+                        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success-dot" />
+                        <p className="text-sm leading-6 text-muted-foreground">
+                          {registeredSshKeyCount} SSH{" "}
+                          {registeredSshKeyCount === 1 ? "key" : "keys"} registered to your
+                          account — you can connect right after launch.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-warning-dot/40 bg-background px-4 py-4">
+                        <p className="text-sm font-medium text-warning">
+                          No SSH keys registered — add one to connect to this sandbox
+                        </p>
+                        <p className="mt-1 text-xs leading-6 text-muted-foreground">
+                          Paste your public key (usually{" "}
+                          <span className="font-mono">~/.ssh/id_ed25519.pub</span>). It registers
+                          to your account, so it works for every sandbox you own. You can also add
+                          one later from Settings → SSH keys.
+                        </p>
+                        <textarea
+                          value={sshKeyInput}
+                          onChange={(event) => {
+                            setSshKeyInput(event.target.value);
+                          }}
+                          rows={3}
+                          className="mt-3 w-full rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-faint focus:border-primary focus:outline-none"
+                          placeholder="ssh-ed25519 AAAA... user@host"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                        {addSshKeyMutation.error instanceof Error ? (
+                          <p className="mt-2 text-xs leading-6 text-danger">
+                            {addSshKeyMutation.error.message}
+                          </p>
+                        ) : null}
+                        <div className="mt-3">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-10 px-4"
+                            disabled={
+                              addSshKeyMutation.isPending || sshKeyInput.trim().length === 0
+                            }
+                            onClick={() => {
+                              addSshKeyMutation.mutate({ publicKey: sshKeyInput.trim() });
+                            }}
+                          >
+                            {addSshKeyMutation.isPending ? "Registering..." : "Register key"}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  ) : null}
+                </div>
               }
             />
 
@@ -1925,6 +2004,17 @@ function NewSandboxPage() {
                     compatibilityIssues.length === 0
                       ? "Package inventory validated"
                       : "Package inventory has compatibility warnings"
+                  }
+                />
+                {/* Warning only — keys can be added after launch, so this never blocks create. */}
+                <HealthRow
+                  ok={!form.sshEnabled || registeredSshKeyCount > 0}
+                  text={
+                    !form.sshEnabled
+                      ? "SSH tunneling disabled"
+                      : registeredSshKeyCount > 0
+                        ? "SSH key registered for gateway access"
+                        : "SSH enabled but no keys registered yet"
                   }
                 />
                 {compatibilityIssues.length > 0 ? (

@@ -1,5 +1,6 @@
 import { parseAuthorizedKeys } from "./authorized-keys.js";
 import { startSshGatewayServer } from "./gateway-server.js";
+import { createPrincipalResolver } from "./principal-resolver.js";
 import { env } from "./runtime-env.js";
 
 // Entry point responsibilities:
@@ -7,13 +8,21 @@ import { env } from "./runtime-env.js";
 // 2) Start SSH gateway listener.
 // 3) Handle process shutdown cleanly.
 
-// Load the gateway client allowlist once at startup. We do not hot-reload keys in this
-// implementation so runtime behavior is deterministic per process start.
+// Load the static gateway allowlist once at startup (no hot-reload; deterministic per process
+// start). This is the operator break-glass path — user keys resolve dynamically via the API, so
+// an empty (or missing) file is a valid configuration now.
 const allowedClientKeys = parseAuthorizedKeys(env.SSH_GATEWAY_ALLOWED_KEYS);
 
 if (allowedClientKeys.length === 0) {
-  throw new Error("No SSH client keys were loaded from SSH_GATEWAY_ALLOWED_KEYS_FILE.");
+  console.warn("[ssh-gateway] static allowlist is empty; relying on API key lookup only.");
 }
+
+// DB-registered keys (ssh_keys table) resolve per connection through the API — a newly added key
+// works immediately, no gateway restart.
+const lookupPrincipal = createPrincipalResolver({
+  apiBaseUrl: env.CORE_API_BASE_URL,
+  gatewayToken: env.SANDBOX_SSH_GATEWAY_TOKEN,
+});
 
 console.log("[ssh-gateway] starting", {
   host: env.SSH_GATEWAY_HOST,
@@ -34,6 +43,7 @@ const main = async () => {
     sandboxUsernamePrefix: env.SSH_GATEWAY_SANDBOX_USERNAME_PREFIX,
     coreApiBaseUrl: env.CORE_API_BASE_URL,
     gatewayToken: env.SANDBOX_SSH_GATEWAY_TOKEN,
+    lookupPrincipal,
   });
 
   const shutdown = async () => {

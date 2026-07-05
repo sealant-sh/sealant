@@ -5,12 +5,18 @@ import type {
   ServerChannel,
 } from "ssh2";
 import ssh2 from "ssh2";
-const { Server } = ssh2;
+const { Server, utils } = ssh2;
 
 import type { Channel } from "@sealant/runtime-client";
+import { computeSshPublicKeyFingerprint } from "@sealant/validators/ssh-public-key";
 
-import { findAuthorizedKey, type AuthorizedKeyEntry } from "./authorized-keys.js";
+import {
+  findAuthorizedKey,
+  type AuthorizedKeyEntry,
+  type VerifyFunction,
+} from "./authorized-keys.js";
 import { ControlClient, type ShellSession, type ExecSession } from "./control-client.js";
+import type { PrincipalLookup } from "./principal-resolver.js";
 import {
   parseSandboxIdFromUsername,
   resolveSandboxControlTarget,
@@ -37,7 +43,32 @@ export interface SshGatewayServerConfig {
   readonly sandboxUsernamePrefix: string;
   readonly coreApiBaseUrl: string;
   readonly gatewayToken: string;
+  /** Resolves an offered key to its owning principal via the API (DB-registered keys). */
+  readonly lookupPrincipal: PrincipalLookup;
 }
+
+/** A key accepted for auth: who it belongs to + how to verify a signature made with it. */
+interface ResolvedClientKey {
+  readonly principalId: string;
+  readonly verify: VerifyFunction;
+}
+
+/** Build a signature verifier for a DB-resolved key from the raw blob the client offered. */
+const toOfferedKeyVerifier = (keyData: Buffer): VerifyFunction | undefined => {
+  const parsed = utils.parseKey(keyData);
+
+  if (parsed instanceof Error) {
+    return undefined;
+  }
+
+  const key = Array.isArray(parsed) ? parsed[0] : parsed;
+
+  if (key === undefined || typeof key !== "object" || !("verify" in key)) {
+    return undefined;
+  }
+
+  return key.verify.bind(key) as VerifyFunction;
+};
 
 // POSIX signal names (as ssh2 delivers them, e.g. "INT") -> numbers the daemon's `signalProcess`
 // expects. Covers the signals an interactive client realistically sends (Ctrl-C, Ctrl-\, kill, ...).
@@ -180,7 +211,61 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     return controlPromise;
   };
 
-  incomingConnection.on("authentication", (ctx: AuthContext) => {
+  // OpenSSH sends every offered key twice (an unsigned probe, then a signed proof), so the API
+  // lookup result is cached per connection to avoid a second round-trip. Only "found" results are
+  // cached; revocation takes effect on the next connection.
+  let cachedLookup: { readonly cacheKey: string; readonly principalId: string } | undefined;
+
+  // Resolution order: static file allowlist first (local, synchronous, works when the API is
+  // down — the operator break-glass path), then the API lookup for DB-registered keys. A key in
+  // both resolves to the file's principal; DB revocation cannot override a file entry by design.
+  const resolveOfferedKeyPrincipal = async (offered: {
+    readonly algo: string;
+    readonly data: Buffer;
+  }): Promise<ResolvedClientKey | undefined> => {
+    const fileEntry = findAuthorizedKey(config.allowedClientKeys, offered);
+
+    if (fileEntry !== undefined) {
+      return { principalId: fileEntry.principalId, verify: fileEntry.verify };
+    }
+
+    const cacheKey = `${offered.algo}:${offered.data.toString("base64")}`;
+    let resolvedPrincipalId =
+      cachedLookup?.cacheKey === cacheKey ? cachedLookup.principalId : undefined;
+
+    if (resolvedPrincipalId === undefined) {
+      const lookup = await config.lookupPrincipal({ algo: offered.algo, data: offered.data });
+
+      if (lookup.kind === "error") {
+        // Lookup failure is NOT "unknown key": log loudly (fingerprint only — never key material)
+        // and reject this attempt rather than silently degrading auth semantics.
+        console.error("[ssh-gateway] principal lookup failed", {
+          fingerprint: computeSshPublicKeyFingerprint(offered.data),
+          error: lookup.message,
+        });
+        return undefined;
+      }
+
+      if (lookup.kind === "not-found") {
+        return undefined;
+      }
+
+      resolvedPrincipalId = lookup.principalId;
+      cachedLookup = { cacheKey, principalId: resolvedPrincipalId };
+    }
+
+    // The API matched this exact blob's fingerprint, so verifying signatures against the offered
+    // key is sound: the signature proves possession, the DB proves the blob -> principal binding.
+    const verify = toOfferedKeyVerifier(offered.data);
+
+    if (verify === undefined) {
+      return undefined;
+    }
+
+    return { principalId: resolvedPrincipalId, verify };
+  };
+
+  const handleAuthentication = async (ctx: AuthContext): Promise<void> => {
     // We only support public-key auth at the gateway boundary.
     if (ctx.method !== "publickey") {
       ctx.reject(["publickey"]);
@@ -197,7 +282,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       return;
     }
 
-    const key = findAuthorizedKey(config.allowedClientKeys, {
+    // Runs in the probe phase too: rejecting an unknown key at probe is how clients move on to
+    // their next identity instead of burning a signed attempt on a doomed key.
+    const key = await resolveOfferedKeyPrincipal({
       algo: ctx.key.algo,
       data: ctx.key.data,
     });
@@ -230,6 +317,19 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     sandboxId = resolvedSandboxId;
     principalId = key.principalId;
     ctx.accept();
+  };
+
+  incomingConnection.on("authentication", (ctx: AuthContext) => {
+    // The handler awaits the API lookup, so it settles the ctx asynchronously; ssh2 blocks the
+    // client on SSH_MSG_USERAUTH_* until then. The catch is the single-settle safety net — if the
+    // handler throws after partial progress (or the connection died mid-await), force a reject.
+    void handleAuthentication(ctx).catch(() => {
+      try {
+        ctx.reject();
+      } catch {
+        // Connection already torn down.
+      }
+    });
   });
 
   incomingConnection.on("ready", () => {

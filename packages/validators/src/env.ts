@@ -279,7 +279,9 @@ export const parseWorkerEnv = (input: NodeJS.ProcessEnv): WorkerEnv => {
 };
 
 export const sshGatewayCoreEnvSchema = z.object({
-  SSH_GATEWAY_HOST: z.string().trim().min(1).default("0.0.0.0"),
+  // Loopback by default: the gateway runs with host networking in compose, so binding wider than
+  // 127.0.0.1 exposes it publicly — that must be an explicit opt-in, not a default.
+  SSH_GATEWAY_HOST: z.string().trim().min(1).default("127.0.0.1"),
   SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
   SSH_GATEWAY_BANNER: z
     .string()
@@ -315,6 +317,20 @@ export type HydratedSshGatewayEnv = SshGatewayEnv & {
   readonly SSH_GATEWAY_ALLOWED_KEYS: string;
 };
 
+const readOptionalKeyFile = (filePath: string): string => {
+  // The static allowlist is optional now that the gateway can resolve keys from the API: a missing
+  // file means "no file-based keys", not a broken deployment. Other read errors still throw.
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+
+    throw error;
+  }
+};
+
 const hydrateSshGatewayFileContents = (input: SshGatewayEnv): HydratedSshGatewayEnv => {
   const hostKeyPath = expandEnvironmentPath(input.SSH_GATEWAY_HOST_KEY_PATH);
   const allowedKeysPath = expandEnvironmentPath(input.SSH_GATEWAY_ALLOWED_KEYS_FILE);
@@ -323,8 +339,9 @@ const hydrateSshGatewayFileContents = (input: SshGatewayEnv): HydratedSshGateway
     ...input,
     SSH_GATEWAY_HOST_KEY_PATH: hostKeyPath,
     SSH_GATEWAY_ALLOWED_KEYS_FILE: allowedKeysPath,
+    // The host key stays strictly required — the server cannot start without it.
     SSH_GATEWAY_HOST_KEY: readFileSync(hostKeyPath, "utf8"),
-    SSH_GATEWAY_ALLOWED_KEYS: readFileSync(allowedKeysPath, "utf8"),
+    SSH_GATEWAY_ALLOWED_KEYS: readOptionalKeyFile(allowedKeysPath),
   };
 };
 

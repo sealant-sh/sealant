@@ -32,6 +32,7 @@ import {
   ChevronsUpDown,
   CircleAlert,
   FolderGit2,
+  KeyRound,
   LogOut,
   Palette,
   PanelLeftClose,
@@ -64,7 +65,7 @@ interface SidebarSandbox {
   readonly status: SandboxStatus;
 }
 
-type GlobalArea = "sandboxes" | "issues" | "repositories" | "profiles";
+type GlobalArea = "sandboxes" | "issues" | "repositories" | "profiles" | "settings";
 
 type GlobalNavHref = "/sandboxes" | "/issues" | "/repositories" | "/profiles";
 
@@ -107,6 +108,15 @@ const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
       { to: "/sandboxes", match: "/sandboxes", label: "All sandboxes", exact: true },
       { to: "/sandboxes/active", match: "/sandboxes/active", label: "Running", exact: true },
       { to: "/sandboxes/failed", match: "/sandboxes/failed", label: "Failed", exact: true },
+    ],
+  },
+];
+
+const SETTINGS_SIDEBAR: readonly SidebarGroup[] = [
+  {
+    label: "Settings",
+    links: [
+      { to: "/settings/ssh-keys", match: "/settings/ssh-keys", label: "SSH keys", exact: true },
     ],
   },
 ];
@@ -535,6 +545,16 @@ function AppSidebarNav({
             </DropdownMenuSub>
             <DropdownMenuSeparator className="my-0 -mx-0 bg-border" />
             <DropdownMenuItem
+              onClick={() => {
+                window.location.assign("/settings/ssh-keys");
+              }}
+              className="flex items-center gap-3 px-4 py-2.5 text-[0.8125rem]"
+            >
+              <KeyRound className="size-4" />
+              <span>SSH keys</span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="my-0 -mx-0 bg-border" />
+            <DropdownMenuItem
               disabled={isSigningOut}
               onClick={() => {
                 void onSignOut();
@@ -592,6 +612,10 @@ function getGlobalArea(pathname: string): GlobalArea {
 
   if (pathname.startsWith("/profiles")) {
     return "profiles";
+  }
+
+  if (pathname.startsWith("/settings")) {
+    return "settings";
   }
 
   return "sandboxes";
@@ -669,6 +693,10 @@ function getSidebarGroups({
 
   if (activeArea === "issues") {
     return ISSUE_SIDEBAR;
+  }
+
+  if (activeArea === "settings") {
+    return SETTINGS_SIDEBAR;
   }
 
   if (activeArea === "repositories") {

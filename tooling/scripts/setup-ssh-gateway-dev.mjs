@@ -306,9 +306,12 @@ const main = () => {
   console.log("[ssh-gateway-setup] next steps:");
   console.log("  1) Infra:          docker compose up -d");
   console.log("  2) Migrate DB:     pnpm db:migrate");
-  console.log("  3) API + web:      pnpm --filter @sealant/api dev   (and --filter @sealant/web)");
-  console.log("  4) Worker+gateway: docker compose --profile apps up -d --build");
-  console.log(`  5) Connect:        ssh -F ${effectiveSshConfigPath} sbx-<sandboxId>`);
+  console.log(
+    "  3) Seed DB:        pnpm --filter @sealant/db db:seed   (registers the dev client key for usr_local)",
+  );
+  console.log("  4) API + web:      pnpm --filter @sealant/api dev   (and --filter @sealant/web)");
+  console.log("  5) Worker+gateway: docker compose --profile apps up -d --build");
+  console.log(`  6) Connect:        ssh -F ${effectiveSshConfigPath} sbx-<sandboxId>`);
 };
 
 main();

@@ -29,6 +29,7 @@ import { Route as ApiLinearDisconnectRouteImport } from './routes/api/linear/dis
 import { Route as ApiLinearConnectRouteImport } from './routes/api/linear/connect'
 import { Route as ApiLinearCallbackRouteImport } from './routes/api/linear/callback'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
 import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authenticated/sandboxes/new'
 import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
 import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_authenticated/sandboxes/active'
@@ -157,6 +158,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedSettingsSshKeysRoute =
+  AuthenticatedSettingsSshKeysRouteImport.update({
+    id: '/settings/ssh-keys',
+    path: '/settings/ssh-keys',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedSandboxesNewRoute =
   AuthenticatedSandboxesNewRouteImport.update({
     id: '/sandboxes/new',
@@ -316,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/linear/callback': typeof ApiLinearCallbackRoute
   '/api/linear/connect': typeof ApiLinearConnectRoute
@@ -360,6 +368,7 @@ export interface FileRoutesByTo {
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/linear/callback': typeof ApiLinearCallbackRoute
   '/api/linear/connect': typeof ApiLinearConnectRoute
@@ -407,6 +416,7 @@ export interface FileRoutesById {
   '/_authenticated/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/_authenticated/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/linear/callback': typeof ApiLinearCallbackRoute
   '/api/linear/connect': typeof ApiLinearConnectRoute
@@ -453,6 +463,7 @@ export interface FileRouteTypes {
     | '/sandboxes/active'
     | '/sandboxes/failed'
     | '/sandboxes/new'
+    | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/linear/callback'
     | '/api/linear/connect'
@@ -497,6 +508,7 @@ export interface FileRouteTypes {
     | '/sandboxes/active'
     | '/sandboxes/failed'
     | '/sandboxes/new'
+    | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/linear/callback'
     | '/api/linear/connect'
@@ -543,6 +555,7 @@ export interface FileRouteTypes {
     | '/_authenticated/sandboxes/active'
     | '/_authenticated/sandboxes/failed'
     | '/_authenticated/sandboxes/new'
+    | '/_authenticated/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/linear/callback'
     | '/api/linear/connect'
@@ -727,6 +740,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/settings/ssh-keys': {
+      id: '/_authenticated/settings/ssh-keys'
+      path: '/settings/ssh-keys'
+      fullPath: '/settings/ssh-keys'
+      preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
+      parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/sandboxes/new': {
       id: '/_authenticated/sandboxes/new'
@@ -925,6 +945,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedSandboxesActiveRoute: typeof AuthenticatedSandboxesActiveRoute
   AuthenticatedSandboxesFailedRoute: typeof AuthenticatedSandboxesFailedRoute
   AuthenticatedSandboxesNewRoute: typeof AuthenticatedSandboxesNewRoute
+  AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
   AuthenticatedIssuesIndexRoute: typeof AuthenticatedIssuesIndexRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
@@ -959,6 +980,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSandboxesActiveRoute: AuthenticatedSandboxesActiveRoute,
   AuthenticatedSandboxesFailedRoute: AuthenticatedSandboxesFailedRoute,
   AuthenticatedSandboxesNewRoute: AuthenticatedSandboxesNewRoute,
+  AuthenticatedSettingsSshKeysRoute: AuthenticatedSettingsSshKeysRoute,
   AuthenticatedIssuesIndexRoute: AuthenticatedIssuesIndexRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,

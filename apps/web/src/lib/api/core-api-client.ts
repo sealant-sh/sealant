@@ -1,6 +1,7 @@
 import {
   createSandboxRequestSchema,
   createSandboxResponseSchema,
+  createSshKeyRequestSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
@@ -14,6 +15,7 @@ import {
   listSandboxEventsResponseSchema,
   listSandboxesQuerySchema,
   listSandboxesResponseSchema,
+  listSshKeysResponseSchema,
   messageResponseSchema,
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
@@ -21,6 +23,8 @@ import {
   resolvePackageResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
+  sshKeyIdParamsSchema,
+  sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
   syncGitHubInstallationResponseSchema,
 } from "@sealant/validators";
@@ -47,7 +51,7 @@ export class CoreApiHttpError extends Error {
 }
 
 interface CoreApiRequestOptions<TOutput> {
-  readonly method: "GET" | "POST" | "PATCH";
+  readonly method: "GET" | "POST" | "PATCH" | "DELETE";
   readonly path: string;
   readonly schema: JsonSchema<TOutput>;
   readonly query?: Readonly<Record<string, string | number | undefined>>;
@@ -135,6 +139,18 @@ export interface CoreApiClient {
       readonly name: string;
     }): Promise<InferSchema<typeof renameSandboxResponseSchema>>;
   };
+  readonly sshKeys: {
+    create(
+      input: InferSchema<typeof createSshKeyRequestSchema>,
+    ): Promise<InferSchema<typeof sshKeySummarySchema>>;
+    list(input: {
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listSshKeysResponseSchema>>;
+    archive(input: {
+      readonly sshKeyId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof sshKeySummarySchema>>;
+  };
 }
 
 class CoreApiClientImpl implements CoreApiClient {
@@ -144,6 +160,7 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly sandboxes: CoreApiClient["sandboxes"];
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
+  public readonly sshKeys: CoreApiClient["sshKeys"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -165,6 +182,49 @@ class CoreApiClientImpl implements CoreApiClient {
       installationRepositories: (input) => this.listGitHubInstallationRepositories(input),
       syncInstallation: (input) => this.syncGitHubInstallation(input),
     };
+    this.sshKeys = {
+      create: (input) => this.createSshKey(input),
+      list: (input) => this.listSshKeys(input),
+      archive: (input) => this.archiveSshKey(input),
+    };
+  }
+
+  private async createSshKey(
+    input: InferSchema<typeof createSshKeyRequestSchema>,
+  ): Promise<InferSchema<typeof sshKeySummarySchema>> {
+    const payload = createSshKeyRequestSchema.parse(input);
+
+    return this.requestJson({
+      method: "POST",
+      path: "/v1/ssh-keys",
+      schema: sshKeySummarySchema,
+      body: payload,
+    });
+  }
+
+  private async listSshKeys(input: {
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listSshKeysResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/ssh-keys",
+      schema: listSshKeysResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async archiveSshKey(input: {
+    readonly sshKeyId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof sshKeySummarySchema>> {
+    const params = sshKeyIdParamsSchema.parse({ sshKeyId: input.sshKeyId });
+
+    return this.requestJson({
+      method: "DELETE",
+      path: `/v1/ssh-keys/${encodeURIComponent(params.sshKeyId)}`,
+      schema: sshKeySummarySchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
   }
 
   private async importGitHubInstallation(
