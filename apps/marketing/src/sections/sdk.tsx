@@ -94,8 +94,8 @@ export function BuildOnSdk() {
               Build your agent on a runtime, not container glue.
             </Display>
             <p className="mt-5 max-w-[52ch] text-lg leading-relaxed text-muted-foreground">
-              Create a live sandbox around a real repository, run the harness you already use, stream
-              progress while it works, and{" "}
+              Create a live sandbox around a real repository, run the harness you already use,
+              stream progress while it works, and{" "}
               <span className="text-foreground">keep the record after the sandbox is gone</span>.
             </p>
             <p className="mt-6 font-mono text-xs text-faint">

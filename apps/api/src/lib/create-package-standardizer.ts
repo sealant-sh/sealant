@@ -122,30 +122,30 @@ export const createPassthroughPackageStandardizer = (): PackageStandardizer => {
         const expiresAt = new Date(now.getTime() + 1000 * 60 * 5);
 
         return packageResolutionSchema.parse({
-        requested: query,
-        normalized,
-        status: "resolved",
-        source: "override",
-        canonicalId: normalized,
-        selectedProject: normalized,
-        osSupport: {
-          arch: {
-            supported: true,
-            packageName: normalized,
+          requested: query,
+          normalized,
+          status: "resolved",
+          source: "override",
+          canonicalId: normalized,
+          selectedProject: normalized,
+          osSupport: {
+            arch: {
+              supported: true,
+              packageName: normalized,
+            },
+            fedora: {
+              supported: true,
+              packageName: normalized,
+            },
+            nix: {
+              supported: true,
+              packageName: normalized,
+            },
           },
-          fedora: {
-            supported: true,
-            packageName: normalized,
-          },
-          nix: {
-            supported: true,
-            packageName: normalized,
-          },
-        },
-        alternatives: [],
-        fetchedAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      });
+          alternatives: [],
+          fetchedAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        });
       }),
   };
 };

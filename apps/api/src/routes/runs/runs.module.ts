@@ -53,7 +53,10 @@ const isForeignKeyViolation = (error: unknown): boolean => {
     if (record.code === "23503") {
       return true;
     }
-    if (typeof record.message === "string" && record.message.toLowerCase().includes("foreign key")) {
+    if (
+      typeof record.message === "string" &&
+      record.message.toLowerCase().includes("foreign key")
+    ) {
       return true;
     }
     current = record.cause;
@@ -63,7 +66,9 @@ const isForeignKeyViolation = (error: unknown): boolean => {
 
 const withRunInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: string) =>
   effect.pipe(
-    Effect.mapError((error) => new RunInternalServerError({ message: toErrorMessage(error, fallback) })),
+    Effect.mapError(
+      (error) => new RunInternalServerError({ message: toErrorMessage(error, fallback) }),
+    ),
   );
 
 const mapRun = (run: RunRecord): Run => ({
@@ -137,7 +142,9 @@ export const createRun = (payload: CreateRunRequest) =>
               message: `Unknown sandbox or owner for run (sandbox=${payload.sandboxId}).`,
             });
           }
-          return new RunInternalServerError({ message: toErrorMessage(error, "Failed to create run.") });
+          return new RunInternalServerError({
+            message: toErrorMessage(error, "Failed to create run."),
+          });
         }),
       );
 
@@ -214,7 +221,9 @@ export const updateRun = (input: { readonly runId: string; readonly payload: Upd
           : status === "failed"
             ? runs.markRunFailed({
                 id: input.runId,
-                ...(input.payload.exitCode === undefined ? {} : { exitCode: input.payload.exitCode }),
+                ...(input.payload.exitCode === undefined
+                  ? {}
+                  : { exitCode: input.payload.exitCode }),
                 ...(input.payload.errorMessage === undefined
                   ? {}
                   : { errorMessage: input.payload.errorMessage }),
@@ -303,7 +312,10 @@ export const getRunLoss = (runId: string) =>
   Effect.gen(function* () {
     yield* requireRun(runId);
     const query = yield* TelemetryQuery;
-    const report = yield* withRunInternalError(query.getLossReport(runId), "Failed to read loss report.");
+    const report = yield* withRunInternalError(
+      query.getLossReport(runId),
+      "Failed to read loss report.",
+    );
 
     return {
       runId: report.runId,

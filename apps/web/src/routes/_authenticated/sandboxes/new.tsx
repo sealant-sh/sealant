@@ -1827,9 +1827,8 @@ function NewSandboxPage() {
                       <div className="flex items-center gap-2 rounded-2xl border border-rule-faint bg-background px-4 py-4">
                         <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success-dot" />
                         <p className="text-sm leading-6 text-muted-foreground">
-                          {registeredSshKeyCount} SSH{" "}
-                          {registeredSshKeyCount === 1 ? "key" : "keys"} registered to your
-                          account — you can connect right after launch.
+                          {registeredSshKeyCount} SSH {registeredSshKeyCount === 1 ? "key" : "keys"}{" "}
+                          registered to your account — you can connect right after launch.
                         </p>
                       </div>
                     ) : (
@@ -1839,9 +1838,9 @@ function NewSandboxPage() {
                         </p>
                         <p className="mt-1 text-xs leading-6 text-muted-foreground">
                           Paste your public key (usually{" "}
-                          <span className="font-mono">~/.ssh/id_ed25519.pub</span>). It registers
-                          to your account, so it works for every sandbox you own. You can also add
-                          one later from Settings → SSH keys.
+                          <span className="font-mono">~/.ssh/id_ed25519.pub</span>). It registers to
+                          your account, so it works for every sandbox you own. You can also add one
+                          later from Settings → SSH keys.
                         </p>
                         <textarea
                           value={sshKeyInput}

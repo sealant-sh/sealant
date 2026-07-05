@@ -605,7 +605,8 @@ export interface CreatePackageStandardizerOptions {
 
 const repologyError = (operation: string, target: string, cause: unknown): PackageResolutionError =>
   new PackageResolutionError({
-    message: cause instanceof Error ? cause.message : `Repology ${operation} failed for '${target}'.`,
+    message:
+      cause instanceof Error ? cause.message : `Repology ${operation} failed for '${target}'.`,
     cause,
   });
 

@@ -48,13 +48,7 @@ function Code({ lines }: { lines: ReadonlyArray<Line> }) {
 }
 
 // ── Small UI exhibit primitives ──────────────────────────────────────────────
-function Panel({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`h-full overflow-hidden rounded-xl border border-rule bg-panel ${className}`}>
       {children}
@@ -70,7 +64,11 @@ function PanelHead({ children }: { children: ReactNode }) {
   );
 }
 
-function Status({ word, dot = "bg-success-dot", text = "text-success" }: {
+function Status({
+  word,
+  dot = "bg-success-dot",
+  text = "text-success",
+}: {
   word: string;
   dot?: string;
   text?: string;
@@ -291,10 +289,22 @@ const AUDIT: ReadonlyArray<Line> = [
     ["const", "kw"],
     [" { ", "plain"],
   ],
-  [["  changes", "member"], [",", "plain"]],
-  [["  checks", "member"], [",", "plain"]],
-  [["  artifacts", "member"], [",", "plain"]],
-  [["  record", "member"], [",", "plain"]],
+  [
+    ["  changes", "member"],
+    [",", "plain"],
+  ],
+  [
+    ["  checks", "member"],
+    [",", "plain"],
+  ],
+  [
+    ["  artifacts", "member"],
+    [",", "plain"],
+  ],
+  [
+    ["  record", "member"],
+    [",", "plain"],
+  ],
   [
     ["} = ", "plain"],
     ["run", "plain"],
@@ -304,9 +314,18 @@ const AUDIT: ReadonlyArray<Line> = [
     ["const", "kw"],
     [" { ", "plain"],
   ],
-  [["  files", "member"], [",", "plain"]],
-  [["  processes", "member"], [",", "plain"]],
-  [["  logs", "member"], [",", "plain"]],
+  [
+    ["  files", "member"],
+    [",", "plain"],
+  ],
+  [
+    ["  processes", "member"],
+    [",", "plain"],
+  ],
+  [
+    ["  logs", "member"],
+    [",", "plain"],
+  ],
   [
     ["} = ", "plain"],
     ["sandbox", "plain"],

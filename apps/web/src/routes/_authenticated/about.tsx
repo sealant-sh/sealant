@@ -32,10 +32,7 @@ function AboutPage() {
 
         <dl className="mt-8 divide-y divide-rule-faint border-t border-rule-faint">
           {PLATFORM_FACTS.map((fact) => (
-            <div
-              key={fact.label}
-              className="flex items-baseline justify-between gap-4 py-3.5"
-            >
+            <div key={fact.label} className="flex items-baseline justify-between gap-4 py-3.5">
               <dt className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{fact.label}</dt>
               <dd className="text-right font-mono text-xs text-ink-2">{fact.value}</dd>
             </div>

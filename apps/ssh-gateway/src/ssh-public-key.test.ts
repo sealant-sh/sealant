@@ -1,9 +1,8 @@
-import { describe, expect, it } from "vitest";
-
 import {
   computeSshPublicKeyFingerprint,
   parseSshPublicKey,
 } from "@sealant/validators/ssh-public-key";
+import { describe, expect, it } from "vitest";
 
 /*
 The fingerprint format is the load-bearing contract between key registration (API) and gateway

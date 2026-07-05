@@ -7,7 +7,9 @@
  */
 import { opencode, Sealant } from "@sealant/sdk";
 
-const sealant = new Sealant({ baseUrl: process.env["SEALANT_BASE_URL"] ?? "http://localhost:8080" });
+const sealant = new Sealant({
+  baseUrl: process.env["SEALANT_BASE_URL"] ?? "http://localhost:8080",
+});
 
 const sandbox = await sealant.sandboxes.create({
   repository: "github.com/acme/billing-service",

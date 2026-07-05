@@ -32,9 +32,7 @@ export interface RunExecRequestedMessage {
 }
 
 export const runExecQueueTopology: RabbitMqTopology = {
-  exchanges: [
-    { name: runExecDeadLetterExchangeName, type: "direct", options: { durable: true } },
-  ],
+  exchanges: [{ name: runExecDeadLetterExchangeName, type: "direct", options: { durable: true } }],
   queues: [
     {
       name: runExecDeadLetterQueueName,

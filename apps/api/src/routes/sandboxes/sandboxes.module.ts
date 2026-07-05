@@ -71,9 +71,7 @@ type SandboxAttemptRepoService = Context.Service.Shape<typeof SandboxAttemptRepo
 type SandboxBuildJobRepoService = Context.Service.Shape<typeof SandboxBuildJobRepo>;
 type SandboxRuntimeInstanceRepoService = Context.Service.Shape<typeof SandboxRuntimeInstanceRepo>;
 
-type SandboxRecord = NonNullable<
-  Effect.Success<ReturnType<SandboxRepoService["getSandboxById"]>>
->;
+type SandboxRecord = NonNullable<Effect.Success<ReturnType<SandboxRepoService["getSandboxById"]>>>;
 type SandboxAttemptRecord = NonNullable<
   Effect.Success<ReturnType<SandboxAttemptRepoService["getAttemptById"]>>
 >;

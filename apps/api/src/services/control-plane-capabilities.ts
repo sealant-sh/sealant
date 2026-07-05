@@ -18,10 +18,9 @@ export class PackageStandardizerService extends Context.Service<
   PackageStandardizer
 >()("@sealant/api/PackageStandardizerService") {}
 
-export class RegistryClientService extends Context.Service<
-  RegistryClientService,
-  RegistryClient
->()("@sealant/api/RegistryClientService") {}
+export class RegistryClientService extends Context.Service<RegistryClientService, RegistryClient>()(
+  "@sealant/api/RegistryClientService",
+) {}
 
 export class SandboxBuildJobPublisherService extends Context.Service<
   SandboxBuildJobPublisherService,

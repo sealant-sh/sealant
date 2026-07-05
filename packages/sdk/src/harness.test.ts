@@ -22,7 +22,10 @@ describe("harness factories", () => {
   it("customHarness is the bring-your-own escape hatch", () => {
     const harness = customHarness({ id: "mybot", invoke: (prompt) => ["go", prompt] });
     expect(harness.id).toBe("mybot");
-    expect(harness.buildRunCommand("hello")).toEqual({ executable: "mybot", args: ["go", "hello"] });
+    expect(harness.buildRunCommand("hello")).toEqual({
+      executable: "mybot",
+      args: ["go", "hello"],
+    });
   });
 
   it("customHarness can override the executable", () => {

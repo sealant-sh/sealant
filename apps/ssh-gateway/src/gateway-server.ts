@@ -1,9 +1,4 @@
-import type {
-  AuthContext,
-  Connection,
-  PseudoTtyInfo,
-  ServerChannel,
-} from "ssh2";
+import type { AuthContext, Connection, PseudoTtyInfo, ServerChannel } from "ssh2";
 import ssh2 from "ssh2";
 const { Server, utils } = ssh2;
 

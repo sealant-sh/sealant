@@ -10,10 +10,10 @@ import {
   processSandboxBuildJob,
   reapStaleSandboxBuildJobs,
 } from "@sealant/sandboxes";
-
-import { processRunExecJob } from "./process-run-exec-job.js";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
+
+import { processRunExecJob } from "./process-run-exec-job.js";
 
 const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
   return createSealantDB(env.DATABASE_URL);

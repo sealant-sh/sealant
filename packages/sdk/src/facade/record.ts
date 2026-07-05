@@ -157,7 +157,8 @@ export const renderTranscript = (commands: readonly RunCommand[]): string => {
           : command.exitCode !== undefined
             ? `failed (exit ${command.exitCode})`
             : "ended";
-    const duration = command.durationMs === undefined ? "" : ` · ${humanDuration(command.durationMs)}`;
+    const duration =
+      command.durationMs === undefined ? "" : ` · ${humanDuration(command.durationMs)}`;
     return `  $ ${command.command}\n      ↳ ${[...io, outcome].join(" · ")}${duration}`;
   });
   return `${blocks.join("\n\n")}\n`;

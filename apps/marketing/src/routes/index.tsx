@@ -1,14 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { BuildOnSdk } from "#/sections/sdk";
 import { RecordCaptures } from "#/sections/capture";
 import { FinalCta } from "#/sections/final-cta";
 import { Hero } from "#/sections/hero";
-import { ModelStrip } from "#/sections/thesis-strip";
 import { OpenSource } from "#/sections/opensource";
 import { Products } from "#/sections/products";
 import { RunSurface } from "#/sections/record";
 import { Sandboxes } from "#/sections/sandboxes";
+import { BuildOnSdk } from "#/sections/sdk";
+import { ModelStrip } from "#/sections/thesis-strip";
 
 export const Route = createFileRoute("/")({
   component: MarketingPage,

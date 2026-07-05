@@ -197,10 +197,9 @@ export interface SealantTransportService {
   readonly open: (target: SealantTarget) => Effect.Effect<Duplex, TransportError, Scope.Scope>;
 }
 
-export class SealantTransport extends Context.Service<
-  SealantTransport,
-  SealantTransportService
->()("@sealant/sandboxes/SealantTransport") {}
+export class SealantTransport extends Context.Service<SealantTransport, SealantTransportService>()(
+  "@sealant/sandboxes/SealantTransport",
+) {}
 
 /**
  * P3 bridge as a transport: `docker exec -i <ctr> socat - UNIX-CONNECT:<sock>`. Deliberately no `-t`
@@ -216,14 +215,7 @@ const dockerExecTransport: SealantTransportService = {
         Effect.sync(() => {
           const child = spawn(
             "docker",
-            [
-              "exec",
-              "-i",
-              target.containerId,
-              "socat",
-              "-",
-              `UNIX-CONNECT:${target.socketPath}`,
-            ],
+            ["exec", "-i", target.containerId, "socat", "-", `UNIX-CONNECT:${target.socketPath}`],
             { stdio: ["pipe", "pipe", "pipe"] },
           );
 
@@ -314,13 +306,14 @@ export interface SealantRuntimeService {
    * `Effect.acquireRelease`) that closes the client. Resource-safe: closing the `Scope` releases the
    * client and the transport child in reverse order.
    */
-  readonly connect: (target: SealantTarget) => Effect.Effect<SealantSession, SealantError, Scope.Scope>;
+  readonly connect: (
+    target: SealantTarget,
+  ) => Effect.Effect<SealantSession, SealantError, Scope.Scope>;
 }
 
-export class SealantRuntime extends Context.Service<
-  SealantRuntime,
-  SealantRuntimeService
->()("@sealant/sandboxes/SealantRuntime") {}
+export class SealantRuntime extends Context.Service<SealantRuntime, SealantRuntimeService>()(
+  "@sealant/sandboxes/SealantRuntime",
+) {}
 
 /** Builds the per-connection session handle around a connected `SealantClient`. */
 const makeSession = (client: SealantClient): SealantSession => ({
@@ -328,7 +321,10 @@ const makeSession = (client: SealantClient): SealantSession => ({
   // (e.g. a flaky docker-exec bridge). Use `tryPromise` so the rejection lands on the typed
   // `SealantError` channel (retryable) — `Effect.promise` would turn it into a defect that escapes
   // `withSealantError` and bypasses `Effect.retry`.
-  health: withSealantError("health", Effect.tryPromise(() => client.health())),
+  health: withSealantError(
+    "health",
+    Effect.tryPromise(() => client.health()),
+  ),
 
   capabilities: withSealantError(
     "capabilities",
@@ -353,7 +349,10 @@ const makeSession = (client: SealantClient): SealantSession => ({
     ),
 
   writeStdin: (processId, data) =>
-    withSealantError("writeStdin", Effect.tryPromise(() => client.writeStdin(processId, data))),
+    withSealantError(
+      "writeStdin",
+      Effect.tryPromise(() => client.writeStdin(processId, data)),
+    ),
 
   signalProcess: (processId, signal) =>
     withSealantError(
@@ -362,7 +361,10 @@ const makeSession = (client: SealantClient): SealantSession => ({
     ),
 
   shutdown: (graceMillis) =>
-    withSealantError("shutdown", Effect.tryPromise(() => client.shutdown(graceMillis))),
+    withSealantError(
+      "shutdown",
+      Effect.tryPromise(() => client.shutdown(graceMillis)),
+    ),
 
   // `Stream.fromAsyncIterable` pulls one event per `next()` (the SDK iterator is the backpressure
   // boundary). Iterator exhaustion (after `client.close()`) is normal completion; any throw is

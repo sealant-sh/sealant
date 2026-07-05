@@ -35,7 +35,11 @@ export const buildCreateSandboxRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
 ): { readonly payload: CreateSandboxRequest } => {
-  const tail = options.repository.split("/").filter((s) => s.length > 0).pop() ?? options.repository;
+  const tail =
+    options.repository
+      .split("/")
+      .filter((s) => s.length > 0)
+      .pop() ?? options.repository;
   const spec = {
     version: "1",
     sources: {

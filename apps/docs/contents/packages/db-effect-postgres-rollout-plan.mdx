@@ -1,32 +1,44 @@
 ---
 title: DB Effect/Postgres rollout plan
-description: A staged, small-PR plan to move @sealant/db from SQLite to PostgreSQL with an Effect-first service boundary using Drizzle's Effect integrations.
+description:
+  A staged, small-PR plan to move @sealant/db from SQLite to PostgreSQL with an Effect-first service
+  boundary using Drizzle's Effect integrations.
 ---
 
-import { Card, Cards } from 'fumadocs-ui/components/card';
-import { Step, Steps } from 'fumadocs-ui/components/steps';
-import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+import { Card, Cards } from "fumadocs-ui/components/card";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
 
-This plan moves `@sealant/db` from SQLite to PostgreSQL and adopts an Effect-first database service boundary, built on Drizzle's Effect integrations (`drizzle-orm/effect-postgres` and `drizzle-orm/effect-schema`). It is deliberately split into small, targeted pull requests, each with a narrow blast radius and explicit acceptance criteria so the migration stays reviewable and reversible at every step.
+This plan moves `@sealant/db` from SQLite to PostgreSQL and adopts an Effect-first database service
+boundary, built on Drizzle's Effect integrations (`drizzle-orm/effect-postgres` and
+`drizzle-orm/effect-schema`). It is deliberately split into small, targeted pull requests, each with
+a narrow blast radius and explicit acceptance criteria so the migration stays reviewable and
+reversible at every step.
 
 <Callout type="info">
-The cutover is a clean break to PostgreSQL: there is no SQLite-to-Postgres data migration tooling and no long-lived dual-database mode. The work lands as nine focused PRs that move the stack from dependencies, through schema and runtime, into an Effect service contract, and finally across all consumers and local infrastructure.
+  The cutover is a clean break to PostgreSQL: there is no SQLite-to-Postgres data migration tooling
+  and no long-lived dual-database mode. The work lands as nine focused PRs that move the stack from
+  dependencies, through schema and runtime, into an Effect service contract, and finally across all
+  consumers and local infrastructure.
 </Callout>
 
 ## Objective
 
-Replace the SQLite backend in `@sealant/db` with PostgreSQL and introduce an explicit Effect service boundary for the database, using Drizzle's Effect integrations:
+Replace the SQLite backend in `@sealant/db` with PostgreSQL and introduce an explicit Effect service
+boundary for the database, using Drizzle's Effect integrations:
 
 - `drizzle-orm/effect-postgres` for the connection and runtime path
 - `drizzle-orm/effect-schema` for validation generation
 
-The service contract is defined first; the live implementation is layered separately, mirroring the Effect service patterns already used across the repo.
+The service contract is defined first; the live implementation is layered separately, mirroring the
+Effect service patterns already used across the repo.
 
 ## Delivery constraints
 
 <Cards>
   <Card title="Clean cutover">
-    A clean break to PostgreSQL. No SQLite-to-Postgres data migration tooling and no dual-database runtime.
+    A clean break to PostgreSQL. No SQLite-to-Postgres data migration tooling and no dual-database
+    runtime.
   </Card>
   <Card title="Contract first">
     Define the service contract first, then provide the live implementation as a separate layer.
@@ -53,7 +65,8 @@ The service contract is defined first; the live implementation is layered separa
 
 ## Targeted PR sequence
 
-The migration proceeds as nine PRs. Each one lists its goal, primary targets, key changes where relevant, acceptance criteria, and the validation command(s) that gate it.
+The migration proceeds as nine PRs. Each one lists its goal, primary targets, key changes where
+relevant, acceptance criteria, and the validation command(s) that gate it.
 
 <Steps>
 
@@ -210,7 +223,8 @@ pnpm --filter @sealant/db typecheck
 
 ### PR 6 — Effect DB service boundary
 
-Introduce an explicit DB service contract and layer composition in `@sealant/db`, aligned with existing Effect service patterns in the repo.
+Introduce an explicit DB service contract and layer composition in `@sealant/db`, aligned with
+existing Effect service patterns in the repo.
 
 **Primary targets**
 
@@ -341,5 +355,6 @@ A docs consistency pass plus a smoke runbook check.
     - DB validation generation uses Drizzle Effect Schema.
     - API, worker, auth, and web server contexts compile and run with `DATABASE_URL`.
     - Docs and local dev instructions no longer reference SQLite as the default backend.
+
   </Accordion>
 </Accordions>

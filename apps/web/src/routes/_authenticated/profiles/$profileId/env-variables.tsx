@@ -23,10 +23,7 @@ function ProfileEnvVariablesPage() {
           ["SEALANT_REGION", "eu-west-1"],
           ["VALIDATION_LEVEL", "strict"],
         ].map(([key, value]) => (
-          <div
-            key={key}
-            className="grid gap-2 py-3.5 sm:grid-cols-[1fr_2fr] sm:items-baseline"
-          >
+          <div key={key} className="grid gap-2 py-3.5 sm:grid-cols-[1fr_2fr] sm:items-baseline">
             <p className="font-mono text-xs text-foreground">{key}</p>
             <p className="font-mono text-xs text-ink-2">{value}</p>
           </div>

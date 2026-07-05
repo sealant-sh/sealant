@@ -69,7 +69,7 @@ Use concise tags so reviewers can grep quickly:
 | `owners` | `engineering`                                                                              |
 | `scope`  | `apps/api`, `packages/api-contracts`, `apps/docs`                                          |
 | `tags`   | `arch:effect`, `area:api`, `area:docs`, `domain:sandboxes`, `kind:refactor`, `risk:medium` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/56`, commits: `c56686f`, `2fe9094`        |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/56`, commits: `c56686f`, `2fe9094`         |
 
 **PR Description (copy-ready)**
 
@@ -161,7 +161,7 @@ Both commands passed after migration and wiring updates.
 | `owners` | `engineering`                                                                                                                                                                                    |
 | `scope`  | `packages/db`, `packages/auth`, `packages/sandboxes`, `apps/api`, `apps/web`, `apps/worker`, `apps/docs`, `flake.nix`                                                                            |
 | `tags`   | `arch:effect`, `area:db`, `area:api`, `area:web`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `domain:source-integrations`, `kind:fix`, `risk:medium` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/55`, commits: `ba6ae9e`, `ea094d8`, `f6e0e67`                                                                                                   |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/55`, commits: `ba6ae9e`, `ea094d8`, `f6e0e67`                                                                                                    |
 
 **PR Description (copy-ready)**
 
@@ -292,7 +292,7 @@ Both commands passed during implementation.
 | `owners` | `engineering`                                                                                                                                            |
 | `scope`  | `packages/db`, `packages/validators`, `packages/auth`, `apps/api`, `apps/worker`, `apps/docs`, `compose.yaml`, root `README.md`                          |
 | `tags`   | `arch:effect`, `area:db`, `area:api`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `kind:feature`, `risk:high` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/51`, commit: `0859797`, rollout plan: `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md`                              |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/51`, commit: `0859797`, rollout plan: `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md`                               |
 
 **PR Description (copy-ready)**
 
@@ -421,12 +421,12 @@ All commands passed during implementation.
 
 ### CHG-2026-04-02-001 - Initial Effect Service Runtime Wiring
 
-| Field    | Value                                                                                                                    |
-| -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `status` | `merged`                                                                                                                 |
-| `owners` | `engineering`                                                                                                            |
-| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs          |
-| `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                                  |
+| Field    | Value                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `status` | `merged`                                                                                                                |
+| `owners` | `engineering`                                                                                                           |
+| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs         |
+| `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                                 |
 | `links`  | PR: `https://github.com/sealant-sh/sealant/pull/49`, commits: `8c69885`, `d3bed5d`, audit: `TECH_DEBT_CLEANUP_AUDIT.md` |
 
 **PR Description (copy-ready)**

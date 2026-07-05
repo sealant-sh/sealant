@@ -40,16 +40,22 @@ const gitHubWebhookDeliveryRepoOperationSchema = Schema.Literals([
   "markWebhookDeliveryProcessed",
 ]);
 
-export class GitHubWebhookDeliveryRepoInvariantError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoInvariantError>()("GitHubWebhookDeliveryRepoInvariantError", {
-  operation: gitHubWebhookDeliveryRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class GitHubWebhookDeliveryRepoInvariantError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoInvariantError>()(
+  "GitHubWebhookDeliveryRepoInvariantError",
+  {
+    operation: gitHubWebhookDeliveryRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class GitHubWebhookDeliveryRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoUnexpectedError>()("GitHubWebhookDeliveryRepoUnexpectedError", {
-  operation: gitHubWebhookDeliveryRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class GitHubWebhookDeliveryRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubWebhookDeliveryRepoUnexpectedError>()(
+  "GitHubWebhookDeliveryRepoUnexpectedError",
+  {
+    operation: gitHubWebhookDeliveryRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const gitHubWebhookDeliveryRepoErrorSchema = Schema.Union([
   GitHubWebhookDeliveryRepoInvariantError,

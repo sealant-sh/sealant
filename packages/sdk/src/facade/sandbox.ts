@@ -8,13 +8,7 @@ import type { SandboxDetails } from "@sealant/api-contracts";
 
 import { getSandboxOp } from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
-import type {
-  Harness,
-  HarnessRunner,
-  Sandbox,
-  SandboxEvent,
-  SandboxStatus,
-} from "../types.js";
+import type { Harness, HarnessRunner, Sandbox, SandboxEvent, SandboxStatus } from "../types.js";
 import type { SdkContext } from "./context.js";
 
 export interface SandboxInit {

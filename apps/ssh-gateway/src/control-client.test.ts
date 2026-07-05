@@ -3,8 +3,8 @@
 // emits and replies with the matching ServerMessage responses + stream frames, so we can assert that
 // each high-level operation issues the right command and bridges the right byte channel.
 
-import { Duplex } from "node:stream";
 import { Buffer } from "node:buffer";
+import { Duplex } from "node:stream";
 
 import { fromBinary } from "@bufbuild/protobuf";
 import {
@@ -86,7 +86,10 @@ class FakeDaemon extends Duplex {
     switch (kase) {
       case "openSession": {
         this.#okResult(requestId, {
-          result: { case: "sessionOpened", value: { sessionId: "sess-1", processId: "proc-1", pid: 100 } },
+          result: {
+            case: "sessionOpened",
+            value: { sessionId: "sess-1", processId: "proc-1", pid: 100 },
+          },
         });
         break;
       }
@@ -102,7 +105,10 @@ class FakeDaemon extends Duplex {
         const channelId = `chan-${++this.#channelCounter}`;
         this.lastChannelId = channelId;
         this.#okResult(requestId, {
-          result: { case: "processAttached", value: { processId: "proc-2", pid: 200, pgid: 200, channelId } },
+          result: {
+            case: "processAttached",
+            value: { processId: "proc-2", pid: 200, pgid: 200, channelId },
+          },
         });
         break;
       }
@@ -170,11 +176,23 @@ describe("ControlClient channel->command mapping", () => {
     const daemon = new FakeDaemon();
     const client = ControlClient.fromStream(daemon);
 
-    const shell = await client.openShell({ cols: 120, rows: 40, term: "xterm", env: { TERM: "xterm" } });
+    const shell = await client.openShell({
+      cols: 120,
+      rows: 40,
+      term: "xterm",
+      env: { TERM: "xterm" },
+    });
 
     const openSession = daemon.commands.find((c) => c.case === "openSession");
-    expect(openSession?.value).toMatchObject({ shell: "/bin/bash", args: ["-l"], cols: 120, rows: 40 });
-    expect(daemon.commands.find((c) => c.case === "attachSession")?.value).toMatchObject({ mode: 1 });
+    expect(openSession?.value).toMatchObject({
+      shell: "/bin/bash",
+      args: ["-l"],
+      cols: 120,
+      rows: 40,
+    });
+    expect(daemon.commands.find((c) => c.case === "attachSession")?.value).toMatchObject({
+      mode: 1,
+    });
     expect(shell.sessionId).toBe("sess-1");
     expect(shell.processId).toBe("proc-1");
 
@@ -208,10 +226,16 @@ describe("ControlClient channel->command mapping", () => {
     expect(writeStdinValue.sessionId).toBe("sess-1");
 
     await client.resizePty("sess-1", 100, 30);
-    expect(lastCommand(daemon)).toMatchObject({ case: "resizePty", value: { sessionId: "sess-1", cols: 100, rows: 30 } });
+    expect(lastCommand(daemon)).toMatchObject({
+      case: "resizePty",
+      value: { sessionId: "sess-1", cols: 100, rows: 30 },
+    });
 
     await client.signalProcess("proc-1", 2);
-    expect(lastCommand(daemon)).toMatchObject({ case: "signalProcess", value: { processId: "proc-1", signal: 2 } });
+    expect(lastCommand(daemon)).toMatchObject({
+      case: "signalProcess",
+      value: { processId: "proc-1", signal: 2 },
+    });
 
     client.close();
   });
@@ -241,7 +265,10 @@ describe("ControlClient channel->command mapping", () => {
     const client = ControlClient.fromStream(daemon);
 
     const { result, channel } = await client.openForward("127.0.0.1", 9000);
-    expect(lastCommand(daemon)).toMatchObject({ case: "openForward", value: { host: "127.0.0.1", port: 9000 } });
+    expect(lastCommand(daemon)).toMatchObject({
+      case: "openForward",
+      value: { host: "127.0.0.1", port: 9000 },
+    });
     expect(result.channelId).toBe(channel.channelId);
 
     // Outbound: a write muxes a ClientMessage::Stream for this channel.
