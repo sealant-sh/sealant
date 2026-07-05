@@ -52,6 +52,12 @@ export type SandboxRunLinkRelation = (typeof sandboxRunLinkRelationValues)[numbe
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
 export type ProfileSshKeyPurpose = (typeof profileSshKeyPurposeValues)[number];
 
+export const connectedAccountProviderValues = ["claude", "codex", "github"] as const;
+export type ConnectedAccountProvider = (typeof connectedAccountProviderValues)[number];
+
+export const connectedAccountStatusValues = ["active", "invalid", "archived"] as const;
+export type ConnectedAccountStatus = (typeof connectedAccountStatusValues)[number];
+
 export const githubInstallationAccountTypeValues = ["organization", "user"] as const;
 export type GitHubInstallationAccountType = (typeof githubInstallationAccountTypeValues)[number];
 
@@ -467,6 +473,89 @@ export const profileSshKeyBindings = pgTable(
   ],
 );
 
+/*
+Connected accounts: bring-your-own provider credentials (Claude setup-token, Codex auth.json,
+GitHub gh-CLI token). The secret payload is sealed with AES-256-GCM by @sealant/credentials
+(`encrypted_payload` + `encryption_key_id`); `payload_sha256` enables change detection without
+decryption and `metadata` carries ONLY non-secret display/ops data. `createdAt` doubles as the
+design doc's `connected_at` (when the credential was connected/replaced).
+*/
+export const connectedAccounts = pgTable(
+  "connected_accounts",
+  {
+    id: text().primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    provider: text({ enum: connectedAccountProviderValues }).notNull(),
+    // Multiple accounts per provider are allowed; (owner, provider, name) is unique while active.
+    name: text().notNull().default("default"),
+    // "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token" (github today,
+    // "github-app-user" on the roadmap).
+    kind: text().notNull(),
+    status: text({ enum: connectedAccountStatusValues }).notNull().default("active"),
+    encryptedPayload: text("encrypted_payload").notNull(),
+    encryptionKeyId: text("encryption_key_id").notNull(),
+    payloadSha256: text("payload_sha256").notNull(),
+    metadata: jsonb()
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .$defaultFn(() => ({})),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    lastUsedAt: timestamp("last_used_at", { mode: "date", withTimezone: true }),
+    lastSyncedAt: timestamp("last_synced_at", { mode: "date", withTimezone: true }),
+    invalidAt: timestamp("invalid_at", { mode: "date", withTimezone: true }),
+    archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
+  },
+  (table) => [
+    // Partial so archived rows don't block reconnecting under the same name.
+    uniqueIndex("connected_accounts_owner_provider_name_active_idx")
+      .on(table.ownerUserId, table.provider, table.name)
+      .where(sql`archived_at IS NULL`),
+    index("connected_accounts_owner_provider_status_idx").on(
+      table.ownerUserId,
+      table.provider,
+      table.status,
+    ),
+  ],
+);
+
+/*
+The profile "bundle" piece: one connected account per provider per profile. Profile-level (not
+revision-level) on purpose — a connected account is a live identity pointer, and re-linking or
+rotating it must not fork a revision or change a fingerprint. No cascade on the account FK:
+archiving an account is handled at the app level so bindings surface as "needs reconnect".
+*/
+export const profileConnectedAccounts = pgTable(
+  "profile_connected_accounts",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    provider: text({ enum: connectedAccountProviderValues }).notNull(),
+    connectedAccountId: text("connected_account_id")
+      .notNull()
+      .references(() => connectedAccounts.id),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    primaryKey({ columns: [table.profileId, table.provider] }),
+    index("profile_connected_accounts_connected_account_id_idx").on(table.connectedAccountId),
+  ],
+);
+
 export const repositoryProfiles = pgTable(
   "repository_profiles",
   {
@@ -799,6 +888,12 @@ export type NewProfileSshSetting = typeof profileSshSettings.$inferInsert;
 
 export type ProfileSshKeyBinding = typeof profileSshKeyBindings.$inferSelect;
 export type NewProfileSshKeyBinding = typeof profileSshKeyBindings.$inferInsert;
+
+export type ConnectedAccount = typeof connectedAccounts.$inferSelect;
+export type NewConnectedAccount = typeof connectedAccounts.$inferInsert;
+
+export type ProfileConnectedAccount = typeof profileConnectedAccounts.$inferSelect;
+export type NewProfileConnectedAccount = typeof profileConnectedAccounts.$inferInsert;
 
 export type RepositoryProfile = typeof repositoryProfiles.$inferSelect;
 export type NewRepositoryProfile = typeof repositoryProfiles.$inferInsert;

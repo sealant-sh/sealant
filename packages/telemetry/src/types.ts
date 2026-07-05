@@ -99,7 +99,11 @@ export interface GapDetectionState {
 // Read-model shapes (the SDK-facing surface)
 // ---------------------------------------------------------------------------------------------
 
-/** One ordered entry in a run's timeline (a real event, or an inline loss marker). */
+/**
+ * One ordered entry in a run's timeline (a real event, or an inline loss marker). Correlation +
+ * provenance (`processId`, `captureMethod`, `confidence`) are joined from the log so consumers can
+ * attribute activity to the process that produced it and state how each fact was captured.
+ */
 export interface TimelineEntry {
   readonly eventId: string;
   readonly sequence: bigint;
@@ -107,6 +111,9 @@ export interface TimelineEntry {
   readonly occurredAt: bigint;
   readonly summary: string;
   readonly ref: Record<string, unknown> | null;
+  readonly processId: string | null;
+  readonly captureMethod: number;
+  readonly confidence: number;
 }
 
 export interface RunSummary {

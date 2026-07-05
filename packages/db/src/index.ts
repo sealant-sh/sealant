@@ -189,6 +189,25 @@ export {
 } from "./repositories/users.js";
 
 export {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoInvariantError,
+  ConnectedAccountRepoLive,
+  ConnectedAccountRepoUnexpectedError,
+  connectedAccountRepoErrorSchema,
+  type ArchiveConnectedAccountInput,
+  type ClearProfileConnectedAccountBindingInput,
+  type ConnectedAccountRepoError,
+  type ConnectedAccountRepoService,
+  type CreateConnectedAccountInput,
+  type GetConnectedAccountByOwnerProviderNameInput,
+  type ProfileConnectedAccountBindingWithAccount,
+  type ReplaceConnectedAccountPayloadInput,
+  type RestoreConnectedAccountInput,
+  type SetProfileConnectedAccountBindingInput,
+  type UpdateConnectedAccountSyncStateInput,
+} from "./repositories/connected-accounts.js";
+
+export {
   RunRepo,
   RunRepoInvariantError,
   RunRepoLive,
@@ -203,6 +222,9 @@ export {
 } from "./repositories/runs.js";
 
 export {
+  connectedAccountProviderValues,
+  connectedAccounts,
+  connectedAccountStatusValues,
   githubAppInstallations,
   githubInstallationAccountTypeValues,
   githubInstallationRepositories,
@@ -212,6 +234,7 @@ export {
   githubWebhookDeliveries,
   githubWebhookDeliveryStatusValues,
   packageResolutionCacheEntries,
+  profileConnectedAccounts,
   runModeValues,
   runs,
   runStatusValues,
@@ -234,6 +257,9 @@ export {
   type AuthSession,
   type AuthUser,
   type AuthVerification,
+  type ConnectedAccount,
+  type ConnectedAccountProvider,
+  type ConnectedAccountStatus,
   type GitHubAppInstallation,
   type GitHubInstallationAccountType,
   type GitHubInstallationRepository as GitHubInstallationRepositoryRecord,
@@ -246,11 +272,13 @@ export {
   type NewAuthSession,
   type NewAuthUser,
   type NewAuthVerification,
+  type NewConnectedAccount,
   type NewGitHubAppInstallation,
   type NewGitHubInstallationRepository,
   type NewGitHubInstallationUserGrant,
   type NewGitHubWebhookDelivery,
   type NewPackageResolutionCacheEntry,
+  type NewProfileConnectedAccount,
   type NewRun,
   type NewSandboxAttempt,
   type NewSandboxAttemptSnapshot,
@@ -260,6 +288,7 @@ export {
   type OciImageBuildJob,
   type OciImageBuildJobStatus,
   type PackageResolutionCacheEntry,
+  type ProfileConnectedAccount,
   type Run,
   type RunFileChange,
   type RunMode,

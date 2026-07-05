@@ -129,9 +129,19 @@ export const sandboxSpecNetworkSchema = z
   })
   .prefault({});
 
+export const sandboxCredentialProviderSchema = z.enum(["claude", "codex", "github"]);
+
+// Opaque connected-account pointer (`connected-account:<id>`), resolved and decrypted by the
+// worker just before launch. Blueprints never carry credential material itself.
+export const sandboxCredentialRefSchema = z.strictObject({
+  provider: sandboxCredentialProviderSchema,
+  ref: nonEmptyStringSchema,
+});
+
 export const sandboxSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
+    credentialRefs: z.array(sandboxCredentialRefSchema).default([]),
     sandboxRoot: nonEmptyStringSchema.default("/sandbox"),
     workingDirectory: nonEmptyStringSchema.default("/sandbox/repo"),
     persistence: sandboxPersistenceSchema.default("ephemeral"),

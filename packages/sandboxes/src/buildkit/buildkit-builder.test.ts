@@ -51,6 +51,7 @@ const createSandboxBuildSpec = (overrides: Partial<NewSandbox> = {}): NewSandbox
     },
     runtime: {
       env: {},
+      credentialRefs: [],
       sandboxRoot: "/sandbox",
       workingDirectory: "/sandbox/repo",
       persistence: "ephemeral",

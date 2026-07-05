@@ -1,10 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { CredentialCipherService } from "@sealant/credentials";
 import {
+  ConnectedAccountRepo,
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
   SandboxAttemptRepo,
   SandboxBuildJobRepo,
   SandboxRuntimeInstanceRepo,
+  type ConnectedAccountRepoService,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
   type SandboxAttemptRepoService,
@@ -174,6 +177,7 @@ const createSandboxBuildSpec = (
     readonly startupCommand?: string;
     readonly sshEnabled?: boolean;
     readonly inputSources?: NewSandbox["sources"]["inputs"];
+    readonly credentialRefs?: NewSandbox["runtime"]["credentialRefs"];
   } = {},
 ): NewSandbox => {
   return {
@@ -225,6 +229,7 @@ const createSandboxBuildSpec = (
     },
     runtime: {
       env: {},
+      credentialRefs: input.credentialRefs ?? [],
       sandboxRoot: "/sandbox",
       workingDirectory: "/sandbox/repo",
       persistence: "ephemeral",
@@ -263,6 +268,7 @@ const provideRepos = (stubs: {
   readonly attempts: unknown;
   readonly installations?: unknown;
   readonly installationRepositories?: unknown;
+  readonly connectedAccounts?: unknown;
 }) =>
   Layer.mergeAll(
     Layer.succeed(SandboxBuildJobRepo, stubs.jobs as SandboxBuildJobRepoService),
@@ -279,6 +285,10 @@ const provideRepos = (stubs: {
       GitHubInstallationRepositoryCacheRepo,
       (stubs.installationRepositories ?? {}) as GitHubInstallationRepositoryCacheRepoService,
     ),
+    Layer.succeed(
+      ConnectedAccountRepo,
+      (stubs.connectedAccounts ?? {}) as ConnectedAccountRepoService,
+    ),
   );
 
 const baseOptions = (
@@ -293,7 +303,140 @@ const baseOptions = (
   ...overrides,
 });
 
+const fakeCredentialCipher: CredentialCipherService = {
+  encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k-test" }),
+  decrypt: (sealed) => Effect.succeed(sealed.slice("sealed:".length)),
+};
+
+const connectedAccountStub = (input: {
+  readonly id: string;
+  readonly provider: "claude" | "codex" | "github";
+  readonly payload: Record<string, unknown>;
+  readonly status?: string;
+}) => ({
+  id: input.id,
+  ownerUserId: "usr_1",
+  provider: input.provider,
+  name: "default",
+  kind: "oauth-token",
+  status: input.status ?? "active",
+  encryptedPayload: `sealed:${JSON.stringify(input.payload)}`,
+  encryptionKeyId: "k-test",
+  payloadSha256: "sha",
+  metadata: {},
+  createdAt: new Date("2026-06-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-06-01T00:00:00.000Z"),
+  lastUsedAt: null,
+  lastSyncedAt: null,
+  invalidAt: null,
+  archivedAt: null,
+});
+
 describe("processSandboxBuildJobEffect", () => {
+  it.effect("resolves connected-account refs into launch credential env + files", () => {
+    const codexAuthJson = JSON.stringify({ tokens: { refresh_token: "rt" } });
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_credentials",
+        runId: null,
+        repository: "sealant/sandboxes/demo",
+        tag: "opencode",
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+          credentialRefs: [
+            { provider: "claude", ref: "connected-account:cacc_claude" },
+            { provider: "codex", ref: "connected-account:cacc_codex" },
+          ],
+        }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const accountRows = [
+      connectedAccountStub({
+        id: "cacc_claude",
+        provider: "claude",
+        payload: { token: "sk-ant-oat01-test" },
+      }),
+      {
+        ...connectedAccountStub({
+          id: "cacc_codex",
+          provider: "codex",
+          payload: { authJson: codexAuthJson },
+        }),
+        kind: "auth-json",
+      },
+    ];
+    const connectedAccounts = {
+      getById: vi.fn((id: string) =>
+        Effect.succeed(accountRows.find((account) => account.id === id)),
+      ),
+      updateSyncState: vi.fn((_input: unknown) => Effect.succeed(accountRows[0])),
+    };
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_credentials",
+          runtimeAdapters: [runtimeAdapter],
+          credentialCipher: fakeCredentialCipher,
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credentialEnv: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test" },
+          credentialFiles: [
+            {
+              path: "$HOME/.codex/auth.json",
+              contentBase64: Buffer.from(codexAuthJson, "utf8").toString("base64"),
+              mode: "600",
+            },
+          ],
+        }),
+      );
+      expect(connectedAccounts.updateSyncState).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
+  });
+
+  it.effect("fails the launch when refs are present but no credentials key is configured", () => {
+    const jobs = sandboxBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_no_credentials_key",
+        runId: null,
+        repository: "sealant/sandboxes/demo",
+        tag: "opencode",
+        requestPayload: createSandboxBuildSpec({
+          osFamily: "nix",
+          credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude" }],
+        }),
+      }),
+    });
+    const attempts = sandboxAttemptRepoStub();
+    const runtimeInstances = sandboxRuntimeInstanceRepoStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      // No credentialCipher option -> the resolver must fail the job visibly.
+      const error = yield* processSandboxBuildJobEffect(
+        baseOptions({
+          jobId: "job_no_credentials_key",
+          runtimeAdapters: [runtimeAdapter],
+          compileSandboxSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SandboxBuildJobProcessingError);
+      expect(error.errorCode).toBe("credentials-key-unconfigured");
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+      // Phase B failure: the image build stays succeeded.
+      expect(jobs.markJobSucceeded).toHaveBeenCalledTimes(1);
+      expect(jobs.markJobFailed).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
   it.effect("mints GitHub installation token auth right before runtime launch", () => {
     const jobs = sandboxBuildJobRepoStub({
       claimJobById: () => ({

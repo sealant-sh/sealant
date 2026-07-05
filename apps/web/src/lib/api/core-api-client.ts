@@ -1,7 +1,12 @@
 import {
+  connectedAccountSummarySchema,
+  createConnectedAccountRequestSchema,
   createSandboxRequestSchema,
   createSandboxResponseSchema,
   createSshKeyRequestSchema,
+  listConnectedAccountsResponseSchema,
+  listProfileCredentialBindingsResponseSchema,
+  listProfilesResponseSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
@@ -19,8 +24,20 @@ import {
   messageResponseSchema,
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
+  listRunsQuerySchema,
+  listRunsResponseSchema,
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
+  runChangesResponseSchema,
+  runEventParamsSchema,
+  runEventSchema,
+  runIdParamsSchema,
+  runLossReportSchema,
+  runSchema,
+  runScrollbackQuerySchema,
+  runScrollbackResponseSchema,
+  runTimelineQuerySchema,
+  runTimelineResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
   setupStateResponseSchema,
@@ -52,7 +69,7 @@ export class CoreApiHttpError extends Error {
 }
 
 interface CoreApiRequestOptions<TOutput> {
-  readonly method: "GET" | "POST" | "PATCH" | "DELETE";
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly path: string;
   readonly schema: JsonSchema<TOutput>;
   readonly query?: Readonly<Record<string, string | number | undefined>>;
@@ -143,6 +160,30 @@ export interface CoreApiClient {
       readonly name: string;
     }): Promise<InferSchema<typeof renameSandboxResponseSchema>>;
   };
+  readonly runs: {
+    list(input: {
+      readonly ownerUserId: string;
+      readonly sandboxId?: string;
+      readonly status?: InferSchema<typeof runSchema>["status"];
+      readonly limit?: number;
+    }): Promise<InferSchema<typeof listRunsResponseSchema>>;
+    byId(input: InferSchema<typeof runIdParamsSchema>): Promise<InferSchema<typeof runSchema>>;
+    timeline(
+      input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runTimelineQuerySchema>,
+    ): Promise<InferSchema<typeof runTimelineResponseSchema>>;
+    event(
+      input: InferSchema<typeof runEventParamsSchema>,
+    ): Promise<InferSchema<typeof runEventSchema>>;
+    scrollback(
+      input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runScrollbackQuerySchema>,
+    ): Promise<InferSchema<typeof runScrollbackResponseSchema>>;
+    loss(
+      input: InferSchema<typeof runIdParamsSchema>,
+    ): Promise<InferSchema<typeof runLossReportSchema>>;
+    changes(
+      input: InferSchema<typeof runIdParamsSchema>,
+    ): Promise<InferSchema<typeof runChangesResponseSchema>>;
+  };
   readonly sshKeys: {
     create(
       input: InferSchema<typeof createSshKeyRequestSchema>,
@@ -158,6 +199,33 @@ export interface CoreApiClient {
   readonly system: {
     setupState(): Promise<InferSchema<typeof setupStateResponseSchema>>;
   };
+  readonly connectedAccounts: {
+    create(
+      input: InferSchema<typeof createConnectedAccountRequestSchema>,
+    ): Promise<InferSchema<typeof connectedAccountSummarySchema>>;
+    list(input: {
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listConnectedAccountsResponseSchema>>;
+    archive(input: {
+      readonly connectedAccountId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof connectedAccountSummarySchema>>;
+  };
+  readonly profiles: {
+    list(input: {
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listProfilesResponseSchema>>;
+    listCredentialBindings(input: {
+      readonly profileId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>>;
+    setCredentialBinding(input: {
+      readonly profileId: string;
+      readonly ownerUserId: string;
+      readonly provider: InferSchema<typeof createConnectedAccountRequestSchema>["provider"];
+      readonly connectedAccountId: string | null;
+    }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>>;
+  };
 }
 
 class CoreApiClientImpl implements CoreApiClient {
@@ -167,8 +235,11 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly sandboxes: CoreApiClient["sandboxes"];
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
+  public readonly runs: CoreApiClient["runs"];
   public readonly sshKeys: CoreApiClient["sshKeys"];
   public readonly system: CoreApiClient["system"];
+  public readonly connectedAccounts: CoreApiClient["connectedAccounts"];
+  public readonly profiles: CoreApiClient["profiles"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -190,6 +261,15 @@ class CoreApiClientImpl implements CoreApiClient {
       installationRepositories: (input) => this.listGitHubInstallationRepositories(input),
       syncInstallation: (input) => this.syncGitHubInstallation(input),
     };
+    this.runs = {
+      list: (input) => this.listRuns(input),
+      byId: (input) => this.getRun(input),
+      timeline: (input) => this.getRunTimeline(input),
+      event: (input) => this.getRunEvent(input),
+      scrollback: (input) => this.getRunScrollback(input),
+      loss: (input) => this.getRunLoss(input),
+      changes: (input) => this.getRunChanges(input),
+    };
     this.sshKeys = {
       create: (input) => this.createSshKey(input),
       list: (input) => this.listSshKeys(input),
@@ -198,6 +278,16 @@ class CoreApiClientImpl implements CoreApiClient {
     this.system = {
       setupState: () => this.getSetupState(),
     };
+    this.connectedAccounts = {
+      create: (input) => this.createConnectedAccount(input),
+      list: (input) => this.listConnectedAccounts(input),
+      archive: (input) => this.archiveConnectedAccount(input),
+    };
+    this.profiles = {
+      list: (input) => this.listProfiles(input),
+      listCredentialBindings: (input) => this.listProfileCredentialBindings(input),
+      setCredentialBinding: (input) => this.setProfileCredentialBinding(input),
+    };
   }
 
   private async getSetupState(): Promise<InferSchema<typeof setupStateResponseSchema>> {
@@ -205,6 +295,203 @@ class CoreApiClientImpl implements CoreApiClient {
       method: "GET",
       path: "/v1/system/setup-state",
       schema: setupStateResponseSchema,
+    });
+  }
+
+  private async createConnectedAccount(
+    input: InferSchema<typeof createConnectedAccountRequestSchema>,
+  ): Promise<InferSchema<typeof connectedAccountSummarySchema>> {
+    const payload = createConnectedAccountRequestSchema.parse(input);
+
+    return this.requestJson({
+      method: "POST",
+      path: "/v1/connected-accounts",
+      schema: connectedAccountSummarySchema,
+      body: payload,
+    });
+  }
+
+  private async listConnectedAccounts(input: {
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listConnectedAccountsResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/connected-accounts",
+      schema: listConnectedAccountsResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async archiveConnectedAccount(input: {
+    readonly connectedAccountId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof connectedAccountSummarySchema>> {
+    return this.requestJson({
+      method: "DELETE",
+      path: `/v1/connected-accounts/${encodeURIComponent(input.connectedAccountId)}`,
+      schema: connectedAccountSummarySchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async listProfiles(input: {
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listProfilesResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/profiles",
+      schema: listProfilesResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async listProfileCredentialBindings(input: {
+    readonly profileId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/profiles/${encodeURIComponent(input.profileId)}/credential-bindings`,
+      schema: listProfileCredentialBindingsResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async setProfileCredentialBinding(input: {
+    readonly profileId: string;
+    readonly ownerUserId: string;
+    readonly provider: InferSchema<typeof createConnectedAccountRequestSchema>["provider"];
+    readonly connectedAccountId: string | null;
+  }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>> {
+    return this.requestJson({
+      method: "PUT",
+      path: `/v1/profiles/${encodeURIComponent(input.profileId)}/credential-bindings`,
+      schema: listProfileCredentialBindingsResponseSchema,
+      body: {
+        ownerUserId: input.ownerUserId,
+        provider: input.provider,
+        connectedAccountId: input.connectedAccountId,
+      },
+    });
+  }
+
+  private async listRuns(input: {
+    readonly ownerUserId: string;
+    readonly sandboxId?: string;
+    readonly status?: InferSchema<typeof runSchema>["status"];
+    readonly limit?: number;
+  }): Promise<InferSchema<typeof listRunsResponseSchema>> {
+    const query = listRunsQuerySchema.parse({
+      sandboxId: input.sandboxId,
+      status: input.status,
+      limit: input.limit,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/runs",
+      schema: listRunsResponseSchema,
+      query: {
+        ownerUserId: input.ownerUserId,
+        sandboxId: query.sandboxId,
+        status: query.status,
+        limit: query.limit,
+      },
+    });
+  }
+
+  private async getRun(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}`,
+      schema: runSchema,
+    });
+  }
+
+  private async getRunTimeline(
+    input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runTimelineQuerySchema>,
+  ): Promise<InferSchema<typeof runTimelineResponseSchema>> {
+    const params = runIdParamsSchema.parse({ runId: input.runId });
+    const query = runTimelineQuerySchema.parse({
+      fromSequence: input.fromSequence,
+      toSequence: input.toSequence,
+      limit: input.limit,
+      kinds: input.kinds,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/timeline`,
+      schema: runTimelineResponseSchema,
+      query: {
+        fromSequence: query.fromSequence,
+        toSequence: query.toSequence,
+        limit: query.limit,
+        // The wire carries kinds as a comma-separated list (see api-contracts runs.ts).
+        kinds: query.kinds?.join(","),
+      },
+    });
+  }
+
+  private async getRunEvent(
+    input: InferSchema<typeof runEventParamsSchema>,
+  ): Promise<InferSchema<typeof runEventSchema>> {
+    const params = runEventParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/events/${encodeURIComponent(params.sequence)}`,
+      schema: runEventSchema,
+    });
+  }
+
+  private async getRunScrollback(
+    input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runScrollbackQuerySchema>,
+  ): Promise<InferSchema<typeof runScrollbackResponseSchema>> {
+    const params = runIdParamsSchema.parse({ runId: input.runId });
+    const query = runScrollbackQuerySchema.parse({
+      processId: input.processId,
+      stream: input.stream,
+      atSequence: input.atSequence,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/scrollback`,
+      schema: runScrollbackResponseSchema,
+      query: {
+        processId: query.processId,
+        stream: query.stream,
+        atSequence: query.atSequence,
+      },
+    });
+  }
+
+  private async getRunLoss(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runLossReportSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/loss`,
+      schema: runLossReportSchema,
+    });
+  }
+
+  private async getRunChanges(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runChangesResponseSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/changes`,
+      schema: runChangesResponseSchema,
     });
   }
 

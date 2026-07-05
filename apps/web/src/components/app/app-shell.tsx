@@ -115,6 +115,12 @@ const SETTINGS_SIDEBAR: readonly SidebarGroup[] = [
     label: "Settings",
     links: [
       { to: "/settings/ssh-keys", match: "/settings/ssh-keys", label: "SSH keys", exact: true },
+      {
+        to: "/settings/connected-accounts",
+        match: "/settings/connected-accounts",
+        label: "Connected accounts",
+        exact: true,
+      },
     ],
   },
 ];
@@ -797,6 +803,13 @@ function getSidebarGroups({
             params: { profileId },
             match: `${profileBase}/secrets`,
             label: "Secrets",
+            exact: true,
+          },
+          {
+            to: "/profiles/$profileId/agents",
+            params: { profileId },
+            match: `${profileBase}/agents`,
+            label: "Agents",
             exact: true,
           },
           {
