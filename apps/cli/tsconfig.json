@@ -1,0 +1,5 @@
+{
+  "extends": "@sealant/typescript/core.json",
+  "include": ["**/*.ts", "package.json"],
+  "exclude": ["dist", "node_modules"]
+}

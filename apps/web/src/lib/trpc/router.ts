@@ -1,4 +1,7 @@
 import {
+  connectedAccountIdParamsSchema,
+  connectedAccountSummarySchema,
+  createConnectedAccountRequestSchema,
   createSandboxRequestSchema,
   createSshKeyRequestSchema,
   githubInstallationIdParamsSchema,
@@ -11,6 +14,9 @@ import {
   listRunsQuerySchema,
   listSandboxAttemptsQuerySchema,
   listSandboxEventsQuerySchema,
+  listConnectedAccountsResponseSchema,
+  listProfileCredentialBindingsResponseSchema,
+  listProfilesResponseSchema,
   listSandboxesQuerySchema,
   listSshKeysResponseSchema,
   renameSandboxRequestSchema,
@@ -22,6 +28,7 @@ import {
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
   sandboxIdParamsSchema,
+  setProfileCredentialBindingRequestSchema,
   sshKeyIdParamsSchema,
   sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
@@ -108,6 +115,18 @@ const requireOwnedRun = async (coreApi: CoreApiClient, userId: string, runId: st
   }
   return run;
 };
+
+const connectAccountForSessionSchema = createConnectedAccountRequestSchema.omit({
+  ownerUserId: true,
+});
+
+const setProfileCredentialBindingForSessionSchema = setProfileCredentialBindingRequestSchema.omit({
+  ownerUserId: true,
+});
+
+const profileIdInputSchema = z.object({
+  profileId: z.string().trim().min(1),
+});
 
 export const appRouter = router({
   auth: router({
@@ -285,6 +304,52 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         return ctx.coreApi.sshKeys.archive({
           sshKeyId: input.sshKeyId,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+  }),
+  connectedAccounts: router({
+    list: protectedProcedure.output(listConnectedAccountsResponseSchema).query(async ({ ctx }) => {
+      return ctx.coreApi.connectedAccounts.list({ ownerUserId: ctx.session.user.id });
+    }),
+    connect: protectedProcedure
+      .input(connectAccountForSessionSchema)
+      .output(connectedAccountSummarySchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.connectedAccounts.create({
+          ...input,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    disconnect: protectedProcedure
+      .input(connectedAccountIdParamsSchema)
+      .output(connectedAccountSummarySchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.connectedAccounts.archive({
+          connectedAccountId: input.connectedAccountId,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    profilesList: protectedProcedure.output(listProfilesResponseSchema).query(async ({ ctx }) => {
+      return ctx.coreApi.profiles.list({ ownerUserId: ctx.session.user.id });
+    }),
+    profileBindings: protectedProcedure
+      .input(profileIdInputSchema)
+      .output(listProfileCredentialBindingsResponseSchema)
+      .query(async ({ ctx, input }) => {
+        return ctx.coreApi.profiles.listCredentialBindings({
+          profileId: input.profileId,
+          ownerUserId: ctx.session.user.id,
+        });
+      }),
+    setProfileBinding: protectedProcedure
+      .input(setProfileCredentialBindingForSessionSchema)
+      .output(listProfileCredentialBindingsResponseSchema)
+      .mutation(async ({ ctx, input }) => {
+        return ctx.coreApi.profiles.setCredentialBinding({
+          profileId: input.profileId,
+          provider: input.provider,
+          connectedAccountId: input.connectedAccountId,
           ownerUserId: ctx.session.user.id,
         });
       }),

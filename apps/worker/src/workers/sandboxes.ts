@@ -1,3 +1,8 @@
+import {
+  CredentialCipher,
+  credentialCipherLayer,
+  type CredentialCipherService,
+} from "@sealant/credentials";
 import { createSealantDB, type DB } from "@sealant/db";
 import { createRabbitMqService } from "@sealant/rabbitmq";
 import {
@@ -12,6 +17,7 @@ import {
 } from "@sealant/sandboxes";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
+import { Effect } from "effect";
 
 import { processRunExecJob } from "./process-run-exec-job.js";
 
@@ -20,11 +26,30 @@ const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
 };
 
 /**
+ * Materialize the connected-account credential cipher from SEALANT_CREDENTIALS_KEY. Undefined
+ * when the key is unset — launches without credentialRefs are unaffected, and launches WITH
+ * credentialRefs fail with a typed misconfiguration error inside the job pipeline (never a
+ * silent no-auth sandbox). The env schema already validated the key decodes to 32 bytes, so
+ * building the layer here cannot fail in practice; a bad key would throw loudly at startup.
+ */
+const createCredentialCipherFromEnv = (env: WorkerEnv): CredentialCipherService | undefined => {
+  if (env.SEALANT_CREDENTIALS_KEY === undefined) {
+    return undefined;
+  }
+
+  // The service key is itself an Effect that resolves the service from context.
+  return Effect.runSync(
+    Effect.provide(CredentialCipher, credentialCipherLayer({ key: env.SEALANT_CREDENTIALS_KEY })),
+  );
+};
+
+/**
  * Starts the sandbox worker loop and returns a graceful shutdown handle.
  */
 export const startSandboxWorker = async (env: WorkerEnv) => {
   const db = await createDatabaseFromEnv(env);
   const rabbitMq = createRabbitMqService(env.RABBITMQ_URL);
+  const credentialCipher = createCredentialCipherFromEnv(env);
   const registryClient = createZotRegistryClient({
     baseUrl: env.REGISTRY_BASE_URL,
     pushRegistry: env.REGISTRY_PUSH_REGISTRY,
@@ -66,6 +91,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
           gitHubSourceIntegration,
           registryClient,
+          ...(credentialCipher === undefined ? {} : { credentialCipher }),
         });
         ack();
       } catch (error) {
@@ -85,7 +111,12 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
     prefetch: env.SANDBOX_BUILD_QUEUE_PREFETCH,
     onMessage: async ({ message, ack, nack }) => {
       try {
-        await processRunExecJob({ runId: message.runId, command: message.command, db });
+        await processRunExecJob({
+          runId: message.runId,
+          command: message.command,
+          db,
+          ...(credentialCipher === undefined ? {} : { credentialCipher }),
+        });
         ack();
       } catch (error) {
         console.error("Run exec job failed", { error, runId: message.runId });
@@ -107,6 +138,7 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
       defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
       gitHubSourceIntegration,
       registryClient,
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
     }).catch((error: unknown) => {
       console.error("Sandbox build job reaper tick failed", { error });
     });

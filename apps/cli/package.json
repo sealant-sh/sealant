@@ -1,0 +1,26 @@
+{
+  "name": "@sealant/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Sealant CLI: connect AI-subscription credentials and manage profile bindings",
+  "bin": {
+    "sealant": "./bin/sealant.mjs"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "BUNDLE_ENTRIES=src/main.ts node ../../tooling/scripts/bundle-app.mjs",
+    "dev": "pnpm run build && node ./bin/sealant.mjs",
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@sealant/typescript": "workspace:*",
+    "vitest": "catalog:"
+  }
+}

@@ -14,6 +14,7 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/runtime-client": "^0.4.0",

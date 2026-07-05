@@ -1,0 +1,11 @@
+{
+  "title": "Contributing",
+  "pages": [
+    "index",
+    "local-development",
+    "monorepo-layout",
+    "effect-and-api-conventions",
+    "design-system",
+    "docs-authoring"
+  ]
+}

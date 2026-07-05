@@ -24,6 +24,7 @@ import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authen
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
+import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
 import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authenticated/sandboxes/new'
 import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
 import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_authenticated/sandboxes/active'
@@ -44,6 +45,7 @@ import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './route
 import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
 import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
 import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
+import { Route as AuthenticatedProfilesProfileIdAgentsRouteImport } from './routes/_authenticated/profiles/$profileId/agents'
 import { Route as AuthenticatedProfilesProfileIdAccessRouteImport } from './routes/_authenticated/profiles/$profileId/access'
 import { Route as AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/runs/$runId'
 import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
@@ -124,6 +126,12 @@ const AuthenticatedSettingsSshKeysRoute =
   AuthenticatedSettingsSshKeysRouteImport.update({
     id: '/settings/ssh-keys',
     path: '/settings/ssh-keys',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSettingsConnectedAccountsRoute =
+  AuthenticatedSettingsConnectedAccountsRouteImport.update({
+    id: '/settings/connected-accounts',
+    path: '/settings/connected-accounts',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedSandboxesNewRoute =
@@ -246,6 +254,12 @@ const AuthenticatedProfilesProfileIdEnvVariablesRoute =
     path: '/profiles/$profileId/env-variables',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedProfilesProfileIdAgentsRoute =
+  AuthenticatedProfilesProfileIdAgentsRouteImport.update({
+    id: '/profiles/$profileId/agents',
+    path: '/profiles/$profileId/agents',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedProfilesProfileIdAccessRoute =
   AuthenticatedProfilesProfileIdAccessRouteImport.update({
     id: '/profiles/$profileId/access',
@@ -277,6 +291,7 @@ export interface FileRoutesByFullPath {
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
@@ -285,6 +300,7 @@ export interface FileRoutesByFullPath {
   '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
   '/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
@@ -315,6 +331,7 @@ export interface FileRoutesByTo {
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
@@ -323,6 +340,7 @@ export interface FileRoutesByTo {
   '/repositories': typeof AuthenticatedRepositoriesIndexRoute
   '/sandboxes': typeof AuthenticatedSandboxesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
@@ -356,6 +374,7 @@ export interface FileRoutesById {
   '/_authenticated/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
   '/_authenticated/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/_authenticated/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
@@ -364,6 +383,7 @@ export interface FileRoutesById {
   '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
   '/_authenticated/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
   '/_authenticated/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
+  '/_authenticated/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/_authenticated/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/_authenticated/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/_authenticated/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
@@ -396,6 +416,7 @@ export interface FileRouteTypes {
     | '/sandboxes/active'
     | '/sandboxes/failed'
     | '/sandboxes/new'
+    | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
@@ -404,6 +425,7 @@ export interface FileRouteTypes {
     | '/repositories/'
     | '/sandboxes/'
     | '/profiles/$profileId/access'
+    | '/profiles/$profileId/agents'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
@@ -434,6 +456,7 @@ export interface FileRouteTypes {
     | '/sandboxes/active'
     | '/sandboxes/failed'
     | '/sandboxes/new'
+    | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
@@ -442,6 +465,7 @@ export interface FileRouteTypes {
     | '/repositories'
     | '/sandboxes'
     | '/profiles/$profileId/access'
+    | '/profiles/$profileId/agents'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
@@ -474,6 +498,7 @@ export interface FileRouteTypes {
     | '/_authenticated/sandboxes/active'
     | '/_authenticated/sandboxes/failed'
     | '/_authenticated/sandboxes/new'
+    | '/_authenticated/settings/connected-accounts'
     | '/_authenticated/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
@@ -482,6 +507,7 @@ export interface FileRouteTypes {
     | '/_authenticated/repositories/'
     | '/_authenticated/sandboxes/'
     | '/_authenticated/profiles/$profileId/access'
+    | '/_authenticated/profiles/$profileId/agents'
     | '/_authenticated/profiles/$profileId/env-variables'
     | '/_authenticated/profiles/$profileId/packages'
     | '/_authenticated/profiles/$profileId/secrets'
@@ -613,6 +639,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/ssh-keys'
       fullPath: '/settings/ssh-keys'
       preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/settings/connected-accounts': {
+      id: '/_authenticated/settings/connected-accounts'
+      path: '/settings/connected-accounts'
+      fullPath: '/settings/connected-accounts'
+      preLoaderRoute: typeof AuthenticatedSettingsConnectedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/sandboxes/new': {
@@ -755,6 +788,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/profiles/$profileId/agents': {
+      id: '/_authenticated/profiles/$profileId/agents'
+      path: '/profiles/$profileId/agents'
+      fullPath: '/profiles/$profileId/agents'
+      preLoaderRoute: typeof AuthenticatedProfilesProfileIdAgentsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/profiles/$profileId/access': {
       id: '/_authenticated/profiles/$profileId/access'
       path: '/profiles/$profileId/access'
@@ -803,12 +843,14 @@ interface AuthenticatedRouteChildren {
   AuthenticatedSandboxesActiveRoute: typeof AuthenticatedSandboxesActiveRoute
   AuthenticatedSandboxesFailedRoute: typeof AuthenticatedSandboxesFailedRoute
   AuthenticatedSandboxesNewRoute: typeof AuthenticatedSandboxesNewRoute
+  AuthenticatedSettingsConnectedAccountsRoute: typeof AuthenticatedSettingsConnectedAccountsRoute
   AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
   AuthenticatedSandboxesIndexRoute: typeof AuthenticatedSandboxesIndexRoute
   AuthenticatedProfilesProfileIdAccessRoute: typeof AuthenticatedProfilesProfileIdAccessRoute
+  AuthenticatedProfilesProfileIdAgentsRoute: typeof AuthenticatedProfilesProfileIdAgentsRoute
   AuthenticatedProfilesProfileIdEnvVariablesRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   AuthenticatedProfilesProfileIdPackagesRoute: typeof AuthenticatedProfilesProfileIdPackagesRoute
   AuthenticatedProfilesProfileIdSecretsRoute: typeof AuthenticatedProfilesProfileIdSecretsRoute
@@ -836,6 +878,8 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSandboxesActiveRoute: AuthenticatedSandboxesActiveRoute,
   AuthenticatedSandboxesFailedRoute: AuthenticatedSandboxesFailedRoute,
   AuthenticatedSandboxesNewRoute: AuthenticatedSandboxesNewRoute,
+  AuthenticatedSettingsConnectedAccountsRoute:
+    AuthenticatedSettingsConnectedAccountsRoute,
   AuthenticatedSettingsSshKeysRoute: AuthenticatedSettingsSshKeysRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
@@ -843,6 +887,8 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSandboxesIndexRoute: AuthenticatedSandboxesIndexRoute,
   AuthenticatedProfilesProfileIdAccessRoute:
     AuthenticatedProfilesProfileIdAccessRoute,
+  AuthenticatedProfilesProfileIdAgentsRoute:
+    AuthenticatedProfilesProfileIdAgentsRoute,
   AuthenticatedProfilesProfileIdEnvVariablesRoute:
     AuthenticatedProfilesProfileIdEnvVariablesRoute,
   AuthenticatedProfilesProfileIdPackagesRoute:

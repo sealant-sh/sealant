@@ -15,7 +15,19 @@ export const sandboxBuildSpecSchema = sandboxBlueprintSchema;
 
 export type SandboxBuildSpec = SandboxBlueprint;
 
-export const newSandboxSchema = sandboxBuildSpecSchema;
+// Connected-account selection for sandbox creation: account ids (or per-provider account names).
+// Resolved by the sandboxes module into blueprint runtime `credentialRefs`; never carries secret
+// material. Explicit per-provider entries win over the profile's bindings.
+export const newSandboxCredentialsSchema = z.object({
+  profileId: z.string().trim().min(1).optional(),
+  claude: z.string().trim().min(1).optional(),
+  codex: z.string().trim().min(1).optional(),
+  github: z.string().trim().min(1).optional(),
+});
+
+export const newSandboxSchema = sandboxBuildSpecSchema.extend({
+  credentials: newSandboxCredentialsSchema.optional(),
+});
 
 export const sandboxLaunchSchema = z.strictObject({
   compile: osBuilderCompileResultSchema,
@@ -24,7 +36,9 @@ export const sandboxLaunchSchema = z.strictObject({
 
 export const sandboxBuildSchema = osBuilderCompileResultSchema;
 
-export type NewSandbox = SandboxBuildSpec;
+export type NewSandboxCredentials = z.infer<typeof newSandboxCredentialsSchema>;
+
+export type NewSandbox = z.infer<typeof newSandboxSchema>;
 
 export type SandboxLaunch = {
   compile: OsBuilderCompileResult;

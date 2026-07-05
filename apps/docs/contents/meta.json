@@ -1,12 +1,11 @@
 {
   "pages": [
+    "index",
+    "introduction",
     "getting-started",
-    "architecture",
-    "packages",
-    "apps",
-    "product",
-    "design-system",
-    "changelog",
-    "..."
+    "guides",
+    "reference",
+    "concepts",
+    "contributing"
   ]
 }

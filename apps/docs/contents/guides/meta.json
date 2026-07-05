@@ -1,0 +1,12 @@
+{
+  "title": "Guides",
+  "pages": [
+    "github-app",
+    "ssh-access",
+    "creating-sandboxes",
+    "runs-and-execution-records",
+    "secrets-and-credentials",
+    "upgrade-repair-uninstall",
+    "beyond-localhost"
+  ]
+}

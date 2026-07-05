@@ -50,10 +50,25 @@ export const runtimeAdapterSupportInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
 });
 
+// Connected-account file injection (design doc §6): written AFTER the container is ready via
+// `docker exec -i … base64 -d` with the content piped over stdin, so the bytes never appear in
+// argv, image layers, or `docker inspect`. The path may contain `$HOME/…` — expansion happens
+// inside the container shell.
+export const credentialFileInjectionSchema = z.strictObject({
+  path: z.string().trim().min(1),
+  contentBase64: z.string().min(1),
+  mode: z.string().regex(/^[0-7]{3,4}$/),
+});
+
 export const runtimeAdapterLaunchInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
   publishedImage: publishedImageSchema,
   sandboxCloneAuth: sandboxCloneAuthSchema.optional(),
+  // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN); they join the existing `-e`
+  // args, sharing the exposure profile of today's clone tokens (plaintext-argv hardening is a
+  // tracked, pre-existing item).
+  credentialEnv: z.record(z.string(), z.string()).optional(),
+  credentialFiles: z.array(credentialFileInjectionSchema).optional(),
   // The run (sandbox attempt) this launch belongs to. When present the docker adapter derives a
   // DETERMINISTIC per-run container name, so a redelivered/reaper-republished or concurrent launch
   // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).
@@ -99,6 +114,8 @@ export type RuntimeAdapterSupportInput = z.infer<typeof runtimeAdapterSupportInp
 export type PublishedImage = z.infer<typeof publishedImageSchema>;
 
 export type SandboxCloneAuth = z.infer<typeof sandboxCloneAuthSchema>;
+
+export type CredentialFileInjection = z.infer<typeof credentialFileInjectionSchema>;
 
 export type RuntimeAdapterLaunchInput = z.infer<typeof runtimeAdapterLaunchInputSchema>;
 

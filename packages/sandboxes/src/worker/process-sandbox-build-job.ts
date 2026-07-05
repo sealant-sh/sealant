@@ -1,4 +1,7 @@
+import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoLive,
   GitHubInstallationRepo,
   GitHubInstallationRepoLive,
   GitHubInstallationRepositoryCacheRepo,
@@ -20,11 +23,13 @@ import { compileSandboxBuildSpec } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
+  type CredentialFileInjection,
   type PublishedImage,
   type RuntimeAdapter,
   type RuntimeAdapterId,
   type SandboxCloneAuth,
 } from "../runtime/index.js";
+import { resolveCredentialInjections } from "./connected-account-resolver.js";
 import { SandboxBuildJobProcessingError, toSandboxBuildJobProcessingError } from "./errors.js";
 import {
   resolveDotfilesRuntimeEnv,
@@ -39,7 +44,8 @@ export type ProcessSandboxBuildJobRequirements =
   | SandboxRuntimeInstanceRepo
   | SandboxAttemptRepo
   | GitHubInstallationRepo
-  | GitHubInstallationRepositoryCacheRepo;
+  | GitHubInstallationRepositoryCacheRepo
+  | ConnectedAccountRepo;
 
 export interface ProcessSandboxBuildJobOptions {
   readonly jobId: string;
@@ -50,6 +56,12 @@ export interface ProcessSandboxBuildJobOptions {
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly registryClient: RegistryClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
+  /**
+   * Decrypts connected-account credentials at launch (design doc §6). Undefined when
+   * SEALANT_CREDENTIALS_KEY is not configured — launching a blueprint that carries
+   * credentialRefs then fails with a typed misconfiguration error.
+   */
+  readonly credentialCipher?: CredentialCipherService;
   readonly compileSandboxSpec?: (spec: NewSandbox) => Promise<SandboxBuild>;
 }
 
@@ -86,6 +98,8 @@ const launchPublishedImage = async (input: {
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
   readonly sandboxCloneAuth?: SandboxCloneAuth;
+  readonly credentialEnv?: Record<string, string>;
+  readonly credentialFiles?: readonly CredentialFileInjection[];
   readonly runId?: string;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
@@ -98,9 +112,36 @@ const launchPublishedImage = async (input: {
     blueprint: input.spec,
     publishedImage: input.publishedImage,
     ...(input.sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth: input.sandboxCloneAuth }),
+    ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
+    ...(input.credentialFiles === undefined ? {} : { credentialFiles: [...input.credentialFiles] }),
     // Deterministic per-run container name -> idempotent launch/adopt (#4).
     ...(input.runId === undefined ? {} : { runId: input.runId }),
   });
+};
+
+/** Split the resolver's injection plan into the adapter-launch env record + file list. */
+const splitCredentialInjections = (
+  injections: readonly CredentialInjection[],
+): {
+  readonly credentialEnv: Record<string, string>;
+  readonly credentialFiles: readonly CredentialFileInjection[];
+} => {
+  const credentialEnv: Record<string, string> = {};
+  const credentialFiles: CredentialFileInjection[] = [];
+
+  for (const injection of injections) {
+    if (injection.kind === "env") {
+      credentialEnv[injection.key] = injection.value;
+    } else {
+      credentialFiles.push({
+        path: injection.path,
+        contentBase64: injection.contentBase64,
+        mode: injection.mode,
+      });
+    }
+  }
+
+  return { credentialEnv, credentialFiles };
 };
 
 /**
@@ -267,6 +308,16 @@ export const processSandboxBuildJobEffect = Effect.fn("processSandboxBuildJob")(
       spec,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
+    // Connected-account credentials resolve JUST before launch — blueprints only carry opaque
+    // refs, so nothing secret ever sits in job payloads. Codex sync-back later re-derives the
+    // refs from the stored attempt snapshot (no extra persistence needed here).
+    const resolvedCredentials = yield* resolveCredentialInjections({
+      blueprint: spec,
+      credentialCipher: options.credentialCipher,
+    });
+    const { credentialEnv, credentialFiles } = splitCredentialInjections(
+      resolvedCredentials.injections,
+    );
 
     const runtimeSpec: NewSandbox =
       Object.keys(dotfilesRuntimeEnv).length === 0
@@ -290,6 +341,8 @@ export const processSandboxBuildJobEffect = Effect.fn("processSandboxBuildJob")(
           defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
           publishedImage,
           ...(sandboxCloneAuth === undefined ? {} : { sandboxCloneAuth }),
+          ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
+          ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
           ...(job.runId === null ? {} : { runId: job.runId }),
         }),
       catch: toSandboxBuildJobProcessingError,
@@ -340,6 +393,7 @@ export const processSandboxBuildJob = (
     SandboxAttemptRepoLive,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
+    ConnectedAccountRepoLive,
   ).pipe(Layer.provide(dbLayer));
 
   return Effect.runPromise(
