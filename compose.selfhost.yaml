@@ -91,7 +91,7 @@ services:
   # One-shot: apply DB migrations + seed the default owner principal before the API/worker/web start,
   # then exit. Runs the prebuilt api image's bundled migrate entrypoint — no source tree needed.
   migrate:
-    image: ghcr.io/get-sealant/sealant-api:${SEALANT_VERSION:-latest}
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-api:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,7 +101,7 @@ services:
     restart: "no"
 
   api:
-    image: ghcr.io/get-sealant/sealant-api:${SEALANT_VERSION:-latest}
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-api:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -144,7 +144,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: ghcr.io/get-sealant/sealant-worker:${SEALANT_VERSION:-latest}
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-worker:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -180,7 +180,7 @@ services:
   # 0.0.0.0 INSIDE the container (binding container-loopback would make the published port
   # unreachable) and is published on host loopback by default.
   ssh-gateway:
-    image: ghcr.io/get-sealant/sealant-ssh-gateway:${SEALANT_VERSION:-latest}
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-ssh-gateway:${SEALANT_VERSION:-latest}
     depends_on:
       api:
         condition: service_healthy
@@ -222,7 +222,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: ghcr.io/get-sealant/sealant-web:${SEALANT_VERSION:-latest}
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-web:${SEALANT_VERSION:-latest}
     depends_on:
       api:
         condition: service_healthy

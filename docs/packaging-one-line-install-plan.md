@@ -9,7 +9,7 @@ agent.
 Goal: a user with **only Docker** (daemon + compose v2) installs the full Sealant Core stack with
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/get-sealant/sealant/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sealant-sh/sealant/main/install.sh | sh
 ```
 
 then opens `http://localhost:3000`, signs up, adds their SSH key in the UI, creates a sandbox, and
@@ -52,7 +52,7 @@ Facts that make this easy (verified in code):
 
 | Decision             | Choice                                                                                                                                                                                                                    | Rationale                                                                                                                                                                                                                                            |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Image names          | `ghcr.io/get-sealant/sealant-{api,worker,ssh-gateway,web}`, public                                                                                                                                                        | Repo is `get-sealant/sealant`; sealantd owns `ghcr.io/get-sealant/sealantd`                                                                                                                                                                          |
+| Image names          | `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,web}`, public                                                                                                                                                        | Repo is `sealant-sh/sealant`; sealantd owns `ghcr.io/sealant-sh/sealantd`                                                                                                                                                                          |
 | Gateway host key     | **Auto-generate on first boot in the gateway** (opt-in env `SSH_GATEWAY_HOST_KEY_AUTOGENERATE=true`, key persisted in a named volume)                                                                                     | vs codex's ssh-keygen bootstrap container: same no-silent-rotation property (generate only when missing), one fewer service/image, no ssh-keygen dependency (node `generateKeyPairSync("ed25519")`). Fail-fast default preserved for non-compose use |
 | Seed `usr_local`     | **Keep in packaged migrate** (default on)                                                                                                                                                                                 | SDK flows key off `usr_local`; it's inert for web users. Codex wanted opt-in — revisit at identity convergence                                                                                                                                       |
 | Compose distribution | **Attach `compose.selfhost.yaml` as a GitHub Release asset**; raw-at-tag URL as fallback                                                                                                                                  | We need `gh release create` anyway for `releases/latest` resolution; assets are immutable and allow future manifest/checksums                                                                                                                        |
@@ -113,7 +113,7 @@ Facts that make this easy (verified in code):
 
 ## Phase 2 — `compose.selfhost.yaml` rewrite (fully self-contained)
 
-- All app services `image: ghcr.io/get-sealant/sealant-<name>:${SEALANT_VERSION:?}` (no `build:`).
+- All app services `image: ghcr.io/sealant-sh/sealant-<name>:${SEALANT_VERSION:?}` (no `build:`).
 - Top-level `configs:` with inline zot config `content:`; zot keeps `127.0.0.1:5000:5000`.
 - `migrate`: api image, `command: ["node", "dist/migrate.js"]`, `restart: no`.
 - `api`: adds `SANDBOX_SSH_GATEWAY_TOKEN`,
@@ -144,7 +144,7 @@ Facts that make this easy (verified in code):
 
 ## Phase 3 — `install.sh` rewrite
 
-POSIX sh, no git. Hosted at `raw.githubusercontent.com/get-sealant/sealant/main/install.sh`.
+POSIX sh, no git. Hosted at `raw.githubusercontent.com/sealant-sh/sealant/main/install.sh`.
 
 1. Preflight: `docker` present + daemon reachable, `docker compose version` ≥ 2.23.1, `curl`.
 2. Resolve version: `SEALANT_VERSION` env override, else GitHub API `releases/latest` `tag_name` via
@@ -191,7 +191,7 @@ POSIX sh, no git. Hosted at `raw.githubusercontent.com/get-sealant/sealant/main/
 ## Verification (end-to-end, before first tag)
 
 1. Build all four images locally with the same Dockerfiles
-   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/get-sealant/sealant-<name>:0.0.0-dev .`).
+   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`).
 2. `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=<local file> sh install.sh` on a clean host (or
    after `down -v`).
 3. Full flow: signup at localhost:3000 → add a real public key in Settings → create sandbox →

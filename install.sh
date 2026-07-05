@@ -1,7 +1,7 @@
 #!/bin/sh
 # Sealant self-host installer — bring up the whole product with one command:
 #
-#   curl -fsSL https://raw.githubusercontent.com/get-sealant/sealant/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/sealant-sh/sealant/main/install.sh | sh
 #
 # It checks Docker, downloads the versioned compose file for the latest release, generates secrets,
 # pulls the prebuilt images, and starts the stack (web app, API, build worker, SSH gateway, Postgres,
@@ -15,7 +15,7 @@
 # Uninstall: docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
 set -eu
 
-REPO="get-sealant/sealant"
+REPO="sealant-sh/sealant"
 INSTALL_DIR="${SEALANT_INSTALL_DIR:-$HOME/.sealant}"
 ENV_FILE="$INSTALL_DIR/.env"
 COMPOSE_FILE="$INSTALL_DIR/compose.yaml"
@@ -167,9 +167,13 @@ info "Pulling images (first run downloads a few hundred MB)…"
 # Best-effort: a failed pull is fine when the images are already present (local builds, air-gapped
 # re-runs) — the presence check below is what actually gates the install.
 compose pull --quiet --ignore-pull-failures 2>/dev/null || true
+# Same namespace resolution as the compose file: explicit env > .env from a previous run > the
+# default derived from REPO. SEALANT_IMAGE_NS is the fork/mirror escape hatch.
+image_ns_pinned="$(sed -n 's/^SEALANT_IMAGE_NS=//p' "$ENV_FILE" 2>/dev/null | head -n 1)"
+IMAGE_NS="${SEALANT_IMAGE_NS:-${image_ns_pinned:-ghcr.io/${REPO%/*}}}"
 for image_name in sealant-api sealant-worker sealant-ssh-gateway sealant-web; do
-  docker image inspect "ghcr.io/get-sealant/$image_name:$VERSION" >/dev/null 2>&1 ||
-    die "Image $image_name:$VERSION is unavailable. Are you offline, or is that release not published (or not public) yet?"
+  docker image inspect "$IMAGE_NS/$image_name:$VERSION" >/dev/null 2>&1 ||
+    die "Image $IMAGE_NS/$image_name:$VERSION is unavailable. Are you offline, or is that release not published (or not public) yet?"
 done
 
 info "Applying database migrations…"

@@ -75,13 +75,13 @@ Users install with `curl -fsSL …/install.sh | sh` (see README) — prebuilt im
 The pieces:
 
 - **Images**: `.github/workflows/release.yml` builds + pushes multi-arch
-  `ghcr.io/get-sealant/sealant-{api,worker,ssh-gateway,web}` on every `vX.Y.Z` tag, smoke-tests the
+  `ghcr.io/sealant-sh/sealant-{api,worker,ssh-gateway,web}` on every `vX.Y.Z` tag, smoke-tests the
   installer against them, then publishes the GitHub release with `compose.selfhost.yaml` attached.
   Creating the release is what moves `releases/latest`, i.e. what the installer resolves.
 - **Cutting a release**: push a `vX.Y.Z` tag. After the very first release, flip the four GHCR
   packages to public (one-time, per package) or anonymous pulls fail.
 - **Local dry-run**: build the images with the same Dockerfiles
-  (`docker build -f apps/<app>/Dockerfile -t ghcr.io/get-sealant/sealant-<name>:0.0.0-dev .`), then
+  (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
   ports (`SEALANT_{WEB,API,SSH,REGISTRY}_PORT`) let it coexist with the dev stack.
 - **Migrations in the packaged path** run from the api image (`node dist/migrate.js`, programmatic

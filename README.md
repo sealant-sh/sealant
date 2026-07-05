@@ -109,7 +109,7 @@ registry integrations publish and retrieve artifacts.
 Everything you need is a running Docker daemon — no git, no node, no firewall changes:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/get-sealant/sealant/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sealant-sh/sealant/main/install.sh | sh
 ```
 
 That downloads the compose file for the latest release, generates secrets into `~/.sealant/.env`,
