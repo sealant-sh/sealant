@@ -47,6 +47,7 @@ import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './ro
 import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
 import { Route as AuthenticatedProfilesProfileIdAgentsRouteImport } from './routes/_authenticated/profiles/$profileId/agents'
 import { Route as AuthenticatedProfilesProfileIdAccessRouteImport } from './routes/_authenticated/profiles/$profileId/access'
+import { Route as AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/runs/$runId'
 import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -265,6 +266,12 @@ const AuthenticatedProfilesProfileIdAccessRoute =
     path: '/profiles/$profileId/access',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedSandboxesSandboxIdRunsRunIdRoute =
+  AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport.update({
+    id: '/sandboxes/$sandboxId/runs/$runId',
+    path: '/sandboxes/$sandboxId/runs/$runId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedRegistryRegistryIdRepoTagRoute =
   AuthenticatedRegistryRegistryIdRepoTagRouteImport.update({
     id: '/registry/$registryId/$repo/$tag',
@@ -310,6 +317,7 @@ export interface FileRoutesByFullPath {
   '/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
   '/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
+  '/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
@@ -349,6 +357,7 @@ export interface FileRoutesByTo {
   '/repositories/$repoId': typeof AuthenticatedRepositoriesRepoIdIndexRoute
   '/sandboxes/$sandboxId': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
+  '/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -391,6 +400,7 @@ export interface FileRoutesById {
   '/_authenticated/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
   '/_authenticated/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
   '/_authenticated/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
+  '/_authenticated/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -432,6 +442,7 @@ export interface FileRouteTypes {
     | '/repositories/$repoId/'
     | '/sandboxes/$sandboxId/'
     | '/registry/$registryId/$repo/$tag'
+    | '/sandboxes/$sandboxId/runs/$runId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -471,6 +482,7 @@ export interface FileRouteTypes {
     | '/repositories/$repoId'
     | '/sandboxes/$sandboxId'
     | '/registry/$registryId/$repo/$tag'
+    | '/sandboxes/$sandboxId/runs/$runId'
   id:
     | '__root__'
     | '/_auth'
@@ -512,6 +524,7 @@ export interface FileRouteTypes {
     | '/_authenticated/repositories/$repoId/'
     | '/_authenticated/sandboxes/$sandboxId/'
     | '/_authenticated/registry/$registryId/$repo/$tag'
+    | '/_authenticated/sandboxes/$sandboxId/runs/$runId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -789,6 +802,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/sandboxes/$sandboxId/runs/$runId': {
+      id: '/_authenticated/sandboxes/$sandboxId/runs/$runId'
+      path: '/sandboxes/$sandboxId/runs/$runId'
+      fullPath: '/sandboxes/$sandboxId/runs/$runId'
+      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/registry/$registryId/$repo/$tag': {
       id: '/_authenticated/registry/$registryId/$repo/$tag'
       path: '/registry/$registryId/$repo/$tag'
@@ -847,6 +867,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedRepositoriesRepoIdIndexRoute: typeof AuthenticatedRepositoriesRepoIdIndexRoute
   AuthenticatedSandboxesSandboxIdIndexRoute: typeof AuthenticatedSandboxesSandboxIdIndexRoute
   AuthenticatedRegistryRegistryIdRepoTagRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRoute
+  AuthenticatedSandboxesSandboxIdRunsRunIdRoute: typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -900,6 +921,8 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
     AuthenticatedSandboxesSandboxIdIndexRoute,
   AuthenticatedRegistryRegistryIdRepoTagRoute:
     AuthenticatedRegistryRegistryIdRepoTagRoute,
+  AuthenticatedSandboxesSandboxIdRunsRunIdRoute:
+    AuthenticatedSandboxesSandboxIdRunsRunIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

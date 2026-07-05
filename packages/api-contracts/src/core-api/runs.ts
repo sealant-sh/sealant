@@ -103,6 +103,11 @@ export const timelineEntrySchema = Schema.Struct({
   occurredAt: NonEmptyString, // decimal-string monotonic timestamp
   summary: Schema.String,
   ref: Schema.optional(Schema.Unknown),
+  /** Correlation id of the producing process (attribution key for record views). */
+  processId: Schema.optional(NonEmptyString),
+  /** Numeric CaptureMethod / Confidence enums — how the fact was captured, per envelope. */
+  captureMethod: Schema.Number,
+  confidence: Schema.Number,
 });
 export type TimelineEntry = typeof timelineEntrySchema.Type;
 
@@ -110,6 +115,12 @@ export const getRunTimelineQuerySchema = Schema.Struct({
   fromSequence: Schema.optional(NonEmptyString),
   toSequence: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
+  /**
+   * Comma-separated payload cases (e.g. `processStarted,processExited,fileChange`). Filters the
+   * timeline to those event kinds server-side — the read path for record views that must not pay
+   * for the ioChunk-dominated full log.
+   */
+  kinds: Schema.optional(NonEmptyString),
 });
 export type GetRunTimelineQuery = typeof getRunTimelineQuerySchema.Type;
 
@@ -117,6 +128,35 @@ export const runTimelineResponseSchema = Schema.Struct({
   items: Schema.Array(timelineEntrySchema),
 });
 export type RunTimelineResponse = typeof runTimelineResponseSchema.Type;
+
+// ---------------------------------------------------------------------------------------------
+// Execution record — single raw event (the full envelope, provenance included)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * One stored EventEnvelope, verbatim: correlation ids, both clocks, capture provenance, and the
+ * jsonb payload (bigints stringified at ingest). This is the drill-down read behind a timeline
+ * entry — the timeline carries the summary + ref, this carries the whole record.
+ */
+export const runEventSchema = Schema.Struct({
+  eventId: NonEmptyString,
+  runId: NonEmptyString,
+  runtimeId: NonEmptyString,
+  executionId: Schema.optional(NonEmptyString),
+  sessionId: Schema.optional(NonEmptyString),
+  processId: Schema.optional(NonEmptyString),
+  requestId: Schema.optional(NonEmptyString),
+  schemaVersion: Schema.Number,
+  sequence: NonEmptyString, // decimal-string uint64
+  observedAt: NonEmptyString, // decimal-string int64 wall clock
+  monotonicTimestamp: NonEmptyString, // decimal-string uint64 ordering clock
+  captureMethod: Schema.Number,
+  confidence: Schema.Number,
+  payloadCase: NonEmptyString,
+  payload: Schema.Unknown,
+  ingestedAt: Schema.String,
+});
+export type RunEvent = typeof runEventSchema.Type;
 
 // ---------------------------------------------------------------------------------------------
 // Execution record — scrollback (byte-exact terminal output)
@@ -203,6 +243,7 @@ export class RunInternalServerError extends Schema.TaggedErrorClass<RunInternalS
 ) {}
 
 const runIdParams = Schema.Struct({ runId: NonEmptyString });
+const runEventParams = Schema.Struct({ runId: NonEmptyString, sequence: NonEmptyString });
 
 // ---------------------------------------------------------------------------------------------
 // Group
@@ -243,6 +284,13 @@ export const RunsGroup = HttpApiGroup.make("runs")
       params: runIdParams,
       query: getRunTimelineQuerySchema,
       success: runTimelineResponseSchema,
+      error: [RunBadRequestError, RunNotFoundError, RunInternalServerError],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("getRunEvent", "/:runId/events/:sequence", {
+      params: runEventParams,
+      success: runEventSchema,
       error: [RunBadRequestError, RunNotFoundError, RunInternalServerError],
     }),
   )

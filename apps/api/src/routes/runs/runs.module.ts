@@ -19,6 +19,7 @@ import {
   type LossSpan,
   type Run,
   type RunChangesResponse,
+  type RunEvent,
   type RunLossReport,
   type RunScrollbackResponse,
   type RunStatusWire,
@@ -27,7 +28,12 @@ import {
   type UpdateRunRequest,
 } from "@sealant/api-contracts";
 import { RunRepo } from "@sealant/db";
-import { TelemetryQuery } from "@sealant/telemetry";
+import {
+  payloadCaseValues,
+  TelemetryQuery,
+  TelemetryQueryInvariantError,
+  type PayloadCase,
+} from "@sealant/telemetry";
 import { Context, Effect, Stream } from "effect";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
@@ -107,6 +113,27 @@ const parseSequence = (raw: string | undefined, field: string) => {
   } catch {
     return Effect.fail(new RunBadRequestError({ message: `${field} must be a decimal integer.` }));
   }
+};
+
+const isPayloadCase = (value: string): value is PayloadCase =>
+  (payloadCaseValues as readonly string[]).includes(value);
+
+const parseKinds = (raw: string | undefined) => {
+  if (raw === undefined) {
+    return Effect.succeed(undefined);
+  }
+  const values = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (values.length === 0 || !values.every(isPayloadCase)) {
+    return Effect.fail(
+      new RunBadRequestError({
+        message: `kinds must be a comma-separated list of: ${payloadCaseValues.join(", ")}.`,
+      }),
+    );
+  }
+  return Effect.succeed(values);
 };
 
 const parseLimit = (raw: string | undefined, fallback: number, max: number) => {
@@ -254,6 +281,7 @@ export const getRunTimeline = (input: {
     const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
     const toSequence = yield* parseSequence(input.query.toSequence, "toSequence");
     const limit = yield* parseLimit(input.query.limit, 500, 5000);
+    const kinds = yield* parseKinds(input.query.kinds);
 
     const query = yield* TelemetryQuery;
     const chunk = yield* withRunInternalError(
@@ -261,6 +289,7 @@ export const getRunTimeline = (input: {
         query.getTimeline(input.runId, {
           ...(fromSequence === undefined ? {} : { fromSequence }),
           ...(toSequence === undefined ? {} : { toSequence }),
+          ...(kinds === undefined ? {} : { cases: kinds }),
         }),
       ),
       "Failed to read run timeline.",
@@ -276,10 +305,55 @@ export const getRunTimeline = (input: {
           occurredAt: entry.occurredAt.toString(),
           summary: entry.summary,
           ...(entry.ref === null || entry.ref === undefined ? {} : { ref: entry.ref }),
+          ...(entry.processId === null ? {} : { processId: entry.processId }),
+          captureMethod: entry.captureMethod,
+          confidence: entry.confidence,
         }),
       );
 
     return { items } satisfies RunTimelineResponse;
+  });
+
+export const getRunEvent = (input: { readonly runId: string; readonly sequence: string }) =>
+  Effect.gen(function* () {
+    yield* requireRun(input.runId);
+    const sequence = yield* parseSequence(input.sequence, "sequence");
+    if (sequence === undefined) {
+      return yield* new RunBadRequestError({ message: "sequence must be a decimal integer." });
+    }
+
+    const query = yield* TelemetryQuery;
+    // A missing sequence is an InvariantError from TelemetryQuery — surface it as a 404, not a 500.
+    const row = yield* query.getEvent(input.runId, sequence).pipe(
+      Effect.mapError((error) =>
+        error instanceof TelemetryQueryInvariantError
+          ? new RunNotFoundError({
+              message: `No event at sequence ${input.sequence} for run ${input.runId}.`,
+            })
+          : new RunInternalServerError({
+              message: toErrorMessage(error, "Failed to read run event."),
+            }),
+      ),
+    );
+
+    return {
+      eventId: row.eventId,
+      runId: row.runId,
+      runtimeId: row.runtimeId,
+      ...(row.executionId === null ? {} : { executionId: row.executionId }),
+      ...(row.sessionId === null ? {} : { sessionId: row.sessionId }),
+      ...(row.processId === null ? {} : { processId: row.processId }),
+      ...(row.requestId === null ? {} : { requestId: row.requestId }),
+      schemaVersion: row.schemaVersion,
+      sequence: row.sequence.toString(),
+      observedAt: row.observedAt.toString(),
+      monotonicTimestamp: row.monotonicTimestamp.toString(),
+      captureMethod: row.captureMethod,
+      confidence: row.confidence,
+      payloadCase: row.payloadCase,
+      payload: row.payload,
+      ingestedAt: row.ingestedAt.toISOString(),
+    } satisfies RunEvent;
   });
 
 export const getRunScrollback = (input: {

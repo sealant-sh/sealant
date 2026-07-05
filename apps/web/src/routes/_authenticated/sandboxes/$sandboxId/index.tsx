@@ -6,7 +6,7 @@ import {
   useSuspenseQuery,
   type QueryClient,
 } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 
 import type { AppTrpc } from "@/lib/trpc/client";
@@ -95,6 +95,9 @@ export const Route = createFileRoute("/_authenticated/sandboxes/$sandboxId/")({
     await context.queryClient.ensureQueryData(
       context.trpc.sandbox.byId.queryOptions({ sandboxId: params.sandboxId }),
     );
+    await context.queryClient.ensureQueryData(
+      context.trpc.run.list.queryOptions({ sandboxId: params.sandboxId, limit: 10 }),
+    );
     const attemptsResponse = await context.queryClient.ensureQueryData(
       context.trpc.sandbox.attempts.queryOptions({ sandboxId: params.sandboxId, limit: 5 }),
     );
@@ -117,6 +120,10 @@ function SandboxSummaryPage() {
   const queryClient = useQueryClient();
   const sandboxQueryOptions = trpc.sandbox.byId.queryOptions({ sandboxId });
   const { data: sandboxResponse } = useSuspenseQuery(sandboxQueryOptions);
+  const { data: runsResponse } = useSuspenseQuery(
+    trpc.run.list.queryOptions({ sandboxId, limit: 10 }),
+  );
+  const runs = runsResponse.items;
   const sandbox = toSandboxSummary(sandboxResponse);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const [sshCopyState, setSshCopyState] = useState<"idle" | "copied" | "error">("idle");
@@ -366,7 +373,47 @@ function SandboxSummaryPage() {
       <div className="grid gap-8 xl:grid-cols-[1.35fr_1fr]">
         <div className="space-y-8">
           <Panel>
-            <p className="ev-eyebrow">01 · Attempt history</p>
+            <p className="ev-eyebrow">01 · Run records</p>
+            <h2 className="mt-3 font-display text-xl font-semibold tracking-tight text-foreground">
+              Runs
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Each run is a harness execution with its evidence attached — commands, output, file
+              changes, and the diff it produced.
+            </p>
+            <div className="mt-6 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
+              {runs.length === 0 ? (
+                <p className="px-4 py-6 font-mono text-[0.68rem] text-muted-foreground">
+                  No runs recorded for this sandbox yet.
+                </p>
+              ) : (
+                <div className="divide-y divide-rule-faint">
+                  {runs.map((run) => (
+                    <Link
+                      key={run.runId}
+                      to="/sandboxes/$sandboxId/runs/$runId"
+                      params={{ sandboxId, runId: run.runId }}
+                      className="grid gap-2 px-4 py-3.5 transition-colors hover:bg-muted/40 sm:grid-cols-[1fr_auto_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-mono text-[0.66rem] text-faint">{run.runId}</p>
+                        <p className="mt-1 truncate text-sm text-foreground">
+                          {run.prompt ?? `${run.harnessId} run`}
+                        </p>
+                      </div>
+                      <p className="font-mono text-[0.66rem] text-muted-foreground">
+                        {toShortDateTime(run.createdAt)}
+                      </p>
+                      <StatusIndicator status={run.status} />
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Panel>
+
+          <Panel>
+            <p className="ev-eyebrow">02 · Attempt history</p>
             <h2 className="mt-3 font-display text-xl font-semibold tracking-tight text-foreground">
               Execution attempts
             </h2>
@@ -400,7 +447,7 @@ function SandboxSummaryPage() {
           </Panel>
 
           <Panel>
-            <p className="ev-eyebrow">02 · Runtime</p>
+            <p className="ev-eyebrow">03 · Runtime</p>
             <div className="mt-5 overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-xs)]">
               <dl className="grid divide-y divide-rule-faint sm:grid-cols-2 sm:divide-x">
                 <RuntimeCell label="Adapter" value={sandbox.runtime?.adapter ?? "n/a"} />
@@ -437,7 +484,7 @@ function SandboxSummaryPage() {
           </Panel>
 
           <Panel>
-            <p className="ev-eyebrow">03 · Sandbox spec</p>
+            <p className="ev-eyebrow">04 · Sandbox spec</p>
             {sandboxSpecDetails === null ? (
               <p className="mt-5 rounded-2xl border border-border bg-card px-4 py-4 font-mono text-[0.68rem] text-muted-foreground shadow-[var(--shadow-xs)]">
                 Spec details are not available for this sandbox.
