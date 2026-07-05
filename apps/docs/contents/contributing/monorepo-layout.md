@@ -1,0 +1,54 @@
+---
+title: Monorepo layout
+description:
+  What every app and package under apps/ and packages/ is for, and where to start reading each one.
+---
+
+Sealant is a `pnpm` + `turbo` monorepo. `apps/` holds deployable surfaces; `packages/` holds the
+shared domains and libraries they compose. `tooling/` holds centralized TypeScript, lint, format,
+and test config used across every workspace.
+
+## Apps
+
+| App                    | Role                                                                                                                                                                                                                  | Key entry points                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `@sealant/api`         | Control-plane API: sandbox lifecycle, SSH-key resolution, runs/execution-record queries, GitHub App routes, registry proxy. Effect `HttpApi` server on Hono/Node, OpenAPI at `/openapi.json`, Scalar docs at `/docs`. | `apps/api/src/index.ts`, `apps/api/src/routes/*`, `apps/api/src/runtime-env.ts`        |
+| `@sealant/web`         | Main product app — sandboxes, execution records, SSH-key settings, and preview issue-workflow/repository/profile/registry views. TanStack Start + TanStack Router.                                                    | `apps/web/src/routes/_authenticated/*`, `apps/web/DESIGN.md`                           |
+| `@sealant/worker`      | Background job worker: consumes sandbox build jobs, compiles/publishes images via BuildKit, launches sandbox runtimes, updates durable lifecycle state.                                                               | `apps/worker/src/index.ts`, `apps/worker/src/runtime-env.ts`                           |
+| `@sealant/ssh-gateway` | Single stable SSH entrypoint (`sbx-<sandboxId>@host`) that resolves a sandbox's runtime target from the API and proxies the connection into it.                                                                       | `apps/ssh-gateway/src/gateway-server.ts`, `apps/ssh-gateway/src/principal-resolver.ts` |
+| `@sealant/docs`        | This documentation site — a fumadocs app over the Markdown/MDX content in `apps/docs/contents`. TanStack Start, deployed to Cloudflare via `wrangler`.                                                                | `apps/docs/contents/*`, `apps/docs/src/lib/source.ts`                                  |
+| `@sealant/marketing`   | Public marketing site and install/docs entrypoints. TanStack Start + Vite, deployed to Cloudflare.                                                                                                                    | `apps/marketing/src/routes/index.tsx`                                                  |
+| `@sealant/electron`    | Desktop client workspace. Currently a scaffold — package metadata and TypeScript config only, no runtime app yet.                                                                                                     | `apps/electron/package.json`                                                           |
+| `@sealant/mobile`      | Expo/React Native client with tab screens for sandboxes, runs, issues, and approvals; talks to the control-plane API directly. Early-stage, not a released product surface.                                           | `apps/mobile/src/app/(tabs)/*`, `apps/mobile/docs/MOBILE_PRODUCT_PLAN.md`              |
+
+## Packages
+
+| Package                        | Role                                                                                                                                                                                                | Key entry points                                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `@sealant/api-contracts`       | The wire contracts — the single source of truth for the HTTP API. Effect `HttpApi` groups, endpoint schemas, and typed errors; no runtime logic.                                                    | `packages/api-contracts/src/core-api/*`                                                          |
+| `@sealant/auth`                | Shared Better Auth setup: server bootstrap, client factory, session helpers, backed by `@sealant/db`.                                                                                               | `packages/auth/src/server.ts`, `packages/auth/src/session.ts`                                    |
+| `@sealant/db`                  | Shared PostgreSQL + Drizzle persistence for both product domains — sandbox lifecycle and issue workflows — plus auth, profiles/secrets, and source-integration tables.                              | `packages/db/src/client.ts`, `packages/db/src/repositories/*`                                    |
+| `@sealant/issues`              | Issue-workflow provider imports (GitHub, Linear) and board-ordering helpers. Normalizes provider payloads; does not persist them or own OAuth storage.                                              | `packages/issues/src/github.ts`, `packages/issues/src/linear.ts`, `packages/issues/src/board.ts` |
+| `@sealant/rabbitmq`            | Business-agnostic AMQP transport: publish/consume JSON messages, topology assertions, connection singletons.                                                                                        | `packages/rabbitmq/src/index.ts`                                                                 |
+| `@sealant/sandboxes`           | Sandbox domain orchestration end to end: BuildKit compile, registry publish, runtime adapters, build-queue messages, worker job processing.                                                         | `packages/sandboxes/src/worker/process-sandbox-build-job.ts`, `packages/sandboxes/src/runtime/*` |
+| `@sealant/sdk`                 | The fluent public SDK (`Sealant`, `opencode()` harness) — create a sandbox, run a harness, replay the record. **Unpublished** (`"private": true`); consumable only from inside this monorepo today. | `packages/sdk/src/client.ts`, `packages/sdk/src/facade/*`                                        |
+| `@sealant/source-integrations` | Repository/provider integrations — GitHub App auth, installation lookup, webhook verification.                                                                                                      | `packages/source-integrations/src/github/`                                                       |
+| `@sealant/telemetry`           | Ingests the `sealantd` event firehose and persists it as the append-only, replayable execution record, keyed on `(runId, sequence)`.                                                                | `packages/telemetry/src/ingester.ts`, `packages/telemetry/src/projector.ts`                      |
+| `@sealant/ui`                  | Shared React components, hooks, and utilities for product surfaces — primitives, layout shell, registry views. Matches `apps/web/DESIGN.md`.                                                        | `packages/ui/src/index.ts`, `packages/ui/src/components/ui/*`                                    |
+| `@sealant/validators`          | Shared Zod schemas for API requests/responses and sandbox build/queue payloads, consumed by both `@sealant/api` and `@sealant/sandboxes`.                                                           | `packages/validators/src/index.ts`                                                               |
+
+## Dependency shape
+
+Contracts and domain packages don't depend on apps; apps compose them:
+
+- `@sealant/api-contracts` and `@sealant/validators` have no internal dependencies — they're the
+  bottom of the graph.
+- `@sealant/db`, `@sealant/rabbitmq`, `@sealant/auth` depend only on `@sealant/validators` (and
+  `db`, for `auth`).
+- `@sealant/sandboxes` and `@sealant/telemetry` sit above `db`, `rabbitmq`, and
+  `source-integrations`.
+- `apps/api` and `apps/worker` depend on the domain packages above and wire them together;
+  `apps/web` depends on `auth`, `db`, `issues`, `ui`, and `validators`.
+
+For the pattern that governs how a new API domain is wired from persistence to HTTP handler, see
+[Effect and API conventions](/docs/contributing/effect-and-api-conventions).
