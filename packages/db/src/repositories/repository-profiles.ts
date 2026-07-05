@@ -99,16 +99,22 @@ const repositoryProfileRepoOperationSchema = Schema.Literals([
   "upsertRepository",
 ]);
 
-export class RepositoryProfileRepoInvariantError extends Schema.TaggedErrorClass<RepositoryProfileRepoInvariantError>()("RepositoryProfileRepoInvariantError", {
-  operation: repositoryProfileRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class RepositoryProfileRepoInvariantError extends Schema.TaggedErrorClass<RepositoryProfileRepoInvariantError>()(
+  "RepositoryProfileRepoInvariantError",
+  {
+    operation: repositoryProfileRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class RepositoryProfileRepoUnexpectedError extends Schema.TaggedErrorClass<RepositoryProfileRepoUnexpectedError>()("RepositoryProfileRepoUnexpectedError", {
-  operation: repositoryProfileRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class RepositoryProfileRepoUnexpectedError extends Schema.TaggedErrorClass<RepositoryProfileRepoUnexpectedError>()(
+  "RepositoryProfileRepoUnexpectedError",
+  {
+    operation: repositoryProfileRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const repositoryProfileRepoErrorSchema = Schema.Union([
   RepositoryProfileRepoInvariantError,

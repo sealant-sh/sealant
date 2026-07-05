@@ -81,5 +81,8 @@ function healthPresentation(health: string): {
     return { dotClassName: "bg-warning-dot", textClassName: "text-warning" };
   }
 
-  return { dotClassName: "border-[1.5px] border-input bg-transparent", textClassName: "text-ink-2" };
+  return {
+    dotClassName: "border-[1.5px] border-input bg-transparent",
+    textClassName: "text-ink-2",
+  };
 }

@@ -243,7 +243,9 @@ function SandboxSummaryPage() {
               {sandbox.name}
             </h1>
             <p className="mt-3 font-mono text-xs text-faint">
-              {(sandbox.repository ?? "unknown-repository") + " / " + (sandbox.tag ?? "unknown-tag")}
+              {(sandbox.repository ?? "unknown-repository") +
+                " / " +
+                (sandbox.tag ?? "unknown-tag")}
             </p>
 
             <div className="mt-6 rounded-2xl border border-border bg-card p-5 shadow-[var(--shadow-xs)]">

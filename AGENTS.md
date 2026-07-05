@@ -9,12 +9,12 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 ## Product Language Contract
 
-- Treat `sandboxes` and `issue workflows` as the two primary product domains.
+- The primary product nouns are `sandbox` (the live environment), `run` (the durable execution
+  record), and `harness` (the agent that does the work). Runs are the heart of the product.
 - For user-facing API design and UI copy, prefer these terms over implementation terms.
-- Treat `run` and `sandbox build job` as internal execution/orchestration vocabulary unless a task
+- Treat `sandbox build job` and `attempt` as internal orchestration vocabulary unless a task
   explicitly asks for internals.
-- When shaping core API surfaces for the web app, model around sandbox lifecycle and issue workflow
-  lifecycle/reporting first.
+- When shaping core API surfaces for the web app, model around the sandbox and run lifecycles first.
 
 ## Agent Defaults
 

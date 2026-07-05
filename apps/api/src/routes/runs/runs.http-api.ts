@@ -18,9 +18,7 @@ export const RunsHandlersLive = HttpApiBuilder.group(ControlPlaneAPI, "runs", (h
     .handle("listRuns", ({ query }) => listRuns(query))
     .handle("getRun", ({ params }) => getRun(params.runId))
     .handle("updateRun", ({ params, payload }) => updateRun({ runId: params.runId, payload }))
-    .handle("getRunTimeline", ({ params, query }) =>
-      getRunTimeline({ runId: params.runId, query }),
-    )
+    .handle("getRunTimeline", ({ params, query }) => getRunTimeline({ runId: params.runId, query }))
     .handle("getRunScrollback", ({ params, query }) =>
       getRunScrollback({ runId: params.runId, query }),
     )

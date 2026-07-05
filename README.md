@@ -58,9 +58,7 @@ Two canonical reference docs sit at the repo root:
 ├── apps/                      # deployable apps and services
 │   ├── api/                   # control-plane API (Effect)
 │   ├── docs/                  # documentation site (fumadocs)
-│   ├── electron/              # desktop client surface
 │   ├── marketing/             # public marketing site
-│   ├── mobile/                # mobile client surface
 │   ├── ssh-gateway/           # SSH access into live sandboxes
 │   ├── web/                   # main product web app (the review surface)
 │   └── worker/                # background worker
@@ -68,7 +66,6 @@ Two canonical reference docs sit at the repo root:
 │   ├── api-contracts/         # wire contracts — the single source of truth
 │   ├── auth/                  # shared auth
 │   ├── db/                    # Effect + PostgreSQL control-plane state
-│   ├── issues/                # issue-workflow domain
 │   ├── rabbitmq/              # message transport
 │   ├── sandboxes/             # sandbox domain: build, publish, launch, lifecycle
 │   ├── source-integrations/   # repo/provider integrations (GitHub first)
@@ -83,8 +80,8 @@ Two canonical reference docs sit at the repo root:
 
 - `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker, and
   access gateways.
-- `packages/`: shared code — the wire contracts, sandbox/issue domains, the telemetry/execution
-  record, the design system, and reusable utilities.
+- `packages/`: shared code — the wire contracts, the sandbox domain, the telemetry/execution record,
+  the design system, and reusable utilities.
 - `tooling/`: centralized configs and tooling packages (TypeScript, lint, format, test, Tailwind).
 
 ## Architecture at a glance

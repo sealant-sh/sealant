@@ -169,9 +169,7 @@ export const RunRepoLive = Layer.effect(
           "listRuns",
           Effect.gen(function* () {
             const whereClauses = [
-              ...(input.ownerUserId === undefined
-                ? []
-                : [eq(runs.ownerUserId, input.ownerUserId)]),
+              ...(input.ownerUserId === undefined ? [] : [eq(runs.ownerUserId, input.ownerUserId)]),
               ...(input.sandboxId === undefined ? [] : [eq(runs.sandboxId, input.sandboxId)]),
               ...(input.statuses === undefined || input.statuses.length === 0
                 ? []

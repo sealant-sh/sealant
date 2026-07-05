@@ -505,7 +505,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const result = await this.commandRunner("docker", args);
       const id = result.stdout.trim();
       if (id.length === 0) {
-        throw createAdapterError("adapter-unavailable", "Docker run did not return a container id.");
+        throw createAdapterError(
+          "adapter-unavailable",
+          "Docker run did not return a container id.",
+        );
       }
       return id;
     };
@@ -536,7 +539,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   ): Promise<boolean> {
     if (this.controlSocketHostDir !== undefined) {
       try {
-        const stats = await stat(joinPath(this.controlSocketHostDir, containerName, "control.sock"));
+        const stats = await stat(
+          joinPath(this.controlSocketHostDir, containerName, "control.sock"),
+        );
         return stats.isSocket();
       } catch {
         return false;

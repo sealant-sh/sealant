@@ -11,8 +11,8 @@ updated: 2026-03-31
 `@sealant/api` is the control-plane API for validation, orchestration, lifecycle updates, and
 stateful read models.
 
-Product-facing contracts should model around `sandboxes` and `issue workflows`, while lower-level
-execution details remain internal/operator-facing.
+Product-facing contracts should model around `sandboxes` and `runs`, while lower-level orchestration
+details (build jobs, attempts) remain internal/operator-facing.
 
 ## Current capabilities
 

@@ -150,7 +150,7 @@ export const sandboxAttemptSummarySchema = Schema.Struct({
   attemptId: NonEmptyString,
   relation: Schema.Literals(["launch", "rebuild", "retry", "resume"]),
   status: sandboxStatusSchema,
-  triggerType: Schema.Literals(["manual", "issue", "schedule", "api", "retry"]),
+  triggerType: Schema.Literals(["manual", "schedule", "api", "retry"]),
   triggerRef: Schema.optional(NonEmptyString),
   runtime: Schema.optional(sandboxRuntimeSchema),
   publishedImage: Schema.optional(sandboxPublishedImageSchema),

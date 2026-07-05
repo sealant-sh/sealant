@@ -29,7 +29,10 @@ export const claudeCode = (options?: { readonly profile?: string }): Harness => 
   id: "claude-code",
   buildRunCommand: (prompt) => ({
     executable: "claude",
-    args: options?.profile === undefined ? ["-p", prompt] : ["--profile", options.profile, "-p", prompt],
+    args:
+      options?.profile === undefined
+        ? ["-p", prompt]
+        : ["--profile", options.profile, "-p", prompt],
   }),
   launchCommand: "claude",
 });

@@ -10,10 +10,7 @@ updated: 2026-03-31
 
 `@sealant/db` is the shared PostgreSQL + Drizzle package for control-plane persistence.
 
-It stores durable state for Sealant's two core product domains:
-
-- sandboxes
-- issue workflows
+It stores durable state for Sealant's core product nouns: sandboxes and runs.
 
 ## Why this package exists
 
@@ -25,7 +22,7 @@ It stores durable state for Sealant's two core product domains:
 
 - database client creation and lifecycle helpers
 - Drizzle schema exports and inferred table types
-- domain repositories for sandbox lifecycle, issue workflows, source integrations, and profiles
+- domain repositories for sandbox lifecycle, source integrations, and profiles
 - payload schema re-exports from `@sealant/validators`
 - migration entrypoints and helper scripts
 
@@ -40,9 +37,10 @@ Core exports are defined in `packages/db/src/index.ts`.
 - `account`
 - `verification`
 
-### Sandboxes
+### Sandboxes and runs
 
 - `sandboxes`
+- `runs`
 - `sandbox_attempts`
 - `sandbox_attempt_snapshots`
 - `sandbox_runtime_instances`
@@ -54,20 +52,6 @@ Core exports are defined in `packages/db/src/index.ts`.
 
 Note: repository and type exports still include compatibility aliases such as `sandboxBuildJobs`
 while migration to the `oci_image_build_jobs` table name is completed.
-
-### Issue workflows
-
-- `issue_workflows`
-- `issue_workflow_executions`
-- `issue_workflow_execution_events`
-- `issue_workflow_execution_validation_results`
-- `issue_workflow_execution_diff_files`
-- `issue_workflow_execution_artifacts`
-- `issue_workflow_execution_summaries`
-- `issue_workflow_execution_pull_request_links`
-- `issues`
-- `pull_requests`
-- `issue_pull_request_links`
 
 ### Source/provider integration
 

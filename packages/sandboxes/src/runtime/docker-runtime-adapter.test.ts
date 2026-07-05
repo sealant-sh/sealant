@@ -350,7 +350,9 @@ describe("DockerRuntimeAdapter", () => {
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
-    await adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }));
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }),
+    );
 
     const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
     const nameIndex = runArgs.indexOf("--name");

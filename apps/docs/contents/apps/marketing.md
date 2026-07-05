@@ -10,8 +10,7 @@ updated: 2026-03-28
 
 `@sealant/marketing` is the public-facing site and launch surface.
 
-It communicates product positioning around sandboxes and issue workflows and links to install/docs
-entrypoints.
+It communicates product positioning around sandboxes and runs and links to install/docs entrypoints.
 
 ## Current shape
 
@@ -20,7 +19,7 @@ entrypoints.
 - Primary route currently lives in `apps/marketing/src/routes/index.tsx`
 - Messaging emphasizes:
   - tailored sandboxes
-  - issue workflow traceability
+  - the run record: every run comes back with its evidence attached
   - open source/self-hosted positioning
 
 ## Runtime scripts

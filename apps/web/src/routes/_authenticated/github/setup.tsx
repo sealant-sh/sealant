@@ -293,9 +293,7 @@ const INSTALLATION_STATUS_PRESENTATION = {
 
 function InstallationStatus(props: { readonly status: string }) {
   const presentation =
-    INSTALLATION_STATUS_PRESENTATION[
-      props.status as keyof typeof INSTALLATION_STATUS_PRESENTATION
-    ];
+    INSTALLATION_STATUS_PRESENTATION[props.status as keyof typeof INSTALLATION_STATUS_PRESENTATION];
 
   if (presentation === undefined) {
     return <span className="font-mono text-xs text-faint">{props.status}</span>;

@@ -23,8 +23,8 @@ the API.
 
 1. User connects as `<prefix>-<sandboxId>@<gateway-host>`.
 2. Gateway authenticates the user key: static allowlist file first (operator break-glass), then
-   `POST /v1/ssh-keys/resolve-principal` to match the key against user-registered keys
-   (`ssh_keys` table). The resolved principal must own the sandbox.
+   `POST /v1/ssh-keys/resolve-principal` to match the key against user-registered keys (`ssh_keys`
+   table). The resolved principal must own the sandbox.
 3. Gateway asks API `GET /v1/sandboxes/{sandboxId}/ssh-target` for the runtime endpoint.
 4. Gateway opens the sandbox's sealantd control connection and maps SSH channels onto it.
 

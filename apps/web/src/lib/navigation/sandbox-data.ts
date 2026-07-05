@@ -33,7 +33,7 @@ export const RUNS: readonly RunRecord[] = [
     profileId: "staging-smoke",
     status: "active",
     startedAt: "2m ago",
-    trigger: "Issue queue",
+    trigger: "Scheduled launch",
   },
   {
     id: "run-1039",

@@ -8,9 +8,9 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { opencode, Sealant } from "./index.js";
 import { SealantApiClient } from "./effect/api-client.js";
 import { makeSdkRuntime } from "./effect/runtime.js";
+import { opencode, Sealant } from "./index.js";
 import { resolveInternalConfig } from "./internal/config.js";
 
 const SMOKE_BASE_URL = process.env["SEALANT_SMOKE_BASE_URL"];

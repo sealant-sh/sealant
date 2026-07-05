@@ -56,9 +56,7 @@ describe("sealantTargetForDockerContainer", () => {
 
 describe("sealantTargetForRuntimeInstance", () => {
   it("derives a target from a running docker instance using its resourceId", () => {
-    const target = sealantTargetForRuntimeInstance(
-      runtimeInstance({ resourceId: "ctr-running" }),
-    );
+    const target = sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "ctr-running" }));
 
     expect(target).toEqual({
       kind: "docker-exec",
@@ -87,9 +85,7 @@ describe("sealantTargetForRuntimeInstance", () => {
 
   it("returns undefined for a pending instance with no resourceId", () => {
     expect(
-      sealantTargetForRuntimeInstance(
-        runtimeInstance({ status: "pending", resourceId: null }),
-      ),
+      sealantTargetForRuntimeInstance(runtimeInstance({ status: "pending", resourceId: null })),
     ).toBeUndefined();
   });
 

@@ -10,7 +10,11 @@ import {
   type ProcessAttached,
 } from "@sealant/runtime-protocol";
 
-import { openControlTransport, type ControlTarget, type ControlTransport } from "./control-transport.js";
+import {
+  openControlTransport,
+  type ControlTarget,
+  type ControlTransport,
+} from "./control-transport.js";
 
 /*
 Control client + channel-mux glue (gateway-spec §3.1).
@@ -162,10 +166,7 @@ export class ControlClient {
 
   /** Resize a session's PTY (§3.3 window-change -> resizePty). */
   async resizePty(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.#requestResult(
-      { case: "resizePty", value: { sessionId, cols, rows } },
-      undefined,
-    );
+    await this.#requestResult({ case: "resizePty", value: { sessionId, cols, rows } }, undefined);
   }
 
   /** Deliver a signal to a process/session leader (§3.3 signal -> signalProcess). */
@@ -175,10 +176,7 @@ export class ControlClient {
 
   /** Close a session (best-effort; teardown also happens when the control connection drops). */
   async closeSession(sessionId: string): Promise<void> {
-    await this.#requestResult(
-      { case: "closeSession", value: { sessionId } },
-      undefined,
-    );
+    await this.#requestResult({ case: "closeSession", value: { sessionId } }, undefined);
   }
 
   /** Open a direct-TCP forward to `host:port` as a byte channel (§3.3 direct-tcpip -> openForward). */

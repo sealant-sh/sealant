@@ -1,7 +1,4 @@
-import {
-  GitHubInstallationRepo,
-  GitHubInstallationRepositoryCacheRepo,
-} from "@sealant/db";
+import { GitHubInstallationRepo, GitHubInstallationRepositoryCacheRepo } from "@sealant/db";
 import {
   parseGitHubInstallationRepositoryAuthRef,
   type GitHubSourceIntegration,
@@ -10,10 +7,7 @@ import type { NewSandbox } from "@sealant/validators";
 import { Effect } from "effect";
 
 import type { SandboxCloneAuth } from "../runtime/index.js";
-import {
-  sandboxBuildJobProcessingError,
-  toSandboxBuildJobProcessingError,
-} from "./errors.js";
+import { sandboxBuildJobProcessingError, toSandboxBuildJobProcessingError } from "./errors.js";
 
 interface ResolveInstallationAccessTokenInput {
   readonly authRef: string | undefined;
@@ -32,66 +26,66 @@ interface ResolveInstallationAccessTokenInput {
  * installation cannot be resolved. The GitHub repositories are taken from context, so a single
  * data-access layer is provided once at the worker boundary.
  */
-const resolveInstallationAccessToken = Effect.fn("resolveInstallationAccessToken")(
-  function* (input: ResolveInstallationAccessTokenInput) {
-    const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(input.authRef);
+const resolveInstallationAccessToken = Effect.fn("resolveInstallationAccessToken")(function* (
+  input: ResolveInstallationAccessTokenInput,
+) {
+  const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(input.authRef);
 
-    if (installationRepositoryId === undefined) {
-      return undefined;
-    }
+  if (installationRepositoryId === undefined) {
+    return undefined;
+  }
 
-    if (
-      input.gitHubSourceIntegration === undefined ||
-      !input.gitHubSourceIntegration.isConfigured()
-    ) {
-      return yield* sandboxBuildJobProcessingError({
-        errorCode: "github-integration-unavailable",
-        message: input.unavailableIntegrationMessage,
-      });
-    }
+  if (
+    input.gitHubSourceIntegration === undefined ||
+    !input.gitHubSourceIntegration.isConfigured()
+  ) {
+    return yield* sandboxBuildJobProcessingError({
+      errorCode: "github-integration-unavailable",
+      message: input.unavailableIntegrationMessage,
+    });
+  }
 
-    const installationRepositories = yield* GitHubInstallationRepositoryCacheRepo;
-    const installations = yield* GitHubInstallationRepo;
+  const installationRepositories = yield* GitHubInstallationRepositoryCacheRepo;
+  const installations = yield* GitHubInstallationRepo;
 
-    const installationRepositoryRecord = yield* installationRepositories
-      .getInstallationRepositoryById(installationRepositoryId)
-      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
+  const installationRepositoryRecord = yield* installationRepositories
+    .getInstallationRepositoryById(installationRepositoryId)
+    .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-    if (
-      installationRepositoryRecord === undefined ||
-      installationRepositoryRecord.removedAt !== null
-    ) {
-      return yield* sandboxBuildJobProcessingError({
-        errorCode: "github-installation-repository-unavailable",
-        message: `GitHub installation repository '${installationRepositoryId}' is not available for ${input.unavailableRepositoryContext}.`,
-      });
-    }
+  if (
+    installationRepositoryRecord === undefined ||
+    installationRepositoryRecord.removedAt !== null
+  ) {
+    return yield* sandboxBuildJobProcessingError({
+      errorCode: "github-installation-repository-unavailable",
+      message: `GitHub installation repository '${installationRepositoryId}' is not available for ${input.unavailableRepositoryContext}.`,
+    });
+  }
 
-    const installation = yield* installations
-      .getInstallationById(installationRepositoryRecord.installationId)
-      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
+  const installation = yield* installations
+    .getInstallationById(installationRepositoryRecord.installationId)
+    .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-    if (installation === undefined) {
-      return yield* sandboxBuildJobProcessingError({
-        errorCode: "github-installation-missing",
-        message: `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for ${input.missingInstallationContext}.`,
-      });
-    }
+  if (installation === undefined) {
+    return yield* sandboxBuildJobProcessingError({
+      errorCode: "github-installation-missing",
+      message: `GitHub installation '${installationRepositoryRecord.installationId}' could not be resolved for ${input.missingInstallationContext}.`,
+    });
+  }
 
-    if (installation.status !== "active") {
-      return yield* sandboxBuildJobProcessingError({
-        errorCode: "github-installation-inactive",
-        message: `GitHub installation '${installation.id}' is not active for ${input.inactiveInstallationContext}.`,
-      });
-    }
+  if (installation.status !== "active") {
+    return yield* sandboxBuildJobProcessingError({
+      errorCode: "github-installation-inactive",
+      message: `GitHub installation '${installation.id}' is not active for ${input.inactiveInstallationContext}.`,
+    });
+  }
 
-    const accessToken = yield* input.gitHubSourceIntegration
-      .createInstallationAccessToken(installation.externalInstallationId)
-      .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
+  const accessToken = yield* input.gitHubSourceIntegration
+    .createInstallationAccessToken(installation.externalInstallationId)
+    .pipe(Effect.mapError(toSandboxBuildJobProcessingError));
 
-    return accessToken.token;
-  },
-);
+  return accessToken.token;
+});
 
 export interface ResolveSandboxAuthInput {
   readonly spec: NewSandbox;

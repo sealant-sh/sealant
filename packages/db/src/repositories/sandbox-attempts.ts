@@ -19,7 +19,6 @@ export interface CreateQueuedSandboxAttemptInput {
   readonly repositoryId?: string;
   readonly repositoryProfileRevisionId?: string;
   readonly profileRevisionId?: string;
-  readonly issueId?: string;
   readonly triggerType?: SandboxAttemptTriggerType;
   readonly triggerRef?: string;
   readonly requestedByUserId?: string;
@@ -58,7 +57,6 @@ export interface MarkSandboxAttemptCancelledInput {
 export interface ListSandboxAttemptsInput {
   readonly ownerUserId?: string;
   readonly repositoryId?: string;
-  readonly issueId?: string;
   readonly statuses?: readonly SandboxAttemptStatus[];
   readonly limit?: number;
 }
@@ -83,16 +81,22 @@ const sandboxAttemptRepoOperationSchema = Schema.Literals([
   "setAttemptSnapshot",
 ]);
 
-export class SandboxAttemptRepoInvariantError extends Schema.TaggedErrorClass<SandboxAttemptRepoInvariantError>()("SandboxAttemptRepoInvariantError", {
-  operation: sandboxAttemptRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class SandboxAttemptRepoInvariantError extends Schema.TaggedErrorClass<SandboxAttemptRepoInvariantError>()(
+  "SandboxAttemptRepoInvariantError",
+  {
+    operation: sandboxAttemptRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class SandboxAttemptRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxAttemptRepoUnexpectedError>()("SandboxAttemptRepoUnexpectedError", {
-  operation: sandboxAttemptRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class SandboxAttemptRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxAttemptRepoUnexpectedError>()(
+  "SandboxAttemptRepoUnexpectedError",
+  {
+    operation: sandboxAttemptRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const sandboxAttemptRepoErrorSchema = Schema.Union([
   SandboxAttemptRepoInvariantError,
@@ -224,7 +228,6 @@ export const SandboxAttemptRepoLive = Layer.effect(
                 ...(input.profileRevisionId === undefined
                   ? {}
                   : { profileRevisionId: input.profileRevisionId }),
-                ...(input.issueId === undefined ? {} : { issueId: input.issueId }),
                 ...(input.triggerType === undefined ? {} : { triggerType: input.triggerType }),
                 ...(input.triggerRef === undefined ? {} : { triggerRef: input.triggerRef }),
                 ...(input.requestedByUserId === undefined
@@ -368,7 +371,6 @@ export const SandboxAttemptRepoLive = Layer.effect(
               ...(input.repositoryId === undefined
                 ? []
                 : [eq(sandboxAttempts.repositoryId, input.repositoryId)]),
-              ...(input.issueId === undefined ? [] : [eq(sandboxAttempts.issueId, input.issueId)]),
               ...(input.statuses === undefined || input.statuses.length === 0
                 ? []
                 : [inArray(sandboxAttempts.status, [...input.statuses])]),

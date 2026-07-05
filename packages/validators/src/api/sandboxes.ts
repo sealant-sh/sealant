@@ -2,13 +2,7 @@ import { z } from "zod";
 
 import { newSandboxSchema } from "../sandboxes/payloads.js";
 
-export const sandboxAttemptTriggerTypeValues = [
-  "manual",
-  "issue",
-  "schedule",
-  "api",
-  "retry",
-] as const;
+export const sandboxAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
 
 export const sandboxStatusSchema = z.enum(["queued", "running", "ready", "failed", "cancelled"]);
 

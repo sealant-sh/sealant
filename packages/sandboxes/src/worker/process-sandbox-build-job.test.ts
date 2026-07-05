@@ -1,3 +1,4 @@
+import { describe, expect, it } from "@effect/vitest";
 import {
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
@@ -12,7 +13,6 @@ import {
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewSandbox, SandboxBuild } from "@sealant/validators";
-import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { vi } from "vitest";
 

@@ -32,13 +32,7 @@ export function ProfileRows({ profiles }: ProfileRowsProps) {
   );
 }
 
-function ProfileFact({
-  label,
-  children,
-}: {
-  readonly label: string;
-  readonly children: string;
-}) {
+function ProfileFact({ label, children }: { readonly label: string; readonly children: string }) {
   return (
     <div className="lg:text-right">
       <p className="ev-eyebrow">{label}</p>

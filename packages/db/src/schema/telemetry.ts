@@ -27,7 +27,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-import { issueWorkflowExecutionArtifactStorageBackendValues, runs } from "./control-plane.js";
+import { runs } from "./control-plane.js";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the table level
 // to keep implicit column names mapping to snake_case db columns (matches control-plane.ts).
@@ -54,10 +54,14 @@ export type TelemetryLossSpanKind = (typeof telemetryLossSpanKindValues)[number]
 export const telemetryLossSpanDetectedViaValues = ["marker", "gap"] as const;
 export type TelemetryLossSpanDetectedVia = (typeof telemetryLossSpanDetectedViaValues)[number];
 
-// Reuse the verified storage-backend enum so artifact bodies can later move to s3/filesystem
-// without introducing a new enum type.
-export const telemetryArtifactStorageBackendValues =
-  issueWorkflowExecutionArtifactStorageBackendValues;
+export const telemetryArtifactStorageBackendValues = [
+  "inline",
+  "database",
+  "s3",
+  "gcs",
+  "azure-blob",
+  "filesystem",
+] as const;
 
 // ---------------------------------------------------------------------------------------------
 // THE LOG — append-only system of record. One row per EventEnvelope.

@@ -184,7 +184,9 @@ export const processSandboxBuildJobEffect = Effect.fn("processSandboxBuildJob")(
             : Effect.void,
           job.runId === null
             ? Effect.void
-            : attempts.markAttemptFailed({ id: job.runId }).pipe(swallowingFailure("mark-attempt-failed update")),
+            : attempts
+                .markAttemptFailed({ id: job.runId })
+                .pipe(swallowingFailure("mark-attempt-failed update")),
         ],
         { concurrency: "unbounded", discard: true },
       );

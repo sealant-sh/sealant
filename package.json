@@ -1,7 +1,7 @@
 {
-  "license": "Apache-2.0",
   "name": "sealant",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
     "build": "turbo build",
     "build:tui": "turbo build --ui=tui",

@@ -300,8 +300,12 @@ const main = () => {
   if (includeDirectiveConfigured) {
     console.log(`  - ${userSshConfigPath} (Include directive ensured)`);
   } else {
-    console.log(`  - ${userSshConfigPath} is read-only; skipped the Include (connect with -F instead — see below).`);
-    console.log(`    To enable the short \`ssh sbx-<id>\` form, add this line yourself: ${includeDirective}`);
+    console.log(
+      `  - ${userSshConfigPath} is read-only; skipped the Include (connect with -F instead — see below).`,
+    );
+    console.log(
+      `    To enable the short \`ssh sbx-<id>\` form, add this line yourself: ${includeDirective}`,
+    );
   }
   console.log("[ssh-gateway-setup] next steps:");
   console.log("  1) Infra:          docker compose up -d");

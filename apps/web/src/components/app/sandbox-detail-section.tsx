@@ -36,7 +36,11 @@ export function SandboxDetailSection({
   }
 
   return (
-    <SandboxPage kicker="Sandbox detail" title={`${sandbox.name} ${section}`} description={description}>
+    <SandboxPage
+      kicker="Sandbox detail"
+      title={`${sandbox.name} ${section}`}
+      description={description}
+    >
       <div className="space-y-8">
         <RunRecordPanel
           recordId={sandbox.sandboxId}

@@ -12,6 +12,5 @@ The current package architecture is:
 - `rabbitmq`: business-agnostic RabbitMQ transport utilities
 - `sandboxes`: sandbox domain package covering build, publish, deploy, queue wiring, and lifecycle
   mapping, including harness integrations and package resolution/standardization
-- `issues`: issue workflow import, normalization, and board state helpers for GitHub and Linear
 - `source-integrations`: source-provider integration logic such as GitHub repository selection, ref
   resolution, and access-related flows

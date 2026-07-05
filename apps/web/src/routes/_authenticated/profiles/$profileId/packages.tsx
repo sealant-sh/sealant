@@ -24,10 +24,7 @@ function ProfilePackagesPage() {
           ["typescript", "5.9.3"],
           ["oxlint", "1.55.0"],
         ].map(([name, version]) => (
-          <div
-            key={name}
-            className="grid gap-2 py-3.5 sm:grid-cols-[1fr_auto] sm:items-baseline"
-          >
+          <div key={name} className="grid gap-2 py-3.5 sm:grid-cols-[1fr_auto] sm:items-baseline">
             <p className="font-mono text-xs text-foreground">{name}</p>
             <p className="font-mono text-xs text-ink-2">{version}</p>
           </div>

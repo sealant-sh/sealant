@@ -75,16 +75,22 @@ const gitHubInstallationRepoOperationSchema = Schema.Literals([
   "userHasInstallationGrant",
 ]);
 
-export class GitHubInstallationRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepoInvariantError>()("GitHubInstallationRepoInvariantError", {
-  operation: gitHubInstallationRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class GitHubInstallationRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepoInvariantError>()(
+  "GitHubInstallationRepoInvariantError",
+  {
+    operation: gitHubInstallationRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class GitHubInstallationRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepoUnexpectedError>()("GitHubInstallationRepoUnexpectedError", {
-  operation: gitHubInstallationRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class GitHubInstallationRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepoUnexpectedError>()(
+  "GitHubInstallationRepoUnexpectedError",
+  {
+    operation: gitHubInstallationRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const gitHubInstallationRepoErrorSchema = Schema.Union([
   GitHubInstallationRepoInvariantError,

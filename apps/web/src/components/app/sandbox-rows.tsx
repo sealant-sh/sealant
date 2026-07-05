@@ -51,7 +51,9 @@ export function SandboxRows({ sandboxes }: SandboxRowsProps) {
 
           <div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end sm:gap-2">
             <SandboxStatusIndicator status={sandbox.status} />
-            <span className="font-mono text-xs text-faint">{toRelativeTime(sandbox.createdAt)}</span>
+            <span className="font-mono text-xs text-faint">
+              {toRelativeTime(sandbox.createdAt)}
+            </span>
           </div>
         </Link>
       ))}
