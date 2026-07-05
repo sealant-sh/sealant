@@ -204,6 +204,9 @@ importers:
       '@sealant/api-contracts':
         specifier: workspace:*
         version: link:../../packages/api-contracts
+      '@sealant/credentials':
+        specifier: workspace:*
+        version: link:../../packages/credentials
       '@sealant/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -256,6 +259,25 @@ importers:
       dotenv-cli:
         specifier: 'catalog:'
         version: 11.0.0
+
+  apps/cli:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85(effect@4.0.0-beta.85)(ioredis@5.11.1)
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
+    devDependencies:
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(jiti@2.7.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0)
 
   apps/docs:
     dependencies:
@@ -623,6 +645,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@sealant/credentials':
+        specifier: workspace:*
+        version: link:../../packages/credentials
       '@sealant/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -678,6 +703,19 @@ importers:
         specifier: workspace:*
         version: link:../../tooling/typescript
 
+  packages/credentials:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85(effect@4.0.0-beta.85)(vitest@3.2.6(@types/debug@4.1.13)(@types/node@24.13.2)(jiti@2.7.0)(jsdom@28.1.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+      '@sealant/typescript':
+        specifier: workspace:*
+        version: link:../../tooling/typescript
+
   packages/db:
     dependencies:
       '@effect/sql-pg':
@@ -727,6 +765,9 @@ importers:
 
   packages/sandboxes:
     dependencies:
+      '@sealant/credentials':
+        specifier: workspace:*
+        version: link:../credentials
       '@sealant/db':
         specifier: workspace:*
         version: link:../db
