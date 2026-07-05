@@ -8,7 +8,7 @@ import { RunHeaderClock } from "#/components/run-header";
 
 import appCss from "../styles.css?url";
 
-const REPO = "https://github.com/get-sealant/sealant";
+const REPO = "https://github.com/sealant-sh/sealant";
 
 const TITLE = "Sealant — the open-source runtime for AI dev agents";
 const DESCRIPTION =
