@@ -30,7 +30,6 @@ import { Link, useRouter, useRouterState, type LinkProps } from "@tanstack/react
 import {
   Activity,
   ChevronsUpDown,
-  CircleAlert,
   FolderGit2,
   KeyRound,
   LogOut,
@@ -65,9 +64,9 @@ interface SidebarSandbox {
   readonly status: SandboxStatus;
 }
 
-type GlobalArea = "sandboxes" | "issues" | "repositories" | "profiles" | "settings";
+type GlobalArea = "sandboxes" | "repositories" | "profiles" | "settings";
 
-type GlobalNavHref = "/sandboxes" | "/issues" | "/repositories" | "/profiles";
+type GlobalNavHref = "/sandboxes" | "/repositories" | "/profiles";
 
 interface GlobalNavItem {
   readonly href: GlobalNavHref;
@@ -94,7 +93,6 @@ interface SidebarGroup {
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
   { href: "/sandboxes", label: "Sandboxes", icon: Activity },
-  { href: "/issues", label: "Issues", icon: CircleAlert },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
   { href: "/profiles", label: "Profiles", icon: UserRound },
 ] as const;
@@ -123,17 +121,6 @@ const SETTINGS_SIDEBAR: readonly SidebarGroup[] = [
         label: "Connected accounts",
         exact: true,
       },
-    ],
-  },
-];
-
-const ISSUE_SIDEBAR: readonly SidebarGroup[] = [
-  {
-    label: "Issue views",
-    links: [
-      { to: "/issues", match: "/issues", label: "All issues", exact: true },
-      { to: "/issues/assigned", match: "/issues/assigned", label: "Assigned to me", exact: true },
-      { to: "/issues/ready", match: "/issues/ready", label: "Ready for workflow", exact: true },
     ],
   },
 ];
@@ -608,10 +595,6 @@ function isPathActive(pathname: string, target: string, exact: boolean): boolean
 }
 
 function getGlobalArea(pathname: string): GlobalArea {
-  if (pathname.startsWith("/issues")) {
-    return "issues";
-  }
-
   if (pathname.startsWith("/repositories")) {
     return "repositories";
   }
@@ -695,10 +678,6 @@ function getSidebarGroups({
         ],
       },
     ];
-  }
-
-  if (activeArea === "issues") {
-    return ISSUE_SIDEBAR;
   }
 
   if (activeArea === "settings") {

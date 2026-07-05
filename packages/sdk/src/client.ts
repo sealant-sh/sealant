@@ -10,12 +10,7 @@
  * Until then the operations are TYPED against the stable surface and reject with
  * `SealantNotImplementedError` so callers can compile and wire against the final shape today.
  */
-import {
-  createSandboxOp,
-  getRunOp,
-  getSandboxOp,
-  listSandboxesOp,
-} from "./effect/operations.js";
+import { createSandboxOp, getRunOp, getSandboxOp, listSandboxesOp } from "./effect/operations.js";
 import { runHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";

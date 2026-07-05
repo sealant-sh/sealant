@@ -1,26 +1,47 @@
 ---
-title: Sealant Docs Content
-slug: /
-status: draft
-owner: engineering
-updated: 2026-04-03
+title: Sealant Documentation
+description:
+  Open-source, self-hosted runtime for agentic development — sandboxes, runs, and replayable
+  execution records.
 ---
 
-This directory contains framework-agnostic Markdown content for the docs site.
+Sealant is an open-source, self-hosted runtime for agentic development. It gives coding harnesses a
+real, disposable development environment to work in — a **sandbox** — and turns every harness
+execution — a **run** — into a durable, replayable **execution record**. You run it on your own
+infrastructure; your code never leaves it.
 
-The intent is to keep documentation authoring moving while the final docs rendering stack is still
-in flux.
+## Start here
 
-## Sections
+- **[Install Sealant](/docs/getting-started/install)** — one command, needs only Docker with Compose
+  v2:
 
-- [packages/index.md](./packages/index.md): package-by-package reference docs
-- [architecture/index.md](./architecture/index.md): cross-package lifecycle and system flow docs
-- [apps/index.md](./apps/index.md): deployable app/service docs
-- [getting-started/index.md](./getting-started/index.md): local setup and first-run guides
-- [changelog/index.md](./changelog/index.md): implementation notes and rollout history
+  ```bash
+  curl -fsSL https://get.sealant.dev | sh
+  ```
 
-## Writing conventions
+- **[Create your first sandbox](/docs/getting-started/first-sandbox)** — sign up in the web app, add
+  an SSH key, build a sandbox around a real repository, and SSH into it.
 
-- Prefer product terms `sandbox` and `issue workflow` in user-facing descriptions.
-- Use `sandbox build job` and `run` only for internal orchestration details.
-- Keep pages focused on boundaries, contracts, and call flows.
+## Learn the system
+
+- **[What is Sealant](/docs/introduction)** — the model, who it's for, and what it deliberately is
+  not.
+- **[How Sealant works](/docs/introduction/how-sealant-works)** — the services a self-hosted install
+  runs and how a sandbox request flows through them.
+- **[What ships today](/docs/introduction/what-ships-today)** — an honest status table of every
+  surface: shipped, preview, or planned.
+
+## Go deeper
+
+- **Guides** — [connect the GitHub App](/docs/guides/github-app),
+  [SSH into sandboxes](/docs/guides/ssh-access),
+  [create sandboxes](/docs/guides/creating-sandboxes),
+  [runs and execution records](/docs/guides/runs-and-execution-records),
+  [upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
+- **Reference** — [environment variables](/docs/reference/environment-variables),
+  [ports and data](/docs/reference/ports-and-data), [the HTTP API](/docs/reference/http-api),
+  [the SDK (preview)](/docs/reference/sdk).
+- **Concepts** — [sandboxes](/docs/concepts/sandboxes),
+  [execution records](/docs/concepts/execution-records), [harnesses](/docs/concepts/harnesses),
+  [the security model](/docs/concepts/security-model).
+- **Contributing** — [work on Sealant itself](/docs/contributing).

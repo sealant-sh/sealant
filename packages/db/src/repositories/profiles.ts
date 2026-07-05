@@ -112,16 +112,22 @@ const profileRepoOperationSchema = Schema.Literals([
   "setActiveProfileRevision",
 ]);
 
-export class ProfileRepoInvariantError extends Schema.TaggedErrorClass<ProfileRepoInvariantError>()("ProfileRepoInvariantError", {
-  operation: profileRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class ProfileRepoInvariantError extends Schema.TaggedErrorClass<ProfileRepoInvariantError>()(
+  "ProfileRepoInvariantError",
+  {
+    operation: profileRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class ProfileRepoUnexpectedError extends Schema.TaggedErrorClass<ProfileRepoUnexpectedError>()("ProfileRepoUnexpectedError", {
-  operation: profileRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class ProfileRepoUnexpectedError extends Schema.TaggedErrorClass<ProfileRepoUnexpectedError>()(
+  "ProfileRepoUnexpectedError",
+  {
+    operation: profileRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const profileRepoErrorSchema = Schema.Union([
   ProfileRepoInvariantError,
@@ -171,7 +177,9 @@ export interface ProfileRepoService {
   ) => Effect.Effect<ProfileRevisionGraph, ProfileRepoError>;
 }
 
-export class ProfileRepo extends Context.Service<ProfileRepo, ProfileRepoService>()("ProfileRepo") {}
+export class ProfileRepo extends Context.Service<ProfileRepo, ProfileRepoService>()(
+  "ProfileRepo",
+) {}
 
 export const ProfileRepoLive = Layer.effect(
   ProfileRepo,

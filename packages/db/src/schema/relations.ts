@@ -33,12 +33,6 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.user.id,
       to: r.repositoryProfileRevisions.createdByUserId,
     }),
-    authoredIssues: r.many.issues({ from: r.user.id, to: r.issues.authorUserId }),
-    assignedIssues: r.many.issues({ from: r.user.id, to: r.issues.assigneeUserId }),
-    authoredPullRequests: r.many.pullRequests({
-      from: r.user.id,
-      to: r.pullRequests.authorUserId,
-    }),
     ownedSandboxAttempts: r.many.sandboxAttempts({
       from: r.user.id,
       to: r.sandboxAttempts.ownerUserId,
@@ -51,18 +45,6 @@ export const relations = defineRelations(schema, (r) => ({
     requestedSandboxes: r.many.sandboxes({
       from: r.user.id,
       to: r.sandboxes.requestedByUserId,
-    }),
-    ownedIssueWorkflows: r.many.issueWorkflows({
-      from: r.user.id,
-      to: r.issueWorkflows.ownerUserId,
-    }),
-    requestedIssueWorkflows: r.many.issueWorkflows({
-      from: r.user.id,
-      to: r.issueWorkflows.requestedByUserId,
-    }),
-    requestedIssueWorkflowExecutions: r.many.issueWorkflowExecutions({
-      from: r.user.id,
-      to: r.issueWorkflowExecutions.requestedByUserId,
     }),
   },
 
@@ -83,20 +65,11 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.repositories.id,
       to: r.repositoryProfiles.repositoryId,
     }),
-    issues: r.many.issues({ from: r.repositories.id, to: r.issues.repositoryId }),
-    pullRequests: r.many.pullRequests({
-      from: r.repositories.id,
-      to: r.pullRequests.repositoryId,
-    }),
     sandboxAttempts: r.many.sandboxAttempts({
       from: r.repositories.id,
       to: r.sandboxAttempts.repositoryId,
     }),
     sandboxes: r.many.sandboxes({ from: r.repositories.id, to: r.sandboxes.repositoryId }),
-    issueWorkflows: r.many.issueWorkflows({
-      from: r.repositories.id,
-      to: r.issueWorkflows.repositoryId,
-    }),
   },
 
   githubAppInstallations: {
@@ -339,45 +312,6 @@ export const relations = defineRelations(schema, (r) => ({
     }),
   },
 
-  issues: {
-    repository: r.one.repositories({ from: r.issues.repositoryId, to: r.repositories.id }),
-    author: r.one.user({ from: r.issues.authorUserId, to: r.user.id }),
-    assignee: r.one.user({ from: r.issues.assigneeUserId, to: r.user.id }),
-    workflows: r.many.issueWorkflows({ from: r.issues.id, to: r.issueWorkflows.issueId }),
-    sandboxAttempts: r.many.sandboxAttempts({ from: r.issues.id, to: r.sandboxAttempts.issueId }),
-    pullRequestLinks: r.many.issuePullRequestLinks({
-      from: r.issues.id,
-      to: r.issuePullRequestLinks.issueId,
-    }),
-    pullRequests: r.many.pullRequests({
-      from: r.issues.id.through(r.issuePullRequestLinks.issueId),
-      to: r.pullRequests.id.through(r.issuePullRequestLinks.pullRequestId),
-    }),
-  },
-
-  pullRequests: {
-    repository: r.one.repositories({ from: r.pullRequests.repositoryId, to: r.repositories.id }),
-    author: r.one.user({ from: r.pullRequests.authorUserId, to: r.user.id }),
-    issueWorkflowExecutionLinks: r.many.issueWorkflowExecutionPullRequestLinks({
-      from: r.pullRequests.id,
-      to: r.issueWorkflowExecutionPullRequestLinks.pullRequestId,
-    }),
-    issueLinks: r.many.issuePullRequestLinks({
-      from: r.pullRequests.id,
-      to: r.issuePullRequestLinks.pullRequestId,
-    }),
-    issueWorkflowExecutions: r.many.issueWorkflowExecutions({
-      from: r.pullRequests.id.through(r.issueWorkflowExecutionPullRequestLinks.pullRequestId),
-      to: r.issueWorkflowExecutions.id.through(
-        r.issueWorkflowExecutionPullRequestLinks.executionId,
-      ),
-    }),
-    issues: r.many.issues({
-      from: r.pullRequests.id.through(r.issuePullRequestLinks.pullRequestId),
-      to: r.issues.id.through(r.issuePullRequestLinks.issueId),
-    }),
-  },
-
   sandboxAttempts: {
     owner: r.one.user({ from: r.sandboxAttempts.ownerUserId, to: r.user.id }),
     requestedByUser: r.one.user({ from: r.sandboxAttempts.requestedByUserId, to: r.user.id }),
@@ -393,7 +327,6 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.sandboxAttempts.profileRevisionId,
       to: r.profileRevisions.id,
     }),
-    issue: r.one.issues({ from: r.sandboxAttempts.issueId, to: r.issues.id }),
     retryOfRun: r.one.sandboxAttempts({
       from: r.sandboxAttempts.retryOfRunId,
       to: r.sandboxAttempts.id,
@@ -422,10 +355,6 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.sandboxAttempts.id,
       to: r.sandboxRuntimeInstances.runId,
     }),
-    issueWorkflowExecution: r.one.issueWorkflowExecutions({
-      from: r.sandboxAttempts.id,
-      to: r.issueWorkflowExecutions.sandboxAttemptId,
-    }),
   },
 
   sandboxes: {
@@ -445,10 +374,6 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.sandboxes.id,
       to: r.sandboxRunLinks.sandboxId,
     }),
-    issueWorkflowExecutions: r.many.issueWorkflowExecutions({
-      from: r.sandboxes.id,
-      to: r.issueWorkflowExecutions.sandboxId,
-    }),
   },
 
   sandboxRunLinks: {
@@ -460,128 +385,6 @@ export const relations = defineRelations(schema, (r) => ({
     run: r.one.sandboxAttempts({
       from: r.sandboxAttemptSnapshots.runId,
       to: r.sandboxAttempts.id,
-    }),
-  },
-
-  issueWorkflows: {
-    issue: r.one.issues({ from: r.issueWorkflows.issueId, to: r.issues.id }),
-    repository: r.one.repositories({
-      from: r.issueWorkflows.repositoryId,
-      to: r.repositories.id,
-    }),
-    owner: r.one.user({ from: r.issueWorkflows.ownerUserId, to: r.user.id }),
-    requestedByUser: r.one.user({ from: r.issueWorkflows.requestedByUserId, to: r.user.id }),
-    executions: r.many.issueWorkflowExecutions({
-      from: r.issueWorkflows.id,
-      to: r.issueWorkflowExecutions.issueWorkflowId,
-    }),
-  },
-
-  issueWorkflowExecutions: {
-    issueWorkflow: r.one.issueWorkflows({
-      from: r.issueWorkflowExecutions.issueWorkflowId,
-      to: r.issueWorkflows.id,
-    }),
-    requestedByUser: r.one.user({
-      from: r.issueWorkflowExecutions.requestedByUserId,
-      to: r.user.id,
-    }),
-    summary: r.one.issueWorkflowExecutionSummaries({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionSummaries.executionId,
-    }),
-    events: r.many.issueWorkflowExecutionEvents({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionEvents.executionId,
-    }),
-    validationResults: r.many.issueWorkflowExecutionValidationResults({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionValidationResults.executionId,
-    }),
-    diffFiles: r.many.issueWorkflowExecutionDiffFiles({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionDiffFiles.executionId,
-    }),
-    artifacts: r.many.issueWorkflowExecutionArtifacts({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionArtifacts.executionId,
-    }),
-    pullRequestLinks: r.many.issueWorkflowExecutionPullRequestLinks({
-      from: r.issueWorkflowExecutions.id,
-      to: r.issueWorkflowExecutionPullRequestLinks.executionId,
-    }),
-    pullRequests: r.many.pullRequests({
-      from: r.issueWorkflowExecutions.id.through(
-        r.issueWorkflowExecutionPullRequestLinks.executionId,
-      ),
-      to: r.pullRequests.id.through(r.issueWorkflowExecutionPullRequestLinks.pullRequestId),
-    }),
-    sandbox: r.one.sandboxes({ from: r.issueWorkflowExecutions.sandboxId, to: r.sandboxes.id }),
-    sandboxAttempt: r.one.sandboxAttempts({
-      from: r.issueWorkflowExecutions.sandboxAttemptId,
-      to: r.sandboxAttempts.id,
-    }),
-  },
-
-  issueWorkflowExecutionArtifacts: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionArtifacts.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-    diffFilesAsPatchArtifact: r.many.issueWorkflowExecutionDiffFiles({
-      from: r.issueWorkflowExecutionArtifacts.id,
-      to: r.issueWorkflowExecutionDiffFiles.patchArtifactId,
-    }),
-  },
-
-  issueWorkflowExecutionEvents: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionEvents.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-  },
-
-  issueWorkflowExecutionValidationResults: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionValidationResults.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-  },
-
-  issueWorkflowExecutionDiffFiles: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionDiffFiles.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-    patchArtifact: r.one.issueWorkflowExecutionArtifacts({
-      from: r.issueWorkflowExecutionDiffFiles.patchArtifactId,
-      to: r.issueWorkflowExecutionArtifacts.id,
-    }),
-  },
-
-  issueWorkflowExecutionSummaries: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionSummaries.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-  },
-
-  issueWorkflowExecutionPullRequestLinks: {
-    execution: r.one.issueWorkflowExecutions({
-      from: r.issueWorkflowExecutionPullRequestLinks.executionId,
-      to: r.issueWorkflowExecutions.id,
-    }),
-    pullRequest: r.one.pullRequests({
-      from: r.issueWorkflowExecutionPullRequestLinks.pullRequestId,
-      to: r.pullRequests.id,
-    }),
-  },
-
-  issuePullRequestLinks: {
-    issue: r.one.issues({ from: r.issuePullRequestLinks.issueId, to: r.issues.id }),
-    pullRequest: r.one.pullRequests({
-      from: r.issuePullRequestLinks.pullRequestId,
-      to: r.pullRequests.id,
     }),
   },
 

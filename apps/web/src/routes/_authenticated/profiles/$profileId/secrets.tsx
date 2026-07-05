@@ -43,9 +43,7 @@ function SecretBindingStatus(props: { readonly value: string }) {
     <span
       className={`flex items-center gap-1.5 text-xs ${isMapped ? "text-success" : "text-warning"}`}
     >
-      <span
-        className={`size-1.5 rounded-full ${isMapped ? "bg-success-dot" : "bg-warning-dot"}`}
-      />
+      <span className={`size-1.5 rounded-full ${isMapped ? "bg-success-dot" : "bg-warning-dot"}`} />
       {props.value}
     </span>
   );

@@ -16,11 +16,19 @@ const entry = (kind: string, ref: Record<string, unknown>): WireTimelineEntry =>
 // Mirrors the real recorded shape: opencode runs, emits output, exits; then two git commands; then a
 // trailing signal-15 exit (the boot keepalive killed by daemon shutdown) that has no processStarted.
 const TIMELINE: readonly WireTimelineEntry[] = [
-  entry("processStarted", { executable: "opencode", args: ["run", "Append a line."], cwd: "/sandbox/repo" }),
+  entry("processStarted", {
+    executable: "opencode",
+    args: ["run", "Append a line."],
+    cwd: "/sandbox/repo",
+  }),
   entry("ioChunk", { stream: 3, byteCount: "300" }),
   entry("ioChunk", { stream: 2, byteCount: "6" }),
   entry("processExited", { exitCode: 0, durationMicros: "9580094" }),
-  entry("processStarted", { executable: "sh", args: ["-lc", "git diff --cached"], cwd: "/sandbox/repo" }),
+  entry("processStarted", {
+    executable: "sh",
+    args: ["-lc", "git diff --cached"],
+    cwd: "/sandbox/repo",
+  }),
   entry("ioChunk", { stream: 2, byteCount: "134" }),
   entry("processExited", { exitCode: 0, durationMicros: "8921" }),
   entry("runtimeStateChanged", { state: 5, reason: "shutdown requested" }),

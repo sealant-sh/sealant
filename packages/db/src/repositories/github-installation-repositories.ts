@@ -12,7 +12,8 @@ import {
 
 // Treat a user-provided search term as a literal substring: escape LIKE metacharacters so a term
 // such as "a_b" or "50%" matches literally instead of being interpreted as a wildcard pattern.
-const escapeLikePattern = (value: string): string => value.replace(/[\\%_]/g, (char) => `\\${char}`);
+const escapeLikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, (char) => `\\${char}`);
 
 export interface UpsertGitHubInstallationRepositoryInput {
   readonly id: string;
@@ -63,16 +64,22 @@ const gitHubInstallationRepositoryCacheRepoOperationSchema = Schema.Literals([
   "upsertInstallationRepository",
 ]);
 
-export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoInvariantError>()("GitHubInstallationRepositoryCacheRepoInvariantError", {
-  operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class GitHubInstallationRepositoryCacheRepoInvariantError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoInvariantError>()(
+  "GitHubInstallationRepositoryCacheRepoInvariantError",
+  {
+    operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoUnexpectedError>()("GitHubInstallationRepositoryCacheRepoUnexpectedError", {
-  operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class GitHubInstallationRepositoryCacheRepoUnexpectedError extends Schema.TaggedErrorClass<GitHubInstallationRepositoryCacheRepoUnexpectedError>()(
+  "GitHubInstallationRepositoryCacheRepoUnexpectedError",
+  {
+    operation: gitHubInstallationRepositoryCacheRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const gitHubInstallationRepositoryCacheRepoErrorSchema = Schema.Union([
   GitHubInstallationRepositoryCacheRepoInvariantError,

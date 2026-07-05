@@ -17,7 +17,9 @@ const fakeRepologyClient = (overrides: Partial<RepologyClient> = {}): RepologyCl
   ...overrides,
 });
 
-const fakeCacheStore = (overrides: Partial<PackageResolutionCacheStore> = {}): PackageResolutionCacheStore => ({
+const fakeCacheStore = (
+  overrides: Partial<PackageResolutionCacheStore> = {},
+): PackageResolutionCacheStore => ({
   getByQuery: vi.fn(() => Effect.succeed(null)),
   setByQuery: vi.fn(() => Effect.void),
   ...overrides,

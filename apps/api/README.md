@@ -188,15 +188,12 @@ Schema validators over time.
 
 ## Proposed API Roadmap
 
-This roadmap aligns the API with the two primary product domains:
-
-- sandboxes
-- issue workflows
+This roadmap aligns the API with the primary product nouns: sandboxes and runs.
 
 ### Guiding rules
 
-- Product-facing endpoints should be modeled around `sandboxes` and `issue-workflows`.
-- Internal orchestration terms (`run`, `job`) should stay internal unless explicitly needed for
+- Product-facing endpoints should be modeled around `sandboxes` and `runs`.
+- Internal orchestration terms (`job`, `attempt`) should stay internal unless explicitly needed for
   debugging.
 - Command endpoints should be asynchronous (`202` + `Location`) when work is delegated to workers.
 - Query endpoints should return screen-shaped data so the UI does not stitch low-level records.
@@ -215,14 +212,7 @@ This roadmap aligns the API with the two primary product domains:
 - Add sandbox template APIs (repository-scoped templates first) for reusable launch presets.
 - Add a launch-plan endpoint that returns resolved/validated sandbox input before enqueueing work.
 
-### Phase 3: Issue workflow API surface
+### Phase 3: Contract hardening
 
-- Introduce `issue-workflows` as a first-class product resource.
-- Provide list/detail/action endpoints for workflow lifecycle, retries, and cancellation.
-- Expose issue-to-PR lineage through workflow-oriented read models.
-
-### Phase 4: Contract hardening
-
-- Remove product-facing dependency on `runs` naming in web-facing API contracts.
 - Keep internal orchestration routes for diagnostics with clear internal labeling.
 - Add pagination/cursor contracts and consistent machine-readable error codes across all domains.

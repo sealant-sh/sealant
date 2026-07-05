@@ -18,7 +18,11 @@ describe("toSealantError", () => {
   });
 
   it("reads status from a nested HTTP response", () => {
-    const mapped = toSealantError({ _tag: "RequestError", message: "bad", response: { status: 400 } });
+    const mapped = toSealantError({
+      _tag: "RequestError",
+      message: "bad",
+      response: { status: 400 },
+    });
     expect((mapped as SealantApiError).status).toBe(400);
   });
 

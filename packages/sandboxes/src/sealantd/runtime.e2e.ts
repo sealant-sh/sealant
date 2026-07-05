@@ -18,87 +18,90 @@ import { SealantRuntime, SealantRuntimeDockerExecLive, type SealantTarget } from
 
 const imageAvailable = await isImagePresent();
 
-describe.skipIf(!imageAvailable)("SealantRuntime service over DockerExecTransport (real image)", () => {
-  let booted: BootedSealantd | undefined;
-  let target: SealantTarget;
+describe.skipIf(!imageAvailable)(
+  "SealantRuntime service over DockerExecTransport (real image)",
+  () => {
+    let booted: BootedSealantd | undefined;
+    let target: SealantTarget;
 
-  beforeAll(async () => {
-    booted = await bootSealantdContainer();
-    target = {
-      kind: "docker-exec",
-      containerId: booted.containerId,
-      socketPath: booted.socketPath,
-    };
-  }, 90_000);
+    beforeAll(async () => {
+      booted = await bootSealantdContainer();
+      target = {
+        kind: "docker-exec",
+        containerId: booted.containerId,
+        socketPath: booted.socketPath,
+      };
+    }, 90_000);
 
-  afterAll(async () => {
-    await booted?.teardown();
-  });
+    afterAll(async () => {
+      await booted?.teardown();
+    });
 
-  it("connect -> health reports a HEALTHY control channel through the service", async () => {
-    const health = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const runtime = yield* SealantRuntime;
-          const session = yield* runtime.connect(target);
-          return yield* session.health;
-        }),
-      ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
-    );
+    it("connect -> health reports a HEALTHY control channel through the service", async () => {
+      const health = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(target);
+            return yield* session.health;
+          }),
+        ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
 
-    expect(health.state).toBe(RuntimeState.HEALTHY);
-    expect(health.runtimeId).toMatch(/^rt_/);
-  }, 30_000);
+      expect(health.state).toBe(RuntimeState.HEALTHY);
+      expect(health.runtimeId).toMatch(/^rt_/);
+    }, 30_000);
 
-  it("connect -> exec -> events Stream yields processStarted + STDOUT 'hi\\n' + processExited(0)", async () => {
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const runtime = yield* SealantRuntime;
-          const session = yield* runtime.connect(target);
+    it("connect -> exec -> events Stream yields processStarted + STDOUT 'hi\\n' + processExited(0)", async () => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(target);
 
-          const accepted = yield* session.exec({
-            executable: "/bin/echo",
-            args: ["hi"],
-            stdin: false,
-          });
+            const accepted = yield* session.exec({
+              executable: "/bin/echo",
+              args: ["hi"],
+              stdin: false,
+            });
 
-          const events = yield* session.events.pipe(
-            Stream.filter(
-              (event: EventEnvelope) =>
-                event.processId === undefined || event.processId === accepted.processId,
-            ),
-            Stream.takeUntil((event: EventEnvelope) => event.payload.case === "processExited"),
-            Stream.runCollect,
-          );
+            const events = yield* session.events.pipe(
+              Stream.filter(
+                (event: EventEnvelope) =>
+                  event.processId === undefined || event.processId === accepted.processId,
+              ),
+              Stream.takeUntil((event: EventEnvelope) => event.payload.case === "processExited"),
+              Stream.runCollect,
+            );
 
-          return { accepted, events };
-        }),
-      ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
-    );
+            return { accepted, events };
+          }),
+        ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
 
-    expect(result.accepted.processId).toMatch(/^proc_/);
+      expect(result.accepted.processId).toMatch(/^proc_/);
 
-    let sawProcessStarted = false;
-    let stdout = "";
-    let exitCode: number | undefined;
-    for (const event of result.events) {
-      const payload = event.payload;
-      if (payload.case === "processStarted") {
-        sawProcessStarted = true;
-      } else if (
-        payload.case === "ioChunk" &&
-        payload.value.stream === StreamKind.STDOUT &&
-        payload.value.content !== undefined
-      ) {
-        stdout += Buffer.from(payload.value.content).toString("utf8");
-      } else if (payload.case === "processExited") {
-        exitCode = payload.value.exitCode;
+      let sawProcessStarted = false;
+      let stdout = "";
+      let exitCode: number | undefined;
+      for (const event of result.events) {
+        const payload = event.payload;
+        if (payload.case === "processStarted") {
+          sawProcessStarted = true;
+        } else if (
+          payload.case === "ioChunk" &&
+          payload.value.stream === StreamKind.STDOUT &&
+          payload.value.content !== undefined
+        ) {
+          stdout += Buffer.from(payload.value.content).toString("utf8");
+        } else if (payload.case === "processExited") {
+          exitCode = payload.value.exitCode;
+        }
       }
-    }
 
-    expect(sawProcessStarted).toBe(true);
-    expect(stdout).toBe("hi\n");
-    expect(exitCode).toBe(0);
-  }, 30_000);
-});
+      expect(sawProcessStarted).toBe(true);
+      expect(stdout).toBe("hi\n");
+      expect(exitCode).toBe(0);
+    }, 30_000);
+  },
+);

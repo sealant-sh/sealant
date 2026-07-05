@@ -33,7 +33,9 @@ export const createSandboxOp = (payload: CreateSandboxRequest, idempotencyKey?: 
     }),
   );
 
-export const getSandboxOp = (sandboxId: string): Effect.Effect<SandboxDetails, unknown, SealantApiClient> =>
+export const getSandboxOp = (
+  sandboxId: string,
+): Effect.Effect<SandboxDetails, unknown, SealantApiClient> =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.sandboxes.getSandbox({ params: { sandboxId } }),
   );
@@ -43,7 +45,9 @@ export const listSandboxesOp = (query: ListSandboxesQuery) =>
 
 // ---- runs ----
 
-export const createRunOp = (payload: CreateRunRequest): Effect.Effect<WireRun, unknown, SealantApiClient> =>
+export const createRunOp = (
+  payload: CreateRunRequest,
+): Effect.Effect<WireRun, unknown, SealantApiClient> =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.createRun({ payload }));
 
 export const getRunOp = (runId: string): Effect.Effect<WireRun, unknown, SealantApiClient> =>
@@ -56,7 +60,9 @@ export const updateRunOp = (
   runId: string,
   payload: UpdateRunRequest,
 ): Effect.Effect<WireRun, unknown, SealantApiClient> =>
-  Effect.flatMap(SealantApiClient, (client) => client.runs.updateRun({ params: { runId }, payload }));
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.runs.updateRun({ params: { runId }, payload }),
+  );
 
 export const getRunTimelineOp = (
   runId: string,
@@ -74,7 +80,9 @@ export const getRunScrollbackOp = (
     client.runs.getRunScrollback({ params: { runId }, query }),
   );
 
-export const getRunLossOp = (runId: string): Effect.Effect<RunLossReport, unknown, SealantApiClient> =>
+export const getRunLossOp = (
+  runId: string,
+): Effect.Effect<RunLossReport, unknown, SealantApiClient> =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunLoss({ params: { runId } }));
 
 export const getRunChangesOp = (

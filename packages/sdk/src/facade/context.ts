@@ -8,7 +8,10 @@ export interface SdkContext {
 }
 
 /** An AsyncIterable whose iteration rejects — for surface that is typed now but not yet implemented. */
-export const notImplementedAsyncIterable = <A>(operation: string, error: Error): AsyncIterable<A> => ({
+export const notImplementedAsyncIterable = <A>(
+  operation: string,
+  error: Error,
+): AsyncIterable<A> => ({
   [Symbol.asyncIterator]() {
     return {
       next: () => Promise.reject(error),

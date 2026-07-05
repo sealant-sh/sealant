@@ -1,17 +1,16 @@
 import { cn } from "@sealant/ui/lib/utils";
 import { Link, linkOptions } from "@tanstack/react-router";
-import { ScrollText, Layers, BarChart2, Settings2 } from "lucide-react";
+import { ScrollText, Layers, Settings2 } from "lucide-react";
 
 interface NavItem {
   label: string;
-  to: "/sandboxes" | "/registry" | "/issues" | "/profiles";
+  to: "/sandboxes" | "/registry" | "/profiles";
   icon: React.ComponentType<{ className?: string }>;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { label: "Logs", to: "/sandboxes", icon: ScrollText },
   { label: "Registry", to: "/registry", icon: Layers },
-  { label: "Stats", to: "/issues", icon: BarChart2 },
   { label: "Config", to: "/profiles", icon: Settings2 },
 ];
 

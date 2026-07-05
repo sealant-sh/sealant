@@ -85,16 +85,22 @@ const sandboxBuildJobRepoOperationSchema = Schema.Literals([
   "markJobSucceeded",
 ]);
 
-export class SandboxBuildJobRepoInvariantError extends Schema.TaggedErrorClass<SandboxBuildJobRepoInvariantError>()("SandboxBuildJobRepoInvariantError", {
-  operation: sandboxBuildJobRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class SandboxBuildJobRepoInvariantError extends Schema.TaggedErrorClass<SandboxBuildJobRepoInvariantError>()(
+  "SandboxBuildJobRepoInvariantError",
+  {
+    operation: sandboxBuildJobRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
-export class SandboxBuildJobRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxBuildJobRepoUnexpectedError>()("SandboxBuildJobRepoUnexpectedError", {
-  operation: sandboxBuildJobRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class SandboxBuildJobRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxBuildJobRepoUnexpectedError>()(
+  "SandboxBuildJobRepoUnexpectedError",
+  {
+    operation: sandboxBuildJobRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const sandboxBuildJobRepoErrorSchema = Schema.Union([
   SandboxBuildJobRepoInvariantError,

@@ -24,12 +24,6 @@ export type SourceProvider = (typeof sourceProviderValues)[number];
 export const profileStatusValues = ["active", "archived"] as const;
 export type ProfileStatus = (typeof profileStatusValues)[number];
 
-export const issueStateValues = ["open", "closed"] as const;
-export type IssueState = (typeof issueStateValues)[number];
-
-export const pullRequestStateValues = ["draft", "open", "merged", "closed"] as const;
-export type PullRequestState = (typeof pullRequestStateValues)[number];
-
 export const sandboxAttemptStatusValues = [
   "queued",
   "running",
@@ -39,13 +33,7 @@ export const sandboxAttemptStatusValues = [
 ] as const;
 export type SandboxAttemptStatus = (typeof sandboxAttemptStatusValues)[number];
 
-export const sandboxAttemptTriggerTypeValues = [
-  "manual",
-  "issue",
-  "schedule",
-  "api",
-  "retry",
-] as const;
+export const sandboxAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
 export type SandboxAttemptTriggerType = (typeof sandboxAttemptTriggerTypeValues)[number];
 
 export const sandboxStatusValues = ["queued", "running", "ready", "failed", "stopped"] as const;
@@ -69,78 +57,6 @@ export type ConnectedAccountProvider = (typeof connectedAccountProviderValues)[n
 
 export const connectedAccountStatusValues = ["active", "invalid", "archived"] as const;
 export type ConnectedAccountStatus = (typeof connectedAccountStatusValues)[number];
-
-export const issueWorkflowStatusValues = ["active", "completed", "failed", "cancelled"] as const;
-export type IssueWorkflowStatus = (typeof issueWorkflowStatusValues)[number];
-
-export const issueWorkflowExecutionStatusValues = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-] as const;
-export type IssueWorkflowExecutionStatus = (typeof issueWorkflowExecutionStatusValues)[number];
-
-export const issueWorkflowExecutionTriggerTypeValues = ["manual", "api", "retry"] as const;
-export type IssueWorkflowExecutionTriggerType =
-  (typeof issueWorkflowExecutionTriggerTypeValues)[number];
-
-export const issueWorkflowExecutionEventLevelValues = ["debug", "info", "warn", "error"] as const;
-export type IssueWorkflowExecutionEventLevel =
-  (typeof issueWorkflowExecutionEventLevelValues)[number];
-
-export const issueWorkflowExecutionValidationStatusValues = [
-  "pass",
-  "warn",
-  "fail",
-  "skip",
-] as const;
-export type IssueWorkflowExecutionValidationStatus =
-  (typeof issueWorkflowExecutionValidationStatusValues)[number];
-
-export const issueWorkflowExecutionDiffChangeTypeValues = [
-  "added",
-  "modified",
-  "deleted",
-  "renamed",
-] as const;
-export type IssueWorkflowExecutionDiffChangeType =
-  (typeof issueWorkflowExecutionDiffChangeTypeValues)[number];
-
-export const issueWorkflowExecutionArtifactKindValues = [
-  "log",
-  "trace",
-  "diff",
-  "summary",
-  "validation-report",
-  "compiled-spec",
-  "other",
-] as const;
-export type IssueWorkflowExecutionArtifactKind =
-  (typeof issueWorkflowExecutionArtifactKindValues)[number];
-
-export const issueWorkflowExecutionArtifactStorageBackendValues = [
-  "inline",
-  "database",
-  "s3",
-  "gcs",
-  "azure-blob",
-  "filesystem",
-] as const;
-export type IssueWorkflowExecutionArtifactStorageBackend =
-  (typeof issueWorkflowExecutionArtifactStorageBackendValues)[number];
-
-export const issueWorkflowExecutionPullRequestLinkRelationValues = [
-  "created",
-  "updated",
-  "referenced",
-] as const;
-export type IssueWorkflowExecutionPullRequestLinkRelation =
-  (typeof issueWorkflowExecutionPullRequestLinkRelationValues)[number];
-
-export const issuePullRequestLinkRelationValues = ["fixes", "relates_to"] as const;
-export type IssuePullRequestLinkRelation = (typeof issuePullRequestLinkRelationValues)[number];
 
 export const githubInstallationAccountTypeValues = ["organization", "user"] as const;
 export type GitHubInstallationAccountType = (typeof githubInstallationAccountTypeValues)[number];
@@ -721,85 +637,6 @@ export const repositoryProfileProfileLinks = pgTable(
   ],
 );
 
-export const issues = pgTable(
-  "issues",
-  {
-    id: text().primaryKey(),
-    repositoryId: text("repository_id")
-      .notNull()
-      .references(() => repositories.id, { onDelete: "cascade" }),
-    provider: text({ enum: sourceProviderValues }).notNull().default("github"),
-    externalId: text("external_id"),
-    number: integer().notNull(),
-    title: text().notNull(),
-    state: text({ enum: issueStateValues }).notNull().default("open"),
-    url: text(),
-    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
-    assigneeUserId: text("assignee_user_id").references(() => user.id, { onDelete: "set null" }),
-    openedAt: timestamp("opened_at", { mode: "date", withTimezone: true }),
-    closedAt: timestamp("closed_at", { mode: "date", withTimezone: true }),
-    syncedAt: timestamp("synced_at", { mode: "date", withTimezone: true }),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date())
-      .$onUpdate(() => new Date()),
-  },
-  (table) => [
-    uniqueIndex("issues_provider_repository_id_number_idx").on(
-      table.provider,
-      table.repositoryId,
-      table.number,
-    ),
-    uniqueIndex("issues_provider_external_id_idx").on(table.provider, table.externalId),
-    index("issues_repository_id_state_idx").on(table.repositoryId, table.state),
-    index("issues_assignee_user_id_state_idx").on(table.assigneeUserId, table.state),
-  ],
-);
-
-export const pullRequests = pgTable(
-  "pull_requests",
-  {
-    id: text().primaryKey(),
-    repositoryId: text("repository_id")
-      .notNull()
-      .references(() => repositories.id, { onDelete: "cascade" }),
-    provider: text({ enum: sourceProviderValues }).notNull().default("github"),
-    externalId: text("external_id"),
-    number: integer().notNull(),
-    title: text().notNull(),
-    state: text({ enum: pullRequestStateValues }).notNull().default("draft"),
-    headBranch: text("head_branch").notNull(),
-    baseBranch: text("base_branch").notNull(),
-    headSha: text("head_sha"),
-    url: text(),
-    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
-    openedAt: timestamp("opened_at", { mode: "date", withTimezone: true }),
-    mergedAt: timestamp("merged_at", { mode: "date", withTimezone: true }),
-    closedAt: timestamp("closed_at", { mode: "date", withTimezone: true }),
-    syncedAt: timestamp("synced_at", { mode: "date", withTimezone: true }),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date())
-      .$onUpdate(() => new Date()),
-  },
-  (table) => [
-    uniqueIndex("pull_requests_provider_repository_id_number_idx").on(
-      table.provider,
-      table.repositoryId,
-      table.number,
-    ),
-    uniqueIndex("pull_requests_provider_external_id_idx").on(table.provider, table.externalId),
-    index("pull_requests_repository_id_state_idx").on(table.repositoryId, table.state),
-    index("pull_requests_head_sha_idx").on(table.headSha),
-  ],
-);
-
 export const sandboxAttempts = pgTable(
   "sandbox_attempts",
   {
@@ -815,7 +652,6 @@ export const sandboxAttempts = pgTable(
     profileRevisionId: text("profile_revision_id").references(() => profileRevisions.id, {
       onDelete: "set null",
     }),
-    issueId: text("issue_id").references(() => issues.id, { onDelete: "set null" }),
     status: text({ enum: sandboxAttemptStatusValues }).notNull().default("queued"),
     triggerType: text("trigger_type", { enum: sandboxAttemptTriggerTypeValues })
       .notNull()
@@ -855,7 +691,6 @@ export const sandboxAttempts = pgTable(
       table.repositoryProfileRevisionId,
       table.createdAt,
     ),
-    index("sandbox_attempts_issue_id_created_at_idx").on(table.issueId, table.createdAt),
     index("sandbox_attempts_status_started_at_idx").on(table.status, table.startedAt),
   ],
 );
@@ -1012,286 +847,6 @@ export const packageResolutionCacheEntries = pgTable(
   ],
 );
 
-export const issueWorkflows = pgTable(
-  "issue_workflows",
-  {
-    id: text().primaryKey(),
-    issueId: text("issue_id")
-      .notNull()
-      .references(() => issues.id, { onDelete: "cascade" }),
-    repositoryId: text("repository_id")
-      .notNull()
-      .references(() => repositories.id, { onDelete: "cascade" }),
-    ownerUserId: text("owner_user_id").references(() => user.id, { onDelete: "set null" }),
-    status: text({ enum: issueWorkflowStatusValues }).notNull().default("active"),
-    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date())
-      .$onUpdate(() => new Date()),
-    archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
-  },
-  (table) => [
-    index("issue_workflows_issue_id_status_idx").on(table.issueId, table.status),
-    index("issue_workflows_repository_id_status_idx").on(table.repositoryId, table.status),
-    index("issue_workflows_owner_user_id_status_idx").on(table.ownerUserId, table.status),
-  ],
-);
-
-export const issueWorkflowExecutions = pgTable(
-  "issue_workflow_executions",
-  {
-    id: text().primaryKey(),
-    issueWorkflowId: text("issue_workflow_id")
-      .notNull()
-      .references(() => issueWorkflows.id, { onDelete: "cascade" }),
-    sandboxId: text("sandbox_id").references(() => sandboxes.id, { onDelete: "set null" }),
-    sandboxAttemptId: text("sandbox_attempt_id").references(() => sandboxAttempts.id, {
-      onDelete: "set null",
-    }),
-    status: text({ enum: issueWorkflowExecutionStatusValues }).notNull().default("queued"),
-    triggerType: text("trigger_type", { enum: issueWorkflowExecutionTriggerTypeValues })
-      .notNull()
-      .default("manual"),
-    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
-    cancelReason: text("cancel_reason"),
-    queuedAt: timestamp("queued_at", { mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
-    finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
-    durationMs: integer("duration_ms"),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date())
-      .$onUpdate(() => new Date()),
-  },
-  (table) => [
-    index("issue_workflow_executions_workflow_id_created_at_idx").on(
-      table.issueWorkflowId,
-      table.createdAt,
-    ),
-    index("issue_workflow_executions_status_started_at_idx").on(table.status, table.startedAt),
-    index("issue_workflow_executions_sandbox_id_created_at_idx").on(
-      table.sandboxId,
-      table.createdAt,
-    ),
-    uniqueIndex("issue_workflow_executions_sandbox_attempt_id_idx").on(table.sandboxAttemptId),
-  ],
-);
-
-export const issueWorkflowExecutionArtifacts = pgTable(
-  "issue_workflow_execution_artifacts",
-  {
-    id: text().primaryKey(),
-    executionId: text("execution_id")
-      .notNull()
-      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-    kind: text({ enum: issueWorkflowExecutionArtifactKindValues }).notNull().default("other"),
-    storageBackend: text("storage_backend", {
-      enum: issueWorkflowExecutionArtifactStorageBackendValues,
-    })
-      .notNull()
-      .default("inline"),
-    storageKey: text("storage_key"),
-    contentType: text("content_type"),
-    byteSize: integer("byte_size"),
-    checksum: text(),
-    inlineJson: jsonb("inline_json").$type<Record<string, unknown>>(),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    index("issue_workflow_execution_artifacts_execution_id_kind_idx").on(
-      table.executionId,
-      table.kind,
-    ),
-    index("iwf_exec_artifacts_storage_backend_storage_key_idx").on(
-      table.storageBackend,
-      table.storageKey,
-    ),
-  ],
-);
-
-export const issueWorkflowExecutionEvents = pgTable(
-  "issue_workflow_execution_events",
-  {
-    id: text().primaryKey(),
-    executionId: text("execution_id")
-      .notNull()
-      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-    sequence: integer().notNull(),
-    phase: text().notNull(),
-    level: text({ enum: issueWorkflowExecutionEventLevelValues }).notNull().default("info"),
-    eventType: text("event_type").notNull(),
-    message: text().notNull(),
-    payload: jsonb().$type<Record<string, unknown>>(),
-    occurredAt: timestamp("occurred_at", { mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    uniqueIndex("issue_workflow_execution_events_execution_id_sequence_idx").on(
-      table.executionId,
-      table.sequence,
-    ),
-    index("issue_workflow_execution_events_execution_id_occurred_at_idx").on(
-      table.executionId,
-      table.occurredAt,
-    ),
-    index("issue_workflow_execution_events_execution_id_level_idx").on(
-      table.executionId,
-      table.level,
-    ),
-  ],
-);
-
-export const issueWorkflowExecutionValidationResults = pgTable(
-  "issue_workflow_execution_validation_results",
-  {
-    id: text().primaryKey(),
-    executionId: text("execution_id")
-      .notNull()
-      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-    checkKey: text("check_key").notNull(),
-    status: text({ enum: issueWorkflowExecutionValidationStatusValues }).notNull(),
-    durationMs: integer("duration_ms"),
-    message: text(),
-    details: jsonb().$type<Record<string, unknown>>(),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    uniqueIndex("iwf_exec_validation_results_execution_id_check_key_idx").on(
-      table.executionId,
-      table.checkKey,
-    ),
-    index("iwf_exec_validation_results_execution_id_status_idx").on(
-      table.executionId,
-      table.status,
-    ),
-  ],
-);
-
-export const issueWorkflowExecutionDiffFiles = pgTable(
-  "issue_workflow_execution_diff_files",
-  {
-    id: text().primaryKey(),
-    executionId: text("execution_id")
-      .notNull()
-      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-    changeType: text("change_type", { enum: issueWorkflowExecutionDiffChangeTypeValues }).notNull(),
-    path: text().notNull(),
-    oldPath: text("old_path"),
-    additions: integer().notNull().default(0),
-    deletions: integer().notNull().default(0),
-    isBinary: boolean("is_binary").notNull().default(false),
-    patchArtifactId: text("patch_artifact_id").references(
-      () => issueWorkflowExecutionArtifacts.id,
-      {
-        onDelete: "set null",
-      },
-    ),
-    createdAt: timestamp({ mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    index("issue_workflow_execution_diff_files_execution_id_path_idx").on(
-      table.executionId,
-      table.path,
-    ),
-    index("iwf_exec_diff_files_execution_id_change_type_idx").on(
-      table.executionId,
-      table.changeType,
-    ),
-  ],
-);
-
-export const issueWorkflowExecutionSummaries = pgTable("issue_workflow_execution_summaries", {
-  executionId: text("execution_id")
-    .primaryKey()
-    .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-  objective: text(),
-  linkedIssueRef: text("linked_issue_ref"),
-  filesChanged: integer("files_changed").notNull().default(0),
-  additions: integer().notNull().default(0),
-  deletions: integer().notNull().default(0),
-  assumptions: jsonb()
-    .$type<string[]>()
-    .notNull()
-    .$defaultFn(() => []),
-  warnings: jsonb()
-    .$type<string[]>()
-    .notNull()
-    .$defaultFn(() => []),
-  summaryMarkdown: text("summary_markdown"),
-  generatedAt: timestamp("generated_at", { mode: "date", withTimezone: true })
-    .notNull()
-    .$defaultFn(() => new Date()),
-  updatedAt: timestamp({ mode: "date", withTimezone: true })
-    .notNull()
-    .$defaultFn(() => new Date())
-    .$onUpdate(() => new Date()),
-});
-
-export const issueWorkflowExecutionPullRequestLinks = pgTable(
-  "issue_workflow_execution_pull_request_links",
-  {
-    executionId: text("execution_id")
-      .notNull()
-      .references(() => issueWorkflowExecutions.id, { onDelete: "cascade" }),
-    pullRequestId: text("pull_request_id")
-      .notNull()
-      .references(() => pullRequests.id, { onDelete: "cascade" }),
-    relation: text({ enum: issueWorkflowExecutionPullRequestLinkRelationValues })
-      .notNull()
-      .default("created"),
-    linkedAt: timestamp("linked_at", { mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    primaryKey({ columns: [table.executionId, table.pullRequestId] }),
-    index("iwf_exec_pr_links_pull_request_id_relation_idx").on(table.pullRequestId, table.relation),
-  ],
-);
-
-export const issuePullRequestLinks = pgTable(
-  "issue_pull_request_links",
-  {
-    issueId: text("issue_id")
-      .notNull()
-      .references(() => issues.id, { onDelete: "cascade" }),
-    pullRequestId: text("pull_request_id")
-      .notNull()
-      .references(() => pullRequests.id, { onDelete: "cascade" }),
-    relation: text({ enum: issuePullRequestLinkRelationValues }).notNull().default("fixes"),
-    linkedAt: timestamp("linked_at", { mode: "date", withTimezone: true })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  (table) => [
-    primaryKey({ columns: [table.issueId, table.pullRequestId] }),
-    index("issue_pull_request_links_pull_request_id_relation_idx").on(
-      table.pullRequestId,
-      table.relation,
-    ),
-  ],
-);
-
 export type Repository = typeof repositories.$inferSelect;
 export type NewRepository = typeof repositories.$inferInsert;
 
@@ -1349,12 +904,6 @@ export type NewRepositoryProfileRevision = typeof repositoryProfileRevisions.$in
 export type RepositoryProfileProfileLink = typeof repositoryProfileProfileLinks.$inferSelect;
 export type NewRepositoryProfileProfileLink = typeof repositoryProfileProfileLinks.$inferInsert;
 
-export type Issue = typeof issues.$inferSelect;
-export type NewIssue = typeof issues.$inferInsert;
-
-export type PullRequest = typeof pullRequests.$inferSelect;
-export type NewPullRequest = typeof pullRequests.$inferInsert;
-
 export type SandboxAttempt = typeof sandboxAttempts.$inferSelect;
 export type NewSandboxAttempt = typeof sandboxAttempts.$inferInsert;
 
@@ -1374,34 +923,3 @@ export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferIns
 
 export type PackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferSelect;
 export type NewPackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferInsert;
-
-export type IssueWorkflow = typeof issueWorkflows.$inferSelect;
-export type NewIssueWorkflow = typeof issueWorkflows.$inferInsert;
-
-export type IssueWorkflowExecution = typeof issueWorkflowExecutions.$inferSelect;
-export type NewIssueWorkflowExecution = typeof issueWorkflowExecutions.$inferInsert;
-
-export type IssueWorkflowExecutionArtifact = typeof issueWorkflowExecutionArtifacts.$inferSelect;
-export type NewIssueWorkflowExecutionArtifact = typeof issueWorkflowExecutionArtifacts.$inferInsert;
-
-export type IssueWorkflowExecutionEvent = typeof issueWorkflowExecutionEvents.$inferSelect;
-export type NewIssueWorkflowExecutionEvent = typeof issueWorkflowExecutionEvents.$inferInsert;
-
-export type IssueWorkflowExecutionValidationResult =
-  typeof issueWorkflowExecutionValidationResults.$inferSelect;
-export type NewIssueWorkflowExecutionValidationResult =
-  typeof issueWorkflowExecutionValidationResults.$inferInsert;
-
-export type IssueWorkflowExecutionDiffFile = typeof issueWorkflowExecutionDiffFiles.$inferSelect;
-export type NewIssueWorkflowExecutionDiffFile = typeof issueWorkflowExecutionDiffFiles.$inferInsert;
-
-export type IssueWorkflowExecutionSummary = typeof issueWorkflowExecutionSummaries.$inferSelect;
-export type NewIssueWorkflowExecutionSummary = typeof issueWorkflowExecutionSummaries.$inferInsert;
-
-export type IssueWorkflowExecutionPullRequestLink =
-  typeof issueWorkflowExecutionPullRequestLinks.$inferSelect;
-export type NewIssueWorkflowExecutionPullRequestLink =
-  typeof issueWorkflowExecutionPullRequestLinks.$inferInsert;
-
-export type IssuePullRequestLink = typeof issuePullRequestLinks.$inferSelect;
-export type NewIssuePullRequestLink = typeof issuePullRequestLinks.$inferInsert;

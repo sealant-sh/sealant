@@ -222,8 +222,8 @@ function SshKeysSettingsPage() {
                 only routes you to sandboxes <em>you own</em>.
               </p>
               <p>
-                Keys take effect immediately on registration and stop working immediately on
-                removal — no restarts involved.
+                Keys take effect immediately on registration and stop working immediately on removal
+                — no restarts involved.
               </p>
               <div className="rounded-xl border border-rule-faint bg-background px-4 py-4">
                 <p className="ev-eyebrow">Connect</p>

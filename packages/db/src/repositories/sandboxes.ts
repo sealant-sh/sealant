@@ -70,18 +70,24 @@ const sandboxRepoOperationSchema = Schema.Literals([
 
 // Invariant errors represent expected domain/consistency violations
 // (for example, an insert/update path that should return a row but did not).
-export class SandboxRepoInvariantError extends Schema.TaggedErrorClass<SandboxRepoInvariantError>()("SandboxRepoInvariantError", {
-  operation: sandboxRepoOperationSchema,
-  message: Schema.String,
-}) {}
+export class SandboxRepoInvariantError extends Schema.TaggedErrorClass<SandboxRepoInvariantError>()(
+  "SandboxRepoInvariantError",
+  {
+    operation: sandboxRepoOperationSchema,
+    message: Schema.String,
+  },
+) {}
 
 // Unexpected errors wrap unknown defects from infra/driver boundaries
 // so callers can still pattern-match on a typed repo error channel.
-export class SandboxRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRepoUnexpectedError>()("SandboxRepoUnexpectedError", {
-  operation: sandboxRepoOperationSchema,
-  message: Schema.String,
-  cause: Schema.Defect(),
-}) {}
+export class SandboxRepoUnexpectedError extends Schema.TaggedErrorClass<SandboxRepoUnexpectedError>()(
+  "SandboxRepoUnexpectedError",
+  {
+    operation: sandboxRepoOperationSchema,
+    message: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {}
 
 export const sandboxRepoErrorSchema = Schema.Union([
   SandboxRepoInvariantError,
@@ -149,7 +155,9 @@ export interface SandboxRepoService {
     input: SetSandboxStatusInput,
   ) => Effect.Effect<Sandbox | null, SandboxRepoError>;
 }
-export class SandboxRepo extends Context.Service<SandboxRepo, SandboxRepoService>()("SandboxRepo") {}
+export class SandboxRepo extends Context.Service<SandboxRepo, SandboxRepoService>()(
+  "SandboxRepo",
+) {}
 
 export const SandboxRepoLive = Layer.effect(
   SandboxRepo,

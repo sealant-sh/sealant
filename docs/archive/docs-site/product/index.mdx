@@ -1,0 +1,325 @@
+---
+title: Product overview
+description:
+  Sealant is an open-source, self-hosted runtime that gives AI agents a real place to work and turns
+  every run into a replayable execution record.
+---
+
+import { Card, Cards } from "fumadocs-ui/components/card";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Sealant is an open-source, self-hosted runtime that gives AI agents a real development environment
+to work in — and turns everything that happens into a trustworthy, replayable record. The agent
+decides _what_ to do. Sealant supplies _where_ the work happens and _the evidence_ of how it went.
+
+<Callout type="info">
+  Sealant has exactly two primary nouns. A **sandbox** is the live, disposable environment where a
+  harness works. A **run** is the durable execution record you keep. The sandbox is where the work
+  happens; the run is what you get back.
+</Callout>
+
+## Why it exists
+
+The agent ecosystem has exploded with frameworks that decide _what_ to do — planners, model loops,
+coding harnesses. What's missing is the layer underneath: somewhere real for that work to happen,
+and a way to know what actually happened.
+
+Today, developers building with agents improvise this themselves:
+
+- They `docker run` a container and hope it's isolated enough.
+- They scrape a wall of terminal text to figure out what the agent did.
+- They have no clean before/after of what changed, what ran, or what the agent reached out to.
+- When it breaks — a missing dependency, an occupied port, a hung process — they can't step in.
+- They rebuild this plumbing for every agent, every model, every project.
+
+Containers give you isolation. They don't give you the developer-work model around that isolation:
+harness execution, interactive human access, process supervision, file diffs, network observation,
+artifacts, and a structured record of the whole thing. That's the gap Sealant fills.
+
+## Who it's for
+
+<Cards>
+  <Card title="Builders of AI coding products">
+    Teams and individuals building their own coding agents or dev-tools who need an execution
+    runtime they fully control and can run on their own infra — instead of renting a black-box
+    sandbox SaaS and shipping their users' code to a third party.
+  </Card>
+  <Card title="Indie & OSS developers">
+    Solo developers and open-source hackers experimenting with agent harnesses who want a real,
+    recorded sandbox without standing up infrastructure or writing container glue.
+  </Card>
+</Cards>
+
+Both share the same core need: a runtime they own, that records what happens, with no lock-in.
+
+Sealant is **not a SaaS and not a revenue play**. There is no managed cloud, no pricing, no "book a
+demo." It runs self-hosted, inside your own infrastructure, and it is open-source. Success is
+measured in adoption and developer mindshare — developers who star it, self-host it, build on the
+SDK, and tell other developers about it.
+
+## The model
+
+### The sandbox — the live environment
+
+A real, disposable development workspace built around a real repository: its code, the harness, the
+dependencies, the processes, the files, and the services the work needs. You create it in one call,
+the harness works in it, and you can step in directly over SSH when reality gets messy. When you're
+done, it goes away.
+
+### The run — the durable output
+
+One unit of developer work: what it produced, and the structured history of how it happened. The
+sandbox is ephemeral; the run is kept. You use the run's output in your product, attach it to a pull
+request, or inspect it long after the sandbox has stopped.
+
+### The execution record — the soul of the product
+
+The run's history is the **execution record**: every observed fact — process lifecycle, byte-exact
+terminal I/O, file changes, network activity, generated artifacts — captured as one ordered,
+correlated, replayable stream. Not a pile of logs. A stable model your product can read, your UI can
+render, and a human can replay long after the fact.
+
+Two principles keep the record trustworthy:
+
+- **It reports; it does not judge.** Observations, never verdicts. No confidence scores, no "safe to
+  merge," no risk dials. The developer decides what the evidence means.
+- **It's honest about provenance.** Every fact carries how it was captured and how confident the
+  system is (Observed / Inferred / Unknown). Replay is a pure re-fold of an append-only log.
+
+## The platform / products split
+
+Sealant is one platform plus a family of focused products built on it — a split that already
+physically exists in the code.
+
+<Cards>
+  <Card title='The platform — "Sealant"'>
+    The `sealantd` runtime daemon, the wire protocol, and the public SDK. Its job is narrow and
+    reusable: run code in a sandbox, give you access to it, and emit a durable, correlated execution
+    record. Nothing product-specific. This is the thing developers adopt and build on.
+  </Card>
+  <Card title='The products — "by Sealant"'>
+    Focused, opinionated workflows built on top of the public SDK, each as its own
+    standalone-branded, open-source project. They prove the platform is real by consuming it from
+    the outside — and are genuinely useful on their own.
+  </Card>
+</Cards>
+
+This split is the heart of the strategy: **the products are the proof, the platform is the point.**
+
+## What Sealant is NOT
+
+For this audience, drawing honest boundaries is a feature.
+
+| Not…                               | Because                                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Not an AI agent or model           | It's the environment and execution layer _around_ a harness. Bring your own — OpenCode, a custom agent, a CI worker.                                 |
+| Not "just Docker"                  | Containers isolate; Sealant adds the developer-work model on top.                                                                                    |
+| Not a hosted service               | Self-hosted only. Your code and your runs stay in your infrastructure.                                                                               |
+| Not a judge                        | No verdicts, scores, or "safe to merge." Evidence, not opinions.                                                                                     |
+| Not (yet) audit-grade tamper-proof | The record is _tamper-evident_ — honest, best-effort evidence — not a cryptographically tamper-proof compliance log. That hardening is a later tier. |
+| Not a deterministic time machine   | "Replay" means replaying the run's own durable history — not recreating arbitrary external systems perfectly.                                        |
+
+## Core features
+
+Each feature is framed as a developer scenario and the reason it exists.
+
+### Sandboxes & harnesses — the front door
+
+<Accordions>
+  <Accordion title="Isolated sandboxes, one call">
+    *"I want `sealant.sandboxes.create({ repository, harness })` to give me a live, disposable environment around a real repo — no Dockerfiles, no container babysitting — and a handle I can stop, restart, or let expire."*
+
+    The front door of the whole platform. If creating a real environment isn't a one-liner, nothing else matters.
+
+  </Accordion>
+  <Accordion title="Harness execution as a first-class verb">
+    *"I want to hand a coding harness a task and get back `{ result, changes, artifacts, record }` — the agent worker lifecycle managed for me, in one-shot (CI-style) or interactive (`run(prompt)`) mode."*
+
+    This is the headline: run a harness instead of building your own agent worker loop. One-shot for automation, interactive for a sandbox you keep poking at.
+
+  </Accordion>
+  <Accordion title="Bring your own harness">
+    *"I want to change models, planners, or agent frameworks without rebuilding repository setup, environment access, process control, observability, and artifact handling."*
+
+    Harness-neutrality is the durable bet. Models churn monthly; the execution layer shouldn't.
+
+  </Accordion>
+</Accordions>
+
+### The execution record — the payoff
+
+<Accordions>
+  <Accordion title="A record you can query, not parse">
+    *"I want to read a run's record — timeline, terminal scrollback, file diff, process tree, network activity — as structured data at any point in time, not by scraping terminal text."*
+
+    The record is the reason the sandbox is worth more than a bare container. It has to be readable, or it's just logs.
+
+  </Accordion>
+  <Accordion title="Stream it live, replay it later">
+    *"I want to subscribe to a run's typed event stream while it's happening, and replay the full history after the sandbox is gone — and trust I didn't silently lose events."*
+
+    Live progress UIs and after-the-fact debugging both come from the same ordered stream. Delivery integrity is what lets us call the record "trustworthy."
+
+  </Accordion>
+  <Accordion title="Files, diffs, and artifacts as output">
+    *"I want a clean before/after diff of what changed (added/modified/deleted/renamed, with patches) plus retained artifacts — logs, reports, generated files, screenshots — addressable and kept."*
+
+    A reviewable handoff needs the *what changed*, not the harness's self-summary.
+
+  </Accordion>
+  <Accordion title="A browsable run inspector">
+    *"I want to open a run in a web UI and see the diff, the timeline, the scrollback, and the evidence — the experience the design language was built for."*
+
+    The inspector is what makes a run shareable — the screenshot or link that earns the next star.
+
+  </Accordion>
+</Accordions>
+
+### Browser support — the differentiator
+
+**Headless browser as recorded evidence.** A harness can drive a real Chromium inside the sandbox —
+for web-app auth flows, browser dev tools, UI verification — and have the browsing captured as part
+of the same run: screenshots, DOM snapshots, navigations, and the network it generated.
+
+<Callout type="idea">
+  This is the wedge nobody else has framed: browsing as first-class evidence in the same recorded
+  run, not a separate headless-browser service bolted on. It composes Sealant's existing primitives
+  — the tunneling channel, the artifact store, the egress proxy — rather than being a greenfield
+  subsystem, which is exactly why it's a credible differentiator.
+</Callout>
+
+### Human access — not a black box
+
+**SSH and interactive terminals.** When the harness gets stuck — a missing dep, an occupied port, a
+hung process — SSH into the same live sandbox, inspect files and processes, fix it, and let the work
+continue without recreating the environment. Automation when it works, direct access when it
+doesn't. Editor Remote-SSH into the sandbox works through the same path.
+
+### Control & visibility
+
+- **Process supervision.** Process trees tracked, timeouts enforced, signals delivered, and child
+  processes cleaned up reliably — not orphaned daemons leaking across runs.
+- **Network observation (and, later, policy).** See every outbound request a run made, associated
+  with the run that produced it — and eventually set allow/deny policy so an untrusted agent can't
+  reach where it shouldn't. Observation now; enforcement is a stated direction. Policy belongs to
+  the environment, not to instructions buried in a prompt.
+- **Secret redaction.** Configured secrets stripped from the recorded evidence before it becomes
+  durable. Best-effort hygiene today, explicitly labeled as such — not sold as a compliance control.
+
+### The SDK & ecosystem
+
+- **A fluent SDK that reads like the marketing.** The fluent high-level SDK _is_ the public product
+  surface; the low-level protocol client is plumbing beneath it. The goal is for
+  `sealant.sandboxes.create(...).harness.run(prompt)` to actually exist and be the thing you import.
+- **Multi-language clients from one contract.** Run `buf generate` to produce a typed client in Go,
+  Python, or Java from the same wire schema, identical to the TypeScript one. The single-source
+  schema makes other languages mostly codegen — a real ecosystem lever once the compatibility policy
+  is settled.
+
+## The products, by Sealant
+
+Focused, standalone-branded, open-source workflows that prove the platform by consuming the public
+SDK from the outside. Each is its own repo and its own identity, tagged "by Sealant."
+
+<Cards>
+  <Card title="Handoff — the flagship">
+    *Task → verified change → PR.* Give a coding harness an engineering task; get back the result,
+    the code changes, the checks, the artifacts, and the full execution record — in one reviewable
+    handoff, with a pull request at the end. The proof-of-platform demo: it exercises the entire
+    loop end-to-end. If Handoff works, the platform is real.
+  </Card>
+  <Card title="Verify">
+    *Behavior → proof → test.* Describe what should work; Sealant runs the app, exercises the
+    behavior with real dev tools (including the headless browser), shows reviewable evidence, and
+    saves a test the team keeps. Best showcase for browser-as-evidence plus the record.
+  </Card>
+  <Card title="Repro">
+    *Report → runnable case.* Turn a bug report or a failed CI run into a clean environment
+    containing the exact commands, files, logs, and failure another developer needs to rerun it.
+    Leans on the most mature path: sandbox composition plus the record.
+  </Card>
+</Cards>
+
+These are committed roadmap, sequenced after the platform is genuinely consumable — Handoff first.
+
+## Why developers will adopt it
+
+- **It fills a real, current gap.** Everyone building with agents is hand-rolling the runtime and
+  recording layer. Sealant is that layer, done well, once.
+- **No lock-in, fully yours.** Open-source, self-hosted, your code never leaves your infra,
+  harness-neutral.
+- **The record is genuinely novel.** "Every run becomes structured, replayable product data" is a
+  capability, not a tagline — and the inspector makes it shareable.
+- **Browser-as-evidence is a wedge no one else frames.** A clear, demo-able differentiator.
+- **Honesty earns trust.** Explicit boundaries ("evidence, not proof"; "reports, doesn't judge")
+  read as credibility to a skeptical developer audience.
+
+## The adoption wedge — the 5-minute "wow"
+
+The repo, the README, and the demo lead with the one-liner:
+
+```text
+create a sandbox  →  run a harness in it  →  replay the recorded run
+```
+
+The fluent SDK plus the execution record, producing a shareable replay in minutes. That's the hero
+moment that earns the first stars.
+
+The marketing page then shows the same one-liner across multiple examples to demonstrate versatility
+— the same few lines pointed at different harnesses and different jobs: a coding agent fixing a
+test, autonomous QA exercising a flow in a browser, reproducing a failed CI run, landing a
+dependency update, investigating a flaky build. One simple model, many shapes of work.
+
+CTAs are developer-native: star the repo, read the docs, build on the SDK — never "sign up" or
+"contact sales."
+
+## Honest status & rough roadmap
+
+High-level and sequenced — not a ticket list.
+
+**Real today:** the `sealantd` daemon core (process/PTY execution, signals, reaping, the control
+protocol, the durable telemetry capture), the low-level TypeScript SDK seed, the SSH gateway, the
+build → publish → launch pipeline on Docker, and the control-plane API, worker, and state. The
+most-complete path is **create → build → launch → SSH/editor access**.
+
+<Steps>
+  <Step>
+    **The fluent public SDK.** Make `sandboxes.create(...).harness.run()` real and reshape the
+    create contract to drop registry/tag friction. The single most important build.
+  </Step>
+  <Step>
+    **The execution-record read side + run inspector.** Implement the read models and the replay UI.
+    The record is the payoff of every demo; it has to be readable and shareable.
+  </Step>
+  <Step>
+    **Telemetry delivery integrity.** True at-least-once (ack + resume) so "trustworthy record"
+    holds up.
+  </Step>
+  <Step>
+    **Sandbox lifecycle close-out.** Stop, TTL, and GC so self-hosters don't leak containers.
+  </Step>
+  <Step>
+    **Browser-as-evidence.** Headless browser driven by the harness, captured into the run.
+  </Step>
+  <Step>**Handoff (by Sealant).** The flagship product, in its own repo on the public SDK.</Step>
+</Steps>
+
+**Later tiers:** audit-grade record (privilege separation plus cryptographic digests) for a
+security-minded tier; egress enforcement (allow/deny), not just observation; additional runtime
+backends (k8s/k3s) and persistence; multi-language SDKs once the compatibility policy is set; and
+Verify and Repro (by Sealant).
+
+## Naming & brand conventions
+
+- **Platform:** Sealant (the runtime plus SDK). Runtime daemon: `sealantd`.
+- **Products:** their own names, each tagged "by Sealant," each its own open-source repo. The
+  "Sealant Verify/Repro/Handoff" umbrella pattern is avoided — the products stand alone.
+- **Primary nouns everywhere:** **sandbox** (the live environment) and **run** (the durable
+  execution record). "Harness" for the agent or worker that does the work.
+
+---
+
+The sandbox is where the work happens; the run is what you keep; the platform is open and yours to
+build on; the products are the proof. Everything optimizes for developers adopting it, loving it,
+and telling other developers about it.

@@ -1,0 +1,243 @@
+---
+title: Design system
+description:
+  The Evidence Review design language for Sealant — tokens, type split, four-color discipline,
+  components, and the things the surface refuses to render.
+---
+
+import { Card, Cards } from "fumadocs-ui/components/card";
+import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
+
+Evidence Review is the visual language of Sealant's code-review surface, extracted as a reusable
+system. It is the set of tokens, the type split, the four-color discipline, the components, and the
+rules that keep the product a review tool instead of a dashboard. The whole system reduces to one
+rule: show the reviewer the code and its proof in the same place, in plain language, and let them
+decide.
+
+<Callout type="info">
+  A warm near-white canvas, near-black text, and pale gray rules. Two typefaces — one sans for human
+  language, one mono for machine fact. Four semantic accents, each carrying exactly one meaning.
+  Structure comes from spacing and thin rules, never from cards or chips. The surface reports
+  observations; it never renders a verdict.
+</Callout>
+
+The reference surface is desktop at 1440 × 900, set in Inter and JetBrains Mono, with four semantic
+accents.
+
+## Principles
+
+<Cards>
+  <Card title="Evidence beside code">
+    A reviewer never carries a number from one page to verify it on another. The change and its
+    proof share one viewport.
+  </Card>
+  <Card title="The tool reports">
+    It shows observations, never verdicts. No confidence scores, no "safe to merge." The reviewer
+    judges.
+  </Card>
+  <Card title="Hierarchy without containers">
+    Structure comes from spacing, alignment, and thin rules — not cards, pills, or chips.
+  </Card>
+  <Card title="Color is earned">
+    Each accent marks one specific meaning. No panel is ever flooded with it.
+  </Card>
+</Cards>
+
+## Color
+
+A warm near-white canvas, near-black text, pale gray rules. Four accents carry meaning and nothing
+decorative does.
+
+### Surfaces and neutrals
+
+| Token            | Hex       | Role                                               |
+| ---------------- | --------- | -------------------------------------------------- |
+| Canvas           | `#faf9f7` | The default page surface.                          |
+| Sunken bar       | `#f7f5f2` | Recessed bars and table headers.                   |
+| Overlay / drawer | `#ffffff` | Drawers and overlays that sit above the canvas.    |
+| Cobalt wash      | `#f4f6fd` | Faint tint behind interactive or selected regions. |
+
+### Text and rule ramp
+
+| Level                   | Hex       | Used for                           |
+| ----------------------- | --------- | ---------------------------------- |
+| Primary text            | `#1b1b1d` | Body copy and titles.              |
+| Secondary text          | `#3b3b40` | Supporting statements.             |
+| Tertiary / quiet action | `#6e6e76` | Low-emphasis actions and captions. |
+| Section label           | `#8a8a92` | Small uppercase or label text.     |
+| Muted / monospace dim   | `#9a9aa2` | Dimmed monospace and metadata.     |
+| Hairline rule           | `#e4e1db` | Dividers and panel borders.        |
+
+### Semantic accents — one meaning each
+
+| Color            | Means                  | Discipline                                                                          |
+| ---------------- | ---------------------- | ----------------------------------------------------------------------------------- |
+| Cobalt `#2052cc` | Interaction, selection | The only "brand" color. Marks what is active or clickable.                          |
+| Amber            | Unresolved judgment    | One prominent use at a time. Dot `#cf9a18` · text `#9a6700`.                        |
+| Red              | Demonstrated breakage  | Only an observed failure — never a generic warning. Dot `#c0362c` · text `#b3261e`. |
+| Green            | Observed success       | Only a result that was actually run. Text `#2e7d46` · dot `#5f9e77`.                |
+
+### Diff tints — edge marks, never floods
+
+A 2px colored edge plus a faint wash carries the diff signal. Saturated blocks would render a
+verdict before the reviewer decides.
+
+| Line     | Edge      | Wash                   |
+| -------- | --------- | ---------------------- |
+| Addition | `#2e7d46` | `rgba(46,125,70,0.07)` |
+| Deletion | `#c0362c` | `rgba(192,54,44,0.06)` |
+| Context  | none      | transparent            |
+
+## Typography
+
+One neutral sans for everything human; monospace reserved for everything the machine observed or
+executed. The split is semantic, not decorative.
+
+<Cards>
+  <Card title="Inter — human language">
+    Labels, expectations, and the reviewer's own judgment. Weights 400 · 450 · 500 · 600.
+  </Card>
+  <Card title="JetBrains Mono — machine fact">
+    Values, paths, SHAs, commands, and numeric output. Weights 400 · 500.
+  </Card>
+</Cards>
+
+The rule is simple. Sans signals human language — a label, an expectation, a judgment. Mono signals
+a value the system observed or executed, such as `$50.97`, `a9f3c20`, or `round.ts`.
+
+### Scale
+
+| Role                        | Specification          |
+| --------------------------- | ---------------------- |
+| Change title                | 22px / 600 / -0.01em   |
+| Body and statements         | 14.5px / 400 / 1.55    |
+| Interface text and controls | 13px / 400–500         |
+| Section label               | 12px / 500 / `#8a8a92` |
+| Mono value                  | 12.5px                 |
+
+## Spacing and surfaces
+
+An 8-pixel rhythm. Corners are square or at most 3px. Whitespace shows relationships; it is never
+empty padding.
+
+| Step | Meaning       |
+| ---- | ------------- |
+| 6    | label ↔ value |
+| 12   | related items |
+| 16   | group         |
+| 24   | region        |
+| 32   | major break   |
+| 44   | view padding  |
+
+Radius is disciplined to two values, with pills excluded entirely.
+
+| Radius | Used for                                |
+| ------ | --------------------------------------- |
+| 0      | Diff edge, dividers                     |
+| 3px    | Panels, buttons, swatches — the ceiling |
+| pills  | Not used                                |
+
+## Status
+
+Four states triage the queue. A colored dot plus a word — never a glowing badge, never a tinted row.
+
+| State            | Dot               | Means                                     |
+| ---------------- | ----------------- | ----------------------------------------- |
+| Direct evidence  | Green `#5f9e77`   | A result the system ran and observed.     |
+| Not executed     | Amber `#cf9a18`   | A scenario reasoned about but not run.    |
+| Unrelated change | Red `#c0362c`     | An observed problem or out-of-scope edit. |
+| Not started      | Outline `#b3b0a8` | A reviewer disposition not yet made.      |
+
+## Components
+
+### Buttons — a weight hierarchy
+
+One filled button for the consequential, irreversible act. Outlined for a real secondary action.
+Text actions for cheap, frequent ones that should not shout.
+
+| Variant         | Example           | When                                            |
+| --------------- | ----------------- | ----------------------------------------------- |
+| Filled (cobalt) | Approve `a9f3c20` | The consequential, irreversible act.            |
+| Outlined        | Request changes   | A real secondary action.                        |
+| Text (cobalt)   | Full diff         | A cheap, frequent action that should not shout. |
+| Quiet text      | Ask for proof     | The lowest-emphasis action.                     |
+
+### Segmented control — exclusive disposition
+
+A single horizontal control for mutually exclusive reviewer dispositions: `Reviewed`,
+`Needs change`, and `Accept w/ follow-up`. The selected segment fills cobalt; the rest stay
+outlined.
+
+### Review-item navigator — type, not widgets
+
+The queue is rendered as typed rows, not widgets: a monospace index, the item title in sans, and a
+status dot with its word. Selection is a 2px cobalt underline beneath the active title — no row
+tint, no container.
+
+| #   | Item                         | Status           |
+| --- | ---------------------------- | ---------------- |
+| 01  | Reported discrepancy         | Direct evidence  |
+| 03  | Currency rounding (selected) | Not executed     |
+| 04  | Unrelated edit               | Unrelated change |
+
+### Diff block
+
+The diff pairs a sunken header (file path plus an addition/deletion count) with monospace lines.
+Edges and a faint wash mark changes; line numbers and context stay neutral.
+
+```diff
+  lib/invoice/round.ts — 3 additions · 1 deletion
+  function round(amountMinor, currency = "USD") {
+-   return Math.round(amountMinor)
++   const scale = minorUnits(currency)
++   return roundHalfEven(amountMinor, scale)
+  }
+```
+
+### Causal evidence table — Base / Head / Reverted
+
+Alignment and a single colored word per cell carry the meaning — no boxes. The
+`Fails → Passes → Fails` progression shows causation, not correlation.
+
+|          | Base     | Head     | Reverted |
+| -------- | -------- | -------- | -------- |
+| Invoice  | `$50.98` | `$50.97` | `$50.98` |
+| Captured | `$50.97` | `$50.97` | `$50.97` |
+| Result   | Fails    | Passes   | Fails    |
+
+### Open question and warning accent
+
+An open question states the human judgment plainly, then cites the machine fact in mono. For
+example: exact half-cent behavior was not executed — the implementation calls `roundHalfEven`, but
+no test lands a total on `.005`.
+
+Warnings use a thin colored left edge, not a filled panel: amber for an unrun scenario ("exact
+half-cent scenario was not run"), red for an observed out-of-scope problem ("one edit is unrelated
+to issue #5187").
+
+## What the system refuses
+
+An equal part of the system is what it never renders. Each was a live option, rejected.
+
+<Accordions>
+  <Accordion title="No panel tinted green, amber, or red">
+    Color marks a value or a word — it never floods a region, because a tinted panel renders a
+    verdict.
+  </Accordion>
+  <Accordion title="No more than one prominent warning">
+    Two warnings of equal weight means neither is the one that matters.
+  </Accordion>
+  <Accordion title="No card grids, metric tiles, pills, or chips">
+    Containers manufacture hierarchy that alignment and type already provide.
+  </Accordion>
+  <Accordion title="No confidence score or risk dashboard">
+    A number invents precision the evidence does not have.
+  </Accordion>
+  <Accordion title="No banned register">
+    Phrases like "strong proof," "high confidence," "all checks passed," and "safe to merge" each
+    substitute the tool's verdict for the reviewer's.
+  </Accordion>
+</Accordions>
+
+Every token and component above reduces to one rule: show the reviewer the code and its proof in the
+same place, in plain language, and let them decide.

@@ -5,14 +5,7 @@ import {
   githubAppInstallations,
   githubInstallationRepositories,
   githubWebhookDeliveries,
-  issueStateValues,
-  issueWorkflowExecutions,
-  issueWorkflowExecutionStatusValues,
-  issueWorkflowExecutionTriggerTypeValues,
-  issueWorkflows,
-  issueWorkflowStatusValues,
   profileStatusValues,
-  pullRequestStateValues,
   sandboxAttempts,
   sandboxAttemptStatusValues,
   sandboxAttemptTriggerTypeValues,
@@ -62,22 +55,4 @@ export const sandboxInsertSchema = createInsertSchema(sandboxes);
 
 export const sandboxStatusSchema = Schema.Literals(sandboxStatusValues);
 
-export const issueWorkflowSelectSchema = createSelectSchema(issueWorkflows);
-
-export const issueWorkflowInsertSchema = createInsertSchema(issueWorkflows);
-
-export const issueWorkflowStatusSchema = Schema.Literals(issueWorkflowStatusValues);
-
-export const issueWorkflowExecutionSelectSchema = createSelectSchema(issueWorkflowExecutions);
-
-export const issueWorkflowExecutionInsertSchema = createInsertSchema(issueWorkflowExecutions);
-
-export const issueWorkflowExecutionStatusSchema = Schema.Literals(issueWorkflowExecutionStatusValues);
-
-export const issueWorkflowExecutionTriggerTypeSchema = Schema.Literals(issueWorkflowExecutionTriggerTypeValues);
-
 export const profileStatusSchema = Schema.Literals(profileStatusValues);
-
-export const issueStateSchema = Schema.Literals(issueStateValues);
-
-export const pullRequestStateSchema = Schema.Literals(pullRequestStateValues);

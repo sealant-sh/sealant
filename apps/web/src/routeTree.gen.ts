@@ -21,13 +21,7 @@ import { Route as AuthenticatedSandboxesIndexRouteImport } from './routes/_authe
 import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
 import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
-import { Route as AuthenticatedIssuesIndexRouteImport } from './routes/_authenticated/issues/index'
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
-import { Route as ApiLinearStatusRouteImport } from './routes/api/linear/status'
-import { Route as ApiLinearImportRouteImport } from './routes/api/linear/import'
-import { Route as ApiLinearDisconnectRouteImport } from './routes/api/linear/disconnect'
-import { Route as ApiLinearConnectRouteImport } from './routes/api/linear/connect'
-import { Route as ApiLinearCallbackRouteImport } from './routes/api/linear/callback'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
 import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
@@ -35,8 +29,6 @@ import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authent
 import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
 import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_authenticated/sandboxes/active'
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
-import { Route as AuthenticatedIssuesReadyRouteImport } from './routes/_authenticated/issues/ready'
-import { Route as AuthenticatedIssuesAssignedRouteImport } from './routes/_authenticated/issues/assigned'
 import { Route as AuthenticatedGithubSetupRouteImport } from './routes/_authenticated/github/setup'
 import { Route as AuthenticatedSandboxesSandboxIdIndexRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/index'
 import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
@@ -119,40 +111,9 @@ const AuthenticatedProfilesIndexRoute =
     path: '/profiles/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedIssuesIndexRoute =
-  AuthenticatedIssuesIndexRouteImport.update({
-    id: '/issues/',
-    path: '/issues/',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
 const ApiTrpcSplatRoute = ApiTrpcSplatRouteImport.update({
   id: '/api/trpc/$',
   path: '/api/trpc/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiLinearStatusRoute = ApiLinearStatusRouteImport.update({
-  id: '/api/linear/status',
-  path: '/api/linear/status',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiLinearImportRoute = ApiLinearImportRouteImport.update({
-  id: '/api/linear/import',
-  path: '/api/linear/import',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiLinearDisconnectRoute = ApiLinearDisconnectRouteImport.update({
-  id: '/api/linear/disconnect',
-  path: '/api/linear/disconnect',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiLinearConnectRoute = ApiLinearConnectRouteImport.update({
-  id: '/api/linear/connect',
-  path: '/api/linear/connect',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiLinearCallbackRoute = ApiLinearCallbackRouteImport.update({
-  id: '/api/linear/callback',
-  path: '/api/linear/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
@@ -194,18 +155,6 @@ const AuthenticatedProfilesCreateRoute =
   AuthenticatedProfilesCreateRouteImport.update({
     id: '/profiles/create',
     path: '/profiles/create',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedIssuesReadyRoute =
-  AuthenticatedIssuesReadyRouteImport.update({
-    id: '/issues/ready',
-    path: '/issues/ready',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedIssuesAssignedRoute =
-  AuthenticatedIssuesAssignedRouteImport.update({
-    id: '/issues/assigned',
-    path: '/issues/assigned',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedGithubSetupRoute =
@@ -331,8 +280,6 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
-  '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
-  '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
@@ -340,13 +287,7 @@ export interface FileRoutesByFullPath {
   '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/linear/callback': typeof ApiLinearCallbackRoute
-  '/api/linear/connect': typeof ApiLinearConnectRoute
-  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
-  '/api/linear/import': typeof ApiLinearImportRoute
-  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
-  '/issues/': typeof AuthenticatedIssuesIndexRoute
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/registry/': typeof AuthenticatedRegistryIndexRoute
   '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
@@ -378,8 +319,6 @@ export interface FileRoutesByTo {
   '/reset-password': typeof AuthResetPasswordRoute
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
-  '/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
-  '/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
@@ -387,13 +326,7 @@ export interface FileRoutesByTo {
   '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/linear/callback': typeof ApiLinearCallbackRoute
-  '/api/linear/connect': typeof ApiLinearConnectRoute
-  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
-  '/api/linear/import': typeof ApiLinearImportRoute
-  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
-  '/issues': typeof AuthenticatedIssuesIndexRoute
   '/profiles': typeof AuthenticatedProfilesIndexRoute
   '/registry': typeof AuthenticatedRegistryIndexRoute
   '/repositories': typeof AuthenticatedRepositoriesIndexRoute
@@ -428,8 +361,6 @@ export interface FileRoutesById {
   '/_authenticated/about': typeof AuthenticatedAboutRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/github/setup': typeof AuthenticatedGithubSetupRoute
-  '/_authenticated/issues/assigned': typeof AuthenticatedIssuesAssignedRoute
-  '/_authenticated/issues/ready': typeof AuthenticatedIssuesReadyRoute
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
   '/_authenticated/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
   '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
@@ -437,13 +368,7 @@ export interface FileRoutesById {
   '/_authenticated/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/linear/callback': typeof ApiLinearCallbackRoute
-  '/api/linear/connect': typeof ApiLinearConnectRoute
-  '/api/linear/disconnect': typeof ApiLinearDisconnectRoute
-  '/api/linear/import': typeof ApiLinearImportRoute
-  '/api/linear/status': typeof ApiLinearStatusRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
-  '/_authenticated/issues/': typeof AuthenticatedIssuesIndexRoute
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
   '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
@@ -477,8 +402,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/about'
     | '/github/setup'
-    | '/issues/assigned'
-    | '/issues/ready'
     | '/profiles/create'
     | '/sandboxes/active'
     | '/sandboxes/failed'
@@ -486,13 +409,7 @@ export interface FileRouteTypes {
     | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
-    | '/api/linear/callback'
-    | '/api/linear/connect'
-    | '/api/linear/disconnect'
-    | '/api/linear/import'
-    | '/api/linear/status'
     | '/api/trpc/$'
-    | '/issues/'
     | '/profiles/'
     | '/registry/'
     | '/repositories/'
@@ -524,8 +441,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/about'
     | '/github/setup'
-    | '/issues/assigned'
-    | '/issues/ready'
     | '/profiles/create'
     | '/sandboxes/active'
     | '/sandboxes/failed'
@@ -533,13 +448,7 @@ export interface FileRouteTypes {
     | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
-    | '/api/linear/callback'
-    | '/api/linear/connect'
-    | '/api/linear/disconnect'
-    | '/api/linear/import'
-    | '/api/linear/status'
     | '/api/trpc/$'
-    | '/issues'
     | '/profiles'
     | '/registry'
     | '/repositories'
@@ -573,8 +482,6 @@ export interface FileRouteTypes {
     | '/_authenticated/about'
     | '/_authenticated/'
     | '/_authenticated/github/setup'
-    | '/_authenticated/issues/assigned'
-    | '/_authenticated/issues/ready'
     | '/_authenticated/profiles/create'
     | '/_authenticated/sandboxes/active'
     | '/_authenticated/sandboxes/failed'
@@ -582,13 +489,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/connected-accounts'
     | '/_authenticated/settings/ssh-keys'
     | '/api/auth/$'
-    | '/api/linear/callback'
-    | '/api/linear/connect'
-    | '/api/linear/disconnect'
-    | '/api/linear/import'
-    | '/api/linear/status'
     | '/api/trpc/$'
-    | '/_authenticated/issues/'
     | '/_authenticated/profiles/'
     | '/_authenticated/registry/'
     | '/_authenticated/repositories/'
@@ -617,11 +518,6 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
-  ApiLinearCallbackRoute: typeof ApiLinearCallbackRoute
-  ApiLinearConnectRoute: typeof ApiLinearConnectRoute
-  ApiLinearDisconnectRoute: typeof ApiLinearDisconnectRoute
-  ApiLinearImportRoute: typeof ApiLinearImportRoute
-  ApiLinearStatusRoute: typeof ApiLinearStatusRoute
   ApiTrpcSplatRoute: typeof ApiTrpcSplatRoute
 }
 
@@ -711,53 +607,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/issues/': {
-      id: '/_authenticated/issues/'
-      path: '/issues'
-      fullPath: '/issues/'
-      preLoaderRoute: typeof AuthenticatedIssuesIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/api/trpc/$': {
       id: '/api/trpc/$'
       path: '/api/trpc/$'
       fullPath: '/api/trpc/$'
       preLoaderRoute: typeof ApiTrpcSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/linear/status': {
-      id: '/api/linear/status'
-      path: '/api/linear/status'
-      fullPath: '/api/linear/status'
-      preLoaderRoute: typeof ApiLinearStatusRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/linear/import': {
-      id: '/api/linear/import'
-      path: '/api/linear/import'
-      fullPath: '/api/linear/import'
-      preLoaderRoute: typeof ApiLinearImportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/linear/disconnect': {
-      id: '/api/linear/disconnect'
-      path: '/api/linear/disconnect'
-      fullPath: '/api/linear/disconnect'
-      preLoaderRoute: typeof ApiLinearDisconnectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/linear/connect': {
-      id: '/api/linear/connect'
-      path: '/api/linear/connect'
-      fullPath: '/api/linear/connect'
-      preLoaderRoute: typeof ApiLinearConnectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/linear/callback': {
-      id: '/api/linear/callback'
-      path: '/api/linear/callback'
-      fullPath: '/api/linear/callback'
-      preLoaderRoute: typeof ApiLinearCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
@@ -807,20 +661,6 @@ declare module '@tanstack/react-router' {
       path: '/profiles/create'
       fullPath: '/profiles/create'
       preLoaderRoute: typeof AuthenticatedProfilesCreateRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/issues/ready': {
-      id: '/_authenticated/issues/ready'
-      path: '/issues/ready'
-      fullPath: '/issues/ready'
-      preLoaderRoute: typeof AuthenticatedIssuesReadyRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/issues/assigned': {
-      id: '/_authenticated/issues/assigned'
-      path: '/issues/assigned'
-      fullPath: '/issues/assigned'
-      preLoaderRoute: typeof AuthenticatedIssuesAssignedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/github/setup': {
@@ -979,15 +819,12 @@ interface AuthenticatedRouteChildren {
   AuthenticatedAboutRoute: typeof AuthenticatedAboutRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedGithubSetupRoute: typeof AuthenticatedGithubSetupRoute
-  AuthenticatedIssuesAssignedRoute: typeof AuthenticatedIssuesAssignedRoute
-  AuthenticatedIssuesReadyRoute: typeof AuthenticatedIssuesReadyRoute
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
   AuthenticatedSandboxesActiveRoute: typeof AuthenticatedSandboxesActiveRoute
   AuthenticatedSandboxesFailedRoute: typeof AuthenticatedSandboxesFailedRoute
   AuthenticatedSandboxesNewRoute: typeof AuthenticatedSandboxesNewRoute
   AuthenticatedSettingsConnectedAccountsRoute: typeof AuthenticatedSettingsConnectedAccountsRoute
   AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
-  AuthenticatedIssuesIndexRoute: typeof AuthenticatedIssuesIndexRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
@@ -1016,8 +853,6 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedAboutRoute: AuthenticatedAboutRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedGithubSetupRoute: AuthenticatedGithubSetupRoute,
-  AuthenticatedIssuesAssignedRoute: AuthenticatedIssuesAssignedRoute,
-  AuthenticatedIssuesReadyRoute: AuthenticatedIssuesReadyRoute,
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
   AuthenticatedSandboxesActiveRoute: AuthenticatedSandboxesActiveRoute,
   AuthenticatedSandboxesFailedRoute: AuthenticatedSandboxesFailedRoute,
@@ -1025,7 +860,6 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSettingsConnectedAccountsRoute:
     AuthenticatedSettingsConnectedAccountsRoute,
   AuthenticatedSettingsSshKeysRoute: AuthenticatedSettingsSshKeysRoute,
-  AuthenticatedIssuesIndexRoute: AuthenticatedIssuesIndexRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
   AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
@@ -1076,11 +910,6 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
-  ApiLinearCallbackRoute: ApiLinearCallbackRoute,
-  ApiLinearConnectRoute: ApiLinearConnectRoute,
-  ApiLinearDisconnectRoute: ApiLinearDisconnectRoute,
-  ApiLinearImportRoute: ApiLinearImportRoute,
-  ApiLinearStatusRoute: ApiLinearStatusRoute,
   ApiTrpcSplatRoute: ApiTrpcSplatRoute,
 }
 export const routeTree = rootRouteImport

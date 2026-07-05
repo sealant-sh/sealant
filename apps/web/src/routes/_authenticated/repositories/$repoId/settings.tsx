@@ -25,10 +25,7 @@ function RepositorySettingsPage() {
             ["Artifact signing", "Enabled"],
             ["Escalation channel", "#sealant-ops"],
           ].map(([label, value]) => (
-            <div
-              key={label}
-              className="flex items-baseline justify-between gap-4 px-5 py-3.5"
-            >
+            <div key={label} className="flex items-baseline justify-between gap-4 px-5 py-3.5">
               <dt className="font-mono text-[0.7rem] tracking-[0.02em] text-label">{label}</dt>
               <dd className="font-mono text-xs text-ink-2">{value}</dd>
             </div>

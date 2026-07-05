@@ -23,7 +23,6 @@
     "@fontsource/space-grotesk": "catalog:",
     "@sealant/auth": "workspace:*",
     "@sealant/db": "workspace:*",
-    "@sealant/issues": "workspace:*",
     "@sealant/ui": "workspace:*",
     "@sealant/validators": "workspace:*",
     "@tailwindcss/vite": "catalog:",

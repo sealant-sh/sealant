@@ -143,9 +143,7 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
               (event: EventEnvelope) =>
                 event.processId === undefined || event.processId === accepted.processId,
             ),
-            Stream.takeUntil(
-              (event: EventEnvelope) => event.payload.case === "processExited",
-            ),
+            Stream.takeUntil((event: EventEnvelope) => event.payload.case === "processExited"),
             Stream.runCollect,
           );
 

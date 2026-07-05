@@ -1,5 +1,13 @@
 import type { NewSandbox, SandboxBuild } from "@sealant/validators";
-import { index, integer, jsonb, snakeCase, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  jsonb,
+  snakeCase,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 // Client-level `casing: "snake_case"` no longer exists, so re-apply snake_case at the
 // table level to keep implicit column names mapping to snake_case db columns.

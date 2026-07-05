@@ -41,9 +41,11 @@ build on the same public SDK. Your code never leaves your infrastructure.
 
 ## Documentation
 
-The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and covers getting started, the
-architecture (sandbox lifecycle, the execution record & telemetry, `sealantd` integration), the
-packages, and the product and design notes.
+The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and addresses users of the platform:
+getting started (install, first sandbox), task guides (GitHub App, SSH access, sandboxes, upgrades),
+reference (environment variables, ports, the HTTP API, the SDK), the core concepts, and a
+contributing section for working on Sealant itself. Retired planning artifacts are archived under
+[`docs/archive/`](docs/archive).
 
 Two canonical reference docs sit at the repo root:
 
@@ -58,9 +60,7 @@ Two canonical reference docs sit at the repo root:
 ├── apps/                      # deployable apps and services
 │   ├── api/                   # control-plane API (Effect)
 │   ├── docs/                  # documentation site (fumadocs)
-│   ├── electron/              # desktop client surface
 │   ├── marketing/             # public marketing site
-│   ├── mobile/                # mobile client surface
 │   ├── ssh-gateway/           # SSH access into live sandboxes
 │   ├── web/                   # main product web app (the review surface)
 │   └── worker/                # background worker
@@ -68,7 +68,6 @@ Two canonical reference docs sit at the repo root:
 │   ├── api-contracts/         # wire contracts — the single source of truth
 │   ├── auth/                  # shared auth
 │   ├── db/                    # Effect + PostgreSQL control-plane state
-│   ├── issues/                # issue-workflow domain
 │   ├── rabbitmq/              # message transport
 │   ├── sandboxes/             # sandbox domain: build, publish, launch, lifecycle
 │   ├── source-integrations/   # repo/provider integrations (GitHub first)
@@ -83,8 +82,8 @@ Two canonical reference docs sit at the repo root:
 
 - `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker, and
   access gateways.
-- `packages/`: shared code — the wire contracts, sandbox/issue domains, the telemetry/execution
-  record, the design system, and reusable utilities.
+- `packages/`: shared code — the wire contracts, the sandbox domain, the telemetry/execution record,
+  the design system, and reusable utilities.
 - `tooling/`: centralized configs and tooling packages (TypeScript, lint, format, test, Tailwind).
 
 ## Architecture at a glance
@@ -106,7 +105,8 @@ registry integrations publish and retrieve artifacts.
 
 ## Install (self-host)
 
-Everything you need is a running Docker daemon — no git, no node, no firewall changes:
+Everything you need is a running Docker daemon with Compose v2 — no git, no node, no firewall
+changes:
 
 ```bash
 curl -fsSL https://get.sealant.dev | sh
@@ -121,8 +121,9 @@ to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a
 ssh -p 2222 sbx-<sandbox-id>@localhost
 ```
 
-Upgrade by re-running the installer with `SEALANT_VERSION=latest`; re-running without it repairs the
-current install (secrets and data are never regenerated). Uninstall:
+Upgrade with `curl -fsSL https://get.sealant.dev | SEALANT_VERSION=latest sh` (the variable goes on
+the `sh` side of the pipe); re-running plain repairs the current install (secrets and data are never
+regenerated). Uninstall:
 
 ```bash
 docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
