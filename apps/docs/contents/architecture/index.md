@@ -11,7 +11,6 @@ This section documents cross-package behavior for Sealant's two core product loo
 ## Core loops
 
 - [sandbox-lifecycle.md](./sandbox-lifecycle.md)
-- [issue-workflow-lifecycle.md](./issue-workflow-lifecycle.md)
 - [api-route-effect-approach.md](./api-route-effect-approach.md) - Effect control-plane guide from
   DB repos to API handlers
 

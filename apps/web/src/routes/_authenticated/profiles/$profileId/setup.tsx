@@ -15,14 +15,13 @@ function ProfileSetupPage() {
     <ProfileDetailSection
       profile={profile}
       section="Setup"
-      description="Capture setup defaults once and apply them across issue delegation and run execution workflows."
+      description="Capture setup defaults once and apply them across run execution workflows."
     >
       <div className="grid gap-3 sm:grid-cols-2">
         {[
           ["Startup script", "bootstrap.sh"],
           ["Validation profile", "strict"],
           ["Artifact retention", "7 days"],
-          ["Issue handoff", "enabled"],
         ].map(([label, value]) => (
           <div
             key={label}

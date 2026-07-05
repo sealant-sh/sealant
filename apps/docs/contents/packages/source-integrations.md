@@ -17,7 +17,7 @@ GitHub App support is the current implementation.
 
 - Keep source-provider APIs and auth behavior out of app/business layers.
 - Normalize provider payloads into stable internal contracts.
-- Support secure repository access for sandbox and issue workflow execution.
+- Support secure repository access for sandbox execution.
 
 ## Module map
 

@@ -21,6 +21,6 @@ in flux.
 
 ## Writing conventions
 
-- Prefer product terms `sandbox` and `issue workflow` in user-facing descriptions.
-- Use `sandbox build job` and `run` only for internal orchestration details.
+- Prefer the product terms `sandbox`, `run`, and `harness` in user-facing descriptions.
+- Use `sandbox build job` and `attempt` only for internal orchestration details.
 - Keep pages focused on boundaries, contracts, and call flows.

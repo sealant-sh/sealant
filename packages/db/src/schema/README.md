@@ -2,10 +2,7 @@
 
 This folder defines the durable database schema used by Sealant.
 
-Product-facing language is centered on two domains:
-
-- sandboxes
-- issue workflows
+Product-facing language is centered on sandboxes and runs.
 
 Some tables still use internal execution vocabulary (`attempt`, `execution`, `job`) because they
 model orchestration and reporting internals.
@@ -20,6 +17,8 @@ model orchestration and reporting internals.
 ## Sandbox lifecycle tables
 
 - `sandboxes`: primary sandbox product object and lifecycle anchor.
+- `runs`: one harness execution inside a sandbox — the durable execution record the telemetry tables
+  key into.
 - `sandbox_run_links`: links sandbox records to execution attempts over time.
 
 ## Execution attempt tables (internal)
@@ -55,26 +54,4 @@ model orchestration and reporting internals.
 - `profile_ssh_key_bindings`: SSH key references attached to profile revisions.
 - `secrets`: logical secret containers.
 - `secret_versions`: encrypted secret value versions.
-- `ssh_keys`: manag id, ownerUserId, repositoryId, templateId/revisionId, profileRevisionId, status,
-  activeRunId, createdAt, updatedAt, archivedAt
-- sandbox_run_links (history): sandboxId, runed SSH public-key records and private-key secret
-  references.
-
-## Issue workflow and SCM lineage tables
-
-- `issues`: synchronized issue records from source providers.
-- `pull_requests`: synchronized pull request records from source providers.
-- `issue_workflows`: primary issue workflow product object anchored to an issue.
-- `issue_workflow_executions`: concrete executions of an issue workflow.
-- `issue_workflow_execution_pull_request_links`: pull request lineage for workflow executions.
-- `issue_pull_request_links`: direct issue-to-pull-request lineage links.
-
-## Issue workflow execution reporting tables
-
-- `issue_workflow_execution_events`: ordered execution event stream per workflow execution.
-- `issue_workflow_execution_validation_results`: structured validation outcomes per workflow
-  execution.
-- `issue_workflow_execution_diff_files`: structured changed-file metadata per workflow execution.
-- `issue_workflow_execution_artifacts`: artifact references and inline payloads per workflow
-  execution.
-- `issue_workflow_execution_summaries`: synthesized execution summaries.
+- `ssh_keys`: managed SSH public-key records and private-key secret references.

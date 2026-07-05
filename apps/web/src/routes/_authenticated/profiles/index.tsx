@@ -13,7 +13,7 @@ function ProfilesPage() {
     <SandboxPage
       kicker="Profiles"
       title="Reusable environments"
-      description="Profiles define repeatable runtime context so runs and issue delegation stay deterministic across teams."
+      description="Profiles define repeatable runtime context so runs stay deterministic across teams."
       metrics={[
         { label: "Profiles", value: String(PROFILES.length) },
         {
