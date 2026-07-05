@@ -19,8 +19,20 @@ import {
   messageResponseSchema,
   renameSandboxRequestSchema,
   renameSandboxResponseSchema,
+  listRunsQuerySchema,
+  listRunsResponseSchema,
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
+  runChangesResponseSchema,
+  runEventParamsSchema,
+  runEventSchema,
+  runIdParamsSchema,
+  runLossReportSchema,
+  runSchema,
+  runScrollbackQuerySchema,
+  runScrollbackResponseSchema,
+  runTimelineQuerySchema,
+  runTimelineResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
   sshKeyIdParamsSchema,
@@ -142,6 +154,30 @@ export interface CoreApiClient {
       readonly name: string;
     }): Promise<InferSchema<typeof renameSandboxResponseSchema>>;
   };
+  readonly runs: {
+    list(input: {
+      readonly ownerUserId: string;
+      readonly sandboxId?: string;
+      readonly status?: InferSchema<typeof runSchema>["status"];
+      readonly limit?: number;
+    }): Promise<InferSchema<typeof listRunsResponseSchema>>;
+    byId(input: InferSchema<typeof runIdParamsSchema>): Promise<InferSchema<typeof runSchema>>;
+    timeline(
+      input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runTimelineQuerySchema>,
+    ): Promise<InferSchema<typeof runTimelineResponseSchema>>;
+    event(
+      input: InferSchema<typeof runEventParamsSchema>,
+    ): Promise<InferSchema<typeof runEventSchema>>;
+    scrollback(
+      input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runScrollbackQuerySchema>,
+    ): Promise<InferSchema<typeof runScrollbackResponseSchema>>;
+    loss(
+      input: InferSchema<typeof runIdParamsSchema>,
+    ): Promise<InferSchema<typeof runLossReportSchema>>;
+    changes(
+      input: InferSchema<typeof runIdParamsSchema>,
+    ): Promise<InferSchema<typeof runChangesResponseSchema>>;
+  };
   readonly sshKeys: {
     create(
       input: InferSchema<typeof createSshKeyRequestSchema>,
@@ -163,6 +199,7 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly sandboxes: CoreApiClient["sandboxes"];
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
+  public readonly runs: CoreApiClient["runs"];
   public readonly sshKeys: CoreApiClient["sshKeys"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
@@ -185,11 +222,140 @@ class CoreApiClientImpl implements CoreApiClient {
       installationRepositories: (input) => this.listGitHubInstallationRepositories(input),
       syncInstallation: (input) => this.syncGitHubInstallation(input),
     };
+    this.runs = {
+      list: (input) => this.listRuns(input),
+      byId: (input) => this.getRun(input),
+      timeline: (input) => this.getRunTimeline(input),
+      event: (input) => this.getRunEvent(input),
+      scrollback: (input) => this.getRunScrollback(input),
+      loss: (input) => this.getRunLoss(input),
+      changes: (input) => this.getRunChanges(input),
+    };
     this.sshKeys = {
       create: (input) => this.createSshKey(input),
       list: (input) => this.listSshKeys(input),
       archive: (input) => this.archiveSshKey(input),
     };
+  }
+
+  private async listRuns(input: {
+    readonly ownerUserId: string;
+    readonly sandboxId?: string;
+    readonly status?: InferSchema<typeof runSchema>["status"];
+    readonly limit?: number;
+  }): Promise<InferSchema<typeof listRunsResponseSchema>> {
+    const query = listRunsQuerySchema.parse({
+      sandboxId: input.sandboxId,
+      status: input.status,
+      limit: input.limit,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/runs",
+      schema: listRunsResponseSchema,
+      query: {
+        ownerUserId: input.ownerUserId,
+        sandboxId: query.sandboxId,
+        status: query.status,
+        limit: query.limit,
+      },
+    });
+  }
+
+  private async getRun(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}`,
+      schema: runSchema,
+    });
+  }
+
+  private async getRunTimeline(
+    input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runTimelineQuerySchema>,
+  ): Promise<InferSchema<typeof runTimelineResponseSchema>> {
+    const params = runIdParamsSchema.parse({ runId: input.runId });
+    const query = runTimelineQuerySchema.parse({
+      fromSequence: input.fromSequence,
+      toSequence: input.toSequence,
+      limit: input.limit,
+      kinds: input.kinds,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/timeline`,
+      schema: runTimelineResponseSchema,
+      query: {
+        fromSequence: query.fromSequence,
+        toSequence: query.toSequence,
+        limit: query.limit,
+        // The wire carries kinds as a comma-separated list (see api-contracts runs.ts).
+        kinds: query.kinds?.join(","),
+      },
+    });
+  }
+
+  private async getRunEvent(
+    input: InferSchema<typeof runEventParamsSchema>,
+  ): Promise<InferSchema<typeof runEventSchema>> {
+    const params = runEventParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/events/${encodeURIComponent(params.sequence)}`,
+      schema: runEventSchema,
+    });
+  }
+
+  private async getRunScrollback(
+    input: InferSchema<typeof runIdParamsSchema> & InferSchema<typeof runScrollbackQuerySchema>,
+  ): Promise<InferSchema<typeof runScrollbackResponseSchema>> {
+    const params = runIdParamsSchema.parse({ runId: input.runId });
+    const query = runScrollbackQuerySchema.parse({
+      processId: input.processId,
+      stream: input.stream,
+      atSequence: input.atSequence,
+    });
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/scrollback`,
+      schema: runScrollbackResponseSchema,
+      query: {
+        processId: query.processId,
+        stream: query.stream,
+        atSequence: query.atSequence,
+      },
+    });
+  }
+
+  private async getRunLoss(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runLossReportSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/loss`,
+      schema: runLossReportSchema,
+    });
+  }
+
+  private async getRunChanges(
+    input: InferSchema<typeof runIdParamsSchema>,
+  ): Promise<InferSchema<typeof runChangesResponseSchema>> {
+    const params = runIdParamsSchema.parse(input);
+
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/runs/${encodeURIComponent(params.runId)}/changes`,
+      schema: runChangesResponseSchema,
+    });
   }
 
   private async createSshKey(

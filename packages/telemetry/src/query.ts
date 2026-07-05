@@ -101,8 +101,20 @@ export const makeTelemetryQuery = (
       withTelemetryQueryError(
         "getTimeline",
         db
-          .select()
+          .select({
+            eventId: telemetryTimeline.eventId,
+            sequence: telemetryTimeline.sequence,
+            kind: telemetryTimeline.kind,
+            occurredAt: telemetryTimeline.occurredAt,
+            summary: telemetryTimeline.summary,
+            refJson: telemetryTimeline.refJson,
+            // Correlation + provenance joined from the log (event_id is the PK on both sides).
+            processId: telemetryEvents.processId,
+            captureMethod: telemetryEvents.captureMethod,
+            confidence: telemetryEvents.confidence,
+          })
           .from(telemetryTimeline)
+          .innerJoin(telemetryEvents, eq(telemetryEvents.eventId, telemetryTimeline.eventId))
           .where(
             and(
               eq(telemetryTimeline.runId, runId),
@@ -129,6 +141,9 @@ export const makeTelemetryQuery = (
                     occurredAt: row.occurredAt,
                     summary: row.summary,
                     ref: row.refJson,
+                    processId: row.processId,
+                    captureMethod: row.captureMethod,
+                    confidence: row.confidence,
                   }),
                 ),
               ),

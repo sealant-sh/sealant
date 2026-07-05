@@ -11,6 +11,8 @@ const entry = (kind: string, ref: Record<string, unknown>): WireTimelineEntry =>
   occurredAt: String(seq),
   summary: kind,
   ref,
+  captureMethod: 2, // pty
+  confidence: 1, // observed
 });
 
 // Mirrors the real recorded shape: opencode runs, emits output, exits; then two git commands; then a
