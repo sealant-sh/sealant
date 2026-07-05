@@ -1,17 +1,18 @@
 /**
- * `harness.run()` — the one-shot execution path, now a THIN HTTP CLIENT.
+ * `harness.run()` / `harness.start()` — the one-shot execution paths, THIN HTTP CLIENTS.
  *
  * The SDK no longer execs the harness or writes telemetry itself (that moved server-side into the
- * worker). It simply: registers a run via the control plane WITH the harness command (so the control
- * plane executes it), polls until the run reaches a terminal status, then reads the captured changes —
- * all over HTTP. No Postgres pool, no docker-exec, no telemetry sink: this is what makes @sealant/sdk
- * a plain client that runs anywhere.
+ * worker). Both paths register a run via the control plane WITH the harness command (so the control
+ * plane executes it). `run()` then polls until the run reaches a terminal status and reads the
+ * captured changes; `start()` returns the live handle immediately (stream via `run.record.stream()`,
+ * settle via `run.wait()`). No Postgres pool, no docker-exec, no telemetry sink: this is what makes
+ * @sealant/sdk a plain client that runs anywhere.
  */
 import { Effect } from "effect";
 
 import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
-import { makeRun, type RunChangesData } from "../facade/run.js";
+import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { RunHarnessFn, SandboxInit } from "../facade/sandbox.js";
 import type { Run } from "../types.js";
 import { createRunOp, getRunChangesOp, getRunOp } from "./operations.js";
@@ -20,7 +21,11 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const POLL_INTERVAL = "500 millis";
 const RUN_TIMEOUT_MS = 30 * 60 * 1_000;
 
-const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
+/**
+ * Registers the run WITH the harness command — the control plane executes it server-side (the worker
+ * docker-execs it and ingests telemetry). The cwd is the sandbox repo, which the worker defaults to.
+ */
+const createHarnessRunEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
   Effect.gen(function* () {
     const harness = init.harness;
     if (harness === undefined) {
@@ -31,11 +36,8 @@ const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
         ),
       );
     }
-
-    // Register the run WITH the harness command — the control plane executes it server-side (the worker
-    // docker-execs it and ingests telemetry). The cwd is the sandbox repo, which the worker defaults to.
     const command = harness.buildRunCommand(prompt);
-    const created = yield* createRunOp({
+    return yield* createRunOp({
       sandboxId: init.id,
       ownerUserId: ctx.config.hostLocal.ownerUserId,
       harnessId: harness.id,
@@ -43,6 +45,11 @@ const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
       prompt,
       command: { executable: command.executable, args: [...command.args] },
     });
+  });
+
+const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
+  Effect.gen(function* () {
+    const created = yield* createHarnessRunEffect(ctx, init, prompt);
     const runId = created.runId;
 
     // Block until the run is terminal, polling the control plane.
@@ -61,19 +68,22 @@ const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
     }
 
     // Read the changes the run produced (captured server-side).
-    const changesWire = yield* getRunChangesOp(runId);
-    const changes: RunChangesData = {
-      files: changesWire.files.map((file) => ({
-        path: file.path,
-        change: file.change,
-        ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
-      })),
-      diff: changesWire.diff,
-    };
-
+    const changes = toRunChangesData(yield* getRunChangesOp(runId));
     return makeRun(ctx, { wire, changes });
   });
 
-/** The host-local `harness.run()` implementation, registered into the Sandbox facade by the client. */
+/** The BLOCKING `harness.run()` implementation, registered into the Sandbox facade by the client. */
 export const runHarness: RunHarnessFn = (ctx, init, prompt): Promise<Run> =>
   ctx.runtime.run(runHarnessEffect(ctx, init, prompt));
+
+/**
+ * The NON-BLOCKING `harness.start()` implementation: register the run and return the live handle
+ * immediately. Callers stream progress via `run.record.stream()` and settle via `run.wait()` (which
+ * fetches the captured changes once terminal).
+ */
+export const startHarness: RunHarnessFn = (ctx, init, prompt): Promise<Run> =>
+  ctx.runtime.run(
+    Effect.map(createHarnessRunEffect(ctx, init, prompt), (created) =>
+      makeRun(ctx, { wire: created }),
+    ),
+  );

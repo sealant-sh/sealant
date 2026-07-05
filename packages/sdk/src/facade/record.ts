@@ -2,8 +2,8 @@
  * The `RunRecord` facade — the execution record as the SDK exposes it. Backed by the run/record
  * contract endpoints (`client.runs.*`), it maps the wire shapes to the public types: decimal-string
  * sequences become `bigint`, base64 scrollback becomes `Uint8Array`. `replay()`/`timeline()`/
- * `scrollback()`/`loss()`/`summary()` are live; `stream()` and the time-travel folds are typed but
- * reject until their read models land (Phase 2 / Phase 1).
+ * `scrollback()`/`loss()`/`summary()`/`stream()` are live; the time-travel folds are typed but
+ * reject until their read models land (Phase 1).
  */
 import type {
   Run as WireRun,
