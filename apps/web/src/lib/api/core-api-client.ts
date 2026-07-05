@@ -1,7 +1,12 @@
 import {
+  connectedAccountSummarySchema,
+  createConnectedAccountRequestSchema,
   createSandboxRequestSchema,
   createSandboxResponseSchema,
   createSshKeyRequestSchema,
+  listConnectedAccountsResponseSchema,
+  listProfileCredentialBindingsResponseSchema,
+  listProfilesResponseSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
   githubInstallationsQuerySchema,
@@ -51,7 +56,7 @@ export class CoreApiHttpError extends Error {
 }
 
 interface CoreApiRequestOptions<TOutput> {
-  readonly method: "GET" | "POST" | "PATCH" | "DELETE";
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   readonly path: string;
   readonly schema: JsonSchema<TOutput>;
   readonly query?: Readonly<Record<string, string | number | undefined>>;
@@ -154,6 +159,33 @@ export interface CoreApiClient {
       readonly ownerUserId: string;
     }): Promise<InferSchema<typeof sshKeySummarySchema>>;
   };
+  readonly connectedAccounts: {
+    create(
+      input: InferSchema<typeof createConnectedAccountRequestSchema>,
+    ): Promise<InferSchema<typeof connectedAccountSummarySchema>>;
+    list(input: {
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listConnectedAccountsResponseSchema>>;
+    archive(input: {
+      readonly connectedAccountId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof connectedAccountSummarySchema>>;
+  };
+  readonly profiles: {
+    list(input: {
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listProfilesResponseSchema>>;
+    listCredentialBindings(input: {
+      readonly profileId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>>;
+    setCredentialBinding(input: {
+      readonly profileId: string;
+      readonly ownerUserId: string;
+      readonly provider: InferSchema<typeof createConnectedAccountRequestSchema>["provider"];
+      readonly connectedAccountId: string | null;
+    }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>>;
+  };
 }
 
 class CoreApiClientImpl implements CoreApiClient {
@@ -164,6 +196,8 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
   public readonly sshKeys: CoreApiClient["sshKeys"];
+  public readonly connectedAccounts: CoreApiClient["connectedAccounts"];
+  public readonly profiles: CoreApiClient["profiles"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -190,6 +224,93 @@ class CoreApiClientImpl implements CoreApiClient {
       list: (input) => this.listSshKeys(input),
       archive: (input) => this.archiveSshKey(input),
     };
+    this.connectedAccounts = {
+      create: (input) => this.createConnectedAccount(input),
+      list: (input) => this.listConnectedAccounts(input),
+      archive: (input) => this.archiveConnectedAccount(input),
+    };
+    this.profiles = {
+      list: (input) => this.listProfiles(input),
+      listCredentialBindings: (input) => this.listProfileCredentialBindings(input),
+      setCredentialBinding: (input) => this.setProfileCredentialBinding(input),
+    };
+  }
+
+  private async createConnectedAccount(
+    input: InferSchema<typeof createConnectedAccountRequestSchema>,
+  ): Promise<InferSchema<typeof connectedAccountSummarySchema>> {
+    const payload = createConnectedAccountRequestSchema.parse(input);
+
+    return this.requestJson({
+      method: "POST",
+      path: "/v1/connected-accounts",
+      schema: connectedAccountSummarySchema,
+      body: payload,
+    });
+  }
+
+  private async listConnectedAccounts(input: {
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listConnectedAccountsResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/connected-accounts",
+      schema: listConnectedAccountsResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async archiveConnectedAccount(input: {
+    readonly connectedAccountId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof connectedAccountSummarySchema>> {
+    return this.requestJson({
+      method: "DELETE",
+      path: `/v1/connected-accounts/${encodeURIComponent(input.connectedAccountId)}`,
+      schema: connectedAccountSummarySchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async listProfiles(input: {
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listProfilesResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/profiles",
+      schema: listProfilesResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async listProfileCredentialBindings(input: {
+    readonly profileId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: `/v1/profiles/${encodeURIComponent(input.profileId)}/credential-bindings`,
+      schema: listProfileCredentialBindingsResponseSchema,
+      query: { ownerUserId: input.ownerUserId },
+    });
+  }
+
+  private async setProfileCredentialBinding(input: {
+    readonly profileId: string;
+    readonly ownerUserId: string;
+    readonly provider: InferSchema<typeof createConnectedAccountRequestSchema>["provider"];
+    readonly connectedAccountId: string | null;
+  }): Promise<InferSchema<typeof listProfileCredentialBindingsResponseSchema>> {
+    return this.requestJson({
+      method: "PUT",
+      path: `/v1/profiles/${encodeURIComponent(input.profileId)}/credential-bindings`,
+      schema: listProfileCredentialBindingsResponseSchema,
+      body: {
+        ownerUserId: input.ownerUserId,
+        provider: input.provider,
+        connectedAccountId: input.connectedAccountId,
+      },
+    });
   }
 
   private async createSshKey(

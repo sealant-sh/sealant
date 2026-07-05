@@ -29,13 +29,17 @@ import {
   type SandboxSshTarget,
   type SandboxSummary,
 } from "@sealant/api-contracts";
+import { connectedAccountProviders, createConnectedAccountRef } from "@sealant/credentials";
 import {
+  ConnectedAccountRepo,
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
+  ProfileRepo,
   SandboxAttemptRepo,
   SandboxBuildJobRepo,
   SandboxRepo,
   SandboxRuntimeInstanceRepo,
+  type ConnectedAccount,
 } from "@sealant/db";
 import {
   resolveSandboxError,
@@ -664,6 +668,113 @@ const resolveGitHubDotfilesSelection = (input: {
   });
 };
 
+type SandboxCredentialRef = NewSandbox["runtime"]["credentialRefs"][number];
+
+/**
+ * Resolve the connected-account selection into opaque blueprint `credentialRefs`
+ * (`connected-account:<id>`). Explicit per-provider entries win over the profile's bindings.
+ * Values starting with "cacc_" are account ids; anything else is a per-provider account name.
+ * No secret material is resolved here — the worker decrypts just before launch.
+ */
+const resolveSandboxCredentialRefs = (input: {
+  readonly ownerUserId: string;
+  readonly credentials: CreateSandboxRequest["credentials"];
+}) => {
+  return Effect.gen(function* () {
+    const credentials = input.credentials;
+    const refs: SandboxCredentialRef[] = [];
+
+    if (credentials === undefined) {
+      return refs;
+    }
+
+    const connectedAccountRepo = yield* ConnectedAccountRepo;
+    const profileBound = new Map<ConnectedAccount["provider"], ConnectedAccount>();
+
+    if (credentials.profileId !== undefined) {
+      const profileRepo = yield* ProfileRepo;
+
+      const profile = yield* withInternalError(
+        profileRepo.getProfileById(credentials.profileId),
+        "Failed to load profile.",
+      );
+
+      // Uniform 404: unknown profile and someone else's profile look identical.
+      if (profile === undefined || profile.ownerUserId !== input.ownerUserId) {
+        return yield* new SandboxNotFoundError({
+          message: `Profile not found: ${credentials.profileId}`,
+        });
+      }
+
+      const bindings = yield* withInternalError(
+        connectedAccountRepo.getBindingsForProfileWithAccounts(profile.id),
+        "Failed to load profile credential bindings.",
+      );
+
+      for (const { binding, account } of bindings) {
+        profileBound.set(binding.provider, account);
+      }
+    }
+
+    for (const provider of connectedAccountProviders) {
+      const explicit = credentials[provider];
+      let account: ConnectedAccount | undefined;
+
+      if (explicit !== undefined) {
+        account = explicit.startsWith("cacc_")
+          ? yield* withInternalError(
+              connectedAccountRepo.getById(explicit),
+              "Failed to load connected account.",
+            )
+          : yield* withInternalError(
+              connectedAccountRepo.getByOwnerProviderName({
+                ownerUserId: input.ownerUserId,
+                provider,
+                name: explicit,
+              }),
+              "Failed to load connected account.",
+            );
+
+        // Uniform 404: unknown, someone else's, wrong-provider, and archived accounts all look
+        // identical to the caller.
+        if (
+          account === undefined ||
+          account.ownerUserId !== input.ownerUserId ||
+          account.provider !== provider ||
+          account.archivedAt !== null
+        ) {
+          return yield* new SandboxNotFoundError({
+            message: `No ${provider} connected account matches "${explicit}".`,
+          });
+        }
+
+        // Explicit selection: the caller named this account, so a broken one is a hard error
+        // rather than a silent omission.
+        if (account.status !== "active") {
+          return yield* new SandboxConflictError({
+            message: `Connected ${provider} account "${account.name}" is invalid — reconnect it.`,
+          });
+        }
+      } else {
+        const bound = profileBound.get(provider);
+
+        // A binding pointing at an unusable account (archived, or invalidated by a 401) is
+        // effectively disconnected — skip it rather than fail every launch that uses this profile
+        // (surfaces show it as "needs reconnect"). Only an explicitly-named account hard-fails.
+        if (bound === undefined || bound.archivedAt !== null || bound.status !== "active") {
+          continue;
+        }
+
+        account = bound;
+      }
+
+      refs.push({ provider, ref: createConnectedAccountRef(account.id) });
+    }
+
+    return refs;
+  });
+};
+
 const mapSandboxAttemptSummary = (
   link: SandboxRunLinkRecord,
   attempt: SandboxAttemptRecord,
@@ -947,6 +1058,20 @@ export const createSandbox = (input: {
     }
 
     const resolvedSpec = packageStandardization.spec;
+
+    // Connected-account selection -> opaque blueprint credentialRefs. The contract-level
+    // `credentials` field wins over one embedded in the spec (newSandboxSchema allows both).
+    // Always replace any client-supplied `runtime.credentialRefs`: the only refs that may reach
+    // the worker are ones we just resolved through ownership/status checks. A caller could
+    // otherwise embed `runtime.credentialRefs` pointing at another user's account id and have the
+    // worker decrypt and inject it (the refs are opaque `connected-account:<id>` pointers).
+    const credentialRefs = yield* resolveSandboxCredentialRefs({
+      ownerUserId: body.ownerUserId,
+      credentials: body.credentials ?? resolvedSpec.credentials,
+    });
+
+    resolvedSpec.runtime = { ...resolvedSpec.runtime, credentialRefs };
+
     const sandboxName =
       body.name === undefined
         ? inferSandboxName({

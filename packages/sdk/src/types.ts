@@ -86,6 +86,31 @@ export interface SandboxEvent {
 /** The supported sandbox OS families (maps to the blueprint target). */
 export type SandboxOs = "fedora" | "arch" | "nix";
 
+/**
+ * Connected-account credentials to attach to a sandbox at creation time, per provider — so the
+ * harness inside the sandbox authenticates as the caller's own Claude / Codex / GitHub identity
+ * instead of running unauthenticated.
+ *
+ * For each provider: `true` means "my default account" (the one named `"default"`), and a `string`
+ * names a specific connected account. `profile` names a profile slug/id whose bundled per-provider
+ * bindings apply first; any explicit `claude`/`codex`/`github` field wins over the profile's binding
+ * for that provider.
+ *
+ * SECURITY: only account **references** (booleans/names/ids) ever cross this surface — token values,
+ * `auth.json` contents, and any other secret material never do. The control plane resolves references
+ * to encrypted credentials server-side and injects them at launch.
+ */
+export interface SandboxCredentialsOptions {
+  /** Profile id whose per-provider account bindings apply first. */
+  readonly profile?: string;
+  /** `true` for the caller's default Claude account, or a string naming a specific one. */
+  readonly claude?: boolean | string;
+  /** `true` for the caller's default Codex account, or a string naming a specific one. */
+  readonly codex?: boolean | string;
+  /** `true` for the caller's default GitHub account, or a string naming a specific one. */
+  readonly github?: boolean | string;
+}
+
 export interface CreateOptions {
   /** Source git repository to build the sandbox around (e.g. `"github.com/acme/billing-service"`). */
   readonly repository: string;
@@ -103,6 +128,8 @@ export interface CreateOptions {
   readonly wait?: boolean;
   /** Observe provisioning events as they happen. */
   readonly onEvent?: (event: SandboxEvent) => void;
+  /** Connected-account credentials to attach to the sandbox (see `SandboxCredentialsOptions`). */
+  readonly credentials?: SandboxCredentialsOptions;
 }
 
 export interface ListOptions {

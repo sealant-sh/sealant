@@ -47,6 +47,7 @@ describe("K8sRuntimeAdapter", () => {
         },
         runtime: {
           env: {},
+          credentialRefs: [],
           sandboxRoot: "/sandbox",
           workingDirectory: "/sandbox/repo",
           persistence: "ephemeral",

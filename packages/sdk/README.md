@@ -29,6 +29,25 @@ await run.record.replay();
 - **Harness-neutral.** `opencode()`, `codex()`, `claudeCode()`, and `customHarness()` are thin
   client values describing how to invoke a harness one-shot.
 
+## Connected-account credentials
+
+Attach the caller's connected Claude / Codex / GitHub accounts to a sandbox so the harness
+authenticates as that identity instead of running unauthenticated:
+
+```ts
+const sandbox = await sealant.sandboxes.create({
+  repository: "github.com/acme/billing-service",
+  harness: claudeCode(),
+  credentials: { claude: true, github: "bot-account" },
+});
+```
+
+`true` means "my default account"; a string names a specific connected account. `profile` names a
+profile whose bundled per-provider bindings apply first, and any explicit `claude`/`codex`/`github`
+field wins over the profile's binding for that provider. Only account references cross the SDK
+surface — secret material never does; the control plane resolves references to encrypted credentials
+and injects them at launch.
+
 ## Status
 
 Scaffold. The public surface compiles and the harness factories are real; the client operations are

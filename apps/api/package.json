@@ -18,6 +18,7 @@
     "@hono/standard-validator": "^0.2.0",
     "@scalar/hono-api-reference": "^0.9.13",
     "@sealant/api-contracts": "workspace:*",
+    "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
     "@sealant/sandboxes": "workspace:*",

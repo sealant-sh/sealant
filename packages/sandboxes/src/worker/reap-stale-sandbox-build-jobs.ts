@@ -1,4 +1,5 @@
 import {
+  ConnectedAccountRepoLive,
   GitHubInstallationRepoLive,
   GitHubInstallationRepositoryCacheRepoLive,
   SandboxAttemptRepoLive,
@@ -52,6 +53,7 @@ export const reapStaleSandboxBuildJobs = async (
     SandboxAttemptRepoLive,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
+    ConnectedAccountRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   const program = Effect.gen(function* () {

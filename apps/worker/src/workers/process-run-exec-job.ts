@@ -9,11 +9,16 @@
  * Lives in the worker app (not @sealant/sandboxes) because it needs @sealant/telemetry, which already
  * depends on @sealant/sandboxes — putting it in sandboxes would be a dependency cycle.
  */
+import type { CredentialCipherService } from "@sealant/credentials";
 import {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoLive,
   type DB,
   type RunFileChange,
   RunRepo,
   RunRepoLive,
+  SandboxAttemptRepo,
+  SandboxAttemptRepoLive,
   SandboxRepo,
   SandboxRepoLive,
   SandboxRuntimeInstanceRepo,
@@ -26,6 +31,7 @@ import {
   SealantRuntime,
   SealantRuntimeDockerExecLive,
   sealantTargetForDockerContainer,
+  syncBackCodexAuthJson,
   type SealantTarget,
 } from "@sealant/sandboxes";
 import {
@@ -34,6 +40,7 @@ import {
   PostgresTelemetrySinkLive,
   TelemetrySink,
 } from "@sealant/telemetry";
+import { newSandboxSchema } from "@sealant/validators";
 import { Effect, Layer, Schedule, Stream } from "effect";
 
 const WORKDIR = "/sandbox/repo";
@@ -48,6 +55,11 @@ export interface ProcessRunExecJobOptions {
   readonly runId: string;
   readonly command: RunExecCommand;
   readonly db: DB;
+  /**
+   * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
+   * not configured. Only exercised by the best-effort codex auth.json sync-back after the run.
+   */
+  readonly credentialCipher?: CredentialCipherService;
 }
 
 const parseNameStatus = (output: string): RunFileChange[] => {
@@ -164,8 +176,52 @@ const resolveContainerResourceId = (runId: string) =>
         new Error(`Sandbox ${run.sandboxId} is not a running docker sandbox for run ${runId}.`),
       );
     }
-    return instance.resourceId;
+    // attemptId keys the stored attempt snapshot, from which the sync-back re-derives the launch
+    // blueprint (and thus the sandbox's connected-account refs) without new columns.
+    return { resourceId: instance.resourceId, attemptId: sandbox.latestRunId };
   });
+
+/**
+ * Best-effort codex auth.json sync-back after the run (design doc §2 codex / §6): the official
+ * Codex CLI in the sandbox rotates its refresh token, so the mutated file must be persisted —
+ * newest-wins only, and never at the cost of the run result. The blueprint is re-derived from the
+ * stored attempt snapshot; sandboxes without a codex credentialRef no-op immediately.
+ */
+const syncBackCodexAuth = (
+  attemptId: string,
+  target: SealantTarget,
+  credentialCipher: CredentialCipherService | undefined,
+) =>
+  Effect.gen(function* () {
+    const attempts = yield* SandboxAttemptRepo;
+    const snapshot = yield* attempts.getAttemptSnapshotByRunId(attemptId);
+    if (snapshot === undefined) {
+      return;
+    }
+    const blueprint = newSandboxSchema.parse(snapshot.blueprintPayload);
+
+    yield* syncBackCodexAuthJson({
+      blueprint,
+      credentialCipher,
+      // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
+      readAuthJson: () =>
+        execInSandbox(target, {
+          executable: "sh",
+          args: ["-c", 'cat "$HOME/.codex/auth.json"'],
+        }).pipe(
+          Effect.filterOrFail(
+            (result) => result.exitCode === 0,
+            (result) => new Error(`Reading codex auth.json exited with code ${result.exitCode}.`),
+          ),
+          Effect.map((result) => result.stdout),
+        ),
+    });
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Codex auth sync-back failed after run exec; continuing.", cause),
+    ),
+    Effect.asVoid,
+  );
 
 /** The Effect pipeline: resolve container, mark running, exec+capture, diff, mark terminal. */
 export const processRunExecJobEffect = (
@@ -173,11 +229,17 @@ export const processRunExecJobEffect = (
 ): Effect.Effect<
   void,
   unknown,
-  RunRepo | SandboxRepo | SandboxRuntimeInstanceRepo | SealantRuntime | TelemetrySink
+  | RunRepo
+  | SandboxRepo
+  | SandboxRuntimeInstanceRepo
+  | SandboxAttemptRepo
+  | ConnectedAccountRepo
+  | SealantRuntime
+  | TelemetrySink
 > =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const resourceId = yield* resolveContainerResourceId(options.runId);
+    const { resourceId, attemptId } = yield* resolveContainerResourceId(options.runId);
     const target = sealantTargetForDockerContainer(resourceId);
 
     yield* runs.markRunRunning({ id: options.runId });
@@ -197,6 +259,8 @@ export const processRunExecJobEffect = (
 
     // Never leave the run pinned in "running": reconcile to failed on ANY abnormal exit (onError fires
     // on typed failures AND defects, e.g. a "connection closed" surfaced as a die).
+    // The codex sync-back runs on EVERY exit path (`ensuring`): the CLI may have rotated its refresh
+    // token even when the harness itself failed, and the helper never fails (warnings only).
     yield* produce.pipe(
       Effect.onError(() =>
         runs
@@ -206,6 +270,7 @@ export const processRunExecJobEffect = (
           })
           .pipe(Effect.ignore),
       ),
+      Effect.ensuring(syncBackCodexAuth(attemptId, target, options.credentialCipher)),
     );
   });
 
@@ -216,6 +281,8 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
     RunRepoLive,
     SandboxRepoLive,
     SandboxRuntimeInstanceRepoLive,
+    SandboxAttemptRepoLive,
+    ConnectedAccountRepoLive,
   ).pipe(Layer.provide(dbLayer));
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(dbLayer));
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
