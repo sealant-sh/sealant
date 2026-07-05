@@ -15,9 +15,11 @@ cp .env.example .env                                  # the dev defaults already
 pnpm ssh:setup:dev                                    # only if you want to SSH into sandboxes
 ```
 
-`pnpm ssh:setup:dev` generates `.secrets/*` keys, writes a `Host sbx-*` block to your SSH config
-(`~/.config/sealant/ssh_config`, included from `~/.ssh/config` when writable), and appends the
-gateway vars — including a shared `SANDBOX_SSH_GATEWAY_TOKEN` — to **`.env`**.
+`pnpm ssh:setup:dev` appends the gateway vars — including a shared `SANDBOX_SSH_GATEWAY_TOKEN` — to
+**`.env`**. That's all it does: the gateway's host key autogenerates on first boot (into the
+`gateway-keys` compose volume, same mechanism as the packaged self-host stack), and your client key
+is your own — registered through the web app (first-run `/setup` wizard or **Settings → SSH keys**),
+which also prints the `Host sbx-*` block to paste into `~/.ssh/config`.
 
 ## Topology
 
@@ -43,17 +45,20 @@ pnpm --filter @sealant/web dev                        # :3000   (terminal 2)
 docker compose --profile apps up -d --build           # worker + ssh-gateway
 ```
 
-Open **http://localhost:3000**, log in, and start a sandbox. The worker builds the image (pushed to
-zot) and launches the container; wait until it's running/ready.
+Open **http://localhost:3000**. With an empty database the web app routes you to the first-run
+**`/setup` wizard**: create your account, paste your SSH public key, and copy the `Host sbx-*` block
+into `~/.ssh/config`. Then start a sandbox — the worker builds the image (pushed to zot) and
+launches the container; wait until it's running/ready.
 
 ## SSH into a sandbox
 
 ```bash
-ssh -F ~/.config/sealant/ssh_config sbx-<sandboxId>
+ssh sbx-<sandboxId>
 ```
 
-The `-F` form uses the generated config + an isolated `known_hosts` — no `~/.ssh` edits, and it
-survives regenerating the gateway key (so no "host identification changed" warnings).
+Works once the wizard's `Host sbx-*` block is in your `~/.ssh/config` and your key is registered. No
+generated identities, no `IdentityFile` pinning — the gateway authenticates whatever key your SSH
+client offers against the keys registered to your account.
 
 ### Authorization (current ACL)
 
@@ -62,12 +67,24 @@ The gateway authorizes by **owner**: the principal your SSH key resolves to must
 
 1. **DB-registered keys** (the normal path): the gateway looks the offered key up in the `ssh_keys`
    table via the API (`POST /v1/ssh-keys/resolve-principal`) on every connection — no restart
-   needed. Web users register keys under **Settings → SSH keys** (profile dropdown) or inline when
-   creating a sandbox; `db:seed` registers `.secrets/dev_client_key.pub` under `usr_local` for the
-   SDK/self-host flow.
-2. **The static file `.secrets/gateway_allowed_keys`** (operator break-glass): loaded once at
-   gateway start; the trailing comment is the principal. Works even when the API is down, but
-   requires a rebuild/restart to change.
+   needed. Users register keys in the first-run `/setup` wizard, under **Settings → SSH keys**, or
+   inline when creating a sandbox.
+2. **The static file `/keys/gateway_allowed_keys`** in the `gateway-keys` volume (operator
+   break-glass): loaded once at gateway start; the trailing comment is the principal. Works even
+   when the API is down, but requires a restart to change.
+
+### SSH into SDK-created sandboxes (`usr_local`)
+
+The SDK stamps `ownerUserId=usr_local` (seeded by `db:seed`), so your web account's key won't
+authorize you into SDK-created sandboxes. Two options:
+
+- **Recommended:** point the SDK at your real account — `SEALANT_OWNER_USER_ID=<your web user id>` —
+  so SDK sandboxes are owned by you and your registered key just works.
+- **Break-glass:** add a **dedicated** keypair's public key to `/keys/gateway_allowed_keys` (in the
+  `gateway-keys` volume) with the trailing comment `usr_local`, and connect with `-i` pointing at
+  that key. Never list your main key there: the static file wins over the DB, so it would remap
+  **all** your connections to `usr_local`. (`SEALANT_DEV_SSH_PUBLIC_KEY_FILE` on the seed does the
+  DB-side equivalent for automation.)
 
 ## Releasing (packaged self-host)
 
@@ -97,6 +114,6 @@ The pieces:
   with `--filter`.
 - **"Connection closed" right after the gateway banner** is authorization, not SSH: check
   `docker compose logs --tail=5 ssh-gateway`. Usually the principal ≠ owner (above), the key isn't
-  registered (web: Settings → SSH keys; SDK: re-run `db:seed`), or the sandbox isn't running.
-- **"Host identification has changed"** means you regenerated the gateway key. The `-F` form avoids
-  it; if you used the global known_hosts, run `ssh-keygen -R "[localhost]:2222"`.
+  registered (Settings → SSH keys), or the sandbox isn't running.
+- **"Host identification has changed"** means the gateway host key changed (e.g. you removed the
+  `gateway-keys` volume). Run `ssh-keygen -R "[127.0.0.1]:2222"` and reconnect.

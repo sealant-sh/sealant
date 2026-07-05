@@ -51,6 +51,7 @@ import {
 import { newSandboxSchema, type NewSandbox } from "@sealant/validators";
 import { Context, Effect, Result } from "effect";
 
+import { resolveSandboxSshGatewayConfig } from "../../lib/sandbox-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
 import {
   PackageStandardizerService,
@@ -149,22 +150,6 @@ const parseSandboxSpec = (spec: unknown) => {
   }
 
   return Effect.succeed(parsed.data);
-};
-
-const resolveSandboxSshGatewayConfig = (): SandboxSshGatewayConfig | undefined => {
-  const host = env.SANDBOX_SSH_GATEWAY_HOST?.trim();
-
-  if (host === undefined || host.length === 0) {
-    return undefined;
-  }
-
-  return {
-    host,
-    ...(env.SANDBOX_SSH_GATEWAY_PORT === undefined ? {} : { port: env.SANDBOX_SSH_GATEWAY_PORT }),
-    ...(env.SANDBOX_SSH_GATEWAY_USERNAME_PREFIX === undefined
-      ? {}
-      : { usernamePrefix: env.SANDBOX_SSH_GATEWAY_USERNAME_PREFIX }),
-  };
 };
 
 const readIdempotencyKey = (headers: CreateSandboxHeaders): string | undefined => {

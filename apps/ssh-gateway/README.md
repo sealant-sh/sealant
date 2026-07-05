@@ -42,11 +42,12 @@ In short: user connects once to gateway, gateway drives the daemon control proto
   binding wider exposes it publicly; opt in explicitly)
 - `SSH_GATEWAY_PORT` (default: `2222`)
 - `SSH_GATEWAY_BANNER` (default: welcome message shown during SSH handshake)
-- `SSH_GATEWAY_HOST_KEY_PATH` (default: `./.secrets/ssh_gateway_host_key`)
+- `SSH_GATEWAY_HOST_KEY_PATH` (default: `/keys/ssh_gateway_host_key` — matches the `gateway-keys`
+  compose volume; override for host runs)
 - `SSH_GATEWAY_HOST_KEY_AUTOGENERATE` (default: `false` — when `true`, a missing host key is
-  generated on first boot instead of failing startup; the packaged self-host compose uses this with
-  a persistent volume. An existing key is never overwritten.)
-- `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `./.secrets/authorized_keys`; optional — a missing or
+  generated on first boot instead of failing startup; both the dev and self-host compose files use
+  this with the persistent `gateway-keys` volume. An existing key is never overwritten.)
+- `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `/keys/gateway_allowed_keys`; optional — a missing or
   empty file is fine, user keys resolve via the API)
 - `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX` (default: `sbx`)
 - `CORE_API_BASE_URL` (default: `http://127.0.0.1:4000`)
@@ -90,25 +91,21 @@ Related integration points outside this app:
 - `apps/web/src/routes/_authenticated/sandboxes/$sandboxId/index.tsx`
   - copied SSH command and VS Code/Cursor URI generation.
 - `tooling/scripts/setup-ssh-gateway-dev.mjs`
-  - dev key/env setup + SSH config generation.
+  - dev gateway env bootstrap (`.env` managed block).
 
 ## Development
 
-Bootstrap local env + keys (recommended before first run):
+Bootstrap the shared gateway env (recommended before first run):
 
 ```bash
 pnpm ssh:setup:dev
 ```
 
-This script:
-
-- Generates gateway host/upstream/client keys under `.secrets/`.
-- Updates `.env.local` with gateway env values.
-- Writes `~/.config/sealant/ssh_config` and `~/.config/sealant/known_hosts`.
-- Tries to add `Include ~/.config/sealant/ssh_config` to `~/.ssh/config`.
-
-If your environment prevents editing `~/.ssh/config` (common with immutable Nix setups), the script
-prints the manual include line you need to add in your own SSH config management.
+This writes a managed block to the repo `.env` with `SANDBOX_SSH_GATEWAY_TOKEN` (generated once,
+then preserved) plus HOST/PORT/USERNAME_PREFIX, so the API (host process) and the gateway container
+agree. No key material is involved: the gateway host key autogenerates on first boot into the
+`gateway-keys` volume, and client keys are registered through the web app (first-run `/setup` wizard
+or Settings → SSH keys), which also prints the `Host sbx-*` block for `~/.ssh/config`.
 
 Run with Docker Compose app profile (starts `worker` + `ssh-gateway`):
 
@@ -128,9 +125,8 @@ Then connect through the gateway:
 ssh sbx-<sandboxId>
 ```
 
-`pnpm ssh:setup:dev` writes `~/.config/sealant/ssh_config` and ensures
-`Include ~/.config/sealant/ssh_config` exists in `~/.ssh/config` so VS Code Remote SSH can resolve
-`sbx-<sandboxId>` with the correct identity key.
+This works once the `Host sbx-*` block from the web app's `/setup` wizard is in `~/.ssh/config`; VS
+Code Remote SSH resolves `sbx-<sandboxId>` through the same block.
 
 ## VS Code notes
 
@@ -150,13 +146,12 @@ Expected shape:
 - `hostname 127.0.0.1` (or your configured gateway host)
 - `port 2222`
 - `user sbx-<sandboxId>`
-- `identityfile .../.secrets/dev_client_key`
 
 ## Troubleshooting
 
 - `Permission denied (publickey)`:
-  - confirm your public key is registered (web: Settings → SSH keys; SDK/self-host: `db:seed`
-    registers `.secrets/dev_client_key.pub`) or present in `.secrets/gateway_allowed_keys`.
+  - confirm your public key is registered (web: `/setup` wizard or Settings → SSH keys) or present
+    in the `gateway-keys` volume's `gateway_allowed_keys` (break-glass).
   - if the API is down, only static-file keys authenticate — check the gateway logs for
     `principal lookup failed`.
   - confirm SSH config uses `User %n` for `Host sbx-*`.

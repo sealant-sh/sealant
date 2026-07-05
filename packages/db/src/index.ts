@@ -181,6 +181,14 @@ export {
 } from "./repositories/ssh-keys.js";
 
 export {
+  UserRepo,
+  UserRepoLive,
+  UserRepoUnexpectedError,
+  type UserRepoError,
+  type UserRepoService,
+} from "./repositories/users.js";
+
+export {
   RunRepo,
   RunRepoInvariantError,
   RunRepoLive,

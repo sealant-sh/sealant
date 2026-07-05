@@ -23,6 +23,7 @@ import {
   resolvePackageResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
+  setupStateResponseSchema,
   sshKeyIdParamsSchema,
   sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
@@ -154,6 +155,9 @@ export interface CoreApiClient {
       readonly ownerUserId: string;
     }): Promise<InferSchema<typeof sshKeySummarySchema>>;
   };
+  readonly system: {
+    setupState(): Promise<InferSchema<typeof setupStateResponseSchema>>;
+  };
 }
 
 class CoreApiClientImpl implements CoreApiClient {
@@ -164,6 +168,7 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
   public readonly sshKeys: CoreApiClient["sshKeys"];
+  public readonly system: CoreApiClient["system"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
@@ -190,6 +195,17 @@ class CoreApiClientImpl implements CoreApiClient {
       list: (input) => this.listSshKeys(input),
       archive: (input) => this.archiveSshKey(input),
     };
+    this.system = {
+      setupState: () => this.getSetupState(),
+    };
+  }
+
+  private async getSetupState(): Promise<InferSchema<typeof setupStateResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/system/setup-state",
+      schema: setupStateResponseSchema,
+    });
   }
 
   private async createSshKey(
