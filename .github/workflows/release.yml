@@ -79,19 +79,16 @@ jobs:
     name: Self-host install smoke
     needs: image
     runs-on: ubuntu-latest
-    # packages: read so the smoke can pull the just-pushed images while the GHCR packages are still
-    # private (before the one-time public flip).
+    # Pull ANONYMOUSLY, exactly like a user: GHCR authorizes GITHUB_TOKEN by package↔repo linkage
+    # (not visibility), and logging in with it 403'd even on public packages during the v0.1.0
+    # release. Anonymous pulls of public packages always work. Consequence: the first release of any
+    # NEW image name fails here until its GHCR package is flipped public — flip it, then re-run the
+    # failed jobs (`gh run rerun <id> --failed`).
     permissions:
       contents: read
-      packages: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Log in to GHCR (packages may be private before first publish)
-        run:
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}"
-          --password-stdin
 
       - name: Run installer against the tagged images
         env:
