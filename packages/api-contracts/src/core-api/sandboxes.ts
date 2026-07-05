@@ -53,6 +53,18 @@ export const githubSandboxSourceSelectionSchema = Schema.Struct({
 });
 export type GitHubSandboxSourceSelection = typeof githubSandboxSourceSelectionSchema.Type;
 
+// Connected-account selection (mirrors `newSandboxCredentialsSchema` in @sealant/validators):
+// values are connected-account ids ("cacc_…") or per-provider account names; explicit per-provider
+// entries win over the profile's bindings. Resolved server-side into opaque blueprint
+// `credentialRefs` — no secret material ever appears in the request or the blueprint.
+export const createSandboxCredentialsSchema = Schema.Struct({
+  profileId: Schema.optional(NonEmptyString),
+  claude: Schema.optional(NonEmptyString),
+  codex: Schema.optional(NonEmptyString),
+  github: Schema.optional(NonEmptyString),
+});
+export type CreateSandboxCredentials = typeof createSandboxCredentialsSchema.Type;
+
 export const createSandboxRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   registryId: NonEmptyString,
@@ -61,6 +73,7 @@ export const createSandboxRequestSchema = Schema.Struct({
   name: Schema.optional(NonEmptyString),
   sourceSelection: Schema.optional(githubSandboxSourceSelectionSchema),
   dotfilesSelection: Schema.optional(githubSandboxSourceSelectionSchema),
+  credentials: Schema.optional(createSandboxCredentialsSchema),
   spec: Schema.Unknown,
 });
 export type CreateSandboxRequest = typeof createSandboxRequestSchema.Type;
@@ -293,6 +306,8 @@ export const SandboxesGroup = HttpApiGroup.make("sandboxes")
         SandboxBadRequestError,
         SandboxForbiddenError,
         SandboxNotFoundError,
+        // Selected connected account exists but is not usable (status "invalid").
+        SandboxConflictError,
         SandboxBadGatewayError,
         SandboxServiceUnavailableError,
         SandboxInternalServerError,

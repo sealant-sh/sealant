@@ -92,6 +92,13 @@ export const githubEnvSchema = githubApiEnvSchema
   .merge(githubAppEnvSchema)
   .merge(githubOAuthEnvSchema);
 
+export const credentialsEnvSchema = z.object({
+  // Generated once per install (install.sh / compose bootstrap write it into the deployment env);
+  // encrypts connected-account credentials at rest (AES-256-GCM in @sealant/credentials).
+  // Base64 encoding of exactly 32 random bytes — enforced by superRefine below.
+  SEALANT_CREDENTIALS_KEY: z.string().trim().min(1).optional(),
+});
+
 export const sandboxSshGatewayEnvSchema = z.object({
   SANDBOX_SSH_GATEWAY_TOKEN: z.string().trim().min(1).optional(),
   SANDBOX_SSH_GATEWAY_HOST: z.string().trim().min(1).optional(),
@@ -142,6 +149,23 @@ const addGitHubAppCredentialsIssue = (
   }
 };
 
+const addCredentialsKeyIssue = (credentialsKey: string | undefined, ctx: z.RefinementCtx) => {
+  if (credentialsKey === undefined) {
+    return;
+  }
+
+  // Buffer.from(.., "base64") silently ignores invalid characters, so also gate on the alphabet.
+  const isBase64 = /^[A-Za-z0-9+/]+={0,2}$/.test(credentialsKey);
+
+  if (!isBase64 || Buffer.from(credentialsKey, "base64").byteLength !== 32) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["SEALANT_CREDENTIALS_KEY"],
+      message: "SEALANT_CREDENTIALS_KEY must be base64 that decodes to exactly 32 bytes.",
+    });
+  }
+};
+
 export const expandEnvironmentPath = (value: string): string => {
   const homeDirectory = process.env.HOME ?? homedir();
 
@@ -157,10 +181,12 @@ export const appCoreEnvSchema = httpServerEnvSchema
 
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
-  .merge(appCoreEnvSchema);
+  .merge(appCoreEnvSchema)
+  .merge(credentialsEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
+  addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(
     input.GITHUB_APP_ID,
     input.GITHUB_APP_PRIVATE_KEY,
@@ -239,10 +265,12 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(registryCredentialsEnvSchema)
   .merge(githubApiEnvSchema)
   .merge(githubAppEnvSchema)
+  .merge(credentialsEnvSchema)
   .merge(workerRuntimeEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
+  addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(
     input.GITHUB_APP_ID,
     input.GITHUB_APP_PRIVATE_KEY,

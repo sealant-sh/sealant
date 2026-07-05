@@ -10,6 +10,7 @@ import {
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
+  type CredentialFileInjection,
   type SandboxCloneAuth,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapter,
@@ -38,9 +39,18 @@ export interface DockerCommandResult {
   readonly stderr: string;
 }
 
+export interface DockerCommandOptions {
+  /**
+   * Piped to the child's stdin (used for credential file injection so secret bytes never appear
+   * in argv or `docker inspect`).
+   */
+  readonly input?: string;
+}
+
 export type DockerCommandRunner = (
   command: string,
   args: Array<string>,
+  options?: DockerCommandOptions,
 ) => Promise<DockerCommandResult>;
 
 export interface DockerRuntimeCatalog {
@@ -89,14 +99,31 @@ export interface DockerRuntimeAdapterOptions {
 }
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
-  return async (command, args) => {
-    const result = await execFileAsync(command, args, {
+  return async (command, args, options) => {
+    const pendingResult = execFileAsync(command, args, {
       maxBuffer: 1024 * 1024 * 10,
       env: {
         ...process.env,
         DOCKER_HOST: `unix://${dockerSocketPath}`,
       },
     });
+
+    // promisify(execFile) exposes the spawned child on the returned promise; write the payload to
+    // its stdin so the content never appears in argv.
+    if (options?.input !== undefined) {
+      const stdin = pendingResult.child.stdin;
+
+      if (stdin !== null && stdin !== undefined) {
+        // If the child already exited (e.g. the image lacks `base64`), writing to the closed pipe
+        // emits an EPIPE 'error' on stdin; with no listener that throws as an uncaught exception
+        // and crashes the worker. Swallow it here — the real failure still surfaces via the
+        // awaited non-zero exit / stderr below.
+        stdin.on("error", () => {});
+        stdin.end(options.input);
+      }
+    }
+
+    const result = await pendingResult;
 
     return {
       stdout: result.stdout,
@@ -221,6 +248,31 @@ const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> =
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,
   ];
+};
+
+/**
+ * Build the in-container shell command that writes one injected credential file from stdin.
+ *
+ * The path is embedded double-quoted inside the script so `$HOME` expands inside the container
+ * shell (design doc §6: the codex path is literally `$HOME/.codex/auth.json`). Paths come from
+ * our own injection planner, but the command is still built defensively: any shell-metacharacter
+ * beyond `$` is rejected rather than interpolated, and the mode is schema-validated octal.
+ */
+const buildCredentialFileWriteScript = (file: CredentialFileInjection): string => {
+  if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {
+    throw createAdapterError(
+      "credential-file-injection-failed",
+      `Credential file path '${file.path}' contains characters that are not allowed in an injection path.`,
+    );
+  }
+  if (!/^[0-7]{3,4}$/.test(file.mode)) {
+    throw createAdapterError(
+      "credential-file-injection-failed",
+      `Credential file mode '${file.mode}' is not a valid octal mode.`,
+    );
+  }
+
+  return `umask 077 && mkdir -p "$(dirname "${file.path}")" && base64 -d > "${file.path}" && chmod ${file.mode} "${file.path}"`;
 };
 
 const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
@@ -505,7 +557,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const result = await this.commandRunner("docker", args);
       const id = result.stdout.trim();
       if (id.length === 0) {
-        throw createAdapterError("adapter-unavailable", "Docker run did not return a container id.");
+        throw createAdapterError(
+          "adapter-unavailable",
+          "Docker run did not return a container id.",
+        );
       }
       return id;
     };
@@ -527,6 +582,35 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
+   * Write connected-account credential files into the running container (design doc §6). Content
+   * is piped over stdin to `base64 -d` inside the container, so the secret bytes never appear in
+   * argv, image layers, or `docker inspect`; `umask 077` + `chmod` keep them owner-only. On any
+   * failure the container is force-removed (matching the readiness-failure cleanup paths) so a
+   * recorded "failed" launch has no dangling container running without its credentials.
+   */
+  private async writeCredentialFiles(
+    containerId: string,
+    containerName: string,
+    credentialFiles: readonly CredentialFileInjection[],
+  ): Promise<void> {
+    for (const file of credentialFiles) {
+      try {
+        const script = buildCredentialFileWriteScript(file);
+        await this.commandRunner("docker", ["exec", "-i", containerId, "sh", "-c", script], {
+          input: file.contentBase64,
+        });
+      } catch (error) {
+        await this.forceRemoveContainer(containerId);
+        const message = error instanceof Error ? error.message : "Unknown credential write error.";
+        throw createAdapterError(
+          "credential-file-injection-failed",
+          `Failed to write credential file '${file.path}' into sandbox container '${containerName}': ${message}`,
+        );
+      }
+    }
+  }
+
+  /**
    * True once the daemon control socket is ACCEPTING. The default reach probes inside the container
    * (`docker exec test -S`); the §2.2 bind-mount fast path stats the socket on the host instead.
    */
@@ -536,7 +620,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   ): Promise<boolean> {
     if (this.controlSocketHostDir !== undefined) {
       try {
-        const stats = await stat(joinPath(this.controlSocketHostDir, containerName, "control.sock"));
+        const stats = await stat(
+          joinPath(this.controlSocketHostDir, containerName, "control.sock"),
+        );
         return stats.isSocket();
       } catch {
         return false;
@@ -657,6 +743,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             "-e",
             `SEALANT_SANDBOX_HTTP_TOKEN=${sandboxCloneAuth.token}`,
           ];
+    // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN) join the `-e`
+    // args with the same exposure profile as the clone tokens above (plaintext-argv hardening is a
+    // tracked pre-existing item, design doc §6).
+    const credentialEnvArgs = Object.entries(parsed.credentialEnv ?? {}).flatMap(([key, value]) => [
+      "-e",
+      `${key}=${value}`,
+    ]);
     // §2.2 opt-in fast path: bind-mount the daemon's socket *parent dir* to a per-container host dir
     // so the gateway can connect directly. We mount the parent (the daemon creates control.sock
     // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
@@ -674,6 +767,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...sandboxHttpAuthEnvArgs,
       ...controlSocketMountArgs,
       ...envArgsFromBlueprint(parsed),
+      // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
+      // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
+      // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).
+      ...credentialEnvArgs,
       imageReference,
     ];
     if (this.autoRemove) {
@@ -687,6 +784,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // otherwise the control plane reports "ready" before the socket binds (the readiness TOCTOU
       // that surfaced as intermittent "connection closed" in harness.run()).
       await this.awaitControlSocketReady(containerId, containerName);
+    }
+
+    // Credential FILE injections happen only after the container is up (and, when verification is
+    // enabled, after the readiness wait): the write is a `docker exec` into the live container.
+    const credentialFiles = parsed.credentialFiles ?? [];
+    if (credentialFiles.length > 0) {
+      await this.writeCredentialFiles(containerId, containerName, credentialFiles);
     }
 
     // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still

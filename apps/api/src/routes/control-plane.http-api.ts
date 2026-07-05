@@ -2,8 +2,10 @@ import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { Layer } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
+import { ConnectedAccountsHandlersLive } from "./connected-accounts/connected-accounts.http-api.js";
 import { GitHubHandlersLive } from "./github/github.http-api.js";
 import { PackagesHandlersLive } from "./packages/packages.http-api.js";
+import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
 import { RunsHandlersLive } from "./runs/runs.http-api.js";
 import { SandboxesHandlersLive } from "./sandboxes/sandboxes.http-api.js";
@@ -15,6 +17,8 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
   PackagesHandlersLive,
   SandboxesHandlersLive,
   SshKeysHandlersLive,
+  ConnectedAccountsHandlersLive,
+  ProfilesHandlersLive,
   RunsHandlersLive,
   RegistriesHandlersLive,
   GitHubHandlersLive,

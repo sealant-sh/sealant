@@ -350,7 +350,9 @@ describe("DockerRuntimeAdapter", () => {
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
-    await adapter.launch(parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }));
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({ ...createLaunchInput(), runId: "run-xyz" }),
+    );
 
     const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
     const nameIndex = runArgs.indexOf("--name");
@@ -712,6 +714,195 @@ describe("DockerRuntimeAdapter", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("joins credential env injections to the docker run -e args", async () => {
+    const commandRunner = vi.fn<
+      (
+        command: string,
+        args: Array<string>,
+        options?: { input?: string },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-cred-env\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput(),
+        credentialEnv: {
+          CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test",
+          GITHUB_TOKEN: "gho_test",
+        },
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-test");
+    expect(runArgs).toContain("GITHUB_TOKEN=gho_test");
+  });
+
+  it("writes credential files over stdin after the container is ready", async () => {
+    const contentBase64 = Buffer.from('{"tokens":{}}', "utf8").toString("base64");
+    const commandRunner = vi.fn<
+      (
+        command: string,
+        args: Array<string>,
+        options?: { input?: string },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-cred-file\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput(),
+        credentialFiles: [{ path: "$HOME/.codex/auth.json", contentBase64, mode: "600" }],
+      }),
+    );
+
+    expect(result.status).toBe("ready");
+    const writeCall = commandRunner.mock.calls.find(
+      (call) => call[1]?.[0] === "exec" && call[1]?.includes("-i"),
+    );
+    expect(writeCall).toBeDefined();
+    expect(writeCall?.[1]).toEqual([
+      "exec",
+      "-i",
+      "container-id-cred-file",
+      "sh",
+      "-c",
+      'umask 077 && mkdir -p "$(dirname "$HOME/.codex/auth.json")" && base64 -d > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json"',
+    ]);
+    // The secret bytes travel over stdin only — never in argv.
+    expect(writeCall?.[2]).toEqual({ input: contentBase64 });
+    expect(writeCall?.[1]).not.toContain(contentBase64);
+    // The write happened AFTER the readiness probe (`exec test -S`).
+    const execCalls = commandRunner.mock.calls.filter((call) => call[1]?.[0] === "exec");
+    expect(execCalls[execCalls.length - 1]?.[1]).toContain("-i");
+  });
+
+  it("fails the launch and removes the container when a credential file write fails", async () => {
+    const commandRunner = vi.fn<
+      (
+        command: string,
+        args: Array<string>,
+        options?: { input?: string },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-cred-fail\n", stderr: "" };
+      }
+      if (args[0] === "exec" && args.includes("-i")) {
+        throw new Error("test: base64 write exploded");
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await expect(
+      adapter.launch(
+        parseRuntimeAdapterLaunchInput({
+          ...createLaunchInput(),
+          credentialFiles: [
+            {
+              path: "$HOME/.codex/auth.json",
+              contentBase64: Buffer.from("{}", "utf8").toString("base64"),
+              mode: "600",
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/Failed to write credential file/);
+
+    const forceRemoved = commandRunner.mock.calls.some(
+      (call) => call[1]?.[0] === "rm" && call[1]?.includes("-f"),
+    );
+    expect(forceRemoved).toBe(true);
+  });
+
+  it("rejects credential file paths with shell metacharacters instead of interpolating them", async () => {
+    const commandRunner = vi.fn<
+      (
+        command: string,
+        args: Array<string>,
+        options?: { input?: string },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-cred-badpath\n", stderr: "" };
+      }
+      if (args[0] === "exec" && args.includes("-i")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await expect(
+      adapter.launch(
+        parseRuntimeAdapterLaunchInput({
+          ...createLaunchInput(),
+          credentialFiles: [
+            {
+              path: '$HOME/.codex/auth.json"; rm -rf /; "',
+              contentBase64: Buffer.from("{}", "utf8").toString("base64"),
+              mode: "600",
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow(/not allowed in an injection path/);
+
+    // No write exec was attempted with the hostile path.
+    const writeCalls = commandRunner.mock.calls.filter(
+      (call) => call[1]?.[0] === "exec" && call[1]?.includes("-i"),
+    );
+    expect(writeCalls).toHaveLength(0);
   });
 
   it("omits a control endpoint when SSH access is disabled", async () => {

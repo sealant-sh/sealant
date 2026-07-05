@@ -25,6 +25,10 @@ export const relations = defineRelations(schema, (r) => ({
       to: r.secretVersions.createdByUserId,
     }),
     sshKeys: r.many.sshKeys({ from: r.user.id, to: r.sshKeys.ownerUserId }),
+    connectedAccounts: r.many.connectedAccounts({
+      from: r.user.id,
+      to: r.connectedAccounts.ownerUserId,
+    }),
     createdRepositoryProfileRevisions: r.many.repositoryProfileRevisions({
       from: r.user.id,
       to: r.repositoryProfileRevisions.createdByUserId,
@@ -146,6 +150,26 @@ export const relations = defineRelations(schema, (r) => ({
     activeRevision: r.one.profileRevisions({
       from: r.profiles.activeRevisionId,
       to: r.profileRevisions.id,
+    }),
+    connectedAccountBindings: r.many.profileConnectedAccounts({
+      from: r.profiles.id,
+      to: r.profileConnectedAccounts.profileId,
+    }),
+  },
+
+  connectedAccounts: {
+    owner: r.one.user({ from: r.connectedAccounts.ownerUserId, to: r.user.id }),
+    profileBindings: r.many.profileConnectedAccounts({
+      from: r.connectedAccounts.id,
+      to: r.profileConnectedAccounts.connectedAccountId,
+    }),
+  },
+
+  profileConnectedAccounts: {
+    profile: r.one.profiles({ from: r.profileConnectedAccounts.profileId, to: r.profiles.id }),
+    connectedAccount: r.one.connectedAccounts({
+      from: r.profileConnectedAccounts.connectedAccountId,
+      to: r.connectedAccounts.id,
     }),
   },
 

@@ -1,0 +1,45 @@
+export {
+  CredentialCipher,
+  CredentialCipherConfig,
+  CredentialCipherError,
+  CredentialCipherLive,
+  credentialCipherLayer,
+  SEALED_CREDENTIAL_VERSION,
+  sha256Hex,
+  type CredentialCipherOperation,
+  type CredentialCipherOptions,
+  type CredentialCipherService,
+  type SealedCredential,
+} from "./cipher.js";
+
+export {
+  CLAUDE_OAUTH_TOKEN_ENV_KEY,
+  CODEX_AUTH_JSON_PATH,
+  CONNECTED_ACCOUNT_REF_PREFIX,
+  createConnectedAccountRef,
+  GITHUB_TOKEN_ENV_KEYS,
+  parseConnectedAccountRef,
+  planCredentialInjections,
+  type CredentialInjection,
+} from "./injection.js";
+
+export {
+  CLAUDE_TOKEN_PREFIX,
+  claudeCredentialPayloadSchema,
+  codexCredentialPayloadSchema,
+  connectedAccountProviders,
+  connectedAccountProviderSchema,
+  GITHUB_TOKEN_PREFIXES,
+  githubCredentialPayloadSchema,
+  hasKnownGitHubTokenPrefix,
+  parseClaudeCredentialPayload,
+  parseCodexAuthJson,
+  parseCodexCredentialPayload,
+  parseGitHubCredentialPayload,
+  type ClaudeCredentialPayload,
+  type CodexAuthMetadata,
+  type CodexCredentialPayload,
+  type ConnectedAccountProvider,
+  type GitHubCredentialPayload,
+  type ParseCodexAuthJsonResult,
+} from "./payloads.js";

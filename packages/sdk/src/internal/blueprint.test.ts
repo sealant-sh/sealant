@@ -16,6 +16,12 @@ interface SpecShape {
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
   readonly target: { readonly runtime: { readonly family: string } };
+  readonly credentials?: {
+    readonly profileId?: string;
+    readonly claude?: string;
+    readonly codex?: string;
+    readonly github?: string;
+  };
 }
 
 describe("buildCreateSandboxRequest", () => {
@@ -45,5 +51,31 @@ describe("buildCreateSandboxRequest", () => {
     const spec = payload.spec as unknown as SpecShape;
     expect(spec.sources.sandbox.url).toBe("https://gitlab.com/x/y.git");
     expect(spec.sources.sandbox.ref).toBe("master");
+  });
+
+  it("omits `spec.credentials` when no credentials were requested", () => {
+    const { payload } = buildCreateSandboxRequest(
+      { repository: "github.com/acme/billing-service", harness: opencode() },
+      config,
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.credentials).toBeUndefined();
+  });
+
+  it("folds mapped credentials into `spec.credentials`", () => {
+    const { payload } = buildCreateSandboxRequest(
+      {
+        repository: "github.com/acme/billing-service",
+        harness: opencode(),
+        credentials: { profile: "prof_123", claude: true, github: "bot-account" },
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.credentials).toEqual({
+      profileId: "prof_123",
+      claude: "default",
+      github: "bot-account",
+    });
   });
 });

@@ -6,7 +6,9 @@
  * we derive. `customization.enableSealantd` is forced on (it bakes + launches the daemon the run path
  * connects to), the runtime target is pinned to docker (the only bridgeable adapter today), and the
  * foreground is a keepalive so the sandbox idles with the daemon up and the harness is exec'd on
- * demand by `run()` rather than launched at boot.
+ * demand by `run()` rather than launched at boot. `options.credentials`, if present, is lowered via
+ * `mapSandboxCredentials` (see `./credentials.js`) and folded into `spec.credentials`; the control
+ * plane resolves those account references server-side (never secret material over this path).
  */
 import { randomUUID } from "node:crypto";
 
@@ -14,6 +16,7 @@ import type { CreateSandboxRequest } from "@sealant/api-contracts";
 
 import type { CreateOptions } from "../types.js";
 import type { SealantInternalConfig } from "./config.js";
+import { mapSandboxCredentials } from "./credentials.js";
 
 const sanitizeRepoSlug = (value: string): string => {
   const slug = value
@@ -35,7 +38,12 @@ export const buildCreateSandboxRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
 ): { readonly payload: CreateSandboxRequest } => {
-  const tail = options.repository.split("/").filter((s) => s.length > 0).pop() ?? options.repository;
+  const tail =
+    options.repository
+      .split("/")
+      .filter((s) => s.length > 0)
+      .pop() ?? options.repository;
+  const credentials = mapSandboxCredentials(options.credentials);
   const spec = {
     version: "1",
     sources: {
@@ -58,6 +66,7 @@ export const buildCreateSandboxRequest = (
     ...(options.packages === undefined || options.packages.length === 0
       ? {}
       : { tooling: { packages: options.packages.map((id) => ({ id })) } }),
+    ...(credentials === undefined ? {} : { credentials }),
   };
 
   return {

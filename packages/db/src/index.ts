@@ -216,6 +216,25 @@ export {
 } from "./repositories/ssh-keys.js";
 
 export {
+  ConnectedAccountRepo,
+  ConnectedAccountRepoInvariantError,
+  ConnectedAccountRepoLive,
+  ConnectedAccountRepoUnexpectedError,
+  connectedAccountRepoErrorSchema,
+  type ArchiveConnectedAccountInput,
+  type ClearProfileConnectedAccountBindingInput,
+  type ConnectedAccountRepoError,
+  type ConnectedAccountRepoService,
+  type CreateConnectedAccountInput,
+  type GetConnectedAccountByOwnerProviderNameInput,
+  type ProfileConnectedAccountBindingWithAccount,
+  type ReplaceConnectedAccountPayloadInput,
+  type RestoreConnectedAccountInput,
+  type SetProfileConnectedAccountBindingInput,
+  type UpdateConnectedAccountSyncStateInput,
+} from "./repositories/connected-accounts.js";
+
+export {
   RunRepo,
   RunRepoInvariantError,
   RunRepoLive,
@@ -230,6 +249,9 @@ export {
 } from "./repositories/runs.js";
 
 export {
+  connectedAccountProviderValues,
+  connectedAccounts,
+  connectedAccountStatusValues,
   githubAppInstallations,
   githubInstallationAccountTypeValues,
   githubInstallationRepositories,
@@ -256,6 +278,7 @@ export {
   issueWorkflows,
   issueWorkflowStatusValues,
   packageResolutionCacheEntries,
+  profileConnectedAccounts,
   runModeValues,
   runs,
   runStatusValues,
@@ -278,6 +301,9 @@ export {
   type AuthSession,
   type AuthUser,
   type AuthVerification,
+  type ConnectedAccount,
+  type ConnectedAccountProvider,
+  type ConnectedAccountStatus,
   type GitHubAppInstallation,
   type GitHubInstallationAccountType,
   type GitHubInstallationRepository as GitHubInstallationRepositoryRecord,
@@ -290,6 +316,7 @@ export {
   type NewAuthSession,
   type NewAuthUser,
   type NewAuthVerification,
+  type NewConnectedAccount,
   type NewGitHubAppInstallation,
   type NewGitHubInstallationRepository,
   type NewGitHubInstallationUserGrant,
@@ -303,6 +330,7 @@ export {
   type NewIssueWorkflowExecutionSummary,
   type NewIssueWorkflowExecutionValidationResult,
   type NewPackageResolutionCacheEntry,
+  type NewProfileConnectedAccount,
   type NewRun,
   type NewSandboxAttempt,
   type NewSandboxAttemptSnapshot,
@@ -329,6 +357,7 @@ export {
   type IssueWorkflowExecutionValidationStatus,
   type IssueWorkflowStatus,
   type PackageResolutionCacheEntry,
+  type ProfileConnectedAccount,
   type Run,
   type RunFileChange,
   type RunMode,

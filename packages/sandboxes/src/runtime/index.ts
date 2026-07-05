@@ -1,4 +1,5 @@
 export {
+  credentialFileInjectionSchema,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
@@ -30,6 +31,7 @@ export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 export { K8sRuntimeAdapter } from "./k8s-runtime-adapter.js";
 
 export type {
+  CredentialFileInjection,
   PublishedImage,
   RuntimeAdapterBlueprint,
   RuntimeAdapter,

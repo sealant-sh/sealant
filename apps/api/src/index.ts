@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
 import { ControlPlaneAPI } from "@sealant/api-contracts";
+import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
@@ -108,10 +109,24 @@ const telemetryQueryLayer = TelemetryQueryLive.pipe(
   ),
 );
 
+/**
+ * Credential cipher layer:
+ *
+ * Seals connected-account payloads at rest (AES-256-GCM, key from
+ * `SEALANT_CREDENTIALS_KEY`). When the key is unset the connected-accounts module
+ * fails fast with 503 before ever touching the cipher, so the zero-key fallback
+ * below is never exercised — it only keeps the layer graph total so startup does
+ * not depend on optional configuration.
+ */
+const credentialCipher = credentialCipherLayer({
+  key: env.SEALANT_CREDENTIALS_KEY ?? Buffer.alloc(32).toString("base64"),
+});
+
 const requestDependenciesLayer = Layer.mergeAll(
   sourceIntegrationLayer,
   ControlPlaneCapabilitiesLive,
   telemetryQueryLayer,
+  credentialCipher,
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**

@@ -1,4 +1,5 @@
 import {
+  ConnectedAccountRepoLive,
   GitHubInstallationRepoLive,
   GitHubInstallationRepositoryCacheRepoLive,
   SandboxAttemptRepoLive,
@@ -14,8 +15,10 @@ import {
   type ProcessSandboxBuildJobOptions,
 } from "./process-sandbox-build-job.js";
 
-export interface ReapStaleSandboxBuildJobsOptions
-  extends Omit<ProcessSandboxBuildJobOptions, "jobId"> {
+export interface ReapStaleSandboxBuildJobsOptions extends Omit<
+  ProcessSandboxBuildJobOptions,
+  "jobId"
+> {
   /** Upper bound on jobs re-driven per tick, so a sweep can't run unbounded. Defaults to 5. */
   readonly maxReapsPerTick?: number;
 }
@@ -50,6 +53,7 @@ export const reapStaleSandboxBuildJobs = async (
     SandboxAttemptRepoLive,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
+    ConnectedAccountRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   const program = Effect.gen(function* () {
