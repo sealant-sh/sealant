@@ -12,6 +12,18 @@ propose a solution — that's the next task. Every claim is anchored to `file:li
 > on the repo layout (`packages/db/src/seed-core.ts`). Identity convergence, fingerprint-uniqueness
 > UX, and file-wins precedence (§8.1/8.2/8.4) remain open.
 
+> **Addendum 2 (onboarding overhaul, July 2026):** the `.secrets/` era described below is over.
+> `dev_client_key` and its seed registration are gone; the dev compose now autogenerates the gateway
+> host key into a `gateway-keys` volume exactly like self-host; the dead `gateway_upstream_key` /
+> sandbox `authorized_keys` / `DEFAULT_SSH_AUTHORIZED_KEYS_FILE` machinery was deleted; and
+> `pnpm ssh:setup:dev` shrank to an env-only bootstrap (it no longer touches `~/.config/sealant` or
+> `~/.ssh/config`). Onboarding is now the web app's first-run `/setup` wizard (create account →
+> paste SSH key → copy a `Host sbx-*` block, no IdentityFile pinning), gated by
+> `GET /v1/system/setup-state`. §3 (key registration paths), §5's dev-key friction, §6 (generated
+> ssh_config), and §8.3 are resolved. Identity convergence (§8.1) and file-wins precedence (§8.4)
+> remain open; SSH into `usr_local` sandboxes is documented in DEVELOPMENT.md ("SSH into SDK-created
+> sandboxes").
+
 ---
 
 ## 0. TL;DR — why this feels like a mess

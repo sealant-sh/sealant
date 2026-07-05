@@ -74,7 +74,6 @@ export interface DockerRuntimeAdapterOptions {
    * 120s. Probing is gated on `verifyRunning`.
    */
   readonly readinessTimeoutMs?: number;
-  readonly defaultSshAuthorizedKeysFile?: string;
   /**
    * @deprecated The inner sshd was removed (gateway-spec §4.3): the gateway reaches the daemon control
    * socket, not an inner sshd, so no SSH port is published and this host has no effect. Retained on the
@@ -320,8 +319,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly readinessTimeoutMs: number;
 
-  private readonly defaultSshAuthorizedKeysFile: string | undefined;
-
   private readonly controlSocketHostDir: string | undefined;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
@@ -334,7 +331,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
-    this.defaultSshAuthorizedKeysFile = options.defaultSshAuthorizedKeysFile;
     this.controlSocketHostDir = options.controlSocketHostDir;
   }
 
@@ -684,26 +680,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
+    // SSH access needs no key material here: the gateway reaches the sandbox over the daemon
+    // control socket (gateway-spec §2), and client keys are authorized against the control plane.
     const parsed = parseRuntimeAdapterSupportInput(input);
-    const support = supportForInput(parsed);
-    if (!support.supported) {
-      return support;
-    }
-
-    if (
-      parsed.blueprint.access.ssh.enabled &&
-      parsed.blueprint.access.ssh.authorizedKeysRef === undefined &&
-      this.defaultSshAuthorizedKeysFile === undefined
-    ) {
-      return parseRuntimeAdapterSupport({
-        supported: false,
-        reason: "unsupported-access-mode",
-        message:
-          "SSH is enabled but no authorized keys file was provided in access.ssh.authorizedKeysRef or adapter defaults.",
-      });
-    }
-
-    return support;
+    return supportForInput(parsed);
   }
 
   public async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {

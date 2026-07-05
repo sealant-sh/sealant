@@ -40,6 +40,7 @@ import {
   runTimelineResponseSchema,
   sandboxDetailsSchema,
   sandboxIdParamsSchema,
+  setupStateResponseSchema,
   sshKeyIdParamsSchema,
   sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
@@ -195,6 +196,9 @@ export interface CoreApiClient {
       readonly ownerUserId: string;
     }): Promise<InferSchema<typeof sshKeySummarySchema>>;
   };
+  readonly system: {
+    setupState(): Promise<InferSchema<typeof setupStateResponseSchema>>;
+  };
   readonly connectedAccounts: {
     create(
       input: InferSchema<typeof createConnectedAccountRequestSchema>,
@@ -233,6 +237,7 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly github: CoreApiClient["github"];
   public readonly runs: CoreApiClient["runs"];
   public readonly sshKeys: CoreApiClient["sshKeys"];
+  public readonly system: CoreApiClient["system"];
   public readonly connectedAccounts: CoreApiClient["connectedAccounts"];
   public readonly profiles: CoreApiClient["profiles"];
 
@@ -270,6 +275,9 @@ class CoreApiClientImpl implements CoreApiClient {
       list: (input) => this.listSshKeys(input),
       archive: (input) => this.archiveSshKey(input),
     };
+    this.system = {
+      setupState: () => this.getSetupState(),
+    };
     this.connectedAccounts = {
       create: (input) => this.createConnectedAccount(input),
       list: (input) => this.listConnectedAccounts(input),
@@ -280,6 +288,14 @@ class CoreApiClientImpl implements CoreApiClient {
       listCredentialBindings: (input) => this.listProfileCredentialBindings(input),
       setCredentialBinding: (input) => this.setProfileCredentialBinding(input),
     };
+  }
+
+  private async getSetupState(): Promise<InferSchema<typeof setupStateResponseSchema>> {
+    return this.requestJson({
+      method: "GET",
+      path: "/v1/system/setup-state",
+      schema: setupStateResponseSchema,
+    });
   }
 
   private async createConnectedAccount(

@@ -1,41 +1,21 @@
 import { Button } from "@sealant/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useState } from "react";
 
+import { AddSshKeyForm } from "@/features/ssh-keys/add-ssh-key-form";
 import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated/settings/ssh-keys")({
   component: SshKeysSettingsPage,
 });
 
-/** Best-effort comment extraction for the name prefill; the server does authoritative parsing. */
-const readKeyComment = (publicKey: string): string | undefined => {
-  const parts = publicKey.trim().split(/\s+/);
-  const comment = parts.slice(2).join(" ").trim();
-
-  return comment.length > 0 ? comment : undefined;
-};
-
 function SshKeysSettingsPage() {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [publicKey, setPublicKey] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const keysQuery = useQuery(trpc.sshKey.list.queryOptions());
-
-  const addKeyMutation = useMutation(
-    trpc.sshKey.add.mutationOptions({
-      onSuccess: async (response) => {
-        setStatusMessage(`Registered '${response.name}' (${response.fingerprint}).`);
-        setName("");
-        setPublicKey("");
-        await queryClient.invalidateQueries({ queryKey: trpc.sshKey.list.pathKey() });
-      },
-    }),
-  );
 
   const removeKeyMutation = useMutation(
     trpc.sshKey.remove.mutationOptions({
@@ -46,33 +26,11 @@ function SshKeysSettingsPage() {
     }),
   );
 
-  const addErrorMessage = useMemo(() => {
-    return addKeyMutation.error instanceof Error ? addKeyMutation.error.message : null;
-  }, [addKeyMutation.error]);
-
   const removeErrorMessage = useMemo(() => {
     return removeKeyMutation.error instanceof Error ? removeKeyMutation.error.message : null;
   }, [removeKeyMutation.error]);
 
   const keys = keysQuery.data?.items ?? [];
-
-  const handleAddKey = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const normalizedKey = publicKey.trim();
-    if (normalizedKey.length === 0) {
-      setStatusMessage("Paste an SSH public key to register it.");
-      return;
-    }
-
-    setStatusMessage(null);
-    const normalizedName = name.trim().length > 0 ? name.trim() : readKeyComment(normalizedKey);
-    await addKeyMutation.mutateAsync({
-      publicKey: normalizedKey,
-      ...(normalizedName === undefined ? {} : { name: normalizedName }),
-    });
-  };
 
   return (
     <div className="space-y-8 p-8 lg:p-10">
@@ -95,47 +53,13 @@ function SshKeysSettingsPage() {
               <span className="font-mono text-sm text-primary">01</span>
               Register a public key
             </h2>
-            <form className="mt-5 space-y-4" onSubmit={handleAddKey}>
-              <label className="flex flex-col gap-2">
-                <span className="ev-eyebrow">Name (optional — defaults to the key comment)</span>
-                <input
-                  value={name}
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    setStatusMessage(null);
-                  }}
-                  className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
-                  placeholder="my laptop"
-                  autoComplete="off"
-                />
-              </label>
-
-              <label className="flex flex-col gap-2">
-                <span className="ev-eyebrow">Public key</span>
-                <textarea
-                  value={publicKey}
-                  onChange={(event) => {
-                    setPublicKey(event.target.value);
-                    setStatusMessage(null);
-                  }}
-                  rows={4}
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
-                  placeholder="ssh-ed25519 AAAA... user@host"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </label>
-
-              {addErrorMessage === null ? null : (
-                <div className="border-l-2 border-danger-dot py-1 pl-3 text-sm leading-6 text-danger">
-                  {addErrorMessage}
-                </div>
-              )}
-
-              <Button type="submit" className="h-11 px-5" disabled={addKeyMutation.isPending}>
-                {addKeyMutation.isPending ? "Registering..." : "Register key"}
-              </Button>
-            </form>
+            <div className="mt-5">
+              <AddSshKeyForm
+                onSuccess={(key) => {
+                  setStatusMessage(`Registered '${key.name}' (${key.fingerprint}).`);
+                }}
+              />
+            </div>
           </section>
 
           <section className="rounded-2xl border border-border bg-popover p-6 shadow-[var(--shadow-sm)] sm:p-8">
@@ -228,7 +152,7 @@ function SshKeysSettingsPage() {
               <div className="rounded-xl border border-rule-faint bg-background px-4 py-4">
                 <p className="ev-eyebrow">Connect</p>
                 <p className="mt-2 font-mono text-xs text-foreground break-all">
-                  ssh sbx-&lt;sandboxId&gt;@127.0.0.1 -p 2222
+                  ssh sbx-&lt;sandboxId&gt;
                 </p>
               </div>
             </div>

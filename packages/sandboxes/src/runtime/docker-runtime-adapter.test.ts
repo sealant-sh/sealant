@@ -143,7 +143,9 @@ const createRuntimeCatalogLoader = (runtimes: ReadonlyArray<string> = ["runc", "
 };
 
 describe("DockerRuntimeAdapter", () => {
-  it("supports SSH-enabled blueprints when key source is configured", () => {
+  it("supports SSH-enabled blueprints without any key material configured", () => {
+    // The gateway reaches sandboxes over the daemon control socket; client keys are authorized
+    // against the control plane, so the adapter needs no authorized-keys source.
     const adapter = new DockerRuntimeAdapter();
     const support = adapter.supports({
       blueprint: createBlueprint({
@@ -151,34 +153,12 @@ describe("DockerRuntimeAdapter", () => {
           ssh: {
             enabled: true,
             listenPort: 2222,
-            authorizedKeysRef: "/sandbox/.secrets/authorized_keys",
           },
         },
       }),
     });
 
     expect(support).toEqual({ supported: true });
-  });
-
-  it("rejects SSH-enabled blueprints when no key source is configured", () => {
-    const adapter = new DockerRuntimeAdapter();
-    const support = adapter.supports({
-      blueprint: createBlueprint({
-        access: {
-          ssh: {
-            enabled: true,
-            listenPort: 2222,
-          },
-        },
-      }),
-    });
-
-    expect(support).toEqual({
-      supported: false,
-      reason: "unsupported-access-mode",
-      message:
-        "SSH is enabled but no authorized keys file was provided in access.ssh.authorizedKeysRef or adapter defaults.",
-    });
   });
 
   it("launches the published image with docker run", async () => {
@@ -580,14 +560,6 @@ describe("DockerRuntimeAdapter", () => {
   });
 
   it("exposes a control endpoint without publishing or injecting an inner sshd when SSH access is enabled", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
-    const keyFile = join(tempDir, "authorized_keys");
-    await writeFile(
-      keyFile,
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
-      "utf8",
-    );
-
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
     >(async (_command, args) => {
@@ -614,48 +586,37 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
-      defaultSshAuthorizedKeysFile: keyFile,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
     });
 
-    try {
-      const result = await adapter.launch(
-        createLaunchInput({
-          access: {
-            ssh: {
-              enabled: true,
-              listenPort: 2222,
-            },
+    const result = await adapter.launch(
+      createLaunchInput({
+        access: {
+          ssh: {
+            enabled: true,
+            listenPort: 2222,
           },
-        }),
-      );
+        },
+      }),
+    );
 
-      const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
-      // §4.3: no inner-sshd plumbing — no published SSH port, no SEALANT_SSH_* env injection.
-      expect(runArgs).not.toContain("-p");
-      expect(runArgs.some((arg) => arg.startsWith("SEALANT_ENABLE_SSH"))).toBe(false);
-      expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_"))).toBe(false);
-      // The endpoint is now the daemon control target (docker-exec reach), never an ssh:// URI.
-      expect(result.endpoint).toBe("docker-exec://container-id-456/run/sealant/control.sock");
-      expect(result.endpoint?.startsWith("ssh://")).toBe(false);
-      // The gateway reaches the daemon by the container id (resourceId), unaffected by sshd removal.
-      expect(result.resourceId).toBe("container-id-456");
-      // No `docker port` / network-inspect discovery is performed anymore.
-      const dockerSubcommands = commandRunner.mock.calls.map((call) => call[1]?.[0]);
-      expect(dockerSubcommands).not.toContain("port");
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    // §4.3: no inner-sshd plumbing — no published SSH port, no SEALANT_SSH_* env injection.
+    expect(runArgs).not.toContain("-p");
+    expect(runArgs.some((arg) => arg.startsWith("SEALANT_ENABLE_SSH"))).toBe(false);
+    expect(runArgs.some((arg) => arg.startsWith("SEALANT_SSH_"))).toBe(false);
+    // The endpoint is now the daemon control target (docker-exec reach), never an ssh:// URI.
+    expect(result.endpoint).toBe("docker-exec://container-id-456/run/sealant/control.sock");
+    expect(result.endpoint?.startsWith("ssh://")).toBe(false);
+    // The gateway reaches the daemon by the container id (resourceId), unaffected by sshd removal.
+    expect(result.resourceId).toBe("container-id-456");
+    // No `docker port` / network-inspect discovery is performed anymore.
+    const dockerSubcommands = commandRunner.mock.calls.map((call) => call[1]?.[0]);
+    expect(dockerSubcommands).not.toContain("port");
   });
 
   it("surfaces the host socket path as the control endpoint when the bind-mount fast path is enabled", async () => {
-    const tempDir = await mkdtemp(join(tmpdir(), "sealant-keys-"));
-    const keyFile = join(tempDir, "authorized_keys");
-    await writeFile(
-      keyFile,
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKexamplekey user@example\n",
-      "utf8",
-    );
+    const tempDir = await mkdtemp(join(tmpdir(), "sealant-sockets-"));
     const socketHostDir = join(tempDir, "sealant-sockets");
 
     const commandRunner = vi.fn<
@@ -684,7 +645,6 @@ describe("DockerRuntimeAdapter", () => {
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       containerNamePrefix: "sealant-test",
-      defaultSshAuthorizedKeysFile: keyFile,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
       controlSocketHostDir: socketHostDir,
       // This test exercises endpoint resolution, not readiness; no real daemon binds the bind-mounted

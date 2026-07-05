@@ -4,6 +4,7 @@ import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { AppShell } from "@/components/app/app-shell";
 import { sessionQueryOptions } from "@/lib/auth/session.query";
 import { sidebarSandboxesQueryOptions } from "@/lib/sandbox/sandbox.query";
+import { resolveNeedsSetup } from "@/lib/setup/setup.query";
 import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -11,6 +12,11 @@ export const Route = createFileRoute("/_authenticated")({
     const session = await context.queryClient.ensureQueryData(sessionQueryOptions(context.trpc));
 
     if (session === null) {
+      // A fresh deployment lands on the first-run wizard no matter which URL is hit first.
+      if (await resolveNeedsSetup(context)) {
+        throw redirect({ to: "/setup", search: { step: undefined } });
+      }
+
       throw redirect({
         to: "/login",
         search: { redirect: location.href },

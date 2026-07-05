@@ -64,7 +64,6 @@ export const startSandboxWorker = async (env: WorkerEnv) => {
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       dockerSocketPath: env.DOCKER_SOCKET_PATH,
-      defaultSshAuthorizedKeysFile: env.DEFAULT_SSH_AUTHORIZED_KEYS_FILE,
       sshBindHost: env.DEFAULT_SSH_BIND_HOST,
       sshEndpointExposureStrategy: env.DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY,
       // §2.2: when set, sandboxes expose their control socket on the host so the gateway reaches them

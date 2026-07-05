@@ -29,6 +29,7 @@ import {
   resolvePackageResponseSchema,
   sandboxIdParamsSchema,
   setProfileCredentialBindingRequestSchema,
+  setupStateResponseSchema,
   sshKeyIdParamsSchema,
   sshKeySummarySchema,
   syncGitHubInstallationQuerySchema,
@@ -135,6 +136,12 @@ export const appRouter = router({
     }),
     protectedSession: protectedProcedure.query(async ({ ctx }) => {
       return ctx.session;
+    }),
+  }),
+  setup: router({
+    // Public: pre-auth route gating decides between /login and the first-run /setup wizard.
+    state: publicProcedure.output(setupStateResponseSchema).query(async ({ ctx }) => {
+      return ctx.coreApi.system.setupState();
     }),
   }),
   registry: router({

@@ -245,11 +245,6 @@ export const workerRuntimeEnvSchema = z.object({
   // (same path) into both the worker (rw) and the ssh-gateway (ro).
   SANDBOX_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
-  DEFAULT_SSH_AUTHORIZED_KEYS_FILE: z
-    .string()
-    .trim()
-    .min(1)
-    .default("/app/.secrets/authorized_keys"),
   DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
   DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
     sshEndpointExposureStrategySchema.default("host-published"),
@@ -316,12 +311,14 @@ export const sshGatewayCoreEnvSchema = z.object({
     .default(
       "Welcome to Sealant Sandbox Gateway. This session is routed through Sealant infrastructure.",
     ),
-  SSH_GATEWAY_HOST_KEY_PATH: z.string().trim().min(1).default("./.secrets/ssh_gateway_host_key"),
-  // Opt-in first-boot provisioning (packaged self-host): generate an ed25519 host key at
-  // SSH_GATEWAY_HOST_KEY_PATH when the file is missing instead of refusing to start. An existing
-  // key is never overwritten, so the gateway's host identity is stable once created.
+  // Defaults match the containerized layout (compose mounts a `gateway-keys` volume at /keys);
+  // host runs override both paths explicitly.
+  SSH_GATEWAY_HOST_KEY_PATH: z.string().trim().min(1).default("/keys/ssh_gateway_host_key"),
+  // Opt-in first-boot provisioning: generate an ed25519 host key at SSH_GATEWAY_HOST_KEY_PATH when
+  // the file is missing instead of refusing to start. An existing key is never overwritten, so the
+  // gateway's host identity is stable once created.
   SSH_GATEWAY_HOST_KEY_AUTOGENERATE: z.stringbool().default(false),
-  SSH_GATEWAY_ALLOWED_KEYS_FILE: z.string().trim().min(1).default("./.secrets/authorized_keys"),
+  SSH_GATEWAY_ALLOWED_KEYS_FILE: z.string().trim().min(1).default("/keys/gateway_allowed_keys"),
   SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: z.string().trim().min(1).default("sbx"),
   CORE_API_BASE_URL: z.string().url().default("http://127.0.0.1:4000"),
 });

@@ -50,12 +50,10 @@ spec leaves `target.runtime.family` as `auto`.
 Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
 `runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
 
-Sandbox startup and SSH behavior are spec-authoritative. Worker defaults only cover host SSH wiring:
+Sandbox startup and SSH behavior are spec-authoritative. SSH-enabled sandboxes need no key material
+from the worker: the gateway reaches them over the sealantd control socket
+(`SANDBOX_CONTROL_SOCKET_HOST_DIR`), and client keys are authorized against the control plane's
+`ssh_keys` table. Remaining worker defaults:
 
-- `DEFAULT_SSH_AUTHORIZED_KEYS_FILE=/app/.secrets/authorized_keys`
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY=host-published` (`container-network` is gateway-ready)
-
-For local Docker Compose usage, create `./.secrets/authorized_keys` in the repo with one or more
-public keys. When SSH is enabled the Docker runtime adapter injects that key material into the
-sandbox and publishes SSH on an available host port.

@@ -680,17 +680,7 @@ interface ParsedSshEndpoint {
   readonly port?: string;
 }
 
-// Defaults are intentionally dev-friendly and match tooling/scripts/setup-ssh-gateway-dev.mjs.
 const DEFAULT_SANDBOX_SSH_USERNAME_PREFIX = "sbx";
-const DEFAULT_SANDBOX_SSH_IDENTITY_FILE = ".secrets/dev_client_key";
-
-function quoteShellToken(value: string): string {
-  if (/^[A-Za-z0-9_./-]+$/.test(value)) {
-    return value;
-  }
-
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
 
 function resolveSandboxSshUsernamePrefixToken(): string {
   const configuredPrefix =
@@ -703,18 +693,9 @@ function resolveSandboxSshUsernamePrefixToken(): string {
   return rawPrefix.endsWith("-") ? rawPrefix : `${rawPrefix}-`;
 }
 
-function resolveSandboxSshIdentityFile(): string {
-  const configuredIdentity =
-    typeof import.meta.env.VITE_SANDBOX_SSH_IDENTITY_FILE === "string"
-      ? import.meta.env.VITE_SANDBOX_SSH_IDENTITY_FILE.trim()
-      : "";
-
-  return configuredIdentity.length > 0 ? configuredIdentity : DEFAULT_SANDBOX_SSH_IDENTITY_FILE;
-}
-
-function shouldIncludeSandboxSshIdentityFlag(parsed: ParsedSshEndpoint): boolean {
-  // Gateway-style usernames look like sbx-<sandboxId>. For those, we want command
-  // snippets to include an explicit identity file so users can connect immediately.
+function isGatewaySshEndpoint(parsed: ParsedSshEndpoint): boolean {
+  // Gateway-style usernames look like sbx-<sandboxId>; the user's own registered key
+  // authenticates them, so commands need no identity flags.
   if (parsed.user.startsWith(resolveSandboxSshUsernamePrefixToken())) {
     return true;
   }
@@ -723,9 +704,9 @@ function shouldIncludeSandboxSshIdentityFlag(parsed: ParsedSshEndpoint): boolean
 }
 
 function buildEditorSshAuthority(parsed: ParsedSshEndpoint): string {
-  if (shouldIncludeSandboxSshIdentityFlag(parsed)) {
+  if (isGatewaySshEndpoint(parsed)) {
     // VS Code remote authority should use host alias only for gateway flow.
-    // The actual host/port/identity are provided by SSH config.
+    // The actual host/port are provided by the user's SSH config block.
     return parsed.user;
   }
 
@@ -777,7 +758,7 @@ function shouldUseSandboxAliasForEditor(input: {
     return false;
   }
 
-  if (shouldIncludeSandboxSshIdentityFlag(input.parsed)) {
+  if (isGatewaySshEndpoint(input.parsed)) {
     return true;
   }
 
@@ -940,17 +921,13 @@ function buildCursorOpenUri(input: {
 function buildSshCommand(endpoint: string | undefined): string | null {
   const parsed = parseSshEndpoint(endpoint);
   if (parsed !== null) {
-    // Copy command behavior differs between direct runtime SSH and gateway SSH.
-    // Gateway commands include an identity key to reduce setup friction.
-    const identityFlags = shouldIncludeSandboxSshIdentityFlag(parsed)
-      ? ` -i ${quoteShellToken(resolveSandboxSshIdentityFile())} -o IdentitiesOnly=yes`
-      : "";
-
+    // The gateway authenticates the key the user's SSH client offers (registered via the web
+    // app), so no identity flags are needed — a plain ssh command works out of the box.
     if (parsed.port !== undefined) {
-      return `ssh${identityFlags} ${parsed.user}@${parsed.host} -p ${parsed.port}`;
+      return `ssh ${parsed.user}@${parsed.host} -p ${parsed.port}`;
     }
 
-    return `ssh${identityFlags} ${parsed.user}@${parsed.host}`;
+    return `ssh ${parsed.user}@${parsed.host}`;
   }
 
   if (endpoint === undefined || endpoint.length === 0) {
