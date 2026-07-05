@@ -57,13 +57,13 @@ decide what it means.
 
 ## How you read records today
 
-> The record model is real, but the review surface is still early. Runs and their timeline,
-> scrollback, changes, and loss views are exposed through the [HTTP API](/docs/reference/http-api)
-> (`GET /v1/runs/:runId/timeline`, `/scrollback`, `/changes`, `/loss`) and the
-> [preview SDK](/docs/reference/sdk) (`run.record.replay()`, `timeline`, `scrollback`, `loss`,
-> `summary`, `transcript`). In the web app, the sandbox detail page shows a **summary** of attempts
-> and recent events today — not yet a full timeline-and-scrollback review UI. Treat the programmatic
-> surface as the way to read a complete record.
+> Runs and their timeline, scrollback, changes, and loss views are exposed three ways: the web app's
+> **run record page** (`/sandboxes/<sandbox-id>/runs/<run-id>` — the folded command timeline with
+> per-command scrollback, changes, network, and raw events), the
+> [HTTP API](/docs/reference/http-api) (`GET /v1/runs/:runId/timeline`, `/scrollback`, `/changes`,
+> `/loss`), and the [preview SDK](/docs/reference/sdk) (`run.record.replay()`, `timeline`, `stream`,
+> `scrollback`, `loss`, `summary`, `transcript`). Artifact retrieval and browser-evidence views are
+> not shipped yet.
 
 ## Related
 

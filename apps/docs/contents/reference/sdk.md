@@ -1,8 +1,8 @@
 ---
 title: SDK
 description:
-  "@sealant/sdk — the fluent TypeScript SDK for Sealant. Preview: unpublished and monorepo-only
-  today, with a clear map of what is implemented versus typed-but-not-wired."
+  "@sealant/sdk — the fluent TypeScript SDK for Sealant. Preview: first npm release in flight, with
+  a clear map of what is implemented versus typed-but-not-wired."
 ---
 
 `@sealant/sdk` is a fluent TypeScript client for Sealant: create a sandbox around a real repository,
@@ -11,10 +11,10 @@ run the harness you already use, and keep the replayable
 client over the [control-plane API](/docs/reference/http-api) — no local Docker or Postgres; it runs
 anywhere the API is reachable.
 
-> **Preview.** The SDK is not published to npm — the package is marked `"private": true`. Today it
-> is consumable only inside the Sealant monorepo (import `@sealant/sdk` from a workspace package).
-> There is no `npm install` yet. Its own README is stale; this page reflects the source. Expect the
-> surface to firm up before a public release.
+> **Preview.** The SDK is not on npm yet — the publish pipeline (Changesets + release tags) is in
+> place and the first release is in flight. Until it lands, the SDK is consumable only inside the
+> Sealant monorepo (import `@sealant/sdk` from a workspace package). Expect the surface to firm up
+> across early releases.
 
 ## Shape
 
@@ -35,6 +35,20 @@ const run = await sandbox.harness.run("Round invoice totals after applying the d
 // Read the replayable record.
 await run.record.replay();
 console.log(await run.record.transcript());
+```
+
+Prefer not to block? `harness.start()` registers the same server-side run but returns the live
+handle immediately — stream progress, then settle:
+
+```ts
+const run = await sandbox.harness.start("Round invoice totals after applying the discount.");
+
+for await (const entry of run.record.stream()) {
+  console.log(entry.kind, entry.occurredAt);
+}
+
+const settled = await run.wait(); // terminal result + captured changes (files, diff)
+console.log(settled.result.outcome, await settled.changes.diff());
 ```
 
 The client takes `{ baseUrl }` (and an optional `apiKey`, which the API does not enforce today — see
@@ -61,8 +75,10 @@ These call the live API and work end-to-end:
 - **Sandboxes:** `sealant.sandboxes.create()`, `.get()`, `.list()`
 - **Sandbox handle:** `sandbox.status()`, `sandbox.ready()`, `sandbox.events()` (poll-backed status
   stream)
-- **Harness:** `sandbox.harness.run(prompt)` — registers a run server-side and blocks until terminal
-- **Runs:** `sealant.runs.get(runId)`, `run.wait()`, `run.result`, `run.changes` (files + diff)
+- **Harness:** `sandbox.harness.run(prompt)` — registers a run server-side and blocks until
+  terminal; `sandbox.harness.start(prompt)` — same run, returns the live handle immediately
+- **Runs:** `sealant.runs.get(runId)`, `run.wait()` (polls to terminal, then fetches the captured
+  changes), `run.result`, `run.changes` (files + diff)
 - **Execution record** (`run.record`): `replay()`, `timeline()`, `stream()` (poll-backed),
   `scrollback()`, `loss()`, `summary()`, `commands()`, `transcript()`
 
@@ -71,7 +87,7 @@ These call the live API and work end-to-end:
 These exist on the typed surface so you can compile against the final shape, but they reject at
 runtime with `SealantNotImplementedError`. Do not depend on them yet:
 
-- **Harness:** `harness.start()` (non-blocking run), `harness.session()` (interactive)
+- **Harness:** `harness.session()` (interactive)
 - **Sandbox lifecycle:** `sandbox.stop()`, `sandbox.restart()`, `sandbox.expire()`
 - **Artifacts:** `run.artifacts.get()` (`.list()` currently returns empty)
 - **Record time-travel folds:** `record.fileTreeAt()`, `record.processTreeAt()`

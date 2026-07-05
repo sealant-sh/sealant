@@ -68,10 +68,11 @@ The relationship is straightforward:
 3. Sealant executes the harness's one-shot invocation inside the ready sandbox.
 4. Everything the harness does becomes an [execution record](/docs/concepts/execution-records).
 
-> The [SDK](/docs/reference/sdk) is a preview package (`@sealant/sdk`, unpublished). Today it is
-> consumable only inside the monorepo, and runs are started through it or the
-> [HTTP API](/docs/reference/http-api) (`POST /v1/runs`). The `harness.start` / `harness.session`
-> forms exist in the typed surface but are not wired end to end yet.
+> The [SDK](/docs/reference/sdk) is a preview package (`@sealant/sdk`; first npm release in flight).
+> Today it is consumable only inside the monorepo, and runs are started through it or the
+> [HTTP API](/docs/reference/http-api) (`POST /v1/runs`) — blocking via `harness.run` or
+> non-blocking via `harness.start`. The interactive `harness.session` form exists in the typed
+> surface but is not wired end to end yet.
 
 ## Related
 
