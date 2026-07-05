@@ -69,7 +69,10 @@ const normalizeBaseUrl = (input: string): string => {
 };
 
 const getCoreApiBaseUrl = (): string => {
-  const configuredBaseUrl = import.meta.env.VITE_API_URL ?? process.env.VITE_API_URL;
+  // CORE_API_BASE_URL is the server-side runtime override (a prebuilt web image points it at the
+  // api container); VITE_API_URL is baked into bundles at build time and must not shadow it.
+  const configuredBaseUrl =
+    process.env.CORE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? process.env.VITE_API_URL;
 
   if (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim().length > 0) {
     return configuredBaseUrl;

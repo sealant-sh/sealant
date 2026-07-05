@@ -1,0 +1,132 @@
+# Release: on a v*.*.* tag, build + push the multi-arch product images to GHCR, smoke-test the
+# packaged install end-to-end (install.sh against the just-pushed images), then publish the GitHub
+# release with the compose file attached — which is what makes `releases/latest` (and therefore the
+# curl|sh installer) resolve to this version. Mirrors sealantd's release workflow.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Image (${{ matrix.name }})
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: sealant-api
+            dockerfile: apps/api/Dockerfile
+          - name: sealant-worker
+            dockerfile: apps/worker/Dockerfile
+          - name: sealant-ssh-gateway
+            dockerfile: apps/ssh-gateway/Dockerfile
+          - name: sealant-web
+            dockerfile: apps/web/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU emulates arm64 on the amd64 runner; native arm64 runners + a per-arch matrix can
+      # replace this later (same follow-up as sealantd).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker builder (Blacksmith cache)
+        uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      # The web image must never receive VITE_API_URL at build time — the server reads
+      # CORE_API_BASE_URL at runtime, and a baked VITE_ value would shadow it.
+      - name: Build and push
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # Run the real installer against the images just pushed: stack must come up healthy (API, web,
+  # SSH gateway) from a clean machine with only Docker — the same contract users get.
+  selfhost-smoke:
+    name: Self-host install smoke
+    needs: image
+    runs-on: ubuntu-latest
+    # packages: read so the smoke can pull the just-pushed images while the GHCR packages are still
+    # private (before the one-time public flip).
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR (packages may be private before first publish)
+        run:
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}"
+          --password-stdin
+
+      - name: Run installer against the tagged images
+        env:
+          SEALANT_VERSION: ${{ github.ref_name }}
+          SEALANT_COMPOSE_URL: ${{ github.workspace }}/compose.selfhost.yaml
+        run: sh install.sh
+
+      - name: Assert SSH gateway is listening
+        run: |
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/2222) 2>/dev/null; then exec 3>&-; echo "gateway up"; exit 0; fi
+            sleep 2
+          done
+          echo "gateway did not come up" >&2
+          docker compose --project-directory ~/.sealant logs ssh-gateway >&2
+          exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose --project-directory ~/.sealant logs
+
+  release:
+    name: Publish GitHub release
+    needs: selfhost-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The attached compose file is what install.sh downloads; creating the release is also what
+      # moves `releases/latest` (the installer's default version) to this tag.
+      - name: Create release with compose asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run:
+          gh release create "$GITHUB_REF_NAME" compose.selfhost.yaml --generate-notes --verify-tag

@@ -84,7 +84,13 @@ export const createSealantAuth = async (options: CreateSealantAuthOptions = {}) 
       updateAge: 24 * 60 * 60,
     },
     advanced: {
-      useSecureCookies: resolvedEnv.NODE_ENV === "production",
+      // Secure cookies must track the scheme users actually hit, not NODE_ENV: the packaged
+      // self-host runs production builds over plain-http localhost, where Secure cookies would
+      // break sign-in.
+      useSecureCookies:
+        resolvedEnv.BETTER_AUTH_URL === undefined
+          ? resolvedEnv.NODE_ENV === "production"
+          : resolvedEnv.BETTER_AUTH_URL.startsWith("https:"),
     },
     plugins: [tanstackStartCookies()],
   });

@@ -453,7 +453,7 @@ describe("compileSandboxBuildSpec", () => {
     expect(containerfile).toContain("FROM fedora:41");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
@@ -636,12 +636,12 @@ describe("compileSandboxBuildSpec", () => {
 
     // sealantd binary + socat relay dependency are always present.
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain("socat");
     // The sealantd COPY follows the harness install (cache ordering).
-    expect(containerfile.indexOf("COPY --from=ghcr.io/get-sealant/sealantd")).toBeGreaterThan(
+    expect(containerfile.indexOf("COPY --from=ghcr.io/sealant-sh/sealantd")).toBeGreaterThan(
       containerfile.indexOf("npm install -g"),
     );
 
@@ -694,7 +694,7 @@ describe("compileSandboxBuildSpec", () => {
       // socat (the host<->control-socket relay dependency) is always part of the install layer.
       expect(containerfile).toContain(osFamily === "nix" ? sealantdLayer : "socat");
       expect(containerfile).toContain(
-        "COPY --from=ghcr.io/get-sealant/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+        "COPY --from=ghcr.io/sealant-sh/sealantd:0.4.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
       );
       expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
     }

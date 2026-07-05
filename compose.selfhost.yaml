@@ -1,18 +1,49 @@
-# Sealant self-host — the whole control plane in one `docker compose up`.
+# Sealant self-host — the whole product in one `docker compose up`, from prebuilt images.
 #
 # Brings up Postgres + RabbitMQ + the zot OCI registry + a one-shot DB migration + the API + the build
-# worker. Driven by ./install.sh (the curl one-liner), but you can also run it directly:
+# worker + the SSH gateway + the web app. Driven by ./install.sh (the curl one-liner), which downloads
+# this file, generates secrets into a sibling .env, and starts everything. To run it by hand instead,
+# create a .env next to this file with the required secrets:
 #
-#   docker compose -f compose.selfhost.yaml up -d --build
+#   SANDBOX_SSH_GATEWAY_TOKEN=<long random string>
+#   BETTER_AUTH_SECRET=<long random string, min 32 chars>
+#
+# then: docker compose -f compose.selfhost.yaml up -d
 #
 # Requirements: a running Docker daemon (the worker drives it, via the mounted socket, to build images
-# and launch sandboxes) and Docker Compose v2. Only the API (4000) and the registry (5000) are exposed
-# on the host; Postgres/RabbitMQ stay internal. Private GitHub repos need GITHUB_APP_* (see README) —
-# public repos (the default demo) need nothing.
+# and launch sandboxes) and Docker Compose >= 2.23.1 (inline `configs`). Everything binds to loopback
+# by default: web 3000, API 4000, SSH gateway 2222, registry 5000. Postgres/RabbitMQ stay internal.
+# Set SEALANT_BIND_HOST=0.0.0.0 to expose web/API/SSH beyond the machine (the registry always stays on
+# loopback — the host Docker daemon pushes/pulls sandbox images through 127.0.0.1:5000).
+# Private GitHub repos need GITHUB_APP_* (see README) — public repos (the default demo) need nothing.
 name: sealant
 
 x-db-url: &db-url postgresql://sealant:${SEALANT_DB_PASSWORD:-sealant}@postgres:5432/sealant_control_plane
 x-amqp-url: &amqp-url amqp://sealant:${SEALANT_RABBITMQ_PASSWORD:-sealant}@rabbitmq:5672
+
+configs:
+  # Inlined so this file is fully self-contained (no repo checkout needed). Mirror of
+  # packages/sandboxes/dev/zot/config.json — keep the two in sync.
+  zot-config:
+    content: |
+      {
+        "distSpecVersion": "1.1.1",
+        "storage": {
+          "rootDirectory": "/var/lib/registry",
+          "dedupe": true,
+          "gc": true,
+          "gcDelay": "1h",
+          "gcInterval": "24h"
+        },
+        "http": {
+          "address": "0.0.0.0",
+          "port": "5000",
+          "compat": ["docker2s2"]
+        },
+        "log": {
+          "level": "info"
+        }
+      }
 
 services:
   postgres:
@@ -42,41 +73,35 @@ services:
       timeout: 10s
       retries: 10
 
-  # Host-exposed on 5000: the worker drives the HOST Docker daemon (via the socket) to push built
-  # sandbox images here and pull them when launching, so the registry must be reachable at 127.0.0.1:5000.
+  # Host-exposed: the worker drives the HOST Docker daemon (via the socket) to push built sandbox
+  # images here and pull them when launching, so the registry must be reachable on host loopback.
+  # Always loopback — never bind this one wider.
   zot:
     image: ghcr.io/project-zot/zot-minimal:v2.1.15
     command: ["serve", "/etc/zot/config.json"]
     ports:
-      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}:5000"
+    configs:
+      - source: zot-config
+        target: /etc/zot/config.json
     volumes:
-      - ./packages/sandboxes/dev/zot/config.json:/etc/zot/config.json:ro
       - zot-data:/var/lib/registry
     restart: unless-stopped
 
-  # One-shot: apply DB migrations before the API/worker start, then exit. Uses the API image's `builder`
-  # stage (it has pnpm + drizzle-kit + the committed migrations; the slim runtime stage does not).
+  # One-shot: apply DB migrations + seed the default owner principal before the API/worker/web start,
+  # then exit. Runs the prebuilt api image's bundled migrate entrypoint — no source tree needed.
   migrate:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-      target: builder
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-api:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: *db-url
-    # Apply migrations, then seed the default owner principal (a fresh DB has no users).
-    command:
-      - "sh"
-      - "-c"
-      - "pnpm --filter @sealant/db db:migrate && pnpm --filter @sealant/db db:seed"
+    command: ["node", "dist/migrate.js"]
     restart: "no"
 
   api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-api:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,14 +110,25 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "127.0.0.1:${SEALANT_API_PORT:-4000}:4000"
+      - "${SEALANT_BIND_HOST:-127.0.0.1}:${SEALANT_API_PORT:-4000}:4000"
     environment:
       PORT: "4000"
       DATABASE_URL: *db-url
       RABBITMQ_URL: *amqp-url
       REGISTRY_BASE_URL: http://zot:5000
-      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+      REGISTRY_PUSH_REGISTRY: 127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}
       CORS_ALLOWED_ORIGINS: ${SEALANT_CORS_ALLOWED_ORIGINS:-*}
+      # Shared secret with the SSH gateway (authenticates resolve-principal + connection-target
+      # lookups), plus the endpoint the UI renders into `ssh` commands for users.
+      SANDBOX_SSH_GATEWAY_TOKEN:
+        ${SANDBOX_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random string}
+      SANDBOX_SSH_GATEWAY_HOST: ${SEALANT_SSH_HOST:-localhost}
+      SANDBOX_SSH_GATEWAY_PORT: ${SEALANT_SSH_PORT:-2222}
+      SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: sbx
+      # Private GitHub repos (see README). Compose only interpolates .env into ${...} — without
+      # these lines the values would never reach the container.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -108,9 +144,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-worker:${SEALANT_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,18 +154,105 @@ services:
         condition: service_started
       migrate:
         condition: service_completed_successfully
-    # The worker drives the host Docker daemon to build images + launch sandboxes.
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # The worker drives the host Docker daemon to build images + launch sandboxes. Rootless Docker
+      # hosts can point DOCKER_SOCKET_PATH at their user socket.
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      # Shared host dir where each sandbox's control socket is exposed, so the gateway reaches the
+      # in-sandbox daemon directly (unix://) with no Docker access. Must be the same real host path
+      # here, in the gateway, and in the sandbox bind-mounts the host daemon creates.
+      - /run/sealant/sockets:/run/sealant/sockets
     environment:
       DATABASE_URL: *db-url
       RABBITMQ_URL: *amqp-url
       REGISTRY_BASE_URL: http://zot:5000
-      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
+      REGISTRY_PUSH_REGISTRY: 127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
+      SANDBOX_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Bridge networking (unlike the dev compose): everything the gateway talks to is a container, so it
+  # reaches the API by service DNS and needs no host networking, no firewall rules. It listens on
+  # 0.0.0.0 INSIDE the container (binding container-loopback would make the published port
+  # unreachable) and is published on host loopback by default.
+  ssh-gateway:
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-ssh-gateway:${SEALANT_VERSION:-latest}
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    ports:
+      - "${SEALANT_BIND_HOST:-127.0.0.1}:${SEALANT_SSH_PORT:-2222}:2222"
+    volumes:
+      - gateway-keys:/keys
+      # Read-only access to the per-sandbox control sockets the worker exposes here. The gateway
+      # connects to them directly (unix://) — NO Docker socket, so a gateway compromise cannot reach
+      # the host Docker daemon (which would be host root). The worker has the socket; the gateway must not.
+      - /run/sealant/sockets:/run/sealant/sockets:ro
+    environment:
+      SSH_GATEWAY_HOST: 0.0.0.0
+      SSH_GATEWAY_PORT: 2222
+      # First boot generates an ed25519 host key into the gateway-keys volume; it is never rotated
+      # after that, so client known_hosts entries stay valid across upgrades.
+      SSH_GATEWAY_HOST_KEY_PATH: /keys/ssh_gateway_host_key
+      SSH_GATEWAY_HOST_KEY_AUTOGENERATE: "true"
+      # Optional operator break-glass allowlist; a missing file just means "no static keys" (users
+      # register keys in the web UI, resolved via the API per connection).
+      SSH_GATEWAY_ALLOWED_KEYS_FILE: /keys/gateway_allowed_keys
+      SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
+      CORE_API_BASE_URL: http://api:4000
+      SANDBOX_SSH_GATEWAY_TOKEN:
+        ${SANDBOX_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random string}
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "const
+          s=require('net').connect(2222,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  web:
+    image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-web:${SEALANT_VERSION:-latest}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${SEALANT_BIND_HOST:-127.0.0.1}:${SEALANT_WEB_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # The web server hosts Better Auth (email+password) and talks to Postgres directly for it.
+      DATABASE_URL: *db-url
+      BETTER_AUTH_SECRET:
+        ${BETTER_AUTH_SECRET:?set in .env — run install.sh or generate a random string of at least
+        32 chars}
+      BETTER_AUTH_URL: ${SEALANT_WEB_URL:-http://localhost:${SEALANT_WEB_PORT:-3000}}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${SEALANT_WEB_TRUSTED_ORIGINS:-http://localhost:${SEALANT_WEB_PORT:-3000},http://127.0.0.1:${SEALANT_WEB_PORT:-3000}}
+      # Server-side tRPC context calls the API over the compose network.
+      CORE_API_BASE_URL: http://api:4000
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
     restart: unless-stopped
 
 volumes:
   postgres-data:
   zot-data:
+  gateway-keys:

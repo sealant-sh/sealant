@@ -11,6 +11,7 @@
     "dev": "vite dev --port 3000",
     "lint": "oxlint .",
     "preview": "vite preview",
+    "start": "node server.mjs",
     "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },

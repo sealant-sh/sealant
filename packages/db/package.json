@@ -5,13 +5,15 @@
   "description": "Shared PostgreSQL database package for control-plane state",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./migrate": "./src/migrate.ts",
+    "./seed-core": "./src/seed-core.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx src/seed.ts",
     "db:push": "drizzle-kit push",
+    "db:seed": "tsx src/seed.ts",
     "db:studio": "drizzle-kit studio",
     "dev": "drizzle-kit studio",
     "lint": "oxlint .",

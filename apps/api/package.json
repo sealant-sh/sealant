@@ -5,7 +5,7 @@
   "description": "Control-plane API for validation, orchestration, lifecycle, and state",
   "type": "module",
   "scripts": {
-    "build": "node ../../tooling/scripts/bundle-app.mjs",
+    "build": "BUNDLE_ENTRIES=src/index.ts,src/migrate.ts node ../../tooling/scripts/bundle-app.mjs",
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "lint": "oxlint .",
     "test": "vitest run",

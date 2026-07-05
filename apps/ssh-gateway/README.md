@@ -2,10 +2,10 @@
 
 `@sealant/ssh-gateway` is the SSH routing gateway for sandbox access.
 
-It accepts client SSH sessions on a single gateway host and, instead of dialing an inner sshd, drives
-the sandbox's sealantd **control socket** (`/run/sealant/control.sock`) over a transport bridge. SSH
-channels are mapped to control commands and daemon byte channels. It resolves the control target via
-the API route:
+It accepts client SSH sessions on a single gateway host and, instead of dialing an inner sshd,
+drives the sandbox's sealantd **control socket** (`/run/sealant/control.sock`) over a transport
+bridge. SSH channels are mapped to control commands and daemon byte channels. It resolves the
+control target via the API route:
 
 - `GET /v1/sandboxes/{sandboxId}/ssh-target`
 
@@ -19,14 +19,14 @@ the API route:
 ## High-level flow
 
 1. User connects to gateway using alias `sbx-<sandboxId>`.
-2. Gateway authenticates the user key and resolves its principal id: first from the static
-   allowlist `SSH_GATEWAY_ALLOWED_KEYS_FILE` (principal = key comment; operator break-glass), then
-   by asking the API (`POST /v1/ssh-keys/resolve-principal`) to match the key's fingerprint against
+2. Gateway authenticates the user key and resolves its principal id: first from the static allowlist
+   `SSH_GATEWAY_ALLOWED_KEYS_FILE` (principal = key comment; operator break-glass), then by asking
+   the API (`POST /v1/ssh-keys/resolve-principal`) to match the key's fingerprint against
    user-registered keys in the `ssh_keys` table (principal = key owner). DB keys work immediately
    after registration — no gateway restart.
 3. Gateway extracts `<sandboxId>` from username (a routing hint only).
-4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` with the gateway token + principal id; the
-   API authorizes principal x sandbox and returns the control target (container id).
+4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` with the gateway token + principal id;
+   the API authorizes principal x sandbox and returns the control target (container id).
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
    - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
    - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)
@@ -43,6 +43,9 @@ In short: user connects once to gateway, gateway drives the daemon control proto
 - `SSH_GATEWAY_PORT` (default: `2222`)
 - `SSH_GATEWAY_BANNER` (default: welcome message shown during SSH handshake)
 - `SSH_GATEWAY_HOST_KEY_PATH` (default: `./.secrets/ssh_gateway_host_key`)
+- `SSH_GATEWAY_HOST_KEY_AUTOGENERATE` (default: `false` — when `true`, a missing host key is
+  generated on first boot instead of failing startup; the packaged self-host compose uses this with
+  a persistent volume. An existing key is never overwritten.)
 - `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `./.secrets/authorized_keys`; optional — a missing or
   empty file is fine, user keys resolve via the API)
 - `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX` (default: `sbx`)
@@ -50,7 +53,8 @@ In short: user connects once to gateway, gateway drives the daemon control proto
 - `SANDBOX_SSH_GATEWAY_TOKEN` (required)
 
 The upstream-SSH env vars (`SSH_UPSTREAM_PRIVATE_KEY_PATH` / `SSH_UPSTREAM_READY_TIMEOUT_MS` /
-`SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING`) are gone — the gateway no longer dials an inner sshd.
+`SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING`) are gone — the gateway no longer dials an inner sshd, and
+no compose file sets them anymore.
 
 ## Username routing contract
 
