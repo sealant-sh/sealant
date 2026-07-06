@@ -4,6 +4,24 @@
  * match the ordering the record was captured in.
  */
 
+/**
+ * Display title for a run: its prompt, or an actor-appropriate fallback for promptless runs —
+ * interactive runs are sessions (SSH connections record as harnessId "ssh"), one-shots are runs.
+ */
+export const runTitle = (run: {
+  readonly prompt?: string | undefined;
+  readonly harnessId: string;
+  readonly mode?: string | undefined;
+}): string => {
+  if (run.prompt !== undefined && run.prompt.length > 0) {
+    return run.prompt;
+  }
+  if (run.mode === "interactive") {
+    return run.harnessId === "ssh" ? "SSH session" : `${run.harnessId} session`;
+  }
+  return `${run.harnessId} run`;
+};
+
 export const formatMicros = (micros: bigint): string => {
   const ms = Number(micros / 1000n);
   if (ms < 1000) {

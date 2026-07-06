@@ -9,6 +9,7 @@ import {
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 
+import { runTitle } from "@/lib/run-record/format";
 import type { AppTrpc } from "@/lib/trpc/client";
 import { useTRPC } from "@/lib/trpc/react";
 
@@ -397,9 +398,7 @@ function SandboxSummaryPage() {
                     >
                       <div className="min-w-0">
                         <p className="font-mono text-[0.66rem] text-faint">{run.runId}</p>
-                        <p className="mt-1 truncate text-sm text-foreground">
-                          {run.prompt ?? `${run.harnessId} run`}
-                        </p>
+                        <p className="mt-1 truncate text-sm text-foreground">{runTitle(run)}</p>
                       </div>
                       <p className="font-mono text-[0.66rem] text-muted-foreground">
                         {toShortDateTime(run.createdAt)}

@@ -19,7 +19,7 @@ import {
 } from "@/components/run-record/status-word";
 import type { RecordCommand } from "@/lib/run-record/fold";
 import { foldRunRecord } from "@/lib/run-record/fold";
-import { formatRunDuration, formatWallClock } from "@/lib/run-record/format";
+import { formatRunDuration, formatWallClock, runTitle } from "@/lib/run-record/format";
 import { useTRPC } from "@/lib/trpc/react";
 
 /** Everything the record renders except ioChunk (fetched lazily as scrollback) and heartbeats. */
@@ -147,7 +147,7 @@ function RunRecordPage() {
           <StatusWord tone={status.tone} word={status.word} />
         </div>
         <h1 className="mt-2.5 max-w-3xl font-display text-2xl font-semibold tracking-tight text-balance text-foreground sm:text-[27px]">
-          {run.prompt ?? `${run.harnessId} run`}
+          {runTitle(run)}
         </h1>
         <p className="mt-3.5 flex flex-wrap gap-x-4.5 gap-y-1 font-mono text-xs text-muted-foreground">
           <span>{run.harnessId}</span>
