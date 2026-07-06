@@ -16,6 +16,7 @@ import {
 } from "@sealant/db";
 import { SealantRuntimeDockerExecLive, sealantTargetForRuntimeInstance } from "@sealant/sandboxes";
 import {
+  ExecutionRunResolverLive,
   InlineByteaArtifactStoreLive,
   PostgresTelemetrySinkLive,
   TelemetryIngester,
@@ -36,8 +37,9 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
     Layer.provide(Layer.mergeAll(dbLayer, artifactLayer)),
   );
+  const resolverLayer = ExecutionRunResolverLive.pipe(Layer.provide(dbLayer));
   const ingesterLayer = TelemetryIngesterLive.pipe(
-    Layer.provide(Layer.mergeAll(SealantRuntimeDockerExecLive, sinkLayer)),
+    Layer.provide(Layer.mergeAll(SealantRuntimeDockerExecLive, sinkLayer, resolverLayer)),
   );
   const repoLayer = SandboxRuntimeInstanceRepoLive.pipe(Layer.provide(dbLayer));
   const appLayer = Layer.mergeAll(ingesterLayer, repoLayer);

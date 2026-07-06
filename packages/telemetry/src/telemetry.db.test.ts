@@ -26,6 +26,7 @@ import { Effect, Layer, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { InlineByteaArtifactStoreLive } from "./artifact-store.js";
+import { ExecutionRunResolverLive } from "./attribution.js";
 import { TelemetryIngester, TelemetryIngesterLive } from "./ingester.js";
 import { TelemetryProjector, TelemetryProjectorLive } from "./projector.js";
 import { TelemetryQuery, TelemetryQueryLive } from "./query.js";
@@ -131,36 +132,102 @@ const stubSession: SealantSession = {
 
 const stubRuntime: SealantRuntimeService = { connect: () => Effect.succeed(stubSession) };
 
+// --- Attribution scenario: a second runtime whose stream carries execution-tagged events -------
+
+const ATTR_RUNTIME_ID = "rt_it_attr";
+
+const attrEvt = (
+  sequence: bigint,
+  executionId: string | undefined,
+  init: MessageInitShape<typeof EventEnvelopeSchema>,
+) =>
+  create(EventEnvelopeSchema, {
+    schemaVersion: 1,
+    eventId: `evt_attr_${sequence.toString()}`,
+    runtimeId: ATTR_RUNTIME_ID,
+    ...(executionId === undefined ? {} : { executionId }),
+    sequence,
+    observedAt: sequence * 1000n,
+    monotonicTimestamp: sequence * 10n,
+    captureMethod: 1,
+    confidence: 1,
+    ...init,
+  });
+
+const makeStubRuntime = (events: readonly EventEnvelope[], runtimeId: string) => {
+  const session: SealantSession = {
+    ...stubSession,
+    health: Effect.succeed(create(HealthReportSchema, { runtimeId, state: 2 })),
+    events: Stream.fromIterable(events),
+  };
+  const runtime: SealantRuntimeService = { connect: () => Effect.succeed(session) };
+  return runtime;
+};
+
 const dbLayer = DATABASE_URL === undefined ? undefined : makeSealantDBLayer(DATABASE_URL);
 
-const buildTestLayer = (db: NonNullable<typeof dbLayer>) => {
-  const runtimeLayer = Layer.succeed(SealantRuntime, stubRuntime);
+const buildTestLayer = (db: NonNullable<typeof dbLayer>, runtime: SealantRuntimeService) => {
+  const runtimeLayer = Layer.succeed(SealantRuntime, runtime);
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(db));
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
     Layer.provide(Layer.mergeAll(db, artifactLayer)),
   );
+  const resolverLayer = ExecutionRunResolverLive.pipe(Layer.provide(db));
   return Layer.mergeAll(
     db,
     sinkLayer,
     TelemetryProjectorLive.pipe(Layer.provide(db)),
     TelemetryQueryLive.pipe(Layer.provide(Layer.mergeAll(db, artifactLayer))),
-    TelemetryIngesterLive.pipe(Layer.provide(Layer.mergeAll(runtimeLayer, sinkLayer))),
+    TelemetryIngesterLive.pipe(
+      Layer.provide(Layer.mergeAll(runtimeLayer, sinkLayer, resolverLayer)),
+    ),
   );
 };
 
 const runId = `run_it_${RUNTIME_ID}`;
 const sandboxId = `sbx_it_${RUNTIME_ID}`;
 const userId = `user_it_${RUNTIME_ID}`;
+// Attribution scenario rows: a launch run + an interactive "ssh" run in the SAME sandbox, and a
+// run in a FOREIGN sandbox that must NOT be attributable from this sandbox's stream.
+const attrLaunchRunId = `run_it_launch_${ATTR_RUNTIME_ID}`;
+const attrSshRunId = `run_it_ssh_${ATTR_RUNTIME_ID}`;
+const foreignSandboxId = `sbx_it_foreign_${ATTR_RUNTIME_ID}`;
+const foreignRunId = `run_it_foreign_${ATTR_RUNTIME_ID}`;
+const SSH_PROC_ID = "proc_it_ssh";
+
+const ATTR_EVENTS: readonly EventEnvelope[] = [
+  attrEvt(1n, attrSshRunId, {
+    processId: SSH_PROC_ID,
+    payload: {
+      case: "ioChunk",
+      value: {
+        stream: StreamKind.STDOUT,
+        byteCount: 4n,
+        streamOffset: 0n,
+        content: new TextEncoder().encode("ssh\n"),
+      },
+    },
+  }),
+  // Tagged with a run from ANOTHER sandbox: attribution must refuse it (falls back to default).
+  attrEvt(2n, foreignRunId, {
+    payload: { case: "runtimeHeartbeat", value: { state: 2 } },
+  }),
+  // Untagged daemon event: default run, the pre-attribution behavior.
+  attrEvt(3n, undefined, {
+    payload: { case: "runtimeHeartbeat", value: { state: 2 } },
+  }),
+];
 
 describe.skipIf(DATABASE_URL === undefined)(
   "@sealant/telemetry vertical slice (real Postgres)",
   () => {
     const db = dbLayer!;
-    const testLayer = buildTestLayer(db);
+    const testLayer = buildTestLayer(db, stubRuntime);
 
     const seed = Effect.gen(function* () {
       const handle = yield* SealantDB;
       yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
+      yield* handle.delete(sandboxes).where(eq(sandboxes.id, foreignSandboxId));
       yield* handle.delete(user).where(eq(user.id, userId));
       const now = new Date();
       yield* handle
@@ -178,21 +245,53 @@ describe.skipIf(DATABASE_URL === undefined)(
         .values({ id: sandboxId, ownerUserId: userId, createdAt: now, updatedAt: now })
         .onConflictDoNothing();
       yield* handle
+        .insert(sandboxes)
+        .values({ id: foreignSandboxId, ownerUserId: userId, createdAt: now, updatedAt: now })
+        .onConflictDoNothing();
+      yield* handle
         .insert(runs)
-        .values({
-          id: runId,
-          sandboxId,
-          ownerUserId: userId,
-          harnessId: "opencode",
-          createdAt: now,
-          updatedAt: now,
-        })
+        .values([
+          {
+            id: runId,
+            sandboxId,
+            ownerUserId: userId,
+            harnessId: "opencode",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: attrLaunchRunId,
+            sandboxId,
+            ownerUserId: userId,
+            harnessId: "opencode",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: attrSshRunId,
+            sandboxId,
+            ownerUserId: userId,
+            harnessId: "ssh",
+            mode: "interactive" as const,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: foreignRunId,
+            sandboxId: foreignSandboxId,
+            ownerUserId: userId,
+            harnessId: "opencode",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ])
         .onConflictDoNothing();
     });
 
     const cleanup = Effect.gen(function* () {
       const handle = yield* SealantDB;
       yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
+      yield* handle.delete(sandboxes).where(eq(sandboxes.id, foreignSandboxId));
       yield* handle.delete(user).where(eq(user.id, userId));
     });
 
@@ -277,6 +376,48 @@ describe.skipIf(DATABASE_URL === undefined)(
       // (e) near-2^63 values are stored losslessly.
       expect(result.exitedSequence).toBe(4n);
       expect(result.exitedDuration).toBe(BIG_DURATION.toString());
+    });
+
+    it("attributes execution-tagged events to their run (same-sandbox only)", async () => {
+      const attrLayer = buildTestLayer(db, makeStubRuntime(ATTR_EVENTS, ATTR_RUNTIME_ID));
+
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const ingester = yield* TelemetryIngester;
+          const query = yield* TelemetryQuery;
+          const handle = yield* SealantDB;
+
+          // The connection's default run is the launch run; tagged events must be re-attributed.
+          yield* Effect.scoped(ingester.run(attrLaunchRunId, TARGET));
+
+          const rows = yield* handle
+            .select({ eventId: telemetryEvents.eventId, runId: telemetryEvents.runId })
+            .from(telemetryEvents)
+            .where(eq(telemetryEvents.runtimeId, ATTR_RUNTIME_ID));
+
+          // The scrollback projection must follow the attribution too.
+          const chunks = yield* Stream.runCollect(
+            query.reconstructScrollback(attrSshRunId, SSH_PROC_ID, StreamKind.STDOUT, 1000n),
+          );
+          const sshScrollback = Buffer.concat(chunks.map((bytes) => Buffer.from(bytes))).toString(
+            "utf8",
+          );
+
+          return {
+            byEvent: new Map(rows.map((row) => [row.eventId, row.runId])),
+            sshScrollback,
+          };
+        }).pipe(Effect.provide(attrLayer)),
+      );
+
+      // Tagged with the same-sandbox ssh run -> attributed to it.
+      expect(result.byEvent.get("evt_attr_1")).toBe(attrSshRunId);
+      // Tagged with a foreign sandbox's run -> refused, falls back to the default run.
+      expect(result.byEvent.get("evt_attr_2")).toBe(attrLaunchRunId);
+      // Untagged -> default run.
+      expect(result.byEvent.get("evt_attr_3")).toBe(attrLaunchRunId);
+      // The ssh run's record reads back its own bytes.
+      expect(result.sshScrollback).toBe("ssh\n");
     });
   },
 );
