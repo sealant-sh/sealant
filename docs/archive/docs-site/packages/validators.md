@@ -10,33 +10,33 @@ updated: 2026-03-31
 
 `@sealant/validators` owns shared schema contracts used across app boundaries.
 
-It provides the canonical API request/response schemas and sandbox message/payload schemas used by
+It provides the canonical API request/response schemas and workspace message/payload schemas used by
 API and worker flows.
 
 ## Module map
 
 - `src/api/*`
-  - API contract schemas for common, sandboxes, registries, packages, github, and system routes
-- `src/sandboxes/sandbox-blueprint.ts`
-  - canonical sandbox blueprint/spec schema
-- `src/sandboxes/builder.ts`
+  - API contract schemas for common, workspaces, registries, packages, github, and system routes
+- `src/workspaces/workspace-blueprint.ts`
+  - canonical workspace blueprint/spec schema
+- `src/workspaces/builder.ts`
   - builder support and compile result contracts
-- `src/sandboxes/buildkit.ts`
+- `src/workspaces/buildkit.ts`
   - BuildKit-specific contract schemas
-- `src/sandboxes/messages.ts`
-  - sandbox queue message schemas
-- `src/sandboxes/payloads.ts`
-  - sandbox build payload schemas used by API/worker persistence boundaries
+- `src/workspaces/messages.ts`
+  - workspace queue message schemas
+- `src/workspaces/payloads.ts`
+  - workspace build payload schemas used by API/worker persistence boundaries
 
 ## Public surface
 
-Exports are defined in `packages/validators/src/index.ts` and re-export API schemas and sandbox
+Exports are defined in `packages/validators/src/index.ts` and re-export API schemas and workspace
 contracts in one package.
 
 ## Cross-package usage
 
-- `@sealant/api` consumes API request/response and sandbox schemas
-- `@sealant/sandboxes` consumes builder/buildkit/messages/payload schemas
+- `@sealant/api` consumes API request/response and workspace schemas
+- `@sealant/workspaces` consumes builder/buildkit/messages/payload schemas
 - `@sealant/web` can consume API contracts for strongly typed integration paths
 
 ## Dependency model

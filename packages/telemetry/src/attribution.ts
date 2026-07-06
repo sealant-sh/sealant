@@ -1,15 +1,15 @@
 /**
  * Per-event run attribution — the seam that lets ONE daemon telemetry stream feed MANY runs.
  *
- * Clients that start work in a sandbox (the run-exec worker for harness runs, the SSH gateway for
+ * Clients that start work in a workspace (the run-exec worker for harness runs, the SSH gateway for
  * interactive sessions) thread their run id through the daemon as the `execution_id`, and the
  * daemon stamps it on every descendant event. At ingest, an event whose `executionId` names a run
- * in the SAME sandbox as the connection's default run is attributed to that run; everything else
+ * in the SAME workspace as the connection's default run is attributed to that run; everything else
  * (daemon boot, heartbeats, untagged executions) falls back to the default run — exactly the
  * pre-attribution behavior.
  *
- * The sandbox check is the authorization boundary: execution ids are client-supplied inside the
- * sandbox, so without it a process could label its events into another sandbox's run.
+ * The workspace check is the authorization boundary: execution ids are client-supplied inside the
+ * workspace, so without it a process could label its events into another workspace's run.
  */
 import { runs, SealantDB, type TSealantDB } from "@sealant/db";
 import { eq, inArray } from "drizzle-orm";
@@ -40,8 +40,8 @@ export const collectExecutionIds = (batch: readonly NormalizedEvent[]): Set<stri
 
 export interface ExecutionRunResolverService {
   /**
-   * Map execution ids to run ids valid for attribution alongside `defaultRunId` (same sandbox).
-   * Unknown / foreign-sandbox ids are simply absent from the result. Never fails: a lookup error
+   * Map execution ids to run ids valid for attribution alongside `defaultRunId` (same workspace).
+   * Unknown / foreign-workspace ids are simply absent from the result. Never fails: a lookup error
    * degrades to "no attributions" (events fall back to the default run) so ingest keeps flowing.
    */
   readonly resolve: (input: {
@@ -63,7 +63,7 @@ export const makeExecutionRunResolver = (db: TSealantDB): ExecutionRunResolverSe
         return new Map<string, string>();
       }
       const [defaultRun] = yield* db
-        .select({ sandboxId: runs.sandboxId })
+        .select({ workspaceId: runs.workspaceId })
         .from(runs)
         .where(eq(runs.id, input.defaultRunId))
         .limit(1);
@@ -71,12 +71,12 @@ export const makeExecutionRunResolver = (db: TSealantDB): ExecutionRunResolverSe
         return new Map<string, string>();
       }
       const candidates = yield* db
-        .select({ id: runs.id, sandboxId: runs.sandboxId })
+        .select({ id: runs.id, workspaceId: runs.workspaceId })
         .from(runs)
         .where(inArray(runs.id, ids));
       return new Map(
         candidates
-          .filter((candidate) => candidate.sandboxId === defaultRun.sandboxId)
+          .filter((candidate) => candidate.workspaceId === defaultRun.workspaceId)
           .map((candidate) => [candidate.id, candidate.id]),
       );
     }).pipe(

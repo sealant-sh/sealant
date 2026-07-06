@@ -76,16 +76,17 @@ const main = () => {
   const existingEnvLocal = readTextFileIfExists(envPath);
   const unmanagedContent = removeManagedBlock(existingEnvLocal);
   const token =
-    readEnvValue(existingEnvLocal, "SANDBOX_SSH_GATEWAY_TOKEN") ?? randomBytes(24).toString("hex");
-  const host = readEnvValue(existingEnvLocal, "SANDBOX_SSH_GATEWAY_HOST") ?? "127.0.0.1";
-  const port = readEnvValue(existingEnvLocal, "SANDBOX_SSH_GATEWAY_PORT") ?? "2222";
-  const prefix = readEnvValue(existingEnvLocal, "SANDBOX_SSH_GATEWAY_USERNAME_PREFIX") ?? "sbx";
+    readEnvValue(existingEnvLocal, "WORKSPACE_SSH_GATEWAY_TOKEN") ??
+    randomBytes(24).toString("hex");
+  const host = readEnvValue(existingEnvLocal, "WORKSPACE_SSH_GATEWAY_HOST") ?? "127.0.0.1";
+  const port = readEnvValue(existingEnvLocal, "WORKSPACE_SSH_GATEWAY_PORT") ?? "2222";
+  const prefix = readEnvValue(existingEnvLocal, "WORKSPACE_SSH_GATEWAY_USERNAME_PREFIX") ?? "ws";
 
   const nextEnvLocal = appendManagedBlock(unmanagedContent, {
-    SANDBOX_SSH_GATEWAY_TOKEN: token,
-    SANDBOX_SSH_GATEWAY_HOST: host,
-    SANDBOX_SSH_GATEWAY_PORT: port,
-    SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: prefix,
+    WORKSPACE_SSH_GATEWAY_TOKEN: token,
+    WORKSPACE_SSH_GATEWAY_HOST: host,
+    WORKSPACE_SSH_GATEWAY_PORT: port,
+    WORKSPACE_SSH_GATEWAY_USERNAME_PREFIX: prefix,
   });
 
   writeFileSync(envPath, nextEnvLocal, "utf8");

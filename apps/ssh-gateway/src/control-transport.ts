@@ -6,7 +6,7 @@ import { Duplex } from "node:stream";
 Gateway -> daemon-socket transport (gateway-spec §2).
 
 The gateway drives one sealantd control connection per client SSH connection. That connection is a
-length-prefixed protobuf stream that must reach the daemon's `control.sock` *inside* the sandbox
+length-prefixed protobuf stream that must reach the daemon's `control.sock` *inside* the workspace
 container. We deliberately reject a localhost TCP listener (it would defeat the daemon's
 `SO_PEERCRED` uid gate and be reachable by the untrusted workload). Two reaches are supported:
 

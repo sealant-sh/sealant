@@ -2,7 +2,7 @@
 title: Upgrade, repair, uninstall
 description:
   Re-run the installer to repair, bump SEALANT_VERSION to upgrade, pin exact versions, and tear
-  everything down — with the one caveat about sandbox containers on the host.
+  everything down — with the one caveat about workspace containers on the host.
 ---
 
 Everything Sealant needs lives in `~/.sealant`: the compose file (`compose.yaml`), your generated
@@ -80,31 +80,31 @@ and the SSH gateway host key. This is destructive and irreversible.
 docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
 ```
 
-### Caveat: sandbox containers outlive uninstall
+### Caveat: workspace containers outlive uninstall
 
-Sandbox containers and images are created by the worker on the **host Docker daemon** (via the
+Workspace containers and images are created by the worker on the **host Docker daemon** (via the
 mounted Docker socket), not inside the compose project. Tearing down the compose project with
-`down -v` does **not** remove sandbox runtime containers or images that were already built. Clean
+`down -v` does **not** remove workspace runtime containers or images that were already built. Clean
 them up on the host separately, for example:
 
 ```sh
-docker ps -a            # find leftover sandbox containers
+docker ps -a            # find leftover workspace containers
 docker rm -f <container>
-docker image prune      # reclaim orphaned sandbox images
+docker image prune      # reclaim orphaned workspace images
 ```
 
-Sandbox control sockets also live on the host at `/run/sealant/sockets`; remove that directory if
+Workspace control sockets also live on the host at `/run/sealant/sockets`; remove that directory if
 you want a fully clean host.
 
 ## What is and isn't preserved
 
-| Item                      | Location                       | Survives `down` |  Survives `down -v`  |
-| ------------------------- | ------------------------------ | :-------------: | :------------------: |
-| Secrets and knobs         | `~/.sealant/.env`              |       yes       | yes (until `rm -rf`) |
-| Postgres data             | volume `sealant_postgres-data` |       yes       |          no          |
-| Registry data             | volume `sealant_zot-data`      |       yes       |          no          |
-| SSH gateway host key      | volume `sealant_gateway-keys`  |       yes       |          no          |
-| Sandbox containers/images | host Docker daemon             |       yes       | yes (manual cleanup) |
+| Item                        | Location                       | Survives `down` |  Survives `down -v`  |
+| --------------------------- | ------------------------------ | :-------------: | :------------------: |
+| Secrets and knobs           | `~/.sealant/.env`              |       yes       | yes (until `rm -rf`) |
+| Postgres data               | volume `sealant_postgres-data` |       yes       |          no          |
+| Registry data               | volume `sealant_zot-data`      |       yes       |          no          |
+| SSH gateway host key        | volume `sealant_gateway-keys`  |       yes       |          no          |
+| Workspace containers/images | host Docker daemon             |       yes       | yes (manual cleanup) |
 
 See [Ports and data](/docs/reference/ports-and-data) for the full volume and port map, and
 [Installer and compose](/docs/reference/installer-and-compose) for what the one-liner does step by

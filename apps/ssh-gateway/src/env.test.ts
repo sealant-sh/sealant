@@ -12,12 +12,13 @@ writeFileSync(bootstrapHostKeyPath, "bootstrap-host-key\n", "utf8");
 writeFileSync(bootstrapAllowedKeysPath, "bootstrap-allowed-key\n", "utf8");
 
 const previousBootstrapEnv = {
-  SANDBOX_SSH_GATEWAY_TOKEN: process.env.SANDBOX_SSH_GATEWAY_TOKEN,
+  WORKSPACE_SSH_GATEWAY_TOKEN: process.env.WORKSPACE_SSH_GATEWAY_TOKEN,
   SSH_GATEWAY_HOST_KEY_PATH: process.env.SSH_GATEWAY_HOST_KEY_PATH,
   SSH_GATEWAY_ALLOWED_KEYS_FILE: process.env.SSH_GATEWAY_ALLOWED_KEYS_FILE,
 };
 
-process.env.SANDBOX_SSH_GATEWAY_TOKEN = process.env.SANDBOX_SSH_GATEWAY_TOKEN ?? "bootstrap-token";
+process.env.WORKSPACE_SSH_GATEWAY_TOKEN =
+  process.env.WORKSPACE_SSH_GATEWAY_TOKEN ?? "bootstrap-token";
 process.env.SSH_GATEWAY_HOST_KEY_PATH =
   process.env.SSH_GATEWAY_HOST_KEY_PATH ?? bootstrapHostKeyPath;
 process.env.SSH_GATEWAY_ALLOWED_KEYS_FILE =
@@ -26,10 +27,10 @@ process.env.SSH_GATEWAY_ALLOWED_KEYS_FILE =
 const { parseSshGatewayEnv } = await import("@sealant/validators/env");
 
 afterAll(() => {
-  if (previousBootstrapEnv.SANDBOX_SSH_GATEWAY_TOKEN === undefined) {
-    delete process.env.SANDBOX_SSH_GATEWAY_TOKEN;
+  if (previousBootstrapEnv.WORKSPACE_SSH_GATEWAY_TOKEN === undefined) {
+    delete process.env.WORKSPACE_SSH_GATEWAY_TOKEN;
   } else {
-    process.env.SANDBOX_SSH_GATEWAY_TOKEN = previousBootstrapEnv.SANDBOX_SSH_GATEWAY_TOKEN;
+    process.env.WORKSPACE_SSH_GATEWAY_TOKEN = previousBootstrapEnv.WORKSPACE_SSH_GATEWAY_TOKEN;
   }
 
   if (previousBootstrapEnv.SSH_GATEWAY_HOST_KEY_PATH === undefined) {
@@ -58,7 +59,7 @@ describe("parseSshGatewayEnv", () => {
       writeFileSync(allowedKeysPath, "allowed-key\n", "utf8");
 
       const env = parseSshGatewayEnv({
-        SANDBOX_SSH_GATEWAY_TOKEN: "token",
+        WORKSPACE_SSH_GATEWAY_TOKEN: "token",
         SSH_GATEWAY_HOST_KEY_PATH: hostKeyPath,
         SSH_GATEWAY_ALLOWED_KEYS_FILE: allowedKeysPath,
       });
@@ -80,7 +81,7 @@ describe("parseSshGatewayEnv", () => {
       writeFileSync(hostKeyPath, "host-key\n", "utf8");
 
       const env = parseSshGatewayEnv({
-        SANDBOX_SSH_GATEWAY_TOKEN: "token",
+        WORKSPACE_SSH_GATEWAY_TOKEN: "token",
         SSH_GATEWAY_HOST_KEY_PATH: hostKeyPath,
         SSH_GATEWAY_ALLOWED_KEYS_FILE: join(tempDirectory, "does_not_exist"),
       });
@@ -97,7 +98,7 @@ describe("parseSshGatewayEnv", () => {
     try {
       expect(() =>
         parseSshGatewayEnv({
-          SANDBOX_SSH_GATEWAY_TOKEN: "token",
+          WORKSPACE_SSH_GATEWAY_TOKEN: "token",
           SSH_GATEWAY_HOST_KEY_PATH: join(tempDirectory, "does_not_exist"),
           SSH_GATEWAY_ALLOWED_KEYS_FILE: join(tempDirectory, "also_missing"),
         }),

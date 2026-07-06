@@ -1,13 +1,13 @@
 /**
  * Idempotent seed for a fresh self-host database: ensure the default owner principal exists.
  *
- * The SDK attributes sandboxes/runs to `ownerUserId` (default "usr_local") before auth lands; a fresh
+ * The SDK attributes workspaces/runs to `ownerUserId` (default "usr_local") before auth lands; a fresh
  * control-plane DB has no users, so `create` would fail the owner FK. Run after migrations. Safe to
  * re-run.
  *
  * When a dev gateway client key is provided and exists on disk (written by `pnpm ssh:setup:dev`), it
  * is also registered in `ssh_keys` under the default owner so the SSH gateway can resolve it to a
- * principal that actually owns SDK/self-host sandboxes.
+ * principal that actually owns SDK/self-host workspaces.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";

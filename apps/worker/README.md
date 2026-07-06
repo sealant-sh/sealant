@@ -1,13 +1,13 @@
 # Worker App
 
-`@sealant/worker` is the first background worker for Sealant sandbox image build jobs.
+`@sealant/worker` is the first background worker for Sealant workspace image build jobs.
 
 It currently provides:
 
 - a Node worker entrypoint
 - one worker-kind module per domain workload under `src/workers/`
 - RabbitMQ transport via `@sealant/rabbitmq`
-- sandbox lifecycle processing through `@sealant/sandboxes`
+- workspace lifecycle processing through `@sealant/workspaces`
 - durable state updates through `@sealant/db`
 
 ## Development
@@ -44,15 +44,15 @@ The worker expects:
 By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
 existing local RabbitMQ instance on `5672`.
 
-Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized sandbox
+Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 
-Per-sandbox Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
+Per-workspace Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
 `runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
 
-Sandbox startup and SSH behavior are spec-authoritative. SSH-enabled sandboxes need no key material
-from the worker: the gateway reaches them over the sealantd control socket
-(`SANDBOX_CONTROL_SOCKET_HOST_DIR`), and client keys are authorized against the control plane's
+Workspace startup and SSH behavior are spec-authoritative. SSH-enabled workspaces need no key
+material from the worker: the gateway reaches them over the sealantd control socket
+(`WORKSPACE_CONTROL_SOCKET_HOST_DIR`), and client keys are authorized against the control plane's
 `ssh_keys` table. Remaining worker defaults:
 
 - `DEFAULT_SSH_BIND_HOST=127.0.0.1`

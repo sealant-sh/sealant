@@ -1,7 +1,7 @@
 import { Button } from "@sealant/ui";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { SandboxPage } from "@/components/app/sandbox-page";
+import { WorkspacePage } from "@/components/app/workspace-page";
 
 export const Route = createFileRoute("/_authenticated/profiles/create")({
   component: CreateProfilePage,
@@ -9,7 +9,7 @@ export const Route = createFileRoute("/_authenticated/profiles/create")({
 
 function CreateProfilePage() {
   return (
-    <SandboxPage
+    <WorkspacePage
       kicker="Profiles"
       title="Create profile"
       description="Define a reusable profile once, then apply the same environment contract across repositories and runs."
@@ -40,6 +40,6 @@ function CreateProfilePage() {
           <Button className="h-11 px-5">Create profile</Button>
         </div>
       </form>
-    </SandboxPage>
+    </WorkspacePage>
   );
 }

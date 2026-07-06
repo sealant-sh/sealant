@@ -1,23 +1,23 @@
 ---
 title: sealantd integration
 description:
-  How the sealantd daemon is baked into sandbox images and driven by the control plane over a typed
-  Effect runtime service.
+  How the sealantd daemon is baked into workspace images and driven by the control plane over a
+  typed Effect runtime service.
 ---
 
 import { Card, Cards } from "fumadocs-ui/components/card";
 import { Step, Steps } from "fumadocs-ui/components/steps";
 import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
 
-`sealantd` is the in-sandbox daemon that exposes a control socket for executing commands, streaming
-binary-safe IO, and emitting telemetry. This page describes how it is baked into sandbox images by
-the build pipeline and how the orchestrator (control plane) reaches it through a typed Effect
-service. The integration runs entirely over the real Docker runtime path: a sandbox built by the
-production pipeline boots `sealantd`, and the orchestrator drives it — `exec`, binary-safe stdout,
-and streamed telemetry — over a real transport.
+`sealantd` is the in-workspace daemon that exposes a control socket for executing commands,
+streaming binary-safe IO, and emitting telemetry. This page describes how it is baked into workspace
+images by the build pipeline and how the orchestrator (control plane) reaches it through a typed
+Effect service. The integration runs entirely over the real Docker runtime path: a workspace built
+by the production pipeline boots `sealantd`, and the orchestrator drives it — `exec`, binary-safe
+stdout, and streamed telemetry — over a real transport.
 
 <Callout type="info">
-  The proof bar for this integration is concrete: a sandbox built by the real buildkit pipeline
+  The proof bar for this integration is concrete: a workspace built by the real buildkit pipeline
   boots `sealantd`, and the orchestrator drives it through a typed Effect service over a real
   `docker exec` transport. That bar is met end-to-end, with every phase verified by breaking each
   test to confirm it is not vacuous.
@@ -25,13 +25,13 @@ and streamed telemetry — over a real transport.
 
 ## Architecture
 
-Sandboxes run as Docker containers via the Docker runtime adapter at
-`packages/sandboxes/src/runtime/docker-runtime-adapter.ts`. `sealantd` runs _inside_ the container,
+Workspaces run as Docker containers via the Docker runtime adapter at
+`packages/workspaces/src/runtime/docker-runtime-adapter.ts`. `sealantd` runs _inside_ the container,
 listening on a Unix socket at `/run/sealant/control.sock`. The orchestrator reaches it from outside
 the container — today via `docker exec`, later via the SSH gateway as a dedicated tunnel channel.
 
 ```text
-orchestrator (Effect)                          sandbox container (docker)
+orchestrator (Effect)                          workspace container (docker)
 ┌────────────────────────────┐                 ┌────────────────────────────────┐
 │ SealantRuntime service     │  docker exec    │ entrypoint:                    │
 │  ├─ transport (exec/socat) │◄──────stdio────►│   sealantd --socket … --ws … & │
@@ -53,11 +53,11 @@ worker-facing consumer call.
 | Layer               | What                                                                                                      | Where                                                            |
 | ------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | L1 — Bake binary    | `COPY --from=ghcr.io/get-sealant/sealantd` plus `socat` for the relay, gated by a flag                    | `buildkit-builder.ts` `renderContainerfile`, distro `packageMap` |
-| L2 — Launch         | Entrypoint starts `sealantd` behind a flag, socket `/run/sealant/control.sock`, workspace = workdir       | `buildkit-builder.ts` `renderSandboxEntrypoint`                  |
-| L3 — Transport      | `docker exec -i <c> socat - UNIX-CONNECT:…` bridged to a Duplex stream (`-i` is load-bearing, never `-t`) | `packages/sandboxes/src/sealantd/transport.ts`                   |
+| L2 — Launch         | Entrypoint starts `sealantd` behind a flag, socket `/run/sealant/control.sock`, workspace = workdir       | `buildkit-builder.ts` `renderWorkspaceEntrypoint`                |
+| L3 — Transport      | `docker exec -i <c> socat - UNIX-CONNECT:…` bridged to a Duplex stream (`-i` is load-bearing, never `-t`) | `packages/workspaces/src/sealantd/transport.ts`                  |
 | L4 — SDK            | `SealantClient.fromStream(duplex)` — generic Duplex transport                                             | sealantd `packages/runtime-client/src/client.ts`                 |
-| L5 — Effect service | `SealantRuntime`: `exec`, `events: Stream`, scoped connection, typed results                              | `packages/sandboxes/src/sealantd/runtime.ts`                     |
-| L6 — Consumer       | A worker-facing `execInSandbox` call plus an adapter-driven path                                          | `packages/sandboxes` + `apps/worker`                             |
+| L5 — Effect service | `SealantRuntime`: `exec`, `events: Stream`, scoped connection, typed results                              | `packages/workspaces/src/sealantd/runtime.ts`                    |
+| L6 — Consumer       | A worker-facing `execInWorkspace` call plus an adapter-driven path                                        | `packages/workspaces` + `apps/worker`                            |
 | L7 — Telemetry sink | Forward the event stream to a message bus or persist it                                                   | `packages/rabbitmq` / db                                         |
 
 ## How a request flows
@@ -79,9 +79,9 @@ build-context plumbing.
 <Step>
 ### Launch (L2)
 
-The sandbox entrypoint starts `sealantd --socket /run/sealant/control.sock --workspace … &` before
+The workspace entrypoint starts `sealantd --socket /run/sealant/control.sock --workspace … &` before
 handing off to the user workload. Launch is gated behind a default-off environment flag, so existing
-sandboxes are unaffected unless the flag is set.
+workspaces are unaffected unless the flag is set.
 
 </Step>
 
@@ -109,7 +109,7 @@ telemetry `Stream`, and tagged errors. The transport itself is a pluggable `Seal
 <Step>
 ### Consume (L6)
 
-`execInSandbox(target, cmd)` is the worker-facing call, returning an `Effect` that resolves to
+`execInWorkspace(target, cmd)` is the worker-facing call, returning an `Effect` that resolves to
 `{ stdout, exitCode }`. Targets are produced from a Docker container id or a runtime instance via
 `sealantTargetForDockerContainer` / `sealantTargetForRuntimeInstance`. An end-to-end path drives the
 real `DockerRuntimeAdapter.launch()` to obtain a container id, builds a target, and execs against a
@@ -125,7 +125,7 @@ live container through `SealantRuntime`.
   <Card title="Default-off flag">
     `sealantd` is fully opt-in per build via the `enableSealantd` customization flag. With the flag
     disabled the buildkit pipeline renders a byte-identical Containerfile, giving zero blast radius
-    for existing sandboxes.
+    for existing workspaces.
   </Card>
   <Card title="docker exec + socat transport">
     The current transport is real and is what the worker can already do. The SSH-gateway tunnel is
@@ -147,7 +147,7 @@ live container through `SealantRuntime`.
 <Callout type="warn">
   A peer-cred mismatch is the most likely failure mode if uids drift. If `docker exec` runs under a
   uid that differs from the one `sealantd` runs as, the connection is rejected. The fix is to align
-  the uids, pass `--allowed-peer-uids`, or run both as the sandbox user.
+  the uids, pass `--allowed-peer-uids`, or run both as the workspace user.
 </Callout>
 
 ## Telemetry
@@ -160,7 +160,7 @@ consumer can attach without reshaping the runtime service.
 <Callout type="idea">
   The event stream is the seam for persisting an execution record. Forwarding `SealantRuntime`
   events to RabbitMQ or a store gives you a durable, queryable history of every command run inside a
-  sandbox.
+  workspace.
 </Callout>
 
 ## What ran end-to-end
@@ -172,16 +172,16 @@ The integration was built and verified phase by phase against the real Docker ru
     `SealantClient.fromStream(Duplex)` lets the client run over any byte stream (such as a `docker exec` pipe) rather than only a local socket. The connect and spawn paths remain intact, verified by the SDK end-to-end suite.
   </Accordion>
   <Accordion title="P2 — Bake and launch">
-    A default-off `enableSealantd` build flag (a customization-schema field, auto-threaded through the build plan's customization). When set, the buildkit pipeline adds the `COPY --from` GHCR layer, installs `socat`, and launches `sealantd --socket /run/sealant/control.sock --workspace … &` in the entrypoint. The disabled path renders a byte-identical Containerfile, so existing sandboxes are unaffected.
+    A default-off `enableSealantd` build flag (a customization-schema field, auto-threaded through the build plan's customization). When set, the buildkit pipeline adds the `COPY --from` GHCR layer, installs `socat`, and launches `sealantd --socket /run/sealant/control.sock --workspace … &` in the entrypoint. The disabled path renders a byte-identical Containerfile, so existing workspaces are unaffected.
   </Accordion>
   <Accordion title="P3 — Real image and live proof">
-    A standalone build script (`compileSandboxBuildSpec`, no worker or database) produces a real Fedora image with `sealantd` baked in. An end-to-end test boots it and bridges `docker exec -i … socat - UNIX-CONNECT:…` into `SealantClient.fromStream`: a `health` check returns HEALTHY, then `exec('/bin/echo hi')` yields `processStarted`, STDOUT `"hi\n"`, and `exitCode 0` over the real transport.
+    A standalone build script (`compileWorkspaceBuildSpec`, no worker or database) produces a real Fedora image with `sealantd` baked in. An end-to-end test boots it and bridges `docker exec -i … socat - UNIX-CONNECT:…` into `SealantClient.fromStream`: a `health` check returns HEALTHY, then `exec('/bin/echo hi')` yields `processStarted`, STDOUT `"hi\n"`, and `exitCode 0` over the real transport.
   </Accordion>
   <Accordion title="P5 — Effect service">
     The `SealantRuntime` Effect service: scoped `connect`, `exec`, a telemetry `Stream`, tagged errors, and a pluggable `SealantTransport` seam (`docker exec` now; gateway and Kubernetes slot in unchanged). Verified both docker-free at the unit level and through the real service end-to-end.
   </Accordion>
   <Accordion title="P6 — Consumer seam">
-    `sealantTargetForDockerContainer` / `sealantTargetForRuntimeInstance` plus `execInSandbox(target, cmd): Effect<{ stdout, exitCode }>` — the worker-facing call. An end-to-end test drives the real `DockerRuntimeAdapter.launch()`, derives a container id and target, and execs against a live container through `SealantRuntime`. The change is purely additive and default-off, with no production launch-path changes.
+    `sealantTargetForDockerContainer` / `sealantTargetForRuntimeInstance` plus `execInWorkspace(target, cmd): Effect<{ stdout, exitCode }>` — the worker-facing call. An end-to-end test drives the real `DockerRuntimeAdapter.launch()`, derives a container id and target, and execs against a live container through `SealantRuntime`. The change is purely additive and default-off, with no production launch-path changes.
   </Accordion>
 </Accordions>
 
@@ -210,7 +210,7 @@ Build the production transport: a `socat` / `nc -U` channel in `apps/ssh-gateway
 <Step>
 ### Pick the product surface
 
-Decide how to expose the worker-facing `execInSandbox` — as an api-contracts operation plus route,
+Decide how to expose the worker-facing `execInWorkspace` — as an api-contracts operation plus route,
 wired into the worker's live flow, and/or by recording control-socket availability on the runtime
 instance. Telemetry persistence (forwarding the event stream to a message bus or store) belongs here
 too.

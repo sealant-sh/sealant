@@ -18,7 +18,7 @@ import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-pass
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
-import { Route as AuthenticatedSandboxesIndexRouteImport } from './routes/_authenticated/sandboxes/index'
+import { Route as AuthenticatedWorkspacesIndexRouteImport } from './routes/_authenticated/workspaces/index'
 import { Route as AuthenticatedRepositoriesIndexRouteImport } from './routes/_authenticated/repositories/index'
 import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authenticated/registry/index'
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
@@ -26,29 +26,29 @@ import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
 import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
-import { Route as AuthenticatedSandboxesNewRouteImport } from './routes/_authenticated/sandboxes/new'
-import { Route as AuthenticatedSandboxesFailedRouteImport } from './routes/_authenticated/sandboxes/failed'
-import { Route as AuthenticatedSandboxesActiveRouteImport } from './routes/_authenticated/sandboxes/active'
+import { Route as AuthenticatedWorkspacesNewRouteImport } from './routes/_authenticated/workspaces/new'
+import { Route as AuthenticatedWorkspacesFailedRouteImport } from './routes/_authenticated/workspaces/failed'
+import { Route as AuthenticatedWorkspacesActiveRouteImport } from './routes/_authenticated/workspaces/active'
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
 import { Route as AuthenticatedGithubSetupRouteImport } from './routes/_authenticated/github/setup'
-import { Route as AuthenticatedSandboxesSandboxIdIndexRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/index'
+import { Route as AuthenticatedWorkspacesWorkspaceIdIndexRouteImport } from './routes/_authenticated/workspaces/$workspaceId/index'
 import { Route as AuthenticatedRepositoriesRepoIdIndexRouteImport } from './routes/_authenticated/repositories/$repoId/index'
 import { Route as AuthenticatedRegistryRegistryIdIndexRouteImport } from './routes/_authenticated/registry/$registryId/index'
 import { Route as AuthenticatedProfilesProfileIdIndexRouteImport } from './routes/_authenticated/profiles/$profileId/index'
-import { Route as AuthenticatedSandboxesSandboxIdValidationRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/validation'
-import { Route as AuthenticatedSandboxesSandboxIdTraceRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/trace'
-import { Route as AuthenticatedSandboxesSandboxIdSpecRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/spec'
-import { Route as AuthenticatedSandboxesSandboxIdDiffRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/diff'
+import { Route as AuthenticatedWorkspacesWorkspaceIdValidationRouteImport } from './routes/_authenticated/workspaces/$workspaceId/validation'
+import { Route as AuthenticatedWorkspacesWorkspaceIdTraceRouteImport } from './routes/_authenticated/workspaces/$workspaceId/trace'
+import { Route as AuthenticatedWorkspacesWorkspaceIdSpecRouteImport } from './routes/_authenticated/workspaces/$workspaceId/spec'
+import { Route as AuthenticatedWorkspacesWorkspaceIdDiffRouteImport } from './routes/_authenticated/workspaces/$workspaceId/diff'
 import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
 import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
-import { Route as AuthenticatedRepositoriesRepoIdSandboxesRouteImport } from './routes/_authenticated/repositories/$repoId/sandboxes'
+import { Route as AuthenticatedRepositoriesRepoIdWorkspacesRouteImport } from './routes/_authenticated/repositories/$repoId/workspaces'
 import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
 import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
 import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
 import { Route as AuthenticatedProfilesProfileIdEnvVariablesRouteImport } from './routes/_authenticated/profiles/$profileId/env-variables'
 import { Route as AuthenticatedProfilesProfileIdAgentsRouteImport } from './routes/_authenticated/profiles/$profileId/agents'
 import { Route as AuthenticatedProfilesProfileIdAccessRouteImport } from './routes/_authenticated/profiles/$profileId/access'
-import { Route as AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport } from './routes/_authenticated/sandboxes/$sandboxId/runs/$runId'
+import { Route as AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport } from './routes/_authenticated/workspaces/$workspaceId/runs/$runId'
 import { Route as AuthenticatedRegistryRegistryIdRepoTagRouteImport } from './routes/_authenticated/registry/$registryId/$repo/$tag'
 
 const SetupRoute = SetupRouteImport.update({
@@ -94,10 +94,10 @@ const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => AuthRoute,
 } as any)
-const AuthenticatedSandboxesIndexRoute =
-  AuthenticatedSandboxesIndexRouteImport.update({
-    id: '/sandboxes/',
-    path: '/sandboxes/',
+const AuthenticatedWorkspacesIndexRoute =
+  AuthenticatedWorkspacesIndexRouteImport.update({
+    id: '/workspaces/',
+    path: '/workspaces/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRepositoriesIndexRoute =
@@ -140,22 +140,22 @@ const AuthenticatedSettingsConnectedAccountsRoute =
     path: '/settings/connected-accounts',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesNewRoute =
-  AuthenticatedSandboxesNewRouteImport.update({
-    id: '/sandboxes/new',
-    path: '/sandboxes/new',
+const AuthenticatedWorkspacesNewRoute =
+  AuthenticatedWorkspacesNewRouteImport.update({
+    id: '/workspaces/new',
+    path: '/workspaces/new',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesFailedRoute =
-  AuthenticatedSandboxesFailedRouteImport.update({
-    id: '/sandboxes/failed',
-    path: '/sandboxes/failed',
+const AuthenticatedWorkspacesFailedRoute =
+  AuthenticatedWorkspacesFailedRouteImport.update({
+    id: '/workspaces/failed',
+    path: '/workspaces/failed',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesActiveRoute =
-  AuthenticatedSandboxesActiveRouteImport.update({
-    id: '/sandboxes/active',
-    path: '/sandboxes/active',
+const AuthenticatedWorkspacesActiveRoute =
+  AuthenticatedWorkspacesActiveRouteImport.update({
+    id: '/workspaces/active',
+    path: '/workspaces/active',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesCreateRoute =
@@ -170,10 +170,10 @@ const AuthenticatedGithubSetupRoute =
     path: '/github/setup',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdIndexRoute =
-  AuthenticatedSandboxesSandboxIdIndexRouteImport.update({
-    id: '/sandboxes/$sandboxId/',
-    path: '/sandboxes/$sandboxId/',
+const AuthenticatedWorkspacesWorkspaceIdIndexRoute =
+  AuthenticatedWorkspacesWorkspaceIdIndexRouteImport.update({
+    id: '/workspaces/$workspaceId/',
+    path: '/workspaces/$workspaceId/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRepositoriesRepoIdIndexRoute =
@@ -194,28 +194,28 @@ const AuthenticatedProfilesProfileIdIndexRoute =
     path: '/profiles/$profileId/',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdValidationRoute =
-  AuthenticatedSandboxesSandboxIdValidationRouteImport.update({
-    id: '/sandboxes/$sandboxId/validation',
-    path: '/sandboxes/$sandboxId/validation',
+const AuthenticatedWorkspacesWorkspaceIdValidationRoute =
+  AuthenticatedWorkspacesWorkspaceIdValidationRouteImport.update({
+    id: '/workspaces/$workspaceId/validation',
+    path: '/workspaces/$workspaceId/validation',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdTraceRoute =
-  AuthenticatedSandboxesSandboxIdTraceRouteImport.update({
-    id: '/sandboxes/$sandboxId/trace',
-    path: '/sandboxes/$sandboxId/trace',
+const AuthenticatedWorkspacesWorkspaceIdTraceRoute =
+  AuthenticatedWorkspacesWorkspaceIdTraceRouteImport.update({
+    id: '/workspaces/$workspaceId/trace',
+    path: '/workspaces/$workspaceId/trace',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdSpecRoute =
-  AuthenticatedSandboxesSandboxIdSpecRouteImport.update({
-    id: '/sandboxes/$sandboxId/spec',
-    path: '/sandboxes/$sandboxId/spec',
+const AuthenticatedWorkspacesWorkspaceIdSpecRoute =
+  AuthenticatedWorkspacesWorkspaceIdSpecRouteImport.update({
+    id: '/workspaces/$workspaceId/spec',
+    path: '/workspaces/$workspaceId/spec',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdDiffRoute =
-  AuthenticatedSandboxesSandboxIdDiffRouteImport.update({
-    id: '/sandboxes/$sandboxId/diff',
-    path: '/sandboxes/$sandboxId/diff',
+const AuthenticatedWorkspacesWorkspaceIdDiffRoute =
+  AuthenticatedWorkspacesWorkspaceIdDiffRouteImport.update({
+    id: '/workspaces/$workspaceId/diff',
+    path: '/workspaces/$workspaceId/diff',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRepositoriesRepoIdSetupRoute =
@@ -230,10 +230,10 @@ const AuthenticatedRepositoriesRepoIdSettingsRoute =
     path: '/repositories/$repoId/settings',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedRepositoriesRepoIdSandboxesRoute =
-  AuthenticatedRepositoriesRepoIdSandboxesRouteImport.update({
-    id: '/repositories/$repoId/sandboxes',
-    path: '/repositories/$repoId/sandboxes',
+const AuthenticatedRepositoriesRepoIdWorkspacesRoute =
+  AuthenticatedRepositoriesRepoIdWorkspacesRouteImport.update({
+    id: '/repositories/$repoId/workspaces',
+    path: '/repositories/$repoId/workspaces',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesProfileIdSetupRoute =
@@ -272,10 +272,10 @@ const AuthenticatedProfilesProfileIdAccessRoute =
     path: '/profiles/$profileId/access',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedSandboxesSandboxIdRunsRunIdRoute =
-  AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport.update({
-    id: '/sandboxes/$sandboxId/runs/$runId',
-    path: '/sandboxes/$sandboxId/runs/$runId',
+const AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute =
+  AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport.update({
+    id: '/workspaces/$workspaceId/runs/$runId',
+    path: '/workspaces/$workspaceId/runs/$runId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedRegistryRegistryIdRepoTagRoute =
@@ -295,9 +295,9 @@ export interface FileRoutesByFullPath {
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
-  '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
-  '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
+  '/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
+  '/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
   '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -305,26 +305,26 @@ export interface FileRoutesByFullPath {
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/registry/': typeof AuthenticatedRegistryIndexRoute
   '/repositories/': typeof AuthenticatedRepositoriesIndexRoute
-  '/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
+  '/workspaces/': typeof AuthenticatedWorkspacesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
+  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
-  '/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
-  '/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
-  '/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
+  '/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
+  '/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
+  '/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
+  '/workspaces/$workspaceId/validation': typeof AuthenticatedWorkspacesWorkspaceIdValidationRoute
   '/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
+  '/workspaces/$workspaceId/': typeof AuthenticatedWorkspacesWorkspaceIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
-  '/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
+  '/workspaces/$workspaceId/runs/$runId': typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
@@ -336,9 +336,9 @@ export interface FileRoutesByTo {
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
-  '/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
-  '/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
+  '/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
+  '/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
   '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -346,26 +346,26 @@ export interface FileRoutesByTo {
   '/profiles': typeof AuthenticatedProfilesIndexRoute
   '/registry': typeof AuthenticatedRegistryIndexRoute
   '/repositories': typeof AuthenticatedRepositoriesIndexRoute
-  '/sandboxes': typeof AuthenticatedSandboxesIndexRoute
+  '/workspaces': typeof AuthenticatedWorkspacesIndexRoute
   '/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
+  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
-  '/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
-  '/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
-  '/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
+  '/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
+  '/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
+  '/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
+  '/workspaces/$workspaceId/validation': typeof AuthenticatedWorkspacesWorkspaceIdValidationRoute
   '/profiles/$profileId': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/registry/$registryId': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/repositories/$repoId': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/sandboxes/$sandboxId': typeof AuthenticatedSandboxesSandboxIdIndexRoute
+  '/workspaces/$workspaceId': typeof AuthenticatedWorkspacesWorkspaceIdIndexRoute
   '/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
-  '/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
+  '/workspaces/$workspaceId/runs/$runId': typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -380,9 +380,9 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/github/setup': typeof AuthenticatedGithubSetupRoute
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
-  '/_authenticated/sandboxes/active': typeof AuthenticatedSandboxesActiveRoute
-  '/_authenticated/sandboxes/failed': typeof AuthenticatedSandboxesFailedRoute
-  '/_authenticated/sandboxes/new': typeof AuthenticatedSandboxesNewRoute
+  '/_authenticated/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
+  '/_authenticated/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
+  '/_authenticated/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
   '/_authenticated/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
   '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -390,26 +390,26 @@ export interface FileRoutesById {
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
   '/_authenticated/registry/': typeof AuthenticatedRegistryIndexRoute
   '/_authenticated/repositories/': typeof AuthenticatedRepositoriesIndexRoute
-  '/_authenticated/sandboxes/': typeof AuthenticatedSandboxesIndexRoute
+  '/_authenticated/workspaces/': typeof AuthenticatedWorkspacesIndexRoute
   '/_authenticated/profiles/$profileId/access': typeof AuthenticatedProfilesProfileIdAccessRoute
   '/_authenticated/profiles/$profileId/agents': typeof AuthenticatedProfilesProfileIdAgentsRoute
   '/_authenticated/profiles/$profileId/env-variables': typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   '/_authenticated/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/_authenticated/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/_authenticated/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/_authenticated/repositories/$repoId/sandboxes': typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
+  '/_authenticated/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/_authenticated/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/_authenticated/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  '/_authenticated/sandboxes/$sandboxId/diff': typeof AuthenticatedSandboxesSandboxIdDiffRoute
-  '/_authenticated/sandboxes/$sandboxId/spec': typeof AuthenticatedSandboxesSandboxIdSpecRoute
-  '/_authenticated/sandboxes/$sandboxId/trace': typeof AuthenticatedSandboxesSandboxIdTraceRoute
-  '/_authenticated/sandboxes/$sandboxId/validation': typeof AuthenticatedSandboxesSandboxIdValidationRoute
+  '/_authenticated/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
+  '/_authenticated/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
+  '/_authenticated/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
+  '/_authenticated/workspaces/$workspaceId/validation': typeof AuthenticatedWorkspacesWorkspaceIdValidationRoute
   '/_authenticated/profiles/$profileId/': typeof AuthenticatedProfilesProfileIdIndexRoute
   '/_authenticated/registry/$registryId/': typeof AuthenticatedRegistryRegistryIdIndexRoute
   '/_authenticated/repositories/$repoId/': typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  '/_authenticated/sandboxes/$sandboxId/': typeof AuthenticatedSandboxesSandboxIdIndexRoute
+  '/_authenticated/workspaces/$workspaceId/': typeof AuthenticatedWorkspacesWorkspaceIdIndexRoute
   '/_authenticated/registry/$registryId/$repo/$tag': typeof AuthenticatedRegistryRegistryIdRepoTagRoute
-  '/_authenticated/sandboxes/$sandboxId/runs/$runId': typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
+  '/_authenticated/workspaces/$workspaceId/runs/$runId': typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -423,9 +423,9 @@ export interface FileRouteTypes {
     | '/about'
     | '/github/setup'
     | '/profiles/create'
-    | '/sandboxes/active'
-    | '/sandboxes/failed'
-    | '/sandboxes/new'
+    | '/workspaces/active'
+    | '/workspaces/failed'
+    | '/workspaces/new'
     | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
@@ -433,26 +433,26 @@ export interface FileRouteTypes {
     | '/profiles/'
     | '/registry/'
     | '/repositories/'
-    | '/sandboxes/'
+    | '/workspaces/'
     | '/profiles/$profileId/access'
     | '/profiles/$profileId/agents'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/sandboxes'
+    | '/repositories/$repoId/workspaces'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
-    | '/sandboxes/$sandboxId/diff'
-    | '/sandboxes/$sandboxId/spec'
-    | '/sandboxes/$sandboxId/trace'
-    | '/sandboxes/$sandboxId/validation'
+    | '/workspaces/$workspaceId/diff'
+    | '/workspaces/$workspaceId/spec'
+    | '/workspaces/$workspaceId/trace'
+    | '/workspaces/$workspaceId/validation'
     | '/profiles/$profileId/'
     | '/registry/$registryId/'
     | '/repositories/$repoId/'
-    | '/sandboxes/$sandboxId/'
+    | '/workspaces/$workspaceId/'
     | '/registry/$registryId/$repo/$tag'
-    | '/sandboxes/$sandboxId/runs/$runId'
+    | '/workspaces/$workspaceId/runs/$runId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -464,9 +464,9 @@ export interface FileRouteTypes {
     | '/about'
     | '/github/setup'
     | '/profiles/create'
-    | '/sandboxes/active'
-    | '/sandboxes/failed'
-    | '/sandboxes/new'
+    | '/workspaces/active'
+    | '/workspaces/failed'
+    | '/workspaces/new'
     | '/settings/connected-accounts'
     | '/settings/ssh-keys'
     | '/api/auth/$'
@@ -474,26 +474,26 @@ export interface FileRouteTypes {
     | '/profiles'
     | '/registry'
     | '/repositories'
-    | '/sandboxes'
+    | '/workspaces'
     | '/profiles/$profileId/access'
     | '/profiles/$profileId/agents'
     | '/profiles/$profileId/env-variables'
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/sandboxes'
+    | '/repositories/$repoId/workspaces'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
-    | '/sandboxes/$sandboxId/diff'
-    | '/sandboxes/$sandboxId/spec'
-    | '/sandboxes/$sandboxId/trace'
-    | '/sandboxes/$sandboxId/validation'
+    | '/workspaces/$workspaceId/diff'
+    | '/workspaces/$workspaceId/spec'
+    | '/workspaces/$workspaceId/trace'
+    | '/workspaces/$workspaceId/validation'
     | '/profiles/$profileId'
     | '/registry/$registryId'
     | '/repositories/$repoId'
-    | '/sandboxes/$sandboxId'
+    | '/workspaces/$workspaceId'
     | '/registry/$registryId/$repo/$tag'
-    | '/sandboxes/$sandboxId/runs/$runId'
+    | '/workspaces/$workspaceId/runs/$runId'
   id:
     | '__root__'
     | '/_auth'
@@ -507,9 +507,9 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/github/setup'
     | '/_authenticated/profiles/create'
-    | '/_authenticated/sandboxes/active'
-    | '/_authenticated/sandboxes/failed'
-    | '/_authenticated/sandboxes/new'
+    | '/_authenticated/workspaces/active'
+    | '/_authenticated/workspaces/failed'
+    | '/_authenticated/workspaces/new'
     | '/_authenticated/settings/connected-accounts'
     | '/_authenticated/settings/ssh-keys'
     | '/api/auth/$'
@@ -517,26 +517,26 @@ export interface FileRouteTypes {
     | '/_authenticated/profiles/'
     | '/_authenticated/registry/'
     | '/_authenticated/repositories/'
-    | '/_authenticated/sandboxes/'
+    | '/_authenticated/workspaces/'
     | '/_authenticated/profiles/$profileId/access'
     | '/_authenticated/profiles/$profileId/agents'
     | '/_authenticated/profiles/$profileId/env-variables'
     | '/_authenticated/profiles/$profileId/packages'
     | '/_authenticated/profiles/$profileId/secrets'
     | '/_authenticated/profiles/$profileId/setup'
-    | '/_authenticated/repositories/$repoId/sandboxes'
+    | '/_authenticated/repositories/$repoId/workspaces'
     | '/_authenticated/repositories/$repoId/settings'
     | '/_authenticated/repositories/$repoId/setup'
-    | '/_authenticated/sandboxes/$sandboxId/diff'
-    | '/_authenticated/sandboxes/$sandboxId/spec'
-    | '/_authenticated/sandboxes/$sandboxId/trace'
-    | '/_authenticated/sandboxes/$sandboxId/validation'
+    | '/_authenticated/workspaces/$workspaceId/diff'
+    | '/_authenticated/workspaces/$workspaceId/spec'
+    | '/_authenticated/workspaces/$workspaceId/trace'
+    | '/_authenticated/workspaces/$workspaceId/validation'
     | '/_authenticated/profiles/$profileId/'
     | '/_authenticated/registry/$registryId/'
     | '/_authenticated/repositories/$repoId/'
-    | '/_authenticated/sandboxes/$sandboxId/'
+    | '/_authenticated/workspaces/$workspaceId/'
     | '/_authenticated/registry/$registryId/$repo/$tag'
-    | '/_authenticated/sandboxes/$sandboxId/runs/$runId'
+    | '/_authenticated/workspaces/$workspaceId/runs/$runId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -612,11 +612,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
     }
-    '/_authenticated/sandboxes/': {
-      id: '/_authenticated/sandboxes/'
-      path: '/sandboxes'
-      fullPath: '/sandboxes/'
-      preLoaderRoute: typeof AuthenticatedSandboxesIndexRouteImport
+    '/_authenticated/workspaces/': {
+      id: '/_authenticated/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AuthenticatedWorkspacesIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/': {
@@ -668,25 +668,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsConnectedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/new': {
-      id: '/_authenticated/sandboxes/new'
-      path: '/sandboxes/new'
-      fullPath: '/sandboxes/new'
-      preLoaderRoute: typeof AuthenticatedSandboxesNewRouteImport
+    '/_authenticated/workspaces/new': {
+      id: '/_authenticated/workspaces/new'
+      path: '/workspaces/new'
+      fullPath: '/workspaces/new'
+      preLoaderRoute: typeof AuthenticatedWorkspacesNewRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/failed': {
-      id: '/_authenticated/sandboxes/failed'
-      path: '/sandboxes/failed'
-      fullPath: '/sandboxes/failed'
-      preLoaderRoute: typeof AuthenticatedSandboxesFailedRouteImport
+    '/_authenticated/workspaces/failed': {
+      id: '/_authenticated/workspaces/failed'
+      path: '/workspaces/failed'
+      fullPath: '/workspaces/failed'
+      preLoaderRoute: typeof AuthenticatedWorkspacesFailedRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/active': {
-      id: '/_authenticated/sandboxes/active'
-      path: '/sandboxes/active'
-      fullPath: '/sandboxes/active'
-      preLoaderRoute: typeof AuthenticatedSandboxesActiveRouteImport
+    '/_authenticated/workspaces/active': {
+      id: '/_authenticated/workspaces/active'
+      path: '/workspaces/active'
+      fullPath: '/workspaces/active'
+      preLoaderRoute: typeof AuthenticatedWorkspacesActiveRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/create': {
@@ -703,11 +703,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedGithubSetupRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/': {
-      id: '/_authenticated/sandboxes/$sandboxId/'
-      path: '/sandboxes/$sandboxId'
-      fullPath: '/sandboxes/$sandboxId/'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdIndexRouteImport
+    '/_authenticated/workspaces/$workspaceId/': {
+      id: '/_authenticated/workspaces/$workspaceId/'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId/'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/$repoId/': {
@@ -731,32 +731,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/validation': {
-      id: '/_authenticated/sandboxes/$sandboxId/validation'
-      path: '/sandboxes/$sandboxId/validation'
-      fullPath: '/sandboxes/$sandboxId/validation'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdValidationRouteImport
+    '/_authenticated/workspaces/$workspaceId/validation': {
+      id: '/_authenticated/workspaces/$workspaceId/validation'
+      path: '/workspaces/$workspaceId/validation'
+      fullPath: '/workspaces/$workspaceId/validation'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdValidationRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/trace': {
-      id: '/_authenticated/sandboxes/$sandboxId/trace'
-      path: '/sandboxes/$sandboxId/trace'
-      fullPath: '/sandboxes/$sandboxId/trace'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdTraceRouteImport
+    '/_authenticated/workspaces/$workspaceId/trace': {
+      id: '/_authenticated/workspaces/$workspaceId/trace'
+      path: '/workspaces/$workspaceId/trace'
+      fullPath: '/workspaces/$workspaceId/trace'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdTraceRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/spec': {
-      id: '/_authenticated/sandboxes/$sandboxId/spec'
-      path: '/sandboxes/$sandboxId/spec'
-      fullPath: '/sandboxes/$sandboxId/spec'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdSpecRouteImport
+    '/_authenticated/workspaces/$workspaceId/spec': {
+      id: '/_authenticated/workspaces/$workspaceId/spec'
+      path: '/workspaces/$workspaceId/spec'
+      fullPath: '/workspaces/$workspaceId/spec'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdSpecRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/diff': {
-      id: '/_authenticated/sandboxes/$sandboxId/diff'
-      path: '/sandboxes/$sandboxId/diff'
-      fullPath: '/sandboxes/$sandboxId/diff'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdDiffRouteImport
+    '/_authenticated/workspaces/$workspaceId/diff': {
+      id: '/_authenticated/workspaces/$workspaceId/diff'
+      path: '/workspaces/$workspaceId/diff'
+      fullPath: '/workspaces/$workspaceId/diff'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/repositories/$repoId/setup': {
@@ -773,11 +773,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/repositories/$repoId/sandboxes': {
-      id: '/_authenticated/repositories/$repoId/sandboxes'
-      path: '/repositories/$repoId/sandboxes'
-      fullPath: '/repositories/$repoId/sandboxes'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSandboxesRouteImport
+    '/_authenticated/repositories/$repoId/workspaces': {
+      id: '/_authenticated/repositories/$repoId/workspaces'
+      path: '/repositories/$repoId/workspaces'
+      fullPath: '/repositories/$repoId/workspaces'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/$profileId/setup': {
@@ -822,11 +822,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProfilesProfileIdAccessRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/sandboxes/$sandboxId/runs/$runId': {
-      id: '/_authenticated/sandboxes/$sandboxId/runs/$runId'
-      path: '/sandboxes/$sandboxId/runs/$runId'
-      fullPath: '/sandboxes/$sandboxId/runs/$runId'
-      preLoaderRoute: typeof AuthenticatedSandboxesSandboxIdRunsRunIdRouteImport
+    '/_authenticated/workspaces/$workspaceId/runs/$runId': {
+      id: '/_authenticated/workspaces/$workspaceId/runs/$runId'
+      path: '/workspaces/$workspaceId/runs/$runId'
+      fullPath: '/workspaces/$workspaceId/runs/$runId'
+      preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/registry/$registryId/$repo/$tag': {
@@ -860,34 +860,34 @@ interface AuthenticatedRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedGithubSetupRoute: typeof AuthenticatedGithubSetupRoute
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
-  AuthenticatedSandboxesActiveRoute: typeof AuthenticatedSandboxesActiveRoute
-  AuthenticatedSandboxesFailedRoute: typeof AuthenticatedSandboxesFailedRoute
-  AuthenticatedSandboxesNewRoute: typeof AuthenticatedSandboxesNewRoute
+  AuthenticatedWorkspacesActiveRoute: typeof AuthenticatedWorkspacesActiveRoute
+  AuthenticatedWorkspacesFailedRoute: typeof AuthenticatedWorkspacesFailedRoute
+  AuthenticatedWorkspacesNewRoute: typeof AuthenticatedWorkspacesNewRoute
   AuthenticatedSettingsConnectedAccountsRoute: typeof AuthenticatedSettingsConnectedAccountsRoute
   AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
-  AuthenticatedSandboxesIndexRoute: typeof AuthenticatedSandboxesIndexRoute
+  AuthenticatedWorkspacesIndexRoute: typeof AuthenticatedWorkspacesIndexRoute
   AuthenticatedProfilesProfileIdAccessRoute: typeof AuthenticatedProfilesProfileIdAccessRoute
   AuthenticatedProfilesProfileIdAgentsRoute: typeof AuthenticatedProfilesProfileIdAgentsRoute
   AuthenticatedProfilesProfileIdEnvVariablesRoute: typeof AuthenticatedProfilesProfileIdEnvVariablesRoute
   AuthenticatedProfilesProfileIdPackagesRoute: typeof AuthenticatedProfilesProfileIdPackagesRoute
   AuthenticatedProfilesProfileIdSecretsRoute: typeof AuthenticatedProfilesProfileIdSecretsRoute
   AuthenticatedProfilesProfileIdSetupRoute: typeof AuthenticatedProfilesProfileIdSetupRoute
-  AuthenticatedRepositoriesRepoIdSandboxesRoute: typeof AuthenticatedRepositoriesRepoIdSandboxesRoute
+  AuthenticatedRepositoriesRepoIdWorkspacesRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   AuthenticatedRepositoriesRepoIdSettingsRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   AuthenticatedRepositoriesRepoIdSetupRoute: typeof AuthenticatedRepositoriesRepoIdSetupRoute
-  AuthenticatedSandboxesSandboxIdDiffRoute: typeof AuthenticatedSandboxesSandboxIdDiffRoute
-  AuthenticatedSandboxesSandboxIdSpecRoute: typeof AuthenticatedSandboxesSandboxIdSpecRoute
-  AuthenticatedSandboxesSandboxIdTraceRoute: typeof AuthenticatedSandboxesSandboxIdTraceRoute
-  AuthenticatedSandboxesSandboxIdValidationRoute: typeof AuthenticatedSandboxesSandboxIdValidationRoute
+  AuthenticatedWorkspacesWorkspaceIdDiffRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
+  AuthenticatedWorkspacesWorkspaceIdSpecRoute: typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
+  AuthenticatedWorkspacesWorkspaceIdTraceRoute: typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
+  AuthenticatedWorkspacesWorkspaceIdValidationRoute: typeof AuthenticatedWorkspacesWorkspaceIdValidationRoute
   AuthenticatedProfilesProfileIdIndexRoute: typeof AuthenticatedProfilesProfileIdIndexRoute
   AuthenticatedRegistryRegistryIdIndexRoute: typeof AuthenticatedRegistryRegistryIdIndexRoute
   AuthenticatedRepositoriesRepoIdIndexRoute: typeof AuthenticatedRepositoriesRepoIdIndexRoute
-  AuthenticatedSandboxesSandboxIdIndexRoute: typeof AuthenticatedSandboxesSandboxIdIndexRoute
+  AuthenticatedWorkspacesWorkspaceIdIndexRoute: typeof AuthenticatedWorkspacesWorkspaceIdIndexRoute
   AuthenticatedRegistryRegistryIdRepoTagRoute: typeof AuthenticatedRegistryRegistryIdRepoTagRoute
-  AuthenticatedSandboxesSandboxIdRunsRunIdRoute: typeof AuthenticatedSandboxesSandboxIdRunsRunIdRoute
+  AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute: typeof AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -895,16 +895,16 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedGithubSetupRoute: AuthenticatedGithubSetupRoute,
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
-  AuthenticatedSandboxesActiveRoute: AuthenticatedSandboxesActiveRoute,
-  AuthenticatedSandboxesFailedRoute: AuthenticatedSandboxesFailedRoute,
-  AuthenticatedSandboxesNewRoute: AuthenticatedSandboxesNewRoute,
+  AuthenticatedWorkspacesActiveRoute: AuthenticatedWorkspacesActiveRoute,
+  AuthenticatedWorkspacesFailedRoute: AuthenticatedWorkspacesFailedRoute,
+  AuthenticatedWorkspacesNewRoute: AuthenticatedWorkspacesNewRoute,
   AuthenticatedSettingsConnectedAccountsRoute:
     AuthenticatedSettingsConnectedAccountsRoute,
   AuthenticatedSettingsSshKeysRoute: AuthenticatedSettingsSshKeysRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
   AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
-  AuthenticatedSandboxesIndexRoute: AuthenticatedSandboxesIndexRoute,
+  AuthenticatedWorkspacesIndexRoute: AuthenticatedWorkspacesIndexRoute,
   AuthenticatedProfilesProfileIdAccessRoute:
     AuthenticatedProfilesProfileIdAccessRoute,
   AuthenticatedProfilesProfileIdAgentsRoute:
@@ -917,32 +917,32 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
     AuthenticatedProfilesProfileIdSecretsRoute,
   AuthenticatedProfilesProfileIdSetupRoute:
     AuthenticatedProfilesProfileIdSetupRoute,
-  AuthenticatedRepositoriesRepoIdSandboxesRoute:
-    AuthenticatedRepositoriesRepoIdSandboxesRoute,
+  AuthenticatedRepositoriesRepoIdWorkspacesRoute:
+    AuthenticatedRepositoriesRepoIdWorkspacesRoute,
   AuthenticatedRepositoriesRepoIdSettingsRoute:
     AuthenticatedRepositoriesRepoIdSettingsRoute,
   AuthenticatedRepositoriesRepoIdSetupRoute:
     AuthenticatedRepositoriesRepoIdSetupRoute,
-  AuthenticatedSandboxesSandboxIdDiffRoute:
-    AuthenticatedSandboxesSandboxIdDiffRoute,
-  AuthenticatedSandboxesSandboxIdSpecRoute:
-    AuthenticatedSandboxesSandboxIdSpecRoute,
-  AuthenticatedSandboxesSandboxIdTraceRoute:
-    AuthenticatedSandboxesSandboxIdTraceRoute,
-  AuthenticatedSandboxesSandboxIdValidationRoute:
-    AuthenticatedSandboxesSandboxIdValidationRoute,
+  AuthenticatedWorkspacesWorkspaceIdDiffRoute:
+    AuthenticatedWorkspacesWorkspaceIdDiffRoute,
+  AuthenticatedWorkspacesWorkspaceIdSpecRoute:
+    AuthenticatedWorkspacesWorkspaceIdSpecRoute,
+  AuthenticatedWorkspacesWorkspaceIdTraceRoute:
+    AuthenticatedWorkspacesWorkspaceIdTraceRoute,
+  AuthenticatedWorkspacesWorkspaceIdValidationRoute:
+    AuthenticatedWorkspacesWorkspaceIdValidationRoute,
   AuthenticatedProfilesProfileIdIndexRoute:
     AuthenticatedProfilesProfileIdIndexRoute,
   AuthenticatedRegistryRegistryIdIndexRoute:
     AuthenticatedRegistryRegistryIdIndexRoute,
   AuthenticatedRepositoriesRepoIdIndexRoute:
     AuthenticatedRepositoriesRepoIdIndexRoute,
-  AuthenticatedSandboxesSandboxIdIndexRoute:
-    AuthenticatedSandboxesSandboxIdIndexRoute,
+  AuthenticatedWorkspacesWorkspaceIdIndexRoute:
+    AuthenticatedWorkspacesWorkspaceIdIndexRoute,
   AuthenticatedRegistryRegistryIdRepoTagRoute:
     AuthenticatedRegistryRegistryIdRepoTagRoute,
-  AuthenticatedSandboxesSandboxIdRunsRunIdRoute:
-    AuthenticatedSandboxesSandboxIdRunsRunIdRoute,
+  AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute:
+    AuthenticatedWorkspacesWorkspaceIdRunsRunIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

@@ -21,14 +21,14 @@ const STEP_SHELL_COPY: Record<SetupStep, { title: string; description: string }>
     description: "A short setup: create the first account, add an SSH key, connect your machine.",
   },
   key: {
-    title: "Reach sandboxes from your terminal.",
+    title: "Reach workspaces from your terminal.",
     description:
-      "Register the public key this machine offers over SSH. The gateway matches it to your account and routes you only to sandboxes you own.",
+      "Register the public key this machine offers over SSH. The gateway matches it to your account and routes you only to workspaces you own.",
   },
   connect: {
     title: "One block in your SSH config.",
     description:
-      "Your SSH client resolves sandbox aliases through the gateway. Paste the block once and every future sandbox is an `ssh` away.",
+      "Your SSH client resolves workspace aliases through the gateway. Paste the block once and every future workspace is an `ssh` away.",
   },
 };
 

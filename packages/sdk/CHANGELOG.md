@@ -4,9 +4,9 @@
 
 ### Patch Changes
 
-- 2b90be5: Platform release: interactive-run telemetry ingest re-enabled (run-keyed) with honest head-loss
-  accounting. No SDK surface changes — this release keeps the package versions in lockstep with the
-  self-host images that actually record interactive sessions.
+- 2b90be5: Platform release: interactive-run telemetry ingest re-enabled (run-keyed) with honest
+  head-loss accounting. No SDK surface changes — this release keeps the package versions in lockstep
+  with the self-host images that actually record interactive sessions.
   - @sealant/api-contracts@0.3.1
 
 ## 0.3.0

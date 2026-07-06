@@ -2,7 +2,7 @@
 
 This folder defines the durable database schema used by Sealant.
 
-Product-facing language is centered on sandboxes and runs.
+Product-facing language is centered on workspaces and runs.
 
 Some tables still use internal execution vocabulary (`attempt`, `execution`, `job`) because they
 model orchestration and reporting internals.
@@ -14,23 +14,24 @@ model orchestration and reporting internals.
 - `account`: external/provider account links for users.
 - `verification`: verification tokens and related auth flows.
 
-## Sandbox lifecycle tables
+## Workspace lifecycle tables
 
-- `sandboxes`: primary sandbox product object and lifecycle anchor.
-- `runs`: one harness execution inside a sandbox — the durable execution record the telemetry tables
-  key into.
-- `sandbox_run_links`: links sandbox records to execution attempts over time.
+- `workspaces`: primary workspace product object and lifecycle anchor.
+- `runs`: one harness execution inside a workspace — the durable execution record the telemetry
+  tables key into.
+- `workspace_run_links`: links workspace records to execution attempts over time.
 
 ## Execution attempt tables (internal)
 
-- `sandbox_attempts`: internal execution attempts used by worker orchestration and reporting.
-- `sandbox_attempt_snapshots`: immutable input snapshots for each attempt (raw spec, resolved spec,
-  normalized blueprint).
+- `workspace_attempts`: internal execution attempts used by worker orchestration and reporting.
+- `workspace_attempt_snapshots`: immutable input snapshots for each attempt (raw spec, resolved
+  spec, normalized blueprint).
 
 ## Build and runtime orchestration tables
 
 - `oci_image_build_jobs`: queue/worker state for OCI build and publish operations.
-- `sandbox_runtime_instances`: runtime launch outcome and connectivity state per execution attempt.
+- `workspace_runtime_instances`: runtime launch outcome and connectivity state per execution
+  attempt.
 
 ## Package resolution cache table
 

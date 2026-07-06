@@ -16,13 +16,13 @@ import { resolveInternalConfig } from "./internal/config.js";
 const SMOKE_BASE_URL = process.env["SEALANT_SMOKE_BASE_URL"];
 const baseUrl = SMOKE_BASE_URL ?? "http://127.0.0.1:4000";
 
-// Created via `POST /v1/runs`; requires the seeded FK parents `usr_local` + `sbx_test`.
+// Created via `POST /v1/runs`; requires the seeded FK parents `usr_local` + `ws_test`.
 const createRunViaApi = async (): Promise<string | undefined> => {
   const response = await fetch(`${baseUrl}/v1/runs`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      sandboxId: "sbx_test",
+      workspaceId: "ws_test",
       ownerUserId: "usr_local",
       harnessId: "opencode",
       prompt: "smoke",
@@ -76,16 +76,16 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
     }
   });
 
-  it("creates a sandbox (enqueues a build) through the fluent facade", async () => {
+  it("creates a workspace (enqueues a build) through the fluent facade", async () => {
     const sealant = new Sealant({ baseUrl });
     try {
-      const sandbox = await sealant.sandboxes.create({
+      const workspace = await sealant.workspaces.create({
         repository: "github.com/sindresorhus/is-odd",
         harness: opencode(),
         wait: false,
       });
-      expect(sandbox.id).toBeTruthy();
-      const status = await sandbox.status();
+      expect(workspace.id).toBeTruthy();
+      const status = await workspace.status();
       expect(["queued", "running", "ready"]).toContain(status);
     } finally {
       await sealant.close();

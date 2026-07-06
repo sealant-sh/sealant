@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import type { RunRecord } from "@/lib/navigation/sandbox-data";
+import type { RunRecord } from "@/lib/navigation/workspace-data";
 
 interface RunRowsProps {
   readonly runs: readonly RunRecord[];
@@ -12,8 +12,8 @@ export function RunRows({ runs }: RunRowsProps) {
       {runs.map((run) => (
         <Link
           key={run.id}
-          to="/sandboxes/$sandboxId"
-          params={{ sandboxId: run.id }}
+          to="/workspaces/$workspaceId"
+          params={{ workspaceId: run.id }}
           className="group grid grid-cols-1 gap-4 border-b border-rule-faint px-6 py-5 no-underline transition-[transform,box-shadow,background-color] duration-200 last:border-b-0 hover:-translate-y-0.5 hover:bg-accent/40 hover:shadow-[var(--shadow-md)] lg:grid-cols-[1.2fr_1fr_1fr_auto] lg:items-center"
         >
           <div className="flex items-center gap-2.5">

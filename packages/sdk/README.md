@@ -1,18 +1,18 @@
 # @sealant/sdk
 
-The fluent public SDK for Sealant — **create a sandbox, run a harness, replay the record.**
+The fluent public SDK for Sealant — **create a workspace, run a harness, replay the record.**
 
 ```ts
 import { Sealant, opencode } from "@sealant/sdk";
 
 const sealant = new Sealant({ baseUrl: "http://localhost:8080" });
 
-const sandbox = await sealant.sandboxes.create({
+const workspace = await sealant.workspaces.create({
   repository: "github.com/acme/billing-service",
   harness: opencode(),
 });
 
-const run = await sandbox.harness.run("Round invoice totals once, after applying the discount.");
+const run = await workspace.harness.run("Round invoice totals once, after applying the discount.");
 
 await run.record.replay();
 ```
@@ -31,11 +31,11 @@ await run.record.replay();
 
 ## Connected-account credentials
 
-Attach the caller's connected Claude / Codex / GitHub accounts to a sandbox so the harness
+Attach the caller's connected Claude / Codex / GitHub accounts to a workspace so the harness
 authenticates as that identity instead of running unauthenticated:
 
 ```ts
-const sandbox = await sealant.sandboxes.create({
+const workspace = await sealant.workspaces.create({
   repository: "github.com/acme/billing-service",
   harness: claudeCode(),
   credentials: { claude: true, github: "bot-account" },
@@ -50,12 +50,12 @@ and injects them at launch.
 
 ## Status
 
-The core loop is real: `sandboxes.create()`/`get()`/`list()`, `ready()`, blocking `harness.run()`
+The core loop is real: `workspaces.create()`/`get()`/`list()`, `ready()`, blocking `harness.run()`
 and non-blocking `harness.start()` (run execution happens server-side; the SDK is a thin HTTP
 client), `runs.get()`, and the record read surface — `replay()`, `timeline()`, `scrollback()`,
 `commands()`, `transcript()`, `stream()` (poll-backed), `loss()`, `summary()`, plus captured
 `changes` (files + diff) settled by `run()`/`wait()`.
 
 Still typed stubs pending their read models / endpoints: `artifacts.get()` and the time-travel folds
-`fileTreeAt()`/`processTreeAt()` (Phase 1), and `harness.session()` + sandbox lifecycle
+`fileTreeAt()`/`processTreeAt()` (Phase 1), and `harness.session()` + workspace lifecycle
 `stop()`/`restart()`/`expire()` (Phase 3).

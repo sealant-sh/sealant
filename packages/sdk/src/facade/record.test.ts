@@ -21,7 +21,7 @@ const TIMELINE: readonly WireTimelineEntry[] = [
   entry("processStarted", {
     executable: "opencode",
     args: ["run", "Append a line."],
-    cwd: "/sandbox/repo",
+    cwd: "/workspace/repo",
   }),
   entry("ioChunk", { stream: 3, byteCount: "300" }),
   entry("ioChunk", { stream: 2, byteCount: "6" }),
@@ -29,7 +29,7 @@ const TIMELINE: readonly WireTimelineEntry[] = [
   entry("processStarted", {
     executable: "sh",
     args: ["-lc", "git diff --cached"],
-    cwd: "/sandbox/repo",
+    cwd: "/workspace/repo",
   }),
   entry("ioChunk", { stream: 2, byteCount: "134" }),
   entry("processExited", { exitCode: 0, durationMicros: "8921" }),
@@ -45,7 +45,7 @@ describe("reconstructCommands", () => {
     expect(commands[0]?.executable).toBe("opencode");
     expect(commands[0]?.args).toEqual(["run", "Append a line."]);
     expect(commands[0]?.command).toBe('opencode run "Append a line."'); // arg with spaces is quoted
-    expect(commands[0]?.cwd).toBe("/sandbox/repo");
+    expect(commands[0]?.cwd).toBe("/workspace/repo");
     expect(commands[0]?.exitCode).toBe(0);
     expect(commands[0]?.durationMs).toBe(9580); // micros -> ms
     expect(commands[0]?.stdoutBytes).toBe(6);

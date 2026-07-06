@@ -35,7 +35,7 @@ export type IoStreamWire = typeof ioStreamSchema.Type;
 
 export const runSchema = Schema.Struct({
   runId: NonEmptyString,
-  sandboxId: NonEmptyString,
+  workspaceId: NonEmptyString,
   attemptId: Schema.optional(NonEmptyString),
   ownerUserId: NonEmptyString,
   harnessId: NonEmptyString,
@@ -51,7 +51,7 @@ export const runSchema = Schema.Struct({
 });
 export type Run = typeof runSchema.Type;
 
-/** The one-shot harness invocation the control plane execs in the sandbox. */
+/** The one-shot harness invocation the control plane execs in the workspace. */
 export const runCommandSchema = Schema.Struct({
   executable: NonEmptyString,
   args: Schema.Array(Schema.String),
@@ -67,14 +67,14 @@ export const runFileChangeSchema = Schema.Struct({
 export type RunFileChangeWire = typeof runFileChangeSchema.Type;
 
 export const createRunRequestSchema = Schema.Struct({
-  sandboxId: NonEmptyString,
+  workspaceId: NonEmptyString,
   harnessId: NonEmptyString,
   ownerUserId: NonEmptyString,
   mode: Schema.optional(runModeSchema),
   prompt: Schema.optional(Schema.String),
   attemptId: Schema.optional(NonEmptyString),
   // When present, the control plane EXECUTES the run SERVER-SIDE: the worker docker-execs this command
-  // in the sandbox, ingests telemetry, and captures the diff. When absent, the run row is created but
+  // in the workspace, ingests telemetry, and captures the diff. When absent, the run row is created but
   // not executed (the legacy host-local path where the caller runs it itself). This field is the gate
   // that lets the thin SDK opt into server-side execution without a breaking contract change.
   command: Schema.optional(runCommandSchema),
@@ -93,7 +93,7 @@ export const updateRunRequestSchema = Schema.Struct({
 export type UpdateRunRequest = typeof updateRunRequestSchema.Type;
 
 export const listRunsQuerySchema = Schema.Struct({
-  sandboxId: Schema.optional(NonEmptyString),
+  workspaceId: Schema.optional(NonEmptyString),
   ownerUserId: Schema.optional(NonEmptyString),
   status: Schema.optional(runStatusSchema),
   limit: Schema.optional(NonEmptyString),

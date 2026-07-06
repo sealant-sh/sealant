@@ -17,7 +17,7 @@ GitHub App support is the current implementation.
 
 - Keep source-provider APIs and auth behavior out of app/business layers.
 - Normalize provider payloads into stable internal contracts.
-- Support secure repository access for sandbox execution.
+- Support secure repository access for workspace execution.
 
 ## Module map
 
@@ -80,7 +80,7 @@ These helpers let composition and build flows carry provider access as opaque re
 ## Cross-package dependency
 
 - Used by `@sealant/api` for GitHub app and repository integrations.
-- Used by `@sealant/worker` when sandbox execution needs provider access.
+- Used by `@sealant/worker` when workspace execution needs provider access.
 - Used indirectly by `@sealant/db` through GitHub installation persistence.
 
 ## Internal dependencies

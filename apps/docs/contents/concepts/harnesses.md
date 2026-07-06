@@ -8,15 +8,15 @@ description:
 Sealant does not ship an agent or a model. It ships the environment and the record, and you bring
 the tool that does the work. That tool is the **harness**.
 
-A harness is whatever drives the coding work inside a [sandbox](/docs/concepts/sandboxes): a coding
-agent, a CI worker, your own loop, or a plain command. Sealant's job is to give it a real repository
-to work in and to turn its execution into an [execution record](/docs/concepts/execution-records).
-What the harness _is_ stays your choice.
+A harness is whatever drives the coding work inside a [workspace](/docs/concepts/workspaces): a
+coding agent, a CI worker, your own loop, or a plain command. Sealant's job is to give it a real
+repository to work in and to turn its execution into an
+[execution record](/docs/concepts/execution-records). What the harness _is_ stays your choice.
 
 ## A harness is one-shot against a prompt
 
 The model is deliberately thin. A harness is described by an id and how to invoke it once against a
-prompt. When you start a run, Sealant executes that invocation inside the sandbox and records
+prompt. When you start a run, Sealant executes that invocation inside the workspace and records
 everything it does. One invocation is one [run](/docs/concepts/execution-records); one run produces
 one record.
 
@@ -25,8 +25,8 @@ understand the agent's internals, only how to launch it and watch it.
 
 ## Shipped harnesses
 
-The sandbox builder (`/sandboxes/new`) lets you pick one of three harnesses when you create a
-sandbox:
+The workspace builder (`/workspaces/new`) lets you pick one of three harnesses when you create a
+workspace:
 
 | Harness     | id            | One-shot invocation     |
 | ----------- | ------------- | ----------------------- |
@@ -36,7 +36,7 @@ sandbox:
 
 > OpenCode is the only harness exercised end to end today. The Codex and Claude Code invocation
 > forms are the expected headless shapes but are still pending live verification against the baked
-> sandbox image. If you rely on one of the latter two, confirm the one-shot command against your
+> workspace image. If you rely on one of the latter two, confirm the one-shot command against your
 > image.
 
 ## Custom harnesses
@@ -63,9 +63,9 @@ a wrapper script. As long as it runs one-shot against a prompt, Sealant can driv
 
 The relationship is straightforward:
 
-1. You bake a harness into the sandbox spec (build time).
+1. You bake a harness into the workspace spec (build time).
 2. You start a run with a prompt.
-3. Sealant executes the harness's one-shot invocation inside the ready sandbox.
+3. Sealant executes the harness's one-shot invocation inside the ready workspace.
 4. Everything the harness does becomes an [execution record](/docs/concepts/execution-records).
 
 > The [SDK](/docs/reference/sdk) is a preview package (`@sealant/sdk`; first npm release in flight).
@@ -76,7 +76,7 @@ The relationship is straightforward:
 
 ## Related
 
-- [Sandboxes](/docs/concepts/sandboxes) — where the harness runs.
+- [Workspaces](/docs/concepts/workspaces) — where the harness runs.
 - [Execution records](/docs/concepts/execution-records) — what a harness run produces.
-- [Creating sandboxes](/docs/guides/creating-sandboxes) — picking a harness in the builder.
+- [Creating workspaces](/docs/guides/creating-workspaces) — picking a harness in the builder.
 - [SDK](/docs/reference/sdk) and [HTTP API](/docs/reference/http-api) — the programmable surface.

@@ -160,7 +160,7 @@ Triage states are a colored dot plus a word. Never a tinted row, never a filled 
   space, not borders. Never a flat bordered slab.
 - **The run-record panel (signature)** — the recurring evidence motif: a lifted white panel with a
   recording pulse + mono id in the header, a dot+word status, hairline-divided mono evidence rows,
-  and (where relevant) a diff peek with 2px colored edge-marks. Build sandbox/run detail from it.
+  and (where relevant) a diff peek with 2px colored edge-marks. Build workspace/run detail from it.
 - **Navigators / lists** — an elevated panel of rows: a mono index/id, a sans label, a dot+word
   status. Mild hover lift, never flashy motion.
 - **Diff block** — mono, hairline header on `--sw-sunken`, 2px colored edge + faint wash per line.

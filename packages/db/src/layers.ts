@@ -8,12 +8,12 @@ import { PackageResolutionCacheRepoLive } from "./repositories/package-resolutio
 import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
 import { RunRepoLive } from "./repositories/runs.js";
-import { SandboxAttemptRepoLive } from "./repositories/sandbox-attempts.js";
-import { SandboxBuildJobRepoLive } from "./repositories/sandbox-build-jobs.js";
-import { SandboxRuntimeInstanceRepoLive } from "./repositories/sandbox-runtime-instances.js";
-import { SandboxRepoLive } from "./repositories/sandboxes.js";
 import { SshKeyRepoLive } from "./repositories/ssh-keys.js";
 import { UserRepoLive } from "./repositories/users.js";
+import { WorkspaceAttemptRepoLive } from "./repositories/workspace-attempts.js";
+import { WorkspaceBuildJobRepoLive } from "./repositories/workspace-build-jobs.js";
+import { WorkspaceRuntimeInstanceRepoLive } from "./repositories/workspace-runtime-instances.js";
+import { WorkspaceRepoLive } from "./repositories/workspaces.js";
 
 /**
  * GitHub-focused data access layer.
@@ -41,10 +41,10 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   GitHubWebhookDeliveryRepoLive,
   RepositoryProfileRepoLive,
   PackageResolutionCacheRepoLive,
-  SandboxRepoLive,
-  SandboxAttemptRepoLive,
-  SandboxRuntimeInstanceRepoLive,
-  SandboxBuildJobRepoLive,
+  WorkspaceRepoLive,
+  WorkspaceAttemptRepoLive,
+  WorkspaceRuntimeInstanceRepoLive,
+  WorkspaceBuildJobRepoLive,
   RunRepoLive,
   ProfileRepoLive,
   SshKeyRepoLive,

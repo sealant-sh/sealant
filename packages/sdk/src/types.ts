@@ -3,8 +3,8 @@
  *
  * This is the fluent object model the marketing site commits to verbatim:
  *
- *   const sandbox = await sealant.sandboxes.create({ repository, harness: opencode() })
- *   const run = await sandbox.harness.run("Round invoice totals once, after applying the discount.")
+ *   const workspace = await sealant.workspaces.create({ repository, harness: opencode() })
+ *   const run = await workspace.harness.run("Round invoice totals once, after applying the discount.")
  *   await run.record.replay()
  *
  * Design rule (load-bearing): these public types are HAND-WRITTEN and DECOUPLED from the Effect-core
@@ -41,7 +41,7 @@ export interface SealantConfig {
 /** The harnesses with first-class integrations baked into the platform today. */
 export type HarnessId = "opencode" | "codex" | "claude-code";
 
-/** A single one-shot command to invoke a harness against a prompt inside the sandbox. */
+/** A single one-shot command to invoke a harness against a prompt inside the workspace. */
 export interface HarnessRunCommand {
   /** The executable to run (e.g. `"opencode"`). */
   readonly executable: string;
@@ -70,25 +70,25 @@ export interface Harness {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Sandboxes
+// Workspaces
 // ---------------------------------------------------------------------------------------------
 
-/** Lifecycle status of a sandbox. `stopped`/`expired` arrive with lifecycle close-out (Phase 3). */
-export type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+/** Lifecycle status of a workspace. `stopped`/`expired` arrive with lifecycle close-out (Phase 3). */
+export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
-/** A coarse lifecycle event observed while a sandbox is being provisioned. */
-export interface SandboxEvent {
+/** A coarse lifecycle event observed while a workspace is being provisioned. */
+export interface WorkspaceEvent {
   readonly type: string;
   readonly occurredAt: string;
   readonly message?: string;
 }
 
-/** The supported sandbox OS families (maps to the blueprint target). */
-export type SandboxOs = "fedora" | "arch" | "nix";
+/** The supported workspace OS families (maps to the blueprint target). */
+export type WorkspaceOs = "fedora" | "arch" | "nix";
 
 /**
- * Connected-account credentials to attach to a sandbox at creation time, per provider — so the
- * harness inside the sandbox authenticates as the caller's own Claude / Codex / GitHub identity
+ * Connected-account credentials to attach to a workspace at creation time, per provider — so the
+ * harness inside the workspace authenticates as the caller's own Claude / Codex / GitHub identity
  * instead of running unauthenticated.
  *
  * For each provider: `true` means "my default account" (the one named `"default"`), and a `string`
@@ -100,7 +100,7 @@ export type SandboxOs = "fedora" | "arch" | "nix";
  * `auth.json` contents, and any other secret material never do. The control plane resolves references
  * to encrypted credentials server-side and injects them at launch.
  */
-export interface SandboxCredentialsOptions {
+export interface WorkspaceCredentialsOptions {
   /** Profile id whose per-provider account bindings apply first. */
   readonly profile?: string;
   /** `true` for the caller's default Claude account, or a string naming a specific one. */
@@ -112,48 +112,48 @@ export interface SandboxCredentialsOptions {
 }
 
 export interface CreateOptions {
-  /** Source git repository to build the sandbox around (e.g. `"github.com/acme/billing-service"`). */
+  /** Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`). */
   readonly repository: string;
-  /** The harness to run inside the sandbox. */
+  /** The harness to run inside the workspace. */
   readonly harness: Harness;
   /** Git ref to check out (defaults to the repository's default branch). */
   readonly ref?: string;
-  /** Human-friendly name for the sandbox. */
+  /** Human-friendly name for the workspace. */
   readonly name?: string;
-  /** OS family for the sandbox image. */
-  readonly os?: SandboxOs;
-  /** Extra OS packages to install in the sandbox. */
+  /** OS family for the workspace image. */
+  readonly os?: WorkspaceOs;
+  /** Extra OS packages to install in the workspace. */
   readonly packages?: readonly string[];
-  /** When true (default), resolve only once the sandbox runtime is live. */
+  /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /** Observe provisioning events as they happen. */
-  readonly onEvent?: (event: SandboxEvent) => void;
-  /** Connected-account credentials to attach to the sandbox (see `SandboxCredentialsOptions`). */
-  readonly credentials?: SandboxCredentialsOptions;
+  readonly onEvent?: (event: WorkspaceEvent) => void;
+  /** Connected-account credentials to attach to the workspace (see `WorkspaceCredentialsOptions`). */
+  readonly credentials?: WorkspaceCredentialsOptions;
 }
 
 export interface ListOptions {
-  readonly status?: SandboxStatus;
+  readonly status?: WorkspaceStatus;
   readonly limit?: number;
 }
 
 /** A live, disposable development environment around a real repository. */
-export interface Sandbox {
+export interface Workspace {
   readonly id: string;
   readonly name: string;
   /** Current lifecycle status. */
-  status(): Promise<SandboxStatus>;
-  /** Resolves once the sandbox runtime is live and ready to accept a run. */
+  status(): Promise<WorkspaceStatus>;
+  /** Resolves once the workspace runtime is live and ready to accept a run. */
   ready(): Promise<this>;
-  /** Run a harness in this sandbox. */
+  /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;
   /** Lifecycle events as an async stream. */
-  events(): AsyncIterable<SandboxEvent>;
-  /** Stop the sandbox now (Phase 3). */
+  events(): AsyncIterable<WorkspaceEvent>;
+  /** Stop the workspace now (Phase 3). */
   stop(): Promise<void>;
-  /** Restart the sandbox into a fresh runtime (Phase 3). */
-  restart(): Promise<Sandbox>;
-  /** Schedule the sandbox to expire (Phase 3). */
+  /** Restart the workspace into a fresh runtime (Phase 3). */
+  restart(): Promise<Workspace>;
+  /** Schedule the workspace to expire (Phase 3). */
   expire(options?: { readonly in?: string }): Promise<void>;
 }
 
@@ -172,13 +172,13 @@ export interface SessionOptions {
   readonly signal?: AbortSignal;
 }
 
-/** Runs a harness in a sandbox, one-shot or interactive. */
+/** Runs a harness in a workspace, one-shot or interactive. */
 export interface HarnessRunner {
   /** BLOCKING: resolves once the harness has terminally completed; `result`/`changes` are settled. */
   run(prompt: string, options?: RunOptions): Promise<Run>;
   /** NON-BLOCKING: returns a live handle immediately for streaming via `run.record.stream()`. */
   start(prompt: string, options?: RunOptions): Promise<Run>;
-  /** Interactive session reusing the live sandbox (Phase 3). */
+  /** Interactive session reusing the live workspace (Phase 3). */
   session(options?: SessionOptions): Promise<InteractiveSession>;
 }
 
@@ -323,7 +323,7 @@ export interface Run {
   wait(): Promise<Run>;
 }
 
-/** An interactive harness session over the live sandbox (Phase 3). */
+/** An interactive harness session over the live workspace (Phase 3). */
 export interface InteractiveSession {
   send(input: string): Promise<void>;
   output(): AsyncIterable<Uint8Array>;

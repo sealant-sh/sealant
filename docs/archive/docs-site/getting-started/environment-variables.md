@@ -21,7 +21,7 @@ For complete contracts, see each app/package env module:
 
 - `DATABASE_URL`
 - `RABBITMQ_URL`
-- `SANDBOX_BUILD_QUEUE_PREFETCH`
+- `WORKSPACE_BUILD_QUEUE_PREFETCH`
 - `REGISTRY_BASE_URL`
 - `REGISTRY_PUSH_REGISTRY`
 - `REGISTRY_USERNAME` / `REGISTRY_PASSWORD` (optional pair)
@@ -35,9 +35,9 @@ For complete contracts, see each app/package env module:
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`
 - `GITHUB_APP_WEBHOOK_SECRET`
-- `SANDBOX_SSH_GATEWAY_TOKEN` (gates the internal gateway routes: `ssh-target` lookup and
+- `WORKSPACE_SSH_GATEWAY_TOKEN` (gates the internal gateway routes: `ssh-target` lookup and
   `ssh-keys/resolve-principal`)
-- `SANDBOX_SSH_GATEWAY_HOST`
+- `WORKSPACE_SSH_GATEWAY_HOST`
 
 ## Worker (`@sealant/worker`)
 
@@ -47,7 +47,7 @@ For complete contracts, see each app/package env module:
 - `DEFAULT_SSH_BIND_HOST`
 - `DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY`
 - `WORKER_ID`
-- `SANDBOX_BUILD_JOB_LEASE_DURATION_MS`
+- `WORKSPACE_BUILD_JOB_LEASE_DURATION_MS`
 
 ## SSH Gateway (`@sealant/ssh-gateway`)
 
@@ -55,9 +55,9 @@ For complete contracts, see each app/package env module:
 - `SSH_GATEWAY_PORT`
 - `SSH_GATEWAY_HOST_KEY_PATH`
 - `SSH_GATEWAY_ALLOWED_KEYS_FILE`
-- `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX`
+- `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX`
 - `CORE_API_BASE_URL`
-- `SANDBOX_SSH_GATEWAY_TOKEN` (required)
+- `WORKSPACE_SSH_GATEWAY_TOKEN` (required)
 
 ## Auth (`@sealant/auth`)
 

@@ -28,7 +28,7 @@ Each directory has a `meta.json` that sets the section title and page order:
 ```json
 {
   "title": "Guides",
-  "pages": ["github-app", "ssh-access", "creating-sandboxes", "..."]
+  "pages": ["github-app", "ssh-access", "creating-workspaces", "..."]
 }
 ```
 

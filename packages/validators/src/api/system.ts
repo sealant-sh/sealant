@@ -15,7 +15,7 @@ export const setupStateResponseSchema = z.object({
   // True while nobody can sign in (zero better-auth accounts); drives the first-run wizard. The
   // seeded SDK owner (usr_local) has no credentials and does not count.
   needsSetup: z.boolean(),
-  // Null when the API has no SANDBOX_SSH_GATEWAY_HOST configured. Defaults (22 / "sbx") are
+  // Null when the API has no WORKSPACE_SSH_GATEWAY_HOST configured. Defaults (22 / "ws") are
   // applied server-side so clients never hardcode them.
   sshGateway: z
     .object({

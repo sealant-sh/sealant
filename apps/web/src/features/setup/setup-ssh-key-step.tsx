@@ -3,7 +3,7 @@ import { Button } from "@sealant/ui";
 import { AddSshKeyForm } from "@/features/ssh-keys/add-ssh-key-form";
 
 /**
- * Wizard step 2: register the SSH public key this machine will offer at the sandbox gateway.
+ * Wizard step 2: register the SSH public key this machine will offer at the workspace gateway.
  * Skippable — keys can always be added later under Settings → SSH keys.
  */
 export function SetupSshKeyStep(props: { readonly onContinue: () => void }) {

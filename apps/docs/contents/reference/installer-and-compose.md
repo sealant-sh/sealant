@@ -91,16 +91,16 @@ tagged file, and written to `~/.sealant/compose.yaml`. `SEALANT_COMPOSE_URL` ove
 
 The self-host compose project (`sealant`) runs eight services:
 
-| Service       | Role                                                        |
-| ------------- | ----------------------------------------------------------- |
-| `postgres`    | Control-plane database (internal only).                     |
-| `rabbitmq`    | Sandbox-build job queue (internal only).                    |
-| `zot`         | OCI registry for built sandbox images, on `127.0.0.1:5000`. |
-| `migrate`     | One-shot database migration and seed; exits after running.  |
-| `api`         | The control-plane API on `:4000`.                           |
-| `worker`      | Builds and runs sandboxes on the host Docker daemon.        |
-| `ssh-gateway` | SSH access into live sandboxes on `:2222`.                  |
-| `web`         | The product web app on `:3000`.                             |
+| Service       | Role                                                          |
+| ------------- | ------------------------------------------------------------- |
+| `postgres`    | Control-plane database (internal only).                       |
+| `rabbitmq`    | Workspace-build job queue (internal only).                    |
+| `zot`         | OCI registry for built workspace images, on `127.0.0.1:5000`. |
+| `migrate`     | One-shot database migration and seed; exits after running.    |
+| `api`         | The control-plane API on `:4000`.                             |
+| `worker`      | Builds and runs workspaces on the host Docker daemon.         |
+| `ssh-gateway` | SSH access into live workspaces on `:2222`.                   |
+| `web`         | The product web app on `:3000`.                               |
 
 Persistent state lives in three named volumes (`sealant_postgres-data`, `sealant_zot-data`,
 `sealant_gateway-keys`) — see [Ports and data](/docs/reference/ports-and-data).
@@ -135,8 +135,8 @@ Uninstall, including volumes and the install dir:
 docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
 ```
 
-`down -v` does not remove sandbox containers or images the worker created on the host Docker daemon
-— those are separate objects. See
+`down -v` does not remove workspace containers or images the worker created on the host Docker
+daemon — those are separate objects. See
 [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
 
 Related: [Install](/docs/getting-started/install) ·

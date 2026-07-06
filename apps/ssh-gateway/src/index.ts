@@ -21,14 +21,14 @@ if (allowedClientKeys.length === 0) {
 // works immediately, no gateway restart.
 const lookupPrincipal = createPrincipalResolver({
   apiBaseUrl: env.CORE_API_BASE_URL,
-  gatewayToken: env.SANDBOX_SSH_GATEWAY_TOKEN,
+  gatewayToken: env.WORKSPACE_SSH_GATEWAY_TOKEN,
 });
 
 console.log("[ssh-gateway] starting", {
   host: env.SSH_GATEWAY_HOST,
   port: env.SSH_GATEWAY_PORT,
   coreApiBaseUrl: env.CORE_API_BASE_URL,
-  usernamePrefix: env.SSH_GATEWAY_SANDBOX_USERNAME_PREFIX,
+  usernamePrefix: env.SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX,
   allowedClientKeys: allowedClientKeys.length,
 });
 
@@ -40,9 +40,9 @@ const main = async () => {
     hostKey: env.SSH_GATEWAY_HOST_KEY,
     banner: env.SSH_GATEWAY_BANNER,
     allowedClientKeys,
-    sandboxUsernamePrefix: env.SSH_GATEWAY_SANDBOX_USERNAME_PREFIX,
+    workspaceUsernamePrefix: env.SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX,
     coreApiBaseUrl: env.CORE_API_BASE_URL,
-    gatewayToken: env.SANDBOX_SSH_GATEWAY_TOKEN,
+    gatewayToken: env.WORKSPACE_SSH_GATEWAY_TOKEN,
     lookupPrincipal,
   });
 

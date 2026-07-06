@@ -11,7 +11,7 @@ export interface AuthorizedKeyEntry {
   readonly data: Buffer;
   readonly verify: VerifyFunction;
   /**
-   * Identifies *who* this key belongs to (gateway-spec §3.4). The API authorizes principal x sandbox;
+   * Identifies *who* this key belongs to (gateway-spec §3.4). The API authorizes principal x workspace;
    * the gateway sends this with the control-target request. Taken from the key's trailing comment, or
    * a stable fingerprint of the key material when no comment is present.
    */

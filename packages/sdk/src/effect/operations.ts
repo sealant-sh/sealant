@@ -6,16 +6,16 @@
  */
 import type {
   CreateRunRequest,
-  CreateSandboxRequest,
+  CreateWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   ListRunsQuery,
-  ListSandboxesQuery,
+  ListWorkspacesQuery,
   Run as WireRun,
   RunChangesResponse,
   RunLossReport,
   RunScrollbackResponse,
-  SandboxDetails,
+  WorkspaceDetails,
   TimelineEntry as WireTimelineEntry,
   UpdateRunRequest,
 } from "@sealant/api-contracts";
@@ -23,25 +23,25 @@ import { Effect } from "effect";
 
 import { SealantApiClient } from "./api-client.js";
 
-// ---- sandboxes ----
+// ---- workspaces ----
 
-export const createSandboxOp = (payload: CreateSandboxRequest, idempotencyKey?: string) =>
+export const createWorkspaceOp = (payload: CreateWorkspaceRequest, idempotencyKey?: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.sandboxes.createSandbox({
+    client.workspaces.createWorkspace({
       payload,
       headers: idempotencyKey === undefined ? {} : { "idempotency-key": idempotencyKey },
     }),
   );
 
-export const getSandboxOp = (
-  sandboxId: string,
-): Effect.Effect<SandboxDetails, unknown, SealantApiClient> =>
+export const getWorkspaceOp = (
+  workspaceId: string,
+): Effect.Effect<WorkspaceDetails, unknown, SealantApiClient> =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.sandboxes.getSandbox({ params: { sandboxId } }),
+    client.workspaces.getWorkspace({ params: { workspaceId } }),
   );
 
-export const listSandboxesOp = (query: ListSandboxesQuery) =>
-  Effect.flatMap(SealantApiClient, (client) => client.sandboxes.listSandboxes({ query }));
+export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
+  Effect.flatMap(SealantApiClient, (client) => client.workspaces.listWorkspaces({ query }));
 
 // ---- runs ----
 

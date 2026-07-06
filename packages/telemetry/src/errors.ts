@@ -1,6 +1,6 @@
 /**
  * Typed error channel for @sealant/telemetry. Mirrors the repo idiom exactly
- * (packages/sandboxes/src/sealantd/runtime.ts, packages/db/src/repositories/*): one
+ * (packages/workspaces/src/sealantd/runtime.ts, packages/db/src/repositories/*): one
  * `Schema.Literals` operation set + an Invariant/Unexpected `Schema.TaggedErrorClass` pair per
  * service, a `Schema.Union` error type, and a `map*`/`with*` funnel so no raw defect escapes.
  */

@@ -1,6 +1,6 @@
 {
   # Root flake only provides the repository development shell. The heavier
-  # image-building logic lives in packages/sandboxes.
+  # image-building logic lives in packages/workspaces.
   description = "Sealant development shell";
 
   inputs = {

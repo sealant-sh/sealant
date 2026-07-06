@@ -1,7 +1,7 @@
 ---
 title: Execution record & telemetry
 description:
-  How Sealant records every sandbox run as one append-only, event-sourced log — ordered, lossless,
+  How Sealant records every workspace run as one append-only, event-sourced log — ordered, lossless,
   and replayable to byte-exact terminal output.
 ---
 
@@ -10,8 +10,8 @@ import { Accordion, Accordions } from "fumadocs-ui/components/accordion";
 import { Step, Steps } from "fumadocs-ui/components/steps";
 import { File, Files, Folder } from "fumadocs-ui/components/files";
 
-Every run inside a Sealant sandbox produces an execution record: a durable, faithful account of
-everything that happened. `sealantd` runs as PID 1 inside the sandbox and emits a typed telemetry
+Every run inside a Sealant workspace produces an execution record: a durable, faithful account of
+everything that happened. `sealantd` runs as PID 1 inside the workspace and emits a typed telemetry
 firehose; the `@sealant/telemetry` package consumes that firehose and persists every event as an
 append-only, event-sourced log on the control-plane Postgres database, behind a pluggable storage
 seam.
@@ -41,17 +41,17 @@ seam.
 - New package `@sealant/telemetry`, built with Effect (services-from-context, layers).
 - Six new Postgres tables in `@sealant/db`: one log, one epoch, one blob store, and three
   projection/loss tables.
-- A dedicated telemetry worker-kind in `apps/worker` that runs one ingester per running sandbox.
+- A dedicated telemetry worker-kind in `apps/worker` that runs one ingester per running workspace.
 - Storage defaults to Postgres; the `TelemetrySink` seam lets ClickHouse or Redis slot in later with
   no ingester change.
 - A real-Postgres integration test proves the whole slice end to end, alongside the pure unit suite.
 
 ## Goal & north star
 
-Sealant's promise is reproducible sandbox runs and issue-to-PR workflows with clear reporting of
+Sealant's promise is reproducible workspace runs and issue-to-PR workflows with clear reporting of
 what happened. That reporting needs raw material: a durable, faithful record of everything that
-occurred inside a sandbox. The execution record is not just a log file — its data model is dictated
-by three long-term goals.
+occurred inside a workspace. The execution record is not just a log file — its data model is
+dictated by three long-term goals.
 
 <Steps>
   <Step>
@@ -125,15 +125,15 @@ There are three layers between the daemon and the ingester, and the highest one 
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | `@sealant/runtime-protocol` | Typed Protobuf codec and framing (`EventEnvelope`, all message and enum types, schemas)                                                                             | Types plus `create()` for test fixtures                 |
 | `@sealant/runtime-client`   | `SealantClient`: a transport-agnostic control client. `client.events()` is an async iterator over decoded envelopes; `fromStream()` drives it over any Node Duplex. | The event firehose; `StreamKind` / `RuntimeState` enums |
-| `@sealant/sandboxes`        | `SealantRuntime` / `SealantSession` — an Effect wrapper that adapts `client.events()` into an Effect `Stream` and owns connection lifecycle via `Scope`.            | **The tap point**                                       |
+| `@sealant/workspaces`       | `SealantRuntime` / `SealantSession` — an Effect wrapper that adapts `client.events()` into an Effect `Stream` and owns connection lifecycle via `Scope`.            | **The tap point**                                       |
 
 ### The tap point
 
-`packages/sandboxes/src/sealantd/runtime.ts` wraps the SDK iterator into an Effect stream — this is
+`packages/workspaces/src/sealantd/runtime.ts` wraps the SDK iterator into an Effect stream — this is
 what the ingester subscribes to. It never touches raw Protobuf or the socket.
 
 ```ts
-// packages/sandboxes/src/sealantd/runtime.ts — the SDK iterator becomes an Effect Stream
+// packages/workspaces/src/sealantd/runtime.ts — the SDK iterator becomes an Effect Stream
 const makeSession = (client: SealantClient): SealantSession => ({
   health: withSealantError(
     "health",
@@ -158,7 +158,7 @@ connect: (target) =>
 
 ### What the ingester does with it
 
-The ingester opens its own, second control connection. It never shares `execInSandbox`'s
+The ingester opens its own, second control connection. It never shares `execInWorkspace`'s
 single-consumer iterator (which would steal events) and never touches the gateway's byte channels.
 It then drains the whole runtime stream for the connection's lifetime as a single `Effect.gen`
 program.
@@ -196,7 +196,7 @@ yield* session.events.pipe(
 End to end, the log is the system of record and everything else is derived from it.
 
 ```text
-  sealantd (PID 1, in sandbox)
+  sealantd (PID 1, in workspace)
         │  events()  ── typed EventEnvelope firehose
         ▼
   docker exec -i + socat ──► SealantRuntime.connect(target)        [OWN 2nd control connection]
@@ -234,7 +234,7 @@ The relevant source files:
     <Folder name="telemetry/src">
       <File name="ingester.ts" />
     </Folder>
-    <Folder name="sandboxes/src/sealantd">
+    <Folder name="workspaces/src/sealantd">
       <File name="runtime.ts" />
     </Folder>
   </Folder>
@@ -319,7 +319,7 @@ kept in the artifact store, any state at any coordinate is a pure fold of the lo
 ## Database schema
 
 Six tables were added to `@sealant/db` (drizzle, snake_case). All carry
-`FK run_id → sandbox_attempts(id) ON DELETE CASCADE`.
+`FK run_id → workspace_attempts(id) ON DELETE CASCADE`.
 
 ### telemetry_events — log, source of truth
 
@@ -328,7 +328,7 @@ One append-only row per `EventEnvelope`. Never updated or deleted (except FK cas
 | Column                                                      | Type          | Note                                                           |
 | ----------------------------------------------------------- | ------------- | -------------------------------------------------------------- |
 | `event_id`                                                  | `text PK`     | `envelope.eventId` — absolute global dedup                     |
-| `run_id`                                                    | `text FK`     | references `sandbox_attempts.id` (the product run)             |
+| `run_id`                                                    | `text FK`     | references `workspace_attempts.id` (the product run)           |
 | `runtime_id`                                                | `text`        | daemon instance (persisted for the first time)                 |
 | `execution_id` / `session_id` / `process_id` / `request_id` | `text?`       | finer correlation                                              |
 | `sequence`                                                  | `bigint`      | per-runtime monotonic — ordering and dedup                     |
@@ -433,7 +433,7 @@ CREATE TABLE "telemetry_events" (
 CREATE UNIQUE INDEX "telemetry_events_runtime_sequence_idx"
   ON "telemetry_events" ("runtime_id","sequence");   -- the dedup arbiter
 ALTER TABLE "telemetry_events" ADD CONSTRAINT … FOREIGN KEY ("run_id")
-  REFERENCES "sandbox_attempts"("id") ON DELETE CASCADE;
+  REFERENCES "workspace_attempts"("id") ON DELETE CASCADE;
 ```
 
 </Accordion>
@@ -469,10 +469,10 @@ artifact store. Coordinates everywhere are `(runId, sequence)` — the same key 
 ## Worker wiring
 
 A dedicated telemetry worker-kind (`apps/worker/src/workers/telemetry.ts`) is registered alongside
-the sandbox worker in `startWorkers`. It polls `sandbox_runtime_instances` for `running` docker rows
-(via a new `SandboxRuntimeInstanceRepo.listRunningDockerInstances`), derives a `SealantTarget` from
-each with the existing pure `sealantTargetForRuntimeInstance` seam, and forks one ingester fiber per
-run.
+the workspace worker in `startWorkers`. It polls `workspace_runtime_instances` for `running` docker
+rows (via a new `WorkspaceRuntimeInstanceRepo.listRunningDockerInstances`), derives a
+`SealantTarget` from each with the existing pure `sealantTargetForRuntimeInstance` seam, and forks
+one ingester fiber per run.
 
 - The layer stack is assembled at the boundary; the DB connection config lives only here.
 - Self-healing: a failed ingest (for example, the control socket not being up yet) is logged and the
@@ -510,7 +510,7 @@ stub `SealantRuntime` feeding a handcrafted stream, and asserts:
 <Callout type="warn">
   The worker is not yet verified end to end against a booted `sealantd` container. The ingester
   itself is proven against real Postgres with a stub runtime; the worker's live polling → connect →
-  ingest path still needs a real sandbox boot to confirm end to end.
+  ingest path still needs a real workspace boot to confirm end to end.
 </Callout>
 
 ### Natural next folds — all additive, no re-capture

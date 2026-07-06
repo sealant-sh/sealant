@@ -1,5 +1,5 @@
 /**
- * End-to-end: create a sandbox, run the harness in it, replay the recorded run.
+ * End-to-end: create a workspace, run the harness in it, replay the recorded run.
  * The whole fluent loop against a live, self-hosted deployment. Relative import so it runs under tsx.
  */
 import { opencode, Sealant } from "../src/index.js";
@@ -8,16 +8,16 @@ const sealant = new Sealant({
   baseUrl: process.env["SEALANT_BASE_URL"] ?? "http://127.0.0.1:4000",
 });
 
-console.log("→ creating sandbox (build + launch)…");
-const sandbox = await sealant.sandboxes.create({
+console.log("→ creating workspace (build + launch)…");
+const workspace = await sealant.workspaces.create({
   repository: "github.com/octocat/Hello-World",
   ref: "master",
   harness: opencode(),
 });
-console.log(`✓ sandbox ready: ${sandbox.id} (${await sandbox.status()})`);
+console.log(`✓ workspace ready: ${workspace.id} (${await workspace.status()})`);
 
 console.log("→ running harness…");
-const run = await sandbox.harness.run(
+const run = await workspace.harness.run(
   "Append a line that says: Hello from Sealant. to the README file.",
 );
 

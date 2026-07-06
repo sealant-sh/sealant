@@ -1,6 +1,6 @@
 # Build worker. Multi-stage: the builder esbuild-bundles the worker into one JS file; the runtime is a
 # slim node image with the Docker CLI + git (the worker shells out to the HOST Docker daemon to build
-# images and launch sandboxes, and to git for clones). Runs `node dist/index.js` — no tsx, no monorepo.
+# images and launch workspaces, and to git for clones). Runs `node dist/index.js` — no tsx, no monorepo.
 FROM node:24-bookworm-slim AS builder
 
 ENV PNPM_HOME=/pnpm

@@ -57,16 +57,16 @@ export function RunSurface() {
             </div>
 
             <div className="min-w-0">
-              <CatalogEyebrow runId="sbx_8m2k" events="184" className="mb-4" />
+              <CatalogEyebrow runId="ws_8m2k" events="184" className="mb-4" />
               <RunRecord
                 variant="full"
                 replay
                 illustrative
-                runId="sbx_8m2k"
+                runId="ws_8m2k"
                 capture="2026-06-25 · 14:02"
                 status={{ word: "Completed · observed", tone: "observed" }}
                 events={[
-                  { seq: 1, offset: "00:00.000", name: "sandbox.ready", provenance: "observed" },
+                  { seq: 1, offset: "00:00.000", name: "workspace.ready", provenance: "observed" },
                   {
                     seq: 7,
                     offset: "00:14.628",

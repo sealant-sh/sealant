@@ -26,27 +26,27 @@ export const MOCK_REGISTRIES: RegistrySummary[] = [
 
 export const MOCK_REPOSITORIES: Record<string, string[]> = {
   "local-dev": [
-    "sandbox/opencode",
-    "sandbox/claude-code",
-    "sandbox/codex",
+    "workspace/opencode",
+    "workspace/claude-code",
+    "workspace/codex",
     "base/fedora-dev",
     "base/arch-dev",
   ],
-  staging: ["sandbox/opencode", "sandbox/claude-code", "base/fedora-dev"],
-  production: ["sandbox/opencode", "sandbox/claude-code"],
+  staging: ["workspace/opencode", "workspace/claude-code", "base/fedora-dev"],
+  production: ["workspace/opencode", "workspace/claude-code"],
 };
 
 export const MOCK_TAGS: Record<string, TagsResponse> = {
-  "local-dev/sandbox/opencode": {
-    repository: "sandbox/opencode",
+  "local-dev/workspace/opencode": {
+    repository: "workspace/opencode",
     tags: ["latest", "v0.1.4", "v0.1.3", "sha-3f8a2c1", "sha-9e4b7d0"],
   },
-  "local-dev/sandbox/claude-code": {
-    repository: "sandbox/claude-code",
+  "local-dev/workspace/claude-code": {
+    repository: "workspace/claude-code",
     tags: ["latest", "v1.2.0", "v1.1.0", "sha-abc1234"],
   },
-  "local-dev/sandbox/codex": {
-    repository: "sandbox/codex",
+  "local-dev/workspace/codex": {
+    repository: "workspace/codex",
     tags: ["latest", "v2.0.1", "sha-ff00cc3"],
   },
   "local-dev/base/fedora-dev": {
@@ -57,24 +57,24 @@ export const MOCK_TAGS: Record<string, TagsResponse> = {
     repository: "base/arch-dev",
     tags: ["latest", "2026.03.01"],
   },
-  "staging/sandbox/opencode": {
-    repository: "sandbox/opencode",
+  "staging/workspace/opencode": {
+    repository: "workspace/opencode",
     tags: ["latest", "v0.1.4", "sha-3f8a2c1"],
   },
-  "staging/sandbox/claude-code": {
-    repository: "sandbox/claude-code",
+  "staging/workspace/claude-code": {
+    repository: "workspace/claude-code",
     tags: ["latest", "v1.2.0"],
   },
   "staging/base/fedora-dev": {
     repository: "base/fedora-dev",
     tags: ["latest", "f41"],
   },
-  "production/sandbox/opencode": {
-    repository: "sandbox/opencode",
+  "production/workspace/opencode": {
+    repository: "workspace/opencode",
     tags: ["v0.1.3", "sha-9e4b7d0"],
   },
-  "production/sandbox/claude-code": {
-    repository: "sandbox/claude-code",
+  "production/workspace/claude-code": {
+    repository: "workspace/claude-code",
     tags: ["v1.1.0"],
   },
 };

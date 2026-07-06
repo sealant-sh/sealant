@@ -12,7 +12,14 @@
  */
 import { create } from "@bufbuild/protobuf";
 import type { MessageInitShape } from "@bufbuild/protobuf";
-import { makeSealantDBLayer, runs, sandboxes, SealantDB, telemetryEvents, user } from "@sealant/db";
+import {
+  makeSealantDBLayer,
+  runs,
+  workspaces,
+  SealantDB,
+  telemetryEvents,
+  user,
+} from "@sealant/db";
 import { EventPriority, ExitReason, StreamKind } from "@sealant/runtime-client";
 import { EventEnvelopeSchema, HealthReportSchema } from "@sealant/runtime-protocol";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
@@ -20,7 +27,7 @@ import {
   SealantRuntime,
   type SealantRuntimeService,
   type SealantSession,
-} from "@sealant/sandboxes";
+} from "@sealant/workspaces";
 import { count, eq } from "drizzle-orm";
 import { Effect, Layer, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -185,13 +192,13 @@ const buildTestLayer = (db: NonNullable<typeof dbLayer>, runtime: SealantRuntime
 };
 
 const runId = `run_it_${RUNTIME_ID}`;
-const sandboxId = `sbx_it_${RUNTIME_ID}`;
+const workspaceId = `ws_it_${RUNTIME_ID}`;
 const userId = `user_it_${RUNTIME_ID}`;
-// Attribution scenario rows: a launch run + an interactive "ssh" run in the SAME sandbox, and a
-// run in a FOREIGN sandbox that must NOT be attributable from this sandbox's stream.
+// Attribution scenario rows: a launch run + an interactive "ssh" run in the SAME workspace, and a
+// run in a FOREIGN workspace that must NOT be attributable from this workspace's stream.
 const attrLaunchRunId = `run_it_launch_${ATTR_RUNTIME_ID}`;
 const attrSshRunId = `run_it_ssh_${ATTR_RUNTIME_ID}`;
-const foreignSandboxId = `sbx_it_foreign_${ATTR_RUNTIME_ID}`;
+const foreignWorkspaceId = `ws_it_foreign_${ATTR_RUNTIME_ID}`;
 const foreignRunId = `run_it_foreign_${ATTR_RUNTIME_ID}`;
 const SSH_PROC_ID = "proc_it_ssh";
 
@@ -208,7 +215,7 @@ const ATTR_EVENTS: readonly EventEnvelope[] = [
       },
     },
   }),
-  // Tagged with a run from ANOTHER sandbox: attribution must refuse it (falls back to default).
+  // Tagged with a run from ANOTHER workspace: attribution must refuse it (falls back to default).
   attrEvt(2n, foreignRunId, {
     payload: { case: "runtimeHeartbeat", value: { state: 2 } },
   }),
@@ -226,8 +233,8 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     const seed = Effect.gen(function* () {
       const handle = yield* SealantDB;
-      yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
-      yield* handle.delete(sandboxes).where(eq(sandboxes.id, foreignSandboxId));
+      yield* handle.delete(workspaces).where(eq(workspaces.id, workspaceId)); // cascades runs -> telemetry_*
+      yield* handle.delete(workspaces).where(eq(workspaces.id, foreignWorkspaceId));
       yield* handle.delete(user).where(eq(user.id, userId));
       const now = new Date();
       yield* handle
@@ -241,19 +248,19 @@ describe.skipIf(DATABASE_URL === undefined)(
         })
         .onConflictDoNothing();
       yield* handle
-        .insert(sandboxes)
-        .values({ id: sandboxId, ownerUserId: userId, createdAt: now, updatedAt: now })
+        .insert(workspaces)
+        .values({ id: workspaceId, ownerUserId: userId, createdAt: now, updatedAt: now })
         .onConflictDoNothing();
       yield* handle
-        .insert(sandboxes)
-        .values({ id: foreignSandboxId, ownerUserId: userId, createdAt: now, updatedAt: now })
+        .insert(workspaces)
+        .values({ id: foreignWorkspaceId, ownerUserId: userId, createdAt: now, updatedAt: now })
         .onConflictDoNothing();
       yield* handle
         .insert(runs)
         .values([
           {
             id: runId,
-            sandboxId,
+            workspaceId,
             ownerUserId: userId,
             harnessId: "opencode",
             createdAt: now,
@@ -261,7 +268,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           },
           {
             id: attrLaunchRunId,
-            sandboxId,
+            workspaceId,
             ownerUserId: userId,
             harnessId: "opencode",
             createdAt: now,
@@ -269,7 +276,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           },
           {
             id: attrSshRunId,
-            sandboxId,
+            workspaceId,
             ownerUserId: userId,
             harnessId: "ssh",
             mode: "interactive" as const,
@@ -278,7 +285,7 @@ describe.skipIf(DATABASE_URL === undefined)(
           },
           {
             id: foreignRunId,
-            sandboxId: foreignSandboxId,
+            workspaceId: foreignWorkspaceId,
             ownerUserId: userId,
             harnessId: "opencode",
             createdAt: now,
@@ -290,8 +297,8 @@ describe.skipIf(DATABASE_URL === undefined)(
 
     const cleanup = Effect.gen(function* () {
       const handle = yield* SealantDB;
-      yield* handle.delete(sandboxes).where(eq(sandboxes.id, sandboxId)); // cascades runs -> telemetry_*
-      yield* handle.delete(sandboxes).where(eq(sandboxes.id, foreignSandboxId));
+      yield* handle.delete(workspaces).where(eq(workspaces.id, workspaceId)); // cascades runs -> telemetry_*
+      yield* handle.delete(workspaces).where(eq(workspaces.id, foreignWorkspaceId));
       yield* handle.delete(user).where(eq(user.id, userId));
     });
 
@@ -378,7 +385,7 @@ describe.skipIf(DATABASE_URL === undefined)(
       expect(result.exitedDuration).toBe(BIG_DURATION.toString());
     });
 
-    it("attributes execution-tagged events to their run (same-sandbox only)", async () => {
+    it("attributes execution-tagged events to their run (same-workspace only)", async () => {
       const attrLayer = buildTestLayer(db, makeStubRuntime(ATTR_EVENTS, ATTR_RUNTIME_ID));
 
       const result = await Effect.runPromise(
@@ -410,9 +417,9 @@ describe.skipIf(DATABASE_URL === undefined)(
         }).pipe(Effect.provide(attrLayer)),
       );
 
-      // Tagged with the same-sandbox ssh run -> attributed to it.
+      // Tagged with the same-workspace ssh run -> attributed to it.
       expect(result.byEvent.get("evt_attr_1")).toBe(attrSshRunId);
-      // Tagged with a foreign sandbox's run -> refused, falls back to the default run.
+      // Tagged with a foreign workspace's run -> refused, falls back to the default run.
       expect(result.byEvent.get("evt_attr_2")).toBe(attrLaunchRunId);
       // Untagged -> default run.
       expect(result.byEvent.get("evt_attr_3")).toBe(attrLaunchRunId);

@@ -46,27 +46,27 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import packageJson from "@/../package.json";
 import { LogoBlob, LogoText } from "@/components/app/Logo";
 import { authClient } from "@/lib/auth/auth-client";
-import { PROFILES, REPOSITORIES } from "@/lib/navigation/sandbox-data";
+import { PROFILES, REPOSITORIES } from "@/lib/navigation/workspace-data";
 import { isUserTheme } from "@/lib/theme/appearance";
 import { type UserTheme, useTheme } from "@/lib/theme/theme-provider";
 
 interface AppShellProps {
   readonly session: AuthSession;
-  readonly sidebarSandboxes: readonly SidebarSandbox[];
+  readonly sidebarWorkspaces: readonly SidebarWorkspace[];
   readonly children: ReactNode;
 }
 
-type SandboxStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
 
-interface SidebarSandbox {
-  readonly sandboxId: string;
+interface SidebarWorkspace {
+  readonly workspaceId: string;
   readonly name: string;
-  readonly status: SandboxStatus;
+  readonly status: WorkspaceStatus;
 }
 
-type GlobalArea = "sandboxes" | "repositories" | "profiles" | "settings";
+type GlobalArea = "workspaces" | "repositories" | "profiles" | "settings";
 
-type GlobalNavHref = "/sandboxes" | "/repositories" | "/profiles";
+type GlobalNavHref = "/workspaces" | "/repositories" | "/profiles";
 
 interface GlobalNavItem {
   readonly href: GlobalNavHref;
@@ -92,20 +92,20 @@ interface SidebarGroup {
 }
 
 const GLOBAL_NAV_ITEMS: readonly GlobalNavItem[] = [
-  { href: "/sandboxes", label: "Sandboxes", icon: Activity },
+  { href: "/workspaces", label: "Workspaces", icon: Activity },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
   { href: "/profiles", label: "Profiles", icon: UserRound },
 ] as const;
 
-const SANDBOX_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
+const WORKSPACE_OVERVIEW_SIDEBAR: readonly SidebarGroup[] = [
   {
-    label: "Sandbox views",
+    label: "Workspace views",
     links: [
-      { to: "/sandboxes/new", match: "/sandboxes/new", label: "Create sandbox", exact: true },
+      { to: "/workspaces/new", match: "/workspaces/new", label: "Create workspace", exact: true },
       { to: "/github/setup", match: "/github/setup", label: "GitHub access", exact: true },
-      { to: "/sandboxes", match: "/sandboxes", label: "All sandboxes", exact: true },
-      { to: "/sandboxes/active", match: "/sandboxes/active", label: "Running", exact: true },
-      { to: "/sandboxes/failed", match: "/sandboxes/failed", label: "Failed", exact: true },
+      { to: "/workspaces", match: "/workspaces", label: "All workspaces", exact: true },
+      { to: "/workspaces/active", match: "/workspaces/active", label: "Running", exact: true },
+      { to: "/workspaces/failed", match: "/workspaces/failed", label: "Failed", exact: true },
     ],
   },
 ];
@@ -134,7 +134,7 @@ const APPEARANCE_THEME_OPTIONS: ReadonlyArray<{
   { value: "system", label: "System" },
 ];
 
-export function AppShell({ session, sidebarSandboxes, children }: AppShellProps) {
+export function AppShell({ session, sidebarWorkspaces, children }: AppShellProps) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const router = useRouter();
@@ -142,14 +142,14 @@ export function AppShell({ session, sidebarSandboxes, children }: AppShellProps)
   const pathname = useRouterState({ select: (state) => normalizePath(state.location.pathname) });
 
   const activeArea = getGlobalArea(pathname);
-  const sandboxDetail = getSandboxDetail(pathname);
+  const workspaceDetail = getWorkspaceDetail(pathname);
   const selectedRepository = getSelectedEntity(pathname, "repositories");
   const selectedProfile = getSelectedEntity(pathname, "profiles");
 
   const sidebarGroups = getSidebarGroups({
     activeArea,
-    sidebarSandboxes,
-    sandboxDetail,
+    sidebarWorkspaces,
+    workspaceDetail,
     selectedRepository,
     selectedProfile,
   });
@@ -248,7 +248,7 @@ function AppSidebarNav({
             aria-hidden={!isExpanded}
           >
             <Link
-              to="/sandboxes"
+              to="/workspaces"
               className="inline-flex items-center gap-3 text-foreground no-underline"
               aria-label="Sealant home"
             >
@@ -340,8 +340,8 @@ function AppSidebarNav({
             <input
               ref={searchInputRef}
               type="search"
-              aria-label="Search sandboxes, repos, profiles"
-              placeholder="Search sandboxes, repos, profiles"
+              aria-label="Search workspaces, repos, profiles"
+              placeholder="Search workspaces, repos, profiles"
               className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[0.8125rem] text-foreground placeholder:text-faint focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
           </label>
@@ -442,13 +442,13 @@ function AppSidebarNav({
           {`v${packageJson.version}`}
         </p>
         <Link
-          to="/sandboxes/new"
+          to="/workspaces/new"
           className={cn(
             "flex items-center justify-center rounded-xl bg-primary text-center text-[0.8125rem] font-medium text-primary-foreground no-underline shadow-[var(--shadow-cobalt)] transition-[transform,box-shadow,background-color] duration-200 ease-out hover:-translate-y-0.5 hover:bg-[var(--primary-hover)]",
             isExpanded ? "h-10 gap-2 px-3" : "h-10 gap-0 px-2",
           )}
-          title={!isExpanded ? "New sandbox" : undefined}
-          aria-label="New sandbox"
+          title={!isExpanded ? "New workspace" : undefined}
+          aria-label="New workspace"
         >
           <Plus className="size-4 shrink-0" />
           <span
@@ -460,7 +460,7 @@ function AppSidebarNav({
             )}
             aria-hidden={!isExpanded}
           >
-            New sandbox
+            New workspace
           </span>
         </Link>
 
@@ -607,22 +607,22 @@ function getGlobalArea(pathname: string): GlobalArea {
     return "settings";
   }
 
-  return "sandboxes";
+  return "workspaces";
 }
 
-function getSandboxDetail(pathname: string): { sandboxId: string } | null {
+function getWorkspaceDetail(pathname: string): { workspaceId: string } | null {
   const segments = pathname.split("/").filter(Boolean);
-  const sandboxId = segments[1];
+  const workspaceId = segments[1];
 
-  if (segments[0] !== "sandboxes" || sandboxId === undefined) {
+  if (segments[0] !== "workspaces" || workspaceId === undefined) {
     return null;
   }
 
-  if (sandboxId === "active" || sandboxId === "failed" || sandboxId === "new") {
+  if (workspaceId === "active" || workspaceId === "failed" || workspaceId === "new") {
     return null;
   }
 
-  return { sandboxId: decodeURIComponent(sandboxId) };
+  return { workspaceId: decodeURIComponent(workspaceId) };
 }
 
 function getSelectedEntity(pathname: string, area: "repositories" | "profiles"): string | null {
@@ -642,36 +642,36 @@ function getSelectedEntity(pathname: string, area: "repositories" | "profiles"):
 
 function getSidebarGroups({
   activeArea,
-  sidebarSandboxes,
-  sandboxDetail,
+  sidebarWorkspaces,
+  workspaceDetail,
   selectedRepository,
   selectedProfile,
 }: {
   readonly activeArea: GlobalArea;
-  readonly sidebarSandboxes: readonly SidebarSandbox[];
-  readonly sandboxDetail: { sandboxId: string } | null;
+  readonly sidebarWorkspaces: readonly SidebarWorkspace[];
+  readonly workspaceDetail: { workspaceId: string } | null;
   readonly selectedRepository: string | null;
   readonly selectedProfile: string | null;
 }): readonly SidebarGroup[] {
-  if (sandboxDetail !== null) {
-    const { sandboxId } = sandboxDetail;
-    const sandboxBase = `/sandboxes/${encodeURIComponent(sandboxId)}`;
+  if (workspaceDetail !== null) {
+    const { workspaceId } = workspaceDetail;
+    const workspaceBase = `/workspaces/${encodeURIComponent(workspaceId)}`;
 
     return [
       {
-        label: "Sandbox navigation",
+        label: "Workspace navigation",
         links: [
           {
-            to: "/sandboxes/$sandboxId",
-            params: { sandboxId },
-            match: sandboxBase,
+            to: "/workspaces/$workspaceId",
+            params: { workspaceId },
+            match: workspaceBase,
             label: "Summary",
             exact: true,
           },
           {
-            to: "/sandboxes/$sandboxId/spec",
-            params: { sandboxId },
-            match: `${sandboxBase}/spec`,
+            to: "/workspaces/$workspaceId/spec",
+            params: { workspaceId },
+            match: `${workspaceBase}/spec`,
             label: "Spec",
             exact: true,
           },
@@ -726,10 +726,10 @@ function getSidebarGroups({
             exact: true,
           },
           {
-            to: "/repositories/$repoId/sandboxes",
+            to: "/repositories/$repoId/workspaces",
             params: { repoId },
-            match: `${repositoryBase}/sandboxes`,
-            label: "Sandboxes",
+            match: `${repositoryBase}/workspaces`,
+            label: "Workspaces",
             exact: true,
           },
           {
@@ -838,31 +838,31 @@ function getSidebarGroups({
     ];
   }
 
-  if (activeArea === "sandboxes") {
-    if (sidebarSandboxes.length === 0) {
-      return SANDBOX_OVERVIEW_SIDEBAR;
+  if (activeArea === "workspaces") {
+    if (sidebarWorkspaces.length === 0) {
+      return WORKSPACE_OVERVIEW_SIDEBAR;
     }
 
     return [
-      ...SANDBOX_OVERVIEW_SIDEBAR,
+      ...WORKSPACE_OVERVIEW_SIDEBAR,
       {
-        label: "Recent sandboxes",
-        links: sidebarSandboxes.map((sandbox) => ({
-          to: "/sandboxes/$sandboxId",
-          params: { sandboxId: sandbox.sandboxId },
-          match: `/sandboxes/${encodeURIComponent(sandbox.sandboxId)}`,
-          label: sandbox.name,
-          meta: formatSandboxStatus(sandbox.status),
+        label: "Recent workspaces",
+        links: sidebarWorkspaces.map((workspace) => ({
+          to: "/workspaces/$workspaceId",
+          params: { workspaceId: workspace.workspaceId },
+          match: `/workspaces/${encodeURIComponent(workspace.workspaceId)}`,
+          label: workspace.name,
+          meta: formatWorkspaceStatus(workspace.status),
           exact: false,
         })),
       },
     ];
   }
 
-  return SANDBOX_OVERVIEW_SIDEBAR;
+  return WORKSPACE_OVERVIEW_SIDEBAR;
 }
 
-function formatSandboxStatus(status: SidebarSandbox["status"]): string {
+function formatWorkspaceStatus(status: SidebarWorkspace["status"]): string {
   if (status === "running") {
     return "Running";
   }

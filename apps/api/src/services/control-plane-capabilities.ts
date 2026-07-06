@@ -4,13 +4,13 @@ import {
   type PackageStandardizer,
   type RegistryClient,
   type RunExecCommand,
-} from "@sealant/sandboxes";
+} from "@sealant/workspaces";
 import { Effect, Layer, Context } from "effect";
 
 import { createApiPackageStandardizer } from "../lib/create-package-standardizer.js";
 import { createRegistryClient } from "../lib/create-registry-client.js";
-import { createSandboxBuildJobPublisher } from "../lib/create-sandbox-build-job-publisher.js";
-import type { SandboxBuildJobPublisher } from "../lib/types.js";
+import { createWorkspaceBuildJobPublisher } from "../lib/create-workspace-build-job-publisher.js";
+import type { WorkspaceBuildJobPublisher } from "../lib/types.js";
 import { env } from "../runtime-env.js";
 
 export class PackageStandardizerService extends Context.Service<
@@ -22,10 +22,10 @@ export class RegistryClientService extends Context.Service<RegistryClientService
   "@sealant/api/RegistryClientService",
 ) {}
 
-export class SandboxBuildJobPublisherService extends Context.Service<
-  SandboxBuildJobPublisherService,
-  SandboxBuildJobPublisher
->()("@sealant/api/SandboxBuildJobPublisherService") {}
+export class WorkspaceBuildJobPublisherService extends Context.Service<
+  WorkspaceBuildJobPublisherService,
+  WorkspaceBuildJobPublisher
+>()("@sealant/api/WorkspaceBuildJobPublisherService") {}
 
 export interface RunExecPublisher {
   readonly publishRequested: (input: {
@@ -56,9 +56,9 @@ export const RegistryClientServiceLive = Layer.succeed(
   createRegistryClient(env),
 );
 
-export const SandboxBuildJobPublisherServiceLive = Layer.succeed(
-  SandboxBuildJobPublisherService,
-  createSandboxBuildJobPublisher(env),
+export const WorkspaceBuildJobPublisherServiceLive = Layer.succeed(
+  WorkspaceBuildJobPublisherService,
+  createWorkspaceBuildJobPublisher(env),
 );
 
 export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService, {
@@ -68,6 +68,6 @@ export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService
 export const ControlPlaneCapabilitiesLive = Layer.mergeAll(
   PackageStandardizerServiceLive,
   RegistryClientServiceLive,
-  SandboxBuildJobPublisherServiceLive,
+  WorkspaceBuildJobPublisherServiceLive,
   RunExecPublisherServiceLive,
 );

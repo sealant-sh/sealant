@@ -13,7 +13,7 @@ import { Effect } from "effect";
 import { SealantError } from "../errors.js";
 import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
-import type { RunHarnessFn, SandboxInit } from "../facade/sandbox.js";
+import type { RunHarnessFn, WorkspaceInit } from "../facade/workspace.js";
 import type { Run } from "../types.js";
 import { createRunOp, getRunChangesOp, getRunOp } from "./operations.js";
 
@@ -23,22 +23,22 @@ const RUN_TIMEOUT_MS = 30 * 60 * 1_000;
 
 /**
  * Registers the run WITH the harness command — the control plane executes it server-side (the worker
- * docker-execs it and ingests telemetry). The cwd is the sandbox repo, which the worker defaults to.
+ * docker-execs it and ingests telemetry). The cwd is the workspace repo, which the worker defaults to.
  */
-const createHarnessRunEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
+const createHarnessRunEffect = (ctx: SdkContext, init: WorkspaceInit, prompt: string) =>
   Effect.gen(function* () {
     const harness = init.harness;
     if (harness === undefined) {
       return yield* Effect.fail(
         new SealantError(
-          "This sandbox handle has no harness; use the handle returned by sandboxes.create().",
+          "This workspace handle has no harness; use the handle returned by workspaces.create().",
           { code: "harness_required" },
         ),
       );
     }
     const command = harness.buildRunCommand(prompt);
     return yield* createRunOp({
-      sandboxId: init.id,
+      workspaceId: init.id,
       ownerUserId: ctx.config.hostLocal.ownerUserId,
       harnessId: harness.id,
       mode: "one-shot",
@@ -47,7 +47,7 @@ const createHarnessRunEffect = (ctx: SdkContext, init: SandboxInit, prompt: stri
     });
   });
 
-const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
+const runHarnessEffect = (ctx: SdkContext, init: WorkspaceInit, prompt: string) =>
   Effect.gen(function* () {
     const created = yield* createHarnessRunEffect(ctx, init, prompt);
     const runId = created.runId;
@@ -72,7 +72,7 @@ const runHarnessEffect = (ctx: SdkContext, init: SandboxInit, prompt: string) =>
     return makeRun(ctx, { wire, changes });
   });
 
-/** The BLOCKING `harness.run()` implementation, registered into the Sandbox facade by the client. */
+/** The BLOCKING `harness.run()` implementation, registered into the Workspace facade by the client. */
 export const runHarness: RunHarnessFn = (ctx, init, prompt): Promise<Run> =>
   ctx.runtime.run(runHarnessEffect(ctx, init, prompt));
 

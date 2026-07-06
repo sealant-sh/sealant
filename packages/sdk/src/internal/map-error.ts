@@ -1,6 +1,6 @@
 /**
  * Maps any failure crossing the Effect boundary onto a plain public `SealantError`. The Effect core
- * fails with `@sealant/api-contracts` tagged errors (e.g. `SandboxNotFoundError`), Effect HTTP-client
+ * fails with `@sealant/api-contracts` tagged errors (e.g. `WorkspaceNotFoundError`), Effect HTTP-client
  * errors, or schema decode errors; the runtime squashes the `Cause` to its failure value and hands it
  * here. This is the single funnel that keeps Effect internals out of the public, Promise-based API.
  */

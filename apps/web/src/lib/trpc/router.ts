@@ -2,7 +2,7 @@ import {
   connectedAccountIdParamsSchema,
   connectedAccountSummarySchema,
   createConnectedAccountRequestSchema,
-  createSandboxRequestSchema,
+  createWorkspaceRequestSchema,
   createSshKeyRequestSchema,
   githubInstallationIdParamsSchema,
   githubInstallationRepositoriesQuerySchema,
@@ -12,22 +12,22 @@ import {
   listGitHubInstallationRepositoriesResponseSchema,
   listGitHubInstallationsResponseSchema,
   listRunsQuerySchema,
-  listSandboxAttemptsQuerySchema,
-  listSandboxEventsQuerySchema,
+  listWorkspaceAttemptsQuerySchema,
+  listWorkspaceEventsQuerySchema,
   listConnectedAccountsResponseSchema,
   listProfileCredentialBindingsResponseSchema,
   listProfilesResponseSchema,
-  listSandboxesQuerySchema,
+  listWorkspacesQuerySchema,
   listSshKeysResponseSchema,
-  renameSandboxRequestSchema,
+  renameWorkspaceRequestSchema,
   runEventParamsSchema,
   runIdParamsSchema,
   runScrollbackQuerySchema,
   runTimelineQuerySchema,
-  renameSandboxResponseSchema,
+  renameWorkspaceResponseSchema,
   resolvePackageQuerySchema,
   resolvePackageResponseSchema,
-  sandboxIdParamsSchema,
+  workspaceIdParamsSchema,
   setProfileCredentialBindingRequestSchema,
   setupStateResponseSchema,
   sshKeyIdParamsSchema,
@@ -69,23 +69,23 @@ const syncGitHubInstallationForSessionSchema = githubInstallationIdParamsSchema.
   syncGitHubInstallationQuerySchema.omit({ userId: true }),
 );
 
-const listOwnedSandboxesInputSchema = listSandboxesQuerySchema.omit({
+const listOwnedWorkspacesInputSchema = listWorkspacesQuerySchema.omit({
   ownerUserId: true,
 });
 
-const sandboxAttemptsInputSchema = sandboxIdParamsSchema.extend({
-  limit: listSandboxAttemptsQuerySchema.shape.limit,
+const workspaceAttemptsInputSchema = workspaceIdParamsSchema.extend({
+  limit: listWorkspaceAttemptsQuerySchema.shape.limit,
 });
 
-const sandboxEventsInputSchema = sandboxIdParamsSchema.extend({
-  limit: listSandboxEventsQuerySchema.shape.limit,
+const workspaceEventsInputSchema = workspaceIdParamsSchema.extend({
+  limit: listWorkspaceEventsQuerySchema.shape.limit,
 });
 
-const createSandboxForSessionSchema = createSandboxRequestSchema.omit({
+const createWorkspaceForSessionSchema = createWorkspaceRequestSchema.omit({
   ownerUserId: true,
 });
 
-const renameSandboxInputSchema = sandboxIdParamsSchema.merge(renameSandboxRequestSchema);
+const renameWorkspaceInputSchema = workspaceIdParamsSchema.merge(renameWorkspaceRequestSchema);
 
 const createSshKeyForSessionSchema = createSshKeyRequestSchema.omit({
   ownerUserId: true,
@@ -222,48 +222,50 @@ export const appRouter = router({
         });
       }),
   }),
-  sandbox: router({
+  workspace: router({
     create: protectedProcedure
-      .input(createSandboxForSessionSchema)
+      .input(createWorkspaceForSessionSchema)
       .mutation(async ({ ctx, input }) => {
-        return ctx.coreApi.sandboxes.create({
+        return ctx.coreApi.workspaces.create({
           ...input,
           ownerUserId: ctx.session.user.id,
         });
       }),
     list: protectedProcedure
-      .input(listOwnedSandboxesInputSchema.optional())
+      .input(listOwnedWorkspacesInputSchema.optional())
       .query(async ({ ctx, input }) => {
         /**
          * Keep a stable default limit when optional input is omitted.
          */
-        return ctx.coreApi.sandboxes.list({
+        return ctx.coreApi.workspaces.list({
           limit: input?.limit ?? 25,
           ...(input?.status === undefined ? {} : { status: input.status }),
           ownerUserId: ctx.session.user.id,
         });
       }),
-    byId: protectedProcedure.input(sandboxIdParamsSchema).query(async ({ ctx, input }) => {
-      return ctx.coreApi.sandboxes.byId(input);
+    byId: protectedProcedure.input(workspaceIdParamsSchema).query(async ({ ctx, input }) => {
+      return ctx.coreApi.workspaces.byId(input);
     }),
-    attempts: protectedProcedure.input(sandboxAttemptsInputSchema).query(async ({ ctx, input }) => {
-      return ctx.coreApi.sandboxes.attempts(input);
-    }),
-    events: protectedProcedure.input(sandboxEventsInputSchema).query(async ({ ctx, input }) => {
-      return ctx.coreApi.sandboxes.events(input);
+    attempts: protectedProcedure
+      .input(workspaceAttemptsInputSchema)
+      .query(async ({ ctx, input }) => {
+        return ctx.coreApi.workspaces.attempts(input);
+      }),
+    events: protectedProcedure.input(workspaceEventsInputSchema).query(async ({ ctx, input }) => {
+      return ctx.coreApi.workspaces.events(input);
     }),
     rename: protectedProcedure
-      .input(renameSandboxInputSchema)
-      .output(renameSandboxResponseSchema)
+      .input(renameWorkspaceInputSchema)
+      .output(renameWorkspaceResponseSchema)
       .mutation(async ({ ctx, input }) => {
-        return ctx.coreApi.sandboxes.rename(input);
+        return ctx.coreApi.workspaces.rename(input);
       }),
   }),
   run: router({
     list: protectedProcedure.input(listRunsQuerySchema.optional()).query(async ({ ctx, input }) => {
       return ctx.coreApi.runs.list({
         ownerUserId: ctx.session.user.id,
-        ...(input?.sandboxId === undefined ? {} : { sandboxId: input.sandboxId }),
+        ...(input?.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
         ...(input?.status === undefined ? {} : { status: input.status }),
         limit: input?.limit ?? 25,
       });

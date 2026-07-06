@@ -2,7 +2,7 @@
 title: GitHub App for private repos
 description:
   Create a GitHub App, wire its credentials into Sealant, and import the installation so you can
-  build sandboxes from private repositories.
+  build workspaces from private repositories.
 ---
 
 Public repositories clone from a raw Git URL with no extra setup. Private repositories need a
@@ -79,9 +79,9 @@ Open the web app at **`/github/setup`**. You can import the installation two way
 
 Once imported, click **Sync repositories** to pull the list of repos the installation can access.
 
-## 6. Build a sandbox from a private repo
+## 6. Build a workspace from a private repo
 
-Go to [`/sandboxes/new`](/docs/guides/creating-sandboxes). For **Source**, choose the GitHub App
+Go to [`/workspaces/new`](/docs/guides/creating-workspaces). For **Source**, choose the GitHub App
 repository option, select your installation, and pick a synced repository and ref. Sealant mints a
 short-lived installation token for the clone at build time — no long-lived token is stored on disk.
 

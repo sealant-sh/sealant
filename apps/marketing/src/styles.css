@@ -24,6 +24,22 @@
   --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+/*
+  Marketing sits directly on the warm canvas (--sw-canvas, #edeae4), one step
+  darker than the app's working sheet (--sw-bg) the shared tokens are tuned
+  for — so the quiet text steps and hairlines lose a stop of contrast here.
+  Strengthen them one step locally; the @sealant/ui tokens stay untouched.
+  Light-only on purpose (the landing page has no dark theme).
+*/
+:root:where(:not(.dark)) {
+  --sw-muted: #5a5a62; /* body copy on canvas */
+  --sw-label: #71717a; /* eyebrows / section labels */
+  --sw-faint: #7e7e87; /* mono dim: timestamps, taglines */
+  --sw-soft-rule: #d6d2ca; /* inner panel rules */
+  --sw-faint-rule: #e2dfd8; /* row dividers */
+  --border: var(--sw-rule); /* outer frames: strong hairline vs canvas */
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;

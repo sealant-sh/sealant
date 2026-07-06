@@ -19,9 +19,9 @@ source, not the docs.
 <Callout type="info">
   Three findings, in priority order: the telemetry capture pipeline is fully built but **dead-ends
   in memory** in production; the SSH gateway accepts **any upstream host key** today (exploitable
-  now); and sandbox orchestration is generated as **~370 lines of string-concatenated bash** with no
-  real init system. The unifying theme of every recommendation is that the daemon already implements
-  the hard parts — the work is to route through it rather than around it.
+  now); and workspace orchestration is generated as **~370 lines of string-concatenated bash** with
+  no real init system. The unifying theme of every recommendation is that the daemon already
+  implements the hard parts — the work is to route through it rather than around it.
 </Callout>
 
 <Callout type="warn">
@@ -39,16 +39,16 @@ client loads, tags and pushes it. There is no template file and no init system �
 the orchestration.
 
 Two files drive every build: the renderer/executor
-`packages/sandboxes/src/buildkit/buildkit-builder.ts` and the worker-side driver
-`packages/sandboxes/src/worker/process-sandbox-build-job.ts`.
+`packages/workspaces/src/buildkit/buildkit-builder.ts` and the worker-side driver
+`packages/workspaces/src/worker/process-workspace-build-job.ts`.
 
 ### The end-to-end flow
 
-The worker entry point is `processSandboxBuildJob` (`process-sandbox-build-job.ts:102`):
+The worker entry point is `processWorkspaceBuildJob` (`process-workspace-build-job.ts:102`):
 
 <Steps>
-  <Step>**Claim and parse.** Claim a job, then parse the blueprint with `newSandboxSchema`.</Step>
-  <Step>**Compile.** Call `compileSandboxBuildSpec` (the call into `buildkit-builder`).</Step>
+  <Step>**Claim and parse.** Claim a job, then parse the blueprint with `newWorkspaceSchema`.</Step>
+  <Step>**Compile.** Call `compileWorkspaceBuildSpec` (the call into `buildkit-builder`).</Step>
   <Step>
     **Select the artifact.** Pick the publishable `oci-image` artifact (`:153`), which must have
     `loader === "docker-load"`.
@@ -66,7 +66,7 @@ The worker entry point is `processSandboxBuildJob` (`process-sandbox-build-job.t
 A `buildSucceeded` guard (`:139`, `:254`) ensures a post-build failure never re-marks the build
 itself failed.
 
-Inside `compileSandboxBuildSpec` (`buildkit-builder.ts:1193`): parse input, select the OS family,
+Inside `compileWorkspaceBuildSpec` (`buildkit-builder.ts:1193`): parse input, select the OS family,
 run `mapBlueprintToResolvedImagePlan`, then `writeBuildContext` (temp dir), then `buildImageTarball`
 (the actual `docker build` plus `docker save`), and return a validated result carrying one
 `oci-image` tarball plus two `metadata` JSON artifacts.
@@ -80,7 +80,7 @@ run `mapBlueprintToResolvedImagePlan`, then `writeBuildContext` (temp dir), then
   `# syntax=docker/dockerfile:1.7`, a `FROM` on the base image, a single cache-mounted package `RUN`
   per distro (dnf / pacman / nix), the harness install, shell config, the entrypoint COPY/chmod,
   then (only when enabled) the `sealantd` bake.
-- **The entrypoint** (`renderSandboxEntrypoint`, `:687–982`) is also a string array — roughly 296
+- **The entrypoint** (`renderWorkspaceEntrypoint`, `:687–982`) is also a string array — roughly 296
   lines of bash that decodes SSH keys, optionally rewrites `/etc/passwd|group|shadow` and launches
   an in-container `sshd`, clones the repo, applies dotfiles, runs lifecycle steps, backgrounds
   `sealantd`, then `exec`s the harness.
@@ -101,7 +101,7 @@ digest check to skip an unchanged build.
 
 <Accordions>
 <Accordion title="The enableSealantd flag, end to end">
-Optional, default-off (`sandbox-blueprint.ts:89`). When set, three things change:
+Optional, default-off (`workspace-blueprint.ts:89`). When set, three things change:
 
 - `socat` joins the package set.
 - `COPY --from=ghcr.io/get-sealant/sealantd:0.2.0` plus `chmod` bakes the binary (`:1102–1108`).
@@ -121,7 +121,7 @@ They are **two fully independent paths that never meet**. The gateway speaks SSH
 length-prefixed protobuf. Zero code references connect them — proven by a passing e2e where `sshd`
 is not even running yet the daemon is fully reachable.
 
-Inside a sandbox these are two separate processes the entrypoint starts independently. They differ
+Inside a workspace these are two separate processes the entrypoint starts independently. They differ
 in every dimension:
 
 |               | SSH gateway path                              | Daemon control path                                                    |
@@ -135,9 +135,9 @@ in every dimension:
 ### What the gateway does
 
 `apps/ssh-gateway/src/gateway-server.ts` is a multi-hop relay: one client SSH connection maps to one
-sandbox and one lazily-opened upstream SSH connection, with channels multiplexed over it. It auths
-publickey-only against a static allowlist, parses the `sandboxId` from the SSH username
-(`sbx-<id>`), resolves the target via `GET /v1/sandboxes/{id}/ssh-target` on the core API, then
+workspace and one lazily-opened upstream SSH connection, with channels multiplexed over it. It auths
+publickey-only against a static allowlist, parses the `workspaceId` from the SSH username
+(`ws-<id>`), resolves the target via `GET /v1/workspaces/{id}/ssh-target` on the core API, then
 opens an upstream `ssh2.Client` to the **container's `sshd`** (`connectToUpstream :65`). It forwards
 `shell` / `exec` / `subsystem` (SFTP) / `tcpip` plus PTY/window-change/signal metadata so the
 terminal behaves transparently — including `forwardOut` through the upstream session to make VS Code
@@ -200,7 +200,7 @@ The control socket forwards each `EventEnvelope` as `ServerMessage::Event` to **
 clients only** (`server.rs:96`). On the consumer side: the SDK client buffers into an in-memory
 `#eventQueue` drained by an async iterator, dropping un-pulled events on close
 (`runtime-client/src/client.ts:298`); `SealantRuntime.events` is just an Effect `Stream` wrapper the
-service never consumes; and `execInSandbox` — the **only** code that consumes the stream, and a
+service never consumes; and `execInWorkspace` — the **only** code that consumes the stream, and a
 **test-only** caller — concatenates STDOUT `io.chunk` bytes plus reads `exitCode`, then discards
 stderr, file, and network events when the scope closes (`sealantd/target.ts:102`). There is **no**
 telemetry path through `packages/db` or `packages/rabbitmq`.
@@ -211,20 +211,20 @@ CAPTURE (process/pty pipes, fs snapshot+inotify, egress proxy)
   → Direct mode broadcast channel        [as deployed — no disk]
   → control socket → live-connected clients only (fan-out; disconnected clients miss events)
   → SDK #eventQueue → events() iterator  (un-pulled events dropped on close)
-  → execInSandbox (test-only)  keeps STDOUT + exitCode, DISCARDS the rest on scope close
+  → execInWorkspace (test-only)  keeps STDOUT + exitCode, DISCARDS the rest on scope close
   → DEAD END: nothing in packages/db, nothing in packages/rabbitmq, nothing on disk in prod
 ```
 
 ## Recommendation: cleaning up image building
 
-Stop generating bash by string concatenation. Move the sandbox orchestration into `sealantd` as a
+Stop generating bash by string concatenation. Move the workspace orchestration into `sealantd` as a
 `sealantd boot` supervisor subcommand (it already _is_ a child-subreaper with a process registry),
 and shrink the Containerfile to thin per-distro templates. TypeScript keeps the one job it is good
 at: planning.
 
 ### The pain
 
-`renderSandboxEntrypoint` is roughly 296 lines of string-concatenated bash, with a second roughly
+`renderWorkspaceEntrypoint` is roughly 296 lines of string-concatenated bash, with a second roughly
 80-line copy of the dotfiles logic in `renderDotfilesStep`. Correctness rides on getting array
 boundaries, nested heredocs (bash generating bash across two template layers), and `\n` escaping
 right by eye. Real security-sensitive work — decoding auth keys, writing askpass shims, rewriting
@@ -261,11 +261,11 @@ orchestration logic lives.
 </Accordion>
 <Accordion title="Axis C — Orchestration logic">
 
-| Option                                                | Pros                                                                                  | Cons                                              |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| C0 status quo (generated bash)                        | no new artifact                                                                       | untestable, duplicated, ugly — the core complaint |
-| C1 committed `*.sh` + shellcheck + bats               | lowest migration cost; removes string-concat                                          | still bash for program-shaped logic; no types     |
-| **C2 a Rust `sandbox-init` as a sealantd subcommand** | real errors, types, unit tests; deletes ~370 lines of bash; reuses existing machinery | real porting work; needs a typed config contract  |
+| Option                                                  | Pros                                                                                  | Cons                                              |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| C0 status quo (generated bash)                          | no new artifact                                                                       | untestable, duplicated, ugly — the core complaint |
+| C1 committed `*.sh` + shellcheck + bats                 | lowest migration cost; removes string-concat                                          | still bash for program-shaped logic; no types     |
+| **C2 a Rust `workspace-init` as a sealantd subcommand** | real errors, types, unit tests; deletes ~370 lines of bash; reuses existing machinery | real porting work; needs a typed config contract  |
 
 </Accordion>
 </Accordions>
@@ -283,7 +283,7 @@ orchestration logic lives.
 
 ### Phased plan
 
-No broken sandboxes at any step.
+No broken workspaces at any step.
 
 <Steps>
 <Step>
@@ -299,13 +299,13 @@ No broken sandboxes at any step.
 **Phase 3 — Flip the default, keep a bash fallback** for one release and for the `enableSealantd === false` path.
 </Step>
 <Step>
-**Phase 4 — Delete generated bash; optionally adopt A2 base images.** Remove `renderSandboxEntrypoint` / `renderDotfilesStep`; `buildkit-builder.ts` becomes a planner plus Dockerfile templater.
+**Phase 4 — Delete generated bash; optionally adopt A2 base images.** Remove `renderWorkspaceEntrypoint` / `renderDotfilesStep`; `buildkit-builder.ts` becomes a planner plus Dockerfile templater.
 </Step>
 </Steps>
 
 <Callout type="warn">
   **Invariant to preserve at every phase:** the env-var contract the runtime adapter injects
-  (`docker-runtime-adapter.ts` — `SEALANT_SANDBOX_*`, `SEALANT_ENABLE_SSH`,
+  (`docker-runtime-adapter.ts` — `SEALANT_WORKSPACE_*`, `SEALANT_ENABLE_SSH`,
   `SEALANT_FOREGROUND_COMMAND`, `SEALANT_ENABLE_SEALANTD`, the control socket, the working dir).
 </Callout>
 
@@ -322,7 +322,7 @@ The gateway is a Node plus `ssh2` multi-hop relay — two full SSH stacks per se
 double hop), with an entire second `sshd` baked into every image purely to terminate the inner hop.
 The worst issue: upstream host-key handling defaults to accepting **any** key
 (`gateway-server.ts:106–117`) — even "strict" mode has no pinning, no known_hosts, no TOFU. Auth is
-coarse (one allowlist, one gateway key opens **every** sandbox; no per-principal to per-sandbox
+coarse (one allowlist, one gateway key opens **every** workspace; no per-principal to per-workspace
 authorization), there is no rate-limiting or per-connection caps, and observability is ad-hoc
 `console.error` lines.
 
@@ -360,8 +360,8 @@ The gateway's SSH verbs map 1:1 onto control-protocol commands that already exis
   <Step>
     **Phase 0 — Stop the bleeding (Node, days).** Default strict host-key checking on; implement
     real upstream host-key **pinning** (TOFU or key delivered via the target lookup); add structured
-    tracing with connection-to-sandbox-to-session correlation; add auth-attempt rate-limiting and a
-    cap on `forwardOut` channels.
+    tracing with connection-to-workspace-to-session correlation; add auth-attempt rate-limiting and
+    a cap on `forwardOut` channels.
   </Step>
   <Step>
     **Phase 1 — Daemon readiness (Rust).** Add a reliable, backpressured per-session output stream
@@ -371,8 +371,8 @@ The gateway's SSH verbs map 1:1 onto control-protocol commands that already exis
   <Step>
     **Phase 2 — Consolidate transport.** Tunnel the gateway to `/run/sealantd.sock`; rewrite
     `connectToUpstream` to open a control session instead of an `ssh2.Client`; **delete the
-    in-container `sshd`** plus `sandbox-ssh-shell`; add per-principal to per-sandbox authz at this
-    seam.
+    in-container `sshd`** plus `workspace-ssh-shell`; add per-principal to per-workspace authz at
+    this seam.
   </Step>
   <Step>
     **Phase 3 — Rust rewrite (`russh` + `sealant-protocol`).** Reimplement the SSH-server half;
@@ -389,7 +389,7 @@ The gateway's SSH verbs map 1:1 onto control-protocol commands that already exis
 ## Recommendation: do we need a network MITM proxy?
 
 No. The real problem is that capture is **cooperative and bypassable**, not that TLS is opaque.
-Completeness is a coverage/enforcement problem, not a decryption one — solve it with a per-sandbox
+Completeness is a coverage/enforcement problem, not a decryption one — solve it with a per-workspace
 netns plus eBPF/conntrack plus DNS observation (non-intercepting), not a CA-injecting MITM.
 
 ### What exists today
@@ -420,7 +420,7 @@ egress boundary** (threat-model, known-limitations, ADR-0009).
 <Callout type="idea">
   **Verdict: do not build a TLS MITM as the path to "capture everything."** MITM solves only 1 of 6
   blind spots (payloads) while leaving the dominant gap — bypass — wide open, and it imports the
-  heaviest costs (a trusted CA injected into the sandbox, decrypted secrets, pinning breakage). It
+  heaviest costs (a trusted CA injected into the workspace, decrypted secrets, pinning breakage). It
   is the wrong tool for completeness.
 </Callout>
 
@@ -430,7 +430,7 @@ In priority order.
 
 <Cards>
   <Card title="A — Capture all metadata (not MITM)">
-    Per-sandbox netns plus eBPF/conntrack plus DNS. This is the unbuilt `privileged` / `metadata`
+    Per-workspace netns plus eBPF/conntrack plus DNS. This is the unbuilt `privileged` / `metadata`
     the architecture already anticipates (ADR-0009). eBPF on `connect` / `sendmsg` (or
     conntrack/netlink) captures every TCP and UDP flow with reliable PID attribution — closing
     bypass, UDP/QUIC, raw sockets and attribution at once, without touching payloads or needing a
@@ -443,10 +443,10 @@ In priority order.
   </Card>
   <Card title="C — TLS MITM (payload mode), gated">
     Build only if a product genuinely needs request/response bodies, and only opt-in. The right
-    shape is netns plus redirect into a terminating proxy with a per-sandbox, short-lived CA trusted
-    only inside that sandbox, a strict host allow/deny list, and mandatory redaction. **Off by
-    default** — it weakens the sandbox's own TLS trust, breaks pinned clients, and turns the
-    collector into a plaintext-secret aggregator.
+    shape is netns plus redirect into a terminating proxy with a per-workspace, short-lived CA
+    trusted only inside that workspace, a strict host allow/deny list, and mandatory redaction.
+    **Off by default** — it weakens the workspace's own TLS trust, breaks pinned clients, and turns
+    the collector into a plaintext-secret aggregator.
   </Card>
 </Cards>
 

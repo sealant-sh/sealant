@@ -5,16 +5,16 @@
 # this file, generates secrets into a sibling .env, and starts everything. To run it by hand instead,
 # create a .env next to this file with the required secrets:
 #
-#   SANDBOX_SSH_GATEWAY_TOKEN=<long random string>
+#   WORKSPACE_SSH_GATEWAY_TOKEN=<long random string>
 #   BETTER_AUTH_SECRET=<long random string, min 32 chars>
 #
 # then: docker compose -f compose.selfhost.yaml up -d
 #
 # Requirements: a running Docker daemon (the worker drives it, via the mounted socket, to build images
-# and launch sandboxes) and Docker Compose >= 2.23.1 (inline `configs`). Everything binds to loopback
+# and launch workspaces) and Docker Compose >= 2.23.1 (inline `configs`). Everything binds to loopback
 # by default: web 3000, API 4000, SSH gateway 2222, registry 5000. Postgres/RabbitMQ stay internal.
 # Set SEALANT_BIND_HOST=0.0.0.0 to expose web/API/SSH beyond the machine (the registry always stays on
-# loopback — the host Docker daemon pushes/pulls sandbox images through 127.0.0.1:5000).
+# loopback — the host Docker daemon pushes/pulls workspace images through 127.0.0.1:5000).
 # Private GitHub repos need GITHUB_APP_* (see README) — public repos (the default demo) need nothing.
 name: sealant
 
@@ -23,7 +23,7 @@ x-amqp-url: &amqp-url amqp://sealant:${SEALANT_RABBITMQ_PASSWORD:-sealant}@rabbi
 
 configs:
   # Inlined so this file is fully self-contained (no repo checkout needed). Mirror of
-  # packages/sandboxes/dev/zot/config.json — keep the two in sync.
+  # packages/workspaces/dev/zot/config.json — keep the two in sync.
   zot-config:
     content: |
       {
@@ -73,7 +73,7 @@ services:
       timeout: 10s
       retries: 10
 
-  # Host-exposed: the worker drives the HOST Docker daemon (via the socket) to push built sandbox
+  # Host-exposed: the worker drives the HOST Docker daemon (via the socket) to push built workspace
   # images here and pull them when launching, so the registry must be reachable on host loopback.
   # Always loopback — never bind this one wider.
   zot:
@@ -120,11 +120,12 @@ services:
       CORS_ALLOWED_ORIGINS: ${SEALANT_CORS_ALLOWED_ORIGINS:-*}
       # Shared secret with the SSH gateway (authenticates resolve-principal + connection-target
       # lookups), plus the endpoint the UI renders into `ssh` commands for users.
-      SANDBOX_SSH_GATEWAY_TOKEN:
-        ${SANDBOX_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random string}
-      SANDBOX_SSH_GATEWAY_HOST: ${SEALANT_SSH_HOST:-localhost}
-      SANDBOX_SSH_GATEWAY_PORT: ${SEALANT_SSH_PORT:-2222}
-      SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: sbx
+      WORKSPACE_SSH_GATEWAY_TOKEN:
+        ${WORKSPACE_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random
+        string}
+      WORKSPACE_SSH_GATEWAY_HOST: ${SEALANT_SSH_HOST:-localhost}
+      WORKSPACE_SSH_GATEWAY_PORT: ${SEALANT_SSH_PORT:-2222}
+      WORKSPACE_SSH_GATEWAY_USERNAME_PREFIX: ws
       # Private GitHub repos (see README). Compose only interpolates .env into ${...} — without
       # these lines the values would never reach the container.
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
@@ -155,12 +156,12 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      # The worker drives the host Docker daemon to build images + launch sandboxes. Rootless Docker
+      # The worker drives the host Docker daemon to build images + launch workspaces. Rootless Docker
       # hosts can point DOCKER_SOCKET_PATH at their user socket.
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
-      # Shared host dir where each sandbox's control socket is exposed, so the gateway reaches the
-      # in-sandbox daemon directly (unix://) with no Docker access. Must be the same real host path
-      # here, in the gateway, and in the sandbox bind-mounts the host daemon creates.
+      # Shared host dir where each workspace's control socket is exposed, so the gateway reaches the
+      # in-workspace daemon directly (unix://) with no Docker access. Must be the same real host path
+      # here, in the gateway, and in the workspace bind-mounts the host daemon creates.
       - /run/sealant/sockets:/run/sealant/sockets
     environment:
       DATABASE_URL: *db-url
@@ -170,7 +171,7 @@ services:
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
-      SANDBOX_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
+      WORKSPACE_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -190,7 +191,7 @@ services:
       - "${SEALANT_BIND_HOST:-127.0.0.1}:${SEALANT_SSH_PORT:-2222}:2222"
     volumes:
       - gateway-keys:/keys
-      # Read-only access to the per-sandbox control sockets the worker exposes here. The gateway
+      # Read-only access to the per-workspace control sockets the worker exposes here. The gateway
       # connects to them directly (unix://) — NO Docker socket, so a gateway compromise cannot reach
       # the host Docker daemon (which would be host root). The worker has the socket; the gateway must not.
       - /run/sealant/sockets:/run/sealant/sockets:ro
@@ -204,10 +205,11 @@ services:
       # Optional operator break-glass allowlist; a missing file just means "no static keys" (users
       # register keys in the web UI, resolved via the API per connection).
       SSH_GATEWAY_ALLOWED_KEYS_FILE: /keys/gateway_allowed_keys
-      SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: sbx
+      SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX: ws
       CORE_API_BASE_URL: http://api:4000
-      SANDBOX_SSH_GATEWAY_TOKEN:
-        ${SANDBOX_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random string}
+      WORKSPACE_SSH_GATEWAY_TOKEN:
+        ${WORKSPACE_SSH_GATEWAY_TOKEN:?set in .env — run install.sh or generate a long random
+        string}
     healthcheck:
       test:
         - "CMD"

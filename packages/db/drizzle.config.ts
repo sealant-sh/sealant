@@ -7,7 +7,7 @@ export default defineConfig({
   schema: [
     "./src/schema/auth.ts",
     "./src/schema/control-plane.ts",
-    "./src/schema/sandbox-build-jobs.ts",
+    "./src/schema/workspace-build-jobs.ts",
     "./src/schema/telemetry.ts",
   ],
   out: "./drizzle",

@@ -16,7 +16,7 @@
     "@sealant/db": "workspace:*",
     "@sealant/runtime-client": "^0.4.0",
     "@sealant/runtime-protocol": "^0.4.0",
-    "@sealant/sandboxes": "workspace:*",
+    "@sealant/workspaces": "workspace:*",
     "drizzle-orm": "1.0.0-rc.3",
     "effect": "catalog:"
   },

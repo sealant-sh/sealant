@@ -67,7 +67,7 @@ machine, see [Beyond localhost](/docs/guides/beyond-localhost). The full list of
 Open **[http://localhost:3000](http://localhost:3000)** and create an account. The first user you
 register is a normal account — there is no separate admin setup.
 
-From here, continue to [Run your first sandbox](/docs/getting-started/first-sandbox). To connect
+From here, continue to [Run your first workspace](/docs/getting-started/first-workspace). To connect
 private GitHub repositories, set up the [GitHub App](/docs/guides/github-app).
 
 ## Managing the install

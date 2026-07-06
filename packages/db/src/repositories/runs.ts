@@ -2,7 +2,7 @@
  * RunRepo — data access for `runs` (one HARNESS EXECUTION; the SDK's `harness.run()`). A run owns the
  * execution record: the telemetry tables key their `run_id` FK to `runs.id`. This repo is the bottom
  * of the run-detail read path (RunRepo -> api-contracts -> apps/api -> SDK). Mirrors the
- * `SandboxAttemptRepo` idiom: a `Context.Service` whose methods return `Effect`s on a typed
+ * `WorkspaceAttemptRepo` idiom: a `Context.Service` whose methods return `Effect`s on a typed
  * `TaggedError` channel, wired with `Layer.effect`.
  */
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -20,7 +20,7 @@ import {
 
 export interface CreateRunInput {
   readonly id: string;
-  readonly sandboxId: string;
+  readonly workspaceId: string;
   readonly ownerUserId: string;
   readonly harnessId: string;
   readonly mode?: RunMode;
@@ -52,7 +52,7 @@ export interface MarkRunFailedInput {
 
 export interface ListRunsInput {
   readonly ownerUserId?: string;
-  readonly sandboxId?: string;
+  readonly workspaceId?: string;
   readonly statuses?: readonly RunStatus[];
   readonly limit?: number;
 }
@@ -135,7 +135,7 @@ export const RunRepoLive = Layer.effect(
               .insert(runs)
               .values({
                 id: input.id,
-                sandboxId: input.sandboxId,
+                workspaceId: input.workspaceId,
                 ownerUserId: input.ownerUserId,
                 harnessId: input.harnessId,
                 ...(input.mode === undefined ? {} : { mode: input.mode }),
@@ -170,7 +170,7 @@ export const RunRepoLive = Layer.effect(
           Effect.gen(function* () {
             const whereClauses = [
               ...(input.ownerUserId === undefined ? [] : [eq(runs.ownerUserId, input.ownerUserId)]),
-              ...(input.sandboxId === undefined ? [] : [eq(runs.sandboxId, input.sandboxId)]),
+              ...(input.workspaceId === undefined ? [] : [eq(runs.workspaceId, input.workspaceId)]),
               ...(input.statuses === undefined || input.statuses.length === 0
                 ? []
                 : [inArray(runs.status, [...input.statuses])]),

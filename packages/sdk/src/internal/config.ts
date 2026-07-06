@@ -10,9 +10,9 @@
 import type { SealantConfig } from "../types.js";
 
 export interface SealantHostLocalConfig {
-  /** Owner principal the control plane attributes sandboxes/runs to (pre-auth). */
+  /** Owner principal the control plane attributes workspaces/runs to (pre-auth). */
   readonly ownerUserId: string;
-  /** Registry the sandbox image is published to and launched from. */
+  /** Registry the workspace image is published to and launched from. */
   readonly registryId: string;
 }
 

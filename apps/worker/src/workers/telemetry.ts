@@ -6,7 +6,7 @@
  * One-shot harness runs are NOT polled here: the run-exec worker already ingests them inline
  * (captureRun), bounded to the harness process. Interactive runs (SSH sessions minted by the
  * gateway) have no inline owner, so this worker polls `runs` for `status=running, mode=interactive`,
- * resolves each run's sandbox to its ready docker instance, and forks one ingester fiber per run on
+ * resolves each run's workspace to its ready docker instance, and forks one ingester fiber per run on
  * its OWN control connection with THAT run as the connection's default — attribution then routes
  * execution-tagged events (this run's own session included) while untagged daemon noise falls back
  * to the same run. When the run leaves `running` (the gateway finalized it), the fiber is
@@ -19,13 +19,12 @@
 import {
   RunRepo,
   RunRepoLive,
-  SandboxRepo,
-  SandboxRepoLive,
-  SandboxRuntimeInstanceRepo,
-  SandboxRuntimeInstanceRepoLive,
+  WorkspaceRepo,
+  WorkspaceRepoLive,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceRuntimeInstanceRepoLive,
   makeSealantDBLayer,
 } from "@sealant/db";
-import { SealantRuntimeDockerExecLive, sealantTargetForRuntimeInstance } from "@sealant/sandboxes";
 import {
   ExecutionRunResolverLive,
   InlineByteaArtifactStoreLive,
@@ -34,6 +33,7 @@ import {
   TelemetryIngesterLive,
 } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
+import { SealantRuntimeDockerExecLive, sealantTargetForRuntimeInstance } from "@sealant/workspaces";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 
 // 1s, not 5s: ingest attaches AFTER the gateway opens the session (live-tail protocol, no replay
@@ -42,7 +42,7 @@ const POLL_INTERVAL_MS = 1000;
 
 /**
  * Starts the telemetry worker loop and returns a graceful shutdown handle. Mirrors
- * `startSandboxWorker`'s shape so `startWorkers` can compose it.
+ * `startWorkspaceWorker`'s shape so `startWorkers` can compose it.
  */
 export const startTelemetryWorker = async (env: WorkerEnv) => {
   const dbLayer = makeSealantDBLayer(env.DATABASE_URL);
@@ -56,8 +56,8 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   );
   const repoLayer = Layer.mergeAll(
     RunRepoLive,
-    SandboxRepoLive,
-    SandboxRuntimeInstanceRepoLive,
+    WorkspaceRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
   ).pipe(Layer.provide(dbLayer));
   const appLayer = Layer.mergeAll(ingesterLayer, repoLayer);
 
@@ -66,18 +66,18 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   const context = await Effect.runPromise(Layer.buildWithScope(appLayer, scope));
   const ingester = Context.get(context, TelemetryIngester);
   const runs = Context.get(context, RunRepo);
-  const sandboxes = Context.get(context, SandboxRepo);
-  const instances = Context.get(context, SandboxRuntimeInstanceRepo);
+  const workspaces = Context.get(context, WorkspaceRepo);
+  const instances = Context.get(context, WorkspaceRuntimeInstanceRepo);
 
   const started = new Map<string, Fiber.Fiber<void, unknown>>();
 
-  const resolveTarget = (sandboxId: string) =>
+  const resolveTarget = (workspaceId: string) =>
     Effect.gen(function* () {
-      const sandbox = yield* sandboxes.getSandboxById(sandboxId);
-      if (sandbox === undefined || sandbox.latestRunId === null) {
+      const workspace = yield* workspaces.getWorkspaceById(workspaceId);
+      if (workspace === undefined || workspace.latestRunId === null) {
         return undefined;
       }
-      const instance = yield* instances.getRuntimeInstanceByRunId(sandbox.latestRunId);
+      const instance = yield* instances.getRuntimeInstanceByRunId(workspace.latestRunId);
       if (instance === undefined || instance.adapter !== "docker" || instance.status !== "ready") {
         return undefined;
       }
@@ -101,7 +101,7 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
       if (started.has(run.id)) {
         continue;
       }
-      const target = await Effect.runPromise(resolveTarget(run.sandboxId));
+      const target = await Effect.runPromise(resolveTarget(run.workspaceId));
       if (target === undefined) {
         continue;
       }

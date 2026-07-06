@@ -10,9 +10,9 @@ describe("toSealantError", () => {
   });
 
   it("maps a tagged api error to SealantApiError with code + status", () => {
-    const mapped = toSealantError({ _tag: "SandboxNotFoundError", message: "nope", status: 404 });
+    const mapped = toSealantError({ _tag: "WorkspaceNotFoundError", message: "nope", status: 404 });
     expect(mapped).toBeInstanceOf(SealantApiError);
-    expect(mapped.code).toBe("SandboxNotFoundError");
+    expect(mapped.code).toBe("WorkspaceNotFoundError");
     expect(mapped.message).toBe("nope");
     expect((mapped as SealantApiError).status).toBe(404);
   });

@@ -162,7 +162,7 @@ touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ensure_env_var SEALANT_DB_PASSWORD "$(generate_secret)"
 ensure_env_var SEALANT_RABBITMQ_PASSWORD "$(generate_secret)"
-ensure_env_var SANDBOX_SSH_GATEWAY_TOKEN "$(generate_secret)"
+ensure_env_var WORKSPACE_SSH_GATEWAY_TOKEN "$(generate_secret)"
 ensure_env_var BETTER_AUTH_SECRET "$(generate_secret)"
 set_env_var SEALANT_VERSION "$VERSION"
 API_PORT="$(setting SEALANT_API_PORT 4000 "${SEALANT_API_PORT:-}")"
@@ -217,8 +217,8 @@ printf '\n'
 ok "Sealant $VERSION is running"
 printf '\n  Get started:\n'
 printf '    1. Open \033[1mhttp://localhost:%s\033[0m and create your account\n' "$WEB_PORT"
-printf '    2. Add your SSH public key (Settings → SSH keys, or while creating a sandbox)\n'
-printf '    3. Create a sandbox, then connect:  \033[1mssh -p %s sbx-<sandbox-id>@localhost\033[0m\n' "$SSH_PORT"
+printf '    2. Add your SSH public key (Settings → SSH keys, or while creating a workspace)\n'
+printf '    3. Create a workspace, then connect:  \033[1mssh -p %s ws-<workspace-id>@localhost\033[0m\n' "$SSH_PORT"
 printf '\n  API for the SDK:  http://localhost:%s\n' "$API_PORT"
 printf '\n  Manage it:\n'
 printf '    docker compose --project-directory %s logs -f\n' "$INSTALL_DIR"

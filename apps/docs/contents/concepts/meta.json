@@ -1,4 +1,4 @@
 {
   "title": "Concepts",
-  "pages": ["sandboxes", "execution-records", "harnesses", "security-model"]
+  "pages": ["workspaces", "execution-records", "harnesses", "security-model"]
 }

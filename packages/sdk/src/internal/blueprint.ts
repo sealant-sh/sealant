@@ -1,22 +1,22 @@
 /**
  * Lowers the fluent `create({ repository, harness })` options into the existing
- * `createSandboxRequestSchema` the control plane accepts — entirely client-side, so the slice needs
+ * `createWorkspaceRequestSchema` the control plane accepts — entirely client-side, so the slice needs
  * no contract change. The public `repository` is the SOURCE git repo (it becomes
- * `spec.sources.sandbox.url`); the contract's `repository`/`tag` are the OCI push coordinates, which
+ * `spec.sources.workspace.url`); the contract's `repository`/`tag` are the OCI push coordinates, which
  * we derive. `customization.enableSealantd` is forced on (it bakes + launches the daemon the run path
  * connects to), the runtime target is pinned to docker (the only bridgeable adapter today), and the
- * foreground is a keepalive so the sandbox idles with the daemon up and the harness is exec'd on
+ * foreground is a keepalive so the workspace idles with the daemon up and the harness is exec'd on
  * demand by `run()` rather than launched at boot. `options.credentials`, if present, is lowered via
- * `mapSandboxCredentials` (see `./credentials.js`) and folded into `spec.credentials`; the control
+ * `mapWorkspaceCredentials` (see `./credentials.js`) and folded into `spec.credentials`; the control
  * plane resolves those account references server-side (never secret material over this path).
  */
 import { randomUUID } from "node:crypto";
 
-import type { CreateSandboxRequest } from "@sealant/api-contracts";
+import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 
 import type { CreateOptions } from "../types.js";
 import type { SealantInternalConfig } from "./config.js";
-import { mapSandboxCredentials } from "./credentials.js";
+import { mapWorkspaceCredentials } from "./credentials.js";
 
 const sanitizeRepoSlug = (value: string): string => {
   const slug = value
@@ -34,20 +34,20 @@ const toGitUrl = (repository: string): string => {
   return `https://${repository}.git`;
 };
 
-export const buildCreateSandboxRequest = (
+export const buildCreateWorkspaceRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
-): { readonly payload: CreateSandboxRequest } => {
+): { readonly payload: CreateWorkspaceRequest } => {
   const tail =
     options.repository
       .split("/")
       .filter((s) => s.length > 0)
       .pop() ?? options.repository;
-  const credentials = mapSandboxCredentials(options.credentials);
+  const credentials = mapWorkspaceCredentials(options.credentials);
   const spec = {
     version: "1",
     sources: {
-      sandbox: {
+      workspace: {
         kind: "git",
         provider: "generic",
         url: toGitUrl(options.repository),

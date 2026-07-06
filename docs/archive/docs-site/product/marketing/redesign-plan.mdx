@@ -57,7 +57,7 @@ many jobs to show versatility.
 | 1   | **Hero** — defined, then argued, shown as a live run          | What it is in 5s plus the wow above the fold      |
 | 2   | **Thesis strip** — "Frameworks decide. The runtime delivers." | One quotable line; the three nouns                |
 | 3   | **The indictment** — what you hand-roll today                 | Make the gap felt; wall-of-logs vs record         |
-| 4   | **The model** — a sandbox you enter, a run you keep           | The two-noun mental model                         |
+| 4   | **The model** — a workspace you enter, a run you keep         | The two-noun mental model                         |
 | 5   | **One call, many jobs** — versatility gallery                 | The adoption wedge as a repeatable pattern        |
 | 6   | **The record** — it reports, it does not judge                | The soul; the signature panel; the climax         |
 | 7   | **Browsing as recorded evidence** — the differentiator        | The wedge nobody frames, honestly in-progress     |
@@ -79,12 +79,12 @@ many jobs to show versatility.
 
 <Accordions>
   <Accordion title="1 · Hero — the runtime, defined then argued, shown as a live run">
-    The headline leads with the **definition, not the accusation**: *"The runtime under your agent. A sandbox to work in, a recorded run to keep."* The subhead lands the gap, then the promise — one call spins up a real sandbox around your repo, runs your harness in it, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.
+    The headline leads with the **definition, not the accusation**: *"The runtime under your agent. A workspace to work in, a recorded run to keep."* The subhead lands the gap, then the promise — one call spins up a real workspace around your repo, runs your harness in it, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.
 
     Left side: copy plus calls to action (**primary "Star on GitHub"**, secondary "Read the quickstart") and a quiet mono trust line. Right side: the signature run-record panel. On load it scroll-types the canonical call, then resolves in place into the recorded run.
 
     ```ts
-    sealant.sandboxes
+    sealant.workspaces
       .create({ repository, harness })
       .harness.run(prompt)
     // → { result, changes, artifacts, record }
@@ -96,7 +96,7 @@ many jobs to show versatility.
 
   </Accordion>
   <Accordion title="2 · Thesis strip">
-    Replaces the neutral capability word-list with an argument: one typeset sentence — *"Planners and harnesses decide WHAT. Sealant owns WHERE it runs and WHAT actually happened."* — plus the three nouns in mono: `sandbox · run · harness`. A full-width band with hairline top and bottom and generous space. Not pills or chips; type does the work.
+    Replaces the neutral capability word-list with an argument: one typeset sentence — *"Planners and harnesses decide WHAT. Sealant owns WHERE it runs and WHAT actually happened."* — plus the three nouns in mono: `workspace · run · harness`. A full-width band with hairline top and bottom and generous space. Not pills or chips; type does the work.
   </Accordion>
   <Accordion title="3 · The indictment — what you're doing today">
     Make the normalized pain felt: you `docker run` and hope it is isolated; you scrape a wall of terminal text to learn what the agent did; you have no clean before/after; when it hangs, you cannot step in; you rebuild this for every agent, every model, every project. Close with: *"Containers give you isolation. They don't give you the developer-work model around it."*
@@ -104,10 +104,10 @@ many jobs to show versatility.
     Visually, the pain lines are a rhythm of cobalt left-edge callouts — no red or amber flooding. Beside them, a deliberately dimmed wall-of-`agent.log` fragment sits against the lifted record motif, joined by one quiet label: *"same run, read instead of scraped."*
 
   </Accordion>
-  <Accordion title="4 · The model — a sandbox you enter, a run you keep">
-    The constructive resolution: *"Two nouns. Everything else serves them."* A sandbox is the live disposable environment (code, harness, processes, files, services) you can SSH into; a run is the durable output — what it produced plus the structured history of how. Tagline: *"The sandbox is where the work happens. The run is what you keep."*
+  <Accordion title="4 · The model — a workspace you enter, a run you keep">
+    The constructive resolution: *"Two nouns. Everything else serves them."* A workspace is the live disposable environment (code, harness, processes, files, services) you can SSH into; a run is the durable output — what it produced plus the structured history of how. Tagline: *"The workspace is where the work happens. The run is what you keep."*
 
-    Reuse the two-card model pattern with the `{ harness, ssh, files, processes } = sandbox` and `{ result, changes, artifacts, record } = run` mocks, subtly emphasizing `record` as the spine.
+    Reuse the two-card model pattern with the `{ harness, ssh, files, processes } = workspace` and `{ result, changes, artifacts, record } = run` mocks, subtly emphasizing `record` as the spine.
 
   </Accordion>
   <Accordion title="5 · One call, many jobs — the versatility gallery">
@@ -123,13 +123,13 @@ many jobs to show versatility.
 
   </Accordion>
   <Accordion title="7 · Browsing as recorded evidence — the differentiator (in-progress)">
-    The wedge nobody frames, placed mid-page, never the hero. *"The agent needs the web. The web should leave evidence."* A headless Chromium that the harness drives inside the sandbox — auth flows, UI checks — captured into the same run: screenshots, DOM snapshots, navigations, and the network it generated. Honest line: *"It composes primitives we already have — the tunneling channel, the artifact store, the egress proxy. In progress, and we say so."*
+    The wedge nobody frames, placed mid-page, never the hero. *"The agent needs the web. The web should leave evidence."* A headless Chromium that the harness drives inside the workspace — auth flows, UI checks — captured into the same run: screenshots, DOM snapshots, navigations, and the network it generated. Honest line: *"It composes primitives we already have — the tunneling channel, the artifact store, the egress proxy. In progress, and we say so."*
 
     The visual is a record-panel variant whose timeline interleaves browser evidence under one run id: a navigation event, a small screenshot artifact thumbnail beside its correlated `net.request` rows, a DOM-snapshot row, and one amber `DOM assertion: not run` edge to demonstrate honest provenance. An in-development badge sits in the header, not hidden.
 
   </Accordion>
   <Accordion title="8 · Not a black box — step in over SSH">
-    Advance the anti-black-box stance into a genuinely-shipping capability to anchor credibility. *"Automation when it works. Direct access when it doesn't."* SSH into the same live sandbox, fix the missing dependency, occupied port, or hung process, and let the work continue — *"Same repo, same processes, same task, same record. Your keystrokes land in the same run."* Editor Remote-SSH works through the same path.
+    Advance the anti-black-box stance into a genuinely-shipping capability to anchor credibility. *"Automation when it works. Direct access when it doesn't."* SSH into the same live workspace, fix the missing dependency, occupied port, or hung process, and let the work continue — *"Same repo, same processes, same task, same record. Your keystrokes land in the same run."* Editor Remote-SSH works through the same path.
 
     Reuse the existing SSH terminal panel (`git diff --stat`, `ps -ef`, `pnpm test → 14 tests passed`) largely as-is, plus a cobalt left-edge callout for the tagline.
 
@@ -156,7 +156,7 @@ many jobs to show versatility.
   <Accordion title="11 · Built in the open — Handoff (by Sealant)">
     The product split as strategy, not a catalog: *"The platform is the point. The products are the proof."* Each product is its own open-source repo on the public SDK, tagged "by Sealant."
 
-    **Handoff (flagship, building now)** gets one prominent card: a small mono `by Sealant` tag, an amber "Building now" status, a chip-row of the primitives it consumes (sandbox, harness, files, checks, artifacts, record), a snippet that is visibly the same `create`/`run` pattern wrapped and ending in a PR link, and a single "Watch the repo" call to action. Framed as proof: *"if Handoff works, the platform is real."*
+    **Handoff (flagship, building now)** gets one prominent card: a small mono `by Sealant` tag, an amber "Building now" status, a chip-row of the primitives it consumes (workspace, harness, files, checks, artifacts, record), a snippet that is visibly the same `create`/`run` pattern wrapped and ending in a PR link, and a single "Watch the repo" call to action. Framed as proof: *"if Handoff works, the platform is real."*
 
     **Verify** and **Repro** are two visibly quieter cards below with a hollow-ring "On the roadmap" status, one line each, and no use-it call to action — they have zero code today. This kills the page's biggest honesty violation (three co-equal products with "Explore" links implying all ship today) and drops the umbrella naming entirely.
 
@@ -236,7 +236,7 @@ the one-liner → star the repo.
     indictment foil only. Everywhere it currently appears as the hero or feature visual, it is
     replaced by the run-record exhibit. - The execution-record timeline mock and dot-plus-word
     footer, promoted to the climax. - The SSH terminal peek and "Automation when it works" callout —
-    today-real and on-message. - The two-card sandbox/run model pattern with the destructure mocks
+    today-real and on-message. - The two-card workspace/run model pattern with the destructure mocks
     and cobalt member highlighting. - The missing-runtime stack geometry, repurposed as the contract
     backbone. - The hero one-liner content, verbatim, as the page's literal spine. - The motion
     primitives, type system, warm canvas with dot-grid, reserved cobalt-lift, reduced-motion
@@ -371,7 +371,7 @@ dark panel currently appears as a hero or feature visual, it becomes the light e
 ### Catalog IA — eyebrows that reference real runs
 
 Structure encodes truth: each section's eyebrow becomes a real artifact reference, not a decorative
-label — for example `EXHIBIT C · run sbx_8m2k · 184 events`. Hard rule: an eyebrow must reference a
+label — for example `EXHIBIT C · run ws_8m2k · 184 events`. Hard rule: an eyebrow must reference a
 real run primitive (run-id plus event count), never a generic word. The page reads as a small,
 numbered dossier of evidence you could file. The literal `EXHIBIT A–H` lettering is an optional
 flourish; the run-id reference is always on.
@@ -403,7 +403,7 @@ the pulse becomes a static dot, replay shows the already-folded rows). Exactly t
   <Card title="Hero resolve">The hero one-liner resolving into the exhibit.</Card>
   <Card title="Sticky run-header playhead">
     A persistent run-header in the sticky nav (run-id, recording pulse, and an advancing `mm:ss.mmm`
-    offset) so scroll subliminally reads as replaying one run — opening on `sandbox.ready` at the
+    offset) so scroll subliminally reads as replaying one run — opening on `workspace.ready` at the
     hero and closing on `run.completed` at the final CTA, where the pulse stops and status resolves
     to `Completed · observed`.
   </Card>

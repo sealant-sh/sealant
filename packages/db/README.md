@@ -2,13 +2,13 @@
 
 `@sealant/db` is the shared PostgreSQL package for Sealant control-plane state.
 
-It models the primary product nouns: sandboxes and the runs executed inside them.
+It models the primary product nouns: workspaces and the runs executed inside them.
 
 ## What this package provides
 
 - Better Auth core tables for `user`, `session`, `account`, and `verification`
-- Drizzle schema + migrations for sandbox lifecycle and build/runtime orchestration
-- typed repositories for sandbox attempts, build jobs, runtime instances, profiles, and repository
+- Drizzle schema + migrations for workspace lifecycle and build/runtime orchestration
+- typed repositories for workspace attempts, build jobs, runtime instances, profiles, and repository
   profiles
 - generated Effect schemas from Drizzle tables
 - payload schemas for job request/result JSON
@@ -31,9 +31,9 @@ pnpm --filter @sealant/db db:migrate
 High-level table map:
 
 - auth: `user`, `session`, `account`, `verification`
-- sandbox lifecycle: `sandboxes`, `runs`, `sandbox_attempts`, `sandbox_attempt_snapshots`,
-  `sandbox_run_links`
-- build/runtime orchestration: `oci_image_build_jobs`, `sandbox_runtime_instances`
+- workspace lifecycle: `workspaces`, `runs`, `workspace_attempts`, `workspace_attempt_snapshots`,
+  `workspace_run_links`
+- build/runtime orchestration: `oci_image_build_jobs`, `workspace_runtime_instances`
 - package standardization cache: `package_resolution_cache_entries`
 - repository/profile context: `repositories`, `repository_profiles`, `repository_profile_revisions`,
   `repository_profile_profile_links`, `profiles`, `profile_revisions`, `profile_env_vars`,
@@ -47,13 +47,13 @@ For a per-table purpose summary, see `packages/db/src/schema/README.md`.
 ```ts
 import {
   createDatabaseClientFromEnv,
-  createSandboxAttemptRepository,
-  createSandboxBuildJobRepository,
+  createWorkspaceAttemptRepository,
+  createWorkspaceBuildJobRepository,
 } from "@sealant/db";
 
 const client = await createDatabaseClientFromEnv();
-const attempts = createSandboxAttemptRepository(client);
-const jobs = createSandboxBuildJobRepository(client);
+const attempts = createWorkspaceAttemptRepository(client);
+const jobs = createWorkspaceBuildJobRepository(client);
 
 const attempt = await attempts.createQueuedAttempt({
   id: "attempt_123",
@@ -65,7 +65,7 @@ await jobs.insertQueuedJob({
   id: "job_123",
   runId: attempt.id,
   registryId: "default",
-  repository: "sealant/sandboxes/demo",
+  repository: "sealant/workspaces/demo",
   tag: "opencode",
   requestPayload: {
     source: "https://github.com/example/repo",

@@ -42,14 +42,14 @@ describe("attributeBatch", () => {
     const batch = [
       event({ eventId: "ssh", executionId: "run_ssh" }),
       event({ eventId: "boot", executionId: undefined }),
-      event({ eventId: "foreign", executionId: "run_other_sandbox" }),
+      event({ eventId: "foreign", executionId: "run_other_workspace" }),
     ];
     const attributed = attributeBatch(batch, new Map([["run_ssh", "run_ssh"]]));
 
     expect(attributed[0]?.attributedRunId).toBe("run_ssh");
     // Untagged daemon events (boot, heartbeats) fall back to the connection's default run.
     expect(attributed[1]?.attributedRunId).toBeUndefined();
-    // Execution ids that failed the same-sandbox check are NOT attributed.
+    // Execution ids that failed the same-workspace check are NOT attributed.
     expect(attributed[2]?.attributedRunId).toBeUndefined();
   });
 

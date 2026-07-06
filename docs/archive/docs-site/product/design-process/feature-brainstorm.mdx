@@ -14,7 +14,7 @@ whether a seed already exists in the codebase, whether it belongs to the platfor
 built on top of it, a rough priority, and the open design question it raises.
 
 <Callout type="info">
-  This is an exploration, not a roadmap. It spans nine feature areas — sandboxes, the execution
+  This is an exploration, not a roadmap. It spans nine feature areas — workspaces, the execution
   record, browser support, access, networking, security, reliability, the SDK, and product loops —
   and is intentionally honest about the gap between the narrative and the shipped code. The point is
   to surface decisions, not to commit to them.
@@ -35,7 +35,7 @@ a _product_ (an experience built on top — launcher, inspector, workflows), or 
 
 <Cards>
   <Card
-    title="A · Sandbox & harness"
+    title="A · Workspace & harness"
     description="The front door: lifecycle SDK, harness as a first-class verb, build pipeline DX."
   />
   <Card
@@ -44,7 +44,7 @@ a _product_ (an experience built on top — launcher, inspector, workflows), or 
   />
   <Card
     title="C · Browser support"
-    description="The flagged primitive: in-sandbox browser sessions captured as evidence."
+    description="The flagged primitive: in-workspace browser sessions captured as evidence."
   />
   <Card
     title="D · Access & interactivity"
@@ -69,14 +69,14 @@ a _product_ (an experience built on top — launcher, inspector, workflows), or 
   <Card title="I · Product loops" description="The issue-to-PR workflow execution engine." />
 </Cards>
 
-## A. Sandbox & harness — the front door
+## A. Workspace & harness — the front door
 
-### A1. Sandbox lifecycle SDK (create / inspect / stop / TTL)
+### A1. Workspace lifecycle SDK (create / inspect / stop / TTL)
 
 **Priority:** Table-stakes · **Scope:** Platform & Product
 
-> "`sealant.sandboxes.create({ repository, harness })` gives me a live disposable env and a handle I
-> can stop, restart, or let expire — no Dockerfiles, no container babysitting."
+> "`sealant.workspaces.create({ repository, harness })` gives me a live disposable env and a handle
+> I can stop, restart, or let expire — no Dockerfiles, no container babysitting."
 
 This is the promise the marketing hero makes. The create path is real but REST-shaped today (it
 needs `registryId` plus `tag` plus a GitHub `sourceSelection`), and there is no stop, terminate,
@@ -99,7 +99,7 @@ there is no SDK-level `run(prompt)` that returns a structured result; the harnes
 image boot contract rather than driven interactively.
 
 **Open question —** Is the harness driven once at boot, or repeatedly via interactive `run(prompt)`
-during a sandbox's life? Where do harness API keys get injected? Is bring-your-own-harness a hard
+during a workspace's life? Where do harness API keys get injected? Is bring-your-own-harness a hard
 requirement?
 
 ### A3. Build pipeline DX: caching, reproducibility, build-to-ready SLA
@@ -177,19 +177,19 @@ given that the read models they depend on are themselves unimplemented?
 
 ## C. Browser support — the flagged primitive
 
-### C1. Remote browser sessions in-sandbox (CDP relay + browser-as-evidence)
+### C1. Remote browser sessions in-workspace (CDP relay + browser-as-evidence)
 
 **Priority:** Differentiator · **Scope:** Platform & Product
 
-> "A harness (or human) drives a real Chromium in the sandbox — web-app auth flows, browser dev
+> "A harness (or human) drives a real Chromium in the workspace — web-app auth flows, browser dev
 > tools, UI verification — and the browsing is captured as part of the same recorded run
 > (screenshots, DOM snapshots, navigations, network)."
 
 This is the one primitive that is marketed but unbuilt ("Browser sessions", _in development_). The
-differentiated shape for an isolated-sandbox plus execution-record platform composes existing
+differentiated shape for an isolated-workspace plus execution-record platform composes existing
 primitives:
 
-1. a headless or headful browser running **in-sandbox**;
+1. a headless or headful browser running **in-workspace**;
 2. its CDP/devtools port exposed to the developer's tools via the existing `direct-tcpip`
    `openForward` channel — exactly how VS Code Remote-SSH already tunnels;
 3. browsing artifacts (screenshots, traces, HAR, DOM) written to the content-addressed artifact
@@ -201,8 +201,8 @@ headless-browser service. Strong transport seeds already exist — `openForward`
 relay, the artifact CAS, the egress proxy — but no browser process management, CDP relay, or
 browser-evidence schema exists yet.
 
-**Open question —** What does "browser support" mean for v1: (a) an in-sandbox headless browser the
-harness drives via CDP, (b) a remote interactive browser a human views and controls, (c) browser
+**Open question —** What does "browser support" mean for v1: (a) an in-workspace headless browser
+the harness drives via CDP, (b) a remote interactive browser a human views and controls, (c) browser
 activity captured as evidence, or all three? Which is the wedge? Does it ride the existing
 `openForward` plus artifact store, or need a new browser-session subsystem?
 
@@ -212,7 +212,7 @@ activity captured as evidence, or all three? Which is the wedge? Does it ride th
 
 **Priority:** Table-stakes · **Scope:** Platform & Product
 
-> "Open a PTY-backed shell in a running sandbox (create, resize, close, attach), stream bytes to a
+> "Open a PTY-backed shell in a running workspace (create, resize, close, attach), stream bytes to a
 > real terminal or web terminal, with correct job-control so Ctrl-C hits the whole pipeline."
 
 The daemon PTY runtime is solid (setsid, TIOCSCTTY, a lossless attach channel) and the gateway maps
@@ -223,14 +223,14 @@ the low-level `request()` escape hatch.
 **Open question —** Is a web-based terminal a committed surface? Should the SDK ship typed
 session-lifecycle methods plus a Node `stream.Duplex` over `Channel`?
 
-### D2. Collaboration & sharing (sandbox access, session sharing, principal RBAC)
+### D2. Collaboration & sharing (workspace access, session sharing, principal RBAC)
 
 **Priority:** Future · **Scope:** Product
 
-> "Share a running sandbox or a recorded run with a teammate, grant scoped SSH/terminal access, and
-> have access decisions audited."
+> "Share a running workspace or a recorded run with a teammate, grant scoped SSH/terminal access,
+> and have access decisions audited."
 
-The gateway is a real choke point doing principal × sandbox authorization, but the API check is
+The gateway is a real choke point doing principal × workspace authorization, but the API check is
 owner-only, keys have no provisioning, revocation, or hot-reload, and there is no sharing surface. A
 session OBSERVE mode exists in the protocol but is not surfaced.
 
@@ -263,7 +263,7 @@ positioning these are blocking, and they cannot be bolted on late.
 **Priority:** Table-stakes · **Scope:** Platform & Product
 
 This is the number-one gap. The control-plane API has no user-auth middleware — `ownerUserId` is a
-trusted input, so any caller can create or read sandboxes for any user. The socket trusts every
+trusted input, so any caller can create or read workspaces for any user. The socket trusts every
 uid-passing peer equally. Better Auth exists but is not integrated.
 
 **Open question —** What is the control-plane auth model (a Better Auth session, API keys,
@@ -345,7 +345,7 @@ of control commands required? Should feature toggles be access-controlled and pe
 **Priority:** Future · **Scope:** Platform
 
 The k8s/k3s adapters are 37-line throwing stubs despite being first-class in the spec, DB, worker,
-and marketing; the Docker adapter refuses persistent and no-network sandboxes; telemetry ingestion
+and marketing; the Docker adapter refuses persistent and no-network workspaces; telemetry ingestion
 is Docker-only.
 
 **Open question —** Single-host Docker per worker at launch, or real cluster orchestration for GA?
@@ -419,9 +419,9 @@ because they shape what can credibly be claimed at all.
     For any hosted, B2B, or compliance positioning these are blocking and cannot be bolted on late.
   </Accordion>
   <Accordion title="Lifecycle close-out is missing everywhere">
-    No sandbox stop, TTL, or GC; no build retry; no DLQ consumer; no retention or GC. The system is
-    good at starting and recording things, with no story for reaping them — which becomes acute the
-    moment it runs unattended at scale.
+    No workspace stop, TTL, or GC; no build retry; no DLQ consumer; no retention or GC. The system
+    is good at starting and recording things, with no story for reaping them — which becomes acute
+    the moment it runs unattended at scale.
   </Accordion>
   <Accordion title="Linux-first / Docker-only / amd64 is the real operating envelope">
     Despite the spec and marketing implying k8s, arm64, persistence, and clusters, the honest
@@ -439,8 +439,8 @@ The brainstorm converges on twelve questions whose answers cascade through every
 of the design process works through these to reach alignment.
 
 1. **The one canonical product story** — a harness-neutral "runtime for AI developer agents", or
-   "isolated sandboxes plus issue-workflow review"? Which is the primary noun set (sandbox + run +
-   harness, or sandbox + issue workflow)? Everything hangs on this.
+   "isolated workspaces plus issue-workflow review"? Which is the primary noun set (workspace +
+   run + harness, or workspace + issue workflow)? Everything hangs on this.
 2. **What is the developer-facing product** — the launcher, the run inspector, or the SDK/runtime —
    and which is GA at launch versus aspirational?
 3. **What does "browser support" mean for v1** concretely, and does it ride existing primitives?
@@ -450,7 +450,7 @@ of the design process works through these to reach alignment.
 6. **True at-least-once telemetry delivery (ack plus resume), or "durable until first broadcast"?**
 7. **Is issue-to-PR (Handoff) in scope for launch, and what is the MVP engine?**
 8. **The runtime and scaling target** — single-host Docker, or real k8s/k3s? Persistent workspaces?
-9. **Who owns lifecycle close-out** — sandbox stop/TTL/GC, build retry, DLQ, retention?
+9. **Who owns lifecycle close-out** — workspace stop/TTL/GC, build retry, DLQ, retention?
 10. **A public, supported multi-language SDK/CLI, or an internal-only runtime?** What compat policy?
 11. **The tenancy model** — per-user today; orgs and teams plus quotas, sharing, and RBAC for B2B?
 12. **Are Verify, Repro, and Handoff committed products or naming placeholders** — and which

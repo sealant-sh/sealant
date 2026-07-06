@@ -5,14 +5,14 @@ description:
   API and preview SDK.
 ---
 
-A **run** is a recorded session of work inside a sandbox — a one-shot harness execution, or an
+A **run** is a recorded session of work inside a workspace — a one-shot harness execution, or an
 interactive session when a person [SSHes in](/docs/guides/ssh-access) (each SSH connection becomes a
 run). Its durable, replayable history — process lifecycle, byte-exact I/O, file changes, network
 activity, artifacts — is the **execution record**. For the data model behind the record, see
 [Execution records](/docs/concepts/execution-records).
 
-One caveat the model is honest about: concurrent runs in the same sandbox share one working tree, so
-a run's end-of-session file diff is only crisp when runs do not overlap.
+One caveat the model is honest about: concurrent runs in the same workspace share one working tree,
+so a run's end-of-session file diff is only crisp when runs do not overlap.
 
 This page is about working with runs and records as they exist today. The record views shipped today
 are the timeline, byte-exact terminal scrollback, file changes, and explicit loss accounting —
@@ -21,19 +21,20 @@ retrieval and a browser-evidence surface are not shipped yet.
 
 ## What the web app shows today
 
-The **run record page** (`/sandboxes/<sandbox-id>/runs/<run-id>`) is the review surface for a run:
-the prompt and status up top, an activity strip for orientation, the folded record of commands on
-the left (each expanding to its byte-exact scrollback, loaded lazily), and the outcome — file
+The **run record page** (`/workspaces/<workspace-id>/runs/<run-id>`) is the review surface for a
+run: the prompt and status up top, an activity strip for orientation, the folded record of commands
+on the left (each expanding to its byte-exact scrollback, loaded lazily), and the outcome — file
 changes, network activity, raw events — beside it. `?seq=` deep-links an exact moment, a failed run
 lands on its failing command, and live runs poll while in progress.
 
-The sandbox detail page (`/sandboxes/<sandbox-id>`) is the summary surface around it: attempts,
+The workspace detail page (`/workspaces/<workspace-id>`) is the summary surface around it: attempts,
 recent lifecycle events, runtime info, the published image, and the spec (raw manifest at
-`/sandboxes/<sandbox-id>/spec`). `/sandboxes/<sandbox-id>/trace`, `/diff`, and `/validation` are
-reserved URLs that redirect to the latest run record (or the spec when the sandbox has no runs).
+`/workspaces/<workspace-id>/spec`). `/workspaces/<workspace-id>/trace`, `/diff`, and `/validation`
+are reserved URLs that redirect to the latest run record (or the spec when the workspace has no
+runs).
 
 Two honest caveats: there is no artifact browser or browser-evidence surface yet, and the run rows
-under `/repositories/<id>/sandboxes` are still static mock data.
+under `/repositories/<id>/workspaces` are still static mock data.
 
 ## The run and record API
 
@@ -72,18 +73,18 @@ import { Sealant, opencode } from "@sealant/sdk";
 
 const sealant = new Sealant({ baseUrl: "http://127.0.0.1:4000" });
 
-const sandbox = await sealant.sandboxes.create({ repository, harness: opencode() });
-const run = await sandbox.harness.run(prompt);
+const workspace = await sealant.workspaces.create({ repository, harness: opencode() });
+const run = await workspace.harness.run(prompt);
 
 await run.record.replay();
 ```
 
-The sandbox → run → record path is implemented: `sandboxes.create/get/list`,
-`sandbox.status/ready/events` (polling), `harness.run` (server-side `POST /v1/runs`, blocks until
+The workspace → run → record path is implemented: `workspaces.create/get/list`,
+`workspace.status/ready/events` (polling), `harness.run` (server-side `POST /v1/runs`, blocks until
 terminal), `harness.start` (same run, returns the live handle immediately — stream with
 `record.stream()`, settle with `run.wait()`), `runs.get`, and on the record `replay`, `timeline`,
 `stream` (polling, not push), `scrollback`, `loss`, `summary`, and `transcript`. Other typed methods
-— `harness.session`, `sandbox.stop`/`restart`/`expire`, artifact retrieval, and the time-travel
+— `harness.session`, `workspace.stop`/`restart`/`expire`, artifact retrieval, and the time-travel
 folds (`fileTreeAt`, `processTreeAt`) — exist on the surface but are not fully wired yet.
 
 ## Related

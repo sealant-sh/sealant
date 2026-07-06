@@ -26,7 +26,7 @@ export const parseClaudeCredentialPayload = Schema.decodeUnknownSync(claudeCrede
 
 // ---------------------------------------------------------------------------
 // Codex — verbatim ~/.codex/auth.json contents (stored as-is so the exact file
-// can be re-materialized in the sandbox; the official CLI refreshes it there).
+// can be re-materialized in the workspace; the official CLI refreshes it there).
 // ---------------------------------------------------------------------------
 
 export const codexCredentialPayloadSchema = Schema.Struct({

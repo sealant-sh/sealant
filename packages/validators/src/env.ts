@@ -6,7 +6,7 @@ import { z } from "zod";
 
 export const rabbitMqEnvSchema = z.object({
   RABBITMQ_URL: z.string().trim().min(1).default("amqp://sealant:sealant@127.0.0.1:5673"),
-  SANDBOX_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
+  WORKSPACE_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
 });
 
 export type RabbitMqEnv = z.infer<typeof rabbitMqEnvSchema>;
@@ -99,11 +99,11 @@ export const credentialsEnvSchema = z.object({
   SEALANT_CREDENTIALS_KEY: z.string().trim().min(1).optional(),
 });
 
-export const sandboxSshGatewayEnvSchema = z.object({
-  SANDBOX_SSH_GATEWAY_TOKEN: z.string().trim().min(1).optional(),
-  SANDBOX_SSH_GATEWAY_HOST: z.string().trim().min(1).optional(),
-  SANDBOX_SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
-  SANDBOX_SSH_GATEWAY_USERNAME_PREFIX: z.string().trim().min(1).optional(),
+export const workspaceSshGatewayEnvSchema = z.object({
+  WORKSPACE_SSH_GATEWAY_TOKEN: z.string().trim().min(1).optional(),
+  WORKSPACE_SSH_GATEWAY_HOST: z.string().trim().min(1).optional(),
+  WORKSPACE_SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  WORKSPACE_SSH_GATEWAY_USERNAME_PREFIX: z.string().trim().min(1).optional(),
 });
 
 const addRegistryCredentialsIssue = (
@@ -177,7 +177,7 @@ export const appCoreEnvSchema = httpServerEnvSchema
   .merge(registryEnvSchema)
   .merge(repologyEnvSchema)
   .merge(githubEnvSchema)
-  .merge(sandboxSshGatewayEnvSchema);
+  .merge(workspaceSshGatewayEnvSchema);
 
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
@@ -239,19 +239,19 @@ const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
 export const workerRuntimeEnvSchema = z.object({
   DOCKER_SOCKET_PATH: z.string().trim().min(1).default("/var/run/docker.sock"),
-  // When set, the docker adapter bind-mounts each sandbox's /run/sealant control socket dir to
+  // When set, the docker adapter bind-mounts each workspace's /run/sealant control socket dir to
   // <dir>/<container> on the host, so the gateway can reach the daemon socket directly (unix://) with
   // NO Docker access. Leave unset to keep the universal docker-exec reach. Must be a host path shared
   // (same path) into both the worker (rw) and the ssh-gateway (ro).
-  SANDBOX_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
+  WORKSPACE_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
   DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
   DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
     sshEndpointExposureStrategySchema.default("host-published"),
   WORKER_ID: z.string().trim().min(1).default(defaultWorkerId),
-  SANDBOX_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
-  // How often the worker re-drives sandbox build jobs stranded by a dead lease holder (#5 reaper).
-  SANDBOX_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
+  WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
+  // How often the worker re-drives workspace build jobs stranded by a dead lease holder (#5 reaper).
+  WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
 });
 
 export const workerServerEnvSchema = databaseEnvSchema
@@ -309,7 +309,7 @@ export const sshGatewayCoreEnvSchema = z.object({
   SSH_GATEWAY_BANNER: z
     .string()
     .default(
-      "Welcome to Sealant Sandbox Gateway. This session is routed through Sealant infrastructure.",
+      "Welcome to Sealant Workspace Gateway. This session is routed through Sealant infrastructure.",
     ),
   // Defaults match the containerized layout (compose mounts a `gateway-keys` volume at /keys);
   // host runs override both paths explicitly.
@@ -319,7 +319,7 @@ export const sshGatewayCoreEnvSchema = z.object({
   // gateway's host identity is stable once created.
   SSH_GATEWAY_HOST_KEY_AUTOGENERATE: z.stringbool().default(false),
   SSH_GATEWAY_ALLOWED_KEYS_FILE: z.string().trim().min(1).default("/keys/gateway_allowed_keys"),
-  SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: z.string().trim().min(1).default("sbx"),
+  SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX: z.string().trim().min(1).default("ws"),
   CORE_API_BASE_URL: z.string().url().default("http://127.0.0.1:4000"),
 });
 
@@ -328,12 +328,12 @@ export const sshGatewayServerEnvSchema = runtimeEnvSchema
     NODE_ENV: true,
   })
   .merge(
-    sandboxSshGatewayEnvSchema
+    workspaceSshGatewayEnvSchema
       .pick({
-        SANDBOX_SSH_GATEWAY_TOKEN: true,
+        WORKSPACE_SSH_GATEWAY_TOKEN: true,
       })
       .extend({
-        SANDBOX_SSH_GATEWAY_TOKEN: z.string().trim().min(1),
+        WORKSPACE_SSH_GATEWAY_TOKEN: z.string().trim().min(1),
       }),
   )
   .merge(sshGatewayCoreEnvSchema);

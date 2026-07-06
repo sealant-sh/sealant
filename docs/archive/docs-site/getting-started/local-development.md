@@ -6,7 +6,7 @@ owner: engineering
 updated: 2026-03-28
 ---
 
-This guide bootstraps the monorepo and starts local infrastructure for sandbox development.
+This guide bootstraps the monorepo and starts local infrastructure for workspace development.
 
 ## 1) Enter the development shell
 

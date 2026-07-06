@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useMemo } from "react";
 
-import { SandboxPage } from "@/components/app/sandbox-page";
+import { WorkspacePage } from "@/components/app/workspace-page";
 import { useTRPC } from "@/lib/trpc/react";
 
 export const Route = createFileRoute("/_authenticated/profiles/$profileId/agents")({
@@ -83,10 +83,10 @@ function ProfileAgentsPage() {
   const title = profile === null ? "Agents" : `${profile.name} agents`;
 
   return (
-    <SandboxPage
+    <WorkspacePage
       kicker="Profile"
       title={title}
-      description="Bind a connected account per provider. Sandboxes launched from this profile inherit these identities — Claude, Codex, and GitHub — unless a launch overrides them."
+      description="Bind a connected account per provider. Workspaces launched from this profile inherit these identities — Claude, Codex, and GitHub — unless a launch overrides them."
     >
       <div className="space-y-8">
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)]">
@@ -174,6 +174,6 @@ function ProfileAgentsPage() {
           )}
         </div>
       </div>
-    </SandboxPage>
+    </WorkspacePage>
   );
 }

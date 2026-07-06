@@ -1,5 +1,5 @@
 // The Run-Artifact Timeline — the hero exhibit. The core loop as a vertical timeline:
-// create a sandbox, make a run, audit the outcome. Each stage pairs the SDK call (the
+// create a workspace, make a run, audit the outcome. Each stage pairs the SDK call (the
 // way you'd write it) with a small UI exhibit (the way Sealant shows it back) — so the
 // hero reads as "this is the API, and this is what it returns," top to bottom.
 //
@@ -98,7 +98,7 @@ function Kv({ rows }: { rows: ReadonlyArray<readonly [string, ReactNode]> }) {
 }
 
 // ── The three stage UIs ──────────────────────────────────────────────────────
-function UiSandbox() {
+function UiWorkspace() {
   return (
     <Panel>
       <PanelHead>
@@ -107,7 +107,7 @@ function UiSandbox() {
             className="sealant-status-running size-2 shrink-0 rounded-full bg-primary"
             aria-hidden="true"
           />
-          <span className="font-mono text-[0.72rem] text-ink-2">sbx_8m2k</span>
+          <span className="font-mono text-[0.72rem] text-ink-2">ws_8m2k</span>
         </span>
         <Status word="Ready · running" />
       </PanelHead>
@@ -124,7 +124,7 @@ function UiSandbox() {
 }
 
 const RUN_EVENTS: ReadonlyArray<{ offset: string; name: string; detail: string }> = [
-  { offset: "00:00.000", name: "sandbox.ready", detail: "" },
+  { offset: "00:00.000", name: "workspace.ready", detail: "" },
   { offset: "00:14.628", name: "process.exited", detail: "pnpm install · exit 0" },
   { offset: "00:17.406", name: "file.modified", detail: "src/checkout.ts" },
   { offset: "00:24.802", name: "process.exited", detail: "14 tests passed" },
@@ -134,7 +134,7 @@ function UiRun() {
   return (
     <Panel>
       <PanelHead>
-        <span className="font-mono text-[0.72rem] text-ink-2">run_sbx_8m2k</span>
+        <span className="font-mono text-[0.72rem] text-ink-2">run_ws_8m2k</span>
         <Status word="Completed" />
       </PanelHead>
       <div>
@@ -156,7 +156,7 @@ function UiRun() {
 // A peek into the record — a few real events, then the count. Drives the point that
 // the record is structured evidence you can open, not a transcript.
 const RECORD_PEEK: ReadonlyArray<{ offset: string; name: string; detail?: string }> = [
-  { offset: "00:00.000", name: "sandbox.ready" },
+  { offset: "00:00.000", name: "workspace.ready" },
   { offset: "00:14.628", name: "process.exited", detail: "pnpm install · exit 0" },
   { offset: "00:17.406", name: "file.modified", detail: "src/checkout.ts" },
   { offset: "00:22.041", name: "net.request", detail: "api.stripe.com" },
@@ -249,9 +249,9 @@ function Stage({
 const CREATE: ReadonlyArray<Line> = [
   [
     ["const", "kw"],
-    [" sandbox = ", "plain"],
+    [" workspace = ", "plain"],
     ["await", "kw"],
-    [" sealant.sandboxes.", "plain"],
+    [" sealant.workspaces.", "plain"],
     ["create", "fn"],
     ["({", "plain"],
   ],
@@ -273,7 +273,7 @@ const RUN: ReadonlyArray<Line> = [
     ["const", "kw"],
     [" run = ", "plain"],
     ["await", "kw"],
-    [" sandbox.harness.", "plain"],
+    [" workspace.harness.", "plain"],
     ["run", "fn"],
     ["(", "plain"],
   ],
@@ -328,7 +328,7 @@ const AUDIT: ReadonlyArray<Line> = [
   ],
   [
     ["} = ", "plain"],
-    ["sandbox", "plain"],
+    ["workspace", "plain"],
   ],
   [],
   [
@@ -354,10 +354,15 @@ export function RunTimeline({
       <div className={`overflow-hidden rounded-2xl border border-border bg-panel ${shadow}`}>
         <div className="flex items-center justify-between gap-3 border-b border-rule px-5 py-3.5">
           <span className="ev-eyebrow text-faint">Run artifact</span>
-          <span className="font-mono text-xs text-faint">acme/billing-service · run_sbx_8m2k</span>
+          <span className="font-mono text-xs text-faint">acme/billing-service · run_ws_8m2k</span>
         </div>
         <div className="px-5 py-7 sm:px-7">
-          <Stage title="Create a sandbox" tag="sandboxes.create" code={CREATE} ui={<UiSandbox />} />
+          <Stage
+            title="Create a workspace"
+            tag="workspaces.create"
+            code={CREATE}
+            ui={<UiWorkspace />}
+          />
           <Stage title="Make a run" tag="harness.run" code={RUN} ui={<UiRun />} />
           <Stage
             title="Audit the outcome"

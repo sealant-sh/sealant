@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import type { RepositoryRecord } from "@/lib/navigation/sandbox-data";
+import type { RepositoryRecord } from "@/lib/navigation/workspace-data";
 
 interface RepositoryRowsProps {
   readonly repositories: readonly RepositoryRecord[];

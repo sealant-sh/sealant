@@ -1,32 +1,32 @@
 # SSH Gateway App
 
-`@sealant/ssh-gateway` is the SSH routing gateway for sandbox access.
+`@sealant/ssh-gateway` is the SSH routing gateway for workspace access.
 
 It accepts client SSH sessions on a single gateway host and, instead of dialing an inner sshd,
-drives the sandbox's sealantd **control socket** (`/run/sealant/control.sock`) over a transport
+drives the workspace's sealantd **control socket** (`/run/sealant/control.sock`) over a transport
 bridge. SSH channels are mapped to control commands and daemon byte channels. It resolves the
 control target via the API route:
 
-- `GET /v1/sandboxes/{sandboxId}/ssh-target`
+- `GET /v1/workspaces/{workspaceId}/ssh-target`
 
 ## What this solves
 
-- One stable SSH entrypoint instead of one host port per sandbox.
-- No per-sandbox host port collisions.
+- One stable SSH entrypoint instead of one host port per workspace.
+- No per-workspace host port collisions.
 - Stable host aliases for terminal + VS Code Remote SSH.
 - A central place to add future auth/policy checks.
 
 ## High-level flow
 
-1. User connects to gateway using alias `sbx-<sandboxId>`.
+1. User connects to gateway using alias `ws-<workspaceId>`.
 2. Gateway authenticates the user key and resolves its principal id: first from the static allowlist
    `SSH_GATEWAY_ALLOWED_KEYS_FILE` (principal = key comment; operator break-glass), then by asking
    the API (`POST /v1/ssh-keys/resolve-principal`) to match the key's fingerprint against
    user-registered keys in the `ssh_keys` table (principal = key owner). DB keys work immediately
    after registration — no gateway restart.
-3. Gateway extracts `<sandboxId>` from username (a routing hint only).
-4. Gateway asks API `/v1/sandboxes/{sandboxId}/ssh-target` with the gateway token + principal id;
-   the API authorizes principal x sandbox and returns the control target (container id).
+3. Gateway extracts `<workspaceId>` from username (a routing hint only).
+4. Gateway asks API `/v1/workspaces/{workspaceId}/ssh-target` with the gateway token + principal id;
+   the API authorizes principal x workspace and returns the control target (container id).
 5. Gateway opens one sealantd control connection (docker-exec + socat) and maps SSH channels:
    - `shell` -> `openSession{login}` + `attachSession{interactive}` (PTY stream)
    - `exec` -> `exec{/bin/bash -lc …, attach}` (exit status from the channel End)
@@ -49,9 +49,9 @@ In short: user connects once to gateway, gateway drives the daemon control proto
   this with the persistent `gateway-keys` volume. An existing key is never overwritten.)
 - `SSH_GATEWAY_ALLOWED_KEYS_FILE` (default: `/keys/gateway_allowed_keys`; optional — a missing or
   empty file is fine, user keys resolve via the API)
-- `SSH_GATEWAY_SANDBOX_USERNAME_PREFIX` (default: `sbx`)
+- `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` (default: `ws`)
 - `CORE_API_BASE_URL` (default: `http://127.0.0.1:4000`)
-- `SANDBOX_SSH_GATEWAY_TOKEN` (required)
+- `WORKSPACE_SSH_GATEWAY_TOKEN` (required)
 
 The upstream-SSH env vars (`SSH_UPSTREAM_PRIVATE_KEY_PATH` / `SSH_UPSTREAM_READY_TIMEOUT_MS` /
 `SSH_UPSTREAM_STRICT_HOST_KEY_CHECKING`) are gone — the gateway no longer dials an inner sshd, and
@@ -61,13 +61,13 @@ no compose file sets them anymore.
 
 Incoming usernames must follow:
 
-- `<prefix>-<sandboxId>`
+- `<prefix>-<workspaceId>`
 
 With default settings this means users connect as:
 
-- `sbx-<sandboxId>@<gateway-host>`
+- `ws-<workspaceId>@<gateway-host>`
 
-The gateway resolves `sandboxId` through the API and connects upstream to the runtime endpoint.
+The gateway resolves `workspaceId` through the API and connects upstream to the runtime endpoint.
 
 ## Core files to review
 
@@ -77,18 +77,18 @@ The gateway resolves `sandboxId` through the API and connects upstream to the ru
   - env parsing + key file loading.
 - `apps/ssh-gateway/src/gateway-server.ts`
   - SSH auth, session forwarding, and TCP/dynamic forwarding.
-- `apps/ssh-gateway/src/sandbox-target.ts`
-  - sandbox-id parsing and API lookup for runtime target.
+- `apps/ssh-gateway/src/workspace-target.ts`
+  - workspace-id parsing and API lookup for runtime target.
 - `apps/ssh-gateway/src/authorized-keys.ts`
   - parsing and matching of allowed public keys.
 
 Related integration points outside this app:
 
-- `apps/api/src/routes/sandboxes/sandboxes.handlers.ts`
+- `apps/api/src/routes/workspaces/workspaces.handlers.ts`
   - internal `ssh-target` route + token guard.
-- `apps/api/src/lib/sandbox.ts`
+- `apps/api/src/lib/workspace.ts`
   - runtime endpoint rewrite to gateway-facing endpoint.
-- `apps/web/src/routes/_authenticated/sandboxes/$sandboxId/index.tsx`
+- `apps/web/src/routes/_authenticated/workspaces/$workspaceId/index.tsx`
   - copied SSH command and VS Code/Cursor URI generation.
 - `tooling/scripts/setup-ssh-gateway-dev.mjs`
   - dev gateway env bootstrap (`.env` managed block).
@@ -101,11 +101,11 @@ Bootstrap the shared gateway env (recommended before first run):
 pnpm ssh:setup:dev
 ```
 
-This writes a managed block to the repo `.env` with `SANDBOX_SSH_GATEWAY_TOKEN` (generated once,
+This writes a managed block to the repo `.env` with `WORKSPACE_SSH_GATEWAY_TOKEN` (generated once,
 then preserved) plus HOST/PORT/USERNAME_PREFIX, so the API (host process) and the gateway container
 agree. No key material is involved: the gateway host key autogenerates on first boot into the
 `gateway-keys` volume, and client keys are registered through the web app (first-run `/setup` wizard
-or Settings → SSH keys), which also prints the `Host sbx-*` block for `~/.ssh/config`.
+or Settings → SSH keys), which also prints the `Host ws-*` block for `~/.ssh/config`.
 
 Run with Docker Compose app profile (starts `worker` + `ssh-gateway`):
 
@@ -122,30 +122,30 @@ pnpm --filter @sealant/api dev
 Then connect through the gateway:
 
 ```bash
-ssh sbx-<sandboxId>
+ssh ws-<workspaceId>
 ```
 
-This works once the `Host sbx-*` block from the web app's `/setup` wizard is in `~/.ssh/config`; VS
-Code Remote SSH resolves `sbx-<sandboxId>` through the same block.
+This works once the `Host ws-*` block from the web app's `/setup` wizard is in `~/.ssh/config`; VS
+Code Remote SSH resolves `ws-<workspaceId>` through the same block.
 
 ## VS Code notes
 
 - VS Code Remote SSH relies on dynamic forwarding (`ssh -D ...`).
 - Gateway implements TCP channel forwarding by mapping `direct-tcpip` to the daemon `openForward`
-  command (a TCP connection opened from inside the sandbox) so VS Code works.
-- If auth fails, check that the alias resolves to user `sbx-<sandboxId>` (not `127.0.0.1`).
+  command (a TCP connection opened from inside the workspace) so VS Code works.
+- If auth fails, check that the alias resolves to user `ws-<workspaceId>` (not `127.0.0.1`).
 
 Quick check:
 
 ```bash
-ssh -G sbx-<sandboxId> | grep -E '^(hostname|port|user|identityfile) '
+ssh -G ws-<workspaceId> | grep -E '^(hostname|port|user|identityfile) '
 ```
 
 Expected shape:
 
 - `hostname 127.0.0.1` (or your configured gateway host)
 - `port 2222`
-- `user sbx-<sandboxId>`
+- `user ws-<workspaceId>`
 
 ## Troubleshooting
 
@@ -154,7 +154,7 @@ Expected shape:
     in the `gateway-keys` volume's `gateway_allowed_keys` (break-glass).
   - if the API is down, only static-file keys authenticate — check the gateway logs for
     `principal lookup failed`.
-  - confirm SSH config uses `User %n` for `Host sbx-*`.
+  - confirm SSH config uses `User %n` for `Host ws-*`.
 - `Connection refused`:
   - confirm `ssh-gateway` container is up and listening on `2222`.
 - VS Code connects but fails port forward:

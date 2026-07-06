@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
-import { SandboxPage } from "@/components/app/sandbox-page";
-import type { ProfileRecord } from "@/lib/navigation/sandbox-data";
+import { WorkspacePage } from "@/components/app/workspace-page";
+import type { ProfileRecord } from "@/lib/navigation/workspace-data";
 
 interface ProfileDetailSectionProps {
   readonly profile: ProfileRecord | null;
@@ -18,16 +18,16 @@ export function ProfileDetailSection({
 }: ProfileDetailSectionProps) {
   if (profile === null) {
     return (
-      <SandboxPage
+      <WorkspacePage
         kicker="Profiles"
         title="Profile not found"
-        description="The selected profile is not present in the current sandbox catalog."
+        description="The selected profile is not present in the current workspace catalog."
       />
     );
   }
 
   return (
-    <SandboxPage kicker="Profile" title={`${profile.name} ${section}`} description={description}>
+    <WorkspacePage kicker="Profile" title={`${profile.name} ${section}`} description={description}>
       <div className="space-y-8">
         <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-[var(--shadow-sm)]">
           <div className="flex items-center justify-between gap-3 border-b border-rule-faint px-6 py-4">
@@ -49,7 +49,7 @@ export function ProfileDetailSection({
         </div>
         {children}
       </div>
-    </SandboxPage>
+    </WorkspacePage>
   );
 }
 

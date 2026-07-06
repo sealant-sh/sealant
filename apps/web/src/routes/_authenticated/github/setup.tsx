@@ -115,7 +115,7 @@ function GitHubSetupPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Import a GitHub App installation into Sealant, sync its repositories, and make it
-          available for sandbox launches without requiring webhook delivery first.
+          available for workspace launches without requiring webhook delivery first.
         </p>
       </header>
 
@@ -184,10 +184,10 @@ function GitHubSetupPage() {
                   variant="outline"
                   className="h-11 px-5"
                   onClick={() => {
-                    window.location.assign("/sandboxes/new");
+                    window.location.assign("/workspaces/new");
                   }}
                 >
-                  Go to sandbox builder
+                  Go to workspace builder
                 </Button>
               </div>
             </form>
@@ -222,7 +222,7 @@ function GitHubSetupPage() {
               ) : installations.length === 0 ? (
                 <div className="mt-4 rounded-xl border border-rule-faint bg-background px-4 py-4 text-sm leading-relaxed text-muted-foreground">
                   No granted installations are available yet. Import one above, then head back to
-                  the sandbox builder.
+                  the workspace builder.
                 </div>
               ) : (
                 <div className="mt-4 space-y-3">

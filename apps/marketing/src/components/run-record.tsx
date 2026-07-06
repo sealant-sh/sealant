@@ -228,7 +228,7 @@ export function RunRecord({
   );
 }
 
-// A real catalog reference, not a decorative label: EXHIBIT C · run sbx_8m2k · 184 events
+// A real catalog reference, not a decorative label: EXHIBIT C · run ws_8m2k · 184 events
 export function CatalogEyebrow({
   letter,
   runId,

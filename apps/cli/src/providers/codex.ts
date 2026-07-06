@@ -17,7 +17,7 @@ import { ExternalToolsService } from "../tools.js";
  * - Uploading the auth.json created by the official `codex login` is OpenAI's own documented
  *   CI/CD pattern for running Codex on other machines.
  * - The file is read only AFTER explicit consent naming the exact path and upload target.
- * - NEVER call auth.openai.com ourselves; refresh happens inside sandboxes via the official CLI.
+ * - NEVER call auth.openai.com ourselves; refresh happens inside workspaces via the official CLI.
  */
 
 /** `$CODEX_HOME/auth.json`, falling back to `~/.codex/auth.json`. */
@@ -106,7 +106,7 @@ export const authCodexCommand = Command.make(
         "Sealant uploads the session file created by the official `codex login` — OpenAI's",
       );
       yield* Console.log(
-        "documented pattern for running Codex on other machines. The Codex CLI inside sandboxes",
+        "documented pattern for running Codex on other machines. The Codex CLI inside workspaces",
       );
       yield* Console.log("refreshes it, and Sealant syncs the refreshed file back.");
       yield* Console.log("");

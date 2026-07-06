@@ -30,12 +30,12 @@ and read [Beyond localhost](/docs/guides/beyond-localhost) first.
 ## SSH is public-key only, with ownership checks
 
 The [SSH gateway](/docs/guides/ssh-access) accepts **public-key authentication only** — no
-passwords. When you connect as `sbx-<sandbox-id>`, the gateway:
+passwords. When you connect as `ws-<workspace-id>`, the gateway:
 
 1. Resolves your public key's fingerprint to the user who registered it.
-2. Asks the API for the sandbox's SSH target, which is authorized **only** when the sandbox's owner
-   matches that user.
-3. Requires the sandbox to be `running` or `ready`.
+2. Asks the API for the workspace's SSH target, which is authorized **only** when the workspace's
+   owner matches that user.
+3. Requires the workspace to be `running` or `ready`.
 
 A few things worth knowing:
 
@@ -49,20 +49,20 @@ A few things worth knowing:
 
 ## The worker holds the host Docker socket
 
-Sealant builds and launches [sandboxes](/docs/concepts/sandboxes) as containers on your host's
+Sealant builds and launches [workspaces](/docs/concepts/workspaces) as containers on your host's
 Docker daemon. To do that, the worker container is given the host **Docker socket**
 (`/var/run/docker.sock`).
 
 Holding the Docker socket is equivalent to **root on the host**. Anything that can influence what
 the worker builds or launches can, in principle, reach the host. Concretely:
 
-- Sandbox containers run on your real Docker daemon, alongside anything else it runs.
-- Sandbox containers and images are created **outside** the Sealant Compose project, so they persist
-  independently of it.
+- Workspace containers run on your real Docker daemon, alongside anything else it runs.
+- Workspace containers and images are created **outside** the Sealant Compose project, so they
+  persist independently of it.
 - You should trust the repositories and specs you feed into Sealant to the same degree you trust
   code you would run on the host itself.
-- Per sandbox, the spec's OCI runtime option in the [builder](/docs/guides/creating-sandboxes) can
-  select `runsc` (gVisor) for stronger container isolation than the default `runc`.
+- Per workspace, the spec's OCI runtime option in the [builder](/docs/guides/creating-workspaces)
+  can select `runsc` (gVisor) for stronger container isolation than the default `runc`.
 
 This is a deliberate tradeoff for a self-hosted, single-tenant runtime. It also means Sealant is not
 something to expose to untrusted users.

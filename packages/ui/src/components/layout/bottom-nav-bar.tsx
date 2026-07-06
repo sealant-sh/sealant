@@ -4,12 +4,12 @@ import { ScrollText, Layers, Settings2 } from "lucide-react";
 
 interface NavItem {
   label: string;
-  to: "/sandboxes" | "/registry" | "/profiles";
+  to: "/workspaces" | "/registry" | "/profiles";
   icon: React.ComponentType<{ className?: string }>;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: "Logs", to: "/sandboxes", icon: ScrollText },
+  { label: "Logs", to: "/workspaces", icon: ScrollText },
   { label: "Registry", to: "/registry", icon: Layers },
   { label: "Config", to: "/profiles", icon: Settings2 },
 ];

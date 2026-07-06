@@ -32,7 +32,7 @@ const PRODUCTS: ReadonlyArray<Product> = [
   {
     name: "Rerun",
     pattern: "failing job → replayable repro",
-    desc: "Recreate a failed CI job in a clean sandbox and keep the commands, logs, and failure state as a case you can replay.",
+    desc: "Recreate a failed CI job in a clean workspace and keep the commands, logs, and failure state as a case you can replay.",
     status: "roadmap",
   },
   {
