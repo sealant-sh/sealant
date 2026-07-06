@@ -36,7 +36,9 @@ import {
 import type { WorkerEnv } from "@sealant/validators/env";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 
-const POLL_INTERVAL_MS = 5000;
+// 1s, not 5s: ingest attaches AFTER the gateway opens the session (live-tail protocol, no replay
+// yet — see the delivery-integrity roadmap item), so poll lag is head-loss for short sessions.
+const POLL_INTERVAL_MS = 1000;
 
 /**
  * Starts the telemetry worker loop and returns a graceful shutdown handle. Mirrors

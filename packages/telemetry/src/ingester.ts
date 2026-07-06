@@ -88,8 +88,12 @@ export const makeTelemetryIngester = (
           });
 
         // Per-runtime gap-detection state. Mutated in-order by the single-fiber stream tap.
+        // Seeding 0 when nothing is stored keeps the record HONEST about late attachment: the
+        // daemon numbers events from 1, so a first-seen sequence > 1 on a fresh runtime means the
+        // head of the stream predates this connection (live-tail protocol, no replay yet) and is
+        // recorded as a sequence-gap loss span instead of silently starting mid-stream.
         const gapState: GapDetectionState = {
-          lastSequenceByRuntime: new Map(resume === null ? [] : [[runtimeId, resume]]),
+          lastSequenceByRuntime: new Map([[runtimeId, resume ?? 0n]]),
         };
 
         const drain = session.events.pipe(
