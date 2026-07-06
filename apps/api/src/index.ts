@@ -12,6 +12,7 @@ import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
 import { HttpApiScalar } from "effect/unstable/httpapi";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
+import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 
@@ -127,6 +128,9 @@ const requestDependenciesLayer = Layer.mergeAll(
   ControlPlaneCapabilitiesLive,
   telemetryQueryLayer,
   credentialCipher,
+  // The engine layer is a thin facade over module-level session state (sessions must survive
+  // across requests regardless of this layer's lifecycle), so providing it here is safe.
+  InferenceEngineLive,
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**

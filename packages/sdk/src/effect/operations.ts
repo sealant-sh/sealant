@@ -10,6 +10,7 @@ import type {
   ExecWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
+  InferenceRespondRequest,
   ListRunsQuery,
   ListWorkspacesQuery,
   UpdateRunRequest,
@@ -72,3 +73,8 @@ export const getRunLossOp = (runId: string) =>
 
 export const getRunChangesOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));
+
+// ---- inference ----
+
+export const inferenceRespondOp = (payload: InferenceRespondRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.inference.respond({ payload }));
