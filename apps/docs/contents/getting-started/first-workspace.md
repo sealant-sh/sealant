@@ -41,7 +41,7 @@ start the build. For a tour of the advanced options, see
 
 ## 4. Watch the build
 
-You land on the workspace detail page. It shows the current **status**, build **attempts**, recent
+You land on the workspace detail page. It shows the current **status**, build history, recent
 **events**, and — once the image is published — the output image reference and digest. The build
 clones your repository, installs the harness and packages, and publishes an image to the local
 registry before the workspace goes **running**.

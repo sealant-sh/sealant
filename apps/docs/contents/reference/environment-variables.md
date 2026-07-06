@@ -5,13 +5,14 @@ description:
   and bind knobs, GitHub App variables, and the runtime defaults worth knowing.
 ---
 
-Every variable Sealant reads lives in one file: `~/.sealant/.env` (mode `0600`), written by the
-installer and read by `docker compose`. This page is the operator's reference for what belongs
-there.
+Self-hosted Sealant reads deployment variables from `~/.sealant/.env` (mode `0600`) through
+`docker compose`. This page is the operator's reference for what belongs there.
 
-The [installer](/docs/reference/installer-and-compose) generates the secrets and persists the port
-and bind knobs for you. You only edit this file directly to add GitHub App credentials or to change
-a default. After editing, apply it by re-running the installer or restarting the stack:
+The [installer](/docs/reference/installer-and-compose) writes only a small subset: generated
+infrastructure secrets, the pinned version, the API/web/SSH/registry ports, and the bind host. You
+edit this file directly for GitHub App credentials, connected-account encryption, public web/SSH
+URLs, CORS origins, or image mirrors. After editing, apply it by re-running the installer or
+restarting the stack:
 
 ```sh
 docker compose --project-directory ~/.sealant up -d
@@ -30,33 +31,41 @@ overwrites an existing value. Do not regenerate them on a live install — rotat
 | `WORKSPACE_SSH_GATEWAY_TOKEN` | Shared secret between the API and the SSH gateway. Gates the internal `POST /v1/ssh-keys/resolve-principal` and `GET /v1/workspaces/:id/ssh-target` routes. |
 | `BETTER_AUTH_SECRET`          | Better Auth signing secret (min 32 chars). Required for web sign-in.                                                                                        |
 
-`SEALANT_VERSION` is also persisted here — the pinned image tag. See
-[version resolution](/docs/reference/installer-and-compose) for how it is chosen.
+`SEALANT_VERSION` is also persisted here — the pinned image tag. Current platform release is
+`0.4.0`. See [version resolution](/docs/reference/installer-and-compose) for how the installer
+chooses it.
 
-## Version, ports, and bind
+## Installer-persisted version, ports, and bind
 
-These are the knobs the installer persists and passes through compose. Change one, then re-run the
-installer (or `docker compose up -d`) to apply it. By default everything binds to loopback; see
-[Beyond localhost](/docs/guides/beyond-localhost) before exposing anything.
+These are the only non-secret knobs the installer persists and passes through compose. Change one,
+then re-run the installer (or `docker compose up -d`) to apply it. By default everything binds to
+loopback; see [Beyond localhost](/docs/guides/beyond-localhost) before exposing anything.
 
-| Variable                       | Default                                | Meaning                                                                                     |
-| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `SEALANT_VERSION`              | resolved by installer                  | Image tag pulled for every service.                                                         |
-| `SEALANT_BIND_HOST`            | `127.0.0.1`                            | Host interface for web, API, and SSH. Set `0.0.0.0` to expose beyond the machine.           |
-| `SEALANT_WEB_PORT`             | `3000`                                 | Host port for the web app.                                                                  |
-| `SEALANT_API_PORT`             | `4000`                                 | Host port for the control-plane API.                                                        |
-| `SEALANT_SSH_PORT`             | `2222`                                 | Host port for the SSH gateway.                                                              |
-| `SEALANT_REGISTRY_PORT`        | `5000`                                 | Host port for the zot registry. Always bound to loopback regardless of `SEALANT_BIND_HOST`. |
-| `SEALANT_SSH_HOST`             | `localhost`                            | Public SSH host the API and UI render in connection commands.                               |
-| `SEALANT_WEB_URL`              | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                  |
-| `SEALANT_WEB_TRUSTED_ORIGINS`  | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                          |
-| `SEALANT_CORS_ALLOWED_ORIGINS` | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                              |
+| Variable                | Default               | Meaning                                                                                     |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| `SEALANT_VERSION`       | resolved by installer | Image tag pulled for every service.                                                         |
+| `SEALANT_BIND_HOST`     | `127.0.0.1`           | Host interface for web, API, and SSH. Set `0.0.0.0` to expose beyond the machine.           |
+| `SEALANT_WEB_PORT`      | `3000`                | Host port for the web app.                                                                  |
+| `SEALANT_API_PORT`      | `4000`                | Host port for the control-plane API.                                                        |
+| `SEALANT_SSH_PORT`      | `2222`                | Host port for the SSH gateway.                                                              |
+| `SEALANT_REGISTRY_PORT` | `5000`                | Host port for the zot registry. Always bound to loopback regardless of `SEALANT_BIND_HOST`. |
 
 `SEALANT_INSTALL_DIR` and `SEALANT_COMPOSE_URL` are never stored in `.env` — pass them inline to the
-install command. `SEALANT_IMAGE_NS` is not written by the installer either, but both the installer
-and compose read it from `.env` — mirror users should add it to `~/.sealant/.env` by hand so manual
-`docker compose … up -d` runs keep using the mirror. See
-[Installer and compose](/docs/reference/installer-and-compose).
+install command.
+
+## Self-host compose variables you may add
+
+The default `compose.selfhost.yaml` reads these variables when present, but `install.sh` does not
+write them for you.
+
+| Variable                       | Default                                | Meaning                                                                                                                         |
+| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_IMAGE_NS`             | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too. |
+| `SEALANT_SSH_HOST`             | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                   |
+| `SEALANT_WEB_URL`              | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                      |
+| `SEALANT_WEB_TRUSTED_ORIGINS`  | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                              |
+| `SEALANT_CORS_ALLOWED_ORIGINS` | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                  |
+| `DOCKER_SOCKET_PATH`           | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                     |
 
 ## GitHub App variables
 
@@ -83,6 +92,25 @@ alone has no effect.
 | `GITHUB_APP_CLIENT_SECRET`    | unset                    | Validated as a pair with the client ID; no current code path uses it.                                       |
 
 See [GitHub App setup](/docs/guides/github-app) for the full walkthrough.
+
+## Connected-account encryption
+
+Connected accounts require one extra secret: `SEALANT_CREDENTIALS_KEY`, a base64 string that decodes
+to exactly 32 random bytes. The API uses it to seal connected-account payloads, and the worker uses
+the same key to decrypt them before launch.
+
+The runtime code accepts this variable, but the current default `compose.selfhost.yaml` does **not**
+generate or pass it through. To enable connected accounts on a self-host install, generate a key,
+add it to `~/.sealant/.env`, and add the same environment entry to both the `api` and `worker`
+services in `~/.sealant/compose.yaml`:
+
+```yaml
+SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:?set in .env}
+```
+
+Then restart with `docker compose --project-directory ~/.sealant up -d`. A later installer re-run
+downloads a fresh compose file, so you would need to reapply this compose edit until the packaged
+compose file includes it.
 
 ## Notable runtime defaults
 

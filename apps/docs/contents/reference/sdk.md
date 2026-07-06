@@ -1,20 +1,18 @@
 ---
 title: SDK
 description:
-  "@sealant/sdk — the fluent TypeScript SDK for Sealant. Preview: first npm release in flight, with
-  a clear map of what is implemented versus typed-but-not-wired."
+  "@sealant/sdk — the fluent TypeScript SDK for Sealant, published on npm with a clear map of what
+  is implemented versus typed-but-not-wired."
 ---
 
 `@sealant/sdk` is a fluent TypeScript client for Sealant: create a workspace around a real
 repository, run the harness you already use, and keep the replayable
 [execution record](/docs/concepts/execution-records) after the workspace is gone. It is a thin HTTP
-client over the [control-plane API](/docs/reference/http-api) — no local Docker or Postgres; it runs
+client over the [control-plane API](/docs/reference/http-api) — no local Docker or Postgres. It runs
 anywhere the API is reachable.
 
-> **Preview.** The SDK is not on npm yet — the publish pipeline (Changesets + release tags) is in
-> place and the first release is in flight. Until it lands, the SDK is consumable only inside the
-> Sealant monorepo (import `@sealant/sdk` from a workspace package). Expect the surface to firm up
-> across early releases.
+The package is published on npm as `@sealant/sdk` `0.4.0`. It is early: the main workspace → run →
+record path is wired, while several typed methods still reject with `SealantNotImplementedError`.
 
 ## Shape
 
@@ -58,8 +56,8 @@ The client takes `{ baseUrl }` (and an optional `apiKey`, which the API does not
 ### Harnesses
 
 Harness factories describe how to invoke a harness one-shot: `opencode()`, `codex()`,
-`claudeCode({ profile? })`, and `customHarness({ id, invoke, … })` for anything else. Only
-`opencode()` is exercised end-to-end today; the others provide the typed surface and are pending
+`claudeCode({ profile? })`, and `customHarness({ id, invoke, ... })` for anything else. Only
+`opencode()` is exercised end-to-end today; the Codex and Claude Code invocation forms are pending
 live verification against the baked workspace image.
 
 ### Owner identity
@@ -94,9 +92,10 @@ runtime with `SealantNotImplementedError`. Do not depend on them yet:
 
 ## Automating today
 
-Until the SDK is published, the portable way to script Sealant from outside the monorepo is the
-[HTTP API](/docs/reference/http-api) directly — generate a client from the live
-`http://localhost:4000/openapi.json`. There is no CLI; see [CLI](/docs/reference/cli).
+Use the SDK for the shipped workspace/run/record path. For endpoint coverage the SDK does not wrap
+yet, use the [HTTP API](/docs/reference/http-api) directly or generate a client from
+`http://localhost:4000/openapi.json`. The repo-local [CLI](/docs/reference/cli) covers connected
+accounts and profile credential bindings, not general workspace/run automation.
 
 Related: [HTTP API](/docs/reference/http-api) ·
 [Runs and execution records](/docs/guides/runs-and-execution-records) ·

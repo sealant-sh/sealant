@@ -40,7 +40,7 @@ infrastructure; your code never leaves it.
   [upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
 - **Reference** — [environment variables](/docs/reference/environment-variables),
   [ports and data](/docs/reference/ports-and-data), [the HTTP API](/docs/reference/http-api),
-  [the SDK (preview)](/docs/reference/sdk).
+  [the SDK](/docs/reference/sdk), and [the CLI](/docs/reference/cli).
 - **Concepts** — [workspaces](/docs/concepts/workspaces),
   [execution records](/docs/concepts/execution-records), [harnesses](/docs/concepts/harnesses),
   [the security model](/docs/concepts/security-model).

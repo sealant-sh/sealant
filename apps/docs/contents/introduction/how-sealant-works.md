@@ -10,15 +10,15 @@ see [Ports and data](/docs/reference/ports-and-data).
 
 ## The services
 
-| Service           | What it does                                                                                                                           | Default address                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| Web app           | The product UI: sign-up, workspace creation, workspace detail, SSH key management.                                                     | `http://localhost:3000`          |
-| Control-plane API | The HTTP API everything talks to: workspaces, runs, SSH keys, GitHub installations. Serves `/openapi.json` and docs at `/docs`.        | `http://localhost:4000`          |
-| Worker            | Background service that picks up workspace build jobs, builds the workspace image, publishes it, and launches the workspace container. | internal                         |
-| SSH gateway       | Public-key SSH entry point that routes `ssh ws-<workspace-id>@…` sessions into the right live workspace.                               | `localhost:2222`                 |
-| Zot registry      | An OCI image registry that stores built workspace images.                                                                              | `127.0.0.1:5000` (loopback only) |
-| Postgres          | Control-plane state: users, workspaces, runs, SSH keys, events.                                                                        | internal only                    |
-| RabbitMQ          | Message transport between the API and the worker.                                                                                      | internal only                    |
+| Service           | What it does                                                                                                                               | Default address                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
+| Web app           | The product UI: sign-up, workspace creation, workspace detail, SSH key management.                                                         | `http://localhost:3000`          |
+| Control-plane API | The HTTP API everything talks to: workspaces, runs, SSH keys, GitHub installations. Serves `/openapi.json` and docs at `/docs`.            | `http://localhost:4000`          |
+| Worker            | Background service that picks up workspace build requests, builds the workspace image, publishes it, and launches the workspace container. | internal                         |
+| SSH gateway       | Public-key SSH entry point that routes `ssh ws-<workspace-id>@…` sessions into the right live workspace.                                   | `localhost:2222`                 |
+| Zot registry      | An OCI image registry that stores built workspace images.                                                                                  | `127.0.0.1:5000` (loopback only) |
+| Postgres          | Control-plane state: users, workspaces, runs, SSH keys, events.                                                                            | internal only                    |
+| RabbitMQ          | Message transport between the API and the worker.                                                                                          | internal only                    |
 
 The installer writes two files — `~/.sealant/compose.yaml` and `~/.sealant/.env` — and everything
 else lives in Docker named volumes. By default every published port binds to `127.0.0.1`; nothing is
@@ -43,7 +43,7 @@ created on **your host Docker daemon**, as siblings of the compose stack — not
    workspace is reproducible from a pinned image reference and digest.
 5. **The workspace launches.** The worker starts the workspace container on the host Docker daemon
    and reports runtime status, endpoints, and lifecycle events back through the API. The web app's
-   workspace detail page shows attempts, events, runtime state, and the published image.
+   workspace detail page shows build history, events, runtime state, and the published image.
 6. **You connect.** With SSH enabled and a key registered, `ssh -p 2222 ws-<workspace-id>@localhost`
    reaches the SSH gateway. The gateway verifies your public key against the API (key fingerprint →
    owning user), checks that you own the workspace, and proxies your session into the running

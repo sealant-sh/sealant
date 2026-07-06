@@ -51,12 +51,12 @@ A workspace can also land in a **failed** state if the build or launch does not 
 `/workspaces` list groups your workspaces by total, running, and failed so you can see the health of
 the fleet at a glance.
 
-## Attempts
+## Build history
 
-Building and launching a workspace is recorded as an **attempt**. Each rerun starts a new attempt
-against the same spec, so a single workspace accumulates a history of build/launch attempts you can
-inspect on its detail page. This is how you retry a transient failure without losing the record of
-what happened before.
+Building and launching a workspace is recorded in its build/launch history. Each rerun starts a new
+entry against the same spec, so a single workspace accumulates a record you can inspect on its
+detail page. This is how you retry a transient failure without losing what happened before. The HTTP
+API endpoint for this internal history is `GET /v1/workspaces/:workspaceId/attempts`.
 
 ## Disposability and rerun
 

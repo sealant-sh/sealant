@@ -79,11 +79,13 @@ This is the non-negotiable one: **never document unshipped surface as if it were
 
 Sealant's docs describe a system that is still being built. Concretely:
 
-- If a feature is mock or static-data-backed in the UI (for example, some
-  repository/profile/registry views), say so plainly rather than writing instructions as if it
-  persisted anything.
-- If something is a preview (the SDK, the runs review surface), label it as preview and say what
-  that means in practice — what works end to end today versus what's typed but not wired up.
+- If a feature is mock or static-data-backed in the UI, say so plainly rather than writing
+  instructions as if it persisted anything. Today that applies to repository pages, the profile
+  create/secrets/env-var/access/package/setup pages, and the registry UI; profile agent credential
+  bindings and the HTTP registry endpoints are live.
+- If something is a preview, label it as preview and say what that means in practice — what works
+  end to end today versus what's typed but not wired up. For shipped-but-early surfaces such as the
+  SDK, say what is implemented and what still throws or remains incomplete.
 - If a security/auth property doesn't exist yet (there are no API tokens; there is no bearer-auth
   enforcement on the control-plane API; identity is currently a passed-through `ownerUserId`), state
   that plainly wherever it's relevant instead of describing an auth model that doesn't exist.

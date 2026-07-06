@@ -12,10 +12,10 @@ packages that carry the workspace domain and the execution record between them.
 ## Where things live
 
 - **`apps/`** — deployable surfaces: the product web app, the control-plane API, the worker, the SSH
-  gateway, this docs site, and the marketing site. See
+  gateway, the repo-local CLI, this docs site, and the marketing site. See
   [Monorepo layout](/docs/contributing/monorepo-layout) for a one-paragraph map of each.
 - **`packages/`** — shared libraries: wire contracts, the workspace domain, the
-  telemetry/execution-record log, auth, the design system, and the (unpublished, preview) SDK. Same
+  telemetry/execution-record log, auth, credentials, the design system, and the published SDK. Same
   page as above.
 - **`tooling/`** — centralized TypeScript, lint, format, and test config shared by every workspace.
 

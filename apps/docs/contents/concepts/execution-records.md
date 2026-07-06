@@ -60,10 +60,10 @@ decide what it means.
 > Runs and their timeline, scrollback, changes, and loss views are exposed three ways: the web app's
 > **run record page** (`/workspaces/<workspace-id>/runs/<run-id>` — the folded command timeline with
 > per-command scrollback, changes, network, and raw events), the
-> [HTTP API](/docs/reference/http-api) (`GET /v1/runs/:runId/timeline`, `/scrollback`, `/changes`,
-> `/loss`), and the [preview SDK](/docs/reference/sdk) (`run.record.replay()`, `timeline`, `stream`,
-> `scrollback`, `loss`, `summary`, `transcript`). Artifact retrieval and browser-evidence views are
-> not shipped yet.
+> [HTTP API](/docs/reference/http-api) (`GET /v1/runs/:runId/timeline`, `/events/:sequence`,
+> `/scrollback`, `/changes`, `/loss`), and the [SDK](/docs/reference/sdk) (`run.record.replay()`,
+> `timeline`, `stream`, `scrollback`, `loss`, `summary`, `transcript`). Artifact retrieval and
+> browser-evidence views are not shipped yet.
 
 ## Related
 
