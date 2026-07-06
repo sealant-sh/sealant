@@ -259,7 +259,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
  * deterministic and easy to bump. The binary is multi-arch (amd64+arm64) so we inherit both without
  * bundling a local build context.
  */
-const sealantdImageReference = "ghcr.io/sealant-sh/sealantd:0.4.0";
+const sealantdImageReference = "ghcr.io/sealant-sh/sealantd:0.5.0";
 
 /**
  * In-container control socket `sealantd boot` listens on. Build-static; promoted to
