@@ -106,11 +106,14 @@ export class ControlClient {
     readonly term?: string | undefined;
     readonly env: Record<string, string>;
     readonly cwd?: string | undefined;
+    /** Run id threaded as the daemon execution id so this session's events attribute to it. */
+    readonly executionId?: string | undefined;
   }): Promise<ShellSession> {
     const opened = (await this.#requestResult(
       {
         case: "openSession",
         value: {
+          executionId: input.executionId,
           shell: LOGIN_SHELL,
           args: ["-l"],
           cols: input.cols,
@@ -136,11 +139,14 @@ export class ControlClient {
     readonly command: string;
     readonly env: Record<string, string>;
     readonly cwd?: string;
+    /** Run id threaded as the daemon execution id so this exec's events attribute to it. */
+    readonly executionId?: string | undefined;
   }): Promise<ExecSession> {
     const attached = (await this.#requestResult(
       {
         case: "exec",
         value: {
+          executionId: input.executionId,
           executable: LOGIN_SHELL,
           args: ["-lc", input.command],
           cwd: input.cwd,
@@ -154,6 +160,47 @@ export class ControlClient {
 
     const channel = this.#client.openChannel(attached.channelId);
     return { processId: attached.processId, channel };
+  }
+
+  /**
+   * Run a command to completion and collect its combined output (finalize-path helper, e.g. the
+   * end-of-session diff capture). Deliberately does NOT thread an execution id: the capture is
+   * gateway bookkeeping, not something the user did — it must not appear in the session's record.
+   */
+  async execCapture(input: {
+    readonly command: string;
+    readonly cwd?: string;
+    readonly timeoutMs?: number;
+  }): Promise<{ readonly exitCode: number | undefined; readonly output: string }> {
+    const exec = await this.execLogin({
+      command: input.command,
+      env: {},
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+    });
+    const chunks: Buffer[] = [];
+    const collect = (async () => {
+      try {
+        for await (const chunk of exec.channel) {
+          chunks.push(Buffer.from(chunk));
+        }
+      } catch {
+        // Iteration ends on close; exit is read from closeCause below.
+      }
+      const cause = exec.channel.closeCause;
+      const exitCode = cause?.kind === "remote" ? (cause.end.exitCode ?? undefined) : undefined;
+      return { exitCode, output: Buffer.concat(chunks).toString("utf8") };
+    })();
+
+    const timeoutMs = input.timeoutMs ?? 10_000;
+    return Promise.race([
+      collect,
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          exec.channel.destroy();
+          reject(new Error(`execCapture timed out after ${timeoutMs}ms`));
+        }, timeoutMs).unref();
+      }),
+    ]);
   }
 
   /** Write client keystrokes / stdin bytes to a session's PTY (§3.3 shell input path). */
@@ -183,13 +230,20 @@ export class ControlClient {
   async openForward(
     host: string,
     port: number,
+    executionId?: string,
   ): Promise<{ result: ForwardOpened; channel: Channel }> {
-    return this.#client.openForward(host, port);
+    return this.#client.openForward(host, port, executionId);
   }
 
   /** Open an SFTP subsystem byte channel (§3.3 subsystem:sftp -> openSftp). */
-  async openSftp(cwd?: string): Promise<{ result: SftpOpened; channel: Channel }> {
-    return this.#client.openSftp(cwd === undefined ? {} : { cwd });
+  async openSftp(options?: {
+    readonly cwd?: string;
+    readonly executionId?: string;
+  }): Promise<{ result: SftpOpened; channel: Channel }> {
+    return this.#client.openSftp({
+      ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options?.executionId === undefined ? {} : { executionId: options.executionId }),
+    });
   }
 
   /** Close the control connection and, transitively, every daemon channel it owns (§0.3). */

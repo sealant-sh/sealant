@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./errors.js";
 export * from "./normalize.js";
+export * from "./attribution.js";
 export * from "./artifact-store.js";
 export * from "./sink.js";
 export * from "./projector.js";

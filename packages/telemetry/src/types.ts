@@ -75,6 +75,13 @@ export interface NormalizedEvent {
   readonly summary: string;
   readonly content: NormalizedContent | undefined;
   readonly scrollback: NormalizedScrollback | undefined;
+  /**
+   * The run this event is attributed to, when its `executionId` names a run in the same sandbox
+   * (clients thread their run id through the daemon as the execution id). Absent -> the sink falls
+   * back to the connection's default run. Set by the ingest paths via `attributeBatch`, never by
+   * normalization itself.
+   */
+  readonly attributedRunId?: string;
 }
 
 /** A detected loss span (explicit daemon drop, inferred sequence gap, watch overflow, or early close). */

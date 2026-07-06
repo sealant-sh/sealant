@@ -147,6 +147,10 @@ export const makePostgresTelemetrySink = (
           return [];
         }
 
+        // Per-event attribution: an event tagged (via `attributeBatch`) with a sibling run's id is
+        // stored under THAT run; everything else lands on the connection's default run.
+        const runIdFor = (event: NormalizedEvent): string => event.attributedRunId ?? input.runId;
+
         // Offload content BEFORE the transaction so the tx stays short.
         yield* Effect.forEach(
           batch,
@@ -154,7 +158,7 @@ export const makePostgresTelemetrySink = (
             event.content === undefined
               ? Effect.void
               : artifacts.put({
-                  runId: input.runId,
+                  runId: runIdFor(event),
                   algo: event.content.algo,
                   hash: event.content.hash,
                   bytes: event.content.bytes,
@@ -167,7 +171,7 @@ export const makePostgresTelemetrySink = (
           Effect.gen(function* () {
             const inserted = yield* tx
               .insert(telemetryEvents)
-              .values(batch.map((event) => eventRow(event, input.runId)))
+              .values(batch.map((event) => eventRow(event, runIdFor(event))))
               .onConflictDoNothing({
                 target: [telemetryEvents.runtimeId, telemetryEvents.sequence],
               })
@@ -181,11 +185,11 @@ export const makePostgresTelemetrySink = (
 
             yield* tx
               .insert(telemetryTimeline)
-              .values(committed.map((event) => deriveTimelineRow(event, input.runId)))
+              .values(committed.map((event) => deriveTimelineRow(event, runIdFor(event))))
               .onConflictDoNothing();
 
             const scrollbackRows = committed
-              .map((event) => deriveScrollbackRow(event, input.runId))
+              .map((event) => deriveScrollbackRow(event, runIdFor(event)))
               .filter((row): row is NewTelemetryScrollbackRow => row !== undefined);
             if (scrollbackRows.length > 0) {
               yield* tx.insert(telemetryScrollback).values(scrollbackRows).onConflictDoNothing();

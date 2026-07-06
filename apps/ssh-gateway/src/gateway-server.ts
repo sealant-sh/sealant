@@ -12,6 +12,7 @@ import {
 } from "./authorized-keys.js";
 import { ControlClient, type ShellSession, type ExecSession } from "./control-client.js";
 import type { PrincipalLookup } from "./principal-resolver.js";
+import { finalizeInteractiveRun, startInteractiveRun } from "./run-recorder.js";
 import {
   parseSandboxIdFromUsername,
   resolveSandboxControlTarget,
@@ -179,6 +180,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // A single client connection gets a single control connection. Channels multiplex over it.
   let controlPromise: Promise<ControlClient> | undefined;
   let controlClient: ControlClient | undefined;
+  // The interactive run recording this connection (one SSH connection = one run). Undefined until
+  // the first channel opens, and stays undefined when recording is unavailable (best-effort).
+  let recordedRunId: string | undefined;
 
   const ensureControl = async (): Promise<ControlClient> => {
     if (sandboxId === undefined || principalId === undefined) {
@@ -196,6 +200,14 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           gatewayToken: config.gatewayToken,
           principalId: resolvedPrincipalId,
           sandboxId: resolvedSandboxId,
+        });
+        // Register the session's run BEFORE any daemon channel opens so its id can be threaded as
+        // the execution id on every session/exec — that threading is what attributes the session's
+        // telemetry to this run. Undefined (recording unavailable) never blocks access.
+        recordedRunId = await startInteractiveRun({
+          config: { apiBaseUrl: config.coreApiBaseUrl },
+          sandboxId: resolvedSandboxId,
+          ownerUserId: resolvedPrincipalId,
         });
         const client = ControlClient.open(toControlTarget(target));
         controlClient = client;
@@ -387,6 +399,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
               rows: sessionPty?.rows ?? 24,
               term: sessionEnv.TERM,
               env: sessionEnv,
+              executionId: recordedRunId,
             });
             activeShell = shell;
             bridgeChannel({
@@ -422,6 +435,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             const exec = await control.execLogin({
               command: info.command,
               env: sessionEnv,
+              executionId: recordedRunId,
             });
             activeExec = exec;
             bridgeChannel({
@@ -460,7 +474,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           try {
             const control = await ensureControl();
             // §3.3 subsystem:sftp -> openSftp; bridge the subsystem channel <-> the byte channel.
-            const { channel } = await control.openSftp();
+            const { channel } = await control.openSftp(
+              recordedRunId === undefined ? undefined : { executionId: recordedRunId },
+            );
             bridgeChannel({
               sshChannel,
               channel,
@@ -487,7 +503,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           // §3.3 direct-tcpip -> openForward. This is the VS Code Remote-SSH server path: the editor
           // connects *through* the sandbox to host:port (openForward connects from inside the
           // container), not from the gateway host.
-          const { channel } = await control.openForward(info.destIP, info.destPort);
+          const { channel } = await control.openForward(info.destIP, info.destPort, recordedRunId);
           const sshChannel = acceptChannel();
           if (sshChannel === undefined) {
             channel.end();
@@ -520,9 +536,20 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     if (controlPromise === undefined) {
       return;
     }
-    // Closing the control connection tears down every daemon channel it owns (§0.3).
+    // Finalize the run over the still-open control connection (diff capture is best-effort), THEN
+    // close it — closing tears down every daemon channel it owns (§0.3).
     void controlPromise
-      .then((control) => {
+      .then(async (control) => {
+        if (recordedRunId !== undefined) {
+          await finalizeInteractiveRun({
+            config: { apiBaseUrl: config.coreApiBaseUrl },
+            runId: recordedRunId,
+            captureOutput: async (command, cwd) => {
+              const result = await control.execCapture({ command, cwd });
+              return result.output;
+            },
+          });
+        }
         control.close();
         return undefined;
       })

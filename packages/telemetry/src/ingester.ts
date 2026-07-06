@@ -6,7 +6,8 @@ import { RuntimeState } from "@sealant/runtime-client";
  * no `takeUntil(processExited)`.
  *
  * Pipeline: events -> per-runtime gap detection + loss-span persist (tap) -> bound the unbounded
- * SDK queue (groupedWithin) -> normalize + idempotent appendBatch (mapEffect, retried) -> runDrain.
+ * SDK queue (groupedWithin) -> normalize + attribute (an event whose execution id names a sibling
+ * run is stored under THAT run) + idempotent appendBatch (mapEffect, retried) -> runDrain.
  * A finalizer closes the epoch and records `early_close` unless a clean terminal STOPPED was observed
  * (stream-end is SUSPICIOUS, never a clean EOF).
  */
@@ -14,6 +15,12 @@ import { SealantRuntime, type SealantRuntimeService, type SealantTarget } from "
 import { Context, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import type * as Scope from "effect/Scope";
 
+import {
+  attributeBatch,
+  collectExecutionIds,
+  ExecutionRunResolver,
+  type ExecutionRunResolverService,
+} from "./attribution.js";
 import { type TelemetryIngesterError, withTelemetryIngesterError } from "./errors.js";
 import { detectGap, normalizeEnvelope } from "./normalize.js";
 import { TelemetrySink, type TelemetrySinkService } from "./sink.js";
@@ -38,6 +45,7 @@ export class TelemetryIngester extends Context.Service<
 export const makeTelemetryIngester = (
   runtime: SealantRuntimeService,
   sink: TelemetrySinkService,
+  resolver: ExecutionRunResolverService,
 ): TelemetryIngesterService => ({
   run: (runId, target) =>
     withTelemetryIngesterError(
@@ -50,6 +58,34 @@ export const makeTelemetryIngester = (
         yield* sink.openEpoch({ runId, runtimeId, schemaVersion: 0 });
         const resume = yield* sink.getMaxSequence(runtimeId);
         const sawTerminalStop = yield* Ref.make(false);
+
+        // Per-connection attribution cache: execution id -> attributed run id (or null = known
+        // non-run). Safe to cache both ways for the connection's lifetime — clients create the run
+        // row BEFORE threading its id as an execution id, so an id's resolution never changes.
+        const attributionCache = new Map<string, string | null>();
+        const resolveAttributions = (
+          executionIds: ReadonlySet<string>,
+        ): Effect.Effect<ReadonlyMap<string, string>> =>
+          Effect.gen(function* () {
+            const unknown = new Set([...executionIds].filter((id) => !attributionCache.has(id)));
+            if (unknown.size > 0) {
+              const resolved = yield* resolver.resolve({
+                defaultRunId: runId,
+                executionIds: unknown,
+              });
+              for (const id of unknown) {
+                attributionCache.set(id, resolved.get(id) ?? null);
+              }
+            }
+            const resolutions = new Map<string, string>();
+            for (const id of executionIds) {
+              const attributed = attributionCache.get(id);
+              if (attributed !== null && attributed !== undefined) {
+                resolutions.set(id, attributed);
+              }
+            }
+            return resolutions;
+          });
 
         // Per-runtime gap-detection state. Mutated in-order by the single-fiber stream tap.
         const gapState: GapDetectionState = {
@@ -73,13 +109,17 @@ export const makeTelemetryIngester = (
           ),
           Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
           Stream.mapEffect((batch) =>
-            sink
-              .appendBatch({ runId, runtimeId, batch: batch.map(normalizeEnvelope) })
-              .pipe(
-                Effect.retry(
-                  Schedule.exponential("100 millis").pipe(Schedule.both(Schedule.recurs(5))),
-                ),
-              ),
+            Effect.gen(function* () {
+              const normalized = [...batch].map(normalizeEnvelope);
+              const resolutions = yield* resolveAttributions(collectExecutionIds(normalized));
+              return yield* sink
+                .appendBatch({ runId, runtimeId, batch: attributeBatch(normalized, resolutions) })
+                .pipe(
+                  Effect.retry(
+                    Schedule.exponential("100 millis").pipe(Schedule.both(Schedule.recurs(5))),
+                  ),
+                );
+            }),
           ),
           Stream.runDrain,
         );
@@ -108,6 +148,7 @@ export const TelemetryIngesterLive = Layer.effect(
   Effect.gen(function* () {
     const runtime = yield* SealantRuntime;
     const sink = yield* TelemetrySink;
-    return makeTelemetryIngester(runtime, sink);
+    const resolver = yield* ExecutionRunResolver;
+    return makeTelemetryIngester(runtime, sink, resolver);
   }),
 );

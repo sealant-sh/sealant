@@ -59,6 +59,13 @@ export const runCommandSchema = Schema.Struct({
 });
 export type RunCommandWire = typeof runCommandSchema.Type;
 
+export const runFileChangeSchema = Schema.Struct({
+  path: NonEmptyString,
+  change: Schema.Literals(["added", "modified", "deleted", "renamed"]),
+  oldPath: Schema.optional(NonEmptyString),
+});
+export type RunFileChangeWire = typeof runFileChangeSchema.Type;
+
 export const createRunRequestSchema = Schema.Struct({
   sandboxId: NonEmptyString,
   harnessId: NonEmptyString,
@@ -78,6 +85,10 @@ export const updateRunRequestSchema = Schema.Struct({
   status: Schema.optional(runStatusSchema),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
+  // Terminal-transition capture: callers that observed the run's file changes (e.g. the SSH gateway
+  // closing an interactive session) persist them alongside the status flip.
+  diff: Schema.optional(Schema.String),
+  changedFiles: Schema.optional(Schema.Array(runFileChangeSchema)),
 });
 export type UpdateRunRequest = typeof updateRunRequestSchema.Type;
 
@@ -205,13 +216,6 @@ export type RunLossReport = typeof runLossReportSchema.Type;
 // ---------------------------------------------------------------------------------------------
 // Run changes — the file diff the run produced (captured server-side)
 // ---------------------------------------------------------------------------------------------
-
-export const runFileChangeSchema = Schema.Struct({
-  path: NonEmptyString,
-  change: Schema.Literals(["added", "modified", "deleted", "renamed"]),
-  oldPath: Schema.optional(NonEmptyString),
-});
-export type RunFileChangeWire = typeof runFileChangeSchema.Type;
 
 export const runChangesResponseSchema = Schema.Struct({
   files: Schema.Array(runFileChangeSchema),

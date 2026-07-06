@@ -105,6 +105,10 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
             const started = yield* connected.exec({
               executable: command.executable,
               args: [...command.args],
+              // The run id doubles as the daemon execution id: sealantd stamps it on every event
+              // this exec produces, which is what lets ingest attribute them to THIS run (and lets
+              // concurrent executions — e.g. an SSH session — keep their events out of it).
+              executionId: runId,
               cwd: WORKDIR,
               stdin: false,
             });
@@ -118,6 +122,11 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
 
       let exitCode = -1;
       const drain = session.events.pipe(
+        // Ingest this run's own events plus untagged daemon events (boot, heartbeats — the
+        // pre-attribution behavior, and the compatibility path for daemons that ignore
+        // execution_id). Events tagged with a DIFFERENT execution (a concurrent SSH session)
+        // belong to that run; the telemetry worker's full-stream ingester attributes them there.
+        Stream.filter((event) => event.executionId === undefined || event.executionId === runId),
         Stream.takeUntil(
           (event) =>
             event.payload.case === "processExited" && event.processId === accepted.processId,
