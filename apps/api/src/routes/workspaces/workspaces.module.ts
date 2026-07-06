@@ -21,6 +21,8 @@ import {
   type ListWorkspacesResponse,
   type RenameWorkspaceRequest,
   type RenameWorkspaceResponse,
+  execRunHarnessId,
+  type ExecWorkspaceRequest,
   type WorkspaceAttemptSummary,
   type WorkspaceDetails,
   type WorkspaceEvent,
@@ -35,6 +37,7 @@ import {
   GitHubInstallationRepo,
   GitHubInstallationRepositoryCacheRepo,
   ProfileRepo,
+  RunRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
@@ -59,8 +62,10 @@ import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gatewa
 import { env } from "../../runtime-env.js";
 import {
   PackageStandardizerService,
+  RunExecPublisherService,
   WorkspaceBuildJobPublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { mapRun } from "../runs/runs.module.js";
 
 interface WorkspaceEventDraft {
   readonly workspaceId: string;
@@ -1750,5 +1755,68 @@ export const listWorkspaceEvents = (input: {
     return {
       items,
     } satisfies ListWorkspaceEventsResponse;
+  });
+};
+
+/**
+ * Deterministic exec — run an ordered command list in the workspace, recorded as ONE run (a "check
+ * run") on the same run-exec pipeline as harness runs. The run is created with
+ * `harnessId: "exec"` and executed asynchronously by the worker under EXEC framing (see
+ * `execWorkspaceRequestSchema` for the completed-vs-failed semantics); callers poll
+ * `GET /v1/runs/:runId` and read exit codes / output from the run record.
+ */
+export const execWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: ExecWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspaces = yield* WorkspaceRepo;
+    const workspace = yield* withInternalError(
+      workspaces.getWorkspaceById(input.workspaceId),
+      "Failed to load workspace.",
+    );
+    // Uniform 404 for unknown workspace AND foreign owner — do not leak existence.
+    if (workspace === undefined || workspace.ownerUserId !== input.payload.ownerUserId) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Workspace not found: ${input.workspaceId}`,
+      });
+    }
+    if (workspace.latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
+      });
+    }
+
+    const runs = yield* RunRepo;
+    const runId = `run_${yield* randomId}`;
+    const run = yield* withInternalError(
+      runs.createRun({
+        id: runId,
+        workspaceId: workspace.id,
+        ownerUserId: input.payload.ownerUserId,
+        harnessId: execRunHarnessId,
+        mode: "one-shot",
+      }),
+      "Failed to create the exec run.",
+    );
+
+    const publisher = yield* RunExecPublisherService;
+    yield* Effect.tryPromise({
+      try: () =>
+        publisher.publishRequested({
+          runId: run.id,
+          commands: input.payload.commands.map((command) => ({
+            executable: command.executable,
+            args: [...command.args],
+            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+          })),
+        }),
+      catch: (error) =>
+        new WorkspaceInternalServerError({
+          message: toErrorMessage(error, "Failed to enqueue the exec run."),
+        }),
+    });
+
+    return mapRun(run);
   });
 };

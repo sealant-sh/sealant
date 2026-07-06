@@ -7,8 +7,10 @@
 import type {
   CreateRunRequest,
   CreateWorkspaceRequest,
+  ExecWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
+  InferenceRespondRequest,
   ListRunsQuery,
   ListWorkspacesQuery,
   UpdateRunRequest,
@@ -34,6 +36,11 @@ export const getWorkspaceOp = (workspaceId: string) =>
 
 export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
   Effect.flatMap(SealantApiClient, (client) => client.workspaces.listWorkspaces({ query }));
+
+export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.execWorkspace({ params: { workspaceId }, payload }),
+  );
 
 // ---- runs ----
 
@@ -66,3 +73,8 @@ export const getRunLossOp = (runId: string) =>
 
 export const getRunChangesOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));
+
+// ---- inference ----
+
+export const inferenceRespondOp = (payload: InferenceRespondRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.inference.respond({ payload }));

@@ -44,6 +44,46 @@ await run.record.replay();
 - **Harness-neutral.** `opencode()`, `codex()`, `claudeCode()`, and `customHarness()` are thin
   client values describing how to invoke a harness one-shot.
 
+## Deterministic exec
+
+Run a command in the workspace with no agent in the loop — recorded into a run record like any other
+process:
+
+```ts
+const check = await workspace.exec(["pnpm", "test"], { cwd: "/workspace/repo" });
+check.exitCode; // the check datum — a NONZERO exit RESOLVES (that's the point)
+check.stdout; // full stdout, decoded
+check.run.record; // the durable evidence
+
+// A causal proof is three execs with three recorded exit codes:
+const base = await workspace.exec(["pnpm", "test"]); // fails
+// ...apply the fix...
+const head = await workspace.exec(["pnpm", "test"]); // passes
+```
+
+`exec()` rejects only when the execution machinery itself broke (workspace gone, transport dropped)
+— i.e. when the exit code cannot be trusted. The underlying endpoint
+(`POST /v1/workspaces/:id/exec`) accepts an ordered **list** of commands recorded as one check run;
+the SDK surface starts with the single-command form.
+
+## Typed record events
+
+Timeline reads are discriminated by `kind` — switch on it and `data` narrows to the event's typed
+payload (all 12 recorded kinds: process, io, file, network, runtime, and loss events):
+
+```ts
+for await (const entry of run.record.timeline()) {
+  if (entry.kind === "networkSourceObserved") {
+    entry.data.host; // typed — the raw material of a "sources the agent opened" trail
+    entry.data.status;
+  }
+}
+```
+
+Forward compatibility is a case, not an error: kinds newer than your SDK version (and payloads that
+fail their schema) arrive as `{ kind: "unknown", rawKind, data }` with everything preserved. Wire
+conventions carry through: uint64 fields are decimal strings, protocol enums are numbers.
+
 ## Connected-account credentials
 
 Attach the caller's connected Claude / Codex / GitHub accounts to a workspace so the harness
@@ -63,14 +103,53 @@ field wins over the profile's binding for that provider. Only account references
 surface — secret material never does; the control plane resolves references to encrypted credentials
 and injects them at launch.
 
+## Inference on connected accounts
+
+Run short, tool-calling inference loops on the caller's own subscription — server-side, through the
+official agent SDKs (never raw model-API calls on stored credentials), with the tool loop executed
+on YOUR side:
+
+```ts
+let response = await sealant.inference.respond({
+  prompt: "Compile a review brief from this run record.",
+  tools: [
+    {
+      name: "get_timeline",
+      inputSchema: { type: "object", properties: { runId: { type: "string" } } },
+    },
+  ],
+  responseFormat: { type: "json", schema: briefSchema },
+  credentials: { claude: true },
+});
+
+while (response.turn.type === "toolCalls") {
+  const toolResults = await Promise.all(
+    response.turn.calls.map(async (call) => ({
+      toolCallId: call.toolCallId,
+      content: await runTool(call.name, call.input),
+    })),
+  );
+  response = await sealant.inference.respond({ sessionId: response.sessionId, toolResults });
+}
+
+response.turn.json; // schema-constrained result
+```
+
+Only account references cross the surface — the control plane resolves and decrypts server-side and
+invokes the official Claude Agent SDK with the account's own subscription token. Claude accounts
+only for now (Codex inference is a stated follow-up); sessions are held in memory by the control
+plane and expire after a few idle minutes, so handle a 404 on continuation by restarting the
+exchange.
+
 ## Status
 
 The core loop is real: `workspaces.create()`/`get()`/`list()`, `ready()`, blocking `harness.run()`
 and non-blocking `harness.start()` (run execution happens server-side; the SDK is a thin HTTP
-client), `runs.get()`, and the record read surface — `replay()`, `timeline()`, `scrollback()`,
-`commands()`, `transcript()`, `stream()` (poll-backed), `loss()`, `summary()`, plus captured
-`changes` (files + diff) settled by `run()`/`wait()`. The Effect-native core ships at
-`@sealant/sdk/effect`.
+client), deterministic `workspace.exec()`, `inference.respond()` (connected-account inference with a
+caller-executed tool loop), `runs.get()`, and the record read surface — `replay()`, `timeline()`
+(typed, kind-discriminated entries), `scrollback()`, `commands()`, `transcript()`, `stream()`
+(poll-backed), `loss()`, `summary()`, plus captured `changes` (files + diff) settled by
+`run()`/`wait()`. The Effect-native core ships at `@sealant/sdk/effect`.
 
 Still typed stubs pending their read models / endpoints: `artifacts.get()` and the time-travel folds
 `fileTreeAt()`/`processTreeAt()` (Phase 1), and `harness.session()` + workspace lifecycle

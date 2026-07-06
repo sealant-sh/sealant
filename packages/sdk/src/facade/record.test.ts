@@ -1,7 +1,7 @@
 import type { TimelineEntry as WireTimelineEntry } from "@sealant/api-contracts";
 import { describe, expect, it } from "vitest";
 
-import { reconstructCommands, renderTranscript } from "./record.js";
+import { reconstructCommands, renderTranscript, toTimelineEntry } from "./record.js";
 
 let seq = 0;
 const entry = (kind: string, ref: Record<string, unknown>): WireTimelineEntry => ({
@@ -65,5 +65,51 @@ describe("reconstructCommands", () => {
   it("handles an empty record", () => {
     expect(reconstructCommands([])).toEqual([]);
     expect(renderTranscript([])).toContain("no commands recorded");
+  });
+});
+
+describe("toTimelineEntry (typed taxonomy)", () => {
+  it("folds a known kind into the discriminated case with typed data", () => {
+    const mapped = toTimelineEntry({
+      ...entry("networkSourceObserved", {
+        host: "registry.npmjs.org",
+        resolvedIps: ["104.16.0.1"],
+        port: 443,
+        method: "GET",
+        path: "/react",
+        status: 200,
+      }),
+      processId: "proc_9",
+    });
+
+    expect(mapped.kind).toBe("networkSourceObserved");
+    if (mapped.kind !== "networkSourceObserved") {
+      return;
+    }
+    // `data` is narrowed — these reads are fully typed, no `unknown` in sight.
+    expect(mapped.data.host).toBe("registry.npmjs.org");
+    expect(mapped.data.status).toBe(200);
+    expect(mapped.processId).toBe("proc_9");
+    expect(typeof mapped.sequence).toBe("bigint");
+    expect(mapped.summary).toBe("networkSourceObserved");
+  });
+
+  it("degrades an unmodeled kind to the unknown case, preserving the wire kind and payload", () => {
+    const mapped = toTimelineEntry(entry("fileRead", { path: "/etc/hosts" }));
+    expect(mapped.kind).toBe("unknown");
+    if (mapped.kind !== "unknown") {
+      return;
+    }
+    expect(mapped.rawKind).toBe("fileRead");
+    expect(mapped.data).toEqual({ path: "/etc/hosts" });
+  });
+
+  it("degrades a known kind with a non-conforming payload to the unknown case", () => {
+    const mapped = toTimelineEntry(entry("networkRequest", { host: 42 }));
+    expect(mapped.kind).toBe("unknown");
+    if (mapped.kind !== "unknown") {
+      return;
+    }
+    expect(mapped.rawKind).toBe("networkRequest");
   });
 });

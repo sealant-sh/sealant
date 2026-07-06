@@ -254,7 +254,9 @@ anything; `--yes` skips prompts for scripting.
 - Internal features ("summarize this run"): a control-plane service resolves the _owner's_ claude
   account and runs the **Claude Agent SDK** (which wraps the official binary) with
   `CLAUDE_CODE_OAUTH_TOKEN` set — inside the user's own deployment, on the user's own subscription.
-  Never raw API calls. Not built in this change; the resolver + cipher make it a small follow-up.
+  Never raw API calls. _Built (July 2026):_ the `/v1/inference/respond` endpoint +
+  `sealant.inference.respond(...)` run exactly this path, with a caller-executed tool loop; internal
+  features can reuse the same engine.
 
 ## 10. Build order
 

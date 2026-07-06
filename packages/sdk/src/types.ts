@@ -137,6 +137,29 @@ export interface ListOptions {
   readonly limit?: number;
 }
 
+/** Options for a deterministic `workspace.exec()`. */
+export interface WorkspaceExecOptions {
+  /** Working directory inside the workspace (defaults to the repository root). */
+  readonly cwd?: string;
+}
+
+/**
+ * The settled result of a deterministic `workspace.exec()`. The exit code is a check DATUM — a
+ * nonzero exit resolves normally (that's the point: `base fails` is a recorded fact, not an error).
+ * `exec()` rejects only when the execution machinery itself broke, i.e. when the exit code cannot
+ * be trusted.
+ */
+export interface WorkspaceExecResult {
+  /** Exit code of the executed command. */
+  readonly exitCode: number;
+  /** Everything the command wrote to stdout, decoded as UTF-8. */
+  readonly stdout: string;
+  /** Everything the command wrote to stderr, decoded as UTF-8. */
+  readonly stderr: string;
+  /** The run this exec was recorded as — its `record` is the durable, replayable evidence. */
+  readonly run: Run;
+}
+
 /** A live, disposable development environment around a real repository. */
 export interface Workspace {
   readonly id: string;
@@ -147,6 +170,11 @@ export interface Workspace {
   ready(): Promise<this>;
   /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;
+  /**
+   * Execute one command deterministically in the workspace — no agent in the loop — recorded into a
+   * run record like any other process. `argv[0]` is the executable, the rest its arguments.
+   */
+  exec(argv: readonly string[], options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
   /** Lifecycle events as an async stream. */
   events(): AsyncIterable<WorkspaceEvent>;
   /** Stop the workspace now (Phase 3). */
@@ -222,13 +250,195 @@ export interface RunArtifacts {
   get(name: string): Promise<Uint8Array>;
 }
 
-/** A single ordered entry in the execution record's timeline. */
-export interface TimelineEntry {
-  readonly sequence: bigint;
-  readonly kind: string;
-  readonly occurredAt: string;
-  readonly data: unknown;
+// ---------------------------------------------------------------------------------------------
+// Record events — the typed taxonomy behind the timeline
+// ---------------------------------------------------------------------------------------------
+//
+// HAND-WRITTEN mirrors of the platform's record-event payloads (mapped in the facade via the
+// `@sealant/api-contracts` schemas). Conventions, straight from the wire: uint64/int64 fields are
+// DECIMAL STRINGS (values past 2^53 survive), and protocol enum fields are NUMBERS (`RuntimeState`,
+// `ExitReason`, `StreamKind` — stdout = 2, stderr = 3 —, `FileChangeKind`, `FileType`,
+// `NetworkScheme`, `EventPriority`).
+
+/** The runtime daemon's lifecycle state changed. `state` is a numeric `RuntimeState`. */
+export interface RuntimeStateChangedEvent {
+  readonly state: number;
+  readonly reason?: string | undefined;
 }
+
+/** Periodic runtime liveness signal. `state` is a numeric `RuntimeState`. */
+export interface RuntimeHeartbeatEvent {
+  readonly state: number;
+}
+
+/** A supervised process began executing. */
+export interface ProcessStartedEvent {
+  readonly pid: number;
+  readonly pgid: number;
+  readonly pidfd: boolean;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  /** Wall clock at start, microseconds (decimal string). */
+  readonly startedAt: string;
+}
+
+/** A supervised process ended. `reason` is a numeric `ExitReason`. */
+export interface ProcessExitedEvent {
+  readonly exitCode?: number | undefined;
+  readonly signal?: number | undefined;
+  readonly reason: number;
+  /** Wall-clock duration, microseconds (decimal string). */
+  readonly durationMicros: string;
+}
+
+/**
+ * A run of process output. Raw bytes live in the artifact store (fetch byte-exact text via
+ * `record.scrollback()`); the event carries counts and a content hash. `stream` is a numeric
+ * `StreamKind` (stdout = 2, stderr = 3).
+ */
+export interface IoChunkEvent {
+  readonly stream: number;
+  readonly byteCount: string;
+  readonly streamOffset: string;
+  readonly contentAlgo?: string | undefined;
+  readonly contentHash?: string | undefined;
+  readonly transform?:
+    | {
+        readonly redacted: boolean;
+        readonly truncated: boolean;
+        readonly coalesced: boolean;
+        readonly originalByteCount?: string | undefined;
+      }
+    | undefined;
+}
+
+/** The runtime dropped events under pressure. `priority` is a numeric `EventPriority`. */
+export interface TelemetryDroppedEvent {
+  readonly reason: string;
+  readonly count: string;
+  readonly priority: number;
+}
+
+/** Filesystem entry metadata attached to a change. `fileType` is a numeric `FileType`. */
+export interface FileEntryData {
+  readonly path: string;
+  readonly fileType: number;
+  readonly size: string;
+  readonly mtimeMicros: string;
+  readonly mode: number;
+  readonly hash?: string | undefined;
+  readonly symlinkTarget?: string | undefined;
+}
+
+/** A watched file changed. `kind` is a numeric `FileChangeKind`. */
+export interface FileChangeEvent {
+  readonly kind: number;
+  readonly path: string;
+  readonly renameFrom?: string | undefined;
+  readonly entry?: FileEntryData | undefined;
+  readonly certain: boolean;
+}
+
+/** The file watcher overflowed — changes under `root` may have been missed. */
+export interface FileWatchOverflowEvent {
+  readonly root: string;
+}
+
+/** A filesystem snapshot pass finished. */
+export interface FileSnapshotCompletedEvent {
+  readonly root: string;
+  readonly fileCount: string;
+}
+
+/** Aggregate before/after diff counts became available. */
+export interface FileDiffAvailableEvent {
+  readonly added: string;
+  readonly modified: string;
+  readonly deleted: string;
+  readonly renamed: string;
+}
+
+/** An outbound network request the run made. `scheme` is a numeric `NetworkScheme`. */
+export interface NetworkRequestEvent {
+  readonly scheme: number;
+  readonly method?: string | undefined;
+  readonly host: string;
+  readonly port: number;
+  readonly path?: string | undefined;
+  readonly status?: number | undefined;
+  readonly bytesSent: string;
+  readonly bytesReceived: string;
+  readonly durationMicros: string;
+}
+
+/** A network source the run touched — the raw material of a "sources the agent opened" trail. */
+export interface NetworkSourceObservedEvent {
+  readonly host: string;
+  readonly resolvedIps: readonly string[];
+  readonly port: number;
+  readonly scheme?: number | undefined;
+  readonly method?: string | undefined;
+  readonly path?: string | undefined;
+  readonly status?: number | undefined;
+}
+
+/** Fields shared by every timeline entry, independent of its kind. */
+export interface TimelineEntryBase {
+  readonly sequence: bigint;
+  readonly occurredAt: string;
+  /** One-line human summary of the event. */
+  readonly summary: string;
+  /** Correlation id of the producing process, when attributable. */
+  readonly processId?: string | undefined;
+}
+
+/**
+ * A single ordered entry in the execution record's timeline, DISCRIMINATED by `kind`: switch on it
+ * and `data` narrows to the event's typed payload. The `"unknown"` case is the forward-compatibility
+ * path — it carries kinds newer than this SDK (or payloads that failed their schema) with the wire
+ * kind preserved in `rawKind` and the payload verbatim in `data`.
+ */
+export type TimelineEntry =
+  | (TimelineEntryBase & {
+      readonly kind: "runtimeStateChanged";
+      readonly data: RuntimeStateChangedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "runtimeHeartbeat";
+      readonly data: RuntimeHeartbeatEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "processStarted"; readonly data: ProcessStartedEvent })
+  | (TimelineEntryBase & { readonly kind: "processExited"; readonly data: ProcessExitedEvent })
+  | (TimelineEntryBase & { readonly kind: "ioChunk"; readonly data: IoChunkEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "telemetryDropped";
+      readonly data: TelemetryDroppedEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "fileChange"; readonly data: FileChangeEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "fileWatchOverflow";
+      readonly data: FileWatchOverflowEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "fileSnapshotCompleted";
+      readonly data: FileSnapshotCompletedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "fileDiffAvailable";
+      readonly data: FileDiffAvailableEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "networkRequest"; readonly data: NetworkRequestEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "networkSourceObserved";
+      readonly data: NetworkSourceObservedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "unknown";
+      /** The kind as received on the wire — set when this SDK version doesn't model it. */
+      readonly rawKind: string;
+      readonly data: unknown;
+    });
 
 /** A re-fold of the record up to some point — scrubable by sequence. */
 export interface RunReplay {
@@ -328,4 +538,97 @@ export interface InteractiveSession {
   send(input: string): Promise<void>;
   output(): AsyncIterable<Uint8Array>;
   close(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Inference on connected accounts
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Connected-account selection for inference — the same reference shape as workspace creation,
+ * minus GitHub (not a model provider). `true` means "my default account"; a string names one.
+ * Only claude accounts are supported today; a codex selection is rejected until Codex inference
+ * ships. SECURITY: only account references cross this surface — never token material.
+ */
+export interface InferenceCredentialsOptions {
+  /** Profile id whose claude binding applies when `claude` is not set explicitly. */
+  readonly profile?: string;
+  /** `true` for the caller's default claude account, or a string naming a specific one. */
+  readonly claude?: boolean | string;
+  /** Reserved — rejected until Codex inference ships. */
+  readonly codex?: boolean | string;
+}
+
+/** A caller-defined tool the model may call. `inputSchema` is a JSON Schema object, verbatim. */
+export interface InferenceToolDefinition {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema: unknown;
+}
+
+/** A tool call the model made. Execute it YOUR side, then respond with an `InferenceToolResult`. */
+export interface InferenceToolCall {
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly input: unknown;
+}
+
+/** Your result for one tool call, keyed by its `toolCallId`. */
+export interface InferenceToolResult {
+  readonly toolCallId: string;
+  readonly content: string;
+  readonly isError?: boolean;
+}
+
+/** The assistant turn: the final text (with parsed `json` when requested) or pending tool calls. */
+export type InferenceTurn =
+  | { readonly type: "text"; readonly text: string; readonly json?: unknown }
+  | { readonly type: "toolCalls"; readonly calls: readonly InferenceToolCall[] };
+
+export interface InferenceUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface InferenceResponse {
+  /** Continuation handle for the tool loop (held in memory server-side; expires after idle). */
+  readonly sessionId: string;
+  readonly turn: InferenceTurn;
+  /** Usage for the exchange, present on the final text turn. */
+  readonly usage?: InferenceUsage;
+}
+
+/** Starts a new inference exchange on a connected account. */
+export interface InferenceRespondOptions {
+  readonly prompt: string;
+  readonly system?: string;
+  readonly model?: string;
+  /** Upper bound on agentic turns within the exchange (server default 16). */
+  readonly maxTurns?: number;
+  readonly tools?: readonly InferenceToolDefinition[];
+  /** Structured output: reply as JSON (schema-constrained when `schema` is given). */
+  readonly responseFormat?: { readonly type: "json"; readonly schema?: unknown };
+  readonly credentials: InferenceCredentialsOptions;
+}
+
+/** Continues an exchange by posting the results of the previous turn's tool calls. */
+export interface InferenceContinueOptions {
+  readonly sessionId: string;
+  readonly toolResults: readonly InferenceToolResult[];
+}
+
+/**
+ * Inference on connected accounts. The model call runs SERVER-SIDE through the official agent SDKs
+ * on the resolved account's credential (never raw model-API calls); the tool loop is CALLER-
+ * EXECUTED — a `toolCalls` turn parks server-side until you `respond()` with the results:
+ *
+ *   let response = await sealant.inference.respond({ prompt, tools, credentials: { claude: true } })
+ *   while (response.turn.type === "toolCalls") {
+ *     const toolResults = await runTools(response.turn.calls)
+ *     response = await sealant.inference.respond({ sessionId: response.sessionId, toolResults })
+ *   }
+ *   response.turn.text
+ */
+export interface InferenceNamespace {
+  respond(options: InferenceRespondOptions | InferenceContinueOptions): Promise<InferenceResponse>;
 }

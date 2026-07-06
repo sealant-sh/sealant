@@ -33,10 +33,15 @@ export type { SdkRuntime, SdkServices } from "./runtime.js";
 export { resolveInternalConfig } from "../internal/config.js";
 export type { SealantHostLocalConfig, SealantInternalConfig } from "../internal/config.js";
 
-// The typed contract errors carried on the client's failure channel (workspaces + runs — the groups
-// the operations above call). Re-exported so Effect consumers don't need to depend on the contracts
-// package directly to `Effect.catchTag` a failure.
+// The typed contract errors carried on the client's failure channel (workspaces + runs +
+// inference — the groups the operations above call). Re-exported so Effect consumers don't need to
+// depend on the contracts package directly to `Effect.catchTag` a failure.
 export {
+  InferenceBadRequestError,
+  InferenceConflictError,
+  InferenceInternalServerError,
+  InferenceNotFoundError,
+  InferenceUnavailableError,
   RunBadRequestError,
   RunInternalServerError,
   RunNotFoundError,
