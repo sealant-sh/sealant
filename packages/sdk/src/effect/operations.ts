@@ -11,12 +11,6 @@ import type {
   GetRunTimelineQuery,
   ListRunsQuery,
   ListWorkspacesQuery,
-  Run as WireRun,
-  RunChangesResponse,
-  RunLossReport,
-  RunScrollbackResponse,
-  WorkspaceDetails,
-  TimelineEntry as WireTimelineEntry,
   UpdateRunRequest,
 } from "@sealant/api-contracts";
 import { Effect } from "effect";
@@ -33,9 +27,7 @@ export const createWorkspaceOp = (payload: CreateWorkspaceRequest, idempotencyKe
     }),
   );
 
-export const getWorkspaceOp = (
-  workspaceId: string,
-): Effect.Effect<WorkspaceDetails, unknown, SealantApiClient> =>
+export const getWorkspaceOp = (workspaceId: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.getWorkspace({ params: { workspaceId } }),
   );
@@ -45,47 +37,32 @@ export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
 
 // ---- runs ----
 
-export const createRunOp = (
-  payload: CreateRunRequest,
-): Effect.Effect<WireRun, unknown, SealantApiClient> =>
+export const createRunOp = (payload: CreateRunRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.createRun({ payload }));
 
-export const getRunOp = (runId: string): Effect.Effect<WireRun, unknown, SealantApiClient> =>
+export const getRunOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRun({ params: { runId } }));
 
 export const listRunsOp = (query: ListRunsQuery) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.listRuns({ query }));
 
-export const updateRunOp = (
-  runId: string,
-  payload: UpdateRunRequest,
-): Effect.Effect<WireRun, unknown, SealantApiClient> =>
+export const updateRunOp = (runId: string, payload: UpdateRunRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.runs.updateRun({ params: { runId }, payload }),
   );
 
-export const getRunTimelineOp = (
-  runId: string,
-  query: GetRunTimelineQuery,
-): Effect.Effect<readonly WireTimelineEntry[], unknown, SealantApiClient> =>
+export const getRunTimelineOp = (runId: string, query: GetRunTimelineQuery) =>
   Effect.flatMap(SealantApiClient, (client) =>
     Effect.map(client.runs.getRunTimeline({ params: { runId }, query }), (r) => r.items),
   );
 
-export const getRunScrollbackOp = (
-  runId: string,
-  query: GetRunScrollbackQuery,
-): Effect.Effect<RunScrollbackResponse, unknown, SealantApiClient> =>
+export const getRunScrollbackOp = (runId: string, query: GetRunScrollbackQuery) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.runs.getRunScrollback({ params: { runId }, query }),
   );
 
-export const getRunLossOp = (
-  runId: string,
-): Effect.Effect<RunLossReport, unknown, SealantApiClient> =>
+export const getRunLossOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunLoss({ params: { runId } }));
 
-export const getRunChangesOp = (
-  runId: string,
-): Effect.Effect<RunChangesResponse, unknown, SealantApiClient> =>
+export const getRunChangesOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));
