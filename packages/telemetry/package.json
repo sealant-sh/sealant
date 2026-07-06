@@ -23,6 +23,7 @@
   "devDependencies": {
     "@bufbuild/protobuf": "^2.12.0",
     "@effect/vitest": "catalog:",
+    "@sealant/api-contracts": "workspace:*",
     "@sealant/typescript": "workspace:*"
   }
 }
