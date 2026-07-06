@@ -3,6 +3,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
   createWorkspace,
+  execWorkspace,
   getWorkspace,
   getWorkspaceSshTarget,
   listWorkspaceAttempts,
@@ -19,6 +20,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       .handle("createWorkspace", ({ headers, payload }) =>
         createWorkspace({
           headers,
+          payload,
+        }),
+      )
+      .handle("execWorkspace", ({ params, payload }) =>
+        execWorkspace({
+          workspaceId: params.workspaceId,
           payload,
         }),
       )

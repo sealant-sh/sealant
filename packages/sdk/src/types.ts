@@ -137,6 +137,29 @@ export interface ListOptions {
   readonly limit?: number;
 }
 
+/** Options for a deterministic `workspace.exec()`. */
+export interface WorkspaceExecOptions {
+  /** Working directory inside the workspace (defaults to the repository root). */
+  readonly cwd?: string;
+}
+
+/**
+ * The settled result of a deterministic `workspace.exec()`. The exit code is a check DATUM — a
+ * nonzero exit resolves normally (that's the point: `base fails` is a recorded fact, not an error).
+ * `exec()` rejects only when the execution machinery itself broke, i.e. when the exit code cannot
+ * be trusted.
+ */
+export interface WorkspaceExecResult {
+  /** Exit code of the executed command. */
+  readonly exitCode: number;
+  /** Everything the command wrote to stdout, decoded as UTF-8. */
+  readonly stdout: string;
+  /** Everything the command wrote to stderr, decoded as UTF-8. */
+  readonly stderr: string;
+  /** The run this exec was recorded as — its `record` is the durable, replayable evidence. */
+  readonly run: Run;
+}
+
 /** A live, disposable development environment around a real repository. */
 export interface Workspace {
   readonly id: string;
@@ -147,6 +170,11 @@ export interface Workspace {
   ready(): Promise<this>;
   /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;
+  /**
+   * Execute one command deterministically in the workspace — no agent in the loop — recorded into a
+   * run record like any other process. `argv[0]` is the executable, the rest its arguments.
+   */
+  exec(argv: readonly string[], options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
   /** Lifecycle events as an async stream. */
   events(): AsyncIterable<WorkspaceEvent>;
   /** Stop the workspace now (Phase 3). */

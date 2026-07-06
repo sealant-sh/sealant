@@ -28,9 +28,11 @@ export class WorkspaceBuildJobPublisherService extends Context.Service<
 >()("@sealant/api/WorkspaceBuildJobPublisherService") {}
 
 export interface RunExecPublisher {
+  /** Exactly one framing per request: `command` (harness) or `commands` (exec/check run). */
   readonly publishRequested: (input: {
     readonly runId: string;
-    readonly command: RunExecCommand;
+    readonly command?: RunExecCommand;
+    readonly commands?: readonly RunExecCommand[];
   }) => Promise<void>;
 }
 

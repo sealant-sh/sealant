@@ -6,6 +6,7 @@
  */
 import type { WorkspaceDetails } from "@sealant/api-contracts";
 
+import { execWorkspace } from "../effect/exec-workspace.js";
 import { getWorkspaceOp } from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
 import type {
@@ -112,6 +113,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     harness,
+
+    exec: (argv, options) => execWorkspace(ctx, init, argv, options),
 
     // Poll-backed lifecycle stream: emit a coarse event on each status transition until the workspace
     // reaches a terminal/ready state. Swaps to SSE over Postgres LISTEN/NOTIFY in Stage 5 (same shape).
