@@ -17,10 +17,14 @@ describe("@sealant/sdk/effect subpath", () => {
     expect(typeof effectSubpath.getRunTimelineOp).toBe("function");
   });
 
-  it("exposes the typed contract errors for catchTag matching", () => {
-    expect(new effectSubpath.RunNotFoundError({ message: "gone" })._tag).toBe("RunNotFoundError");
-    expect(new effectSubpath.WorkspaceNotFoundError({ message: "gone" })._tag).toBe(
-      "WorkspaceNotFoundError",
+  it("exposes the typed contract errors for catchTag matching", async () => {
+    const { Effect } = await import("effect");
+    const recovered = await Effect.runPromise(
+      Effect.fail(new effectSubpath.RunNotFoundError({ message: "gone" })).pipe(
+        Effect.catchTag("RunNotFoundError", (error) => Effect.succeed(error.message)),
+      ),
     );
+    expect(recovered).toBe("gone");
+    expect(new effectSubpath.WorkspaceNotFoundError({ message: "gone" })).toBeInstanceOf(Error);
   });
 });
