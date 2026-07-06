@@ -44,6 +44,19 @@ you into the right sandbox based on the username and your key.
 So a connection succeeds only when the key you present belongs to the user who owns the sandbox you
 are asking for.
 
+## Sessions are recorded
+
+Sandboxes are recorded environments, and that includes people: each SSH connection becomes a run (an
+"SSH session" in the run list), with its terminal activity captured into the same
+[execution record](/docs/concepts/execution-records) a harness run gets, and the working-tree diff
+captured when you disconnect. That is the point — work done by hand in a sandbox is part of the
+sandbox's evidence, not an invisible side door.
+
+Worth knowing: recording is byte-exact, so anything typed or printed in the session — including
+secret values you `export` or `cat` — lands in the record's scrollback. Best-effort secret redaction
+is a stated direction, not a shipped feature; treat session recordings with the same care as the
+sandbox itself.
+
 ## Connect
 
 Once the sandbox is running and your key is registered:

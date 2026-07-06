@@ -5,9 +5,14 @@ description:
   API and preview SDK.
 ---
 
-A **run** is a single harness execution inside a sandbox. Its durable, replayable history — process
-lifecycle, byte-exact I/O, file changes, network activity, artifacts — is the **execution record**.
-For the data model behind the record, see [Execution records](/docs/concepts/execution-records).
+A **run** is a recorded session of work inside a sandbox — a one-shot harness execution, or an
+interactive session when a person [SSHes in](/docs/guides/ssh-access) (each SSH connection becomes a
+run). Its durable, replayable history — process lifecycle, byte-exact I/O, file changes, network
+activity, artifacts — is the **execution record**. For the data model behind the record, see
+[Execution records](/docs/concepts/execution-records).
+
+One caveat the model is honest about: concurrent runs in the same sandbox share one working tree, so
+a run's end-of-session file diff is only crisp when runs do not overlap.
 
 This page is about working with runs and records as they exist today. The record views shipped today
 are the timeline, byte-exact terminal scrollback, file changes, and explicit loss accounting —
