@@ -1,6 +1,6 @@
 {
   "name": "@sealant/sdk",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "The fluent public SDK for Sealant — create a workspace, run a harness, replay the record.",
   "license": "Apache-2.0",
   "repository": {
