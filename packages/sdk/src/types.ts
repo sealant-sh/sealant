@@ -250,13 +250,195 @@ export interface RunArtifacts {
   get(name: string): Promise<Uint8Array>;
 }
 
-/** A single ordered entry in the execution record's timeline. */
-export interface TimelineEntry {
-  readonly sequence: bigint;
-  readonly kind: string;
-  readonly occurredAt: string;
-  readonly data: unknown;
+// ---------------------------------------------------------------------------------------------
+// Record events — the typed taxonomy behind the timeline
+// ---------------------------------------------------------------------------------------------
+//
+// HAND-WRITTEN mirrors of the platform's record-event payloads (mapped in the facade via the
+// `@sealant/api-contracts` schemas). Conventions, straight from the wire: uint64/int64 fields are
+// DECIMAL STRINGS (values past 2^53 survive), and protocol enum fields are NUMBERS (`RuntimeState`,
+// `ExitReason`, `StreamKind` — stdout = 2, stderr = 3 —, `FileChangeKind`, `FileType`,
+// `NetworkScheme`, `EventPriority`).
+
+/** The runtime daemon's lifecycle state changed. `state` is a numeric `RuntimeState`. */
+export interface RuntimeStateChangedEvent {
+  readonly state: number;
+  readonly reason?: string | undefined;
 }
+
+/** Periodic runtime liveness signal. `state` is a numeric `RuntimeState`. */
+export interface RuntimeHeartbeatEvent {
+  readonly state: number;
+}
+
+/** A supervised process began executing. */
+export interface ProcessStartedEvent {
+  readonly pid: number;
+  readonly pgid: number;
+  readonly pidfd: boolean;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  /** Wall clock at start, microseconds (decimal string). */
+  readonly startedAt: string;
+}
+
+/** A supervised process ended. `reason` is a numeric `ExitReason`. */
+export interface ProcessExitedEvent {
+  readonly exitCode?: number | undefined;
+  readonly signal?: number | undefined;
+  readonly reason: number;
+  /** Wall-clock duration, microseconds (decimal string). */
+  readonly durationMicros: string;
+}
+
+/**
+ * A run of process output. Raw bytes live in the artifact store (fetch byte-exact text via
+ * `record.scrollback()`); the event carries counts and a content hash. `stream` is a numeric
+ * `StreamKind` (stdout = 2, stderr = 3).
+ */
+export interface IoChunkEvent {
+  readonly stream: number;
+  readonly byteCount: string;
+  readonly streamOffset: string;
+  readonly contentAlgo?: string | undefined;
+  readonly contentHash?: string | undefined;
+  readonly transform?:
+    | {
+        readonly redacted: boolean;
+        readonly truncated: boolean;
+        readonly coalesced: boolean;
+        readonly originalByteCount?: string | undefined;
+      }
+    | undefined;
+}
+
+/** The runtime dropped events under pressure. `priority` is a numeric `EventPriority`. */
+export interface TelemetryDroppedEvent {
+  readonly reason: string;
+  readonly count: string;
+  readonly priority: number;
+}
+
+/** Filesystem entry metadata attached to a change. `fileType` is a numeric `FileType`. */
+export interface FileEntryData {
+  readonly path: string;
+  readonly fileType: number;
+  readonly size: string;
+  readonly mtimeMicros: string;
+  readonly mode: number;
+  readonly hash?: string | undefined;
+  readonly symlinkTarget?: string | undefined;
+}
+
+/** A watched file changed. `kind` is a numeric `FileChangeKind`. */
+export interface FileChangeEvent {
+  readonly kind: number;
+  readonly path: string;
+  readonly renameFrom?: string | undefined;
+  readonly entry?: FileEntryData | undefined;
+  readonly certain: boolean;
+}
+
+/** The file watcher overflowed — changes under `root` may have been missed. */
+export interface FileWatchOverflowEvent {
+  readonly root: string;
+}
+
+/** A filesystem snapshot pass finished. */
+export interface FileSnapshotCompletedEvent {
+  readonly root: string;
+  readonly fileCount: string;
+}
+
+/** Aggregate before/after diff counts became available. */
+export interface FileDiffAvailableEvent {
+  readonly added: string;
+  readonly modified: string;
+  readonly deleted: string;
+  readonly renamed: string;
+}
+
+/** An outbound network request the run made. `scheme` is a numeric `NetworkScheme`. */
+export interface NetworkRequestEvent {
+  readonly scheme: number;
+  readonly method?: string | undefined;
+  readonly host: string;
+  readonly port: number;
+  readonly path?: string | undefined;
+  readonly status?: number | undefined;
+  readonly bytesSent: string;
+  readonly bytesReceived: string;
+  readonly durationMicros: string;
+}
+
+/** A network source the run touched — the raw material of a "sources the agent opened" trail. */
+export interface NetworkSourceObservedEvent {
+  readonly host: string;
+  readonly resolvedIps: readonly string[];
+  readonly port: number;
+  readonly scheme?: number | undefined;
+  readonly method?: string | undefined;
+  readonly path?: string | undefined;
+  readonly status?: number | undefined;
+}
+
+/** Fields shared by every timeline entry, independent of its kind. */
+export interface TimelineEntryBase {
+  readonly sequence: bigint;
+  readonly occurredAt: string;
+  /** One-line human summary of the event. */
+  readonly summary: string;
+  /** Correlation id of the producing process, when attributable. */
+  readonly processId?: string | undefined;
+}
+
+/**
+ * A single ordered entry in the execution record's timeline, DISCRIMINATED by `kind`: switch on it
+ * and `data` narrows to the event's typed payload. The `"unknown"` case is the forward-compatibility
+ * path — it carries kinds newer than this SDK (or payloads that failed their schema) with the wire
+ * kind preserved in `rawKind` and the payload verbatim in `data`.
+ */
+export type TimelineEntry =
+  | (TimelineEntryBase & {
+      readonly kind: "runtimeStateChanged";
+      readonly data: RuntimeStateChangedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "runtimeHeartbeat";
+      readonly data: RuntimeHeartbeatEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "processStarted"; readonly data: ProcessStartedEvent })
+  | (TimelineEntryBase & { readonly kind: "processExited"; readonly data: ProcessExitedEvent })
+  | (TimelineEntryBase & { readonly kind: "ioChunk"; readonly data: IoChunkEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "telemetryDropped";
+      readonly data: TelemetryDroppedEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "fileChange"; readonly data: FileChangeEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "fileWatchOverflow";
+      readonly data: FileWatchOverflowEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "fileSnapshotCompleted";
+      readonly data: FileSnapshotCompletedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "fileDiffAvailable";
+      readonly data: FileDiffAvailableEvent;
+    })
+  | (TimelineEntryBase & { readonly kind: "networkRequest"; readonly data: NetworkRequestEvent })
+  | (TimelineEntryBase & {
+      readonly kind: "networkSourceObserved";
+      readonly data: NetworkSourceObservedEvent;
+    })
+  | (TimelineEntryBase & {
+      readonly kind: "unknown";
+      /** The kind as received on the wire — set when this SDK version doesn't model it. */
+      readonly rawKind: string;
+      readonly data: unknown;
+    });
 
 /** A re-fold of the record up to some point — scrubable by sequence. */
 export interface RunReplay {

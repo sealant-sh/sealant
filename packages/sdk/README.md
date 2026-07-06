@@ -66,6 +66,24 @@ const head = await workspace.exec(["pnpm", "test"]); // passes
 (`POST /v1/workspaces/:id/exec`) accepts an ordered **list** of commands recorded as one check run;
 the SDK surface starts with the single-command form.
 
+## Typed record events
+
+Timeline reads are discriminated by `kind` — switch on it and `data` narrows to the event's typed
+payload (all 12 recorded kinds: process, io, file, network, runtime, and loss events):
+
+```ts
+for await (const entry of run.record.timeline()) {
+  if (entry.kind === "networkSourceObserved") {
+    entry.data.host; // typed — the raw material of a "sources the agent opened" trail
+    entry.data.status;
+  }
+}
+```
+
+Forward compatibility is a case, not an error: kinds newer than your SDK version (and payloads that
+fail their schema) arrive as `{ kind: "unknown", rawKind, data }` with everything preserved. Wire
+conventions carry through: uint64 fields are decimal strings, protocol enums are numbers.
+
 ## Connected-account credentials
 
 Attach the caller's connected Claude / Codex / GitHub accounts to a workspace so the harness
@@ -90,9 +108,9 @@ and injects them at launch.
 The core loop is real: `workspaces.create()`/`get()`/`list()`, `ready()`, blocking `harness.run()`
 and non-blocking `harness.start()` (run execution happens server-side; the SDK is a thin HTTP
 client), deterministic `workspace.exec()`, `runs.get()`, and the record read surface — `replay()`,
-`timeline()`, `scrollback()`, `commands()`, `transcript()`, `stream()` (poll-backed), `loss()`,
-`summary()`, plus captured `changes` (files + diff) settled by `run()`/`wait()`. The Effect-native
-core ships at `@sealant/sdk/effect`.
+`timeline()` (typed, kind-discriminated entries), `scrollback()`, `commands()`, `transcript()`,
+`stream()` (poll-backed), `loss()`, `summary()`, plus captured `changes` (files + diff) settled by
+`run()`/`wait()`. The Effect-native core ships at `@sealant/sdk/effect`.
 
 Still typed stubs pending their read models / endpoints: `artifacts.get()` and the time-travel folds
 `fileTreeAt()`/`processTreeAt()` (Phase 1), and `harness.session()` + workspace lifecycle

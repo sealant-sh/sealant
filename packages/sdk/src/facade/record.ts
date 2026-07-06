@@ -5,10 +5,11 @@
  * `scrollback()`/`loss()`/`summary()`/`stream()` are live; the time-travel folds are typed but
  * reject until their read models land (Phase 1).
  */
-import type {
-  Run as WireRun,
-  RunLossReport,
-  TimelineEntry as WireTimelineEntry,
+import {
+  decodeRecordEventPayload,
+  type Run as WireRun,
+  type RunLossReport,
+  type TimelineEntry as WireTimelineEntry,
 } from "@sealant/api-contracts";
 
 import {
@@ -36,11 +37,17 @@ const STREAM_POLL_INTERVAL_MS = 500;
 const STREAM_TIMEOUT_MS = 30 * 60 * 1_000;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const toTimelineEntry = (wire: WireTimelineEntry): TimelineEntry => ({
+/**
+ * Maps a wire entry to the public DISCRIMINATED entry: the contract's payload schemas fold
+ * `(kind, ref)` into typed `data`, degrading to the `unknown` case (raw kind + payload preserved)
+ * for kinds newer than this SDK or payloads that fail their schema. Exported for tests.
+ */
+export const toTimelineEntry = (wire: WireTimelineEntry): TimelineEntry => ({
   sequence: BigInt(wire.sequence),
-  kind: wire.kind,
   occurredAt: wire.occurredAt,
-  data: { summary: wire.summary, ...(wire.ref === undefined ? {} : { ref: wire.ref }) },
+  summary: wire.summary,
+  ...(wire.processId === undefined ? {} : { processId: wire.processId }),
+  ...decodeRecordEventPayload(wire.kind, wire.ref),
 });
 
 const toLossReport = (wire: RunLossReport): LossReport => ({
