@@ -1,18 +1,20 @@
 import type { WorkerEnv } from "@sealant/validators/env";
 
 import { startSandboxWorker } from "./sandboxes.js";
+import { startTelemetryWorker } from "./telemetry.js";
 
-// NOTE: the telemetry-ingest worker (`startTelemetryWorker`) is intentionally NOT started here.
-// Telemetry now keys its `run_id` FK to the `runs` table (a harness execution), not to
-// `sandbox_attempts`. Ingestion is therefore owned by whoever STARTS a run: the SDK forks the
-// ingester inline per `harness.run()`. The old per-runtime-instance auto-ingest keyed on the
-// attempt id and would violate the new FK. Re-enable it once it is reworked to be run-keyed
-// (poll active `runs`, not runtime instances) — see the SDK plan, Phase 3.
+// The telemetry worker is RUN-KEYED (the rework its old per-runtime-instance version was disabled
+// pending): it polls running INTERACTIVE runs — real `runs` rows, so the telemetry FKs hold — and
+// ingests each on its own control connection. One-shot harness runs are still ingested inline by
+// the run-exec worker (captureRun); the two paths dedup on (runtime_id, sequence) and agree on
+// attribution via execution ids.
 export const startWorkers = async (env: WorkerEnv) => {
   const sandboxWorker = await startSandboxWorker(env);
+  const telemetryWorker = await startTelemetryWorker(env);
 
   return {
     stop: async () => {
+      await telemetryWorker.stop();
       await sandboxWorker.stop();
     },
   };

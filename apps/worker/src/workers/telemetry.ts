@@ -1,15 +1,26 @@
 /**
  * Telemetry worker-kind: a dedicated supervisor that drives the @sealant/telemetry ingester for
- * every running docker sandbox. It polls `sandbox_runtime_instances` for `running` docker rows,
- * derives a `SealantTarget` from each (the same pure seam process-sandbox-build-job.ts persists),
- * and forks one ingester fiber per run on its OWN second control connection — never disrupting the
- * gateway or execInSandbox.
+ * every RUNNING INTERACTIVE RUN (the run-keyed rework the old per-runtime-instance auto-ingest was
+ * disabled pending — its `run_id` was an attempt id and violated the runs FK).
+ *
+ * One-shot harness runs are NOT polled here: the run-exec worker already ingests them inline
+ * (captureRun), bounded to the harness process. Interactive runs (SSH sessions minted by the
+ * gateway) have no inline owner, so this worker polls `runs` for `status=running, mode=interactive`,
+ * resolves each run's sandbox to its ready docker instance, and forks one ingester fiber per run on
+ * its OWN control connection with THAT run as the connection's default — attribution then routes
+ * execution-tagged events (this run's own session included) while untagged daemon noise falls back
+ * to the same run. When the run leaves `running` (the gateway finalized it), the fiber is
+ * interrupted, closing the connection and the epoch.
  *
  * The layer stack is assembled here at the boundary (DB connection config lives ONLY here). A failed
  * ingest (e.g. the control socket isn't up yet) is logged and the run is released so the next poll
  * retries — self-healing without an explicit readiness probe.
  */
 import {
+  RunRepo,
+  RunRepoLive,
+  SandboxRepo,
+  SandboxRepoLive,
   SandboxRuntimeInstanceRepo,
   SandboxRuntimeInstanceRepoLive,
   makeSealantDBLayer,
@@ -23,7 +34,7 @@ import {
   TelemetryIngesterLive,
 } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
-import { Cause, Context, Effect, Exit, Layer, Scope } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -41,37 +52,66 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   const ingesterLayer = TelemetryIngesterLive.pipe(
     Layer.provide(Layer.mergeAll(SealantRuntimeDockerExecLive, sinkLayer, resolverLayer)),
   );
-  const repoLayer = SandboxRuntimeInstanceRepoLive.pipe(Layer.provide(dbLayer));
+  const repoLayer = Layer.mergeAll(
+    RunRepoLive,
+    SandboxRepoLive,
+    SandboxRuntimeInstanceRepoLive,
+  ).pipe(Layer.provide(dbLayer));
   const appLayer = Layer.mergeAll(ingesterLayer, repoLayer);
 
   // Build the layer stack into a process-lifetime scope (the DB pool + connections live until stop()).
   const scope = await Effect.runPromise(Scope.make());
   const context = await Effect.runPromise(Layer.buildWithScope(appLayer, scope));
   const ingester = Context.get(context, TelemetryIngester);
-  const repo = Context.get(context, SandboxRuntimeInstanceRepo);
+  const runs = Context.get(context, RunRepo);
+  const sandboxes = Context.get(context, SandboxRepo);
+  const instances = Context.get(context, SandboxRuntimeInstanceRepo);
 
-  const started = new Set<string>();
+  const started = new Map<string, Fiber.Fiber<void, unknown>>();
+
+  const resolveTarget = (sandboxId: string) =>
+    Effect.gen(function* () {
+      const sandbox = yield* sandboxes.getSandboxById(sandboxId);
+      if (sandbox === undefined || sandbox.latestRunId === null) {
+        return undefined;
+      }
+      const instance = yield* instances.getRuntimeInstanceByRunId(sandbox.latestRunId);
+      if (instance === undefined || instance.adapter !== "docker" || instance.status !== "ready") {
+        return undefined;
+      }
+      return sealantTargetForRuntimeInstance(instance);
+    });
 
   const poll = async () => {
-    const instances = await Effect.runPromise(repo.listRunningDockerInstances());
-    for (const instance of instances) {
-      if (started.has(instance.runId)) {
+    const running = await Effect.runPromise(runs.listRuns({ statuses: ["running"] }));
+    const interactive = running.filter((run) => run.mode === "interactive");
+    const activeIds = new Set(interactive.map((run) => run.id));
+
+    // Reap: a run that left `running` (finalized by the gateway) releases its connection + epoch.
+    for (const [runId, fiber] of started) {
+      if (!activeIds.has(runId)) {
+        started.delete(runId);
+        Effect.runFork(Fiber.interrupt(fiber));
+      }
+    }
+
+    for (const run of interactive) {
+      if (started.has(run.id)) {
         continue;
       }
-      const target = sealantTargetForRuntimeInstance(instance);
+      const target = await Effect.runPromise(resolveTarget(run.sandboxId));
       if (target === undefined) {
         continue;
       }
-      started.add(instance.runId);
-      Effect.runFork(
-        Effect.scoped(ingester.run(instance.runId, target)).pipe(
+      const fiber = Effect.runFork(
+        Effect.scoped(ingester.run(run.id, target)).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => {
               // Release the run so the next poll retries (e.g. socket not yet ready).
-              started.delete(instance.runId);
+              started.delete(run.id);
               if (!Cause.hasInterruptsOnly(cause)) {
                 console.error("Telemetry ingest ended", {
-                  runId: instance.runId,
+                  runId: run.id,
                   cause: Cause.pretty(cause),
                 });
               }
@@ -79,6 +119,7 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
           ),
         ),
       );
+      started.set(run.id, fiber);
     }
   };
 
@@ -92,6 +133,10 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   return {
     stop: async () => {
       clearInterval(interval);
+      for (const [, fiber] of started) {
+        Effect.runFork(Fiber.interrupt(fiber));
+      }
+      started.clear();
       await Effect.runPromise(Scope.close(scope, Exit.void));
     },
   };
