@@ -240,11 +240,27 @@ export const updateRun = (input: { readonly runId: string; readonly payload: Upd
     yield* requireRun(input.runId);
     const status: RunStatusWire | undefined = input.payload.status;
 
+    const capturedChanges = {
+      ...(input.payload.diff === undefined ? {} : { diff: input.payload.diff }),
+      ...(input.payload.changedFiles === undefined
+        ? {}
+        : {
+            changedFiles: input.payload.changedFiles.map((file) => ({
+              path: file.path,
+              change: file.change,
+              ...(file.oldPath === undefined ? {} : { oldPath: file.oldPath }),
+            })),
+          }),
+    };
     const updated = yield* withRunInternalError(
       status === "running"
         ? runs.markRunRunning({ id: input.runId })
         : status === "completed"
-          ? runs.markRunCompleted({ id: input.runId, exitCode: input.payload.exitCode ?? 0 })
+          ? runs.markRunCompleted({
+              id: input.runId,
+              exitCode: input.payload.exitCode ?? 0,
+              ...capturedChanges,
+            })
           : status === "failed"
             ? runs.markRunFailed({
                 id: input.runId,
@@ -254,6 +270,7 @@ export const updateRun = (input: { readonly runId: string; readonly payload: Upd
                 ...(input.payload.errorMessage === undefined
                   ? {}
                   : { errorMessage: input.payload.errorMessage }),
+                ...capturedChanges,
               })
             : Effect.succeed<RunRecord | null>(null),
       "Failed to update run.",
