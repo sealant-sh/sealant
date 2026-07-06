@@ -3,6 +3,14 @@ packages:
   - packages/*
   - tooling/*
 
+allowBuilds:
+  cpu-features: true
+  esbuild: true
+  msgpackr-extract: true
+  sharp: true
+  ssh2: true
+  workerd: true
+
 catalog:
   "@effect/platform-node": ^4.0.0-beta.85
   "@effect/sql-pg": ^4.0.0-beta.85

@@ -140,6 +140,9 @@ importers:
 
   .:
     dependencies:
+      dotenv-cli:
+        specifier: 'catalog:'
+        version: 11.0.0
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.85
