@@ -1,6 +1,7 @@
 export * from "./core-api/connected-accounts.js";
 export * from "./core-api/control-plane.js";
 export * from "./core-api/github.js";
+export * from "./core-api/inference.js";
 export * from "./core-api/packages.js";
 export * from "./core-api/profiles.js";
 export * from "./core-api/record-events.js";

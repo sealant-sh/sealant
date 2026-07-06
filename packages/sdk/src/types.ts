@@ -539,3 +539,96 @@ export interface InteractiveSession {
   output(): AsyncIterable<Uint8Array>;
   close(): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Inference on connected accounts
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Connected-account selection for inference — the same reference shape as workspace creation,
+ * minus GitHub (not a model provider). `true` means "my default account"; a string names one.
+ * Only claude accounts are supported today; a codex selection is rejected until Codex inference
+ * ships. SECURITY: only account references cross this surface — never token material.
+ */
+export interface InferenceCredentialsOptions {
+  /** Profile id whose claude binding applies when `claude` is not set explicitly. */
+  readonly profile?: string;
+  /** `true` for the caller's default claude account, or a string naming a specific one. */
+  readonly claude?: boolean | string;
+  /** Reserved — rejected until Codex inference ships. */
+  readonly codex?: boolean | string;
+}
+
+/** A caller-defined tool the model may call. `inputSchema` is a JSON Schema object, verbatim. */
+export interface InferenceToolDefinition {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema: unknown;
+}
+
+/** A tool call the model made. Execute it YOUR side, then respond with an `InferenceToolResult`. */
+export interface InferenceToolCall {
+  readonly toolCallId: string;
+  readonly name: string;
+  readonly input: unknown;
+}
+
+/** Your result for one tool call, keyed by its `toolCallId`. */
+export interface InferenceToolResult {
+  readonly toolCallId: string;
+  readonly content: string;
+  readonly isError?: boolean;
+}
+
+/** The assistant turn: the final text (with parsed `json` when requested) or pending tool calls. */
+export type InferenceTurn =
+  | { readonly type: "text"; readonly text: string; readonly json?: unknown }
+  | { readonly type: "toolCalls"; readonly calls: readonly InferenceToolCall[] };
+
+export interface InferenceUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface InferenceResponse {
+  /** Continuation handle for the tool loop (held in memory server-side; expires after idle). */
+  readonly sessionId: string;
+  readonly turn: InferenceTurn;
+  /** Usage for the exchange, present on the final text turn. */
+  readonly usage?: InferenceUsage;
+}
+
+/** Starts a new inference exchange on a connected account. */
+export interface InferenceRespondOptions {
+  readonly prompt: string;
+  readonly system?: string;
+  readonly model?: string;
+  /** Upper bound on agentic turns within the exchange (server default 16). */
+  readonly maxTurns?: number;
+  readonly tools?: readonly InferenceToolDefinition[];
+  /** Structured output: reply as JSON (schema-constrained when `schema` is given). */
+  readonly responseFormat?: { readonly type: "json"; readonly schema?: unknown };
+  readonly credentials: InferenceCredentialsOptions;
+}
+
+/** Continues an exchange by posting the results of the previous turn's tool calls. */
+export interface InferenceContinueOptions {
+  readonly sessionId: string;
+  readonly toolResults: readonly InferenceToolResult[];
+}
+
+/**
+ * Inference on connected accounts. The model call runs SERVER-SIDE through the official agent SDKs
+ * on the resolved account's credential (never raw model-API calls); the tool loop is CALLER-
+ * EXECUTED — a `toolCalls` turn parks server-side until you `respond()` with the results:
+ *
+ *   let response = await sealant.inference.respond({ prompt, tools, credentials: { claude: true } })
+ *   while (response.turn.type === "toolCalls") {
+ *     const toolResults = await runTools(response.turn.calls)
+ *     response = await sealant.inference.respond({ sessionId: response.sessionId, toolResults })
+ *   }
+ *   response.turn.text
+ */
+export interface InferenceNamespace {
+  respond(options: InferenceRespondOptions | InferenceContinueOptions): Promise<InferenceResponse>;
+}

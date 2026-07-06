@@ -14,6 +14,7 @@ import {
   createWorkspaceOp,
   getRunOp,
   getWorkspaceOp,
+  inferenceRespondOp,
   listWorkspacesOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
@@ -24,7 +25,15 @@ import { makeRun } from "./facade/run.js";
 import { makeWorkspace, registerHarnessExecutors } from "./facade/workspace.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
-import type { CreateOptions, ListOptions, Run, Workspace, SealantConfig } from "./types.js";
+import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
+import type {
+  CreateOptions,
+  InferenceNamespace,
+  ListOptions,
+  Run,
+  Workspace,
+  SealantConfig,
+} from "./types.js";
 
 // Wire the run-execution implementations into the Workspace facade (the injection point exists to
 // break the workspace <-> run-harness import cycle; the client is the composition root).
@@ -105,6 +114,18 @@ export class Sealant {
           status: item.status,
         }),
       );
+    },
+  };
+
+  /**
+   * Inference on connected accounts — server-side via the official agent SDKs, never raw model-API
+   * calls. Tool calls park server-side; execute them here and `respond()` with the results.
+   */
+  readonly inference: InferenceNamespace = {
+    respond: async (options) => {
+      const payload = buildInferenceRespondRequest(options, this.#ctx.config.hostLocal.ownerUserId);
+      const wire = await this.#runtime.run(inferenceRespondOp(payload));
+      return mapInferenceResponse(wire);
     },
   };
 

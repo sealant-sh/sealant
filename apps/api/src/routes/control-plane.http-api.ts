@@ -4,6 +4,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { ConnectedAccountsHandlersLive } from "./connected-accounts/connected-accounts.http-api.js";
 import { GitHubHandlersLive } from "./github/github.http-api.js";
+import { InferenceHandlersLive } from "./inference/inference.http-api.js";
 import { PackagesHandlersLive } from "./packages/packages.http-api.js";
 import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
@@ -19,6 +20,7 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
   SshKeysHandlersLive,
   ConnectedAccountsHandlersLive,
   ProfilesHandlersLive,
+  InferenceHandlersLive,
   RunsHandlersLive,
   RegistriesHandlersLive,
   GitHubHandlersLive,
