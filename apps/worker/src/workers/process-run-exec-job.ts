@@ -53,7 +53,13 @@ const BRIDGE_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
 
 export interface ProcessRunExecJobOptions {
   readonly runId: string;
-  readonly command: RunExecCommand;
+  /** HARNESS framing: one invocation; a nonzero exit marks the run failed. */
+  readonly command?: RunExecCommand;
+  /**
+   * EXEC (check-run) framing: an ordered list; every command executes regardless of exit codes
+   * (exit codes are check DATA) and the run completes iff all of them executed and were recorded.
+   */
+  readonly commands?: readonly RunExecCommand[];
   readonly db: DB;
   /**
    * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
@@ -109,7 +115,7 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
               // this exec produces, which is what lets ingest attribute them to THIS run (and lets
               // concurrent executions — e.g. an SSH session — keep their events out of it).
               executionId: runId,
-              cwd: WORKDIR,
+              cwd: command.cwd ?? WORKDIR,
               stdin: false,
             });
             return { session: connected, runtimeId: health.runtimeId, accepted: started };
@@ -234,6 +240,58 @@ const syncBackCodexAuth = (
     Effect.asVoid,
   );
 
+/** Captures the staged git diff after execution (shared by both framings). */
+const captureChanges = (target: SealantTarget) =>
+  Effect.gen(function* () {
+    const diff = yield* shellExec(
+      target,
+      `git add -A >/dev/null 2>&1; git --no-pager diff --cached`,
+    );
+    const names = yield* shellExec(target, `git --no-pager diff --cached --name-status`);
+    return { diff: diff.stdout, changedFiles: parseNameStatus(names.stdout) };
+  });
+
+/** HARNESS framing: one command; a nonzero exit marks the run failed. */
+const produceHarnessRun = (runId: string, target: SealantTarget, command: RunExecCommand) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    const exitCode = yield* captureRun(runId, target, command);
+    const { diff, changedFiles } = yield* captureChanges(target);
+    yield* exitCode === 0
+      ? runs.markRunCompleted({ id: runId, exitCode: 0, diff, changedFiles })
+      : runs.markRunFailed({ id: runId, exitCode, diff, changedFiles });
+  });
+
+/**
+ * EXEC (check-run) framing: every command executes in order regardless of exit codes — a nonzero
+ * exit is a check DATUM (`base fails · head passes · revert fails`), not an execution failure. The
+ * run completes iff every command executed and was recorded (its `exitCode` is the LAST command's;
+ * per-command codes live in the record's `processExited` events). It fails only when the machinery
+ * broke — a command that never reported an exit code means the recording cannot be trusted.
+ */
+const produceExecRun = (
+  runId: string,
+  target: SealantTarget,
+  commands: readonly RunExecCommand[],
+) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    let lastExitCode = 0;
+    for (const [index, command] of commands.entries()) {
+      const exitCode = yield* captureRun(runId, target, command);
+      if (exitCode === -1) {
+        yield* runs.markRunFailed({
+          id: runId,
+          errorMessage: `Command ${index + 1}/${commands.length} (${command.executable}) ended without an exit code (transport closed or killed); check run aborted.`,
+        });
+        return;
+      }
+      lastExitCode = exitCode;
+    }
+    const { diff, changedFiles } = yield* captureChanges(target);
+    yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, diff, changedFiles });
+  });
+
 /** The Effect pipeline: resolve container, mark running, exec+capture, diff, mark terminal. */
 export const processRunExecJobEffect = (
   options: Omit<ProcessRunExecJobOptions, "db">,
@@ -250,34 +308,34 @@ export const processRunExecJobEffect = (
 > =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
+    const { command, commands } = options;
+    if ((command === undefined) === (commands === undefined)) {
+      return yield* Effect.fail(
+        new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
+      );
+    }
     const { resourceId, attemptId } = yield* resolveContainerResourceId(options.runId);
     const target = sealantTargetForDockerContainer(resourceId);
 
     yield* runs.markRunRunning({ id: options.runId });
 
-    const produce = Effect.gen(function* () {
-      const exitCode = yield* captureRun(options.runId, target, options.command);
-      const diff = yield* shellExec(
-        target,
-        `git add -A >/dev/null 2>&1; git --no-pager diff --cached`,
-      );
-      const names = yield* shellExec(target, `git --no-pager diff --cached --name-status`);
-      const changedFiles = parseNameStatus(names.stdout);
-      yield* exitCode === 0
-        ? runs.markRunCompleted({ id: options.runId, exitCode: 0, diff: diff.stdout, changedFiles })
-        : runs.markRunFailed({ id: options.runId, exitCode, diff: diff.stdout, changedFiles });
-    });
+    const produce =
+      commands !== undefined
+        ? produceExecRun(options.runId, target, commands)
+        : command !== undefined
+          ? produceHarnessRun(options.runId, target, command)
+          : Effect.void; // unreachable: the framing guard above rejected the neither-set case
 
     // Never leave the run pinned in "running": reconcile to failed on ANY abnormal exit (onError fires
     // on typed failures AND defects, e.g. a "connection closed" surfaced as a die).
     // The codex sync-back runs on EVERY exit path (`ensuring`): the CLI may have rotated its refresh
-    // token even when the harness itself failed, and the helper never fails (warnings only).
+    // token even when the run itself failed, and the helper never fails (warnings only).
     yield* produce.pipe(
       Effect.onError(() =>
         runs
           .markRunFailed({
             id: options.runId,
-            errorMessage: "Harness run failed before completion.",
+            errorMessage: "Run execution failed before completion.",
           })
           .pipe(Effect.ignore),
       ),

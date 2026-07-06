@@ -77,7 +77,8 @@ const withRunInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback:
     ),
   );
 
-const mapRun = (run: RunRecord): Run => ({
+/** Maps a runs-table record to the wire run resource (shared with the workspaces exec endpoint). */
+export const mapRun = (run: RunRecord): Run => ({
   runId: run.id,
   workspaceId: run.workspaceId,
   ...(run.attemptId === null ? {} : { attemptId: run.attemptId }),

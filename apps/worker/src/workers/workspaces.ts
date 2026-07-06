@@ -103,8 +103,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     },
   });
 
-  // Run-exec consumer: execute harness runs server-side (docker-exec + telemetry ingest), so the SDK
-  // can be a thin HTTP client. The API enqueues here when a run is created with a `command`.
+  // Run-exec consumer: execute harness runs and deterministic check runs server-side (docker-exec +
+  // telemetry ingest), so the SDK can be a thin HTTP client. The API enqueues here when a run is
+  // created with a `command` (harness framing) or via execWorkspace (`commands`, exec framing).
   const runExecConsumer = await consumeRunExecJobs({
     connectionUrl: env.RABBITMQ_URL,
     prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
@@ -112,7 +113,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       try {
         await processRunExecJob({
           runId: message.runId,
-          command: message.command,
+          ...(message.command === undefined ? {} : { command: message.command }),
+          ...(message.commands === undefined ? {} : { commands: message.commands }),
           db,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
         });

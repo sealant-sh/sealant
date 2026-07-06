@@ -1,6 +1,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { runCommandSchema, runSchema } from "./runs.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const workspaceStatusSchema = Schema.Literals([
@@ -82,6 +84,31 @@ export const createWorkspaceHeadersSchema = Schema.Struct({
   "idempotency-key": Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceHeaders = typeof createWorkspaceHeadersSchema.Type;
+
+/**
+ * The `harnessId` stamped on runs created by the deterministic-exec endpoint, so consumers can tell
+ * check runs apart from harness runs when listing/reading runs.
+ */
+export const execRunHarnessId = "exec";
+
+/**
+ * Deterministic exec: run an ORDERED LIST of commands in the workspace, recorded as ONE run (a
+ * "check run") — e.g. a causal proof `base fails · head passes · revert fails` as three commands
+ * with three recorded exit codes.
+ *
+ * Semantics differ deliberately from harness runs: every command executes IN ORDER regardless of
+ * exit codes (a nonzero exit is a check DATUM, not an execution failure), and the run completes iff
+ * every command executed and was recorded. The run's `exitCode` is the LAST command's; per-command
+ * exit codes live in the execution record (`processExited` events). The run FAILS only when the
+ * execution machinery broke (workspace gone, transport dropped mid-command) — so `status` answers
+ * "can I trust these exit codes", not "did the checks pass".
+ */
+export const execWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  /** Commands execute sequentially in the workspace, each recorded like any other process. */
+  commands: Schema.Array(runCommandSchema).check(Schema.isNonEmpty(), Schema.isMaxLength(32)),
+});
+export type ExecWorkspaceRequest = typeof execWorkspaceRequestSchema.Type;
 
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
@@ -310,6 +337,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
         WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Async like createWorkspace: 202 + the queued run resource; poll `GET /v1/runs/:runId` to
+    // completion, then read exit codes / scrollback from the run record.
+    HttpApiEndpoint.post("execWorkspace", "/:workspaceId/exec", {
+      params: workspaceIdParams,
+      payload: execWorkspaceRequestSchema,
+      success: runSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // The workspace has never launched a runtime — nothing to exec in yet.
+        WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
     }),

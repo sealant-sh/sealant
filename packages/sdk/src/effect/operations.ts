@@ -7,6 +7,7 @@
 import type {
   CreateRunRequest,
   CreateWorkspaceRequest,
+  ExecWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   ListRunsQuery,
@@ -34,6 +35,11 @@ export const getWorkspaceOp = (workspaceId: string) =>
 
 export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
   Effect.flatMap(SealantApiClient, (client) => client.workspaces.listWorkspaces({ query }));
+
+export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.execWorkspace({ params: { workspaceId }, payload }),
+  );
 
 // ---- runs ----
 
