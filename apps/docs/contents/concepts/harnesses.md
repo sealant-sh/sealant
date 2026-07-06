@@ -41,9 +41,9 @@ workspace:
 
 ## Custom harnesses
 
-Anything you can install and invoke can be a harness. Through the
-[preview SDK](/docs/reference/sdk), `customHarness` is the escape hatch: you supply the id, how to
-build the one-shot command from a prompt, and optionally how to install and launch the tool.
+Anything you can install and invoke can be a harness. Through the [SDK](/docs/reference/sdk),
+`customHarness` is the escape hatch: you supply the id, how to build the one-shot command from a
+prompt, and optionally how to install and launch the tool.
 
 ```ts
 import { Sealant, customHarness } from "@sealant/sdk";
@@ -68,9 +68,8 @@ The relationship is straightforward:
 3. Sealant executes the harness's one-shot invocation inside the ready workspace.
 4. Everything the harness does becomes an [execution record](/docs/concepts/execution-records).
 
-> The [SDK](/docs/reference/sdk) is a preview package (`@sealant/sdk`; first npm release in flight).
-> Today it is consumable only inside the monorepo, and runs are started through it or the
-> [HTTP API](/docs/reference/http-api) (`POST /v1/runs`) — blocking via `harness.run` or
+> The [SDK](/docs/reference/sdk) is published on npm as `@sealant/sdk`. Runs are started through it
+> or the [HTTP API](/docs/reference/http-api) (`POST /v1/runs`) — blocking via `harness.run` or
 > non-blocking via `harness.start`. The interactive `harness.session` form exists in the typed
 > surface but is not wired end to end yet.
 

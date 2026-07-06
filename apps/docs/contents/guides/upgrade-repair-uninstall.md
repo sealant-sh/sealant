@@ -44,7 +44,7 @@ To install or switch to a specific version — for a reproducible deployment, or
 it explicitly:
 
 ```sh
-curl -fsSL https://get.sealant.dev | SEALANT_VERSION=0.1.3 sh
+curl -fsSL https://get.sealant.dev | SEALANT_VERSION=0.4.0 sh
 ```
 
 The installer requires a running Docker daemon and Docker Compose `>= 2.23.1`.

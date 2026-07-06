@@ -82,13 +82,21 @@ The practical rule: **do not expose the API (port 4000) beyond a trusted network
 reach it can act as any owner. Auth hardening — real tokens and enforced identity — is planned, and
 this page will change when it lands.
 
-## Secrets
+## Secrets and connected accounts
 
 The installer generates the stack's secrets once into `~/.sealant/.env` with `0600` permissions and
-never overwrites existing values. There is **no in-app secrets management** — the profiles and
-secrets areas in the web app are static placeholders today. Manage credentials
-(`GITHUB_APP_PRIVATE_KEY`, database and queue passwords, the SSH gateway token) at the environment
-level. See [Environment variables](/docs/reference/environment-variables).
+never overwrites existing values. `GITHUB_APP_PRIVATE_KEY`, database and queue passwords, and the
+SSH gateway token are environment-level operator secrets.
+
+Connected accounts for Claude, Codex, and GitHub are a separate provider-credential path. They are
+stored sealed in Postgres and require `SEALANT_CREDENTIALS_KEY` on the API and worker. The current
+self-host installer does not generate or pass that key through by default, so enabling connected
+accounts is an explicit operator step.
+
+There is still **no general in-app secrets manager** for arbitrary named secrets. Profile secrets
+and env-var pages are static placeholders today. See
+[Secrets and credentials](/docs/guides/secrets-and-credentials) and
+[Environment variables](/docs/reference/environment-variables).
 
 ## Related
 

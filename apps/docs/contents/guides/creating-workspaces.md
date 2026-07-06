@@ -85,7 +85,7 @@ The right rail mirrors the form as you fill it in:
 - **Health check** — validation warnings that must clear before the spec is buildable.
 
 Submitting sends a real create request and redirects you to the workspace detail page, where the
-build progresses through its attempts.
+build progresses through its build/launch history.
 
 ## Managing workspaces
 
@@ -94,8 +94,8 @@ build progresses through its attempts.
   **`/workspaces/failed`** are the same list filtered by status.
 - **`/workspaces/<workspace-id>`** is the detail page. From here you can **rename** the workspace,
   **rerun** it from its existing spec, open it in **VS Code** or **Cursor**, and **copy the SSH
-  command** once a runtime endpoint exists. It also shows status, attempts, runtime info, selected
-  packages, recent events, and the published image reference and digest.
+  command** once a runtime endpoint exists. It also shows status, build history, runtime info,
+  selected packages, recent events, and the published image reference and digest.
 - **`/workspaces/<workspace-id>/spec`** shows the raw `spec.json`.
 
 **What is not here yet:** there is no stop or delete action in the web UI, and the SDK's

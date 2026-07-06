@@ -38,7 +38,7 @@ you pull from a mirror, add `SEALANT_IMAGE_NS=…` to `.env` by hand, or every l
 
 | Variable                | Default              | Effect                                                                                              |
 | ----------------------- | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `SEALANT_VERSION`       | resolved (see below) | Version to install. `latest` re-resolves the newest release; an exact version like `0.1.3` pins it. |
+| `SEALANT_VERSION`       | resolved (see below) | Version to install. `latest` re-resolves the newest release; an exact version like `0.4.0` pins it. |
 | `SEALANT_INSTALL_DIR`   | `$HOME/.sealant`     | Where install metadata and `.env` live.                                                             |
 | `SEALANT_COMPOSE_URL`   | unset                | Override the compose source — a URL or a local file path.                                           |
 | `SEALANT_IMAGE_NS`      | `ghcr.io/sealant-sh` | Image namespace or mirror to pull from.                                                             |
@@ -51,7 +51,7 @@ you pull from a mirror, add `SEALANT_IMAGE_NS=…` to `.env` by hand, or every l
 Example — pin a version, expose beyond loopback, move the web port:
 
 ```sh
-SEALANT_VERSION=0.1.3 SEALANT_BIND_HOST=0.0.0.0 SEALANT_WEB_PORT=8080 \
+SEALANT_VERSION=0.4.0 SEALANT_BIND_HOST=0.0.0.0 SEALANT_WEB_PORT=8080 \
   sh -c "$(curl -fsSL https://get.sealant.dev)"
 ```
 
@@ -62,7 +62,7 @@ The full env reference (including secrets and GitHub App variables) is in
 
 In priority order:
 
-1. **`SEALANT_VERSION` set to an exact version** (e.g. `0.2.0`) — installs exactly that.
+1. **`SEALANT_VERSION` set to an exact version** (e.g. `0.4.0`) — installs exactly that.
 2. **`SEALANT_VERSION=latest`** — re-resolves GitHub's `releases/latest` and installs the newest.
 3. **An existing `~/.sealant/.env`** — reuses the pinned `SEALANT_VERSION` from a prior install.
    This is what makes a bare re-run a repair rather than an upgrade.

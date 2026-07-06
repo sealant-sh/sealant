@@ -35,9 +35,10 @@ The script is idempotent and never overwrites your secrets or data. In order, it
 3. **Creates the install directory** — `~/.sealant` by default (override with
    `SEALANT_INSTALL_DIR`).
 4. **Downloads the compose file** to `~/.sealant/compose.yaml` for the resolved release.
-5. **Writes `~/.sealant/.env`** with mode `0600` and **generates any missing secrets** once
-   (database and RabbitMQ passwords, the SSH gateway token, and the auth secret). Existing values
-   are left untouched.
+5. **Writes `~/.sealant/.env`** with mode `0600`, pins `SEALANT_VERSION`, persists the selected
+   API/web/SSH/registry ports and bind host, and **generates any missing infrastructure secrets**
+   once (database and RabbitMQ passwords, the SSH gateway token, and the auth secret). Existing
+   values are left untouched.
 6. **Pulls the prebuilt images** — API, worker, SSH gateway, and web.
 7. **Runs database migrations** with `docker compose ... run --rm migrate`.
 8. **Starts the stack** with `docker compose ... up -d`.

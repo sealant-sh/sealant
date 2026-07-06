@@ -60,9 +60,11 @@ Both share the same need: a runtime they own, that records what happens, with no
 
 Sealant is early and says so. The most complete path today is the self-hosted install and the
 workspace flow: install with one command, create a workspace around a real repository through the
-web app, and SSH into it. The HTTP API for runs and execution records is shipped; the TypeScript SDK
-is a preview; a CLI, API tokens, and several web UI areas are still planned or preview. The full,
-honest status table is at [What ships today](/docs/introduction/what-ships-today).
+web app, SSH into it, and inspect runs. The HTTP API, the `@sealant/sdk` npm package, and a
+repo-local `sealant` CLI for connected accounts and profile bindings all exist today. API tokens,
+workspace stop/delete UI, general secrets management, and several web UI areas are still planned or
+preview. The full, honest status table is at
+[What ships today](/docs/introduction/what-ships-today).
 
 ## Next steps
 

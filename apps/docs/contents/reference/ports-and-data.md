@@ -53,8 +53,9 @@ A few things worth knowing:
 
 To capture a full install, preserve:
 
-1. `~/.sealant/.env` — your secrets and knobs. Without it you cannot decrypt sessions or match the
-   DB password to the volume. Back this up somewhere safe.
+1. `~/.sealant/.env` — your secrets and knobs. Without it you cannot match the DB password to the
+   volume, preserve web session signing, or keep the SSH gateway token stable. Back this up
+   somewhere safe.
 2. The `sealant_postgres-data` volume — all durable control-plane state.
 
 The `sealant_zot-data` and `sealant_gateway-keys` volumes are recoverable (rebuild images;
