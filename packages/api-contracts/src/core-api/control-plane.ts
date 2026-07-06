@@ -6,14 +6,14 @@ import { PackagesGroup } from "./packages.js";
 import { ProfilesGroup } from "./profiles.js";
 import { RegistriesGroup } from "./registries.js";
 import { RunsGroup } from "./runs.js";
-import { SandboxesGroup } from "./sandboxes.js";
 import { SshKeysGroup } from "./ssh-keys.js";
 import { SystemGroup } from "./system.js";
+import { WorkspacesGroup } from "./workspaces.js";
 
 export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(SystemGroup)
   .add(PackagesGroup.prefix("/v1/packages"))
-  .add(SandboxesGroup.prefix("/v1/sandboxes"))
+  .add(WorkspacesGroup.prefix("/v1/workspaces"))
   .add(SshKeysGroup.prefix("/v1/ssh-keys"))
   .add(ConnectedAccountsGroup.prefix("/v1/connected-accounts"))
   .add(ProfilesGroup.prefix("/v1/profiles"))

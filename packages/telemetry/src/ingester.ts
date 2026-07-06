@@ -1,7 +1,7 @@
 import { RuntimeState } from "@sealant/runtime-client";
 /**
  * TelemetryIngester — one `Effect.gen` Stream program per run. It owns a DEDICATED second
- * `SealantRuntime.connect` (never sharing execInSandbox's single-consumer iterator) and drains the
+ * `SealantRuntime.connect` (never sharing execInWorkspace's single-consumer iterator) and drains the
  * WHOLE runtime telemetry stream (heartbeats, drops, all processes) for the connection's lifetime —
  * no `takeUntil(processExited)`.
  *
@@ -11,7 +11,11 @@ import { RuntimeState } from "@sealant/runtime-client";
  * A finalizer closes the epoch and records `early_close` unless a clean terminal STOPPED was observed
  * (stream-end is SUSPICIOUS, never a clean EOF).
  */
-import { SealantRuntime, type SealantRuntimeService, type SealantTarget } from "@sealant/sandboxes";
+import {
+  SealantRuntime,
+  type SealantRuntimeService,
+  type SealantTarget,
+} from "@sealant/workspaces";
 import { Context, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import type * as Scope from "effect/Scope";
 

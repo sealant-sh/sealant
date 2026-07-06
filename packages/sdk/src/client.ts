@@ -10,19 +10,24 @@
  * stable surface and reject with `SealantNotImplementedError` so callers can compile and wire
  * against the final shape today.
  */
-import { createSandboxOp, getRunOp, getSandboxOp, listSandboxesOp } from "./effect/operations.js";
+import {
+  createWorkspaceOp,
+  getRunOp,
+  getWorkspaceOp,
+  listWorkspacesOp,
+} from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
 import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
-import { makeSandbox, registerHarnessExecutors } from "./facade/sandbox.js";
-import { buildCreateSandboxRequest } from "./internal/blueprint.js";
+import { makeWorkspace, registerHarnessExecutors } from "./facade/workspace.js";
+import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
-import type { CreateOptions, ListOptions, Run, Sandbox, SealantConfig } from "./types.js";
+import type { CreateOptions, ListOptions, Run, Workspace, SealantConfig } from "./types.js";
 
-// Wire the run-execution implementations into the Sandbox facade (the injection point exists to
-// break the sandbox <-> run-harness import cycle; the client is the composition root).
+// Wire the run-execution implementations into the Workspace facade (the injection point exists to
+// break the workspace <-> run-harness import cycle; the client is the composition root).
 registerHarnessExecutors({ run: runHarness, start: startHarness });
 
 export class Sealant {
@@ -45,19 +50,19 @@ export class Sealant {
     return this.#config.baseUrl;
   }
 
-  /** Sandbox lifecycle: create, fetch, and list live environments. */
-  readonly sandboxes = {
-    create: async (options: CreateOptions): Promise<Sandbox> => {
-      const { payload } = buildCreateSandboxRequest(options, this.#ctx.config);
-      const created = await this.#runtime.run(createSandboxOp(payload));
-      const sandbox = makeSandbox(this.#ctx, {
-        id: created.sandboxId,
+  /** Workspace lifecycle: create, fetch, and list live environments. */
+  readonly workspaces = {
+    create: async (options: CreateOptions): Promise<Workspace> => {
+      const { payload } = buildCreateWorkspaceRequest(options, this.#ctx.config);
+      const created = await this.#runtime.run(createWorkspaceOp(payload));
+      const workspace = makeWorkspace(this.#ctx, {
+        id: created.workspaceId,
         name: created.name,
         status: created.status,
         harness: options.harness,
       });
       if (options.wait === false) {
-        return sandbox;
+        return workspace;
       }
       // Pump provisioning events to onEvent (best-effort) while we wait for ready. Never let an
       // event-stream hiccup fail create().
@@ -65,7 +70,7 @@ export class Sealant {
         const onEvent = options.onEvent;
         void (async () => {
           try {
-            for await (const event of sandbox.events()) {
+            for await (const event of workspace.events()) {
               onEvent(event);
             }
           } catch {
@@ -73,29 +78,29 @@ export class Sealant {
           }
         })();
       }
-      return sandbox.ready();
+      return workspace.ready();
     },
 
-    get: async (id: string): Promise<Sandbox> => {
-      const details = await this.#runtime.run(getSandboxOp(id));
-      return makeSandbox(this.#ctx, {
-        id: details.sandboxId,
+    get: async (id: string): Promise<Workspace> => {
+      const details = await this.#runtime.run(getWorkspaceOp(id));
+      return makeWorkspace(this.#ctx, {
+        id: details.workspaceId,
         name: details.name,
         status: details.status,
       });
     },
 
-    list: async (options?: ListOptions): Promise<readonly Sandbox[]> => {
+    list: async (options?: ListOptions): Promise<readonly Workspace[]> => {
       const response = await this.#runtime.run(
-        listSandboxesOp({
+        listWorkspacesOp({
           ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
           ...(options?.status === undefined ? {} : { status: options.status }),
           ...(options?.limit === undefined ? {} : { limit: String(options.limit) }),
         }),
       );
       return response.items.map((item) =>
-        makeSandbox(this.#ctx, {
-          id: item.sandboxId,
+        makeWorkspace(this.#ctx, {
+          id: item.workspaceId,
           name: item.name,
           status: item.status,
         }),
@@ -103,7 +108,7 @@ export class Sealant {
     },
   };
 
-  /** Runs by id — so a record can be replayed long after its sandbox is gone. */
+  /** Runs by id — so a record can be replayed long after its workspace is gone. */
   readonly runs = {
     get: async (runId: string): Promise<Run> => {
       const wire = await this.#runtime.run(getRunOp(runId));

@@ -25,29 +25,29 @@ const PROVIDERS: readonly ProviderCopy[] = [
   {
     provider: "claude",
     name: "Claude",
-    valueProp: "Run Claude Code and the Agent SDK inside your sandboxes on your own subscription.",
+    valueProp: "Run Claude Code and the Agent SDK inside your workspaces on your own subscription.",
     command: "claude setup-token",
     commandNote: "Run on your machine — requires Claude Pro or Max.",
     footnote:
-      "Stored encrypted in your control plane. Only used by the official Claude Code CLI / Agent SDK inside your sandboxes.",
+      "Stored encrypted in your control plane. Only used by the official Claude Code CLI / Agent SDK inside your workspaces.",
   },
   {
     provider: "codex",
     name: "Codex",
-    valueProp: "Run the Codex CLI inside your sandboxes with your ChatGPT subscription.",
+    valueProp: "Run the Codex CLI inside your workspaces with your ChatGPT subscription.",
     command: "codex login",
     commandNote: "Run on your machine, then paste the contents of ~/.codex/auth.json below.",
     footnote:
-      "This is OpenAI's documented pattern for running Codex on another machine. Sandboxes refresh it; Sealant syncs it back.",
+      "This is OpenAI's documented pattern for running Codex on another machine. Workspaces refresh it; Sealant syncs it back.",
   },
   {
     provider: "github",
     name: "GitHub",
-    valueProp: "Give sandboxes your GitHub identity for git push/pull and the GitHub API.",
+    valueProp: "Give workspaces your GitHub identity for git push/pull and the GitHub API.",
     command: "gh auth token",
     commandNote: "Run on your machine, or use --token with a PAT you created.",
     footnote:
-      "Used for git clone/push/pull and GitHub API calls from your sandboxes. Needs the repo scope; workflow is required to edit .github/workflows.",
+      "Used for git clone/push/pull and GitHub API calls from your workspaces. Needs the repo scope; workflow is required to edit .github/workflows.",
   },
 ];
 
@@ -114,7 +114,7 @@ function ConnectedAccountsSettingsPage() {
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Bring your own Claude and Codex subscriptions and a GitHub token. You run the official
           tool once on your machine and paste the result here; Sealant stores it encrypted and
-          injects it into your sandboxes. Sealant never signs in on your behalf.
+          injects it into your workspaces. Sealant never signs in on your behalf.
         </p>
       </header>
 
@@ -170,7 +170,7 @@ function ProviderCard({
   const disconnectMutation = useMutation(
     trpc.connectedAccounts.disconnect.mutationOptions({
       onSuccess: async () => {
-        setStatusMessage(`Disconnected ${copy.name}. Sandboxes will no longer receive it.`);
+        setStatusMessage(`Disconnected ${copy.name}. Workspaces will no longer receive it.`);
         await invalidate();
       },
     }),
@@ -289,7 +289,7 @@ function ProviderCard({
 
       {isInvalid && !isFormOpen ? (
         <div className="mt-4 border-l-2 border-warning-dot py-1 pl-3 text-sm leading-6 text-warning">
-          This credential stopped working. Reconnect to restore access from your sandboxes.
+          This credential stopped working. Reconnect to restore access from your workspaces.
         </div>
       ) : null}
 

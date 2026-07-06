@@ -3,7 +3,7 @@ import { z } from "zod";
 /*
 Key -> principal resolution against the API (POST /v1/ssh-keys/resolve-principal). This is how a
 user-registered key (ssh_keys table) authenticates at the gateway without any static allowlist
-entry or gateway restart. Same trust wiring as sandbox-target.ts: the gateway token authenticates
+entry or gateway restart. Same trust wiring as workspace-target.ts: the gateway token authenticates
 the gateway; the API recomputes the fingerprint from the offered key blob server-side.
 */
 

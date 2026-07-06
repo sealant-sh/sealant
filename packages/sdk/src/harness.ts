@@ -4,7 +4,7 @@
  *
  * NOTE — the one-shot invocation forms below (`opencode run <prompt>`, `codex exec <prompt>`,
  * `claude -p <prompt>`) are the expected headless shapes but are PENDING live verification against
- * the baked sandbox image (see the SDK plan's task #2, "verify harness one-shot CLI semantics").
+ * the baked workspace image (see the SDK plan's task #2, "verify harness one-shot CLI semantics").
  * Until that is confirmed, only `opencode()` is exercised end-to-end; the others are provided for the
  * typed surface and adjusted once verified.
  */

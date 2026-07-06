@@ -1,8 +1,8 @@
 import {
   connectedAccountSummarySchema,
   createConnectedAccountRequestSchema,
-  createSandboxRequestSchema,
-  createSandboxResponseSchema,
+  createWorkspaceRequestSchema,
+  createWorkspaceResponseSchema,
   createSshKeyRequestSchema,
   listConnectedAccountsResponseSchema,
   listProfileCredentialBindingsResponseSchema,
@@ -14,16 +14,16 @@ import {
   importGitHubInstallationResponseSchema,
   listGitHubInstallationRepositoriesResponseSchema,
   listGitHubInstallationsResponseSchema,
-  listSandboxAttemptsQuerySchema,
-  listSandboxAttemptsResponseSchema,
-  listSandboxEventsQuerySchema,
-  listSandboxEventsResponseSchema,
-  listSandboxesQuerySchema,
-  listSandboxesResponseSchema,
+  listWorkspaceAttemptsQuerySchema,
+  listWorkspaceAttemptsResponseSchema,
+  listWorkspaceEventsQuerySchema,
+  listWorkspaceEventsResponseSchema,
+  listWorkspacesQuerySchema,
+  listWorkspacesResponseSchema,
   listSshKeysResponseSchema,
   messageResponseSchema,
-  renameSandboxRequestSchema,
-  renameSandboxResponseSchema,
+  renameWorkspaceRequestSchema,
+  renameWorkspaceResponseSchema,
   listRunsQuerySchema,
   listRunsResponseSchema,
   resolvePackageQuerySchema,
@@ -38,8 +38,8 @@ import {
   runScrollbackResponseSchema,
   runTimelineQuerySchema,
   runTimelineResponseSchema,
-  sandboxDetailsSchema,
-  sandboxIdParamsSchema,
+  workspaceDetailsSchema,
+  workspaceIdParamsSchema,
   setupStateResponseSchema,
   sshKeyIdParamsSchema,
   sshKeySummarySchema,
@@ -134,36 +134,36 @@ export interface CoreApiClient {
       input: InferSchema<typeof resolvePackageQuerySchema>,
     ): Promise<InferSchema<typeof resolvePackageResponseSchema>>;
   };
-  readonly sandboxes: {
+  readonly workspaces: {
     create(
-      input: InferSchema<typeof createSandboxRequestSchema>,
+      input: InferSchema<typeof createWorkspaceRequestSchema>,
       options?: {
         readonly idempotencyKey?: string;
       },
-    ): Promise<InferSchema<typeof createSandboxResponseSchema>>;
+    ): Promise<InferSchema<typeof createWorkspaceResponseSchema>>;
     list(
-      input: InferSchema<typeof listSandboxesQuerySchema>,
-    ): Promise<InferSchema<typeof listSandboxesResponseSchema>>;
+      input: InferSchema<typeof listWorkspacesQuerySchema>,
+    ): Promise<InferSchema<typeof listWorkspacesResponseSchema>>;
     byId(
-      input: InferSchema<typeof sandboxIdParamsSchema>,
-    ): Promise<InferSchema<typeof sandboxDetailsSchema>>;
+      input: InferSchema<typeof workspaceIdParamsSchema>,
+    ): Promise<InferSchema<typeof workspaceDetailsSchema>>;
     attempts(input: {
-      readonly sandboxId: string;
+      readonly workspaceId: string;
       readonly limit?: number;
-    }): Promise<InferSchema<typeof listSandboxAttemptsResponseSchema>>;
+    }): Promise<InferSchema<typeof listWorkspaceAttemptsResponseSchema>>;
     events(input: {
-      readonly sandboxId: string;
+      readonly workspaceId: string;
       readonly limit?: number;
-    }): Promise<InferSchema<typeof listSandboxEventsResponseSchema>>;
+    }): Promise<InferSchema<typeof listWorkspaceEventsResponseSchema>>;
     rename(input: {
-      readonly sandboxId: string;
+      readonly workspaceId: string;
       readonly name: string;
-    }): Promise<InferSchema<typeof renameSandboxResponseSchema>>;
+    }): Promise<InferSchema<typeof renameWorkspaceResponseSchema>>;
   };
   readonly runs: {
     list(input: {
       readonly ownerUserId: string;
-      readonly sandboxId?: string;
+      readonly workspaceId?: string;
       readonly status?: InferSchema<typeof runSchema>["status"];
       readonly limit?: number;
     }): Promise<InferSchema<typeof listRunsResponseSchema>>;
@@ -232,7 +232,7 @@ class CoreApiClientImpl implements CoreApiClient {
   private readonly baseUrl: string;
   private readonly fetchImplementation: typeof fetch;
 
-  public readonly sandboxes: CoreApiClient["sandboxes"];
+  public readonly workspaces: CoreApiClient["workspaces"];
   public readonly packages: CoreApiClient["packages"];
   public readonly github: CoreApiClient["github"];
   public readonly runs: CoreApiClient["runs"];
@@ -244,13 +244,13 @@ class CoreApiClientImpl implements CoreApiClient {
   public constructor(options: CreateCoreApiClientOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
     this.fetchImplementation = options.fetchImplementation ?? fetch;
-    this.sandboxes = {
-      create: (input, requestOptions) => this.createSandbox(input, requestOptions),
-      list: (input) => this.listSandboxes(input),
-      byId: (input) => this.getSandbox(input),
-      attempts: (input) => this.listSandboxAttempts(input),
-      events: (input) => this.listSandboxEvents(input),
-      rename: (input) => this.renameSandbox(input),
+    this.workspaces = {
+      create: (input, requestOptions) => this.createWorkspace(input, requestOptions),
+      list: (input) => this.listWorkspaces(input),
+      byId: (input) => this.getWorkspace(input),
+      attempts: (input) => this.listWorkspaceAttempts(input),
+      events: (input) => this.listWorkspaceEvents(input),
+      rename: (input) => this.renameWorkspace(input),
     };
     this.packages = {
       resolve: (input) => this.resolvePackage(input),
@@ -377,12 +377,12 @@ class CoreApiClientImpl implements CoreApiClient {
 
   private async listRuns(input: {
     readonly ownerUserId: string;
-    readonly sandboxId?: string;
+    readonly workspaceId?: string;
     readonly status?: InferSchema<typeof runSchema>["status"];
     readonly limit?: number;
   }): Promise<InferSchema<typeof listRunsResponseSchema>> {
     const query = listRunsQuerySchema.parse({
-      sandboxId: input.sandboxId,
+      workspaceId: input.workspaceId,
       status: input.status,
       limit: input.limit,
     });
@@ -393,7 +393,7 @@ class CoreApiClientImpl implements CoreApiClient {
       schema: listRunsResponseSchema,
       query: {
         ownerUserId: input.ownerUserId,
-        sandboxId: query.sandboxId,
+        workspaceId: query.workspaceId,
         status: query.status,
         limit: query.limit,
       },
@@ -656,18 +656,18 @@ class CoreApiClientImpl implements CoreApiClient {
     return parseWithSchema(options.schema, payload);
   }
 
-  private async createSandbox(
-    input: InferSchema<typeof createSandboxRequestSchema>,
+  private async createWorkspace(
+    input: InferSchema<typeof createWorkspaceRequestSchema>,
     options: {
       readonly idempotencyKey?: string;
     } = {},
-  ): Promise<InferSchema<typeof createSandboxResponseSchema>> {
-    const payload = createSandboxRequestSchema.parse(input);
+  ): Promise<InferSchema<typeof createWorkspaceResponseSchema>> {
+    const payload = createWorkspaceRequestSchema.parse(input);
 
     return this.requestJson({
       method: "POST",
-      path: "/v1/sandboxes",
-      schema: createSandboxResponseSchema,
+      path: "/v1/workspaces",
+      schema: createWorkspaceResponseSchema,
       body: payload,
       ...(options.idempotencyKey === undefined
         ? {}
@@ -679,72 +679,72 @@ class CoreApiClientImpl implements CoreApiClient {
     });
   }
 
-  private async listSandboxes(
-    input: InferSchema<typeof listSandboxesQuerySchema>,
-  ): Promise<InferSchema<typeof listSandboxesResponseSchema>> {
-    const query = listSandboxesQuerySchema.parse(input);
+  private async listWorkspaces(
+    input: InferSchema<typeof listWorkspacesQuerySchema>,
+  ): Promise<InferSchema<typeof listWorkspacesResponseSchema>> {
+    const query = listWorkspacesQuerySchema.parse(input);
 
     return this.requestJson({
       method: "GET",
-      path: "/v1/sandboxes",
-      schema: listSandboxesResponseSchema,
+      path: "/v1/workspaces",
+      schema: listWorkspacesResponseSchema,
       query,
     });
   }
 
-  private async getSandbox(
-    input: InferSchema<typeof sandboxIdParamsSchema>,
-  ): Promise<InferSchema<typeof sandboxDetailsSchema>> {
-    const params = sandboxIdParamsSchema.parse(input);
+  private async getWorkspace(
+    input: InferSchema<typeof workspaceIdParamsSchema>,
+  ): Promise<InferSchema<typeof workspaceDetailsSchema>> {
+    const params = workspaceIdParamsSchema.parse(input);
 
     return this.requestJson({
       method: "GET",
-      path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}`,
-      schema: sandboxDetailsSchema,
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}`,
+      schema: workspaceDetailsSchema,
     });
   }
 
-  private async listSandboxAttempts(input: {
-    readonly sandboxId: string;
+  private async listWorkspaceAttempts(input: {
+    readonly workspaceId: string;
     readonly limit?: number;
-  }): Promise<InferSchema<typeof listSandboxAttemptsResponseSchema>> {
-    const params = sandboxIdParamsSchema.parse({ sandboxId: input.sandboxId });
-    const query = listSandboxAttemptsQuerySchema.parse({ limit: input.limit });
+  }): Promise<InferSchema<typeof listWorkspaceAttemptsResponseSchema>> {
+    const params = workspaceIdParamsSchema.parse({ workspaceId: input.workspaceId });
+    const query = listWorkspaceAttemptsQuerySchema.parse({ limit: input.limit });
 
     return this.requestJson({
       method: "GET",
-      path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}/attempts`,
-      schema: listSandboxAttemptsResponseSchema,
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/attempts`,
+      schema: listWorkspaceAttemptsResponseSchema,
       query,
     });
   }
 
-  private async listSandboxEvents(input: {
-    readonly sandboxId: string;
+  private async listWorkspaceEvents(input: {
+    readonly workspaceId: string;
     readonly limit?: number;
-  }): Promise<InferSchema<typeof listSandboxEventsResponseSchema>> {
-    const params = sandboxIdParamsSchema.parse({ sandboxId: input.sandboxId });
-    const query = listSandboxEventsQuerySchema.parse({ limit: input.limit });
+  }): Promise<InferSchema<typeof listWorkspaceEventsResponseSchema>> {
+    const params = workspaceIdParamsSchema.parse({ workspaceId: input.workspaceId });
+    const query = listWorkspaceEventsQuerySchema.parse({ limit: input.limit });
 
     return this.requestJson({
       method: "GET",
-      path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}/events`,
-      schema: listSandboxEventsResponseSchema,
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/events`,
+      schema: listWorkspaceEventsResponseSchema,
       query,
     });
   }
 
-  private async renameSandbox(input: {
-    readonly sandboxId: string;
+  private async renameWorkspace(input: {
+    readonly workspaceId: string;
     readonly name: string;
-  }): Promise<InferSchema<typeof renameSandboxResponseSchema>> {
-    const params = sandboxIdParamsSchema.parse({ sandboxId: input.sandboxId });
-    const payload = renameSandboxRequestSchema.parse({ name: input.name });
+  }): Promise<InferSchema<typeof renameWorkspaceResponseSchema>> {
+    const params = workspaceIdParamsSchema.parse({ workspaceId: input.workspaceId });
+    const payload = renameWorkspaceRequestSchema.parse({ name: input.name });
 
     return this.requestJson({
       method: "PATCH",
-      path: `/v1/sandboxes/${encodeURIComponent(params.sandboxId)}/name`,
-      schema: renameSandboxResponseSchema,
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/name`,
+      schema: renameWorkspaceResponseSchema,
       body: payload,
     });
   }

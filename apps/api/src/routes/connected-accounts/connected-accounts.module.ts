@@ -177,7 +177,7 @@ const normalizeSecret = (
 
         return {
           kind: "auth-json",
-          // Stored verbatim so the exact file can be re-materialized in the sandbox.
+          // Stored verbatim so the exact file can be re-materialized in the workspace.
           payloadJson: JSON.stringify({ authJson: secret }),
           metadata: { ...parsed.metadata },
         };

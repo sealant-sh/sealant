@@ -2,7 +2,7 @@
   "name": "@sealant/ssh-gateway",
   "version": "0.0.0",
   "private": true,
-  "description": "SSH gateway service for sandbox routing",
+  "description": "SSH gateway service for workspace routing",
   "type": "module",
   "scripts": {
     "build": "BUNDLE_EXTERNAL=ssh2,cpu-features node ../../tooling/scripts/bundle-app.mjs",

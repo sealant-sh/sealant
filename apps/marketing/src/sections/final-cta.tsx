@@ -26,7 +26,7 @@ export function FinalCta() {
               Give your next agent run a real environment — and a record worth reviewing.
             </Display>
             <p className="mx-auto mt-5 max-w-[52ch] text-lg leading-relaxed text-muted-foreground">
-              Create a sandbox, run a harness, replay the record — in minutes.
+              Create a workspace, run a harness, replay the record — in minutes.
             </p>
             <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
               <PrimaryCTA href={REPO_URL}>
@@ -39,7 +39,7 @@ export function FinalCta() {
             <TrustLine className="mt-7" />
             <RunRecord
               variant="inert"
-              runId="run_sbx_8m2k"
+              runId="run_ws_8m2k"
               status={{ word: "Completed · observed", tone: "observed" }}
               events={[]}
               footnote="run.completed · 00:25.110 · 184 events"

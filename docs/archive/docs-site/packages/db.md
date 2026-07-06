@@ -10,7 +10,7 @@ updated: 2026-03-31
 
 `@sealant/db` is the shared PostgreSQL + Drizzle package for control-plane persistence.
 
-It stores durable state for Sealant's core product nouns: sandboxes and runs.
+It stores durable state for Sealant's core product nouns: workspaces and runs.
 
 ## Why this package exists
 
@@ -22,7 +22,7 @@ It stores durable state for Sealant's core product nouns: sandboxes and runs.
 
 - database client creation and lifecycle helpers
 - Drizzle schema exports and inferred table types
-- domain repositories for sandbox lifecycle, source integrations, and profiles
+- domain repositories for workspace lifecycle, source integrations, and profiles
 - payload schema re-exports from `@sealant/validators`
 - migration entrypoints and helper scripts
 
@@ -37,20 +37,20 @@ Core exports are defined in `packages/db/src/index.ts`.
 - `account`
 - `verification`
 
-### Sandboxes and runs
+### Workspaces and runs
 
-- `sandboxes`
+- `workspaces`
 - `runs`
-- `sandbox_attempts`
-- `sandbox_attempt_snapshots`
-- `sandbox_runtime_instances`
-- `sandbox_run_links`
+- `workspace_attempts`
+- `workspace_attempt_snapshots`
+- `workspace_runtime_instances`
+- `workspace_run_links`
 
-### Sandbox build jobs
+### Workspace build jobs
 
 - `oci_image_build_jobs`
 
-Note: repository and type exports still include compatibility aliases such as `sandboxBuildJobs`
+Note: repository and type exports still include compatibility aliases such as `workspaceBuildJobs`
 while migration to the `oci_image_build_jobs` table name is completed.
 
 ### Source/provider integration
@@ -82,12 +82,12 @@ while migration to the `oci_image_build_jobs` table name is completed.
 
 ## Payload contracts
 
-`packages/db/src/payloads.ts` re-exports shared sandbox payload schemas and types from
+`packages/db/src/payloads.ts` re-exports shared workspace payload schemas and types from
 `@sealant/validators`:
 
-- `newSandboxSchema` / `NewSandbox`
-- `sandboxBuildSchema` / `SandboxBuild`
-- `sandboxLaunchSchema` / `SandboxLaunch`
+- `newWorkspaceSchema` / `NewWorkspace`
+- `workspaceBuildSchema` / `WorkspaceBuild`
+- `workspaceLaunchSchema` / `WorkspaceLaunch`
 
 ## Environment
 

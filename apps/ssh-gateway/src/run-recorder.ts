@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /*
 Interactive-run recording (the consolidated run model: a run is a recorded session of work in a
-sandbox by ANY actor, human or harness).
+workspace by ANY actor, human or harness).
 
 One SSH client connection = one run. The gateway registers the run before the first daemon channel
 opens, threads its id through the daemon as the execution id (so the ingester attributes the
@@ -18,8 +18,8 @@ Known, accepted gaps (v1):
 
 const createRunResponseSchema = z.object({ runId: z.string().trim().min(1) });
 
-/** Matches the run-exec worker's capture; the sandbox repo checkout path baked into the image. */
-const REPO_WORKDIR = "/sandbox/repo";
+/** Matches the run-exec worker's capture; the workspace repo checkout path baked into the image. */
+const REPO_WORKDIR = "/workspace/repo";
 
 /** The internal harness id recorded for human SSH sessions (no harness runs; a person does). */
 export const SSH_HARNESS_ID = "ssh";
@@ -78,12 +78,12 @@ const postJson = async (
  */
 export const startInteractiveRun = async (input: {
   readonly config: RunRecorderConfig;
-  readonly sandboxId: string;
+  readonly workspaceId: string;
   readonly ownerUserId: string;
 }): Promise<string | undefined> => {
   try {
     const created = await postJson(new URL("/v1/runs", input.config.apiBaseUrl), "POST", {
-      sandboxId: input.sandboxId,
+      workspaceId: input.workspaceId,
       ownerUserId: input.ownerUserId,
       harnessId: SSH_HARNESS_ID,
       mode: "interactive",
@@ -104,7 +104,7 @@ export const startInteractiveRun = async (input: {
     return runId;
   } catch (error) {
     console.error("[ssh-gateway] interactive-run recording unavailable; session unrecorded", {
-      sandboxId: input.sandboxId,
+      workspaceId: input.workspaceId,
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;
@@ -114,7 +114,7 @@ export const startInteractiveRun = async (input: {
 /**
  * Finalize the interactive run on disconnect: capture the working-tree diff over the still-open
  * control connection (best-effort), then mark the run completed. `captureOutput` runs a shell
- * command in the sandbox repo and returns its output (the gateway supplies `execCapture`).
+ * command in the workspace repo and returns its output (the gateway supplies `execCapture`).
  */
 export const finalizeInteractiveRun = async (input: {
   readonly config: RunRecorderConfig;

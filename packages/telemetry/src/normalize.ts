@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 /**
  * Pure normalization + projection folds — NO Effect, fully unit-testable, separated from I/O
- * (mirrors the pure/IO split in packages/sandboxes/src/sealantd/target.ts).
+ * (mirrors the pure/IO split in packages/workspaces/src/sealantd/target.ts).
  *
  * `normalizeEnvelope` (ingest) and `eventRowToNormalized` (rebuild) both produce a `NormalizedEvent`,
  * and the projection derivations (`deriveTimelineRow` / `deriveScrollbackRow`) read ONLY from that

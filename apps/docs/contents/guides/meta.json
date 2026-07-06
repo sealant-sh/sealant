@@ -3,7 +3,7 @@
   "pages": [
     "github-app",
     "ssh-access",
-    "creating-sandboxes",
+    "creating-workspaces",
     "runs-and-execution-records",
     "secrets-and-credentials",
     "upgrade-repair-uninstall",

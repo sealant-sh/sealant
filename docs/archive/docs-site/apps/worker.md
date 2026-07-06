@@ -8,8 +8,8 @@ updated: 2026-03-31
 
 ## Purpose
 
-`@sealant/worker` is the background execution worker for sandbox image build jobs and runtime launch
-handoff.
+`@sealant/worker` is the background execution worker for workspace image build jobs and runtime
+launch handoff.
 
 It consumes queued build jobs, compiles/publishes artifacts, and updates durable lifecycle state.
 
@@ -17,14 +17,14 @@ It consumes queued build jobs, compiles/publishes artifacts, and updates durable
 
 - RabbitMQ transport via `@sealant/rabbitmq`
 - durable build/job state updates via `@sealant/db`
-- BuildKit compile, registry publication, and runtime launch via `@sealant/sandboxes`
+- BuildKit compile, registry publication, and runtime launch via `@sealant/workspaces`
 - source-provider resolution via `@sealant/source-integrations`
 
 ## Key dependencies
 
 - `@sealant/db`
 - `@sealant/rabbitmq`
-- `@sealant/sandboxes`
+- `@sealant/workspaces`
 - `@sealant/source-integrations`
 
 ## Environment highlights
@@ -35,7 +35,7 @@ Worker env combines database + RabbitMQ contracts with worker-specific defaults 
 - optional GitHub App credentials
 - Docker socket path
 - default runtime adapter
-- default startup and SSH behavior for launched sandboxes
+- default startup and SSH behavior for launched workspaces
 - worker identity and lease duration
 
 See `apps/worker/src/env.ts` for the full contract.

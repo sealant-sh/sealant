@@ -79,7 +79,7 @@ const withRunInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback:
 
 const mapRun = (run: RunRecord): Run => ({
   runId: run.id,
-  sandboxId: run.sandboxId,
+  workspaceId: run.workspaceId,
   ...(run.attemptId === null ? {} : { attemptId: run.attemptId }),
   ownerUserId: run.ownerUserId,
   harnessId: run.harnessId,
@@ -155,7 +155,7 @@ export const createRun = (payload: CreateRunRequest) =>
     const run = yield* runs
       .createRun({
         id: `run_${randomUUID()}`,
-        sandboxId: payload.sandboxId,
+        workspaceId: payload.workspaceId,
         ownerUserId: payload.ownerUserId,
         harnessId: payload.harnessId,
         ...(payload.mode === undefined ? {} : { mode: payload.mode }),
@@ -166,7 +166,7 @@ export const createRun = (payload: CreateRunRequest) =>
         Effect.mapError((error) => {
           if (isForeignKeyViolation(error)) {
             return new RunBadRequestError({
-              message: `Unknown sandbox or owner for run (sandbox=${payload.sandboxId}).`,
+              message: `Unknown workspace or owner for run (workspace=${payload.workspaceId}).`,
             });
           }
           return new RunInternalServerError({
@@ -205,7 +205,7 @@ export const listRuns = (query: ListRunsQuery) =>
     const runs = yield* RunRepo;
     const items = yield* withRunInternalError(
       runs.listRuns({
-        ...(query.sandboxId === undefined ? {} : { sandboxId: query.sandboxId }),
+        ...(query.workspaceId === undefined ? {} : { workspaceId: query.workspaceId }),
         ...(query.ownerUserId === undefined ? {} : { ownerUserId: query.ownerUserId }),
         ...(query.status === undefined ? {} : { statuses: [query.status] }),
         limit,

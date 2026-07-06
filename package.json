@@ -7,7 +7,7 @@
     "build:tui": "turbo build --ui=tui",
     "changeset": "changeset",
     "clean": "pnpm run clean:workspaces && rm -rf node_modules .turbo",
-    "clean:sandboxes": "node tooling/scripts/clean-sandboxes.mjs",
+    "clean:runtime-workspaces": "node tooling/scripts/clean-workspaces.mjs",
     "clean:turbo": "turbo clean",
     "clean:workspaces": "pnpm -r --parallel exec rm -rf node_modules .turbo",
     "db:migrate": "pnpm --filter @sealant/db db:migrate",

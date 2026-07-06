@@ -25,8 +25,8 @@ import { env } from "../../runtime-env.js";
 
 /*
 User SSH public keys. Registration/list/archive serve the web tRPC proxy (owner injected by the
-web server — same trust model as createSandbox). `resolveSshPrincipal` is the gateway's key ->
-principal lookup at SSH auth time, gated by the shared gateway token like getSandboxSshTarget.
+web server — same trust model as createWorkspace). `resolveSshPrincipal` is the gateway's key ->
+principal lookup at SSH auth time, gated by the shared gateway token like getWorkspaceSshTarget.
 */
 
 const toErrorMessage = (error: unknown, fallback: string): string => {
@@ -62,17 +62,17 @@ const gatewayTokenMatches = (provided: string | undefined, expected: string): bo
 
 const requireGatewayToken = (headers: SshKeyGatewayHeaders) => {
   return Effect.gen(function* () {
-    const expectedGatewayToken = env.SANDBOX_SSH_GATEWAY_TOKEN?.trim();
+    const expectedGatewayToken = env.WORKSPACE_SSH_GATEWAY_TOKEN?.trim();
 
     if (expectedGatewayToken === undefined || expectedGatewayToken.length === 0) {
       return yield* new SshKeyServiceUnavailableError({
-        message: "Sandbox SSH gateway token is not configured.",
+        message: "Workspace SSH gateway token is not configured.",
       });
     }
 
     if (!gatewayTokenMatches(headers["x-sealant-gateway-token"], expectedGatewayToken)) {
       return yield* new SshKeyUnauthorizedError({
-        message: "Invalid sandbox SSH gateway token.",
+        message: "Invalid workspace SSH gateway token.",
       });
     }
   });

@@ -6,12 +6,12 @@ import {
   githubInstallationRepositories,
   githubWebhookDeliveries,
   profileStatusValues,
-  sandboxAttempts,
-  sandboxAttemptStatusValues,
-  sandboxAttemptTriggerTypeValues,
-  sandboxes,
-  sandboxStatusValues,
-  sandboxBuildJobs,
+  workspaceAttempts,
+  workspaceAttemptStatusValues,
+  workspaceAttemptTriggerTypeValues,
+  workspaces,
+  workspaceStatusValues,
+  workspaceBuildJobs,
 } from "./schema.js";
 
 export const githubAppInstallationSelectSchema = createSelectSchema(githubAppInstallations);
@@ -30,29 +30,29 @@ export const githubWebhookDeliverySelectSchema = createSelectSchema(githubWebhoo
 
 export const githubWebhookDeliveryInsertSchema = createInsertSchema(githubWebhookDeliveries);
 
-export const sandboxBuildJobSelectSchema = createSelectSchema(sandboxBuildJobs);
+export const workspaceBuildJobSelectSchema = createSelectSchema(workspaceBuildJobs);
 
-export const sandboxBuildJobInsertSchema = createInsertSchema(sandboxBuildJobs);
+export const workspaceBuildJobInsertSchema = createInsertSchema(workspaceBuildJobs);
 
-export const sandboxBuildJobStatusSchema = Schema.Literals([
+export const workspaceBuildJobStatusSchema = Schema.Literals([
   "queued",
   "running",
   "succeeded",
   "failed",
 ]);
 
-export const sandboxAttemptSelectSchema = createSelectSchema(sandboxAttempts);
+export const workspaceAttemptSelectSchema = createSelectSchema(workspaceAttempts);
 
-export const sandboxAttemptInsertSchema = createInsertSchema(sandboxAttempts);
+export const workspaceAttemptInsertSchema = createInsertSchema(workspaceAttempts);
 
-export const sandboxAttemptStatusSchema = Schema.Literals(sandboxAttemptStatusValues);
+export const workspaceAttemptStatusSchema = Schema.Literals(workspaceAttemptStatusValues);
 
-export const sandboxAttemptTriggerTypeSchema = Schema.Literals(sandboxAttemptTriggerTypeValues);
+export const workspaceAttemptTriggerTypeSchema = Schema.Literals(workspaceAttemptTriggerTypeValues);
 
-export const sandboxSelectSchema = createSelectSchema(sandboxes);
+export const workspaceSelectSchema = createSelectSchema(workspaces);
 
-export const sandboxInsertSchema = createInsertSchema(sandboxes);
+export const workspaceInsertSchema = createInsertSchema(workspaces);
 
-export const sandboxStatusSchema = Schema.Literals(sandboxStatusValues);
+export const workspaceStatusSchema = Schema.Literals(workspaceStatusValues);
 
 export const profileStatusSchema = Schema.Literals(profileStatusValues);

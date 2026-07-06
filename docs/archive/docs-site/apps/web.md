@@ -8,9 +8,9 @@ updated: 2026-03-28
 
 ## Purpose
 
-`@sealant/web` is the main product app for user-facing sandbox and run surfaces.
+`@sealant/web` is the main product app for user-facing workspace and run surfaces.
 
-It is where users authenticate, create/manage sandboxes, and review runs as evidence.
+It is where users authenticate, create/manage workspaces, and review runs as evidence.
 
 ## Current shape
 
@@ -24,7 +24,7 @@ It is where users authenticate, create/manage sandboxes, and review runs as evid
   - authenticated product shell (`_authenticated/*`)
   - API routes (`api/auth/*`, `api/trpc/*`)
 
-Observed authenticated areas include sandboxes, repositories, profiles, and registry views.
+Observed authenticated areas include workspaces, repositories, profiles, and registry views.
 
 ## Design source of truth
 

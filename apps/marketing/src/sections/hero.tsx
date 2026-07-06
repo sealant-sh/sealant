@@ -47,7 +47,7 @@ export function Hero() {
             {...child}
             className="mx-auto mt-6 max-w-[58ch] text-lg leading-relaxed text-muted-foreground"
           >
-            Sealant gives coding harnesses a self-hosted sandbox to work in, then turns every run
+            Sealant gives coding harnesses a self-hosted workspace to work in, then turns every run
             into a structured record you can replay and review: code changes, checks, terminal
             output, artifacts, browser evidence, and the source trail behind the result.
           </motion.p>

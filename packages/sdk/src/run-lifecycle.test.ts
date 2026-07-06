@@ -11,13 +11,13 @@ import { type ControlPlaneClient, SealantApiClient } from "./effect/api-client.j
 import { runHarness, startHarness } from "./effect/run-harness.js";
 import type { SdkRuntime, SdkServices } from "./effect/runtime.js";
 import type { SdkContext } from "./facade/context.js";
-import type { SandboxInit } from "./facade/sandbox.js";
+import type { WorkspaceInit } from "./facade/workspace.js";
 import { opencode } from "./harness.js";
 import { resolveInternalConfig } from "./internal/config.js";
 
 const wireRun = (status: WireRun["status"], overrides: Partial<WireRun> = {}): WireRun => ({
   runId: "run_1",
-  sandboxId: "sbx_1",
+  workspaceId: "ws_1",
   ownerUserId: "usr_local",
   harnessId: "opencode",
   mode: "one-shot",
@@ -83,12 +83,12 @@ const makeCtx = (client: ControlPlaneClient): SdkContext => ({
   config: resolveInternalConfig({ baseUrl: "http://stub.invalid" }),
 });
 
-const SANDBOX: SandboxInit = { id: "sbx_1", name: "t", status: "ready", harness: opencode() };
+const WORKSPACE: WorkspaceInit = { id: "ws_1", name: "t", status: "ready", harness: opencode() };
 
 describe("harness.start()", () => {
   it("returns the live handle immediately without polling or fetching changes", async () => {
     const { client, calls } = makeStub({});
-    const run = await startHarness(makeCtx(client), SANDBOX, "fix the test");
+    const run = await startHarness(makeCtx(client), WORKSPACE, "fix the test");
 
     expect(run.id).toBe("run_1");
     expect(run.result.status).toBe("queued");
@@ -97,9 +97,9 @@ describe("harness.start()", () => {
     expect(run.changes.files).toEqual([]);
   });
 
-  it("rejects when the sandbox handle has no harness", async () => {
+  it("rejects when the workspace handle has no harness", async () => {
     const { client } = makeStub({});
-    const handleWithoutHarness: SandboxInit = { id: "sbx_1", name: "t", status: "ready" };
+    const handleWithoutHarness: WorkspaceInit = { id: "ws_1", name: "t", status: "ready" };
     await expect(startHarness(makeCtx(client), handleWithoutHarness, "p")).rejects.toThrow(
       /no harness/,
     );
@@ -109,7 +109,7 @@ describe("harness.start()", () => {
     const { client, calls } = makeStub({
       getRun: () => wireRun("completed", { exitCode: 0 }),
     });
-    const started = await startHarness(makeCtx(client), SANDBOX, "fix the test");
+    const started = await startHarness(makeCtx(client), WORKSPACE, "fix the test");
 
     const settled = await started.wait();
     expect(settled.result.status).toBe("completed");
@@ -125,7 +125,7 @@ describe("harness.run()", () => {
     const { client, calls } = makeStub({
       getRun: () => wireRun("completed", { exitCode: 0 }),
     });
-    const run = await runHarness(makeCtx(client), SANDBOX, "fix the test");
+    const run = await runHarness(makeCtx(client), WORKSPACE, "fix the test");
 
     expect(run.result.status).toBe("completed");
     expect(run.changes.files).toEqual([{ path: "src/index.ts", change: "modified" }]);

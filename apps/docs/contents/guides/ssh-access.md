@@ -1,12 +1,12 @@
 ---
 title: SSH access
 description:
-  Register an SSH key and connect into a live sandbox through the gateway — including VS Code and
+  Register an SSH key and connect into a live workspace through the gateway — including VS Code and
   Cursor, and the one-key-per-user gotcha.
 ---
 
-Every sandbox with SSH enabled is reachable through the Sealant SSH gateway. You authenticate with
-an SSH key you register once, and connect to a per-sandbox username. Your key never leaves your
+Every workspace with SSH enabled is reachable through the Sealant SSH gateway. You authenticate with
+an SSH key you register once, and connect to a per-workspace username. Your key never leaves your
 machine; the gateway only ever sees your public key.
 
 ## Register a public key
@@ -18,9 +18,9 @@ Two places register a key, and they write to the same store:
 
 - **Settings → SSH keys** (`/settings/ssh-keys`) — paste a public key, optionally name it, and it
   works immediately. You can also list and remove registered keys here.
-- **Inline in the sandbox builder** — when you enable SSH on a new sandbox and have no key yet, the
-  builder lets you register one without leaving the form. See
-  [Creating sandboxes](/docs/guides/creating-sandboxes).
+- **Inline in the workspace builder** — when you enable SSH on a new workspace and have no key yet,
+  the builder lets you register one without leaving the form. See
+  [Creating workspaces](/docs/guides/creating-workspaces).
 
 If you do not have a key, generate one:
 
@@ -32,37 +32,37 @@ Then paste the contents of the public file (for example `~/.ssh/id_ed25519.pub`)
 
 ## The gateway model
 
-You do not connect to a sandbox directly. You connect to the gateway on port `2222`, and it routes
-you into the right sandbox based on the username and your key.
+You do not connect to a workspace directly. You connect to the gateway on port `2222`, and it routes
+you into the right workspace based on the username and your key.
 
-- **Username** is `sbx-<sandbox-id>` — the sandbox id with an `sbx-` prefix.
+- **Username** is `ws-<workspace-id>` — the workspace id with a `ws-` prefix.
 - **Auth** is public-key only. Passwords are never accepted.
 - **Principal resolution**: on connect, the gateway maps your key's fingerprint to the user who
-  registered it, then asks the API for the sandbox's SSH target. The API authorizes the connection
-  only when the sandbox is owned by that same user and its runtime is `running` or `ready`.
+  registered it, then asks the API for the workspace's SSH target. The API authorizes the connection
+  only when the workspace is owned by that same user and its runtime is `running` or `ready`.
 
-So a connection succeeds only when the key you present belongs to the user who owns the sandbox you
-are asking for.
+So a connection succeeds only when the key you present belongs to the user who owns the workspace
+you are asking for.
 
 ## Sessions are recorded
 
-Sandboxes are recorded environments, and that includes people: each SSH connection becomes a run (an
-"SSH session" in the run list), with its terminal activity captured into the same
+Workspaces are recorded environments, and that includes people: each SSH connection becomes a run
+(an "SSH session" in the run list), with its terminal activity captured into the same
 [execution record](/docs/concepts/execution-records) a harness run gets, and the working-tree diff
-captured when you disconnect. That is the point — work done by hand in a sandbox is part of the
-sandbox's evidence, not an invisible side door.
+captured when you disconnect. That is the point — work done by hand in a workspace is part of the
+workspace's evidence, not an invisible side door.
 
 Worth knowing: recording is byte-exact, so anything typed or printed in the session — including
 secret values you `export` or `cat` — lands in the record's scrollback. Best-effort secret redaction
 is a stated direction, not a shipped feature; treat session recordings with the same care as the
-sandbox itself.
+workspace itself.
 
 ## Connect
 
-Once the sandbox is running and your key is registered:
+Once the workspace is running and your key is registered:
 
 ```bash
-ssh -p 2222 sbx-<sandbox-id>@localhost
+ssh -p 2222 ws-<workspace-id>@localhost
 ```
 
 If you changed `SEALANT_SSH_PORT` or `SEALANT_SSH_HOST` at install time, substitute those values for
@@ -71,30 +71,30 @@ If you changed `SEALANT_SSH_PORT` or `SEALANT_SSH_HOST` at install time, substit
 If your registered key is not your default identity, point SSH at it explicitly:
 
 ```bash
-ssh -p 2222 -i ~/.ssh/id_ed25519 sbx-<sandbox-id>@localhost
+ssh -p 2222 -i ~/.ssh/id_ed25519 ws-<workspace-id>@localhost
 ```
 
 ## From VS Code or Cursor
 
-The sandbox detail page (`/sandboxes/<sandbox-id>`) shows action buttons when the sandbox exposes an
-SSH endpoint:
+The workspace detail page (`/workspaces/<workspace-id>`) shows action buttons when the workspace
+exposes an SSH endpoint:
 
 - **Open in VS Code** and **Open in Cursor** launch the editor's Remote-SSH flow against the
-  sandbox.
-- **Copy SSH command** copies the ready-to-run `ssh` line for the sandbox.
+  workspace.
+- **Copy SSH command** copies the ready-to-run `ssh` line for the workspace.
 
 The editor buttons open a `vscode://` / `cursor://` remote authority that targets the
-`sbx-<sandbox-id>` alias. For the editor to resolve that alias to the right host, port, and identity
-file, add a matching entry to your `~/.ssh/config`:
+`ws-<workspace-id>` alias. For the editor to resolve that alias to the right host, port, and
+identity file, add a matching entry to your `~/.ssh/config`:
 
 ```
-Host sbx-*
+Host ws-*
   HostName localhost
   Port 2222
   IdentityFile ~/.ssh/id_ed25519
 ```
 
-With that in place, `ssh sbx-<sandbox-id>` and the editor buttons both resolve the same way.
+With that in place, `ssh ws-<workspace-id>` and the editor buttons both resolve the same way.
 
 ## Gotchas
 
@@ -107,12 +107,13 @@ With that in place, `ssh sbx-<sandbox-id>` and the editor buttons both resolve t
 - **Changed port or host.** The `2222` / `localhost` defaults come from `SEALANT_SSH_PORT` and
   `SEALANT_SSH_HOST`. If your install overrides them, every command and config entry above uses your
   values instead.
-- **The sandbox must be up.** Principal resolution only authorizes a target whose runtime is
-  `running` or `ready`. A queued, building, or failed sandbox refuses SSH.
+- **The workspace must be up.** Principal resolution only authorizes a target whose runtime is
+  `running` or `ready`. A queued, building, or failed workspace refuses SSH.
 
 ## Related
 
-- [Creating sandboxes](/docs/guides/creating-sandboxes) — enabling SSH and registering a key inline.
+- [Creating workspaces](/docs/guides/creating-workspaces) — enabling SSH and registering a key
+  inline.
 - [Environment variables](/docs/reference/environment-variables) — `SEALANT_SSH_PORT`,
   `SEALANT_SSH_HOST`, and gateway knobs.
 - [Ports and data](/docs/reference/ports-and-data) — what binds to loopback and where the gateway

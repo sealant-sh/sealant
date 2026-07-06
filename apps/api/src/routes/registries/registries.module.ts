@@ -9,7 +9,7 @@ import {
   type RegistryTagsResponse,
   type RegistryExtensionsResponse,
 } from "@sealant/api-contracts";
-import { RegistryClientHttpError } from "@sealant/sandboxes";
+import { RegistryClientHttpError } from "@sealant/workspaces";
 import { Effect } from "effect";
 
 import { env } from "../../runtime-env.js";

@@ -14,14 +14,14 @@ import { ControlClient, type ShellSession, type ExecSession } from "./control-cl
 import type { PrincipalLookup } from "./principal-resolver.js";
 import { finalizeInteractiveRun, startInteractiveRun } from "./run-recorder.js";
 import {
-  parseSandboxIdFromUsername,
-  resolveSandboxControlTarget,
+  parseWorkspaceIdFromUsername,
+  resolveWorkspaceControlTarget,
   toControlTarget,
-} from "./sandbox-target.js";
+} from "./workspace-target.js";
 
 /*
 Gateway architecture in one sentence (gateway-spec §3):
-client SSH session <-> this process <-> sealantd *control connection* to the sandbox's control.sock.
+client SSH session <-> this process <-> sealantd *control connection* to the workspace's control.sock.
 
 The gateway is still an `ssh2.Server` toward the client (its own host key is the single known_hosts
 the user sees, pubkey auth identifies a principal). But instead of dialing an inner sshd, it opens one
@@ -36,7 +36,7 @@ export interface SshGatewayServerConfig {
   readonly hostKey: string;
   readonly banner?: string;
   readonly allowedClientKeys: ReadonlyArray<AuthorizedKeyEntry>;
-  readonly sandboxUsernamePrefix: string;
+  readonly workspaceUsernamePrefix: string;
   readonly coreApiBaseUrl: string;
   readonly gatewayToken: string;
   /** Resolves an offered key to its owning principal via the API (DB-registered keys). */
@@ -170,12 +170,12 @@ const bridgeChannel = (input: {
   });
 };
 
-// One incoming client connection maps to exactly one sandbox and one lazily-opened control
+// One incoming client connection maps to exactly one workspace and one lazily-opened control
 // connection. SSH channels are then mapped onto control commands across that connection.
 const bindClientConnection = (incomingConnection: Connection, config: SshGatewayServerConfig) => {
-  // The sandbox routing decision comes from the SSH username (sbx-<id>); the real per-sandbox gate is
+  // The workspace routing decision comes from the SSH username (ws-<id>); the real per-workspace gate is
   // the API, keyed by the authenticated principal. Both are set once auth passes.
-  let sandboxId: string | undefined;
+  let workspaceId: string | undefined;
   let principalId: string | undefined;
   // A single client connection gets a single control connection. Channels multiplex over it.
   let controlPromise: Promise<ControlClient> | undefined;
@@ -185,28 +185,28 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   let recordedRunId: string | undefined;
 
   const ensureControl = async (): Promise<ControlClient> => {
-    if (sandboxId === undefined || principalId === undefined) {
-      throw new Error("Incoming SSH connection is not mapped to an authorized sandbox.");
+    if (workspaceId === undefined || principalId === undefined) {
+      throw new Error("Incoming SSH connection is not mapped to an authorized workspace.");
     }
 
     if (controlPromise === undefined) {
       // Defer the control connection until the first channel request: no work for auth failures, and
-      // the API authorizes principal x sandbox at resolve time (§3.4).
-      const resolvedSandboxId = sandboxId;
+      // the API authorizes principal x workspace at resolve time (§3.4).
+      const resolvedWorkspaceId = workspaceId;
       const resolvedPrincipalId = principalId;
       controlPromise = (async () => {
-        const target = await resolveSandboxControlTarget({
+        const target = await resolveWorkspaceControlTarget({
           apiBaseUrl: config.coreApiBaseUrl,
           gatewayToken: config.gatewayToken,
           principalId: resolvedPrincipalId,
-          sandboxId: resolvedSandboxId,
+          workspaceId: resolvedWorkspaceId,
         });
         // Register the session's run BEFORE any daemon channel opens so its id can be threaded as
         // the execution id on every session/exec — that threading is what attributes the session's
         // telemetry to this run. Undefined (recording unavailable) never blocks access.
         recordedRunId = await startInteractiveRun({
           config: { apiBaseUrl: config.coreApiBaseUrl },
-          sandboxId: resolvedSandboxId,
+          workspaceId: resolvedWorkspaceId,
           ownerUserId: resolvedPrincipalId,
         });
         const client = ControlClient.open(toControlTarget(target));
@@ -279,12 +279,12 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
       return;
     }
 
-    const resolvedSandboxId = parseSandboxIdFromUsername(
+    const resolvedWorkspaceId = parseWorkspaceIdFromUsername(
       ctx.username,
-      config.sandboxUsernamePrefix,
+      config.workspaceUsernamePrefix,
     );
 
-    if (resolvedSandboxId === undefined) {
+    if (resolvedWorkspaceId === undefined) {
       ctx.reject();
       return;
     }
@@ -321,7 +321,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     }
 
     // The username is only a routing hint now; the principal (key owner) is the authorization subject.
-    sandboxId = resolvedSandboxId;
+    workspaceId = resolvedWorkspaceId;
     principalId = key.principalId;
     ctx.accept();
   };
@@ -412,7 +412,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             });
           } catch (error) {
             console.error("[ssh-gateway] shell session setup failed", {
-              sandboxId,
+              workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
             sshChannel.exit(1);
@@ -448,7 +448,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             });
           } catch (error) {
             console.error("[ssh-gateway] exec session setup failed", {
-              sandboxId,
+              workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
             sshChannel.exit(1);
@@ -487,7 +487,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             });
           } catch (error) {
             console.error("[ssh-gateway] sftp subsystem setup failed", {
-              sandboxId,
+              workspaceId,
               error: error instanceof Error ? error.message : String(error),
             });
             sshChannel.end();
@@ -501,7 +501,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         try {
           const control = await ensureControl();
           // §3.3 direct-tcpip -> openForward. This is the VS Code Remote-SSH server path: the editor
-          // connects *through* the sandbox to host:port (openForward connects from inside the
+          // connects *through* the workspace to host:port (openForward connects from inside the
           // container), not from the gateway host.
           const { channel } = await control.openForward(info.destIP, info.destPort, recordedRunId);
           const sshChannel = acceptChannel();
@@ -528,7 +528,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   incomingConnection.on("error", (error) => {
     console.error("[ssh-gateway] incoming connection error", {
       error: error.message,
-      sandboxId,
+      workspaceId,
     });
   });
 

@@ -28,26 +28,26 @@ the bind host. See [Beyond localhost](/docs/guides/beyond-localhost) for exposin
 
 ## State
 
-| State                         | Location                                                | Kind                |
-| ----------------------------- | ------------------------------------------------------- | ------------------- |
-| Install metadata              | `~/.sealant/compose.yaml`, `~/.sealant/.env`            | Host files          |
-| Postgres data                 | `sealant_postgres-data`                                 | Docker named volume |
-| Registry data                 | `sealant_zot-data`                                      | Docker named volume |
-| SSH gateway host key          | `sealant_gateway-keys`, at `/keys/ssh_gateway_host_key` | Docker named volume |
-| Sandbox control sockets       | `/run/sealant/sockets`                                  | Host path           |
-| Sandbox containers and images | Host Docker daemon (via the mounted socket)             | Docker objects      |
+| State                           | Location                                                | Kind                |
+| ------------------------------- | ------------------------------------------------------- | ------------------- |
+| Install metadata                | `~/.sealant/compose.yaml`, `~/.sealant/.env`            | Host files          |
+| Postgres data                   | `sealant_postgres-data`                                 | Docker named volume |
+| Registry data                   | `sealant_zot-data`                                      | Docker named volume |
+| SSH gateway host key            | `sealant_gateway-keys`, at `/keys/ssh_gateway_host_key` | Docker named volume |
+| Workspace control sockets       | `/run/sealant/sockets`                                  | Host path           |
+| Workspace containers and images | Host Docker daemon (via the mounted socket)             | Docker objects      |
 
 A few things worth knowing:
 
-- **The control plane's durable state is Postgres.** Accounts, SSH keys, sandbox metadata, and
+- **The control plane's durable state is Postgres.** Accounts, SSH keys, workspace metadata, and
   execution records all live in the `sealant_postgres-data` volume.
 - **The SSH gateway host key is generated once** into `sealant_gateway-keys` and is not rotated on
   upgrade. Deleting that volume changes the host key and triggers the "host key changed" warning on
   next connect.
-- **Sandboxes run on your host Docker daemon**, created by the worker through the mounted socket.
+- **Workspaces run on your host Docker daemon**, created by the worker through the mounted socket.
   They are not part of the compose project — see the uninstall note below.
-- The registry (`sealant_zot-data`) holds the built sandbox images. It is a cache: it can be rebuilt
-  from source repositories, but losing it means re-building sandboxes.
+- The registry (`sealant_zot-data`) holds the built workspace images. It is a cache: it can be
+  rebuilt from source repositories, but losing it means re-building workspaces.
 
 ## What to back up
 
@@ -64,7 +64,7 @@ existing users.
 ## A note on uninstall
 
 `docker compose --project-directory ~/.sealant down -v` removes the compose services and the three
-named volumes. It does **not** remove sandbox containers or images the worker created on your host
+named volumes. It does **not** remove workspace containers or images the worker created on your host
 Docker daemon — those are separate Docker objects. Clean them up with the usual `docker` commands if
 needed. Full sequence in [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
 

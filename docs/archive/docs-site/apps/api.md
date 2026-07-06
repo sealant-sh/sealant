@@ -11,16 +11,16 @@ updated: 2026-03-31
 `@sealant/api` is the control-plane API for validation, orchestration, lifecycle updates, and
 stateful read models.
 
-Product-facing contracts should model around `sandboxes` and `runs`, while lower-level orchestration
-details (build jobs, attempts) remain internal/operator-facing.
+Product-facing contracts should model around `workspaces` and `runs`, while lower-level
+orchestration details (build jobs, attempts) remain internal/operator-facing.
 
 ## Current capabilities
 
 - Node-based Hono server
 - OpenAPI generation (`/openapi.json`)
 - Scalar docs UI (`/docs`)
-- route groups for system, sandboxes, registries, packages, and github
-- sandbox lifecycle routes backed by `@sealant/db`, `@sealant/rabbitmq`, and `@sealant/sandboxes`
+- route groups for system, workspaces, registries, packages, and github
+- workspace lifecycle routes backed by `@sealant/db`, `@sealant/rabbitmq`, and `@sealant/workspaces`
 - schema-first route contracts powered by `@sealant/validators`
 
 Primary route details are documented in `apps/api/README.md`.
@@ -29,7 +29,7 @@ Primary route details are documented in `apps/api/README.md`.
 
 - `@sealant/db`
 - `@sealant/rabbitmq`
-- `@sealant/sandboxes`
+- `@sealant/workspaces`
 - `@sealant/source-integrations`
 - `@sealant/validators`
 
@@ -41,7 +41,7 @@ Environment parsing merges database and RabbitMQ env contracts and adds API-spec
 - registry connectivity
 - Repology request configuration
 - GitHub App configuration
-- optional sandbox SSH gateway rewrite settings
+- optional workspace SSH gateway rewrite settings
 
 See `apps/api/src/env.ts` for the complete runtime contract.
 

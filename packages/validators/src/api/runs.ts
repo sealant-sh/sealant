@@ -17,7 +17,7 @@ export const runIdParamsSchema = z.object({
 
 export const runSchema = z.object({
   runId: z.string(),
-  sandboxId: z.string(),
+  workspaceId: z.string(),
   attemptId: z.string().optional(),
   ownerUserId: z.string(),
   harnessId: z.string(),
@@ -34,7 +34,7 @@ export const runSchema = z.object({
 export type Run = z.infer<typeof runSchema>;
 
 export const listRunsQuerySchema = z.object({
-  sandboxId: z.string().trim().min(1).optional(),
+  workspaceId: z.string().trim().min(1).optional(),
   status: runStatusSchema.optional(),
   limit: z.number().int().min(1).max(200).optional(),
 });

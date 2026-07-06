@@ -96,7 +96,7 @@ export const authGithubCommand = Command.make(
         "Sealant captures the token your gh CLI already holds (`gh auth token` is a documented",
       );
       yield* Console.log(
-        "command) so sandboxes can push, pull, and call the GitHub API as you. Caveats: revoking",
+        "command) so workspaces can push, pull, and call the GitHub API as you. Caveats: revoking",
       );
       yield* Console.log(
         'the "GitHub CLI" OAuth app kills it, and logging into gh on many machines expires the oldest token.',
@@ -134,7 +134,7 @@ export const authGithubCommand = Command.make(
           new CliFailure({
             message: `The token lacks the \`${REQUIRED_SCOPE}\` scope (has: ${
               preflight.scopes.length > 0 ? preflight.scopes.join(", ") : "none"
-            }), so sandboxes could not push or pull.`,
+            }), so workspaces could not push or pull.`,
             hint: "Run `gh auth refresh -s repo,workflow`, then retry.",
           }),
         );

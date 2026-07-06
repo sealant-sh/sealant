@@ -33,18 +33,18 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.user.id,
       to: r.repositoryProfileRevisions.createdByUserId,
     }),
-    ownedSandboxAttempts: r.many.sandboxAttempts({
+    ownedWorkspaceAttempts: r.many.workspaceAttempts({
       from: r.user.id,
-      to: r.sandboxAttempts.ownerUserId,
+      to: r.workspaceAttempts.ownerUserId,
     }),
-    requestedSandboxAttempts: r.many.sandboxAttempts({
+    requestedWorkspaceAttempts: r.many.workspaceAttempts({
       from: r.user.id,
-      to: r.sandboxAttempts.requestedByUserId,
+      to: r.workspaceAttempts.requestedByUserId,
     }),
-    ownedSandboxes: r.many.sandboxes({ from: r.user.id, to: r.sandboxes.ownerUserId }),
-    requestedSandboxes: r.many.sandboxes({
+    ownedWorkspaces: r.many.workspaces({ from: r.user.id, to: r.workspaces.ownerUserId }),
+    requestedWorkspaces: r.many.workspaces({
       from: r.user.id,
-      to: r.sandboxes.requestedByUserId,
+      to: r.workspaces.requestedByUserId,
     }),
   },
 
@@ -65,11 +65,11 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.repositories.id,
       to: r.repositoryProfiles.repositoryId,
     }),
-    sandboxAttempts: r.many.sandboxAttempts({
+    workspaceAttempts: r.many.workspaceAttempts({
       from: r.repositories.id,
-      to: r.sandboxAttempts.repositoryId,
+      to: r.workspaceAttempts.repositoryId,
     }),
-    sandboxes: r.many.sandboxes({ from: r.repositories.id, to: r.sandboxes.repositoryId }),
+    workspaces: r.many.workspaces({ from: r.repositories.id, to: r.workspaces.repositoryId }),
   },
 
   githubAppInstallations: {
@@ -179,13 +179,13 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.profileRevisions.id,
       to: r.profiles.activeRevisionId,
     }),
-    sandboxAttempts: r.many.sandboxAttempts({
+    workspaceAttempts: r.many.workspaceAttempts({
       from: r.profileRevisions.id,
-      to: r.sandboxAttempts.profileRevisionId,
+      to: r.workspaceAttempts.profileRevisionId,
     }),
-    sandboxes: r.many.sandboxes({
+    workspaces: r.many.workspaces({
       from: r.profileRevisions.id,
-      to: r.sandboxes.profileRevisionId,
+      to: r.workspaces.profileRevisionId,
     }),
   },
 
@@ -291,13 +291,13 @@ export const relations = defineRelations(schema, (r) => ({
       from: r.repositoryProfileRevisions.id,
       to: r.repositoryProfiles.activeRevisionId,
     }),
-    sandboxAttempts: r.many.sandboxAttempts({
+    workspaceAttempts: r.many.workspaceAttempts({
       from: r.repositoryProfileRevisions.id,
-      to: r.sandboxAttempts.repositoryProfileRevisionId,
+      to: r.workspaceAttempts.repositoryProfileRevisionId,
     }),
-    sandboxes: r.many.sandboxes({
+    workspaces: r.many.workspaces({
       from: r.repositoryProfileRevisions.id,
-      to: r.sandboxes.repositoryProfileRevisionId,
+      to: r.workspaces.repositoryProfileRevisionId,
     }),
   },
 
@@ -312,90 +312,93 @@ export const relations = defineRelations(schema, (r) => ({
     }),
   },
 
-  sandboxAttempts: {
-    owner: r.one.user({ from: r.sandboxAttempts.ownerUserId, to: r.user.id }),
-    requestedByUser: r.one.user({ from: r.sandboxAttempts.requestedByUserId, to: r.user.id }),
+  workspaceAttempts: {
+    owner: r.one.user({ from: r.workspaceAttempts.ownerUserId, to: r.user.id }),
+    requestedByUser: r.one.user({ from: r.workspaceAttempts.requestedByUserId, to: r.user.id }),
     repository: r.one.repositories({
-      from: r.sandboxAttempts.repositoryId,
+      from: r.workspaceAttempts.repositoryId,
       to: r.repositories.id,
     }),
     repositoryProfileRevision: r.one.repositoryProfileRevisions({
-      from: r.sandboxAttempts.repositoryProfileRevisionId,
+      from: r.workspaceAttempts.repositoryProfileRevisionId,
       to: r.repositoryProfileRevisions.id,
     }),
     profileRevision: r.one.profileRevisions({
-      from: r.sandboxAttempts.profileRevisionId,
+      from: r.workspaceAttempts.profileRevisionId,
       to: r.profileRevisions.id,
     }),
-    retryOfRun: r.one.sandboxAttempts({
-      from: r.sandboxAttempts.retryOfRunId,
-      to: r.sandboxAttempts.id,
+    retryOfRun: r.one.workspaceAttempts({
+      from: r.workspaceAttempts.retryOfRunId,
+      to: r.workspaceAttempts.id,
     }),
-    retries: r.many.sandboxAttempts({
-      from: r.sandboxAttempts.id,
-      to: r.sandboxAttempts.retryOfRunId,
+    retries: r.many.workspaceAttempts({
+      from: r.workspaceAttempts.id,
+      to: r.workspaceAttempts.retryOfRunId,
     }),
-    snapshot: r.one.sandboxAttemptSnapshots({
-      from: r.sandboxAttempts.id,
-      to: r.sandboxAttemptSnapshots.runId,
+    snapshot: r.one.workspaceAttemptSnapshots({
+      from: r.workspaceAttempts.id,
+      to: r.workspaceAttemptSnapshots.runId,
     }),
-    sandboxRunLink: r.one.sandboxRunLinks({
-      from: r.sandboxAttempts.id,
-      to: r.sandboxRunLinks.runId,
+    workspaceRunLink: r.one.workspaceRunLinks({
+      from: r.workspaceAttempts.id,
+      to: r.workspaceRunLinks.runId,
     }),
-    sandboxesAsLatestRun: r.many.sandboxes({
-      from: r.sandboxAttempts.id,
-      to: r.sandboxes.latestRunId,
+    workspacesAsLatestRun: r.many.workspaces({
+      from: r.workspaceAttempts.id,
+      to: r.workspaces.latestRunId,
     }),
     ociImageBuildJobs: r.many.ociImageBuildJobs({
-      from: r.sandboxAttempts.id,
+      from: r.workspaceAttempts.id,
       to: r.ociImageBuildJobs.runId,
     }),
-    runtimeInstance: r.one.sandboxRuntimeInstances({
-      from: r.sandboxAttempts.id,
-      to: r.sandboxRuntimeInstances.runId,
+    runtimeInstance: r.one.workspaceRuntimeInstances({
+      from: r.workspaceAttempts.id,
+      to: r.workspaceRuntimeInstances.runId,
     }),
   },
 
-  sandboxes: {
-    owner: r.one.user({ from: r.sandboxes.ownerUserId, to: r.user.id }),
-    requestedByUser: r.one.user({ from: r.sandboxes.requestedByUserId, to: r.user.id }),
-    repository: r.one.repositories({ from: r.sandboxes.repositoryId, to: r.repositories.id }),
+  workspaces: {
+    owner: r.one.user({ from: r.workspaces.ownerUserId, to: r.user.id }),
+    requestedByUser: r.one.user({ from: r.workspaces.requestedByUserId, to: r.user.id }),
+    repository: r.one.repositories({ from: r.workspaces.repositoryId, to: r.repositories.id }),
     repositoryProfileRevision: r.one.repositoryProfileRevisions({
-      from: r.sandboxes.repositoryProfileRevisionId,
+      from: r.workspaces.repositoryProfileRevisionId,
       to: r.repositoryProfileRevisions.id,
     }),
     profileRevision: r.one.profileRevisions({
-      from: r.sandboxes.profileRevisionId,
+      from: r.workspaces.profileRevisionId,
       to: r.profileRevisions.id,
     }),
-    latestRun: r.one.sandboxAttempts({ from: r.sandboxes.latestRunId, to: r.sandboxAttempts.id }),
-    runLinks: r.many.sandboxRunLinks({
-      from: r.sandboxes.id,
-      to: r.sandboxRunLinks.sandboxId,
+    latestRun: r.one.workspaceAttempts({
+      from: r.workspaces.latestRunId,
+      to: r.workspaceAttempts.id,
+    }),
+    runLinks: r.many.workspaceRunLinks({
+      from: r.workspaces.id,
+      to: r.workspaceRunLinks.workspaceId,
     }),
   },
 
-  sandboxRunLinks: {
-    sandbox: r.one.sandboxes({ from: r.sandboxRunLinks.sandboxId, to: r.sandboxes.id }),
-    run: r.one.sandboxAttempts({ from: r.sandboxRunLinks.runId, to: r.sandboxAttempts.id }),
+  workspaceRunLinks: {
+    workspace: r.one.workspaces({ from: r.workspaceRunLinks.workspaceId, to: r.workspaces.id }),
+    run: r.one.workspaceAttempts({ from: r.workspaceRunLinks.runId, to: r.workspaceAttempts.id }),
   },
 
-  sandboxAttemptSnapshots: {
-    run: r.one.sandboxAttempts({
-      from: r.sandboxAttemptSnapshots.runId,
-      to: r.sandboxAttempts.id,
+  workspaceAttemptSnapshots: {
+    run: r.one.workspaceAttempts({
+      from: r.workspaceAttemptSnapshots.runId,
+      to: r.workspaceAttempts.id,
     }),
   },
 
   ociImageBuildJobs: {
-    run: r.one.sandboxAttempts({ from: r.ociImageBuildJobs.runId, to: r.sandboxAttempts.id }),
+    run: r.one.workspaceAttempts({ from: r.ociImageBuildJobs.runId, to: r.workspaceAttempts.id }),
   },
 
-  sandboxRuntimeInstances: {
-    run: r.one.sandboxAttempts({
-      from: r.sandboxRuntimeInstances.runId,
-      to: r.sandboxAttempts.id,
+  workspaceRuntimeInstances: {
+    run: r.one.workspaceAttempts({
+      from: r.workspaceRuntimeInstances.runId,
+      to: r.workspaceAttempts.id,
     }),
   },
 }));

@@ -8,14 +8,14 @@ import { PackagesHandlersLive } from "./packages/packages.http-api.js";
 import { ProfilesHandlersLive } from "./profiles/profiles.http-api.js";
 import { RegistriesHandlersLive } from "./registries/registries.http-api.js";
 import { RunsHandlersLive } from "./runs/runs.http-api.js";
-import { SandboxesHandlersLive } from "./sandboxes/sandboxes.http-api.js";
 import { SshKeysHandlersLive } from "./ssh-keys/ssh-keys.http-api.js";
 import { SystemHandlersLive } from "./system/system.http-api.js";
+import { WorkspacesHandlersLive } from "./workspaces/workspaces.http-api.js";
 
 const ControlPlaneHandlersLive = Layer.mergeAll(
   SystemHandlersLive,
   PackagesHandlersLive,
-  SandboxesHandlersLive,
+  WorkspacesHandlersLive,
   SshKeysHandlersLive,
   ConnectedAccountsHandlersLive,
   ProfilesHandlersLive,

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import type { ProfileRecord } from "@/lib/navigation/sandbox-data";
+import type { ProfileRecord } from "@/lib/navigation/workspace-data";
 
 interface ProfileRowsProps {
   readonly profiles: readonly ProfileRecord[];

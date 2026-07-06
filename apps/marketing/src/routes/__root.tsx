@@ -12,7 +12,7 @@ const REPO = "https://github.com/sealant-sh/sealant";
 
 const TITLE = "Sealant — the open-source runtime for AI dev agents";
 const DESCRIPTION =
-  "Sealant is the open-source, self-hosted runtime under your AI agent. One call spins up a real sandbox around your repo, runs your harness, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.";
+  "Sealant is the open-source, self-hosted runtime under your AI agent. One call spins up a real workspace around your repo, runs your harness, and hands back a structured run you can replay. Bring your own agent. Keep your code. Read the evidence yourself.";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -47,7 +47,7 @@ function RootComponent() {
               <nav className="hidden items-center gap-7 lg:flex" aria-label="Primary">
                 <TopLevelNavLink href="#records">The run</TopLevelNavLink>
                 <TopLevelNavLink href="#sdk">SDK</TopLevelNavLink>
-                <TopLevelNavLink href="#sandboxes">Sandboxes</TopLevelNavLink>
+                <TopLevelNavLink href="#workspaces">Workspaces</TopLevelNavLink>
                 <TopLevelNavLink href="#products">Products</TopLevelNavLink>
                 <TopLevelNavLink href={REPO}>Docs</TopLevelNavLink>
               </nav>
@@ -95,7 +95,7 @@ function RootComponent() {
                   ["The run", "#records"],
                   ["SDK", "#sdk"],
                   ["What it captures", "#capture"],
-                  ["Sandboxes", "#sandboxes"],
+                  ["Workspaces", "#workspaces"],
                   ["GitHub", REPO],
                 ]}
               />

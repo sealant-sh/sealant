@@ -8,7 +8,7 @@ User SSH public keys. Two audiences:
 - the web app (via its tRPC proxy) registers/lists/archives keys for the logged-in user;
 - the SSH gateway resolves an offered key to its owning principal at auth time via
   `resolveSshPrincipal`, gated by the shared gateway token (same trust model as
-  `getSandboxSshTarget` in sandboxes.ts).
+  `getWorkspaceSshTarget` in workspaces.ts).
 */
 
 export const sshKeyGatewayHeadersSchema = Schema.Struct({
@@ -18,7 +18,7 @@ export const sshKeyGatewayHeadersSchema = Schema.Struct({
 export type SshKeyGatewayHeaders = typeof sshKeyGatewayHeadersSchema.Type;
 
 export const createSshKeyRequestSchema = Schema.Struct({
-  // Same trust model as createSandbox: the internal API trusts the caller-supplied owner; the web
+  // Same trust model as createWorkspace: the internal API trusts the caller-supplied owner; the web
   // server injects the session user id.
   ownerUserId: NonEmptyString,
   name: Schema.optional(NonEmptyString),

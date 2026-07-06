@@ -40,9 +40,9 @@ function SshKeysSettingsPage() {
           SSH keys
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Public keys registered here authenticate you at the sandbox SSH gateway. A new key works
-          immediately — connect with <span className="font-mono">ssh sbx-&lt;sandboxId&gt;</span>{" "}
-          after launching a sandbox.
+          Public keys registered here authenticate you at the workspace SSH gateway. A new key works
+          immediately — connect with <span className="font-mono">ssh ws-&lt;workspaceId&gt;</span>{" "}
+          after launching a workspace.
         </p>
       </header>
 
@@ -143,7 +143,7 @@ function SshKeysSettingsPage() {
             <div className="mt-6 space-y-4 border-t border-rule-faint pt-6 text-sm leading-relaxed text-muted-foreground">
               <p>
                 The gateway matches the key your SSH client offers against your registered keys and
-                only routes you to sandboxes <em>you own</em>.
+                only routes you to workspaces <em>you own</em>.
               </p>
               <p>
                 Keys take effect immediately on registration and stop working immediately on removal
@@ -152,7 +152,7 @@ function SshKeysSettingsPage() {
               <div className="rounded-xl border border-rule-faint bg-background px-4 py-4">
                 <p className="ev-eyebrow">Connect</p>
                 <p className="mt-2 font-mono text-xs text-foreground break-all">
-                  ssh sbx-&lt;sandboxId&gt;
+                  ssh ws-&lt;workspaceId&gt;
                 </p>
               </div>
             </div>

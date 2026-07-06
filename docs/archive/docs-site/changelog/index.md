@@ -33,7 +33,7 @@ Each entry must include all of the following fields:
 Use concise tags so reviewers can grep quickly:
 
 - `area:*` (for example `area:api`, `area:rabbitmq`, `area:docs`)
-- `domain:*` (for example `domain:sandboxes`, `domain:issue-workflows`)
+- `domain:*` (for example `domain:workspaces`, `domain:issue-workflows`)
 - `kind:*` (for example `kind:refactor`, `kind:feature`, `kind:fix`)
 - `risk:*` (`risk:low`, `risk:medium`, `risk:high`)
 - `arch:*` (for example `arch:effect`, `arch:lifecycle`)
@@ -52,7 +52,7 @@ Use concise tags so reviewers can grep quickly:
 | `area:worker`                | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
 | `domain:source-integrations` | `CHG-2026-04-12-001`                                                                   |
 | `domain:issue-workflows`     | `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                                             |
-| `domain:sandboxes`           | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
+| `domain:workspaces`          | `CHG-2026-04-12-002`, `CHG-2026-04-12-001`, `CHG-2026-04-03-001`                       |
 | `kind:fix`                   | `CHG-2026-04-12-001`                                                                   |
 | `kind:feature`               | `CHG-2026-04-03-001`                                                                   |
 | `kind:refactor`              | `CHG-2026-04-12-002`, `CHG-2026-04-02-001`                                             |
@@ -63,13 +63,13 @@ Use concise tags so reviewers can grep quickly:
 
 ### CHG-2026-04-12-002 - Complete Control-Plane Route Migration from Hono to Effect HttpApi
 
-| Field    | Value                                                                                      |
-| -------- | ------------------------------------------------------------------------------------------ |
-| `status` | `in_review`                                                                                |
-| `owners` | `engineering`                                                                              |
-| `scope`  | `apps/api`, `packages/api-contracts`, `apps/docs`                                          |
-| `tags`   | `arch:effect`, `area:api`, `area:docs`, `domain:sandboxes`, `kind:refactor`, `risk:medium` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/56`, commits: `c56686f`, `2fe9094`         |
+| Field    | Value                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------- |
+| `status` | `in_review`                                                                                 |
+| `owners` | `engineering`                                                                               |
+| `scope`  | `apps/api`, `packages/api-contracts`, `apps/docs`                                           |
+| `tags`   | `arch:effect`, `area:api`, `area:docs`, `domain:workspaces`, `kind:refactor`, `risk:medium` |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/56`, commits: `c56686f`, `2fe9094`          |
 
 **PR Description (copy-ready)**
 
@@ -79,24 +79,25 @@ to Effect `HttpApi` contracts and handlers, and wires them into a single control
 **Key changes**
 
 - **Contract-first expansion:** Add Effect HTTP contracts for `system`, `packages`, `registries`,
-  and `sandboxes` in `@sealant/api-contracts` and register all groups in `ControlPlaneAPI`.
+  and `workspaces` in `@sealant/api-contracts` and register all groups in `ControlPlaneAPI`.
 - **Per-domain Effect modules:** Implement route behavior in `*.module.ts` files and keep
   `*.http-api.ts` as thin endpoint-to-use-case bindings.
 - **Unified control-plane composition:** Add a composed API layer in
   `apps/api/src/routes/control-plane.http-api.ts` and switch `apps/api/src/index.ts` to consume it.
 - **Capability service boundaries:** Add Effect services for package standardization, registry
-  access, and sandbox build-job publishing in `apps/api/src/services/control-plane-capabilities.ts`.
+  access, and workspace build-job publishing in
+  `apps/api/src/services/control-plane-capabilities.ts`.
 - **Error boundary mapping:** Preserve domain-level 4xx/5xx behavior by mapping Promise-based and
   repository failures into typed contract errors.
 
 **Scope in this PR**
 
 - Add new contracts in
-  `packages/api-contracts/src/core-api/{system,packages,registries,sandboxes}.ts`.
+  `packages/api-contracts/src/core-api/{system,packages,registries,workspaces}.ts`.
 - Update `packages/api-contracts/src/core-api/control-plane.ts` and
   `packages/api-contracts/src/index.ts` exports.
 - Add Effect domain modules and bindings in
-  `apps/api/src/routes/{system,packages,registries,sandboxes}/*`.
+  `apps/api/src/routes/{system,packages,registries,workspaces}/*`.
 - Add composed route layer in `apps/api/src/routes/control-plane.http-api.ts`.
 - Update API startup wiring in `apps/api/src/index.ts` to use `ControlPlaneDataAccessLive` plus
   control-plane capability layers.
@@ -119,7 +120,7 @@ to Effect `HttpApi` contracts and handlers, and wires them into a single control
 1. `packages/api-contracts/src/core-api/control-plane.ts` and new contract files - endpoint shapes
    and error contracts.
 2. `apps/api/src/routes/control-plane.http-api.ts` - composed handler wiring.
-3. `apps/api/src/routes/sandboxes/sandboxes.module.ts` - largest behavior migration surface.
+3. `apps/api/src/routes/workspaces/workspaces.module.ts` - largest behavior migration surface.
 4. `apps/api/src/routes/{packages,registries,system}/*.module.ts` - remaining migrated domains.
 5. `apps/api/src/services/control-plane-capabilities.ts` and `apps/api/src/index.ts` - runtime
    composition and layer provisioning.
@@ -127,7 +128,7 @@ to Effect `HttpApi` contracts and handlers, and wires them into a single control
 **Implementation summary**
 
 - Added four new Effect contract groups and attached them to `ControlPlaneAPI`.
-- Added Effect module + binding pairs for `system`, `packages`, `registries`, and `sandboxes`.
+- Added Effect module + binding pairs for `system`, `packages`, `registries`, and `workspaces`.
 - Introduced `ControlPlaneCapabilitiesLive` to centralize Promise-backed integration boundaries.
 - Switched app bootstrap from GitHub-only API layer to full control-plane API layer.
 - Preserved GitHub group behavior and exported `GitHubHandlersLive` for merged composition.
@@ -141,7 +142,7 @@ Both commands passed after migration and wiring updates.
 
 **Risk and mitigation**
 
-- Primary risk is behavior drift on sandbox endpoints due to migration size.
+- Primary risk is behavior drift on workspace endpoints due to migration size.
 - Mitigated by retaining existing persistence/service dependencies, preserving route shapes, and
   validating with full monorepo typecheck.
 - Mitigated by keeping contracts explicit in `@sealant/api-contracts` and using typed boundary
@@ -149,24 +150,24 @@ Both commands passed after migration and wiring updates.
 
 **Follow-ups**
 
-- Add focused API tests for migrated `packages`, `registries`, and `sandboxes` Effect handlers.
+- Add focused API tests for migrated `packages`, `registries`, and `workspaces` Effect handlers.
 - Remove or archive deprecated Hono route files once migration confidence gates are complete.
 - Set `status` to `merged` after merge.
 
 ### CHG-2026-04-12-001 - Stabilize DB Client Wiring and Effect Repository Access
 
-| Field    | Value                                                                                                                                                                                            |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `status` | `in_review`                                                                                                                                                                                      |
-| `owners` | `engineering`                                                                                                                                                                                    |
-| `scope`  | `packages/db`, `packages/auth`, `packages/sandboxes`, `apps/api`, `apps/web`, `apps/worker`, `apps/docs`, `flake.nix`                                                                            |
-| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:web`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `domain:source-integrations`, `kind:fix`, `risk:medium` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/55`, commits: `ba6ae9e`, `ea094d8`, `f6e0e67`                                                                                                    |
+| Field    | Value                                                                                                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status` | `in_review`                                                                                                                                                                                       |
+| `owners` | `engineering`                                                                                                                                                                                     |
+| `scope`  | `packages/db`, `packages/auth`, `packages/workspaces`, `apps/api`, `apps/web`, `apps/worker`, `apps/docs`, `flake.nix`                                                                            |
+| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:web`, `area:worker`, `area:auth`, `area:docs`, `domain:workspaces`, `domain:issue-workflows`, `domain:source-integrations`, `kind:fix`, `risk:medium` |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/55`, commits: `ba6ae9e`, `ea094d8`, `f6e0e67`                                                                                                     |
 
 **PR Description (copy-ready)**
 
 This PR stabilizes control-plane DB usage across API/web/worker/auth flows by aligning Drizzle
-client construction, moving sandbox worker paths onto Effect repository services, and documenting
+client construction, moving workspace worker paths onto Effect repository services, and documenting
 the change with the changelog contract.
 
 **Key changes**
@@ -177,10 +178,11 @@ the change with the changelog contract.
 - **Fix casing drift for PostgreSQL queries:** Set Effect Drizzle client `casing: "snake_case"` and
   wire explicit schema relations to prevent generated SQL from requesting camelCase columns.
 - **Adopt relation-driven repository reads:** Move repository read paths in GitHub installations,
-  profiles, repository profiles, sandboxes, issue workflows, and issue workflow executions to
+  profiles, repository profiles, workspaces, issue workflows, and issue workflow executions to
   `db.query.*` + `with` loading patterns.
-- **Move sandbox worker DB access to Effect services:** Replace direct repository constructor usage
-  with repository tags/layers in sandbox build orchestration and GitHub installation auth resolver.
+- **Move workspace worker DB access to Effect services:** Replace direct repository constructor
+  usage with repository tags/layers in workspace build orchestration and GitHub installation auth
+  resolver.
 - **Strengthen app boundary wiring:** Update API package standardizer calls, worker startup DB
   wiring, web imports, and auth startup to use the updated DB client contracts.
 - **Changelog-first PR discipline:** Add this entry and update tag index for canonical review and
@@ -194,15 +196,15 @@ the change with the changelog contract.
 - Add explicit relation definitions in `packages/db/src/schema/relations.ts` and adopt
   relation-aware query patterns in repository implementations.
 - Update DB consumer wiring in `packages/auth/src/server.ts`,
-  `apps/worker/src/workers/sandboxes.ts`, `apps/web/src/lib/trpc/context.ts`,
-  `apps/api/src/lib/create-package-standardizer.ts`, and sandbox worker internals.
+  `apps/worker/src/workers/workspaces.ts`, `apps/web/src/lib/trpc/context.ts`,
+  `apps/api/src/lib/create-package-standardizer.ts`, and workspace worker internals.
 - Record implementation details in `apps/docs/contents/changelog/index.md`.
 
 **Non-goals (explicitly not changed)**
 
 - No schema migration shape changes.
 - No HTTP API contract or payload schema changes.
-- No queue topology changes for sandbox build orchestration.
+- No queue topology changes for workspace build orchestration.
 
 **Design decision**
 
@@ -218,10 +220,10 @@ the change with the changelog contract.
    casing, and helper constructors.
 2. `packages/db/src/schema/relations.ts` - explicit relation map used by all Drizzle clients.
 3. `packages/db/src/repositories/*.ts` (changed files) - relation-based read path rewrites.
-4. `packages/sandboxes/src/worker/process-sandbox-build-job.ts` and
-   `packages/sandboxes/src/worker/github-installation-auth-resolver.ts` - runtime Effect repository
+4. `packages/workspaces/src/worker/process-workspace-build-job.ts` and
+   `packages/workspaces/src/worker/github-installation-auth-resolver.ts` - runtime Effect repository
    composition.
-5. `packages/auth/src/server.ts`, `apps/worker/src/workers/sandboxes.ts`, and
+5. `packages/auth/src/server.ts`, `apps/worker/src/workers/workspaces.ts`, and
    `apps/api/src/lib/create-package-standardizer.ts` - consumer wiring updates.
 6. `apps/docs/contents/changelog/index.md` - changelog entry and tag index.
 
@@ -237,16 +239,16 @@ const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations });
 const dbEffect = PgDrizzle.makeWithDefaults({ schema, relations, casing: "snake_case" });
 ```
 
-Sandbox worker repository access:
+Workspace worker repository access:
 
 ```ts
 // Before
-const jobs = createSandboxBuildJobRepository(options.dbClient);
+const jobs = createWorkspaceBuildJobRepository(options.dbClient);
 await jobs.claimJobById(...);
 
 // After
 const dbLayer = Layer.succeed(SealantDB, options.db);
-const dataAccessLayer = Layer.mergeAll(SandboxBuildJobRepoLive, ...).pipe(Layer.provide(dbLayer));
+const dataAccessLayer = Layer.mergeAll(WorkspaceBuildJobRepoLive, ...).pipe(Layer.provide(dbLayer));
 const repos = await Effect.runPromise(Effect.gen(function* () { ... }).pipe(Effect.provide(dataAccessLayer)));
 await Effect.runPromise(repos.jobs.claimJobById(...));
 ```
@@ -257,7 +259,7 @@ await Effect.runPromise(repos.jobs.claimJobById(...));
 - Added `createSealantDB*` helpers and `casing: "snake_case"` to Effect PostgreSQL Drizzle config.
 - Added explicit schema relation definitions and updated repository read paths to use relation-aware
   query APIs.
-- Updated sandbox worker internals to compose repository services via Effect layers.
+- Updated workspace worker internals to compose repository services via Effect layers.
 - Updated API/auth/web/worker integration code to consume the new DB helpers and effectful
   repositories.
 - Added this changelog entry and updated tag index.
@@ -279,20 +281,20 @@ Both commands passed during implementation.
 **Follow-ups**
 
 - Add focused repository integration tests for relation-based `db.query.*` paths in
-  `issue-workflows`, `profiles`, and `sandboxes` repositories.
+  `issue-workflows`, `profiles`, and `workspaces` repositories.
 - Add a regression test covering `github_app_installations.created_at`/`updated_at` selection
   through Effect DB clients.
 - Keep `links` and `status` synchronized with final PR URL and merge state.
 
 ### CHG-2026-04-03-001 - Control-plane DB Migration to PostgreSQL and Effect Service
 
-| Field    | Value                                                                                                                                                    |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status` | `in_review`                                                                                                                                              |
-| `owners` | `engineering`                                                                                                                                            |
-| `scope`  | `packages/db`, `packages/validators`, `packages/auth`, `apps/api`, `apps/worker`, `apps/docs`, `compose.yaml`, root `README.md`                          |
-| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:worker`, `area:auth`, `area:docs`, `domain:sandboxes`, `domain:issue-workflows`, `kind:feature`, `risk:high` |
-| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/51`, commit: `0859797`, rollout plan: `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md`                               |
+| Field    | Value                                                                                                                                                     |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status` | `in_review`                                                                                                                                               |
+| `owners` | `engineering`                                                                                                                                             |
+| `scope`  | `packages/db`, `packages/validators`, `packages/auth`, `apps/api`, `apps/worker`, `apps/docs`, `compose.yaml`, root `README.md`                           |
+| `tags`   | `arch:effect`, `area:db`, `area:api`, `area:worker`, `area:auth`, `area:docs`, `domain:workspaces`, `domain:issue-workflows`, `kind:feature`, `risk:high` |
+| `links`  | PR: `https://github.com/sealant-sh/sealant/pull/51`, commit: `0859797`, rollout plan: `DB_EFFECT_POSTGRES_ROLLOUT_PLAN.md`                                |
 
 **PR Description (copy-ready)**
 
@@ -325,7 +327,7 @@ Effect-style database service boundary for runtime composition.
 
 - No data migration path from existing SQLite files (clean-break migration strategy).
 - No API endpoint contract or payload shape changes.
-- No product-domain behavior changes for sandbox or issue workflow lifecycles.
+- No product-domain behavior changes for workspace or issue workflow lifecycles.
 
 **Design decision**
 
@@ -392,7 +394,7 @@ export const createDefaultApiApp = async () => {
   index-name normalization for PostgreSQL identifier limits.
 - Added `packages/db/src/service.ts` and exported service helpers via `packages/db/src/index.ts`.
 - Updated consumer wiring in `packages/auth/src/server.ts`, `apps/api/src/app.ts`, and
-  `apps/worker/src/workers/sandboxes.ts`.
+  `apps/worker/src/workers/workspaces.ts`.
 - Added PostgreSQL local service in `compose.yaml` and updated project docs/READMEs accordingly.
 
 **Validation and results**
@@ -425,7 +427,7 @@ All commands passed during implementation.
 | -------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `status` | `merged`                                                                                                                |
 | `owners` | `engineering`                                                                                                           |
-| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/sandboxes`, repo policy docs         |
+| `scope`  | `apps/api`, `apps/web`, `apps/docs`, `apps/worker`, `packages/rabbitmq`, `packages/workspaces`, repo policy docs        |
 | `tags`   | `arch:effect`, `area:api`, `area:rabbitmq`, `area:docs`, `kind:refactor`, `risk:medium`                                 |
 | `links`  | PR: `https://github.com/sealant-sh/sealant/pull/49`, commits: `8c69885`, `d3bed5d`, audit: `TECH_DEBT_CLEANUP_AUDIT.md` |
 
@@ -446,7 +448,7 @@ pattern.
 **Scope in this PR**
 
 - Add API runtime service composition and inject once at API bootstrap.
-- Migrate API handlers to runtime-provided dependencies (GitHub, sandboxes, packages, registries).
+- Migrate API handlers to runtime-provided dependencies (GitHub, workspaces, packages, registries).
 - Add RabbitMQ service contract + live layer + composition helper, then route queue
   publish/consume/topology calls through that boundary.
 - Codify the Effect pattern in `AGENTS.md` and establish changelog discipline in docs.
@@ -469,7 +471,7 @@ pattern.
 1. `apps/api/src/lib/create-api-runtime.ts` - new service composition boundary.
 2. `apps/api/src/lib/create-app.ts` - runtime injection point (`c.set("runtime", runtime)`).
 3. `apps/api/src/routes/github/github.handlers.ts` - dependency usage migrated to runtime.
-4. `apps/api/src/routes/sandboxes/sandboxes.handlers.ts` - same migration pattern at larger scale.
+4. `apps/api/src/routes/workspaces/workspaces.handlers.ts` - same migration pattern at larger scale.
 5. `packages/rabbitmq/src/service.ts` - service contract/type/live layer/composition helper.
 6. `AGENTS.md` - repository policy update for Effect workflow and file shape.
 
@@ -495,7 +497,7 @@ id: existing?.id ?? runtime.idGenerator.randomUuid();
 ```ts
 // Before
 c.set("env", config.env);
-c.set("sandboxRepository", config.sandboxRepository);
+c.set("workspaceRepository", config.workspaceRepository);
 
 // After
 const runtime = createApiRuntime(config);
@@ -517,9 +519,9 @@ export const rabbitMqServiceLayer = (connectionUrl: string) => ...;
   `apps/api/src/lib/create-api-runtime.ts`.
 - Added runtime contract types in `apps/api/src/lib/types.ts` and runtime injection in
   `apps/api/src/lib/create-app.ts`.
-- Migrated GitHub and sandbox handlers to runtime dependencies in
+- Migrated GitHub and workspace handlers to runtime dependencies in
   `apps/api/src/routes/github/github.handlers.ts` and
-  `apps/api/src/routes/sandboxes/sandboxes.handlers.ts`.
+  `apps/api/src/routes/workspaces/workspaces.handlers.ts`.
 - Added RabbitMQ service boundary in `packages/rabbitmq/src/service.ts` and exports in
   `packages/rabbitmq/src/index.ts`.
 - Updated Effect guidance in `AGENTS.md` and aligned `effect` dependency usage to catalog-managed

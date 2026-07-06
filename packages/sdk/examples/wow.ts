@@ -11,12 +11,12 @@ const sealant = new Sealant({
   baseUrl: process.env["SEALANT_BASE_URL"] ?? "http://localhost:8080",
 });
 
-const sandbox = await sealant.sandboxes.create({
+const workspace = await sealant.workspaces.create({
   repository: "github.com/acme/billing-service",
   harness: opencode(),
 });
 
-const run = await sandbox.harness.run("Round invoice totals once, after applying the discount.");
+const run = await workspace.harness.run("Round invoice totals once, after applying the discount.");
 
 const replay = await run.record.replay();
 

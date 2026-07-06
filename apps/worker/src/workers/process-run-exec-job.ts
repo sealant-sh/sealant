@@ -1,13 +1,13 @@
 /**
  * Server-side harness run execution — the worker counterpart of what the SDK used to do host-local.
  *
- * Given a run id + the harness command, it: resolves the sandbox's docker container, marks the run
+ * Given a run id + the harness command, it: resolves the workspace's docker container, marks the run
  * running, docker-execs the harness over the sealantd control connection while draining its telemetry
  * into the {@link TelemetrySink} (bounded to the harness process, epoch bracketed + suspicious-flagged
  * on a dropped bridge), captures the git diff, and marks the run completed/failed with the changes.
  *
- * Lives in the worker app (not @sealant/sandboxes) because it needs @sealant/telemetry, which already
- * depends on @sealant/sandboxes — putting it in sandboxes would be a dependency cycle.
+ * Lives in the worker app (not @sealant/workspaces) because it needs @sealant/telemetry, which already
+ * depends on @sealant/workspaces — putting it in workspaces would be a dependency cycle.
  */
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
@@ -17,33 +17,33 @@ import {
   type RunFileChange,
   RunRepo,
   RunRepoLive,
-  SandboxAttemptRepo,
-  SandboxAttemptRepoLive,
-  SandboxRepo,
-  SandboxRepoLive,
-  SandboxRuntimeInstanceRepo,
-  SandboxRuntimeInstanceRepoLive,
+  WorkspaceAttemptRepo,
+  WorkspaceAttemptRepoLive,
+  WorkspaceRepo,
+  WorkspaceRepoLive,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
 } from "@sealant/db";
-import {
-  execInSandbox,
-  type RunExecCommand,
-  SealantRuntime,
-  SealantRuntimeDockerExecLive,
-  sealantTargetForDockerContainer,
-  syncBackCodexAuthJson,
-  type SealantTarget,
-} from "@sealant/sandboxes";
 import {
   InlineByteaArtifactStoreLive,
   normalizeEnvelope,
   PostgresTelemetrySinkLive,
   TelemetrySink,
 } from "@sealant/telemetry";
-import { newSandboxSchema } from "@sealant/validators";
+import { newWorkspaceSchema } from "@sealant/validators";
+import {
+  execInWorkspace,
+  type RunExecCommand,
+  SealantRuntime,
+  SealantRuntimeDockerExecLive,
+  sealantTargetForDockerContainer,
+  syncBackCodexAuthJson,
+  type SealantTarget,
+} from "@sealant/workspaces";
 import { Effect, Layer, Schedule, Stream } from "effect";
 
-const WORKDIR = "/sandbox/repo";
+const WORKDIR = "/workspace/repo";
 const BATCH_SIZE = 256;
 const BATCH_WINDOW = "250 millis";
 // The docker-exec/socat bridge can flake while a freshly-launched daemon's socket comes up; retry the
@@ -87,7 +87,7 @@ const parseNameStatus = (output: string): RunFileChange[] => {
 };
 
 const shellExec = (target: SealantTarget, script: string) =>
-  execInSandbox(target, { executable: "sh", args: ["-lc", script], cwd: WORKDIR }).pipe(
+  execInWorkspace(target, { executable: "sh", args: ["-lc", script], cwd: WORKDIR }).pipe(
     Effect.retry(BRIDGE_RETRY),
   );
 
@@ -166,35 +166,37 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
 const resolveContainerResourceId = (runId: string) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    const sandboxes = yield* SandboxRepo;
-    const runtimeInstances = yield* SandboxRuntimeInstanceRepo;
+    const workspaces = yield* WorkspaceRepo;
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
 
     const run = yield* runs.getRunById(runId);
     if (run === undefined) {
       return yield* Effect.fail(new Error(`Run not found: ${runId}`));
     }
-    const sandbox = yield* sandboxes.getSandboxById(run.sandboxId);
-    if (sandbox === undefined || sandbox.latestRunId === null) {
+    const workspace = yield* workspaces.getWorkspaceById(run.workspaceId);
+    if (workspace === undefined || workspace.latestRunId === null) {
       return yield* Effect.fail(
-        new Error(`Sandbox ${run.sandboxId} has no active attempt for run ${runId}.`),
+        new Error(`Workspace ${run.workspaceId} has no active attempt for run ${runId}.`),
       );
     }
-    const instance = yield* runtimeInstances.getRuntimeInstanceByRunId(sandbox.latestRunId);
+    const instance = yield* runtimeInstances.getRuntimeInstanceByRunId(workspace.latestRunId);
     if (instance === undefined || instance.adapter !== "docker" || instance.resourceId === null) {
       return yield* Effect.fail(
-        new Error(`Sandbox ${run.sandboxId} is not a running docker sandbox for run ${runId}.`),
+        new Error(
+          `Workspace ${run.workspaceId} is not a running docker workspace for run ${runId}.`,
+        ),
       );
     }
     // attemptId keys the stored attempt snapshot, from which the sync-back re-derives the launch
-    // blueprint (and thus the sandbox's connected-account refs) without new columns.
-    return { resourceId: instance.resourceId, attemptId: sandbox.latestRunId };
+    // blueprint (and thus the workspace's connected-account refs) without new columns.
+    return { resourceId: instance.resourceId, attemptId: workspace.latestRunId };
   });
 
 /**
  * Best-effort codex auth.json sync-back after the run (design doc §2 codex / §6): the official
- * Codex CLI in the sandbox rotates its refresh token, so the mutated file must be persisted —
+ * Codex CLI in the workspace rotates its refresh token, so the mutated file must be persisted —
  * newest-wins only, and never at the cost of the run result. The blueprint is re-derived from the
- * stored attempt snapshot; sandboxes without a codex credentialRef no-op immediately.
+ * stored attempt snapshot; workspaces without a codex credentialRef no-op immediately.
  */
 const syncBackCodexAuth = (
   attemptId: string,
@@ -202,19 +204,19 @@ const syncBackCodexAuth = (
   credentialCipher: CredentialCipherService | undefined,
 ) =>
   Effect.gen(function* () {
-    const attempts = yield* SandboxAttemptRepo;
+    const attempts = yield* WorkspaceAttemptRepo;
     const snapshot = yield* attempts.getAttemptSnapshotByRunId(attemptId);
     if (snapshot === undefined) {
       return;
     }
-    const blueprint = newSandboxSchema.parse(snapshot.blueprintPayload);
+    const blueprint = newWorkspaceSchema.parse(snapshot.blueprintPayload);
 
     yield* syncBackCodexAuthJson({
       blueprint,
       credentialCipher,
       // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
       readAuthJson: () =>
-        execInSandbox(target, {
+        execInWorkspace(target, {
           executable: "sh",
           args: ["-c", 'cat "$HOME/.codex/auth.json"'],
         }).pipe(
@@ -239,9 +241,9 @@ export const processRunExecJobEffect = (
   void,
   unknown,
   | RunRepo
-  | SandboxRepo
-  | SandboxRuntimeInstanceRepo
-  | SandboxAttemptRepo
+  | WorkspaceRepo
+  | WorkspaceRuntimeInstanceRepo
+  | WorkspaceAttemptRepo
   | ConnectedAccountRepo
   | SealantRuntime
   | TelemetrySink
@@ -288,9 +290,9 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
   const dbLayer = Layer.succeed(SealantDB, options.db);
   const dataAccessLayer = Layer.mergeAll(
     RunRepoLive,
-    SandboxRepoLive,
-    SandboxRuntimeInstanceRepoLive,
-    SandboxAttemptRepoLive,
+    WorkspaceRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
+    WorkspaceAttemptRepoLive,
     ConnectedAccountRepoLive,
   ).pipe(Layer.provide(dbLayer));
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(dbLayer));

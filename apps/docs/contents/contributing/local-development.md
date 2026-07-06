@@ -1,8 +1,8 @@
 ---
 title: Local development
 description:
-  Run the whole Sealant stack locally — web app, control-plane API, worker, and a real sandbox over
-  SSH.
+  Run the whole Sealant stack locally — web app, control-plane API, worker, and a real workspace
+  over SSH.
 ---
 
 This page is an overview. The step-by-step runbook —
@@ -12,7 +12,7 @@ worth knowing before you dive in.
 
 ## Prerequisites
 
-- **Docker** running — the worker and SSH gateway drive it to build and launch sandboxes.
+- **Docker** running — the worker and SSH gateway drive it to build and launch workspaces.
 - The **Nix dev shell** — `direnv allow` (or `nix develop`) gives you Node 24 and `pnpm`.
 
 ## Topology
@@ -33,11 +33,11 @@ reads it, and compose passes it to the gateway via `env_file`.
 ```bash
 pnpm install
 cp .env.example .env          # dev defaults already point at local infra
-pnpm ssh:setup:dev             # only if you want to SSH into sandboxes
+pnpm ssh:setup:dev             # only if you want to SSH into workspaces
 ```
 
-`pnpm ssh:setup:dev` generates `.secrets/*` keys, writes a `Host sbx-*` block to your SSH config,
-and appends the gateway vars — including a shared `SANDBOX_SSH_GATEWAY_TOKEN` — to `.env`.
+`pnpm ssh:setup:dev` generates `.secrets/*` keys, writes a `Host ws-*` block to your SSH config, and
+appends the gateway vars — including a shared `WORKSPACE_SSH_GATEWAY_TOKEN` — to `.env`.
 
 ## Running it
 
@@ -50,15 +50,15 @@ pnpm --filter @sealant/web dev                # :3000   (terminal 2)
 docker compose --profile apps up -d --build   # worker + ssh-gateway
 ```
 
-Open [http://localhost:3000](http://localhost:3000), sign up, and create a sandbox. The worker
+Open [http://localhost:3000](http://localhost:3000), sign up, and create a workspace. The worker
 builds the image (pushed to the local zot registry) and launches the container — wait until it's
 running/ready, then:
 
 ```bash
-ssh -F ~/.config/sealant/ssh_config sbx-<sandboxId>
+ssh -F ~/.config/sealant/ssh_config ws-<workspaceId>
 ```
 
-The gateway authorizes by owner: the principal your SSH key resolves to must match the sandbox's
+The gateway authorizes by owner: the principal your SSH key resolves to must match the workspace's
 owner. See [SSH access](/docs/guides/ssh-access) for how key resolution and authorization work.
 
 ## Gotchas worth knowing up front
@@ -71,7 +71,7 @@ owner. See [SSH access](/docs/guides/ssh-access) for how key resolution and auth
   `--filter`.
 - **"Connection closed" right after the SSH banner** is authorization, not SSH — check
   `docker compose logs --tail=5 ssh-gateway`. Usually the resolved principal doesn't own the
-  sandbox, the key isn't registered, or the sandbox isn't running yet.
+  workspace, the key isn't registered, or the workspace isn't running yet.
 
 ## After you change code
 

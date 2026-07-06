@@ -49,10 +49,10 @@ export function SetupConnectStep(props: { readonly sshGateway: SetupStateRespons
         </h2>
         <p className="text-sm leading-7 text-muted-foreground">
           Append this once to <span className="font-mono">~/.ssh/config</span>. After launching a
-          sandbox,{" "}
+          workspace,{" "}
           <span className="font-mono">
-            ssh {props.sshGateway?.usernamePrefix ?? "sbx"}
-            -&lt;sandboxId&gt;
+            ssh {props.sshGateway?.usernamePrefix ?? "ws"}
+            -&lt;workspaceId&gt;
           </span>{" "}
           drops you into it.
         </p>
@@ -61,7 +61,7 @@ export function SetupConnectStep(props: { readonly sshGateway: SetupStateRespons
       {snippet === null ? (
         <div className="border-l-2 border-[var(--sw-amber)] py-1 pl-3 text-sm leading-6 text-warning">
           The SSH gateway is not configured on this deployment (the API has no{" "}
-          <span className="font-mono">SANDBOX_SSH_GATEWAY_HOST</span>). You can finish setup and
+          <span className="font-mono">WORKSPACE_SSH_GATEWAY_HOST</span>). You can finish setup and
           wire this up later.
         </div>
       ) : (

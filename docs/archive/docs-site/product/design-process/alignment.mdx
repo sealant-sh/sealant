@@ -38,15 +38,15 @@ The decisions that define the v1 surface and where the lines of honesty are draw
 
 <Cards>
   <Card title="v1 hero">
-    The live environment plus the harness run. Give an agent a real sandbox, run its harness, get a
-    result. The execution record is the payoff, not the lead.
+    The live environment plus the harness run. Give an agent a real workspace, run its harness, get
+    a result. The execution record is the payoff, not the lead.
   </Card>
   <Card title="Public SDK surface">
     The fluent high-level SDK. The low-level runtime client becomes internal plumbing, and the REST
     create contract is reshaped to drop registry and tag friction.
   </Card>
   <Card title="Harness model">
-    Both modes — one-shot (CI-style) and interactive on a long-lived sandbox you can SSH into
+    Both modes — one-shot (CI-style) and interactive on a long-lived workspace you can SSH into
     between tasks. Bring-your-own-harness stays a core principle.
   </Card>
   <Card title="Execution record grade">
@@ -54,8 +54,8 @@ The decisions that define the v1 surface and where the lines of honesty are draw
     separation, crypto digests, and an out-of-namespace spool sequenced as a later tier.
   </Card>
   <Card title="Browser support (v1)">
-    Headless, harness-driven, captured as evidence. The agent drives a real in-sandbox Chromium via
-    CDP; screenshots, HAR, DOM, and navigations land in the run record.
+    Headless, harness-driven, captured as evidence. The agent drives a real in-workspace Chromium
+    via CDP; screenshots, HAR, DOM, and navigations land in the run record.
   </Card>
   <Card title="Hosting target (v1)">
     Local-first with Docker. k8s and k3s come later. This matches code reality: Docker works, the
@@ -65,11 +65,11 @@ The decisions that define the v1 surface and where the lines of honesty are draw
 
 ### The fluent SDK surface
 
-The public surface is the fluent, high-level SDK: create a sandbox, run a harness against it, and
+The public surface is the fluent, high-level SDK: create a workspace, run a harness against it, and
 receive a structured result.
 
 ```ts
-const { result, changes, artifacts, record } = await sealant.sandboxes
+const { result, changes, artifacts, record } = await sealant.workspaces
   .create(/* ... */)
   .harness.run();
 ```
@@ -109,7 +109,7 @@ How a newcomer reaches a shareable moment in the first five minutes.
 
 | Decision           | Answer                                                                                                                                                                                               |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The 5-minute "wow" | The one-liner: create sandbox → run harness → replay the recorded run. Fluent SDK DX plus the execution record is the hero demo, and it is the lightest path to a shareable moment.                  |
+| The 5-minute "wow" | The one-liner: create workspace → run harness → replay the recorded run. Fluent SDK DX plus the execution record is the hero demo, and it is the lightest path to a shareable moment.                |
 | Marketing page     | Show multiple examples of the one-liner to demonstrate versatility — different harnesses for different jobs: coding agent, autonomous QA, bug repro, CI investigation, dependency updates, and more. |
 
 ## What this means for the narrative
@@ -127,12 +127,12 @@ have to absorb.
     the repo, read the docs, and build on it.
   </Step>
   <Step>
-    ### Reconcile the README Retire the "sandboxes plus issue workflows" two-loop contract. Adopt
-    sandbox, run, and harness as the primary nouns, with issue-to-PR demoted to a product (Handoff,
-    by Sealant).
+    ### Reconcile the README Retire the "workspaces plus issue workflows" two-loop contract. Adopt
+    workspace, run, and harness as the primary nouns, with issue-to-PR demoted to a product
+    (Handoff, by Sealant).
   </Step>
   <Step>
-    ### Make the fluent SDK real or stop showing it The hero `sandboxes.create(...).harness.run()`
+    ### Make the fluent SDK real or stop showing it The hero `workspaces.create(...).harness.run()`
     must exist as the public SDK — it does not today. This is the single most important build.
   </Step>
   <Step>

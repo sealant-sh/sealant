@@ -4,17 +4,18 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 - `apps/web`: TanStack Start product web app.
 - `apps/api`: Hono control-plane API.
-- `apps/worker`: background sandbox build worker.
-- `packages/*`: shared libraries (`db`, `auth`, `ui`, `sandbox-*`, `registry-*`, integrations).
+- `apps/worker`: background workspace build worker.
+- `packages/*`: shared libraries (`db`, `auth`, `ui`, `workspace-*`, `registry-*`, integrations).
 
 ## Product Language Contract
 
-- The primary product nouns are `sandbox` (the live environment), `run` (the durable execution
+- The primary product nouns are `workspace` (the live environment), `run` (the durable execution
   record), and `harness` (the agent that does the work). Runs are the heart of the product.
 - For user-facing API design and UI copy, prefer these terms over implementation terms.
-- Treat `sandbox build job` and `attempt` as internal orchestration vocabulary unless a task
+- Treat `workspace build job` and `attempt` as internal orchestration vocabulary unless a task
   explicitly asks for internals.
-- When shaping core API surfaces for the web app, model around the sandbox and run lifecycles first.
+- When shaping core API surfaces for the web app, model around the workspace and run lifecycles
+  first.
 
 ## Agent Defaults
 

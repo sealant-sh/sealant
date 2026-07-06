@@ -1,13 +1,13 @@
 import type { PackageResolutionCacheRepository } from "@sealant/db";
+import { packageResolutionSchema } from "@sealant/validators";
+import type { AppEnv } from "@sealant/validators/env";
 import {
   createPackageStandardizer,
   createRepologyClient,
   type PackageResolutionCacheStore,
   type PackageResolutionCacheValue,
   type PackageStandardizer,
-} from "@sealant/sandboxes";
-import { packageResolutionSchema } from "@sealant/validators";
-import type { AppEnv } from "@sealant/validators/env";
+} from "@sealant/workspaces";
 import { Effect } from "effect";
 
 /**

@@ -1,6 +1,6 @@
 // The ambient run-header playhead — the page's single aesthetic risk (§10).
 // A persistent run-id + recording pulse + an offset that advances with scroll, so
-// reading the page subliminally replays one run: it opens on sandbox.ready (hero)
+// reading the page subliminally replays one run: it opens on workspace.ready (hero)
 // and reaches run.completed at the final CTA.
 //
 // Discipline: hairline-quiet, single cobalt accent, fully static-degradable (under
@@ -9,7 +9,7 @@
 
 import { motion, useReducedMotion, useScroll, useTransform } from "framer-motion";
 
-export const RUN_ID = "run_sbx_8m2k";
+export const RUN_ID = "run_ws_8m2k";
 const RUN_END_MS = 25_110;
 
 function formatMs(ms: number): string {

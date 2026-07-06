@@ -8,7 +8,7 @@ import { UserRepo } from "@sealant/db";
 import { Effect } from "effect";
 
 import packageJson from "../../../package.json" with { type: "json" };
-import { resolveSandboxSshGatewayConfig } from "../../lib/sandbox-ssh-gateway.js";
+import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 
 export const getIndex = () => {
   return Effect.succeed({
@@ -39,7 +39,7 @@ export const getSetupState = () => {
     const hasAccounts = yield* userRepo
       .hasAnySignInAccounts()
       .pipe(Effect.mapError((error) => new SystemInternalServerError({ message: error.message })));
-    const sshGateway = resolveSandboxSshGatewayConfig();
+    const sshGateway = resolveWorkspaceSshGatewayConfig();
 
     return {
       needsSetup: !hasAccounts,
@@ -48,11 +48,11 @@ export const getSetupState = () => {
           ? null
           : {
               host: sshGateway.host,
-              // Same defaults as resolveSandboxRuntime; applied here so clients never hardcode them.
+              // Same defaults as resolveWorkspaceRuntime; applied here so clients never hardcode them.
               port: sshGateway.port ?? 22,
               usernamePrefix:
                 sshGateway.usernamePrefix === undefined || sshGateway.usernamePrefix.trim() === ""
-                  ? "sbx"
+                  ? "ws"
                   : sshGateway.usernamePrefix.trim(),
             },
     } satisfies SetupStateResponse;

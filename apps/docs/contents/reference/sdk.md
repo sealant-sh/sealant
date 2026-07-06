@@ -5,9 +5,9 @@ description:
   a clear map of what is implemented versus typed-but-not-wired."
 ---
 
-`@sealant/sdk` is a fluent TypeScript client for Sealant: create a sandbox around a real repository,
-run the harness you already use, and keep the replayable
-[execution record](/docs/concepts/execution-records) after the sandbox is gone. It is a thin HTTP
+`@sealant/sdk` is a fluent TypeScript client for Sealant: create a workspace around a real
+repository, run the harness you already use, and keep the replayable
+[execution record](/docs/concepts/execution-records) after the workspace is gone. It is a thin HTTP
 client over the [control-plane API](/docs/reference/http-api) — no local Docker or Postgres; it runs
 anywhere the API is reachable.
 
@@ -23,14 +23,14 @@ import { Sealant, opencode } from "@sealant/sdk";
 
 const sealant = new Sealant({ baseUrl: "http://localhost:4000" });
 
-// Create a live sandbox and wait until it is ready.
-const sandbox = await sealant.sandboxes.create({
+// Create a live workspace and wait until it is ready.
+const workspace = await sealant.workspaces.create({
   repository: "github.com/acme/billing-service",
   harness: opencode(),
 });
 
 // Run the harness one-shot; resolves when the run is terminal.
-const run = await sandbox.harness.run("Round invoice totals after applying the discount.");
+const run = await workspace.harness.run("Round invoice totals after applying the discount.");
 
 // Read the replayable record.
 await run.record.replay();
@@ -41,7 +41,7 @@ Prefer not to block? `harness.start()` registers the same server-side run but re
 handle immediately — stream progress, then settle:
 
 ```ts
-const run = await sandbox.harness.start("Round invoice totals after applying the discount.");
+const run = await workspace.harness.start("Round invoice totals after applying the discount.");
 
 for await (const entry of run.record.stream()) {
   console.log(entry.kind, entry.occurredAt);
@@ -60,11 +60,11 @@ The client takes `{ baseUrl }` (and an optional `apiKey`, which the API does not
 Harness factories describe how to invoke a harness one-shot: `opencode()`, `codex()`,
 `claudeCode({ profile? })`, and `customHarness({ id, invoke, … })` for anything else. Only
 `opencode()` is exercised end-to-end today; the others provide the typed surface and are pending
-live verification against the baked sandbox image.
+live verification against the baked workspace image.
 
 ### Owner identity
 
-Sandboxes and runs are attributed to a `usr_local` owner by default (override with the
+Workspaces and runs are attributed to a `usr_local` owner by default (override with the
 `SEALANT_OWNER_USER_ID` environment variable). This is the same temporary pre-auth model the API
 uses — it disappears when real authentication lands.
 
@@ -72,11 +72,11 @@ uses — it disappears when real authentication lands.
 
 These call the live API and work end-to-end:
 
-- **Sandboxes:** `sealant.sandboxes.create()`, `.get()`, `.list()`
-- **Sandbox handle:** `sandbox.status()`, `sandbox.ready()`, `sandbox.events()` (poll-backed status
-  stream)
-- **Harness:** `sandbox.harness.run(prompt)` — registers a run server-side and blocks until
-  terminal; `sandbox.harness.start(prompt)` — same run, returns the live handle immediately
+- **Workspaces:** `sealant.workspaces.create()`, `.get()`, `.list()`
+- **Workspace handle:** `workspace.status()`, `workspace.ready()`, `workspace.events()` (poll-backed
+  status stream)
+- **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
+  terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Runs:** `sealant.runs.get(runId)`, `run.wait()` (polls to terminal, then fetches the captured
   changes), `run.result`, `run.changes` (files + diff)
 - **Execution record** (`run.record`): `replay()`, `timeline()`, `stream()` (poll-backed),
@@ -88,7 +88,7 @@ These exist on the typed surface so you can compile against the final shape, but
 runtime with `SealantNotImplementedError`. Do not depend on them yet:
 
 - **Harness:** `harness.session()` (interactive)
-- **Sandbox lifecycle:** `sandbox.stop()`, `sandbox.restart()`, `sandbox.expire()`
+- **Workspace lifecycle:** `workspace.stop()`, `workspace.restart()`, `workspace.expire()`
 - **Artifacts:** `run.artifacts.get()` (`.list()` currently returns empty)
 - **Record time-travel folds:** `record.fileTreeAt()`, `record.processTreeAt()`
 

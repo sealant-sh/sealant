@@ -5,10 +5,10 @@ description:
   history — evidence, not verdicts.
 ---
 
-When a [harness](/docs/concepts/harnesses) does work inside a [sandbox](/docs/concepts/sandboxes),
-two things exist:
+When a [harness](/docs/concepts/harnesses) does work inside a
+[workspace](/docs/concepts/workspaces), two things exist:
 
-- A **run** — a single harness execution inside a sandbox. It is the unit of work you start.
+- A **run** — a single harness execution inside a workspace. It is the unit of work you start.
 - An **execution record** — the durable, append-only history of that run. It is what you keep and
   what you review after the run is over.
 
@@ -16,7 +16,7 @@ The run is the event; the record is the evidence.
 
 ## The record is append-only
 
-As a run executes, everything that happens inside the sandbox is captured as one ordered stream of
+As a run executes, everything that happens inside the workspace is captured as one ordered stream of
 events and stored as an **append-only log**. Nothing is edited after the fact. Every view you look
 at — the terminal, the timeline, the list of changes — is _derived_ from that log, never a separate
 recording. Adding a new way to look at a run is a re-read of the same log, not a re-capture.
@@ -58,7 +58,7 @@ decide what it means.
 ## How you read records today
 
 > Runs and their timeline, scrollback, changes, and loss views are exposed three ways: the web app's
-> **run record page** (`/sandboxes/<sandbox-id>/runs/<run-id>` — the folded command timeline with
+> **run record page** (`/workspaces/<workspace-id>/runs/<run-id>` — the folded command timeline with
 > per-command scrollback, changes, network, and raw events), the
 > [HTTP API](/docs/reference/http-api) (`GET /v1/runs/:runId/timeline`, `/scrollback`, `/changes`,
 > `/loss`), and the [preview SDK](/docs/reference/sdk) (`run.record.replay()`, `timeline`, `stream`,
@@ -67,7 +67,7 @@ decide what it means.
 
 ## Related
 
-- [Sandboxes](/docs/concepts/sandboxes) — where runs happen.
+- [Workspaces](/docs/concepts/workspaces) — where runs happen.
 - [Harnesses](/docs/concepts/harnesses) — what produces a run.
 - [Runs & execution records](/docs/guides/runs-and-execution-records) — starting a run and reading
   its record.

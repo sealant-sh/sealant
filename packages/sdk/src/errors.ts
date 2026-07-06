@@ -16,7 +16,7 @@ export class SealantError extends Error {
   }
 }
 
-/** A typed control/transport failure from the sandbox runtime daemon. */
+/** A typed control/transport failure from the workspace runtime daemon. */
 export class SealantRuntimeError extends SealantError {
   override readonly name = "SealantRuntimeError";
   constructor(message: string, options?: { readonly code?: string; readonly cause?: unknown }) {

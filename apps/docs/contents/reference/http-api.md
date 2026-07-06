@@ -6,7 +6,7 @@ description:
 ---
 
 The control plane is a single HTTP API. Everything the web app and the [SDK](/docs/reference/sdk) do
-— create sandboxes, register runs, read execution records, manage SSH keys, wire up GitHub — goes
+— create workspaces, register runs, read execution records, manage SSH keys, wire up GitHub — goes
 through it. The contract is defined once (as an Effect `HttpApi`) and both the OpenAPI spec and the
 live docs are generated from it, so the running install is always the source of truth.
 
@@ -37,15 +37,15 @@ requests interactively.
 
 The shipped resource groups and their operations:
 
-| Group                    | Operations                                                                                                                                                                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| System                   | `GET /`, `GET /healthz`, `GET /readyz`                                                                                                                                                                                                      |
-| Packages                 | `GET /v1/packages/resolve?query=&targetOs=`                                                                                                                                                                                                 |
-| Sandboxes                | `POST /v1/sandboxes`, `PATCH /v1/sandboxes/:sandboxId/name`, `GET /v1/sandboxes`, `GET /v1/sandboxes/:sandboxId`, `GET /v1/sandboxes/:sandboxId/attempts`, `GET /v1/sandboxes/:sandboxId/events`, `GET /v1/sandboxes/:sandboxId/ssh-target` |
-| SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                             |
-| Runs / execution records | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:runId`, `PATCH /v1/runs/:runId`, `GET /v1/runs/:runId/timeline`, `GET /v1/runs/:runId/scrollback`, `GET /v1/runs/:runId/loss`, `GET /v1/runs/:runId/changes`                                |
-| Registries               | `GET /v1/registries/:registryId`, `/ping`, `/extensions`, `/tags?repository=`, `/manifest?repository=&reference=`                                                                                                                           |
-| GitHub                   | `GET /v1/github/installations`, `GET /v1/github/installations/:installationId/repositories`, `POST /v1/github/installations/import`, `POST /v1/github/installations/:installationId/sync`, `POST /v1/github/webhooks`                       |
+| Group                    | Operations                                                                                                                                                                                                                                                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| System                   | `GET /`, `GET /healthz`, `GET /readyz`                                                                                                                                                                                                                       |
+| Packages                 | `GET /v1/packages/resolve?query=&targetOs=`                                                                                                                                                                                                                  |
+| Workspaces               | `POST /v1/workspaces`, `PATCH /v1/workspaces/:workspaceId/name`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target` |
+| SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                                              |
+| Runs / execution records | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:runId`, `PATCH /v1/runs/:runId`, `GET /v1/runs/:runId/timeline`, `GET /v1/runs/:runId/scrollback`, `GET /v1/runs/:runId/loss`, `GET /v1/runs/:runId/changes`                                                 |
+| Registries               | `GET /v1/registries/:registryId`, `/ping`, `/extensions`, `/tags?repository=`, `/manifest?repository=&reference=`                                                                                                                                            |
+| GitHub                   | `GET /v1/github/installations`, `GET /v1/github/installations/:installationId/repositories`, `POST /v1/github/installations/import`, `POST /v1/github/installations/:installationId/sync`, `POST /v1/github/webhooks`                                        |
 
 The execution record is read through the run endpoints: `/timeline` is the ordered event stream,
 `/scrollback` returns byte-exact process I/O, `/changes` is the file diff, and `/loss` reports any
@@ -70,9 +70,9 @@ important thing to understand about the current API.
 - **This is a temporary model.** The `ownerUserId`-in-payload path is scaffolding that goes away
   once real authentication lands. Do not build durable authorization assumptions on it.
 - **The exceptions are the internal SSH-gateway routes.** `POST /v1/ssh-keys/resolve-principal` and
-  `GET /v1/sandboxes/:id/ssh-target` require the shared `x-sealant-gateway-token`
-  ([`SANDBOX_SSH_GATEWAY_TOKEN`](/docs/reference/environment-variables)), and the SSH-target lookup
-  also checks sandbox ownership. These exist for the gateway, not for general clients.
+  `GET /v1/workspaces/:id/ssh-target` require the shared `x-sealant-gateway-token`
+  ([`WORKSPACE_SSH_GATEWAY_TOKEN`](/docs/reference/environment-variables)), and the SSH-target
+  lookup also checks workspace ownership. These exist for the gateway, not for general clients.
 
 Because the API trusts the `ownerUserId` you send, **treat network reachability as your only access
 control.** Keep the API on loopback unless you have put your own authenticating proxy in front of it

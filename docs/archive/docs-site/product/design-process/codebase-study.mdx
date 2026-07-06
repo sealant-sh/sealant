@@ -16,10 +16,10 @@ the rest of the design process has to respect.
 
 <Callout type="info">
   Sealant is a runtime for running and recording untrusted code — AI-agent or human — inside
-  isolated sandboxes, exposed through one stable contract. Its defining primitive is the **execution
-  record**: every observed fact is minted at one deterministic sequencing point, carries correlation
-  IDs and honest provenance, and is replayable as a pure fold of an append-only log. Sealant reports
-  facts and does not judge.
+  isolated workspaces, exposed through one stable contract. Its defining primitive is the
+  **execution record**: every observed fact is minted at one deterministic sequencing point, carries
+  correlation IDs and honest provenance, and is replayable as a pure fold of an append-only log.
+  Sealant reports facts and does not judge.
 </Callout>
 
 ## Method
@@ -68,18 +68,18 @@ The code already draws a clean line, and that line is physically enforced: commu
 
 <Cards>
   <Card title="Platform">
-    The `sealantd` daemon (Rust crates `sealant-protocol`, `sealant-control`, `sealant-process`, `sealant-pty`, `sealant-telemetry`, `sealant-eventlog`, `sealant-fs`, `sealant-network`, `sealant-runtime-core`, `sealantd`, `sealantctl`) plus the generated wire SDK (`@sealant/runtime-protocol`) and the thin typed client (`@sealant/runtime-client`). These live in a **separate repo** — `sealant-core` vendors no `.proto` and pins the SDK at `^0.4.0`. The platform runs code in a sandbox, multiplexes byte channels, and emits a durable, correlated, provenance-honest execution record over one socket — nothing product-specific.
+    The `sealantd` daemon (Rust crates `sealant-protocol`, `sealant-control`, `sealant-process`, `sealant-pty`, `sealant-telemetry`, `sealant-eventlog`, `sealant-fs`, `sealant-network`, `sealant-runtime-core`, `sealantd`, `sealantctl`) plus the generated wire SDK (`@sealant/runtime-protocol`) and the thin typed client (`@sealant/runtime-client`). These live in a **separate repo** — `sealant-core` vendors no `.proto` and pins the SDK at `^0.4.0`. The platform runs code in a workspace, multiplexes byte channels, and emits a durable, correlated, provenance-honest execution record over one socket — nothing product-specific.
   </Card>
   <Card title="Products">
-    Everything in `sealant-core` that consumes that SDK: the sandbox composition/build/launch engine (`@sealant/sandboxes`), the control-plane API plus RabbitMQ worker plus Postgres state (`apps/api`, `apps/worker`, `packages/{db,rabbitmq,validators,api-contracts}`), the telemetry read-model pipeline (`packages/telemetry`), the SSH gateway, the web and mobile consoles, source/issue/auth integrations, and the not-yet-built Verify/Repro/Handoff and issue-to-PR engines.
+    Everything in `sealant-core` that consumes that SDK: the workspace composition/build/launch engine (`@sealant/workspaces`), the control-plane API plus RabbitMQ worker plus Postgres state (`apps/api`, `apps/worker`, `packages/{db,rabbitmq,validators,api-contracts}`), the telemetry read-model pipeline (`packages/telemetry`), the SSH gateway, the web and mobile consoles, source/issue/auth integrations, and the not-yet-built Verify/Repro/Handoff and issue-to-PR engines.
   </Card>
 </Cards>
 
 <Callout type="idea">
   The real split decision is **not** "extract a platform" — the platform already lives in its own
   repo. It is: what *additionally* graduates from products into the platform SDK? The ambiguous
-  middle is `packages/telemetry`, the sandbox blueprint schema, and the execution-record read models
-  — generic enough to be SDK surface, but currently living in the product monorepo.
+  middle is `packages/telemetry`, the workspace blueprint schema, and the execution-record read
+  models — generic enough to be SDK surface, but currently living in the product monorepo.
 </Callout>
 
 ## Capability inventory
@@ -96,22 +96,22 @@ These are the primitives products consume.
 | Filesystem and network evidence collectors                | `mixed`   | Unprivileged SHA-256 baseline/final snapshots plus an inotify live watcher (inferred renames, overflow recovery); a cooperative userspace HTTP/HTTPS-CONNECT egress proxy emitting per-request evidence; raw `direct-tcpip` forward. Privileged eBPF/netlink/payload modes are inert schema only.                                                                                 |
 | Daemon composition and PID-1 supervisor (`sealantd boot`) | `working` | Boots the container, clones the repo with scoped short-lived creds, applies dotfiles, runs lifecycle steps, supervises the agent harness as a managed child, and wires all subsystems behind one socket; configured by a `SEALANT_*` env contract. Replaces the in-container sshd. Baked into every image as `ENTRYPOINT ["sealantd","boot"]`.                                    |
 | TypeScript runtime SDK (`@sealant/runtime-client`)        | `working` | Connects to or spawns `sealantd`; drives exec/PTY/stdin/signal/shutdown; multiplexes byte channels (attach/forward/sftp) with SSH-style half-close; exposes `events()` as `AsyncIterable<EventEnvelope>`. The seed of the eventual public SDK. Roughly 10 of 24 wire commands still lack typed convenience methods.                                                               |
-| Sandbox composition engine (`@sealant/sandboxes`)         | `mixed`   | `SandboxBlueprint` to BuildKit Containerfile render/compile, OCI registry publish (Zot), `docker run -d` launch (runc/runsc), runtime-adapter selection, GitHub-installation scoped auth, Repology package standardizer. The k8s/k3s adapters throw "not implemented yet."                                                                                                        |
-| Control-plane API + worker + state                        | `working` | Contract-first Effect `HttpApi` (`POST /v1/sandboxes`, OpenAPI emitted) to Postgres rows (blueprint, queued-attempt, build-job) to a RabbitMQ pointer to a background worker (lease-based at-least-once claim) that compiles/publishes/launches and ingests telemetry. Roughly 45 migrated Postgres tables (Drizzle).                                                             |
-| SSH gateway (control-socket bridge)                       | `working` | One SSH entrypoint (`sbx-<id>@gateway`) for all sandboxes; pubkey-auth, resolve principal, the API authorizes principal × sandbox, then bridges SSH channels to daemon control commands (shell to `openSession`, `direct-tcpip` to `openForward` for VS Code Remote, sftp to `openSftp`). Does not dial an inner sshd.                                                            |
+| Workspace composition engine (`@sealant/workspaces`)      | `mixed`   | `WorkspaceBlueprint` to BuildKit Containerfile render/compile, OCI registry publish (Zot), `docker run -d` launch (runc/runsc), runtime-adapter selection, GitHub-installation scoped auth, Repology package standardizer. The k8s/k3s adapters throw "not implemented yet."                                                                                                      |
+| Control-plane API + worker + state                        | `working` | Contract-first Effect `HttpApi` (`POST /v1/workspaces`, OpenAPI emitted) to Postgres rows (blueprint, queued-attempt, build-job) to a RabbitMQ pointer to a background worker (lease-based at-least-once claim) that compiles/publishes/launches and ingests telemetry. Roughly 45 migrated Postgres tables (Drizzle).                                                            |
+| SSH gateway (control-socket bridge)                       | `working` | One SSH entrypoint (`ws-<id>@gateway`) for all workspaces; pubkey-auth, resolve principal, the API authorizes principal × workspace, then bridges SSH channels to daemon control commands (shell to `openSession`, `direct-tcpip` to `openForward` for VS Code Remote, sftp to `openSftp`). Does not dial an inner sshd.                                                          |
 | Telemetry read-model / run-inspector substrate            | `mixed`   | Event-sourced ingest and query over the daemon stream: gap/drop detection, content-addressed artifact offload, byte-exact scrollback reconstruction by `streamOffset`, projections that are pure re-folds (projection equals rebuild). The north-star folds (`getRunRollup`, `reconstructFileTree/ProcessTree/NetworkInFlight`, `tail`) throw `TelemetryQueryUnimplementedError`. |
 
 ### Product candidates
 
 These are the things that could be "Built on Sealant."
 
-| Candidate                                  | State today                                                                                                                                                                                                                                               |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run Inspector / Execution Record viewer    | The capture and store side is production-shaped; the read side is unbuilt. `RunTelemetry` is exposed via no route, and the web diff/trace/validation pages hard-redirect to a raw spec dump.                                                              |
-| Sealant Verify / Repro / Handoff           | Prominently marketed (`apps/marketing` lines 739–753), but zero code anywhere outside marketing. Positioning and naming placeholders today.                                                                                                               |
-| Issue-to-PR workflow engine                | Full DB lineage plus issue import plus a kanban board UI exist, but zero orchestrator consumes `issueWorkflowExecution*`. The engine that runs the change and builds the PR is unbuilt.                                                                   |
-| Managed sandbox / remote dev environment   | The most-complete end-to-end path today: real BuildKit compile, Zot publish, `docker run`, ssh-gateway with `direct-tcpip` to `openForward` plus working editor deep-links. Limited to single-host Docker, ephemeral-only.                                |
-| Agent-execution control plane / fluent SDK | A verified mismatch: the marketed `sandboxes.create({repository, harness}).harness.run(prompt)` does not exist. The actual contract is REST-style and needs `{ownerUserId, registryId, repository, tag, spec, sourceSelection?}` with no `harness` field. |
+| Candidate                                  | State today                                                                                                                                                                                                                                                |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run Inspector / Execution Record viewer    | The capture and store side is production-shaped; the read side is unbuilt. `RunTelemetry` is exposed via no route, and the web diff/trace/validation pages hard-redirect to a raw spec dump.                                                               |
+| Sealant Verify / Repro / Handoff           | Prominently marketed (`apps/marketing` lines 739–753), but zero code anywhere outside marketing. Positioning and naming placeholders today.                                                                                                                |
+| Issue-to-PR workflow engine                | Full DB lineage plus issue import plus a kanban board UI exist, but zero orchestrator consumes `issueWorkflowExecution*`. The engine that runs the change and builds the PR is unbuilt.                                                                    |
+| Managed workspace / remote dev environment | The most-complete end-to-end path today: real BuildKit compile, Zot publish, `docker run`, ssh-gateway with `direct-tcpip` to `openForward` plus working editor deep-links. Limited to single-host Docker, ephemeral-only.                                 |
+| Agent-execution control plane / fluent SDK | A verified mismatch: the marketed `workspaces.create({repository, harness}).harness.run(prompt)` does not exist. The actual contract is REST-style and needs `{ownerUserId, registryId, repository, tag, spec, sourceSelection?}` with no `harness` field. |
 
 ## Hard boundaries — what Sealant is NOT
 
@@ -159,7 +159,7 @@ A condensed read of real versus scaffold across the whole system.
     The `sealantd` daemon core (control protocol, framing, peer auth, process/PTY execution,
     signals/reaping, composition/PID-1 boot); the TS runtime SDK seed; the SSH gateway; the RabbitMQ
     worker plus Postgres state model (roughly 45 tables, lease-based at-least-once claim); the
-    control-plane API (`POST /v1/sandboxes` to queued build); the telemetry ingest/store pipeline.
+    control-plane API (`POST /v1/workspaces` to queued build); the telemetry ingest/store pipeline.
     The most-complete end-to-end path is create-blueprint, build, publish, docker-launch, SSH/editor
     access.
   </Card>
@@ -167,7 +167,7 @@ A condensed read of real versus scaffold across the whole system.
     Telemetry durability (the spool exists, but the ack advances on broadcast-attempt not receipt,
     and `fsync` is hardcoded `Never` with a 1s loss window); filesystem evidence (snapshots and
     watcher work, but there are no diff artifacts, no FS redaction, and kill switches are inert);
-    the web console (real sandbox lifecycle, but Repositories/Profiles/Registry are mock, and
+    the web console (real workspace lifecycle, but Repositories/Profiles/Registry are mock, and
     diff/trace/validation redirect).
   </Card>
   <Card title="Scaffold / placeholder">
@@ -192,8 +192,8 @@ settle.
 
 Two product stories coexist. The rebranded marketing page (the doc-declared "canonical reference")
 sells a harness-neutral "Runtime for AI developer agents" — platform plus SDK plus
-Verify/Repro/Handoff. The in-repo README still describes "fast isolated sandboxes plus issue-to-PR
-workflows" as the two product loops, with a "sandbox plus issue workflow" terminology contract.
+Verify/Repro/Handoff. The in-repo README still describes "fast isolated workspaces plus issue-to-PR
+workflows" as the two product loops, with a "workspace plus issue workflow" terminology contract.
 Marketing has quietly demoted "issue workflow" to a product (Handoff).
 
 </Step>
@@ -202,7 +202,7 @@ Marketing has quietly demoted "issue workflow" to a product (Handoff).
 
 ### SDK overclaim (verified)
 
-The marketing hero's fluent `sandboxes.create({harness}).harness.run()` returning
+The marketing hero's fluent `workspaces.create({harness}).harness.run()` returning
 `{result, changes, artifacts, record}` does not match the real REST contract (no `harness` field).
 Either the fluent SDK ships from the external runtime-client repo and must be made real and public,
 or the hero is fiction. This is the single most important platform/SDK shape decision.

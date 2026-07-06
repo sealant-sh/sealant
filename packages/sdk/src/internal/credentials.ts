@@ -1,18 +1,18 @@
 /**
- * Lowers the public `SandboxCredentialsOptions` onto the control-plane's sandbox-create payload
- * shape. Pure and side-effect free so it is unit-testable on its own; `buildCreateSandboxRequest`
+ * Lowers the public `WorkspaceCredentialsOptions` onto the control-plane's workspace-create payload
+ * shape. Pure and side-effect free so it is unit-testable on its own; `buildCreateWorkspaceRequest`
  * calls it and folds the result into the request it builds.
  *
  * SECURITY: this only ever moves account **references** (booleans/names/ids) — never token values or
  * other secret material. `true` resolves to the literal account name `"default"`; a string passes
  * through as the named account; `profile` becomes `profileId`.
  */
-import type { SandboxCredentialsOptions } from "../types.js";
+import type { WorkspaceCredentialsOptions } from "../types.js";
 
 const DEFAULT_ACCOUNT_NAME = "default";
 
-/** The control-plane's sandbox-create payload shape for connected-account credentials. */
-export interface SandboxCredentialsPayload {
+/** The control-plane's workspace-create payload shape for connected-account credentials. */
+export interface WorkspaceCredentialsPayload {
   readonly profileId?: string;
   readonly claude?: string;
   readonly codex?: string;
@@ -27,12 +27,12 @@ const mapAccountRef = (value: boolean | string | undefined): string | undefined 
 };
 
 /**
- * Maps `SandboxCredentialsOptions` to the API payload shape, or `undefined` when no credentials were
+ * Maps `WorkspaceCredentialsOptions` to the API payload shape, or `undefined` when no credentials were
  * requested (omitted entirely, rather than serialized as an empty object).
  */
-export const mapSandboxCredentials = (
-  options: SandboxCredentialsOptions | undefined,
-): SandboxCredentialsPayload | undefined => {
+export const mapWorkspaceCredentials = (
+  options: WorkspaceCredentialsOptions | undefined,
+): WorkspaceCredentialsPayload | undefined => {
   if (options === undefined) {
     return undefined;
   }
@@ -41,7 +41,7 @@ export const mapSandboxCredentials = (
   const codex = mapAccountRef(options.codex);
   const github = mapAccountRef(options.github);
 
-  const payload: SandboxCredentialsPayload = {
+  const payload: WorkspaceCredentialsPayload = {
     ...(options.profile === undefined ? {} : { profileId: options.profile }),
     ...(claude === undefined ? {} : { claude }),
     ...(codex === undefined ? {} : { codex }),

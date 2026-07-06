@@ -25,7 +25,7 @@ Exports are defined in `packages/rabbitmq/src/index.ts`.
 ## Environment contract
 
 - `RABBITMQ_URL`
-- `SANDBOX_BUILD_QUEUE_PREFETCH`
+- `WORKSPACE_BUILD_QUEUE_PREFETCH`
 
 Schema source: `packages/rabbitmq/src/env.ts`.
 

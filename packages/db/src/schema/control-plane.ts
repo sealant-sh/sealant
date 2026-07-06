@@ -1,4 +1,4 @@
-import type { NewSandbox as NewSandboxSpec } from "@sealant/validators";
+import type { NewWorkspace as NewWorkspaceSpec } from "@sealant/validators";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -24,30 +24,30 @@ export type SourceProvider = (typeof sourceProviderValues)[number];
 export const profileStatusValues = ["active", "archived"] as const;
 export type ProfileStatus = (typeof profileStatusValues)[number];
 
-export const sandboxAttemptStatusValues = [
+export const workspaceAttemptStatusValues = [
   "queued",
   "running",
   "succeeded",
   "failed",
   "cancelled",
 ] as const;
-export type SandboxAttemptStatus = (typeof sandboxAttemptStatusValues)[number];
+export type WorkspaceAttemptStatus = (typeof workspaceAttemptStatusValues)[number];
 
-export const sandboxAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
-export type SandboxAttemptTriggerType = (typeof sandboxAttemptTriggerTypeValues)[number];
+export const workspaceAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
+export type WorkspaceAttemptTriggerType = (typeof workspaceAttemptTriggerTypeValues)[number];
 
-export const sandboxStatusValues = ["queued", "running", "ready", "failed", "stopped"] as const;
-export type SandboxStatus = (typeof sandboxStatusValues)[number];
+export const workspaceStatusValues = ["queued", "running", "ready", "failed", "stopped"] as const;
+export type WorkspaceStatus = (typeof workspaceStatusValues)[number];
 
-export const sandboxRunLinkRelationValues = ["launch", "rebuild", "retry", "resume"] as const;
+export const workspaceRunLinkRelationValues = ["launch", "rebuild", "retry", "resume"] as const;
 
-// A `run` is one HARNESS EXECUTION inside a sandbox (the SDK's `harness.run()`), distinct from a
-// `sandbox_attempt` (one sandbox *provisioning*). Runs own the execution record: the telemetry tables
-// key their `run_id` FK here. One sandbox can host many runs (interactive sessions); a one-shot run
+// A `run` is one HARNESS EXECUTION inside a workspace (the SDK's `harness.run()`), distinct from a
+// `workspace_attempt` (one workspace *provisioning*). Runs own the execution record: the telemetry tables
+// key their `run_id` FK here. One workspace can host many runs (interactive sessions); a one-shot run
 // maps 1:1 to its launch attempt.
 export const runStatusValues = ["queued", "running", "completed", "failed", "cancelled"] as const;
 export const runModeValues = ["one-shot", "interactive"] as const;
-export type SandboxRunLinkRelation = (typeof sandboxRunLinkRelationValues)[number];
+export type WorkspaceRunLinkRelation = (typeof workspaceRunLinkRelationValues)[number];
 
 export const profileSshKeyPurposeValues = ["login", "git-auth", "git-signing"] as const;
 export type ProfileSshKeyPurpose = (typeof profileSshKeyPurposeValues)[number];
@@ -281,7 +281,7 @@ export const profileRevisions = pgTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    configPatch: jsonb("config_patch").$type<Partial<NewSandboxSpec>>().notNull(),
+    configPatch: jsonb("config_patch").$type<Partial<NewWorkspaceSpec>>().notNull(),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -594,7 +594,7 @@ export const repositoryProfileRevisions = pgTable(
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     changeSummary: text("change_summary"),
     fingerprint: text().notNull(),
-    runTemplate: jsonb("run_template").$type<Partial<NewSandboxSpec>>().notNull(),
+    runTemplate: jsonb("run_template").$type<Partial<NewWorkspaceSpec>>().notNull(),
     policyConfig: jsonb("policy_config").$type<Record<string, unknown>>(),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
@@ -637,8 +637,8 @@ export const repositoryProfileProfileLinks = pgTable(
   ],
 );
 
-export const sandboxAttempts = pgTable(
-  "sandbox_attempts",
+export const workspaceAttempts = pgTable(
+  "workspace_attempts",
   {
     id: text().primaryKey(),
     ownerUserId: text("owner_user_id")
@@ -652,8 +652,8 @@ export const sandboxAttempts = pgTable(
     profileRevisionId: text("profile_revision_id").references(() => profileRevisions.id, {
       onDelete: "set null",
     }),
-    status: text({ enum: sandboxAttemptStatusValues }).notNull().default("queued"),
-    triggerType: text("trigger_type", { enum: sandboxAttemptTriggerTypeValues })
+    status: text({ enum: workspaceAttemptStatusValues }).notNull().default("queued"),
+    triggerType: text("trigger_type", { enum: workspaceAttemptTriggerTypeValues })
       .notNull()
       .default("manual"),
     triggerRef: text("trigger_ref"),
@@ -677,26 +677,29 @@ export const sandboxAttempts = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    index("sandbox_attempts_owner_user_id_status_created_at_idx").on(
+    index("workspace_attempts_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,
       table.createdAt,
     ),
-    index("sandbox_attempts_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
-    index("sandbox_attempts_profile_revision_id_created_at_idx").on(
+    index("workspace_attempts_repository_id_created_at_idx").on(
+      table.repositoryId,
+      table.createdAt,
+    ),
+    index("workspace_attempts_profile_revision_id_created_at_idx").on(
       table.profileRevisionId,
       table.createdAt,
     ),
-    index("sandbox_attempts_repository_profile_revision_id_created_at_idx").on(
+    index("workspace_attempts_repository_profile_revision_id_created_at_idx").on(
       table.repositoryProfileRevisionId,
       table.createdAt,
     ),
-    index("sandbox_attempts_status_started_at_idx").on(table.status, table.startedAt),
+    index("workspace_attempts_status_started_at_idx").on(table.status, table.startedAt),
   ],
 );
 
-export const sandboxes = pgTable(
-  "sandboxes",
+export const workspaces = pgTable(
+  "workspaces",
   {
     id: text().primaryKey(),
     name: text().notNull().default(""),
@@ -714,8 +717,8 @@ export const sandboxes = pgTable(
     requestedByUserId: text("requested_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
-    status: text({ enum: sandboxStatusValues }).notNull().default("queued"),
-    latestRunId: text("latest_run_id").references(() => sandboxAttempts.id, {
+    status: text({ enum: workspaceStatusValues }).notNull().default("queued"),
+    latestRunId: text("latest_run_id").references(() => workspaceAttempts.id, {
       onDelete: "set null",
     }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
@@ -728,41 +731,41 @@ export const sandboxes = pgTable(
     archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
   },
   (table) => [
-    index("sandboxes_owner_user_id_status_created_at_idx").on(
+    index("workspaces_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,
       table.createdAt,
     ),
-    index("sandboxes_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
-    uniqueIndex("sandboxes_latest_run_id_idx").on(table.latestRunId),
+    index("workspaces_repository_id_created_at_idx").on(table.repositoryId, table.createdAt),
+    uniqueIndex("workspaces_latest_run_id_idx").on(table.latestRunId),
   ],
 );
 
-export const sandboxRunLinks = pgTable(
-  "sandbox_run_links",
+export const workspaceRunLinks = pgTable(
+  "workspace_run_links",
   {
-    sandboxId: text("sandbox_id")
+    workspaceId: text("workspace_id")
       .notNull()
-      .references(() => sandboxes.id, { onDelete: "cascade" }),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
     runId: text("run_id")
       .notNull()
-      .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-    relation: text({ enum: sandboxRunLinkRelationValues }).notNull().default("launch"),
+      .references(() => workspaceAttempts.id, { onDelete: "cascade" }),
+    relation: text({ enum: workspaceRunLinkRelationValues }).notNull().default("launch"),
     linkedAt: timestamp("linked_at", { mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
   },
   (table) => [
-    primaryKey({ columns: [table.sandboxId, table.runId] }),
-    uniqueIndex("sandbox_run_links_run_id_idx").on(table.runId),
-    index("sandbox_run_links_sandbox_id_linked_at_idx").on(table.sandboxId, table.linkedAt),
+    primaryKey({ columns: [table.workspaceId, table.runId] }),
+    uniqueIndex("workspace_run_links_run_id_idx").on(table.runId),
+    index("workspace_run_links_workspace_id_linked_at_idx").on(table.workspaceId, table.linkedAt),
   ],
 );
 
 // ---------------------------------------------------------------------------------------------
-// RUNS — one harness execution inside a sandbox. The execution record (telemetry_*) keys its
-// run_id FK here. A run references the sandbox it ran in and the provisioning attempt that hosted
-// it. One sandbox can host many runs; a one-shot run maps 1:1 to its launch attempt.
+// RUNS — one harness execution inside a workspace. The execution record (telemetry_*) keys its
+// run_id FK here. A run references the workspace it ran in and the provisioning attempt that hosted
+// it. One workspace can host many runs; a one-shot run maps 1:1 to its launch attempt.
 // ---------------------------------------------------------------------------------------------
 export interface RunFileChange {
   readonly path: string;
@@ -774,10 +777,10 @@ export const runs = pgTable(
   "runs",
   {
     id: text().primaryKey(),
-    sandboxId: text("sandbox_id")
+    workspaceId: text("workspace_id")
       .notNull()
-      .references(() => sandboxes.id, { onDelete: "cascade" }),
-    attemptId: text("attempt_id").references(() => sandboxAttempts.id, { onDelete: "set null" }),
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    attemptId: text("attempt_id").references(() => workspaceAttempts.id, { onDelete: "set null" }),
     ownerUserId: text("owner_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -801,7 +804,7 @@ export const runs = pgTable(
       .$onUpdate(() => new Date()),
   },
   (table) => [
-    index("runs_sandbox_id_created_at_idx").on(table.sandboxId, table.createdAt),
+    index("runs_workspace_id_created_at_idx").on(table.workspaceId, table.createdAt),
     index("runs_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,
@@ -811,13 +814,13 @@ export const runs = pgTable(
   ],
 );
 
-export const sandboxAttemptSnapshots = pgTable("sandbox_attempt_snapshots", {
+export const workspaceAttemptSnapshots = pgTable("workspace_attempt_snapshots", {
   runId: text("run_id")
     .primaryKey()
-    .references(() => sandboxAttempts.id, { onDelete: "cascade" }),
-  userSpecPayload: jsonb("user_spec_payload").$type<NewSandboxSpec>().notNull(),
-  resolvedSpecPayload: jsonb("resolved_spec_payload").$type<NewSandboxSpec>().notNull(),
-  blueprintPayload: jsonb("blueprint_payload").$type<NewSandboxSpec>().notNull(),
+    .references(() => workspaceAttempts.id, { onDelete: "cascade" }),
+  userSpecPayload: jsonb("user_spec_payload").$type<NewWorkspaceSpec>().notNull(),
+  resolvedSpecPayload: jsonb("resolved_spec_payload").$type<NewWorkspaceSpec>().notNull(),
+  blueprintPayload: jsonb("blueprint_payload").$type<NewWorkspaceSpec>().notNull(),
   profileConfigSnapshot: jsonb("profile_config_snapshot").$type<Record<string, unknown>>(),
   repositoryProfileConfigSnapshot: jsonb("repository_profile_config_snapshot").$type<
     Record<string, unknown>
@@ -904,22 +907,22 @@ export type NewRepositoryProfileRevision = typeof repositoryProfileRevisions.$in
 export type RepositoryProfileProfileLink = typeof repositoryProfileProfileLinks.$inferSelect;
 export type NewRepositoryProfileProfileLink = typeof repositoryProfileProfileLinks.$inferInsert;
 
-export type SandboxAttempt = typeof sandboxAttempts.$inferSelect;
-export type NewSandboxAttempt = typeof sandboxAttempts.$inferInsert;
+export type WorkspaceAttempt = typeof workspaceAttempts.$inferSelect;
+export type NewWorkspaceAttempt = typeof workspaceAttempts.$inferInsert;
 
-export type Sandbox = typeof sandboxes.$inferSelect;
-export type NewSandbox = typeof sandboxes.$inferInsert;
+export type Workspace = typeof workspaces.$inferSelect;
+export type NewWorkspace = typeof workspaces.$inferInsert;
 
-export type SandboxRunLink = typeof sandboxRunLinks.$inferSelect;
-export type NewSandboxRunLink = typeof sandboxRunLinks.$inferInsert;
+export type WorkspaceRunLink = typeof workspaceRunLinks.$inferSelect;
+export type NewWorkspaceRunLink = typeof workspaceRunLinks.$inferInsert;
 
 export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
 export type RunStatus = (typeof runStatusValues)[number];
 export type RunMode = (typeof runModeValues)[number];
 
-export type SandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferSelect;
-export type NewSandboxAttemptSnapshot = typeof sandboxAttemptSnapshots.$inferInsert;
+export type WorkspaceAttemptSnapshot = typeof workspaceAttemptSnapshots.$inferSelect;
+export type NewWorkspaceAttemptSnapshot = typeof workspaceAttemptSnapshots.$inferInsert;
 
 export type PackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferSelect;
 export type NewPackageResolutionCacheEntry = typeof packageResolutionCacheEntries.$inferInsert;

@@ -1,15 +1,15 @@
 /**
- * Demo: create a server-executed run (the worker docker-execs it in the sandbox and records
+ * Demo: create a server-executed run (the worker docker-execs it in the workspace and records
  * telemetry), then follow the record through the public SDK until it is terminal.
  *
- *   pnpm exec tsx packages/sdk/examples/demo-run.ts <sandboxId> <ownerUserId>
+ *   pnpm exec tsx packages/sdk/examples/demo-run.ts <workspaceId> <ownerUserId>
  */
 import { Sealant } from "../src/index.js";
 
 const baseUrl = process.env["SEALANT_BASE_URL"] ?? "http://127.0.0.1:4000";
-const [sandboxId, ownerUserId] = process.argv.slice(2);
-if (sandboxId === undefined || ownerUserId === undefined) {
-  console.error("usage: demo-run.ts <sandboxId> <ownerUserId>");
+const [workspaceId, ownerUserId] = process.argv.slice(2);
+if (workspaceId === undefined || ownerUserId === undefined) {
+  console.error("usage: demo-run.ts <workspaceId> <ownerUserId>");
   process.exit(1);
 }
 
@@ -27,11 +27,11 @@ const created = await fetch(`${baseUrl}/v1/runs`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    sandboxId,
+    workspaceId,
     ownerUserId,
     harnessId: "sh",
     prompt: "Add a demo note to the README and report the working-tree state",
-    command: { executable: "sh", args: ["-lc", script], cwd: "/sandbox/repo" },
+    command: { executable: "sh", args: ["-lc", script], cwd: "/workspace/repo" },
   }),
 });
 if (!created.ok) {

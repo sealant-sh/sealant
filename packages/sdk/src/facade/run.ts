@@ -1,6 +1,6 @@
 /**
  * The `Run` facade — one harness execution as the SDK exposes it. Built from a `runs.get` lookup
- * (read a past run, record outlives the sandbox), from `harness.run()` (which also captures the file
+ * (read a past run, record outlives the workspace), from `harness.run()` (which also captures the file
  * changes inline), or from `harness.start()` (a live handle; `wait()` settles it). `result` is
  * derived from the wire status; `changes` is captured inline by `run()` and fetched by `wait()` once
  * the run is terminal (the event-sourced fileChange projection that backs reads arrives in Phase 1);

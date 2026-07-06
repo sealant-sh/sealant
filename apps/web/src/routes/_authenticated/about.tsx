@@ -4,7 +4,7 @@ export const Route = createFileRoute("/_authenticated/about")({ component: About
 
 const PLATFORM_FACTS: ReadonlyArray<{ readonly label: string; readonly value: string }> = [
   { label: "Control plane", value: "private · authenticated" },
-  { label: "Execution layer", value: "disposable sandboxes" },
+  { label: "Execution layer", value: "disposable workspaces" },
   { label: "Source of truth", value: "recorded run evidence" },
 ];
 
@@ -17,7 +17,7 @@ function AboutPage() {
           Sealant
         </h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          The secure run layer for AI software work — isolated sandboxes, recorded from inside the
+          The secure run layer for AI software work — isolated workspaces, recorded from inside the
           runtime, turned into evidence-backed review.
         </p>
       </header>

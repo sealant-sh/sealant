@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { opencode } from "../harness.js";
-import { buildCreateSandboxRequest } from "./blueprint.js";
+import { buildCreateWorkspaceRequest } from "./blueprint.js";
 import type { SealantInternalConfig } from "./config.js";
 
 const config: SealantInternalConfig = {
@@ -12,7 +12,7 @@ const config: SealantInternalConfig = {
 };
 
 interface SpecShape {
-  readonly sources: { readonly sandbox: { readonly url: string; readonly ref: string } };
+  readonly sources: { readonly workspace: { readonly url: string; readonly ref: string } };
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
   readonly target: { readonly runtime: { readonly family: string } };
@@ -24,9 +24,9 @@ interface SpecShape {
   };
 }
 
-describe("buildCreateSandboxRequest", () => {
+describe("buildCreateWorkspaceRequest", () => {
   it("lowers {repository, harness} onto the create contract", () => {
-    const { payload } = buildCreateSandboxRequest(
+    const { payload } = buildCreateWorkspaceRequest(
       { repository: "github.com/acme/billing-service", harness: opencode() },
       config,
     );
@@ -36,25 +36,25 @@ describe("buildCreateSandboxRequest", () => {
     expect(payload.tag).toMatch(/^sdk-/);
 
     const spec = payload.spec as unknown as SpecShape;
-    expect(spec.sources.sandbox.url).toBe("https://github.com/acme/billing-service.git");
-    expect(spec.sources.sandbox.ref).toBe("main");
+    expect(spec.sources.workspace.url).toBe("https://github.com/acme/billing-service.git");
+    expect(spec.sources.workspace.ref).toBe("main");
     expect(spec.harness.id).toBe("opencode");
     expect(spec.customization.enableSealantd).toBe(true);
     expect(spec.target.runtime.family).toBe("docker");
   });
 
   it("passes through full git urls and honors an explicit ref", () => {
-    const { payload } = buildCreateSandboxRequest(
+    const { payload } = buildCreateWorkspaceRequest(
       { repository: "https://gitlab.com/x/y.git", ref: "master", harness: opencode() },
       config,
     );
     const spec = payload.spec as unknown as SpecShape;
-    expect(spec.sources.sandbox.url).toBe("https://gitlab.com/x/y.git");
-    expect(spec.sources.sandbox.ref).toBe("master");
+    expect(spec.sources.workspace.url).toBe("https://gitlab.com/x/y.git");
+    expect(spec.sources.workspace.ref).toBe("master");
   });
 
   it("omits `spec.credentials` when no credentials were requested", () => {
-    const { payload } = buildCreateSandboxRequest(
+    const { payload } = buildCreateWorkspaceRequest(
       { repository: "github.com/acme/billing-service", harness: opencode() },
       config,
     );
@@ -63,7 +63,7 @@ describe("buildCreateSandboxRequest", () => {
   });
 
   it("folds mapped credentials into `spec.credentials`", () => {
-    const { payload } = buildCreateSandboxRequest(
+    const { payload } = buildCreateWorkspaceRequest(
       {
         repository: "github.com/acme/billing-service",
         harness: opencode(),

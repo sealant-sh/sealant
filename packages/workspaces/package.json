@@ -1,0 +1,33 @@
+{
+  "name": "@sealant/workspaces",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Workspace image lifecycle package: build, publish, deploy, and orchestration",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "oxlint .",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sealant/credentials": "workspace:*",
+    "@sealant/db": "workspace:*",
+    "@sealant/rabbitmq": "workspace:*",
+    "@sealant/runtime-client": "^0.4.0",
+    "@sealant/runtime-protocol": "^0.4.0",
+    "@sealant/source-integrations": "workspace:*",
+    "@sealant/validators": "workspace:*",
+    "amqplib": "catalog:",
+    "effect": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@sealant/typescript": "workspace:*",
+    "@types/amqplib": "catalog:"
+  }
+}

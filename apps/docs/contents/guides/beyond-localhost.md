@@ -47,7 +47,7 @@ SEALANT_SSH_HOST=sealant.internal.example.com
 Connections then look like:
 
 ```sh
-ssh -p 2222 sbx-<sandbox-id>@sealant.internal.example.com
+ssh -p 2222 ws-<workspace-id>@sealant.internal.example.com
 ```
 
 See [SSH access](/docs/guides/ssh-access) for the full connection and key model.
@@ -91,10 +91,10 @@ Exposing Sealant beyond loopback is a real risk in the current build. Be deliber
   against it. Treat network reachability as the only access control you have today, and keep the API
   on a trusted network or behind an authenticating proxy.
 - **The worker mounts the host Docker socket** (`DOCKER_SOCKET_PATH`, default
-  `/var/run/docker.sock`) to build and run sandboxes. Access to sandbox creation is effectively
+  `/var/run/docker.sock`) to build and run workspaces. Access to workspace creation is effectively
   access to the host Docker daemon, which is equivalent to root on the host. Do not expose
-  sandbox-creating surfaces to untrusted users.
-- **Sandboxes run real code from real repositories.** Anyone who can create a sandbox can run
+  workspace-creating surfaces to untrusted users.
+- **Workspaces run real code from real repositories.** Anyone who can create a workspace can run
   arbitrary code on your host.
 
 For the full model and where the current gaps are, read

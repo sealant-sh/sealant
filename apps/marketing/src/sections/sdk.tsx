@@ -1,5 +1,5 @@
 // §5 — BUILD ON THE SDK. Sealant core is programmable infrastructure, not container
-// glue. The fluent SDK is the public surface: create a live sandbox, run the harness
+// glue. The fluent SDK is the public surface: create a live workspace, run the harness
 // you already use, keep the record. Light mono panel (not a dark terminal) so the
 // code reads in the same warm evidence-review system as the rest of the page.
 
@@ -11,9 +11,9 @@ type Tone = "kw" | "str" | "fn" | "comment" | "plain";
 const CODE: ReadonlyArray<ReadonlyArray<readonly [string, Tone]>> = [
   [
     ["const", "kw"],
-    [" sandbox = ", "plain"],
+    [" workspace = ", "plain"],
     ["await", "kw"],
-    [" sealant.sandboxes.", "plain"],
+    [" sealant.workspaces.", "plain"],
     ["create", "fn"],
     ["({", "plain"],
   ],
@@ -33,7 +33,7 @@ const CODE: ReadonlyArray<ReadonlyArray<readonly [string, Tone]>> = [
     ["const", "kw"],
     [" run = ", "plain"],
     ["await", "kw"],
-    [" sandbox.harness.", "plain"],
+    [" workspace.harness.", "plain"],
     ["run", "fn"],
     ["(", "plain"],
   ],
@@ -94,9 +94,9 @@ export function BuildOnSdk() {
               Build your agent on a runtime, not container glue.
             </Display>
             <p className="mt-5 max-w-[52ch] text-lg leading-relaxed text-muted-foreground">
-              Create a live sandbox around a real repository, run the harness you already use,
+              Create a live workspace around a real repository, run the harness you already use,
               stream progress while it works, and{" "}
-              <span className="text-foreground">keep the record after the sandbox is gone</span>.
+              <span className="text-foreground">keep the record after the workspace is gone</span>.
             </p>
             <p className="mt-6 font-mono text-xs text-faint">
               Bring OpenCode, a custom harness, a CI worker, or your own agent loop.

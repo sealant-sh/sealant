@@ -1,4 +1,9 @@
 {
   "extends": "@sealant/typescript/core.json",
+  "compilerOptions": {
+    "paths": {
+      "@sealant/workspaces": ["../../packages/workspaces/src/index.ts"]
+    }
+  },
   "include": ["**/*.ts", "**/*.tsx", "package.json"]
 }

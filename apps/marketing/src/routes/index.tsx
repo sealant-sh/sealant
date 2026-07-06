@@ -6,16 +6,16 @@ import { Hero } from "#/sections/hero";
 import { OpenSource } from "#/sections/opensource";
 import { Products } from "#/sections/products";
 import { RunSurface } from "#/sections/record";
-import { Sandboxes } from "#/sections/sandboxes";
 import { BuildOnSdk } from "#/sections/sdk";
 import { ModelStrip } from "#/sections/thesis-strip";
+import { Workspaces } from "#/sections/workspaces";
 
 export const Route = createFileRoute("/")({
   component: MarketingPage,
 });
 
 // Ordered by value, not implementation: reviewable agent work → the replayable run
-// record → the SDK → what the record captures → live sandboxes & access → versatility
+// record → the SDK → what the record captures → live workspaces & access → versatility
 // → open-source → adopt. See docs/product/LANDING-PAGE-CONTENT-MAP.md.
 function MarketingPage() {
   return (
@@ -25,7 +25,7 @@ function MarketingPage() {
       <RunSurface />
       <BuildOnSdk />
       <RecordCaptures />
-      <Sandboxes />
+      <Workspaces />
       <Products />
       <OpenSource />
       <FinalCta />

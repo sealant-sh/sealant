@@ -1,9 +1,9 @@
 # Sealant
 
 Sealant is an open-source, self-hosted **runtime for agentic development**. It gives coding
-harnesses a real sandbox to work in, then turns every run into a structured, replayable **execution
-record** — the change, the checks, the terminal output, the artifacts, the browser evidence, and the
-source trail behind the result.
+harnesses a real workspace to work in, then turns every run into a structured, replayable
+**execution record** — the change, the checks, the terminal output, the artifacts, the browser
+evidence, and the source trail behind the result.
 
 Bring your own harness. Keep your code. Read the evidence yourself.
 
@@ -11,14 +11,14 @@ Bring your own harness. Keep your code. Read the evidence yourself.
 
 Three nouns carry the whole system:
 
-- **Sandbox** — a live, disposable development environment around a real repository (code,
+- **Workspace** — a live, disposable development environment around a real repository (code,
   dependencies, harness, processes, services). Where the work happens.
-- **Run** — a single harness execution inside a sandbox. What you keep.
+- **Run** — a single harness execution inside a workspace. What you keep.
 - **Execution record** — the durable, append-only, replayable history of a run: one ordered,
   correlated stream of process lifecycle, byte-exact I/O, file changes, network activity, and
   artifacts. The soul of the product.
 
-The core loop is the same everywhere: **create a sandbox → run a harness → replay the record →
+The core loop is the same everywhere: **create a workspace → run a harness → replay the record →
 review the change.**
 
 ## Platform and products
@@ -42,8 +42,8 @@ build on the same public SDK. Your code never leaves your infrastructure.
 ## Documentation
 
 The docs site lives in [`apps/docs/`](apps/docs) (fumadocs) and addresses users of the platform:
-getting started (install, first sandbox), task guides (GitHub App, SSH access, sandboxes, upgrades),
-reference (environment variables, ports, the HTTP API, the SDK), the core concepts, and a
+getting started (install, first workspace), task guides (GitHub App, SSH access, workspaces,
+upgrades), reference (environment variables, ports, the HTTP API, the SDK), the core concepts, and a
 contributing section for working on Sealant itself. Retired planning artifacts are archived under
 [`docs/archive/`](docs/archive).
 
@@ -61,7 +61,7 @@ Two canonical reference docs sit at the repo root:
 │   ├── api/                   # control-plane API (Effect)
 │   ├── docs/                  # documentation site (fumadocs)
 │   ├── marketing/             # public marketing site
-│   ├── ssh-gateway/           # SSH access into live sandboxes
+│   ├── ssh-gateway/           # SSH access into live workspaces
 │   ├── web/                   # main product web app (the review surface)
 │   └── worker/                # background worker
 ├── packages/                  # shared libraries and domain modules
@@ -69,7 +69,7 @@ Two canonical reference docs sit at the repo root:
 │   ├── auth/                  # shared auth
 │   ├── db/                    # Effect + PostgreSQL control-plane state
 │   ├── rabbitmq/              # message transport
-│   ├── sandboxes/             # sandbox domain: build, publish, launch, lifecycle
+│   ├── workspaces/            # workspace domain: build, publish, launch, lifecycle
 │   ├── source-integrations/   # repo/provider integrations (GitHub first)
 │   ├── telemetry/             # execution-record ingestion and persistence
 │   ├── ui/                    # @sealant/ui — the design system and components
@@ -82,24 +82,24 @@ Two canonical reference docs sit at the repo root:
 
 - `apps/`: user-facing and deployable surfaces — the web app, marketing site, docs, API, worker, and
   access gateways.
-- `packages/`: shared code — the wire contracts, the sandbox domain, the telemetry/execution record,
-  the design system, and reusable utilities.
+- `packages/`: shared code — the wire contracts, the workspace domain, the telemetry/execution
+  record, the design system, and reusable utilities.
 - `tooling/`: centralized configs and tooling packages (TypeScript, lint, format, test, Tailwind).
 
 ## Architecture at a glance
 
 The runtime is built around explicit contracts and a daemon that does the work.
 
-1. A product surface or the SDK submits a sandbox spec (repository, harness, runtime).
-2. The control plane (`apps/api`, Effect) normalizes it and provisions an isolated sandbox.
-3. The `sealantd` daemon supervises the sandbox and the harness run inside it, emitting a typed
+1. A product surface or the SDK submits a workspace spec (repository, harness, runtime).
+2. The control plane (`apps/api`, Effect) normalizes it and provisions an isolated workspace.
+3. The `sealantd` daemon supervises the workspace and the harness run inside it, emitting a typed
    telemetry firehose.
 4. `packages/telemetry` consumes that firehose and persists it as an append-only, event-sourced log
    — the execution record, keyed on `(runId, sequence)` and replayable as a pure fold.
 5. The web app (`apps/web`) renders the run as reviewable evidence; access is available over SSH, VS
    Code, or Cursor via `apps/ssh-gateway`.
 
-Supporting integrations feed both the sandbox and run flows without owning either: source
+Supporting integrations feed both the workspace and run flows without owning either: source
 integrations resolve repositories and refs, harness integrations describe launch behavior, and
 registry integrations publish and retrieve artifacts.
 
@@ -115,10 +115,10 @@ curl -fsSL https://get.sealant.dev | sh
 That downloads the compose file for the latest release, generates secrets into `~/.sealant/.env`,
 pulls the prebuilt images, and starts the whole product: the web app on
 [http://localhost:3000](http://localhost:3000), the API on 4000, the SSH gateway on 2222 (all bound
-to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a sandbox, then:
+to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a workspace, then:
 
 ```bash
-ssh -p 2222 sbx-<sandbox-id>@localhost
+ssh -p 2222 ws-<workspace-id>@localhost
 ```
 
 Upgrade with `curl -fsSL https://get.sealant.dev | SEALANT_VERSION=latest sh` (the variable goes on
@@ -162,7 +162,7 @@ pnpm test         # run tests
 pnpm format       # format (oxfmt)
 ```
 
-To run the full stack locally — infra, the web app, launching a sandbox, and SSHing into it — see
+To run the full stack locally — infra, the web app, launching a workspace, and SSHing into it — see
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ### Playwright on NixOS
