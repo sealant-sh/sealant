@@ -92,6 +92,47 @@ describe("parseSshGatewayEnv", () => {
     }
   });
 
+  it("accepts the sandbox-era names a pre-rename compose still passes", () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "sealant-ssh-gateway-keys-"));
+    const hostKeyPath = join(tempDirectory, "ssh_gateway_host_key");
+
+    try {
+      writeFileSync(hostKeyPath, "host-key\n", "utf8");
+
+      const env = parseSshGatewayEnv({
+        SANDBOX_SSH_GATEWAY_TOKEN: "legacy-token",
+        SSH_GATEWAY_SANDBOX_USERNAME_PREFIX: "sbx",
+        SSH_GATEWAY_HOST_KEY_PATH: hostKeyPath,
+        SSH_GATEWAY_ALLOWED_KEYS_FILE: join(tempDirectory, "does_not_exist"),
+      });
+
+      expect(env.WORKSPACE_SSH_GATEWAY_TOKEN).toBe("legacy-token");
+      expect(env.SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX).toBe("sbx");
+    } finally {
+      rmSync(tempDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("prefers the workspace-era name when both are set", () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "sealant-ssh-gateway-keys-"));
+    const hostKeyPath = join(tempDirectory, "ssh_gateway_host_key");
+
+    try {
+      writeFileSync(hostKeyPath, "host-key\n", "utf8");
+
+      const env = parseSshGatewayEnv({
+        SANDBOX_SSH_GATEWAY_TOKEN: "legacy-token",
+        WORKSPACE_SSH_GATEWAY_TOKEN: "current-token",
+        SSH_GATEWAY_HOST_KEY_PATH: hostKeyPath,
+        SSH_GATEWAY_ALLOWED_KEYS_FILE: join(tempDirectory, "does_not_exist"),
+      });
+
+      expect(env.WORKSPACE_SSH_GATEWAY_TOKEN).toBe("current-token");
+    } finally {
+      rmSync(tempDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("still requires the host key file", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "sealant-ssh-gateway-keys-"));
 
