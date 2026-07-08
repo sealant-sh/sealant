@@ -123,6 +123,7 @@ const createRuntimeAdapterStub = (
   options: {
     supports?: RuntimeAdapter["supports"];
     launch?: RuntimeAdapter["launch"];
+    stop?: RuntimeAdapter["stop"];
   } = {},
 ): RuntimeAdapter => {
   return {
@@ -135,6 +136,13 @@ const createRuntimeAdapterStub = (
         resourceId: "resource_123",
         reference: "sealant-resource",
         status: "running" as const,
+      })),
+    stop:
+      options.stop ??
+      vi.fn(async () => ({
+        adapter: id,
+        resourceId: "resource_123",
+        outcome: "stopped" as const,
       })),
   };
 };
