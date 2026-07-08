@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
+  parseRuntimeAdapterStopInput,
+  parseRuntimeAdapterStopResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   type CredentialFileInjection,
@@ -16,6 +18,8 @@ import {
   type RuntimeAdapter,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
+  type RuntimeAdapterStopInput,
+  type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
 } from "./runtime-adapter.js";
 
@@ -206,6 +210,20 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
   const error = new Error(message) as Error & { code: string };
   error.code = code;
   return error;
+};
+
+// `docker rm -f` / `docker inspect` against a missing container fail with "No such container"
+// (or "No such object", depending on the CLI path) on stderr, surfaced in the execFile error
+// message and `.stderr`. That is the one failure `stop` treats as success — the container is
+// already gone. `stop` double-checks structurally (a follow-up inspect) before failing, so this
+// prose match is a fast path, not the load-bearing mechanism.
+const isNoSuchContainerError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /no such (container|object)/i.test(text);
 };
 
 const normalizeContainerToken = (value: string): string => {
@@ -686,6 +704,48 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // control socket (gateway-spec §2), and client keys are authorized against the control plane.
     const parsed = parseRuntimeAdapterSupportInput(input);
     return supportForInput(parsed);
+  }
+
+  /**
+   * Stop a workspace container. Workspaces are ephemeral, so stop = remove (`docker rm -f`) —
+   * there is no resumable container state to keep. Idempotent: a container that is already gone
+   * reports `not-found`, which callers treat as success. Any other failure (daemon unreachable,
+   * permission) surfaces — reporting "stopped" while the container is still alive would leak it.
+   */
+  public async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
+    const parsed = parseRuntimeAdapterStopInput(input);
+    let outcome: "stopped" | "not-found" = "stopped";
+
+    try {
+      await this.commandRunner("docker", ["rm", "-f", parsed.resourceId]);
+    } catch (error) {
+      let gone = isNoSuchContainerError(error);
+      if (!gone) {
+        // The error prose didn't identify a missing container. Check structurally before failing
+        // so idempotency doesn't hinge on docker's error copy: a follow-up inspect that itself
+        // reports the container missing proves it's gone; an inspect that succeeds (container
+        // exists) or fails differently (daemon unreachable) means the rm failure is real.
+        try {
+          await this.inspectContainerState(parsed.resourceId);
+        } catch (inspectError) {
+          gone = isNoSuchContainerError(inspectError);
+        }
+      }
+      if (!gone) {
+        const message = error instanceof Error ? error.message : "Unknown docker rm error.";
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Failed to remove workspace container '${parsed.reference ?? parsed.resourceId}': ${message}`,
+        );
+      }
+      outcome = "not-found";
+    }
+
+    return parseRuntimeAdapterStopResult({
+      adapter: this.id,
+      resourceId: parsed.resourceId,
+      outcome,
+    });
   }
 
   public async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {

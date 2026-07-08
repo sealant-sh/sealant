@@ -911,4 +911,82 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.status).toBe("ready");
     expect(result.endpoint).toBeUndefined();
   });
+
+  it("stops a workspace container with docker rm -f", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "container-id-123\n", stderr: "" }));
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.stop({
+      resourceId: "container-id-123",
+      reference: "sealant-run-abc",
+    });
+
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(commandRunner).toHaveBeenCalledWith("docker", ["rm", "-f", "container-id-123"]);
+    expect(result).toEqual({
+      adapter: "docker",
+      resourceId: "container-id-123",
+      outcome: "stopped",
+    });
+  });
+
+  it("treats an already-removed container as a successful (not-found) stop", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async () => {
+      throw new Error(
+        "Command failed: docker rm -f container-id-123\nError response from daemon: No such container: container-id-123",
+      );
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.stop({ resourceId: "container-id-123" });
+
+    expect(result.outcome).toBe("not-found");
+  });
+
+  it("falls back to a structural inspect when the rm error prose is unrecognized", async () => {
+    // rm fails with wording the regex doesn't know, but the follow-up inspect proves the
+    // container is gone — idempotency must not hinge on docker's error copy.
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "rm") {
+        throw new Error("Error response from daemon: removal already in progress (code 409)");
+      }
+      throw new Error("Error: No such object: container-id-123");
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.stop({ resourceId: "container-id-123" });
+
+    expect(result.outcome).toBe("not-found");
+  });
+
+  it("surfaces a stop failure that is NOT a missing container (so callers never record a false stop)", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async () => {
+      throw new Error("Cannot connect to the Docker daemon at unix:///var/run/docker.sock");
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await expect(adapter.stop({ resourceId: "container-id-123" })).rejects.toThrow(
+      /Failed to remove workspace container/,
+    );
+  });
 });

@@ -1,10 +1,13 @@
 import {
   parseRuntimeAdapterLaunchInput,
+  parseRuntimeAdapterStopInput,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   type RuntimeAdapter,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
+  type RuntimeAdapterStopInput,
+  type RuntimeAdapterStopResult,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapterSupport,
 } from "./runtime-adapter.js";
@@ -32,6 +35,11 @@ export class K3sRuntimeAdapter implements RuntimeAdapter {
 
   public async launch(_input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
     parseRuntimeAdapterLaunchInput(_input);
+    throw notImplementedError();
+  }
+
+  public async stop(_input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
+    parseRuntimeAdapterStopInput(_input);
     throw notImplementedError();
   }
 }
