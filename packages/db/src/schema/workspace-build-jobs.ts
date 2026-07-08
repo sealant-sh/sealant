@@ -33,6 +33,13 @@ export const workspaceRuntimeInstanceStatusValues = [
 
 export type WorkspaceRuntimeInstanceStatus = (typeof workspaceRuntimeInstanceStatusValues)[number];
 
+// Why a runtime instance was stopped: an explicit user/API stop, TTL expiry (reaper), or a stop
+// taken as part of a failure path. Workspaces are ephemeral, so "stopped" is terminal.
+export const workspaceRuntimeInstanceStopReasonValues = ["user", "expired", "failed"] as const;
+
+export type WorkspaceRuntimeInstanceStopReason =
+  (typeof workspaceRuntimeInstanceStopReasonValues)[number];
+
 export const ociImageBuildJobs = pgTable(
   "oci_image_build_jobs",
   {
@@ -91,6 +98,7 @@ export const workspaceRuntimeInstances = pgTable(
     endpoint: text(),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
+    stopReason: text("stop_reason", { enum: workspaceRuntimeInstanceStopReasonValues }),
     launchedAt: timestamp("launched_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })

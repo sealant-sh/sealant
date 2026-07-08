@@ -26,6 +26,8 @@ export {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
   workspaceRuntimeInstanceStatusValues,
+  type WorkspaceRuntimeInstanceStopReason,
+  workspaceRuntimeInstanceStopReasonValues,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobStatus,
   workspaceBuildJobStatusValues,
