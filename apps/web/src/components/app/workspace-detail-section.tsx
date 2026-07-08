@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 import { WorkspacePage } from "@/components/app/workspace-page";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 interface WorkspaceDetail {
   readonly workspaceId: string;
@@ -123,6 +123,12 @@ function statusPresentation(status: WorkspaceStatus): {
         dotClassName: "border-[1.5px] border-input bg-transparent",
         textClassName: "text-ink-2",
         label: "Cancelled",
+      };
+    case "stopped":
+      return {
+        dotClassName: "border-[1.5px] border-input bg-transparent",
+        textClassName: "text-ink-2",
+        label: "Stopped",
       };
   }
 }

@@ -13,7 +13,7 @@ import { runTitle } from "@/lib/run-record/format";
 import type { AppTrpc } from "@/lib/trpc/client";
 import { useTRPC } from "@/lib/trpc/react";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 interface WorkspaceSummary {
   readonly workspaceId: string;
@@ -157,6 +157,24 @@ function WorkspaceSummaryPage() {
     }),
   );
   const rerunWorkspaceMutation = useMutation(trpc.workspace.create.mutationOptions());
+  const stopWorkspaceMutation = useMutation(
+    trpc.workspace.stop.mutationOptions({
+      onSuccess: async () => {
+        // The stop also changes the list and sidebar rows — invalidate the whole workspace family.
+        await queryClient.invalidateQueries({ queryKey: trpc.workspace.pathKey() });
+      },
+    }),
+  );
+  // Stop targets a live runtime, which only "ready" guarantees (a "running" workspace is still
+  // building — there is no container to stop yet, and the API answers 409).
+  const canStopWorkspace = workspace.status === "ready";
+  const stopMutationError =
+    stopWorkspaceMutation.error === null
+      ? null
+      : resolveMutationErrorMessage(stopWorkspaceMutation.error);
+  // DESIGN.md: no more than one prominent warning in a viewport — the action column shows the
+  // most recent failure only.
+  const actionError = stopMutationError ?? rerunMutationError;
 
   const copySshCommand = async () => {
     if (sshCommand === null) {
@@ -339,10 +357,18 @@ function WorkspaceSummaryPage() {
             <Button variant="outline" className="h-11 px-5">
               View spec
             </Button>
-            {rerunMutationError === null ? null : (
-              <p className="border-l-2 border-danger-dot pl-3 text-sm text-danger">
-                {rerunMutationError}
-              </p>
+            <Button
+              variant="outline"
+              className="h-11 px-5"
+              onClick={() => {
+                stopWorkspaceMutation.mutate({ workspaceId: workspace.workspaceId });
+              }}
+              disabled={stopWorkspaceMutation.isPending || !canStopWorkspace}
+            >
+              {stopWorkspaceMutation.isPending ? "Stopping" : "Stop workspace"}
+            </Button>
+            {actionError === null ? null : (
+              <p className="border-l-2 border-danger-dot pl-3 text-sm text-danger">{actionError}</p>
             )}
           </div>
         </div>

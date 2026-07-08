@@ -24,6 +24,10 @@ import {
   messageResponseSchema,
   renameWorkspaceRequestSchema,
   renameWorkspaceResponseSchema,
+  restartWorkspaceRequestSchema,
+  restartWorkspaceResponseSchema,
+  stopWorkspaceRequestSchema,
+  stopWorkspaceResponseSchema,
   listRunsQuerySchema,
   listRunsResponseSchema,
   resolvePackageQuerySchema,
@@ -159,6 +163,14 @@ export interface CoreApiClient {
       readonly workspaceId: string;
       readonly name: string;
     }): Promise<InferSchema<typeof renameWorkspaceResponseSchema>>;
+    stop(input: {
+      readonly workspaceId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof stopWorkspaceResponseSchema>>;
+    restart(input: {
+      readonly workspaceId: string;
+      readonly ownerUserId: string;
+    }): Promise<InferSchema<typeof restartWorkspaceResponseSchema>>;
   };
   readonly runs: {
     list(input: {
@@ -251,6 +263,8 @@ class CoreApiClientImpl implements CoreApiClient {
       attempts: (input) => this.listWorkspaceAttempts(input),
       events: (input) => this.listWorkspaceEvents(input),
       rename: (input) => this.renameWorkspace(input),
+      stop: (input) => this.stopWorkspace(input),
+      restart: (input) => this.restartWorkspace(input),
     };
     this.packages = {
       resolve: (input) => this.resolvePackage(input),
@@ -745,6 +759,36 @@ class CoreApiClientImpl implements CoreApiClient {
       method: "PATCH",
       path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/name`,
       schema: renameWorkspaceResponseSchema,
+      body: payload,
+    });
+  }
+
+  private async stopWorkspace(input: {
+    readonly workspaceId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof stopWorkspaceResponseSchema>> {
+    const params = workspaceIdParamsSchema.parse({ workspaceId: input.workspaceId });
+    const payload = stopWorkspaceRequestSchema.parse({ ownerUserId: input.ownerUserId });
+
+    return this.requestJson({
+      method: "POST",
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/stop`,
+      schema: stopWorkspaceResponseSchema,
+      body: payload,
+    });
+  }
+
+  private async restartWorkspace(input: {
+    readonly workspaceId: string;
+    readonly ownerUserId: string;
+  }): Promise<InferSchema<typeof restartWorkspaceResponseSchema>> {
+    const params = workspaceIdParamsSchema.parse({ workspaceId: input.workspaceId });
+    const payload = restartWorkspaceRequestSchema.parse({ ownerUserId: input.ownerUserId });
+
+    return this.requestJson({
+      method: "POST",
+      path: `/v1/workspaces/${encodeURIComponent(params.workspaceId)}/restart`,
+      schema: restartWorkspaceResponseSchema,
       body: payload,
     });
   }

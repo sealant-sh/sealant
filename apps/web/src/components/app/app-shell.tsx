@@ -56,7 +56,7 @@ interface AppShellProps {
   readonly children: ReactNode;
 }
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 interface SidebarWorkspace {
   readonly workspaceId: string;
@@ -877,6 +877,10 @@ function formatWorkspaceStatus(status: SidebarWorkspace["status"]): string {
 
   if (status === "cancelled") {
     return "Cancelled";
+  }
+
+  if (status === "stopped") {
+    return "Stopped";
   }
 
   return "Queued";
