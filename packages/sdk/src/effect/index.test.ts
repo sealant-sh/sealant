@@ -15,6 +15,9 @@ describe("@sealant/sdk/effect subpath", () => {
     expect(typeof effectSubpath.createWorkspaceOp).toBe("function");
     expect(typeof effectSubpath.createRunOp).toBe("function");
     expect(typeof effectSubpath.getRunTimelineOp).toBe("function");
+    expect(typeof effectSubpath.stopWorkspaceOp).toBe("function");
+    expect(typeof effectSubpath.restartWorkspaceOp).toBe("function");
+    expect(typeof effectSubpath.expireWorkspaceOp).toBe("function");
   });
 
   it("exposes the typed contract errors for catchTag matching", async () => {

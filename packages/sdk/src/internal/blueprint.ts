@@ -17,6 +17,7 @@ import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 import type { CreateOptions } from "../types.js";
 import type { SealantInternalConfig } from "./config.js";
 import { mapWorkspaceCredentials } from "./credentials.js";
+import { parseTtlSeconds } from "./duration.js";
 
 const sanitizeRepoSlug = (value: string): string => {
   const slug = value
@@ -76,6 +77,7 @@ export const buildCreateWorkspaceRequest = (
       repository: sanitizeRepoSlug(tail),
       tag: `sdk-${randomUUID().slice(0, 8)}`,
       ...(options.name === undefined ? {} : { name: options.name }),
+      ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
       spec,
     },
   };

@@ -7,8 +7,14 @@
 import type { WorkspaceDetails } from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
-import { getWorkspaceOp } from "../effect/operations.js";
+import {
+  expireWorkspaceOp,
+  getWorkspaceOp,
+  restartWorkspaceOp,
+  stopWorkspaceOp,
+} from "../effect/operations.js";
 import { SealantError, SealantNotImplementedError } from "../errors.js";
+import { parseTtlSeconds } from "../internal/duration.js";
 import type {
   Harness,
   HarnessRunner,
@@ -26,9 +32,14 @@ export interface WorkspaceInit {
   readonly harness?: Harness;
 }
 
-const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled"]);
+// Terminal statuses a workspace can never leave: ready()/events() fail fast (or end the stream)
+// on these instead of polling out their deadline. "stopped" is terminal too — a TTL expiry or a
+// concurrent stop while ready() polls must surface immediately, not as a 10-minute timeout.
+const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled", "stopped"]);
 const READY_POLL_INTERVAL_MS = 2_000;
 const READY_TIMEOUT_MS = 10 * 60 * 1_000;
+const STOP_POLL_INTERVAL_MS = 1_000;
+const STOP_TIMEOUT_MS = 60 * 1_000;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -145,12 +156,53 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return iterate();
     },
 
-    stop: () =>
-      Promise.reject(new SealantNotImplementedError("workspace.stop (lifecycle, Phase 3)")),
-    restart: () =>
-      Promise.reject(new SealantNotImplementedError("workspace.restart (lifecycle, Phase 3)")),
-    expire: () =>
-      Promise.reject(new SealantNotImplementedError("workspace.expire (lifecycle, Phase 3)")),
+    // BLOCKING stop: the control plane accepts the stop (202) and the worker tears the container
+    // down; resolve only once the workspace reports the terminal "stopped" status, so callers can
+    // trust the container is gone when this settles.
+    stop: async () => {
+      const ownerUserId = ctx.config.hostLocal.ownerUserId;
+      await ctx.runtime.run(stopWorkspaceOp(init.id, { ownerUserId }));
+
+      const deadline = Date.now() + STOP_TIMEOUT_MS;
+      for (;;) {
+        const details: WorkspaceDetails = await ctx.runtime.run(getWorkspaceOp(init.id));
+        if (details.status === "stopped") {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new SealantError(`Timed out waiting for workspace ${init.id} to stop.`, {
+            code: "workspace_stop_timeout",
+          });
+        }
+        await delay(STOP_POLL_INTERVAL_MS);
+      }
+    },
+
+    // Restart drives a fresh launch (new attempt, new container, same resolved spec) and returns a
+    // handle that resolves readiness against the NEW runtime via the usual ready() gate.
+    restart: async () => {
+      const ownerUserId = ctx.config.hostLocal.ownerUserId;
+      await ctx.runtime.run(restartWorkspaceOp(init.id, { ownerUserId }));
+      return makeWorkspace(ctx, {
+        id: init.id,
+        name: init.name,
+        status: "queued",
+        ...(init.harness === undefined ? {} : { harness: init.harness }),
+      });
+    },
+
+    // expire({in: "2h"}) sets the TTL, expire() expires now (the platform reaper stops it on its
+    // next tick), expire({in: null}) clears the TTL. Resolves once the expiry is recorded.
+    expire: async (options) => {
+      const ownerUserId = ctx.config.hostLocal.ownerUserId;
+      const ttl = options?.in;
+      await ctx.runtime.run(
+        expireWorkspaceOp(init.id, {
+          ownerUserId,
+          ...(ttl === undefined ? {} : { ttlSeconds: ttl === null ? null : parseTtlSeconds(ttl) }),
+        }),
+      );
+    },
   };
 
   return workspace;

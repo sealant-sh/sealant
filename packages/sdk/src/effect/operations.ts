@@ -8,11 +8,14 @@ import type {
   CreateRunRequest,
   CreateWorkspaceRequest,
   ExecWorkspaceRequest,
+  ExpireWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
   InferenceRespondRequest,
   ListRunsQuery,
   ListWorkspacesQuery,
+  RestartWorkspaceRequest,
+  StopWorkspaceRequest,
   UpdateRunRequest,
 } from "@sealant/api-contracts";
 import { Effect } from "effect";
@@ -40,6 +43,21 @@ export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
 export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.execWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.stopWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.restartWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.expireWorkspace({ params: { workspaceId }, payload }),
   );
 
 // ---- runs ----
