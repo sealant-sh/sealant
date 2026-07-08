@@ -11,6 +11,7 @@ export const workspaceStatusSchema = Schema.Literals([
   "ready",
   "failed",
   "cancelled",
+  "stopped",
 ]);
 export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
@@ -77,6 +78,9 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   dotfilesSelection: Schema.optional(githubWorkspaceSourceSelectionSchema),
   credentials: Schema.optional(createWorkspaceCredentialsSchema),
   spec: Schema.Unknown,
+  // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
+  // applies. The reaper stops the workspace once the TTL elapses.
+  ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type CreateWorkspaceRequest = typeof createWorkspaceRequestSchema.Type;
 
@@ -115,6 +119,46 @@ export const renameWorkspaceRequestSchema = Schema.Struct({
 });
 export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 
+// Lifecycle actions are owner-scoped like execWorkspace: ownerUserId rides in the payload and a
+// mismatch yields a uniform 404 (existence is not leaked).
+export const stopWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type StopWorkspaceRequest = typeof stopWorkspaceRequestSchema.Type;
+
+export const stopWorkspaceResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  status: workspaceStatusSchema,
+});
+export type StopWorkspaceResponse = typeof stopWorkspaceResponseSchema.Type;
+
+export const restartWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type RestartWorkspaceRequest = typeof restartWorkspaceRequestSchema.Type;
+
+export const restartWorkspaceResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  /** The new attempt driving the fresh launch. */
+  runId: NonEmptyString,
+  status: workspaceStatusSchema,
+});
+export type RestartWorkspaceResponse = typeof restartWorkspaceResponseSchema.Type;
+
+export const expireWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  // Seconds from now until the workspace expires; null clears the TTL (never expires); omitted =
+  // expire immediately (the reaper stops it on its next tick).
+  ttlSeconds: Schema.optional(Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0)))),
+});
+export type ExpireWorkspaceRequest = typeof expireWorkspaceRequestSchema.Type;
+
+export const expireWorkspaceResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  expiresAt: Schema.NullOr(Schema.String),
+});
+export type ExpireWorkspaceResponse = typeof expireWorkspaceResponseSchema.Type;
+
 export const renameWorkspaceResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
@@ -147,6 +191,7 @@ export const workspaceSummarySchema = Schema.Struct({
   updatedAt: Schema.String,
   startedAt: Schema.optional(Schema.String),
   finishedAt: Schema.optional(Schema.String),
+  expiresAt: Schema.optional(Schema.String),
 });
 export type WorkspaceSummary = typeof workspaceSummarySchema.Type;
 
@@ -165,6 +210,7 @@ export const workspaceDetailsSchema = Schema.Struct({
   updatedAt: Schema.String,
   startedAt: Schema.optional(Schema.String),
   finishedAt: Schema.optional(Schema.String),
+  expiresAt: Schema.optional(Schema.String),
   spec: Schema.optional(Schema.Unknown),
 });
 export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
@@ -355,6 +401,49 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
+    }),
+  )
+  .add(
+    // Async: 202 = the stop was accepted and enqueued; the worker removes the container and the
+    // workspace transitions to "stopped". Idempotent — stopping a stopped workspace is a no-op 202.
+    HttpApiEndpoint.post("stopWorkspace", "/:workspaceId/stop", {
+      params: workspaceIdParams,
+      payload: stopWorkspaceRequestSchema,
+      success: stopWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // The workspace has never launched a runtime — nothing to stop yet.
+        WorkspaceConflictError,
+        WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Async: 202 + the new attempt id. Restart = stop the current runtime (if any) and drive a
+    // fresh launch from the same resolved spec — a new container, no filesystem carry-over.
+    HttpApiEndpoint.post("restartWorkspace", "/:workspaceId/restart", {
+      params: workspaceIdParams,
+      payload: restartWorkspaceRequestSchema,
+      success: restartWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // The workspace has never launched (no spec to relaunch from) or is mid-launch.
+        WorkspaceConflictError,
+        WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: sets (or clears) the workspace TTL column; the worker reaper enforces it.
+    HttpApiEndpoint.post("expireWorkspace", "/:workspaceId/expire", {
+      params: workspaceIdParams,
+      payload: expireWorkspaceRequestSchema,
+      success: expireWorkspaceResponseSchema,
+      error: [WorkspaceBadRequestError, WorkspaceNotFoundError, WorkspaceInternalServerError],
     }),
   )
   .add(
