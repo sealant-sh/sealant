@@ -73,6 +73,10 @@ These call the live API and work end-to-end:
 - **Workspaces:** `sealant.workspaces.create()`, `.get()`, `.list()`
 - **Workspace handle:** `workspace.status()`, `workspace.ready()`, `workspace.events()` (poll-backed
   status stream)
+- **Workspace lifecycle:** `workspace.stop()` (blocks until the container is gone and the workspace
+  reports `stopped`), `workspace.restart()` (fresh runtime from the same resolved spec),
+  `workspace.expire({ in: "2h" })` (TTL; `expire()` expires now, `expire({ in: null })` clears it) —
+  plus `create({ ..., ttl: "2h" })` for a create-time TTL
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
 - **Runs:** `sealant.runs.get(runId)`, `run.wait()` (polls to terminal, then fetches the captured
@@ -86,7 +90,6 @@ These exist on the typed surface so you can compile against the final shape, but
 runtime with `SealantNotImplementedError`. Do not depend on them yet:
 
 - **Harness:** `harness.session()` (interactive)
-- **Workspace lifecycle:** `workspace.stop()`, `workspace.restart()`, `workspace.expire()`
 - **Artifacts:** `run.artifacts.get()` (`.list()` currently returns empty)
 - **Record time-travel folds:** `record.fileTreeAt()`, `record.processTreeAt()`
 
