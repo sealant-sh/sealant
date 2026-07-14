@@ -1,5 +1,32 @@
 # @sealant/sdk
 
+## 0.6.0
+
+### Minor Changes
+
+- 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and `workspace.expire()`
+  are real end-to-end operations instead of `SealantNotImplementedError` rejections.
+
+  - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
+    container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async 202
+    — a fresh launch from the same resolved spec, recorded as a new attempt), and
+    `POST /v1/workspaces/:id/expire` (sets, clears, or triggers the workspace TTL).
+  - `WorkspaceStatus` gains `"stopped"`, and workspace summaries/details expose `expiresAt`.
+  - `createWorkspace` accepts an optional `ttlSeconds`; the SDK's `create()` accepts `ttl: "2h"`-style
+    durations. Expired workspaces are stopped by the platform reaper.
+  - SDK `stop()` blocks until the workspace reports `stopped`; `restart()` returns a fresh handle
+    whose `ready()` gates on the new runtime; `expire({ in: "2h" | null })` sets or clears the TTL.
+
+  Compatibility: adding `"stopped"` to the workspace status enum changes the wire contract — older
+  published SDKs decode workspace responses against the previous five-value literal union and will
+  fail to decode a stopped workspace. Upgrade the SDK together with the control plane.
+
+### Patch Changes
+
+- f4c35ca: `workspaces.create()` without a `ref` now really does use the repository's default branch, as the option's docs always claimed. The SDK no longer lowers a missing `ref` to `"main"`, the blueprint schema keeps the workspace source `ref` truly optional instead of defaulting it, and the docker runtime adapter omits `SEALANT_WORKSPACE_REPO_REF` entirely when unset so sealantd's plain `git clone` resolves the remote HEAD. Previously every repository whose default branch isn't `main` (e.g. `master`) failed workspace boot with `fatal: Remote branch main not found in upstream origin`. Requires sealantd ≥ 0.5.1 in the workspace image for the no-ref path.
+- Updated dependencies [6d1d72d]
+  - @sealant/api-contracts@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
