@@ -1,6 +1,6 @@
 {
   "name": "@sealant/api-contracts",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Contract-first HTTP API definitions for Sealant services",
   "license": "Apache-2.0",
   "repository": {
