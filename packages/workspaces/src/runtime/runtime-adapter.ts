@@ -83,6 +83,20 @@ export const runtimeAdapterLaunchResultSchema = z.strictObject({
   endpoint: z.string().trim().min(1).optional(),
 });
 
+// Workspaces are ephemeral (built fresh from a published image), so stop = remove: there is no
+// stopped-but-resumable container state to preserve. Stop is idempotent — a container that is
+// already gone reports `not-found`, which callers treat as success.
+export const runtimeAdapterStopInputSchema = z.strictObject({
+  resourceId: z.string().trim().min(1),
+  reference: z.string().trim().min(1).optional(),
+});
+
+export const runtimeAdapterStopResultSchema = z.strictObject({
+  adapter: runtimeAdapterIdSchema,
+  resourceId: z.string().trim().min(1),
+  outcome: z.enum(["stopped", "not-found"]),
+});
+
 export const parseRuntimeAdapterSupport = (input: unknown): RuntimeAdapterSupport => {
   return runtimeAdapterSupportSchema.parse(input);
 };
@@ -97,6 +111,14 @@ export const parseRuntimeAdapterLaunchInput = (input: unknown): RuntimeAdapterLa
 
 export const parseRuntimeAdapterLaunchResult = (input: unknown): RuntimeAdapterLaunchResult => {
   return runtimeAdapterLaunchResultSchema.parse(input);
+};
+
+export const parseRuntimeAdapterStopInput = (input: unknown): RuntimeAdapterStopInput => {
+  return runtimeAdapterStopInputSchema.parse(input);
+};
+
+export const parseRuntimeAdapterStopResult = (input: unknown): RuntimeAdapterStopResult => {
+  return runtimeAdapterStopResultSchema.parse(input);
 };
 
 export type RuntimeAdapterId = z.infer<typeof runtimeAdapterIdSchema>;
@@ -121,11 +143,16 @@ export type RuntimeAdapterLaunchInput = z.infer<typeof runtimeAdapterLaunchInput
 
 export type RuntimeAdapterLaunchResult = z.infer<typeof runtimeAdapterLaunchResultSchema>;
 
+export type RuntimeAdapterStopInput = z.infer<typeof runtimeAdapterStopInputSchema>;
+
+export type RuntimeAdapterStopResult = z.infer<typeof runtimeAdapterStopResultSchema>;
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult>;
+  stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

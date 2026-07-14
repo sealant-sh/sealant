@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /**
  * Single typed failure for the workspace build job pipeline.
@@ -65,3 +65,18 @@ export const workspaceBuildJobProcessingError = (input: {
     ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
     cause: input.cause ?? input.message,
   });
+
+/**
+ * Run a best-effort state update: never propagate its failure (so it cannot mask the originating
+ * error), but log a warning so a failed status update is still observable instead of silent.
+ * Shared by the build-job and lifecycle pipelines; `pipelineName` prefixes the log line.
+ */
+export const swallowingFailure =
+  (pipelineName: string, operation: string) =>
+  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void> =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(`${pipelineName} ${operation} failed; continuing.`, cause),
+      ),
+      Effect.asVoid,
+    );

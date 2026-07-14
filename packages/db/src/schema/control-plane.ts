@@ -721,6 +721,10 @@ export const workspaces = pgTable(
     latestRunId: text("latest_run_id").references(() => workspaceAttempts.id, {
       onDelete: "set null",
     }),
+    // TTL: when set, the workspace's live runtime is eligible for the worker reaper once this
+    // instant passes. NULL = never expires. Stamped at create (default TTL or per-create override)
+    // and by `workspace.expire()`.
+    expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

@@ -41,3 +41,17 @@ export {
   type RunExecConsumerMessage,
   type RunExecRequestedMessage,
 } from "./run-exec-queue.js";
+
+export {
+  assertWorkspaceLifecycleQueueTopology,
+  consumeWorkspaceLifecycleJobs,
+  parseWorkspaceStopRequestedMessage,
+  publishWorkspaceStopRequested,
+  workspaceLifecycleQueueName,
+  workspaceLifecycleQueueTopology,
+  workspaceStopRequestedMessageKind,
+  type ConsumeWorkspaceLifecycleJobsOptions,
+  type WorkspaceLifecycleConsumerMessage,
+  type WorkspaceStopReason,
+  type WorkspaceStopRequestedMessage,
+} from "./workspace-lifecycle-queue.js";

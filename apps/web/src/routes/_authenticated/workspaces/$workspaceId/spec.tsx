@@ -23,7 +23,7 @@ function WorkspaceSpecPage() {
   const workspace = Route.useLoaderData() as {
     workspaceId: string;
     name: string;
-    status: "queued" | "running" | "ready" | "failed" | "cancelled";
+    status: "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
     repository?: string | undefined;
     tag?: string | undefined;
     spec?: unknown;

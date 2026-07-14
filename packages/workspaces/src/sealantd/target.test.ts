@@ -25,6 +25,7 @@ const runtimeInstance = (
   endpoint: null,
   errorCode: null,
   errorMessage: null,
+  stopReason: null,
   launchedAt: new Date("2026-06-21T00:00:00.000Z"),
   finishedAt: null,
   createdAt: new Date("2026-06-21T00:00:00.000Z"),

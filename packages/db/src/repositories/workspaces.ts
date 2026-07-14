@@ -22,6 +22,7 @@ export interface CreateWorkspaceInput {
   readonly profileRevisionId?: string;
   readonly requestedByUserId?: string;
   readonly status?: WorkspaceStatus;
+  readonly expiresAt?: Date;
 }
 
 export interface ListWorkspacesInput {
@@ -39,6 +40,12 @@ export interface SetWorkspaceStatusInput {
 export interface SetWorkspaceNameInput {
   readonly id: string;
   readonly name: string;
+}
+
+export interface SetWorkspaceExpiryInput {
+  readonly id: string;
+  /** `null` clears the TTL (never expires). */
+  readonly expiresAt: Date | null;
 }
 
 export interface LinkWorkspaceAttemptInput {
@@ -64,6 +71,7 @@ const workspaceRepoOperationSchema = Schema.Literals([
   "linkWorkspaceAttempt",
   "listWorkspaceAttemptLinks",
   "listWorkspaces",
+  "setWorkspaceExpiry",
   "setWorkspaceName",
   "setWorkspaceStatus",
 ]);
@@ -160,6 +168,11 @@ export interface WorkspaceRepoService {
     input: SetWorkspaceNameInput,
   ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
 
+  /** Sets (or clears, with null) the workspace TTL. Returns the updated row, or null when not found. */
+  readonly setWorkspaceExpiry: (
+    input: SetWorkspaceExpiryInput,
+  ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
+
   /** Updates workspace status and returns the updated row, or null when not found. */
   readonly setWorkspaceStatus: (
     input: SetWorkspaceStatusInput,
@@ -196,6 +209,7 @@ export const WorkspaceRepoLive = Layer.effect(
                   ? {}
                   : { requestedByUserId: input.requestedByUserId }),
                 ...(input.status === undefined ? {} : { status: input.status }),
+                ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
               } satisfies NewWorkspace)
               .returning();
 
@@ -320,6 +334,20 @@ export const WorkspaceRepoLive = Layer.effect(
             const [workspace] = yield* db
               .update(workspaces)
               .set({ name: input.name })
+              .where(eq(workspaces.id, input.id))
+              .returning();
+
+            return workspace ?? null;
+          }),
+        ),
+
+      setWorkspaceExpiry: (input) =>
+        withWorkspaceRepoError(
+          "setWorkspaceExpiry",
+          Effect.gen(function* () {
+            const [workspace] = yield* db
+              .update(workspaces)
+              .set({ expiresAt: input.expiresAt })
               .where(eq(workspaces.id, input.id))
               .returning();
 

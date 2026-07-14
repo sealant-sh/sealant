@@ -23,6 +23,12 @@ import {
   type RenameWorkspaceResponse,
   execRunHarnessId,
   type ExecWorkspaceRequest,
+  type ExpireWorkspaceRequest,
+  type ExpireWorkspaceResponse,
+  type RestartWorkspaceRequest,
+  type RestartWorkspaceResponse,
+  type StopWorkspaceRequest,
+  type StopWorkspaceResponse,
   type WorkspaceAttemptSummary,
   type WorkspaceDetails,
   type WorkspaceEvent,
@@ -64,6 +70,7 @@ import {
   PackageStandardizerService,
   RunExecPublisherService,
   WorkspaceBuildJobPublisherService,
+  WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
 import { mapRun } from "../runs/runs.module.js";
 
@@ -217,7 +224,7 @@ const deriveRepositoryNameToken = (repository: string): string => {
 };
 
 const deriveSourceRef = (spec: NewWorkspace): string | undefined => {
-  const ref = spec.sources.workspace.ref.trim();
+  const ref = spec.sources.workspace.ref?.trim() ?? "";
   return ref.length > 0 ? ref : undefined;
 };
 
@@ -265,7 +272,7 @@ const mapStoredWorkspaceStatus = (
     case "failed":
       return "failed";
     case "stopped":
-      return "cancelled";
+      return "stopped";
   }
 };
 
@@ -932,6 +939,7 @@ const mapWorkspaceSummary = (
     updatedAt: updatedAt.toISOString(),
     ...(toIsoString(startedAt) === undefined ? {} : { startedAt: toIsoString(startedAt) }),
     ...(toIsoString(finishedAt) === undefined ? {} : { finishedAt: toIsoString(finishedAt) }),
+    ...(workspace.expiresAt === null ? {} : { expiresAt: workspace.expiresAt.toISOString() }),
   };
 };
 
@@ -1094,6 +1102,9 @@ export const createWorkspace = (input: {
 
     const persistenceResult = yield* Effect.result(
       Effect.gen(function* () {
+        // TTL: per-create override wins; otherwise the install-wide default (if configured).
+        const ttlSeconds = body.ttlSeconds ?? env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
+
         const workspace = yield* workspaces.createWorkspace({
           id: workspaceId,
           name: workspaceName,
@@ -1103,6 +1114,9 @@ export const createWorkspace = (input: {
             : { repositoryId: sourceSelectionResult.repositoryId }),
           requestedByUserId: body.ownerUserId,
           status: "queued",
+          ...(ttlSeconds === undefined
+            ? {}
+            : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
         });
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
@@ -1770,17 +1784,7 @@ export const execWorkspace = (input: {
   readonly payload: ExecWorkspaceRequest;
 }) => {
   return Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaces.getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-    // Uniform 404 for unknown workspace AND foreign owner — do not leak existence.
-    if (workspace === undefined || workspace.ownerUserId !== input.payload.ownerUserId) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     if (workspace.latestRunId === null) {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} has no launched runtime to exec in yet; wait for it to become ready.`,
@@ -1818,5 +1822,287 @@ export const execWorkspace = (input: {
     });
 
     return mapRun(run);
+  });
+};
+
+/** Load an owner-scoped workspace with the uniform-404 idiom (existence is not leaked). */
+const requireOwnedWorkspace = (workspaceId: string, ownerUserId: string) => {
+  return Effect.gen(function* () {
+    const workspaces = yield* WorkspaceRepo;
+    const workspace = yield* withInternalError(
+      workspaces.getWorkspaceById(workspaceId),
+      "Failed to load workspace.",
+    );
+    if (workspace === undefined || workspace.ownerUserId !== ownerUserId) {
+      return yield* new WorkspaceNotFoundError({
+        message: `Workspace not found: ${workspaceId}`,
+      });
+    }
+    return workspace;
+  });
+};
+
+/**
+ * Async stop (202): record the stop intent, then enqueue the teardown for the worker, which
+ * removes the container via the runtime adapter and records the terminal "stopped" state.
+ * Idempotent: stopping a workspace that is already stopped is a no-op 202.
+ */
+export const stopWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: StopWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+
+    if (workspace.status === "stopped") {
+      const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
+      return response;
+    }
+
+    const latestRunId = workspace.latestRunId;
+    if (latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no launched runtime to stop yet.`,
+      });
+    }
+
+    // Stop targets a live runtime. Mid-launch there is no container yet (and the build pipeline
+    // can't be cancelled this round), so surface that instead of recording a stop that the launch
+    // would race.
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const instance = yield* withInternalError(
+      runtimeInstances.getRuntimeInstanceByRunId(latestRunId),
+      "Failed to load the workspace runtime.",
+    );
+    if (instance === undefined) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
+      });
+    }
+
+    // Durable stop intent BEFORE the enqueue: the stored "stopped" status is the reaper's
+    // convergence anchor. If the queue message is lost or dead-letters, the expiry reaper sees a
+    // live container on a stopped workspace and re-drives the teardown — the container can never
+    // outlive an acknowledged stop.
+    const workspaces = yield* WorkspaceRepo;
+    yield* withInternalError(
+      workspaces.setWorkspaceStatus({ id: workspace.id, status: "stopped" }),
+      "Failed to record the workspace stop.",
+    );
+
+    const publisher = yield* WorkspaceLifecyclePublisherService;
+    yield* Effect.tryPromise({
+      try: () =>
+        publisher.publishStopRequested({
+          workspaceId: workspace.id,
+          runId: latestRunId,
+          stopReason: "user",
+        }),
+      catch: (error) =>
+        // The intent is already recorded, so even on 502 the reaper converges the container;
+        // the error still surfaces because the broker being down is worth knowing about.
+        new WorkspaceBadGatewayError({
+          message: toErrorMessage(error, "Failed to enqueue the workspace stop."),
+        }),
+    });
+
+    const response: StopWorkspaceResponse = {
+      workspaceId: workspace.id,
+      status: mapStoredWorkspaceStatus(workspace.status),
+    };
+    return response;
+  });
+};
+
+/**
+ * Async restart (202): stop the current runtime (if any) and drive a fresh launch from the same
+ * resolved spec — a new attempt, a new container, no filesystem carry-over. The stop is enqueued
+ * FIRST so a failure leaves the workspace untouched; a failure after it leaves the workspace
+ * stopped (honest state, retryable), never two live containers.
+ */
+export const restartWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: RestartWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+
+    if (workspace.latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has never launched; there is no recorded spec to relaunch from.`,
+      });
+    }
+    const previousRunId = workspace.latestRunId;
+
+    const workspaces = yield* WorkspaceRepo;
+    const workspaceAttempts = yield* WorkspaceAttemptRepo;
+    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+
+    const previousAttempt = yield* withInternalError(
+      workspaceAttempts.getAttemptById(previousRunId),
+      "Failed to load the latest workspace attempt.",
+    );
+    if (previousAttempt?.status === "queued" || previousAttempt?.status === "running") {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} is mid-launch; wait for the current attempt to finish before restarting.`,
+      });
+    }
+
+    const previousJob = yield* withInternalError(
+      workspaceBuildJobs.getLatestJobByRunId(previousRunId),
+      "Failed to load the latest workspace build job.",
+    );
+    const snapshot = yield* withInternalError(
+      workspaceAttempts.getAttemptSnapshotByRunId(previousRunId),
+      "Failed to load the workspace attempt snapshot.",
+    );
+
+    const specPayload =
+      snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
+    if (previousJob === undefined || specPayload === undefined) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no recorded spec to relaunch from.`,
+      });
+    }
+    const spec = yield* parseWorkspaceSpec(specPayload);
+
+    // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
+    const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;
+    yield* Effect.tryPromise({
+      try: () =>
+        lifecyclePublisher.publishStopRequested({
+          workspaceId: workspace.id,
+          runId: previousRunId,
+          stopReason: "user",
+        }),
+      catch: (error) =>
+        new WorkspaceBadGatewayError({
+          message: toErrorMessage(error, "Failed to enqueue the workspace stop for restart."),
+        }),
+    });
+
+    const runId = yield* randomId;
+    const jobId = yield* randomId;
+    // A fresh tag per rebuild: re-pushing the previous tag would make the prior attempt's recorded
+    // `publishedReference` resolve to a different digest than its recorded `publishedDigest`,
+    // quietly corrupting that run's audit trail. Restarts of restarts replace the suffix instead
+    // of compounding it.
+    const restartTag = `${previousJob.tag.replace(/-r-[0-9a-f]{8}$/, "")}-r-${runId.slice(0, 8)}`;
+    // Restart resets the TTL clock like a fresh create (otherwise restarting an EXPIRED workspace
+    // hands the reaper a runtime that is already past its expiry and it dies on the next tick).
+    const ttlSeconds = env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
+    const expiresAt = ttlSeconds === undefined ? null : new Date(Date.now() + ttlSeconds * 1000);
+
+    const persistenceResult = yield* Effect.result(
+      Effect.gen(function* () {
+        const attempt = yield* workspaceAttempts.createQueuedAttempt({
+          id: runId,
+          ownerUserId: workspace.ownerUserId,
+          ...(workspace.repositoryId === null ? {} : { repositoryId: workspace.repositoryId }),
+          triggerType: "api",
+          requestedByUserId: input.payload.ownerUserId,
+        });
+
+        yield* workspaces.linkWorkspaceAttempt({
+          workspaceId: workspace.id,
+          attemptId: attempt.id,
+          relation: "rebuild",
+        });
+
+        yield* workspaceAttempts.setAttemptSnapshot({
+          runId: attempt.id,
+          specPayload: spec,
+        });
+
+        yield* workspaceBuildJobs.insertQueuedJob({
+          id: jobId,
+          runId: attempt.id,
+          registryId: previousJob.registryId,
+          repository: previousJob.repository,
+          tag: restartTag,
+          requestPayload: spec,
+        });
+
+        yield* workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt });
+        yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
+      }),
+    );
+
+    if (Result.isFailure(persistenceResult)) {
+      return yield* new WorkspaceInternalServerError({
+        message: toErrorMessage(persistenceResult.failure, "Failed to record the restart."),
+      });
+    }
+
+    const workspaceBuildJobPublisher = yield* WorkspaceBuildJobPublisherService;
+    yield* Effect.tryPromise({
+      try: () => workspaceBuildJobPublisher.publishRequested({ jobId }),
+      catch: (error) => error,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          yield* Effect.all(
+            [
+              workspaceBuildJobs.markJobFailed({
+                id: jobId,
+                errorCode: "queue_publish_failed",
+                errorMessage: toErrorMessage(error, "Failed to enqueue workspace build job."),
+              }),
+              workspaceAttempts.markAttemptFailed({ id: runId }),
+              workspaces.setWorkspaceStatus({ id: workspace.id, status: "failed" }),
+            ],
+            { concurrency: "unbounded" },
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Workspace ${workspace.id} rollback writes failed after restart publish failure; state may be inconsistent.`,
+                cause,
+              ),
+            ),
+          );
+
+          return yield* new WorkspaceBadGatewayError({
+            message: `Workspace ${workspace.id} restart was recorded but could not be queued.`,
+          });
+        }),
+      ),
+    );
+
+    const response: RestartWorkspaceResponse = {
+      workspaceId: workspace.id,
+      runId,
+      status: "queued",
+    };
+    return response;
+  });
+};
+
+/** Synchronous: set (ttlSeconds from now), clear (null), or trigger (omitted = now) the TTL. */
+export const expireWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: ExpireWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+
+    const ttlSeconds = input.payload.ttlSeconds;
+    const expiresAt =
+      ttlSeconds === null
+        ? null
+        : ttlSeconds === undefined
+          ? new Date()
+          : new Date(Date.now() + ttlSeconds * 1000);
+
+    const workspaces = yield* WorkspaceRepo;
+    yield* withInternalError(
+      workspaces.setWorkspaceExpiry({ id: workspace.id, expiresAt }),
+      "Failed to set the workspace expiry.",
+    );
+
+    const response: ExpireWorkspaceResponse = {
+      workspaceId: workspace.id,
+      expiresAt: expiresAt === null ? null : expiresAt.toISOString(),
+    };
+    return response;
   });
 };

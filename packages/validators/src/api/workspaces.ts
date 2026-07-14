@@ -4,7 +4,14 @@ import { newWorkspaceSchema } from "../workspaces/payloads.js";
 
 export const workspaceAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
 
-export const workspaceStatusSchema = z.enum(["queued", "running", "ready", "failed", "cancelled"]);
+export const workspaceStatusSchema = z.enum([
+  "queued",
+  "running",
+  "ready",
+  "failed",
+  "cancelled",
+  "stopped",
+]);
 
 export const workspaceIdParamsSchema = z.object({
   workspaceId: z.string().trim().min(1),
@@ -26,10 +33,35 @@ export const createWorkspaceRequestSchema = z.object({
   sourceSelection: githubWorkspaceSourceSelectionSchema.optional(),
   dotfilesSelection: githubWorkspaceSourceSelectionSchema.optional(),
   spec: newWorkspaceSchema,
+  // Per-create TTL override in seconds; when omitted the server default
+  // (SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS) applies. 0/null is not accepted here — "never
+  // expires" is expressed by the server default being unset.
+  ttlSeconds: z.number().int().positive().optional(),
 });
 
 export const renameWorkspaceRequestSchema = z.object({
   name: z.string().trim().min(1).max(120),
+});
+
+// Lifecycle actions are owner-scoped like execWorkspace: the ownerUserId rides in the payload and
+// a mismatch yields a uniform 404 (existence is not leaked).
+export const stopWorkspaceRequestSchema = z.object({
+  ownerUserId: z.string().trim().min(1),
+});
+
+export const stopWorkspaceResponseSchema = z.object({
+  workspaceId: z.string(),
+  status: workspaceStatusSchema,
+});
+
+export const restartWorkspaceRequestSchema = z.object({
+  ownerUserId: z.string().trim().min(1),
+});
+
+export const restartWorkspaceResponseSchema = z.object({
+  workspaceId: z.string(),
+  runId: z.string(),
+  status: workspaceStatusSchema,
 });
 
 export const workspaceRuntimeSchema = z.object({
@@ -93,6 +125,7 @@ export const workspaceSummarySchema = z.object({
   updatedAt: z.string().datetime(),
   startedAt: z.string().datetime().optional(),
   finishedAt: z.string().datetime().optional(),
+  expiresAt: z.string().datetime().optional(),
 });
 
 export const workspaceDetailsSchema = workspaceSummarySchema.extend({

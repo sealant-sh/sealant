@@ -30,7 +30,11 @@ import {
   type WorkspaceCloneAuth,
 } from "../runtime/index.js";
 import { resolveCredentialInjections } from "./connected-account-resolver.js";
-import { WorkspaceBuildJobProcessingError, toWorkspaceBuildJobProcessingError } from "./errors.js";
+import {
+  WorkspaceBuildJobProcessingError,
+  swallowingFailure as sharedSwallowingFailure,
+  toWorkspaceBuildJobProcessingError,
+} from "./errors.js";
 import {
   resolveDotfilesRuntimeEnv,
   resolveWorkspaceCloneAuth,
@@ -146,19 +150,8 @@ const splitCredentialInjections = (
   return { credentialEnv, credentialFiles };
 };
 
-/**
- * Run a best-effort state update: never propagate its failure (so it cannot mask the originating
- * error), but log a warning so a failed status update is still observable instead of silent.
- */
-const swallowingFailure =
-  (operation: string) =>
-  <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<void> =>
-    effect.pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning(`Workspace build job ${operation} failed; continuing.`, cause),
-      ),
-      Effect.asVoid,
-    );
+const swallowingFailure = (operation: string) =>
+  sharedSwallowingFailure("Workspace build job", operation);
 
 /**
  * Process a single workspace build job as one Effect program.

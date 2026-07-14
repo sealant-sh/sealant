@@ -4,12 +4,15 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 import {
   createWorkspace,
   execWorkspace,
+  expireWorkspace,
   getWorkspace,
   getWorkspaceSshTarget,
   listWorkspaceAttempts,
   listWorkspaceEvents,
   listWorkspaces,
   renameWorkspace,
+  restartWorkspace,
+  stopWorkspace,
 } from "./workspaces.module.js";
 
 export const WorkspacesHandlersLive = HttpApiBuilder.group(
@@ -25,6 +28,24 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       )
       .handle("execWorkspace", ({ params, payload }) =>
         execWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("stopWorkspace", ({ params, payload }) =>
+        stopWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("restartWorkspace", ({ params, payload }) =>
+        restartWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("expireWorkspace", ({ params, payload }) =>
+        expireWorkspace({
           workspaceId: params.workspaceId,
           payload,
         }),

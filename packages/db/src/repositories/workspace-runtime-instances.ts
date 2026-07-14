@@ -7,6 +7,7 @@ import {
   type NewWorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
+  type WorkspaceRuntimeInstanceStopReason,
 } from "../schema.js";
 
 export interface UpsertWorkspaceRuntimeInstanceInput {
@@ -36,6 +37,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
   "listRunningDockerInstances",
+  "markStopped",
   "upsertRuntimeInstance",
 ]);
 
@@ -93,9 +95,22 @@ const withWorkspaceRuntimeInstanceRepoError = <A>(
   );
 };
 
+export interface MarkWorkspaceRuntimeInstanceStoppedInput {
+  readonly runId: string;
+  readonly stopReason: WorkspaceRuntimeInstanceStopReason;
+  readonly finishedAt?: Date;
+}
+
 export interface WorkspaceRuntimeInstanceRepoService {
   readonly upsertRuntimeInstance: (
     input: UpsertWorkspaceRuntimeInstanceInput,
+  ) => Effect.Effect<WorkspaceRuntimeInstance, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Terminal stop write. Idempotent: an already-stopped instance is returned unchanged (the first
+   * stopReason wins), so a user stop racing the TTL reaper records exactly one outcome.
+   */
+  readonly markStopped: (
+    input: MarkWorkspaceRuntimeInstanceStoppedInput,
   ) => Effect.Effect<WorkspaceRuntimeInstance, WorkspaceRuntimeInstanceRepoError>;
   readonly getRuntimeInstanceByRunId: (
     runId: string,
@@ -179,6 +194,48 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
               operation: "upsertRuntimeInstance",
               message: `Failed to upsert runtime instance for run ${input.runId}.`,
+            });
+          }),
+        ),
+
+      markStopped: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markStopped",
+          Effect.gen(function* () {
+            const [updated] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "stopped",
+                stopReason: input.stopReason,
+                finishedAt: input.finishedAt ?? new Date(),
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  ne(workspaceRuntimeInstances.status, "stopped"),
+                ),
+              )
+              .returning();
+
+            if (updated !== undefined) {
+              return updated;
+            }
+
+            // No row updated: either the instance is already stopped (idempotent success — the
+            // first stop's reason stands) or it never existed (invariant).
+            const [existing] = yield* db
+              .select()
+              .from(workspaceRuntimeInstances)
+              .where(eq(workspaceRuntimeInstances.runId, input.runId))
+              .limit(1);
+
+            if (existing !== undefined) {
+              return existing;
+            }
+
+            return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
+              operation: "markStopped",
+              message: `No runtime instance exists for run ${input.runId}.`,
             });
           }),
         ),

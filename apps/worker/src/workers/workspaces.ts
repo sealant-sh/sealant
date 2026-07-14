@@ -10,11 +10,14 @@ import type { WorkerEnv } from "@sealant/validators/env";
 import {
   consumeRunExecJobs,
   consumeWorkspaceBuildJobs,
+  consumeWorkspaceLifecycleJobs,
   createZotRegistryClient,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
   processWorkspaceBuildJob,
+  processWorkspaceStop,
+  reapExpiredWorkspaces,
   reapStaleWorkspaceBuildJobs,
 } from "@sealant/workspaces";
 import { Effect } from "effect";
@@ -126,6 +129,33 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     },
   });
 
+  // Lifecycle consumer: execute workspace stop requests (user stop, restart's stop half) — remove
+  // the container via the runtime adapter and record the terminal "stopped" state. Runtime mutations
+  // stay in the worker so the API never needs a Docker socket.
+  const lifecycleConsumer = await consumeWorkspaceLifecycleJobs({
+    connectionUrl: env.RABBITMQ_URL,
+    prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    onMessage: async ({ message, ack, nack }) => {
+      try {
+        await processWorkspaceStop({
+          workspaceId: message.workspaceId,
+          runId: message.runId,
+          stopReason: message.stopReason,
+          db,
+          runtimeAdapters,
+        });
+        ack();
+      } catch (error) {
+        console.error("Workspace stop failed", {
+          error,
+          workspaceId: message.workspaceId,
+          runId: message.runId,
+        });
+        nack(false);
+      }
+    },
+  });
+
   // Reaper (#5): periodically re-drive build jobs stranded by a dead lease holder. The normal path is
   // RabbitMQ delivery; this is the recovery net for deliveries that were acked-and-discarded when a
   // worker died mid-build. Safe to repeat (idempotent build + container adopt, Stage 1). Retired once
@@ -148,9 +178,27 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Don't let the reaper interval keep the process alive on its own.
   reaperTimer.unref();
 
+  // Expiry reaper: stop live runtimes whose workspace TTL elapsed (and stranded containers whose
+  // stop was lost), so a self-host install doesn't accumulate dead containers.
+  const runExpiryReaperTick = (): void => {
+    reapExpiredWorkspaces({
+      db,
+      runtimeAdapters,
+    }).catch((error: unknown) => {
+      console.error("Workspace expiry reaper tick failed", { error });
+    });
+  };
+  const expiryReaperTimer = setInterval(
+    runExpiryReaperTick,
+    env.WORKSPACE_EXPIRY_REAPER_INTERVAL_MS,
+  );
+  expiryReaperTimer.unref();
+
   return {
     stop: async () => {
       clearInterval(reaperTimer);
+      clearInterval(expiryReaperTimer);
+      await lifecycleConsumer.cancel();
       await runExecConsumer.cancel();
       await consumer.cancel();
       await rabbitMq.close();

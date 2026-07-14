@@ -1,6 +1,10 @@
+import { Button } from "@sealant/ui";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+import { useTRPC } from "@/lib/trpc/react";
+
+type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 interface WorkspaceListItem {
   readonly workspaceId: string;
@@ -54,10 +58,43 @@ export function WorkspaceRows({ workspaces }: WorkspaceRowsProps) {
             <span className="font-mono text-xs text-faint">
               {toRelativeTime(workspace.createdAt)}
             </span>
+            {workspace.status === "ready" ? (
+              <StopWorkspaceButton workspaceId={workspace.workspaceId} />
+            ) : null}
           </div>
         </Link>
       ))}
     </div>
+  );
+}
+
+// The row itself is a Link, so the quiet stop action must swallow the click before navigation.
+function StopWorkspaceButton({ workspaceId }: { readonly workspaceId: string }) {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const stopWorkspaceMutation = useMutation(
+    trpc.workspace.stop.mutationOptions({
+      onSuccess: async () => {
+        // The stop also changes the detail page and sidebar — invalidate the workspace family.
+        await queryClient.invalidateQueries({ queryKey: trpc.workspace.pathKey() });
+      },
+    }),
+  );
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="h-7 px-2 text-xs text-muted-foreground"
+      disabled={stopWorkspaceMutation.isPending}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stopWorkspaceMutation.mutate({ workspaceId });
+      }}
+    >
+      {stopWorkspaceMutation.isPending ? "Stopping" : "Stop"}
+    </Button>
   );
 }
 
@@ -91,6 +128,12 @@ function statusPresentation(status: WorkspaceStatus): {
         dotClassName: "border-[1.5px] border-input bg-transparent",
         textClassName: "text-ink-2",
         label: "Cancelled",
+      };
+    case "stopped":
+      return {
+        dotClassName: "border-[1.5px] border-input bg-transparent",
+        textClassName: "text-ink-2",
+        label: "Stopped",
       };
   }
 }

@@ -260,6 +260,19 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         return ctx.coreApi.workspaces.rename(input);
       }),
+    // Owner scoping rides in the payload: the core API 404s on a mismatch (uniform not-found).
+    stop: protectedProcedure.input(workspaceIdParamsSchema).mutation(async ({ ctx, input }) => {
+      return ctx.coreApi.workspaces.stop({
+        workspaceId: input.workspaceId,
+        ownerUserId: ctx.session.user.id,
+      });
+    }),
+    restart: protectedProcedure.input(workspaceIdParamsSchema).mutation(async ({ ctx, input }) => {
+      return ctx.coreApi.workspaces.restart({
+        workspaceId: input.workspaceId,
+        ownerUserId: ctx.session.user.id,
+      });
+    }),
   }),
   run: router({
     list: protectedProcedure.input(listRunsQuerySchema.optional()).query(async ({ ctx, input }) => {

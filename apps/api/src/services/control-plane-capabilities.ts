@@ -1,9 +1,11 @@
 import { PackageResolutionCacheRepo } from "@sealant/db";
 import {
   publishRunExecRequested,
+  publishWorkspaceStopRequested,
   type PackageStandardizer,
   type RegistryClient,
   type RunExecCommand,
+  type WorkspaceStopReason,
 } from "@sealant/workspaces";
 import { Effect, Layer, Context } from "effect";
 
@@ -41,6 +43,20 @@ export class RunExecPublisherService extends Context.Service<
   RunExecPublisher
 >()("@sealant/api/RunExecPublisherService") {}
 
+export interface WorkspaceLifecyclePublisher {
+  /** Enqueue a workspace stop (user stop, or the stop half of a restart) for the worker. */
+  readonly publishStopRequested: (input: {
+    readonly workspaceId: string;
+    readonly runId: string;
+    readonly stopReason: WorkspaceStopReason;
+  }) => Promise<void>;
+}
+
+export class WorkspaceLifecyclePublisherService extends Context.Service<
+  WorkspaceLifecyclePublisherService,
+  WorkspaceLifecyclePublisher
+>()("@sealant/api/WorkspaceLifecyclePublisherService") {}
+
 export const PackageStandardizerServiceLive = Layer.effect(
   PackageStandardizerService,
   Effect.gen(function* () {
@@ -67,9 +83,17 @@ export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService
   publishRequested: (input) => publishRunExecRequested(env.RABBITMQ_URL, input),
 });
 
+export const WorkspaceLifecyclePublisherServiceLive = Layer.succeed(
+  WorkspaceLifecyclePublisherService,
+  {
+    publishStopRequested: (input) => publishWorkspaceStopRequested(env.RABBITMQ_URL, input),
+  },
+);
+
 export const ControlPlaneCapabilitiesLive = Layer.mergeAll(
   PackageStandardizerServiceLive,
   RegistryClientServiceLive,
   WorkspaceBuildJobPublisherServiceLive,
   RunExecPublisherServiceLive,
+  WorkspaceLifecyclePublisherServiceLive,
 );

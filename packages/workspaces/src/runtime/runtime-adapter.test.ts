@@ -129,6 +129,9 @@ const createAdapter = (
     launch: async () => {
       throw new Error("not used in selector tests");
     },
+    stop: async () => {
+      throw new Error("not used in selector tests");
+    },
   };
 };
 

@@ -8,4 +8,6 @@ export * from "./api/workspace.js";
 export * from "./worker/codex-auth-sync-back.js";
 export * from "./worker/connected-account-resolver.js";
 export * from "./worker/process-workspace-build-job.js";
+export * from "./worker/process-workspace-stop.js";
+export * from "./worker/reap-expired-workspaces.js";
 export * from "./worker/reap-stale-workspace-build-jobs.js";

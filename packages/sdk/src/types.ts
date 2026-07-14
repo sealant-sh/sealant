@@ -73,8 +73,8 @@ export interface Harness {
 // Workspaces
 // ---------------------------------------------------------------------------------------------
 
-/** Lifecycle status of a workspace. `stopped`/`expired` arrive with lifecycle close-out (Phase 3). */
-export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+/** Lifecycle status of a workspace. */
+export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 /** A coarse lifecycle event observed while a workspace is being provisioned. */
 export interface WorkspaceEvent {
@@ -130,6 +130,12 @@ export interface CreateOptions {
   readonly onEvent?: (event: WorkspaceEvent) => void;
   /** Connected-account credentials to attach to the workspace (see `WorkspaceCredentialsOptions`). */
   readonly credentials?: WorkspaceCredentialsOptions;
+  /**
+   * Time-to-live for the workspace, e.g. `"90m"`, `"2h"` (also `"45s"`, `"1d"`). Once it elapses
+   * the platform stops the workspace and removes its container. Omitted = the server default TTL
+   * (if the install configures one).
+   */
+  readonly ttl?: string;
 }
 
 export interface ListOptions {
@@ -177,12 +183,15 @@ export interface Workspace {
   exec(argv: readonly string[], options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
   /** Lifecycle events as an async stream. */
   events(): AsyncIterable<WorkspaceEvent>;
-  /** Stop the workspace now (Phase 3). */
+  /** Stop the workspace: remove its container and settle it in the terminal "stopped" status. */
   stop(): Promise<void>;
-  /** Restart the workspace into a fresh runtime (Phase 3). */
+  /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
-  /** Schedule the workspace to expire (Phase 3). */
-  expire(options?: { readonly in?: string }): Promise<void>;
+  /**
+   * Schedule the workspace to expire: `expire({ in: "2h" })` sets the TTL, `expire()` expires it
+   * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
+   */
+  expire(options?: { readonly in?: string | null }): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------------------------

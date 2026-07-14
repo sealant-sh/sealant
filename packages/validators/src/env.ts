@@ -208,10 +208,18 @@ export const appCoreEnvSchema = httpServerEnvSchema
   .merge(githubEnvSchema)
   .merge(workspaceSshGatewayEnvSchema);
 
+export const workspaceLifecycleEnvSchema = z.object({
+  // Default TTL (seconds) stamped on new workspaces when the create request carries no ttlSeconds
+  // override; the worker's expiry reaper stops workspaces past their TTL. Unset = new workspaces
+  // never expire by default.
+  SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS: z.coerce.number().int().positive().optional(),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(appCoreEnvSchema)
-  .merge(credentialsEnvSchema);
+  .merge(credentialsEnvSchema)
+  .merge(workspaceLifecycleEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
@@ -281,6 +289,8 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_BUILD_JOB_LEASE_DURATION_MS: z.coerce.number().int().positive().default(900000),
   // How often the worker re-drives workspace build jobs stranded by a dead lease holder (#5 reaper).
   WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
+  // How often the worker sweeps live runtimes for expired TTLs and stranded containers.
+  WORKSPACE_EXPIRY_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
 });
 
 export const workerServerEnvSchema = databaseEnvSchema

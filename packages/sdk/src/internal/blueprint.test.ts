@@ -37,7 +37,8 @@ describe("buildCreateWorkspaceRequest", () => {
 
     const spec = payload.spec as unknown as SpecShape;
     expect(spec.sources.workspace.url).toBe("https://github.com/acme/billing-service.git");
-    expect(spec.sources.workspace.ref).toBe("main");
+    // No ref requested → none sent; the clone resolves the repository's default branch.
+    expect(spec.sources.workspace.ref).toBeUndefined();
     expect(spec.harness.id).toBe("opencode");
     expect(spec.customization.enableSealantd).toBe(true);
     expect(spec.target.runtime.family).toBe("docker");

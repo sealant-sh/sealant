@@ -1,6 +1,6 @@
 import type { WorkspaceRuntimeInstance, WorkspaceBuildJob } from "@sealant/db";
 
-export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled";
+export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 export interface WorkspaceRuntimeDetails {
   readonly adapter: "docker" | "k8s" | "k3s";
@@ -35,6 +35,14 @@ export const resolveWorkspaceStatus = (input: {
   readonly runtimeInstance?: WorkspaceRuntimeInstance;
 }): WorkspaceStatus => {
   const { attempt, latestJob, runtimeInstance } = input;
+
+  // A stopped runtime is terminal regardless of how the attempt ended: the container is gone
+  // (user stop, TTL expiry, or a failure-path stop), so the workspace is "stopped". Checked
+  // FIRST so a stop on a failed/cancelled attempt still resolves "stopped" — the SDK's blocking
+  // stop() polls for exactly this value.
+  if (runtimeInstance?.status === "stopped") {
+    return "stopped";
+  }
 
   if (attempt.status === "cancelled") {
     return "cancelled";
