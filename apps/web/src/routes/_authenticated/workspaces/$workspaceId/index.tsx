@@ -1028,7 +1028,7 @@ function resolveWorkspaceSpecDetails(workspace: WorkspaceSummary): WorkspaceSpec
 
   return {
     repositoryUrl: source.url,
-    branch: source.ref,
+    branch: source.ref ?? "default branch",
     isGitHubSource,
     provider: source.provider,
     configRepo,
@@ -1155,7 +1155,7 @@ function resolveSourceRef(spec: NewWorkspace | undefined): string | undefined {
     return undefined;
   }
 
-  const ref = spec.sources.workspace.ref.trim();
+  const ref = spec.sources.workspace.ref?.trim() ?? "";
 
   if (ref.length === 0) {
     return undefined;

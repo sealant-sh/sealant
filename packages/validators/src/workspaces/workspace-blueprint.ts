@@ -30,7 +30,8 @@ export const workspaceGitSourceSchema = z.strictObject({
   kind: z.literal("git").default("git"),
   provider: workspaceSourceProviderSchema.default("generic"),
   url: z.string().url(),
-  ref: nonEmptyStringSchema.default("main"),
+  // Absent means the remote's default branch — never assume `main`; sealantd clones HEAD.
+  ref: nonEmptyStringSchema.optional(),
   authRef: nonEmptyStringSchema.optional(),
 });
 

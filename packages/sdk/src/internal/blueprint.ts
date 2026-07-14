@@ -52,7 +52,8 @@ export const buildCreateWorkspaceRequest = (
         kind: "git",
         provider: "generic",
         url: toGitUrl(options.repository),
-        ref: options.ref ?? "main",
+        // Omitted ref = the repository's default branch, resolved by the clone itself.
+        ...(options.ref === undefined ? {} : { ref: options.ref }),
       },
     },
     harness: { id: options.harness.id },

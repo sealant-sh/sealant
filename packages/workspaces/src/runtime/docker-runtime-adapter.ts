@@ -256,11 +256,12 @@ const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> =
     `${key}=${value}`,
   ]);
 
+  const ref = input.blueprint.sources.workspace.ref;
   return [
     "-e",
     `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
-    "-e",
-    `SEALANT_WORKSPACE_REPO_REF=${input.blueprint.sources.workspace.ref}`,
+    // No ref env at all when unset: sealantd then clones the remote's default branch.
+    ...(ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${ref}`]),
     "-e",
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,

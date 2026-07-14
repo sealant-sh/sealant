@@ -224,7 +224,7 @@ const deriveRepositoryNameToken = (repository: string): string => {
 };
 
 const deriveSourceRef = (spec: NewWorkspace): string | undefined => {
-  const ref = spec.sources.workspace.ref.trim();
+  const ref = spec.sources.workspace.ref?.trim() ?? "";
   return ref.length > 0 ? ref : undefined;
 };
 

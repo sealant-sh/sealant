@@ -234,6 +234,32 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.status).toBe("ready");
   });
 
+  it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-123\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(createLaunchInput({ sources: { workspace: { ref: undefined } } }));
+
+    const args = commandRunner.mock.calls[0]?.[1];
+    expect(args).toBeDefined();
+    expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
+    expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_REF="))).toBe(false);
+  });
+
   it("waits for the control socket to accept before reporting the workspace ready", async () => {
     let socketProbes = 0;
     const commandRunner = vi.fn<
