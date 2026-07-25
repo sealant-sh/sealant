@@ -22,7 +22,11 @@
 import { spawn } from "node:child_process";
 import { Duplex } from "node:stream";
 
-import { SealantClient, SealantError as SdkSealantError } from "@sealant/runtime-client";
+import {
+  SealantClient,
+  SealantError as SdkSealantError,
+  type Channel,
+} from "@sealant/runtime-client";
 import type {
   Capabilities,
   EventEnvelope,
@@ -69,6 +73,7 @@ const sealantOperationSchema = Schema.Literals([
   "resizePty",
   "listSessions",
   "writeSessionInput",
+  "attachSession",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -349,6 +354,17 @@ export interface SealantSession {
     sessionId: string,
     data: Uint8Array,
   ) => Effect.Effect<void, SealantError>;
+  /**
+   * Attaches a reliable output channel to a PTY session: byte-exact replay
+   * from `fromSequence`, then live output, as one `AsyncIterable<Uint8Array>`.
+   * The channel is CONNECTION-scoped — it dies with this control connection —
+   * which is exactly what a held attach (WS bridge) wants: one connection, one
+   * channel, torn down together.
+   */
+  readonly attachSession: (
+    sessionId: string,
+    options?: { readonly fromSequence?: bigint },
+  ) => Effect.Effect<Channel, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -538,6 +554,17 @@ const makeSession = (client: SealantClient): SealantSession => ({
       "writeSessionInput",
       Effect.tryPromise(() => client.writeSessionInput(sessionId, data)),
     ),
+
+  attachSession: (sessionId, options) =>
+    withSealantError(
+      "attachSession",
+      Effect.tryPromise(() =>
+        client.attachSession(
+          sessionId,
+          options?.fromSequence === undefined ? {} : { fromSequence: options.fromSequence },
+        ),
+      ),
+    ).pipe(Effect.map(({ channel }) => channel)),
 
   shutdown: (graceMillis) =>
     withSealantError(
