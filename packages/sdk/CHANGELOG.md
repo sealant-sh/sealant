@@ -6,7 +6,6 @@
 
 - 649d965: Mount-sourced workspaces, first-class interactive PTY sessions, scoped access tokens, and
   byte-exact resumable session output — the Mend agent-workbench P0 surfaces (plan §8.1.A/§8.1.B).
-
   - **Mount source**: `workspaces.create({ source: { kind: "mount", path } })` provisions the
     workspace from a caller-owned host directory bind-mounted as the working directory instead of a
     clone (sealantd ≥ 0.6.0). The path is caller-owned: writes persist across stop/restart/expiry
@@ -16,8 +15,8 @@
     clone-based workspaces are unaffected.
   - **Interactive sessions**: `workspace.sessions.open(argv)` / `.get(id)` / `.list()` and a real
     `harness.session()`. Sessions are durable platform resources: the PTY survives handle and
-    process loss, and a session re-fetched by id from any workspace handle supports `send()`
-    (string or bytes), `resize()`, `signal()`, `status()` (with the output high-water cursor), and
+    process loss, and a session re-fetched by id from any workspace handle supports `send()` (string
+    or bytes), `resize()`, `signal()`, `status()` (with the output high-water cursor), and
     `close()`. New control-plane endpoints under `/v1/sessions`, including an SSE live tail
     (`/v1/sessions/:id/output/stream`).
   - **Byte-exact resumable output**: session output is recorded redacted and sequence-keyed;
@@ -26,11 +25,11 @@
     `fromSequence`/`limit` range reads and a `pty` stream for interactive runs.
   - **Scoped access tokens**: `sealant.accessTokens.create({ scopes, workspaceId?, ttl? })` mints
     bearer tokens over three scopes — `session:read` (stream/status), `session:input`
-    (input/resize/signal), `workspace:exec` (open terminals) — enforced on the session surface, so
-    a read-stream token can stream but is rejected for input and exec.
+    (input/resize/signal), `workspace:exec` (open terminals) — enforced on the session surface, so a
+    read-stream token can stream but is rejected for input and exec.
   - **Server-side run commands**: run invocations for built-in harnesses are constructed by the
-    control plane (persisted on the run), so `workspaces.get(id)` handles can start harness runs;
-    an explicit client command remains the `customHarness()` escape hatch.
+    control plane (persisted on the run), so `workspaces.get(id)` handles can start harness runs; an
+    explicit client command remains the `customHarness()` escape hatch.
   - **Correlation metadata**: opaque `metadata` bags accepted at run and session creation, stored
     verbatim and echoed on reads.
   - sealantd image pin bumped to 0.6.0 (mount boot contract, durable PTY session journal, file
@@ -45,16 +44,16 @@
 
 ### Minor Changes
 
-- 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and `workspace.expire()`
-  are real end-to-end operations instead of `SealantNotImplementedError` rejections.
-
+- 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
+  `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
+  rejections.
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
-    container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async 202
-    — a fresh launch from the same resolved spec, recorded as a new attempt), and
+    container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
+    202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
     `POST /v1/workspaces/:id/expire` (sets, clears, or triggers the workspace TTL).
   - `WorkspaceStatus` gains `"stopped"`, and workspace summaries/details expose `expiresAt`.
-  - `createWorkspace` accepts an optional `ttlSeconds`; the SDK's `create()` accepts `ttl: "2h"`-style
-    durations. Expired workspaces are stopped by the platform reaper.
+  - `createWorkspace` accepts an optional `ttlSeconds`; the SDK's `create()` accepts
+    `ttl: "2h"`-style durations. Expired workspaces are stopped by the platform reaper.
   - SDK `stop()` blocks until the workspace reports `stopped`; `restart()` returns a fresh handle
     whose `ready()` gates on the new runtime; `expire({ in: "2h" | null })` sets or clears the TTL.
 
@@ -64,7 +63,14 @@
 
 ### Patch Changes
 
-- f4c35ca: `workspaces.create()` without a `ref` now really does use the repository's default branch, as the option's docs always claimed. The SDK no longer lowers a missing `ref` to `"main"`, the blueprint schema keeps the workspace source `ref` truly optional instead of defaulting it, and the docker runtime adapter omits `SEALANT_WORKSPACE_REPO_REF` entirely when unset so sealantd's plain `git clone` resolves the remote HEAD. Previously every repository whose default branch isn't `main` (e.g. `master`) failed workspace boot with `fatal: Remote branch main not found in upstream origin`. Requires sealantd ≥ 0.5.1 in the workspace image for the no-ref path.
+- f4c35ca: `workspaces.create()` without a `ref` now really does use the repository's default
+  branch, as the option's docs always claimed. The SDK no longer lowers a missing `ref` to `"main"`,
+  the blueprint schema keeps the workspace source `ref` truly optional instead of defaulting it, and
+  the docker runtime adapter omits `SEALANT_WORKSPACE_REPO_REF` entirely when unset so sealantd's
+  plain `git clone` resolves the remote HEAD. Previously every repository whose default branch isn't
+  `main` (e.g. `master`) failed workspace boot with
+  `fatal: Remote branch main not found in upstream origin`. Requires sealantd ≥ 0.5.1 in the
+  workspace image for the no-ref path.
 - Updated dependencies [6d1d72d]
   - @sealant/api-contracts@0.6.0
 
@@ -72,36 +78,37 @@
 
 ### Minor Changes
 
-- 0d2ce1c: Inference on connected accounts. New `inference` contract group: `POST /v1/inference/respond` runs
-  short, tool-calling inference loops on the caller's own subscription — the server resolves the
-  connected-account reference (same shape as workspace creation), decrypts, and invokes the OFFICIAL
-  Claude Agent SDK with `CLAUDE_CODE_OAUTH_TOKEN` (never raw model-API calls on stored credentials,
-  per the connected-accounts design's hard constraint). Caller-defined JSON-schema tools are exposed
-  to the model verbatim; tool calls park server-side and the CALLER executes them, posting results
-  back in a multi-turn session loop. Structured output rides the agent SDK's native json_schema output
-  format. SDK: `sealant.inference.respond(...)` (new exchange or continuation) + `inferenceRespondOp`
-  in the Effect core. Usage is attributed per account (`last_used_at`), and a live auth rejection
-  marks the account invalid. Claude accounts only; Codex inference is a stated follow-up.
-- 012f858: Export the Effect-native core at the `@sealant/sdk/effect` subpath. Effect-end-to-end consumers get
-  the contract-derived control-plane client as a service (`SealantApiClient` +
+- 0d2ce1c: Inference on connected accounts. New `inference` contract group:
+  `POST /v1/inference/respond` runs short, tool-calling inference loops on the caller's own
+  subscription — the server resolves the connected-account reference (same shape as workspace
+  creation), decrypts, and invokes the OFFICIAL Claude Agent SDK with `CLAUDE_CODE_OAUTH_TOKEN`
+  (never raw model-API calls on stored credentials, per the connected-accounts design's hard
+  constraint). Caller-defined JSON-schema tools are exposed to the model verbatim; tool calls park
+  server-side and the CALLER executes them, posting results back in a multi-turn session loop.
+  Structured output rides the agent SDK's native json_schema output format. SDK:
+  `sealant.inference.respond(...)` (new exchange or continuation) + `inferenceRespondOp` in the
+  Effect core. Usage is attributed per account (`last_used_at`), and a live auth rejection marks the
+  account invalid. Claude accounts only; Codex inference is a stated follow-up.
+- 012f858: Export the Effect-native core at the `@sealant/sdk/effect` subpath. Effect-end-to-end
+  consumers get the contract-derived control-plane client as a service (`SealantApiClient` +
   `sealantApiClientLayer`), one operation effect per contract endpoint, the managed runtime
   (`makeSdkRuntime`), and the typed contract errors on the failure channel — instead of wrapping the
   Promise facade. The README's "will be reachable" promise is now true.
-- 5cabebb: Typed record-event taxonomy. `@sealant/api-contracts` now exposes the payload schemas behind every
-  recorded event kind (process, io, file, network, runtime, and loss events — the stored jsonb shape:
-  uint64s as decimal strings, protocol enums as numbers) plus `decodeRecordEventPayload`, a total
-  decoder that folds a wire `(kind, ref)` pair into a discriminated union and degrades to an `unknown`
-  case instead of throwing. The SDK's `TimelineEntry` is now that discriminated union: switch on
-  `kind` and `data` narrows to the typed payload, with `{ kind: "unknown", rawKind, data }` as the
-  forward-compatibility case for kinds newer than the SDK. No new event kinds were added; a
-  file-read/open event is noted as future work.
-- 436546e: Deterministic exec in a workspace. New contract endpoint `POST /v1/workspaces/:id/exec` executes an
-  ORDERED LIST of commands in the workspace, recorded as ONE run (a "check run") on the same run-exec
-  pipeline as harness runs — every command executes in order regardless of exit codes (a nonzero exit
-  is a check datum, e.g. `base fails · head passes · revert fails`), and the run completes iff every
-  command executed and was recorded. SDK: `workspace.exec(argv, { cwd? })` returns
-  `{ exitCode, stdout, stderr, run }`, resolving on nonzero exits and rejecting only when the
-  execution machinery itself broke.
+- 5cabebb: Typed record-event taxonomy. `@sealant/api-contracts` now exposes the payload schemas
+  behind every recorded event kind (process, io, file, network, runtime, and loss events — the
+  stored jsonb shape: uint64s as decimal strings, protocol enums as numbers) plus
+  `decodeRecordEventPayload`, a total decoder that folds a wire `(kind, ref)` pair into a
+  discriminated union and degrades to an `unknown` case instead of throwing. The SDK's
+  `TimelineEntry` is now that discriminated union: switch on `kind` and `data` narrows to the typed
+  payload, with `{ kind: "unknown", rawKind, data }` as the forward-compatibility case for kinds
+  newer than the SDK. No new event kinds were added; a file-read/open event is noted as future work.
+- 436546e: Deterministic exec in a workspace. New contract endpoint `POST /v1/workspaces/:id/exec`
+  executes an ORDERED LIST of commands in the workspace, recorded as ONE run (a "check run") on the
+  same run-exec pipeline as harness runs — every command executes in order regardless of exit codes
+  (a nonzero exit is a check datum, e.g. `base fails · head passes · revert fails`), and the run
+  completes iff every command executed and was recorded. SDK: `workspace.exec(argv, { cwd? })`
+  returns `{ exitCode, stdout, stderr, run }`, resolving on nonzero exits and rejecting only when
+  the execution machinery itself broke.
 
 ### Patch Changes
 
