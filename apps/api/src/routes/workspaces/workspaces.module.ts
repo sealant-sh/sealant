@@ -1149,6 +1149,11 @@ export const createWorkspace = (input: {
     });
 
     resolvedSpec.runtime = { ...resolvedSpec.runtime, credentialRefs };
+    // The create-payload `credentials` key is now fully lowered into `runtime.credentialRefs` —
+    // strip it before the spec is persisted for the build job: the worker's blueprint schema is
+    // strict, and a spec that keeps the key fails every build at `parseWorkspaceBlueprint`
+    // ("Unrecognized key: credentials" — hit by every mount+credentials create on 0.7.0).
+    delete resolvedSpec.credentials;
 
     const workspaceName =
       body.name === undefined
