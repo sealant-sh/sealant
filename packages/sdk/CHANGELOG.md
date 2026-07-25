@@ -1,5 +1,13 @@
 # @sealant/sdk
 
+## 0.8.1
+
+### Patch Changes
+
+- d160516: Fix `session.attach`: the WS route now addresses the daemon's session id (and rejects
+  non-running sessions with a 409) instead of passing the control plane's id to the daemon.
+  - @sealant/api-contracts@0.8.1
+
 ## 0.8.0
 
 ### Minor Changes
