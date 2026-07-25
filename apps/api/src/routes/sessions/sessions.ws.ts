@@ -94,6 +94,14 @@ export const SessionAttachRoute = HttpRouter.add(
       if (!outcome.ok) {
         return HttpServerResponse.text(outcome.message, { status: outcome.status });
       }
+      // Daemon verbs address the DAEMON's session id, not the control plane's.
+      const daemonSessionId = outcome.session.daemonSessionId;
+      if (outcome.session.status !== "running" || daemonSessionId === null) {
+        return HttpServerResponse.text(
+          `Session ${sessionId} is not running (status: ${outcome.session.status}).`,
+          { status: 409 },
+        );
+      }
 
       const target = yield* resolveDaemonTarget(outcome.session.workspaceId).pipe(
         Effect.catch(() => Effect.succeed(undefined)),
@@ -113,7 +121,7 @@ export const SessionAttachRoute = HttpRouter.add(
         Effect.gen(function* () {
           const socket = yield* request.upgrade;
           const daemon = yield* runtime.connect(target);
-          const channel = yield* daemon.attachSession(sessionId, { fromSequence: from });
+          const channel = yield* daemon.attachSession(daemonSessionId, { fromSequence: from });
           const write = yield* socket.writer;
 
           // Daemon → client: drain the reliable channel into binary WS frames.
@@ -138,7 +146,7 @@ export const SessionAttachRoute = HttpRouter.add(
           yield* socket
             .runRaw((data) => {
               if (typeof data !== "string") {
-                return daemon.writeSessionInput(sessionId, data).pipe(Effect.ignore);
+                return daemon.writeSessionInput(daemonSessionId, data).pipe(Effect.ignore);
               }
               let frame: ControlFrame;
               try {
@@ -151,7 +159,7 @@ export const SessionAttachRoute = HttpRouter.add(
                 typeof frame.cols === "number" &&
                 typeof frame.rows === "number"
               ) {
-                return daemon.resizePty(sessionId, frame.cols, frame.rows).pipe(Effect.ignore);
+                return daemon.resizePty(daemonSessionId, frame.cols, frame.rows).pipe(Effect.ignore);
               }
               return Effect.void;
             })
