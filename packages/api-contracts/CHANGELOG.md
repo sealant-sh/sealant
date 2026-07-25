@@ -1,5 +1,15 @@
 # @sealant/api-contracts
 
+## 0.7.1
+
+### Patch Changes
+
+- e0aab44: Strip the create-payload `credentials` key from the workspace spec before it reaches the build job.
+  The SDK folds `credentials` into the spec it sends; the api lowers it into `runtime.credentialRefs`
+  but previously left the raw key in place, and the worker's strict blueprint schema rejected it —
+  killing every `mount` + `credentials` create at `parseWorkspaceBlueprint` ("Unrecognized key:
+  credentials"). Mount-sourced workspaces with connected-account credentials now build.
+
 ## 0.7.0
 
 ### Minor Changes
@@ -42,6 +52,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
