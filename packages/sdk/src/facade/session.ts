@@ -57,16 +57,14 @@ const openAttachment = (
     const pending: Uint8Array[] = [];
     let wake: (() => void) | undefined;
     let finished = false;
-    let resolveClosed: (reason: "end" | "closed") => void = () => {};
-    const closed = new Promise<"end" | "closed">((r) => {
-      resolveClosed = r;
-    });
+    const closedResolver = Promise.withResolvers<"end" | "closed">();
+    const closed = closedResolver.promise;
     const finish = (reason: "end" | "closed") => {
       if (finished) {
         return;
       }
       finished = true;
-      resolveClosed(reason);
+      closedResolver.resolve(reason);
       wake?.();
     };
 
