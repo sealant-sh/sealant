@@ -172,7 +172,7 @@ export const requireSession = (sessionId: string, principal: SessionPrincipal) =
   });
 
 /** Resolve the workspace's live daemon target (docker adapter, ready instance). */
-const resolveDaemonTarget = (workspaceId: string) =>
+export const resolveDaemonTarget = (workspaceId: string) =>
   Effect.gen(function* () {
     const workspaces = yield* WorkspaceRepo;
     const instances = yield* WorkspaceRuntimeInstanceRepo;

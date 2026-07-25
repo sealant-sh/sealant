@@ -629,6 +629,37 @@ export interface InteractiveSession {
   status(): Promise<InteractiveSessionStatus>;
   /** Close the PTY (hang up the terminal). Resolves once the session settles. */
   close(): Promise<void>;
+  /**
+   * THE DATA PLANE for interactive terminals: one held WebSocket carrying
+   * input, output, and resize — auth once at connect, no per-keystroke
+   * requests. Output replays byte-exact from `from` and then live-tails.
+   * `send`/`resize`/`signal`/`output` above remain the request/response
+   * control-plane verbs; a terminal UI should attach instead.
+   */
+  attach(options?: SessionAttachOptions): Promise<SessionAttachment>;
+}
+
+/** Options for {@link InteractiveSession.attach}. */
+export interface SessionAttachOptions {
+  /** Replay output from this sequence (inclusive; default `0n` = full history). */
+  readonly from?: bigint;
+}
+
+/**
+ * A live terminal attachment — one WebSocket, held until `close()` or the
+ * session settles. Not durable: reattach by calling `attach` again.
+ */
+export interface SessionAttachment {
+  /** Write keystrokes onto the held socket (no request/response round-trip). */
+  send(input: string | Uint8Array): void;
+  /** Resize the PTY over the held socket. */
+  resize(cols: number, rows: number): void;
+  /** Output bytes: recorded replay from `from`, then live, until settle/close. */
+  readonly output: AsyncIterable<Uint8Array>;
+  /** Resolves when the attachment ends: session settled (`"end"`) or the socket closed. */
+  readonly closed: Promise<"end" | "closed">;
+  /** Drop the attachment (the session keeps running). */
+  close(): void;
 }
 
 /** Interactive sessions of one workspace: open new ones, reattach to existing ones. */

@@ -18,8 +18,120 @@ import {
   sendSessionInputOp,
   signalSessionOp,
 } from "../effect/operations.js";
-import type { InteractiveSession, InteractiveSessionStatus, SessionOutputChunk } from "../types.js";
+import type {
+  InteractiveSession,
+  InteractiveSessionStatus,
+  SessionAttachment,
+  SessionAttachOptions,
+  SessionOutputChunk,
+} from "../types.js";
 import type { SdkContext } from "./context.js";
+
+/**
+ * Open the held-WebSocket terminal attachment (the data plane). One socket:
+ * binary frames are PTY bytes in both directions, text frames are control
+ * JSON (`{"t":"resize",...}` up, `{"t":"end"}` down). Auth rides the connect —
+ * `?token=` for apiKey clients (WebSocket cannot set headers), `?ownerUserId=`
+ * for host-local — and never repeats per event.
+ */
+const openAttachment = (
+  ctx: SdkContext,
+  sessionId: string,
+  options: SessionAttachOptions | undefined,
+): Promise<SessionAttachment> => {
+  const config = ctx.config;
+  const url = new URL(`/v1/sessions/${sessionId}/attach`, config.baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("from", (options?.from ?? 0n).toString());
+  if (config.apiKey === undefined) {
+    url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
+  } else {
+    url.searchParams.set("token", config.apiKey);
+  }
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+
+    // Push-queue bridging WS message events to the pull-based async iterable.
+    const pending: Uint8Array[] = [];
+    let wake: (() => void) | undefined;
+    let finished = false;
+    let resolveClosed: (reason: "end" | "closed") => void = () => {};
+    const closed = new Promise<"end" | "closed">((r) => {
+      resolveClosed = r;
+    });
+    const finish = (reason: "end" | "closed") => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      resolveClosed(reason);
+      wake?.();
+    };
+
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const frame = JSON.parse(event.data) as { t?: string };
+          if (frame.t === "end") {
+            finish("end");
+          }
+        } catch {
+          // Unknown text frame — ignore.
+        }
+        return;
+      }
+      pending.push(new Uint8Array(event.data as ArrayBuffer));
+      wake?.();
+    });
+    ws.addEventListener("close", () => finish("closed"));
+
+    const output: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async (): Promise<IteratorResult<Uint8Array>> => {
+          for (;;) {
+            const chunk = pending.shift();
+            if (chunk !== undefined) {
+              return { done: false, value: chunk };
+            }
+            if (finished) {
+              return { done: true, value: undefined };
+            }
+            await new Promise<void>((r) => {
+              wake = r;
+            });
+            wake = undefined;
+          }
+        },
+      }),
+    };
+
+    const attachment: SessionAttachment = {
+      send: (input) => {
+        const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
+        // Copy into a plain ArrayBuffer-backed view (WebSocket.send rejects SharedArrayBuffer views).
+        ws.send(new Uint8Array(bytes).buffer);
+      },
+      resize: (cols, rows) => {
+        ws.send(JSON.stringify({ t: "resize", cols, rows }));
+      },
+      output,
+      closed,
+      close: () => {
+        finish("closed");
+        ws.close();
+      },
+    };
+
+    ws.addEventListener("open", () => resolve(attachment), { once: true });
+    ws.addEventListener(
+      "error",
+      () => reject(new Error(`session attach failed: could not connect to ${url.host}`)),
+      { once: true },
+    );
+  });
+};
 
 const OUTPUT_POLL_INTERVAL_MS = 250;
 
@@ -224,5 +336,7 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
         closeSessionOp(sessionId, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
       );
     },
+
+    attach: (options) => openAttachment(ctx, sessionId, options),
   };
 };
