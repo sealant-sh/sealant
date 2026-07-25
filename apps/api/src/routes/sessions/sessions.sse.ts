@@ -13,6 +13,12 @@
  * sequence, so a reconnecting client resumes byte-exact with no gap. Scope: `session:read`.
  */
 import {
+  SessionBadRequestError,
+  SessionForbiddenError,
+  SessionNotFoundError,
+  SessionUnauthorizedError,
+} from "@sealant/api-contracts";
+import {
   RunRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
@@ -115,7 +121,7 @@ export const SessionOutputStreamRoute = HttpRouter.add(
 
       const authorization = request.headers["authorization"];
       const outcome = yield* authorize({
-        headers: { ...(authorization === undefined ? {} : { authorization }) },
+        headers: authorization === undefined ? {} : { authorization },
         requiredScope: "session:read",
         assertedOwnerUserId: ownerUserId,
       }).pipe(
@@ -125,13 +131,13 @@ export const SessionOutputStreamRoute = HttpRouter.add(
           Effect.succeed({
             ok: false as const,
             status:
-              error._tag === "SessionUnauthorizedError"
+              error instanceof SessionUnauthorizedError
                 ? 401
-                : error._tag === "SessionForbiddenError"
+                : error instanceof SessionForbiddenError
                   ? 403
-                  : error._tag === "SessionNotFoundError"
+                  : error instanceof SessionNotFoundError
                     ? 404
-                    : error._tag === "SessionBadRequestError"
+                    : error instanceof SessionBadRequestError
                       ? 400
                       : 500,
             message: error.message,
