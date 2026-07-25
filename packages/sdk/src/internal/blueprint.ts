@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 
 import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 
+import { SealantError } from "../errors.js";
 import type { CreateOptions } from "../types.js";
 import type { SealantInternalConfig } from "./config.js";
 import { mapWorkspaceCredentials } from "./credentials.js";
@@ -39,22 +40,37 @@ export const buildCreateWorkspaceRequest = (
   options: CreateOptions,
   config: SealantInternalConfig,
 ): { readonly payload: CreateWorkspaceRequest } => {
+  if ((options.repository === undefined) === (options.source === undefined)) {
+    throw new SealantError(
+      "workspaces.create requires exactly one of `repository` (a git remote to clone) or `source` (a caller-owned mount).",
+      { code: "invalid_create_options" },
+    );
+  }
+  if (options.source !== undefined && options.ref !== undefined) {
+    throw new SealantError("`ref` applies only to `repository` sources, not mounts.", {
+      code: "invalid_create_options",
+    });
+  }
+  const sourceName = options.repository ?? options.source?.path ?? "workspace";
   const tail =
-    options.repository
+    sourceName
       .split("/")
       .filter((s) => s.length > 0)
-      .pop() ?? options.repository;
+      .pop() ?? sourceName;
   const credentials = mapWorkspaceCredentials(options.credentials);
   const spec = {
     version: "1",
     sources: {
-      workspace: {
-        kind: "git",
-        provider: "generic",
-        url: toGitUrl(options.repository),
-        // Omitted ref = the repository's default branch, resolved by the clone itself.
-        ...(options.ref === undefined ? {} : { ref: options.ref }),
-      },
+      workspace:
+        options.repository !== undefined
+          ? {
+              kind: "git",
+              provider: "generic",
+              url: toGitUrl(options.repository),
+              // Omitted ref = the repository's default branch, resolved by the clone itself.
+              ...(options.ref === undefined ? {} : { ref: options.ref }),
+            }
+          : { kind: "mount", hostPath: options.source?.path },
     },
     harness: { id: options.harness.id },
     customization: { enableSealantd: true },

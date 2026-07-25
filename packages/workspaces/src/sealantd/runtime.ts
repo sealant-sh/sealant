@@ -64,6 +64,11 @@ const sealantOperationSchema = Schema.Literals([
   "signalProcess",
   "shutdown",
   "events",
+  "openSession",
+  "closeSession",
+  "resizePty",
+  "listSessions",
+  "writeSessionInput",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -274,6 +279,37 @@ export interface SealantExecOptions {
   readonly background?: boolean;
 }
 
+/** Options for opening a PTY session (mirrors the daemon's `OpenSessionArgs`). */
+export interface SealantOpenSessionOptions {
+  /** The run id, threaded as the daemon execution id so the session's events attribute to it. */
+  readonly executionId?: string;
+  /** The program the PTY runs (defaults to the daemon's configured shell, `/bin/bash`). */
+  readonly shell?: string;
+  readonly args?: readonly string[];
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly cols: number;
+  readonly rows: number;
+  readonly term?: string;
+}
+
+/** The daemon's accepted-session handle. */
+export interface SealantSessionOpened {
+  readonly sessionId: string;
+  readonly processId: string;
+  readonly pid: number;
+}
+
+/** One live PTY session as reported by `listSessions`. */
+export interface SealantSessionSummary {
+  readonly sessionId: string;
+  readonly processId: string;
+  readonly pid: number;
+  readonly cols: number;
+  readonly rows: number;
+  readonly executionId?: string;
+}
+
 /**
  * A live, connected control session against one sealantd instance. All methods are
  * exception-free: failures land on the typed `SealantError` channel. The session's lifetime is the
@@ -290,6 +326,29 @@ export interface SealantSession {
   readonly writeStdin: (processId: string, data: Uint8Array) => Effect.Effect<void, SealantError>;
   /** Delivers a signal to a process. */
   readonly signalProcess: (processId: string, signal: number) => Effect.Effect<void, SealantError>;
+  /**
+   * Opens a PTY-backed session. The session is DAEMON-OWNED, not connection-owned: it keeps
+   * running when this control connection closes (only stream *attachments* are connection-scoped),
+   * which is what lets the control plane drive sessions over short-lived per-request connections.
+   */
+  readonly openSession: (
+    options: SealantOpenSessionOptions,
+  ) => Effect.Effect<SealantSessionOpened, SealantError>;
+  /** Closes a PTY session (hangs up the terminal; the daemon reaps the process group). */
+  readonly closeSession: (sessionId: string) => Effect.Effect<void, SealantError>;
+  /** Resizes a session's PTY. */
+  readonly resizePty: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => Effect.Effect<void, SealantError>;
+  /** Lists the live PTY sessions on this daemon. */
+  readonly listSessions: Effect.Effect<readonly SealantSessionSummary[], SealantError>;
+  /** Writes keystrokes to a session's PTY input. */
+  readonly writeSessionInput: (
+    sessionId: string,
+    data: Uint8Array,
+  ) => Effect.Effect<void, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -314,6 +373,51 @@ export interface SealantRuntimeService {
 export class SealantRuntime extends Context.Service<SealantRuntime, SealantRuntimeService>()(
   "@sealant/workspaces/SealantRuntime",
 ) {}
+
+/**
+ * Drives a raw control command through the SDK's low-level `request()` and unwraps the outcome.
+ * The session lifecycle commands (openSession/resizePty/closeSession/listSessions) have no typed
+ * SDK sugar yet, so this mirrors the unwrap the SDK's typed methods perform internally: a daemon
+ * `error` outcome becomes a `SealantControlError`, and a result-case mismatch is unexpected.
+ */
+const requestResult = (
+  client: SealantClient,
+  operation: SealantOperation,
+  command: Parameters<SealantClient["request"]>[0],
+  expect: string | undefined,
+): Effect.Effect<unknown, SealantError> =>
+  withSealantError(
+    operation,
+    Effect.tryPromise(async () => {
+      const response = await client.request(command);
+      const outcome = response.outcome?.outcome;
+      if (outcome?.case === "error") {
+        const error = outcome.value;
+        throw new SealantControlError({
+          operation,
+          code: error.code,
+          message: error.message || `control error (${String(error.code)})`,
+          ...(error.detailJson === undefined || error.detailJson === ""
+            ? {}
+            : { detailJson: error.detailJson }),
+        });
+      }
+      if (outcome?.case !== "ok") {
+        throw new Error(`${operation}: control response had no outcome`);
+      }
+      if (expect === undefined) {
+        return undefined;
+      }
+      const result = outcome.value.result;
+      if (result.case !== expect) {
+        throw new Error(`${operation}: expected result ${expect}, got ${String(result.case)}`);
+      }
+      return (result as { value: unknown }).value;
+    }),
+  );
+
+const toEnvVars = (env: Readonly<Record<string, string>> | undefined) =>
+  Object.entries(env ?? {}).map(([key, value]) => ({ key, value }));
 
 /** Builds the per-connection session handle around a connected `SealantClient`. */
 const makeSession = (client: SealantClient): SealantSession => ({
@@ -358,6 +462,81 @@ const makeSession = (client: SealantClient): SealantSession => ({
     withSealantError(
       "signalProcess",
       Effect.tryPromise(() => client.signalProcess(processId, signal)),
+    ),
+
+  openSession: (options) =>
+    requestResult(
+      client,
+      "openSession",
+      {
+        case: "openSession",
+        value: {
+          ...(options.executionId === undefined ? {} : { executionId: options.executionId }),
+          ...(options.shell === undefined ? {} : { shell: options.shell }),
+          ...(options.args === undefined ? {} : { args: [...options.args] }),
+          ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+          env: toEnvVars(options.env),
+          cols: options.cols,
+          rows: options.rows,
+          ...(options.term === undefined ? {} : { term: options.term }),
+        },
+      },
+      "sessionOpened",
+    ).pipe(
+      Effect.map((value) => {
+        const opened = value as { sessionId: string; processId: string; pid: number };
+        return { sessionId: opened.sessionId, processId: opened.processId, pid: opened.pid };
+      }),
+    ),
+
+  closeSession: (sessionId) =>
+    requestResult(
+      client,
+      "closeSession",
+      { case: "closeSession", value: { sessionId } },
+      undefined,
+    ).pipe(Effect.asVoid),
+
+  resizePty: (sessionId, cols, rows) =>
+    requestResult(
+      client,
+      "resizePty",
+      { case: "resizePty", value: { sessionId, cols, rows } },
+      undefined,
+    ).pipe(Effect.asVoid),
+
+  listSessions: requestResult(
+    client,
+    "listSessions",
+    { case: "listSessions", value: {} },
+    "sessionList",
+  ).pipe(
+    Effect.map((value) => {
+      const list = value as {
+        sessions: Array<{
+          sessionId: string;
+          processId: string;
+          pid: number;
+          cols: number;
+          rows: number;
+          executionId?: string;
+        }>;
+      };
+      return list.sessions.map((s) => ({
+        sessionId: s.sessionId,
+        processId: s.processId,
+        pid: s.pid,
+        cols: s.cols,
+        rows: s.rows,
+        ...(s.executionId === undefined ? {} : { executionId: s.executionId }),
+      }));
+    }),
+  ),
+
+  writeSessionInput: (sessionId, data) =>
+    withSealantError(
+      "writeSessionInput",
+      Effect.tryPromise(() => client.writeSessionInput(sessionId, data)),
     ),
 
   shutdown: (graceMillis) =>

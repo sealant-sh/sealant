@@ -31,6 +31,29 @@ export interface GetTimelineOptions {
   readonly cases?: readonly PayloadCase[];
 }
 
+export interface ScrollbackRangeOptions {
+  /** Restrict to one process (omit to select by session or run-wide). */
+  readonly processId?: string;
+  /** Restrict to one daemon session (interactive PTY output). */
+  readonly sessionId?: string;
+  /** Inclusive lower sequence bound. */
+  readonly fromSequence?: bigint;
+  /** Inclusive upper sequence bound. */
+  readonly toSequence?: bigint;
+  /** Maximum chunks returned (default 5000). */
+  readonly limit?: number;
+}
+
+/** One recorded output chunk with its bytes resolved and its resume cursor (the sequence). */
+export interface ScrollbackChunk {
+  readonly sequence: bigint;
+  readonly stream: number;
+  readonly streamOffset: bigint;
+  readonly bytes: Uint8Array;
+  /** True when the chunk's content was not recorded (metadata-only) — a hole, not empty output. */
+  readonly missing: boolean;
+}
+
 export interface TelemetryQueryService {
   readonly listRuns: (filter?: {
     readonly limit?: number;
@@ -51,6 +74,25 @@ export interface TelemetryQueryService {
     stream: number,
     atSequence: bigint,
   ) => Stream.Stream<Uint8Array, TelemetryQueryError>;
+  /**
+   * Byte-exact recorded output chunks for a run, by SEQUENCE RANGE — the resumable read behind
+   * session reattach and the live SSE tail. Ordered by sequence (the durable cursor); each chunk
+   * carries its sequence so a reader resumes with `lastSequence + 1n`. `stream` is the numeric
+   * `StreamKind` (stdout 2, stderr 3, ptyOutput 5).
+   */
+  readonly scrollbackChunks: (
+    runId: string,
+    stream: number,
+    options?: ScrollbackRangeOptions,
+  ) => Effect.Effect<readonly ScrollbackChunk[], TelemetryQueryError>;
+  /** Highest ingested sequence for a run ("0" when nothing is ingested yet) — the resume cursor. */
+  readonly maxSequence: (runId: string) => Effect.Effect<bigint, TelemetryQueryError>;
+  /**
+   * Whether an ingest epoch exists for the run — i.e. a telemetry ingester holds (or held) a live
+   * connection for it. Session creation awaits this BEFORE opening the PTY so the recording starts
+   * at byte zero (the live-tail protocol has no replay; attaching late is head-loss).
+   */
+  readonly hasEpoch: (runId: string) => Effect.Effect<boolean, TelemetryQueryError>;
 }
 
 export class TelemetryQuery extends Context.Service<TelemetryQuery, TelemetryQueryService>()(
@@ -250,6 +292,88 @@ export const makeTelemetryQuery = (
             ),
           ),
       ),
+    ),
+  scrollbackChunks: (runId, stream, options) =>
+    withTelemetryQueryError(
+      "scrollbackChunks",
+      Effect.gen(function* () {
+        const limit = Math.min(Math.max(options?.limit ?? 5000, 1), 10_000);
+        const rows = yield* db
+          .select()
+          .from(telemetryScrollback)
+          .where(
+            and(
+              eq(telemetryScrollback.runId, runId),
+              eq(telemetryScrollback.stream, stream),
+              ...(options?.processId === undefined
+                ? []
+                : [eq(telemetryScrollback.processId, options.processId)]),
+              ...(options?.sessionId === undefined
+                ? []
+                : [eq(telemetryScrollback.sessionId, options.sessionId)]),
+              ...(options?.fromSequence === undefined
+                ? []
+                : [gte(telemetryScrollback.sequence, options.fromSequence)]),
+              ...(options?.toSequence === undefined
+                ? []
+                : [lte(telemetryScrollback.sequence, options.toSequence)]),
+            ),
+          )
+          .orderBy(asc(telemetryScrollback.sequence))
+          .limit(limit);
+
+        return yield* Effect.forEach(rows, (row) =>
+          Effect.gen(function* () {
+            if (row.contentAlgo === null || row.contentHash === null) {
+              // A hole (metadata-only capture), surfaced honestly instead of as empty output.
+              return {
+                sequence: row.sequence,
+                stream: row.stream,
+                streamOffset: row.streamOffset,
+                bytes: new Uint8Array(),
+                missing: true,
+              } satisfies ScrollbackChunk;
+            }
+            const bytes = yield* artifacts
+              .get({ runId, algo: row.contentAlgo, hash: row.contentHash })
+              .pipe(Effect.mapError((cause) => mapTelemetryQueryError("scrollbackChunks", cause)));
+            return {
+              sequence: row.sequence,
+              stream: row.stream,
+              streamOffset: row.streamOffset,
+              bytes,
+              missing: false,
+            } satisfies ScrollbackChunk;
+          }),
+        );
+      }),
+    ),
+
+  maxSequence: (runId) =>
+    withTelemetryQueryError(
+      "maxSequence",
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select({ sequence: telemetryEvents.sequence })
+          .from(telemetryEvents)
+          .where(eq(telemetryEvents.runId, runId))
+          .orderBy(desc(telemetryEvents.sequence))
+          .limit(1);
+        return row?.sequence ?? 0n;
+      }),
+    ),
+
+  hasEpoch: (runId) =>
+    withTelemetryQueryError(
+      "hasEpoch",
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select({ runId: telemetryRunEpochs.runId })
+          .from(telemetryRunEpochs)
+          .where(eq(telemetryRunEpochs.runId, runId))
+          .limit(1);
+        return row !== undefined;
+      }),
     ),
 });
 

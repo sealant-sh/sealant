@@ -500,11 +500,11 @@ importers:
   apps/ssh-gateway:
     dependencies:
       '@sealant/runtime-client':
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@sealant/runtime-protocol':
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
@@ -939,11 +939,11 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@sealant/runtime-protocol':
-        specifier: ^0.4.0
-        version: 0.4.0
+        specifier: ^0.6.0
+        version: 0.6.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -3310,8 +3310,16 @@ packages:
     resolution: {integrity: sha512-ErDS3QNHbu9R/yu3kAfzuhQelIx87aC+ZM20uZcP3bHuPsY/JXuz6WrI3IsVugGaIsqKuNzfiO7DT6l9nwKdaQ==}
     engines: {node: '>=20'}
 
+  '@sealant/runtime-client@0.6.0':
+    resolution: {integrity: sha512-kZIF3Y7UbattTp60n0LjCjSDSut/1ww7B12/n4af6AEAmpbYgbohkEFTvdVES45fWAtF+EMKv4Vq/1jwRm+h5w==}
+    engines: {node: '>=20'}
+
   '@sealant/runtime-protocol@0.4.0':
     resolution: {integrity: sha512-17Z66LI+t9wjnnFvfOHKKMAXBVol2rt5rLdx6eSKPv8OAMGJFxW2VIb7qmako2ZYRMNGZzoYuKzerO2O8cbt3Q==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-protocol@0.6.0':
+    resolution: {integrity: sha512-qP2v9vbr08l6Rl77opAIV9sNUEiI78+ljIsPmn0IUckv6/aZWvvZ7wsJxA/2kCBDbGjth6PMPq98NeTybLZqhA==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -9474,7 +9482,16 @@ snapshots:
       '@bufbuild/protobuf': 2.12.0
       '@sealant/runtime-protocol': 0.4.0
 
+  '@sealant/runtime-client@0.6.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': 0.6.0
+
   '@sealant/runtime-protocol@0.4.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+
+  '@sealant/runtime-protocol@0.6.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

@@ -8,8 +8,11 @@ import type { WorkspaceDetails } from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
+  createSessionOp,
   expireWorkspaceOp,
+  getSessionOp,
   getWorkspaceOp,
+  listSessionsOp,
   restartWorkspaceOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
@@ -18,11 +21,15 @@ import { parseTtlSeconds } from "../internal/duration.js";
 import type {
   Harness,
   HarnessRunner,
+  InteractiveSession,
+  SessionOptions,
   Workspace,
   WorkspaceEvent,
+  WorkspaceSessions,
   WorkspaceStatus,
 } from "../types.js";
 import type { SdkContext } from "./context.js";
+import { makeInteractiveSession } from "./session.js";
 
 export interface WorkspaceInit {
   readonly id: string;
@@ -67,7 +74,76 @@ export const registerHarnessExecutors = (executors: HarnessExecutors): void => {
   harnessExecutors = executors;
 };
 
+// Launch commands for the built-in harnesses — used when a RE-FETCHED handle (no client harness
+// value) opens a harness session; the workspace's own spec names the harness id.
+const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
+  opencode: "opencode",
+  codex: "codex",
+  "claude-code": "claude",
+};
+
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
+  const openSession = async (
+    argv: readonly string[],
+    options?: SessionOptions,
+  ): Promise<InteractiveSession> => {
+    const created = await ctx.runtime.run(
+      createSessionOp({
+        workspaceId: init.id,
+        ownerUserId: ctx.config.hostLocal.ownerUserId,
+        argv: [...argv],
+        ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options?.env === undefined ? {} : { env: options.env }),
+        ...(options?.cols === undefined ? {} : { cols: options.cols }),
+        ...(options?.rows === undefined ? {} : { rows: options.rows }),
+        ...(options?.term === undefined ? {} : { term: options.term }),
+        ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
+      }),
+    );
+    return makeInteractiveSession(ctx, created);
+  };
+
+  const sessions: WorkspaceSessions = {
+    open: (argv, options) => openSession(argv, options),
+
+    get: async (sessionId) => {
+      const wire = await ctx.runtime.run(getSessionOp(sessionId, ctx.config.hostLocal.ownerUserId));
+      if (wire.workspaceId !== init.id) {
+        throw new SealantError(`Session ${sessionId} does not belong to workspace ${init.id}.`, {
+          code: "session_not_found",
+        });
+      }
+      return makeInteractiveSession(ctx, wire);
+    },
+
+    list: async () => {
+      const response = await ctx.runtime.run(
+        listSessionsOp({
+          ownerUserId: ctx.config.hostLocal.ownerUserId,
+          workspaceId: init.id,
+        }),
+      );
+      return response.items.map((item) => makeInteractiveSession(ctx, item));
+    },
+  };
+
+  /** The harness's interactive launch argv — client value when present, else from the spec. */
+  const resolveHarnessLaunchArgv = async (): Promise<readonly string[]> => {
+    if (init.harness !== undefined) {
+      return [init.harness.launchCommand ?? init.harness.id];
+    }
+    const details = await ctx.runtime.run(getWorkspaceOp(init.id));
+    const spec = details.spec as { harness?: { id?: string } } | undefined;
+    const harnessId = spec?.harness?.id;
+    if (harnessId === undefined) {
+      throw new SealantError(
+        `Workspace ${init.id} has no harness in its spec; open a session with workspace.sessions.open(argv) instead.`,
+        { code: "harness_required" },
+      );
+    }
+    return [BUILTIN_LAUNCH_COMMANDS[harnessId] ?? harnessId];
+  };
+
   const harness: HarnessRunner = {
     run: (prompt, options) => {
       if (harnessExecutors === undefined) {
@@ -85,8 +161,10 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       }
       return harnessExecutors.start(ctx, init, prompt, options);
     },
-    session: () =>
-      Promise.reject(new SealantNotImplementedError("harness.session (interactive, Phase 3)")),
+    session: async (options) => {
+      const argv = await resolveHarnessLaunchArgv();
+      return openSession(argv, options);
+    },
   };
 
   const workspace: Workspace = {
@@ -124,6 +202,8 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     harness,
+
+    sessions,
 
     exec: (argv, options) => execWorkspace(ctx, init, argv, options),
 

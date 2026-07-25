@@ -777,6 +777,13 @@ export interface RunFileChange {
   readonly oldPath?: string;
 }
 
+/** The command a server-side-executed run runs in the workspace (persisted so the run is self-describing). */
+export interface RunExecCommandRecord {
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd?: string;
+}
+
 export const runs = pgTable(
   "runs",
   {
@@ -792,6 +799,12 @@ export const runs = pgTable(
     mode: text({ enum: runModeValues }).notNull().default("one-shot"),
     status: text({ enum: runStatusValues }).notNull().default("queued"),
     prompt: text(),
+    // The resolved invocation the control plane executed (server-side runs). Persisted at create
+    // so the run is self-describing before execution and a requeue never re-derives it.
+    command: jsonb().$type<RunExecCommandRecord>(),
+    // Opaque caller-provided correlation bag ({ projectId, sessionId, ... }): stored verbatim,
+    // echoed on reads, no platform-side semantics.
+    metadata: jsonb().$type<Record<string, unknown>>(),
     exitCode: integer("exit_code"),
     errorMessage: text("error_message"),
     // The run's resulting file diff + change list, captured server-side when the run executes.
@@ -816,6 +829,91 @@ export const runs = pgTable(
     ),
     index("runs_attempt_id_idx").on(table.attemptId),
   ],
+);
+
+// ---------------------------------------------------------------------------------------------
+// WORKSPACE SESSIONS — durable rows for interactive PTY sessions. The daemon owns the live PTY
+// (sessions survive control-connection drops); this row is the control plane's durable handle:
+// find the daemon session by id from any process, report lifecycle, and anchor the session's run
+// (whose telemetry carries the byte-exact, sequence-keyed output that makes reattach possible).
+// ---------------------------------------------------------------------------------------------
+export const workspaceSessionStatusValues = ["starting", "running", "exited", "failed"] as const;
+export type WorkspaceSessionStatus = (typeof workspaceSessionStatusValues)[number];
+
+export const workspaceSessions = pgTable(
+  "workspace_sessions",
+  {
+    id: text().primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // The interactive run recording this session; its record serves scrollback + resume.
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Daemon-side identifiers (valid while the workspace runtime is alive).
+    daemonSessionId: text("daemon_session_id"),
+    daemonProcessId: text("daemon_process_id"),
+    // What the PTY runs: argv[0] is the program, the rest its arguments.
+    argv: jsonb().$type<readonly string[]>().notNull(),
+    cwd: text(),
+    cols: integer().notNull(),
+    rows: integer().notNull(),
+    status: text({ enum: workspaceSessionStatusValues }).notNull().default("starting"),
+    exitCode: integer("exit_code"),
+    exitSignal: integer("exit_signal"),
+    errorMessage: text("error_message"),
+    // Opaque caller-provided correlation bag: stored verbatim, echoed on reads, no semantics.
+    metadata: jsonb().$type<Record<string, unknown>>(),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+    endedAt: timestamp("ended_at", { mode: "date", withTimezone: true }),
+  },
+  (table) => [
+    index("workspace_sessions_workspace_id_created_at_idx").on(table.workspaceId, table.createdAt),
+    index("workspace_sessions_owner_user_id_status_idx").on(table.ownerUserId, table.status),
+    index("workspace_sessions_run_id_idx").on(table.runId),
+  ],
+);
+
+// ---------------------------------------------------------------------------------------------
+// ACCESS TOKENS — scoped bearer tokens for the session surface. Only the SHA-256 hash of the
+// secret is stored. Scopes are the enforcement primitive Mend's pairing flow mints against:
+// `session:read` (stream/status/scrollback), `session:input` (input/resize/signal), and
+// `workspace:exec` (open sessions, exec, start runs). A token may optionally be narrowed to one
+// workspace. Endpoints outside the session surface keep the pre-auth owner model untouched.
+// ---------------------------------------------------------------------------------------------
+export const accessTokenScopeValues = ["session:read", "session:input", "workspace:exec"] as const;
+export type AccessTokenScope = (typeof accessTokenScopeValues)[number];
+
+export const accessTokens = pgTable(
+  "access_tokens",
+  {
+    id: text().primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text(),
+    // SHA-256 hex of the bearer secret; the secret itself is returned once at mint and never stored.
+    tokenHash: text("token_hash").notNull().unique(),
+    scopes: jsonb().$type<readonly AccessTokenScope[]>().notNull(),
+    // When set, the token is valid only for this workspace.
+    workspaceId: text("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [index("access_tokens_owner_user_id_idx").on(table.ownerUserId)],
 );
 
 export const workspaceAttemptSnapshots = pgTable("workspace_attempt_snapshots", {
@@ -924,6 +1022,12 @@ export type Run = typeof runs.$inferSelect;
 export type NewRun = typeof runs.$inferInsert;
 export type RunStatus = (typeof runStatusValues)[number];
 export type RunMode = (typeof runModeValues)[number];
+
+export type WorkspaceSession = typeof workspaceSessions.$inferSelect;
+export type NewWorkspaceSession = typeof workspaceSessions.$inferInsert;
+
+export type AccessToken = typeof accessTokens.$inferSelect;
+export type NewAccessToken = typeof accessTokens.$inferInsert;
 
 export type WorkspaceAttemptSnapshot = typeof workspaceAttemptSnapshots.$inferSelect;
 export type NewWorkspaceAttemptSnapshot = typeof workspaceAttemptSnapshots.$inferInsert;

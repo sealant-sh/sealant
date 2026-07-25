@@ -1,5 +1,6 @@
 import { Layer } from "effect";
 
+import { AccessTokenRepoLive } from "./repositories/access-tokens.js";
 import { ConnectedAccountRepoLive } from "./repositories/connected-accounts.js";
 import { GitHubInstallationRepositoryCacheRepoLive } from "./repositories/github-installation-repositories.js";
 import { GitHubInstallationRepoLive } from "./repositories/github-installations.js";
@@ -13,6 +14,7 @@ import { UserRepoLive } from "./repositories/users.js";
 import { WorkspaceAttemptRepoLive } from "./repositories/workspace-attempts.js";
 import { WorkspaceBuildJobRepoLive } from "./repositories/workspace-build-jobs.js";
 import { WorkspaceRuntimeInstanceRepoLive } from "./repositories/workspace-runtime-instances.js";
+import { WorkspaceSessionRepoLive } from "./repositories/workspace-sessions.js";
 import { WorkspaceRepoLive } from "./repositories/workspaces.js";
 
 /**
@@ -46,6 +48,8 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceBuildJobRepoLive,
   RunRepoLive,
+  WorkspaceSessionRepoLive,
+  AccessTokenRepoLive,
   ProfileRepoLive,
   SshKeyRepoLive,
   UserRepoLive,

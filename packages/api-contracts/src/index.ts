@@ -7,6 +7,8 @@ export * from "./core-api/profiles.js";
 export * from "./core-api/record-events.js";
 export * from "./core-api/registries.js";
 export * from "./core-api/runs.js";
+export * from "./core-api/sessions.js";
+export * from "./core-api/access-tokens.js";
 export * from "./core-api/workspaces.js";
 export * from "./core-api/ssh-keys.js";
 export * from "./core-api/system.js";

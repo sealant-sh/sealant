@@ -5,16 +5,24 @@
  * the facade) keeps the wire surface in one place and unit-testable.
  */
 import type {
+  CloseSessionRequest,
+  CreateAccessTokenRequest,
   CreateRunRequest,
+  CreateSessionRequest,
   CreateWorkspaceRequest,
   ExecWorkspaceRequest,
   ExpireWorkspaceRequest,
   GetRunScrollbackQuery,
   GetRunTimelineQuery,
+  GetSessionOutputQuery,
   InferenceRespondRequest,
   ListRunsQuery,
+  ListSessionsQuery,
   ListWorkspacesQuery,
   RestartWorkspaceRequest,
+  SessionInputRequest,
+  SessionResizeRequest,
+  SessionSignalRequest,
   StopWorkspaceRequest,
   UpdateRunRequest,
 } from "@sealant/api-contracts";
@@ -91,6 +99,57 @@ export const getRunLossOp = (runId: string) =>
 
 export const getRunChangesOp = (runId: string) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));
+
+// ---- sessions ----
+
+export const createSessionOp = (payload: CreateSessionRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.createSession({ payload, headers: {} }),
+  );
+
+export const getSessionOp = (sessionId: string, ownerUserId?: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.getSession({
+      params: { sessionId },
+      headers: {},
+      query: ownerUserId === undefined ? {} : { ownerUserId },
+    }),
+  );
+
+export const listSessionsOp = (query: ListSessionsQuery) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.listSessions({ query, headers: {} }),
+  );
+
+export const getSessionOutputOp = (sessionId: string, query: GetSessionOutputQuery) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.getSessionOutput({ params: { sessionId }, headers: {}, query }),
+  );
+
+export const sendSessionInputOp = (sessionId: string, payload: SessionInputRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.sendSessionInput({ params: { sessionId }, headers: {}, payload }),
+  );
+
+export const resizeSessionOp = (sessionId: string, payload: SessionResizeRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.resizeSession({ params: { sessionId }, headers: {}, payload }),
+  );
+
+export const signalSessionOp = (sessionId: string, payload: SessionSignalRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.signalSession({ params: { sessionId }, headers: {}, payload }),
+  );
+
+export const closeSessionOp = (sessionId: string, payload: CloseSessionRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sessions.closeSession({ params: { sessionId }, headers: {}, payload }),
+  );
+
+// ---- access tokens ----
+
+export const createAccessTokenOp = (payload: CreateAccessTokenRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.accessTokens.createAccessToken({ payload }));
 
 // ---- inference ----
 

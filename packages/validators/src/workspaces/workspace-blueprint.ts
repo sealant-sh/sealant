@@ -35,6 +35,37 @@ export const workspaceGitSourceSchema = z.strictObject({
   authRef: nonEmptyStringSchema.optional(),
 });
 
+// An absolute, normalized host path: no relative segments, no trailing slash tricks. This is a
+// SHAPE check only — allowlist policy (which roots are mountable) is enforced by the control
+// plane, not here, because policy is deployment configuration.
+export const workspaceHostPathSchema = nonEmptyStringSchema
+  .refine((value) => value.startsWith("/"), { message: "host path must be absolute" })
+  .refine((value) => value.split("/").every((segment) => segment !== "." && segment !== ".."), {
+    message: "host path must not contain '.' or '..' segments",
+  })
+  .refine((value) => !value.includes("//") && (value === "/" ? true : !value.endsWith("/")), {
+    message: "host path must be normalized (no '//', no trailing slash)",
+  })
+  .refine((value) => value !== "/", { message: "host path must not be the filesystem root" });
+
+/**
+ * A workspace sourced from a CALLER-OWNED host directory bind-mounted at the runtime working
+ * directory instead of a fresh clone. The platform treats the path as caller-owned: writes persist
+ * across workspace stop/restart/expiry and the path is never reprovisioned or deleted. The daemon
+ * boots with `SEALANT_WORKSPACE_SOURCE=mount` and skips its clone-or-reset path entirely.
+ */
+export const workspaceMountSourceSchema = z.strictObject({
+  kind: z.literal("mount"),
+  hostPath: workspaceHostPathSchema,
+});
+
+// Order matters: git first, so legacy payloads that omit `kind` (relying on the default) still
+// resolve as git; a mount payload fails the git shape (no `url`) and falls through to mount.
+export const workspaceSourceSchema = z.union([
+  workspaceGitSourceSchema,
+  workspaceMountSourceSchema,
+]);
+
 export const workspaceInputSourceSchema = z.strictObject({
   id: nonEmptyStringSchema,
   kind: z.literal("git").default("git"),
@@ -175,7 +206,7 @@ export const workspaceTargetSchema = z
 export const workspaceBlueprintSchema = z.strictObject({
   version: z.literal(workspaceBlueprintVersion).default(workspaceBlueprintVersion),
   sources: z.strictObject({
-    workspace: workspaceGitSourceSchema,
+    workspace: workspaceSourceSchema,
     inputs: z.array(workspaceInputSourceSchema).default([]),
   }),
   harness: workspaceHarnessSchema,
