@@ -7,12 +7,14 @@ import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
+import { SealantRuntimeDockerExecLive } from "@sealant/workspaces";
 import { Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
 import { HttpApiScalar } from "effect/unstable/httpapi";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
+import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 
@@ -128,6 +130,10 @@ const requestDependenciesLayer = Layer.mergeAll(
   ControlPlaneCapabilitiesLive,
   telemetryQueryLayer,
   credentialCipher,
+  // Daemon control-channel access for the interactive-session verbs: each request opens a
+  // short-lived docker-exec bridge to the workspace daemon (sessions are daemon-owned, so no
+  // connection registry is needed API-side).
+  SealantRuntimeDockerExecLive,
   // The engine layer is a thin facade over module-level session state (sessions must survive
   // across requests regardless of this layer's lifecycle), so providing it here is safe.
   InferenceEngineLive,
@@ -192,7 +198,13 @@ const corsMiddleware = HttpMiddleware.cors({
  *
  * This merges route handlers + docs into the request router.
  */
-const appLayer = Layer.mergeAll(apiLayer, docsLayer);
+/**
+ * Raw streaming routes (outside the schema-derived contract): the SSE session-output tail.
+ * Provided with the same request-scoped dependencies as the contract handlers.
+ */
+const sseLayer = SessionOutputStreamRoute.pipe(HttpRouter.provideRequest(requestDependenciesLayer));
+
+const appLayer = Layer.mergeAll(apiLayer, sseLayer, docsLayer);
 
 /**
  * Server layer.

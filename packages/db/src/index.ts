@@ -222,6 +222,30 @@ export {
 } from "./repositories/runs.js";
 
 export {
+  WorkspaceSessionRepo,
+  WorkspaceSessionRepoInvariantError,
+  WorkspaceSessionRepoLive,
+  WorkspaceSessionRepoUnexpectedError,
+  type CreateWorkspaceSessionInput,
+  type ListWorkspaceSessionsInput,
+  type MarkSessionEndedInput,
+  type MarkSessionRunningInput,
+  type UpdateSessionSizeInput,
+  type WorkspaceSessionRepoError,
+  type WorkspaceSessionRepoService,
+} from "./repositories/workspace-sessions.js";
+
+export {
+  AccessTokenRepo,
+  AccessTokenRepoInvariantError,
+  AccessTokenRepoLive,
+  AccessTokenRepoUnexpectedError,
+  type AccessTokenRepoError,
+  type AccessTokenRepoService,
+  type CreateAccessTokenInput,
+} from "./repositories/access-tokens.js";
+
+export {
   connectedAccountProviderValues,
   connectedAccounts,
   connectedAccountStatusValues,
@@ -238,6 +262,10 @@ export {
   runModeValues,
   runs,
   runStatusValues,
+  workspaceSessions,
+  workspaceSessionStatusValues,
+  accessTokens,
+  accessTokenScopeValues,
   workspaces,
   workspaceAttempts,
   workspaceAttemptStatusValues,
@@ -290,9 +318,16 @@ export {
   type PackageResolutionCacheEntry,
   type ProfileConnectedAccount,
   type Run,
+  type RunExecCommandRecord,
   type RunFileChange,
   type RunMode,
   type RunStatus,
+  type WorkspaceSession,
+  type NewWorkspaceSession,
+  type WorkspaceSessionStatus,
+  type AccessToken,
+  type NewAccessToken,
+  type AccessTokenScope,
   type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptSnapshot,

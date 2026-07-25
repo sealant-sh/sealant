@@ -13,6 +13,7 @@ import {
   runs,
   type NewRun,
   type Run,
+  type RunExecCommandRecord,
   type RunFileChange,
   type RunMode,
   type RunStatus,
@@ -26,6 +27,10 @@ export interface CreateRunInput {
   readonly mode?: RunMode;
   readonly prompt?: string;
   readonly attemptId?: string;
+  /** The resolved server-side invocation, persisted so the run is self-describing. */
+  readonly command?: RunExecCommandRecord;
+  /** Opaque caller correlation bag, stored verbatim and echoed on reads. */
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface MarkRunRunningInput {
@@ -141,6 +146,8 @@ export const RunRepoLive = Layer.effect(
                 ...(input.mode === undefined ? {} : { mode: input.mode }),
                 ...(input.prompt === undefined ? {} : { prompt: input.prompt }),
                 ...(input.attemptId === undefined ? {} : { attemptId: input.attemptId }),
+                ...(input.command === undefined ? {} : { command: input.command }),
+                ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
               } satisfies NewRun)
               .returning();
 

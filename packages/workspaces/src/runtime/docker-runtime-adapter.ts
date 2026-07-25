@@ -99,6 +99,13 @@ export interface DockerRuntimeAdapterOptions {
    * (`SEALANT_ALLOWED_PEER_UIDS`); leave unset to keep the universal docker-exec reach (§2.1).
    */
   readonly controlSocketHostDir?: string;
+  /**
+   * Colon-separated absolute host roots under which mount-sourced workspaces may bind caller-owned
+   * paths (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`, the operator-wide knob). Passed through to the
+   * in-container daemon, which re-validates the host path at boot. Unset = launching a
+   * mount-sourced blueprint fails (the API rejects such creates first; this is defense in depth).
+   */
+  readonly mountAllowedStoreRoots?: string;
 }
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
@@ -250,22 +257,55 @@ const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): s
   return `${prefix}-${repositoryToken}-${tagToken}-${suffix}`;
 };
 
-const envArgsFromBlueprint = (input: RuntimeAdapterLaunchInput): Array<string> => {
+const envArgsFromBlueprint = (
+  input: RuntimeAdapterLaunchInput,
+  mountAllowedStoreRoots: string | undefined,
+): Array<string> => {
   const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => [
     "-e",
     `${key}=${value}`,
   ]);
 
-  const ref = input.blueprint.sources.workspace.ref;
+  const source = input.blueprint.sources.workspace;
+  const sourceEnvArgs =
+    source.kind === "mount"
+      ? // Mount-sourced workspace: the working directory is a caller-owned bind-mount. This is
+        // sealantd's boot contract for mount mode — it skips clone/clone-auth, verifies the
+        // mountpoint is established + writable, and re-validates the host path against the same
+        // allowlist. Older daemons fail boot on the unknown source mode, the safe outcome.
+        [
+          "-e",
+          "SEALANT_WORKSPACE_SOURCE=mount",
+          "-e",
+          `SEALANT_WORKSPACE_MOUNT_HOST_PATH=${source.hostPath}`,
+          "-e",
+          `SEALANT_MOUNT_ALLOWED_STORE_ROOTS=${mountAllowedStoreRoots ?? ""}`,
+        ]
+      : [
+          "-e",
+          `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
+          // No ref env at all when unset: sealantd then clones the remote's default branch.
+          ...(source.ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${source.ref}`]),
+        ];
   return [
-    "-e",
-    `SEALANT_WORKSPACE_REPO_URL=${input.blueprint.sources.workspace.url}`,
-    // No ref env at all when unset: sealantd then clones the remote's default branch.
-    ...(ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${ref}`]),
+    ...sourceEnvArgs,
     "-e",
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...runtimeEnvArgs,
   ];
+};
+
+/**
+ * The `-v` bind for a mount-sourced workspace: the caller-owned host directory becomes the runtime
+ * working directory. No `:ro` and no cleanup anywhere in stop/reap — the path is caller-owned and
+ * must survive every lifecycle transition (stop, restart, expire, reap).
+ */
+const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
+  const source = input.blueprint.sources.workspace;
+  if (source.kind !== "mount") {
+    return [];
+  }
+  return ["-v", `${source.hostPath}:${input.blueprint.runtime.workingDirectory}`];
 };
 
 /**
@@ -340,6 +380,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly controlSocketHostDir: string | undefined;
 
+  private readonly mountAllowedStoreRoots: string | undefined;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
@@ -351,6 +393,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.verifyRunning = options.verifyRunning ?? true;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.controlSocketHostDir = options.controlSocketHostDir;
+    this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
   }
 
   /**
@@ -427,7 +470,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return input.workspaceCloneAuth;
     }
 
-    const configuredPath = input.blueprint.sources.workspace.authRef;
+    // Mount sources have nothing to clone, so clone auth does not apply.
+    const source = input.blueprint.sources.workspace;
+    if (source.kind === "mount") {
+      return undefined;
+    }
+    const configuredPath = source.authRef;
     if (configuredPath === undefined || configuredPath.length === 0) {
       return undefined;
     }
@@ -809,7 +857,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...workspaceAuthEnvArgs,
       ...workspaceHttpAuthEnvArgs,
       ...controlSocketMountArgs,
-      ...envArgsFromBlueprint(parsed),
+      ...workspaceMountArgs(parsed),
+      ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
       // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
       // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
       // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).

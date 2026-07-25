@@ -34,13 +34,15 @@ import {
   TelemetryQueryInvariantError,
   type PayloadCase,
 } from "@sealant/telemetry";
+import { getHarnessIntegration } from "@sealant/workspaces";
 import { Context, Effect, Stream } from "effect";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
 
-// StreamKind numerics from @sealant/runtime-protocol (avoid a runtime dep for two constants).
+// StreamKind numerics from @sealant/runtime-protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
 const STREAM_KIND_STDERR = 3;
+const STREAM_KIND_PTY_OUTPUT = 5;
 // Reconstruct scrollback up to "everything" when no explicit upper bound is given (uint64 max).
 const MAX_SEQUENCE = 9_223_372_036_854_775_807n;
 
@@ -87,6 +89,16 @@ export const mapRun = (run: RunRecord): Run => ({
   mode: run.mode,
   status: run.status,
   ...(run.prompt === null ? {} : { prompt: run.prompt }),
+  ...(run.command === null
+    ? {}
+    : {
+        command: {
+          executable: run.command.executable,
+          args: [...run.command.args],
+          ...(run.command.cwd === undefined ? {} : { cwd: run.command.cwd }),
+        },
+      }),
+  ...(run.metadata === null ? {} : { metadata: run.metadata }),
   ...(run.exitCode === null ? {} : { exitCode: run.exitCode }),
   ...(run.errorMessage === null ? {} : { errorMessage: run.errorMessage }),
   ...(run.startedAt === null ? {} : { startedAt: run.startedAt.toISOString() }),
@@ -153,6 +165,29 @@ const parseLimit = (raw: string | undefined, fallback: number, max: number) => {
 export const createRun = (payload: CreateRunRequest) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
+
+    // Resolve the invocation: an explicit command wins (custom harnesses); otherwise, for a
+    // one-shot run with a prompt on a built-in harness, the control plane constructs it — the
+    // server-side invoke knowledge that lets a re-fetched workspace handle start a harness.
+    const resolvedCommand = (() => {
+      if (payload.command !== undefined) {
+        return {
+          executable: payload.command.executable,
+          args: [...payload.command.args],
+          ...(payload.command.cwd === undefined ? {} : { cwd: payload.command.cwd }),
+        };
+      }
+      if (payload.prompt === undefined || payload.mode === "interactive") {
+        return undefined;
+      }
+      const integration = getHarnessIntegration(payload.harnessId);
+      if (integration === undefined) {
+        return undefined;
+      }
+      const built = integration.buildRunCommand(payload.prompt);
+      return { executable: built.executable, args: [...built.args] };
+    })();
+
     const run = yield* runs
       .createRun({
         id: `run_${randomUUID()}`,
@@ -162,6 +197,8 @@ export const createRun = (payload: CreateRunRequest) =>
         ...(payload.mode === undefined ? {} : { mode: payload.mode }),
         ...(payload.prompt === undefined ? {} : { prompt: payload.prompt }),
         ...(payload.attemptId === undefined ? {} : { attemptId: payload.attemptId }),
+        ...(resolvedCommand === undefined ? {} : { command: resolvedCommand }),
+        ...(payload.metadata === undefined ? {} : { metadata: { ...payload.metadata } }),
       })
       .pipe(
         Effect.mapError((error) => {
@@ -176,21 +213,14 @@ export const createRun = (payload: CreateRunRequest) =>
         }),
       );
 
-    // When a command is provided, EXECUTE the run server-side: enqueue a run-exec job for the worker
-    // (it docker-execs the harness + ingests telemetry). Absent a command, the run row is created but
-    // not executed (the legacy host-local caller-runs-it path).
-    const command = payload.command;
-    if (command !== undefined) {
+    // With a resolved command (explicit or server-constructed), EXECUTE the run server-side:
+    // enqueue a run-exec job for the worker (it docker-execs the harness + ingests telemetry).
+    // Absent any command, the run row is created but not executed (the legacy host-local
+    // caller-runs-it path).
+    if (resolvedCommand !== undefined && payload.mode !== "interactive") {
       const publisher = yield* RunExecPublisherService;
-      // Construct the command explicitly so an absent cwd is omitted (not passed as `cwd: undefined`),
-      // matching RunExecCommand under exactOptionalPropertyTypes.
-      const execCommand = {
-        executable: command.executable,
-        args: [...command.args],
-        ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
-      };
       yield* Effect.tryPromise({
-        try: () => publisher.publishRequested({ runId: run.id, command: execCommand }),
+        try: () => publisher.publishRequested({ runId: run.id, command: resolvedCommand }),
         catch: (error) =>
           new RunInternalServerError({
             message: toErrorMessage(error, "Failed to enqueue run execution."),
@@ -381,17 +411,35 @@ export const getRunScrollback = (input: {
   Effect.gen(function* () {
     yield* requireRun(input.runId);
     const atSequence = (yield* parseSequence(input.query.atSequence, "atSequence")) ?? MAX_SEQUENCE;
-    const streamKind = input.query.stream === "stdout" ? STREAM_KIND_STDOUT : STREAM_KIND_STDERR;
+    const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
+    const limit = yield* parseLimit(input.query.limit, 5000, 10_000);
+    const streamKind =
+      input.query.stream === "stdout"
+        ? STREAM_KIND_STDOUT
+        : input.query.stream === "stderr"
+          ? STREAM_KIND_STDERR
+          : STREAM_KIND_PTY_OUTPUT;
 
     const query = yield* TelemetryQuery;
-    const chunk = yield* withRunInternalError(
-      Stream.runCollect(
-        query.reconstructScrollback(input.runId, input.query.processId, streamKind, atSequence),
-      ),
-      "Failed to reconstruct run scrollback.",
-    );
+    // Range reads go through the sequence-ordered chunk fold (the resumable path); the legacy
+    // whole-history read keeps the stream-offset reassembly order.
+    const buffer = yield* fromSequence === undefined && input.query.limit === undefined
+      ? withRunInternalError(
+          Stream.runCollect(
+            query.reconstructScrollback(input.runId, input.query.processId, streamKind, atSequence),
+          ),
+          "Failed to reconstruct run scrollback.",
+        ).pipe(Effect.map((chunk) => Buffer.concat(Array.from(chunk))))
+      : withRunInternalError(
+          query.scrollbackChunks(input.runId, streamKind, {
+            processId: input.query.processId,
+            ...(fromSequence === undefined ? {} : { fromSequence }),
+            toSequence: atSequence,
+            limit,
+          }),
+          "Failed to reconstruct run scrollback.",
+        ).pipe(Effect.map((chunks) => Buffer.concat(chunks.map((chunk) => chunk.bytes))));
 
-    const buffer = Buffer.concat(Array.from(chunk));
     return {
       processId: input.query.processId,
       stream: input.query.stream,

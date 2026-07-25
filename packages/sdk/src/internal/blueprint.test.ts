@@ -12,7 +12,14 @@ const config: SealantInternalConfig = {
 };
 
 interface SpecShape {
-  readonly sources: { readonly workspace: { readonly url: string; readonly ref: string } };
+  readonly sources: {
+    readonly workspace: {
+      readonly kind?: string;
+      readonly url?: string;
+      readonly ref?: string;
+      readonly hostPath?: string;
+    };
+  };
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
   readonly target: { readonly runtime: { readonly family: string } };
@@ -52,6 +59,41 @@ describe("buildCreateWorkspaceRequest", () => {
     const spec = payload.spec as unknown as SpecShape;
     expect(spec.sources.workspace.url).toBe("https://gitlab.com/x/y.git");
     expect(spec.sources.workspace.ref).toBe("master");
+  });
+
+  it("lowers a mount source onto the blueprint and derives the slug from the path tail", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { source: { kind: "mount", path: "/srv/store/worktrees/session-1" }, harness: opencode() },
+      config,
+    );
+    expect(payload.repository).toBe("session-1");
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.sources.workspace).toEqual({
+      kind: "mount",
+      hostPath: "/srv/store/worktrees/session-1",
+    });
+  });
+
+  it("rejects both or neither of repository and source, and ref on a mount", () => {
+    expect(() => buildCreateWorkspaceRequest({ harness: opencode() }, config)).toThrow(
+      /exactly one of/,
+    );
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/billing-service",
+          source: { kind: "mount", path: "/srv/store/wt" },
+          harness: opencode(),
+        },
+        config,
+      ),
+    ).toThrow(/exactly one of/);
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        { source: { kind: "mount", path: "/srv/store/wt" }, ref: "main", harness: opencode() },
+        config,
+      ),
+    ).toThrow(/applies only to `repository` sources/);
   });
 
   it("omits `spec.credentials` when no credentials were requested", () => {

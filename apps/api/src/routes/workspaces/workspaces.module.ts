@@ -224,7 +224,11 @@ const deriveRepositoryNameToken = (repository: string): string => {
 };
 
 const deriveSourceRef = (spec: NewWorkspace): string | undefined => {
-  const ref = spec.sources.workspace.ref?.trim() ?? "";
+  const source = spec.sources.workspace;
+  if (source.kind === "mount") {
+    return undefined;
+  }
+  const ref = source.ref?.trim() ?? "";
   return ref.length > 0 ? ref : undefined;
 };
 
@@ -480,6 +484,61 @@ const withInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: st
         }),
     ),
   );
+};
+
+// Mirrors the daemon's `is_proper_descendant`: component-boundary prefix, equality rejected —
+// mounting an entire store root as a workspace is always a configuration error. Both sides are
+// schema-guaranteed absolute + normalized (no "..", no "//", no trailing slash).
+const isProperDescendant = (path: string, root: string): boolean =>
+  path !== root && path.startsWith(`${root}/`);
+
+/**
+ * Mount-source policy gate. Mount-sourced workspaces bind a caller-named HOST path into the
+ * container, which is an escalation surface — so the path must be a proper descendant of an
+ * operator-configured allowlist root (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`, the same knob the
+ * in-container daemon re-enforces at boot). No allowlist configured = every mount is rejected.
+ * Mirrors the credentialRefs rule: the caller's spec is never trusted on its own.
+ */
+const validateMountSource = (input: {
+  readonly spec: NewWorkspace;
+  readonly sourceSelection: GitHubWorkspaceSourceSelection | undefined;
+}) => {
+  return Effect.gen(function* () {
+    const source = input.spec.sources.workspace;
+    if (source.kind !== "mount") {
+      return;
+    }
+    if (input.sourceSelection !== undefined) {
+      return yield* new WorkspaceBadRequestError({
+        message: "A mount-sourced workspace cannot also carry a GitHub source selection.",
+      });
+    }
+    const allowedRoots = (env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS ?? "")
+      .split(":")
+      .map((root) => root.trim())
+      .filter((root) => root.length > 0);
+    if (allowedRoots.length === 0) {
+      return yield* new WorkspaceForbiddenError({
+        message:
+          "Mount-sourced workspaces are not enabled on this install (set SEALANT_MOUNT_ALLOWED_STORE_ROOTS).",
+      });
+    }
+    const invalidRoot = allowedRoots.find(
+      (root) => !root.startsWith("/") || root.split("/").some((s) => s === "." || s === ".."),
+    );
+    if (invalidRoot !== undefined) {
+      return yield* new WorkspaceInternalServerError({
+        message: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS contains an invalid root: ${invalidRoot}`,
+      });
+    }
+    if (
+      !allowedRoots.some((root) => isProperDescendant(source.hostPath, root.replace(/\/+$/, "")))
+    ) {
+      return yield* new WorkspaceForbiddenError({
+        message: `Mount path is not a proper descendant of an allowed store root: ${source.hostPath}`,
+      });
+    }
+  });
 };
 
 const resolveGitHubSourceSelection = (input: {
@@ -1044,6 +1103,11 @@ export const createWorkspace = (input: {
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+
+    yield* validateMountSource({
+      spec: parsedSpec,
+      sourceSelection: body.sourceSelection,
+    });
 
     const sourceSelectionResult = yield* resolveGitHubSourceSelection({
       ownerUserId: body.ownerUserId,

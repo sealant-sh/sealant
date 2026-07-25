@@ -1,4 +1,5 @@
 export * from "./buildkit/index.js";
+export * from "./harness/integrations.js";
 export * from "./registry/index.js";
 export * from "./runtime/index.js";
 export * from "./sealantd/index.js";

@@ -213,6 +213,13 @@ export const workspaceLifecycleEnvSchema = z.object({
   // override; the worker's expiry reaper stops workspaces past their TTL. Unset = new workspaces
   // never expire by default.
   SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS: z.coerce.number().int().positive().optional(),
+  // Colon-separated absolute host directories under which mount-sourced workspaces may bind host
+  // paths (e.g. "/home/me/.mend/store:/srv/checkouts"). The SAME operator value feeds the API's
+  // create-time gate, the worker's launch args, and the in-container daemon's own boot allowlist
+  // (sealantd env of the same name) — one knob, enforced at every layer. Paths must be PROPER
+  // descendants of a root (mounting a whole root is a config error). Unset or empty = mount
+  // sources are REJECTED — mounting host paths into workspaces is opt-in deployment policy.
+  SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
 });
 
 export const appServerEnvSchema = databaseEnvSchema
@@ -291,6 +298,8 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
   // How often the worker sweeps live runtimes for expired TTLs and stranded containers.
   WORKSPACE_EXPIRY_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+  // Mount-source allowlist (same operator knob as the API + daemon; see workspaceLifecycleEnvSchema).
+  SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
 });
 
 export const workerServerEnvSchema = databaseEnvSchema

@@ -17,6 +17,9 @@ export interface RunTelemetryService {
   readonly getEvent: TelemetryQueryService["getEvent"];
   readonly getLossReport: TelemetryQueryService["getLossReport"];
   readonly reconstructScrollback: TelemetryQueryService["reconstructScrollback"];
+  readonly scrollbackChunks: TelemetryQueryService["scrollbackChunks"];
+  readonly maxSequence: TelemetryQueryService["maxSequence"];
+  readonly hasEpoch: TelemetryQueryService["hasEpoch"];
 
   // ---- FUTURE (typed; fail with TelemetryQueryUnimplementedError) ----
   readonly getRunRollup: (runId: string) => Effect.Effect<RunRollup, TelemetryQueryError>;
@@ -54,6 +57,9 @@ export const makeRunTelemetry = (query: TelemetryQueryService): RunTelemetryServ
   getEvent: query.getEvent,
   getLossReport: query.getLossReport,
   reconstructScrollback: query.reconstructScrollback,
+  scrollbackChunks: query.scrollbackChunks,
+  maxSequence: query.maxSequence,
+  hasEpoch: query.hasEpoch,
 
   getRunRollup: () => Effect.fail(unimplemented("getRunRollup")),
   reconstructFileTree: () => Effect.fail(unimplemented("reconstructFileTree")),

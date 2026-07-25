@@ -1,5 +1,6 @@
 import { HttpApi, OpenApi } from "effect/unstable/httpapi";
 
+import { AccessTokensGroup } from "./access-tokens.js";
 import { ConnectedAccountsGroup } from "./connected-accounts.js";
 import { GitHubGroup } from "./github.js";
 import { InferenceGroup } from "./inference.js";
@@ -7,6 +8,7 @@ import { PackagesGroup } from "./packages.js";
 import { ProfilesGroup } from "./profiles.js";
 import { RegistriesGroup } from "./registries.js";
 import { RunsGroup } from "./runs.js";
+import { SessionsGroup } from "./sessions.js";
 import { SshKeysGroup } from "./ssh-keys.js";
 import { SystemGroup } from "./system.js";
 import { WorkspacesGroup } from "./workspaces.js";
@@ -20,6 +22,8 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(ProfilesGroup.prefix("/v1/profiles"))
   .add(InferenceGroup.prefix("/v1/inference"))
   .add(RunsGroup.prefix("/v1/runs"))
+  .add(SessionsGroup.prefix("/v1/sessions"))
+  .add(AccessTokensGroup.prefix("/v1/access-tokens"))
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
   .annotate(OpenApi.Title, "Sealant Control Plane API")

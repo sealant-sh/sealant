@@ -11,6 +11,7 @@
  * against the final shape today.
  */
 import {
+  createAccessTokenOp,
   createWorkspaceOp,
   getRunOp,
   getWorkspaceOp,
@@ -25,8 +26,10 @@ import { makeRun } from "./facade/run.js";
 import { makeWorkspace, registerHarnessExecutors } from "./facade/workspace.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
+import { parseTtlSeconds } from "./internal/duration.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import type {
+  AccessTokensNamespace,
   CreateOptions,
   InferenceNamespace,
   ListOptions,
@@ -126,6 +129,33 @@ export class Sealant {
       const payload = buildInferenceRespondRequest(options, this.#ctx.config.hostLocal.ownerUserId);
       const wire = await this.#runtime.run(inferenceRespondOp(payload));
       return mapInferenceResponse(wire);
+    },
+  };
+
+  /**
+   * Scoped bearer tokens for the session surface — `session:read` / `session:input` /
+   * `workspace:exec`. The returned secret is shown once; hand it to a client as its `apiKey` and
+   * the session endpoints enforce exactly those scopes (a read-stream token can stream but is
+   * rejected for input and exec).
+   */
+  readonly accessTokens: AccessTokensNamespace = {
+    create: async (options) => {
+      const wire = await this.#runtime.run(
+        createAccessTokenOp({
+          ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          scopes: [...options.scopes],
+          ...(options.name === undefined ? {} : { name: options.name }),
+          ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }),
+          ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
+        }),
+      );
+      return {
+        tokenId: wire.tokenId,
+        token: wire.token,
+        scopes: [...wire.scopes],
+        ...(wire.workspaceId === undefined ? {} : { workspaceId: wire.workspaceId }),
+        ...(wire.expiresAt === undefined ? {} : { expiresAt: wire.expiresAt }),
+      };
     },
   };
 

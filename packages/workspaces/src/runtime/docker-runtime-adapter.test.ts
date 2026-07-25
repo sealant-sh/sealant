@@ -80,10 +80,14 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
       sources: {
         ...base.sources,
         ...override.sources,
-        workspace: {
-          ...base.sources.workspace,
-          ...override.sources?.workspace,
-        },
+        // A mount override REPLACES the git base outright (the strict union rejects mixed shapes).
+        workspace:
+          override.sources?.workspace?.kind === "mount"
+            ? override.sources.workspace
+            : {
+                ...base.sources.workspace,
+                ...override.sources?.workspace,
+              },
         inputs: override.sources?.inputs ?? base.sources.inputs,
       },
       access: {
@@ -232,6 +236,42 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
     expect(result.status).toBe("ready");
+  });
+
+  it("bind-mounts a mount-sourced workspace at the working directory with the daemon's mount env contract", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-mount\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      mountAllowedStoreRoots: "/srv/store:/home/me/.mend/store",
+    });
+
+    await adapter.launch(
+      createLaunchInput({
+        sources: { workspace: { kind: "mount", hostPath: "/srv/store/worktrees/session-1" } },
+      }),
+    );
+
+    const args = commandRunner.mock.calls[0]?.[1];
+    expect(args).toBeDefined();
+    expect(args?.join(" ")).toContain("-v /srv/store/worktrees/session-1:/workspace/repo");
+    expect(args).toContain("SEALANT_WORKSPACE_SOURCE=mount");
+    expect(args).toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH=/srv/store/worktrees/session-1");
+    expect(args).toContain("SEALANT_MOUNT_ALLOWED_STORE_ROOTS=/srv/store:/home/me/.mend/store");
+    // Mount mode must not carry any clone configuration — the daemon hard-rejects the combination.
+    expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_URL="))).toBe(false);
+    expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_REF="))).toBe(false);
   });
 
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {

@@ -15,41 +15,71 @@ import type { SdkContext } from "../facade/context.js";
 import { makeRun, toRunChangesData } from "../facade/run.js";
 import type { RunHarnessFn, WorkspaceInit } from "../facade/workspace.js";
 import type { Run } from "../types.js";
-import { createRunOp, getRunChangesOp, getRunOp } from "./operations.js";
+import { createRunOp, getRunChangesOp, getRunOp, getWorkspaceOp } from "./operations.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const POLL_INTERVAL = "500 millis";
 const RUN_TIMEOUT_MS = 30 * 60 * 1_000;
 
 /**
- * Registers the run WITH the harness command — the control plane executes it server-side (the worker
- * docker-execs it and ingests telemetry). The cwd is the workspace repo, which the worker defaults to.
+ * Registers the run — the control plane executes it server-side (the worker docker-execs it and
+ * ingests telemetry). With a client harness value (the creating handle), the client-built command
+ * rides along — the escape hatch that keeps `customHarness()` working. WITHOUT one (a handle from
+ * `workspaces.get(id)`), the harness id is read from the workspace's own spec and NO command is
+ * sent: the control plane constructs the invocation server-side, so re-fetched handles are fully
+ * capable.
  */
-const createHarnessRunEffect = (ctx: SdkContext, init: WorkspaceInit, prompt: string) =>
+const createHarnessRunEffect = (
+  ctx: SdkContext,
+  init: WorkspaceInit,
+  prompt: string,
+  options?: import("../types.js").RunOptions,
+) =>
   Effect.gen(function* () {
+    const metadata = options?.metadata === undefined ? {} : { metadata: { ...options.metadata } };
     const harness = init.harness;
-    if (harness === undefined) {
+    if (harness !== undefined) {
+      const command = harness.buildRunCommand(prompt);
+      return yield* createRunOp({
+        workspaceId: init.id,
+        ownerUserId: ctx.config.hostLocal.ownerUserId,
+        harnessId: harness.id,
+        mode: "one-shot",
+        prompt,
+        command: { executable: command.executable, args: [...command.args] },
+        ...metadata,
+      });
+    }
+
+    const details = yield* getWorkspaceOp(init.id);
+    const spec = details.spec as { harness?: { id?: string } } | undefined;
+    const harnessId = spec?.harness?.id;
+    if (harnessId === undefined) {
       return yield* Effect.fail(
         new SealantError(
-          "This workspace handle has no harness; use the handle returned by workspaces.create().",
+          `Workspace ${init.id} has no harness in its spec; pass a harness at workspaces.create() or use workspace.exec().`,
           { code: "harness_required" },
         ),
       );
     }
-    const command = harness.buildRunCommand(prompt);
     return yield* createRunOp({
       workspaceId: init.id,
       ownerUserId: ctx.config.hostLocal.ownerUserId,
-      harnessId: harness.id,
+      harnessId,
       mode: "one-shot",
       prompt,
-      command: { executable: command.executable, args: [...command.args] },
+      ...metadata,
     });
   });
 
-const runHarnessEffect = (ctx: SdkContext, init: WorkspaceInit, prompt: string) =>
+const runHarnessEffect = (
+  ctx: SdkContext,
+  init: WorkspaceInit,
+  prompt: string,
+  options?: import("../types.js").RunOptions,
+) =>
   Effect.gen(function* () {
-    const created = yield* createHarnessRunEffect(ctx, init, prompt);
+    const created = yield* createHarnessRunEffect(ctx, init, prompt, options);
     const runId = created.runId;
 
     // Block until the run is terminal, polling the control plane.
@@ -73,17 +103,17 @@ const runHarnessEffect = (ctx: SdkContext, init: WorkspaceInit, prompt: string) 
   });
 
 /** The BLOCKING `harness.run()` implementation, registered into the Workspace facade by the client. */
-export const runHarness: RunHarnessFn = (ctx, init, prompt): Promise<Run> =>
-  ctx.runtime.run(runHarnessEffect(ctx, init, prompt));
+export const runHarness: RunHarnessFn = (ctx, init, prompt, options): Promise<Run> =>
+  ctx.runtime.run(runHarnessEffect(ctx, init, prompt, options));
 
 /**
  * The NON-BLOCKING `harness.start()` implementation: register the run and return the live handle
  * immediately. Callers stream progress via `run.record.stream()` and settle via `run.wait()` (which
  * fetches the captured changes once terminal).
  */
-export const startHarness: RunHarnessFn = (ctx, init, prompt): Promise<Run> =>
+export const startHarness: RunHarnessFn = (ctx, init, prompt, options): Promise<Run> =>
   ctx.runtime.run(
-    Effect.map(createHarnessRunEffect(ctx, init, prompt), (created) =>
+    Effect.map(createHarnessRunEffect(ctx, init, prompt, options), (created) =>
       makeRun(ctx, { wire: created }),
     ),
   );

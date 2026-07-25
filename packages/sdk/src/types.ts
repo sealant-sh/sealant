@@ -111,12 +111,31 @@ export interface WorkspaceCredentialsOptions {
   readonly github?: boolean | string;
 }
 
+/**
+ * A workspace sourced from a CALLER-OWNED host directory instead of a fresh clone. The platform
+ * bind-mounts `path` as the workspace working directory and treats it as caller-owned: writes
+ * persist across workspace stop/restart/expiry, and the path is never reprovisioned or deleted.
+ * The install must allowlist the path's root (`SEALANT_WORKSPACE_MOUNT_ALLOWED_ROOTS`); paths
+ * outside the allowlist are rejected at create. Credentials and dotfiles options compose
+ * unchanged. Clone-based workspaces remain the right shape for independent verification.
+ */
+export interface WorkspaceMountSource {
+  readonly kind: "mount";
+  /** Absolute, normalized host path (no `..` segments). */
+  readonly path: string;
+}
+
 export interface CreateOptions {
-  /** Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`). */
-  readonly repository: string;
+  /**
+   * Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`).
+   * Exactly one of `repository` or `source` must be provided.
+   */
+  readonly repository?: string;
+  /** Alternative to `repository`: source the workspace from a caller-owned mount. */
+  readonly source?: WorkspaceMountSource;
   /** The harness to run inside the workspace. */
   readonly harness: Harness;
-  /** Git ref to check out (defaults to the repository's default branch). */
+  /** Git ref to check out (defaults to the repository's default branch; `repository` only). */
   readonly ref?: string;
   /** Human-friendly name for the workspace. */
   readonly name?: string;
@@ -181,6 +200,8 @@ export interface Workspace {
    * run record like any other process. `argv[0]` is the executable, the rest its arguments.
    */
   exec(argv: readonly string[], options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
+  /** Interactive PTY sessions: open new ones, reattach to existing ones by id. */
+  readonly sessions: WorkspaceSessions;
   /** Lifecycle events as an async stream. */
   events(): AsyncIterable<WorkspaceEvent>;
   /** Stop the workspace: remove its container and settle it in the terminal "stopped" status. */
@@ -203,10 +224,24 @@ export interface RunOptions {
   readonly signal?: AbortSignal;
   /** Idempotency key so a retried call does not start a duplicate run. */
   readonly idempotencyKey?: string;
+  /**
+   * Opaque correlation bag ({ projectId, sessionId, ... }): stored verbatim by the platform and
+   * echoed on reads. No platform-side semantics.
+   */
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
+/** Options for opening an interactive PTY session. */
 export interface SessionOptions {
-  readonly signal?: AbortSignal;
+  /** Working directory inside the workspace (defaults to the repository root). */
+  readonly cwd?: string;
+  /** Extra environment for the PTY process (not for secrets — use `credentials`). */
+  readonly env?: Readonly<Record<string, string>>;
+  readonly cols?: number;
+  readonly rows?: number;
+  readonly term?: string;
+  /** Opaque correlation bag, stored verbatim and echoed on reads. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 /** Runs a harness in a workspace, one-shot or interactive. */
@@ -215,7 +250,7 @@ export interface HarnessRunner {
   run(prompt: string, options?: RunOptions): Promise<Run>;
   /** NON-BLOCKING: returns a live handle immediately for streaming via `run.record.stream()`. */
   start(prompt: string, options?: RunOptions): Promise<Run>;
-  /** Interactive session reusing the live workspace (Phase 3). */
+  /** Opens an interactive PTY session running the harness's launch command. */
   session(options?: SessionOptions): Promise<InteractiveSession>;
 }
 
@@ -542,11 +577,102 @@ export interface Run {
   wait(): Promise<Run>;
 }
 
-/** An interactive harness session over the live workspace (Phase 3). */
+/** Lifecycle status of an interactive session. */
+export type SessionStatus = "starting" | "running" | "exited" | "failed";
+
+/** One recorded output chunk. `sequence` is the durable resume cursor. */
+export interface SessionOutputChunk {
+  readonly sequence: bigint;
+  readonly data: Uint8Array;
+}
+
+/** A point-in-time report of an interactive session's lifecycle. */
+export interface InteractiveSessionStatus {
+  readonly status: SessionStatus;
+  readonly exitCode?: number;
+  readonly exitSignal?: number;
+  /**
+   * Highest recorded output sequence — resume a disconnected reader with
+   * `output({ from: outputHighWater + 1n })` (or re-read from `0n` for full history).
+   */
+  readonly outputHighWater: bigint;
+}
+
+/**
+ * An interactive PTY session over a live workspace. Sessions are DURABLE PLATFORM RESOURCES, not
+ * client connections: the PTY keeps running when this handle (or the whole process) goes away, and
+ * a session can be re-fetched by id from any workspace handle (`workspace.sessions.get(id)`) and
+ * driven from there. Output is byte-exact, redacted, and sequence-keyed — `output({ from: 0n })`
+ * after a reconnect replays the full recorded history and then live-tails.
+ */
 export interface InteractiveSession {
-  send(input: string): Promise<void>;
-  output(): AsyncIterable<Uint8Array>;
+  readonly id: string;
+  readonly workspaceId: string;
+  /** The run recording this session — its record is the durable, replayable evidence. */
+  readonly runId: string;
+  /** Send keystrokes. Strings are UTF-8-encoded; bytes pass through untouched. */
+  send(input: string | Uint8Array): Promise<void>;
+  /**
+   * Byte-exact output as a RESUMABLE stream: recorded history from `from` (inclusive; default the
+   * beginning), then the live tail until the session settles. Each chunk carries its durable
+   * sequence, so a disconnected consumer resumes with `from: lastChunk.sequence + 1n`.
+   */
+  output(options?: {
+    readonly from?: bigint;
+    readonly signal?: AbortSignal;
+  }): AsyncIterable<SessionOutputChunk>;
+  /** Resize the PTY. */
+  resize(cols: number, rows: number): Promise<void>;
+  /** Deliver a POSIX signal to the session's process (e.g. 2 = SIGINT). */
+  signal(signal: number): Promise<void>;
+  /** Current lifecycle + the output high-water mark (the resume cursor). */
+  status(): Promise<InteractiveSessionStatus>;
+  /** Close the PTY (hang up the terminal). Resolves once the session settles. */
   close(): Promise<void>;
+}
+
+/** Interactive sessions of one workspace: open new ones, reattach to existing ones. */
+export interface WorkspaceSessions {
+  /** Opens a PTY session running `argv` (argv[0] is the program). */
+  open(argv: readonly string[], options?: SessionOptions): Promise<InteractiveSession>;
+  /** Reattach to a session by id — works from ANY handle, not just the creating one. */
+  get(sessionId: string): Promise<InteractiveSession>;
+  /** Sessions of this workspace, newest first. */
+  list(): Promise<readonly InteractiveSession[]>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Access tokens — scoped credentials for the session surface
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Scopes for the session surface: `session:read` (stream/status/output), `session:input`
+ * (input/resize/signal), `workspace:exec` (open sessions/terminals, exec). A client holding only
+ * `session:read` can stream output but is rejected for input and exec.
+ */
+export type AccessTokenScope = "session:read" | "session:input" | "workspace:exec";
+
+export interface CreateAccessTokenOptions {
+  readonly scopes: readonly AccessTokenScope[];
+  readonly name?: string;
+  /** Narrow the token to one workspace. */
+  readonly workspaceId?: string;
+  /** Time-to-live, e.g. `"15m"`, `"2h"`. Omitted = no expiry. */
+  readonly ttl?: string;
+}
+
+export interface CreatedAccessToken {
+  readonly tokenId: string;
+  /** The bearer secret — shown exactly once, never retrievable again. Use it as `apiKey`. */
+  readonly token: string;
+  readonly scopes: readonly AccessTokenScope[];
+  readonly workspaceId?: string;
+  readonly expiresAt?: string;
+}
+
+/** Mint scoped bearer tokens (e.g. for a mobile pairing flow's per-scope grants). */
+export interface AccessTokensNamespace {
+  create(options: CreateAccessTokenOptions): Promise<CreatedAccessToken>;
 }
 
 // ---------------------------------------------------------------------------------------------

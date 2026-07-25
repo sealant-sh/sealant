@@ -166,6 +166,9 @@ const telemetryQueryOperation = Schema.Literals([
   "getEvent",
   "getLossReport",
   "reconstructScrollback",
+  "scrollbackChunks",
+  "maxSequence",
+  "hasEpoch",
   "unimplemented",
 ]);
 export type TelemetryQueryOperation = typeof telemetryQueryOperation.Type;

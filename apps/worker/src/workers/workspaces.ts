@@ -74,6 +74,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ...(env.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
         ? {}
         : { controlSocketHostDir: env.WORKSPACE_CONTROL_SOCKET_HOST_DIR }),
+      ...(env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS === undefined
+        ? {}
+        : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
     }),
     new K8sRuntimeAdapter(),
     new K3sRuntimeAdapter(),

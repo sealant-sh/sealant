@@ -257,9 +257,12 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
  *
  * Pinned to a digest-or-tag here (single source of truth) so the multi-stage copy stays
  * deterministic and easy to bump. The binary is multi-arch (amd64+arm64) so we inherit both without
- * bundling a local build context.
+ * bundling a local build context. `SEALANT_SEALANTD_IMAGE` overrides the pin for daemon
+ * development: bake an unreleased local sealantd build (e.g. `sealantd-dev:mount`) into workspace
+ * images without touching the released pin.
  */
-const sealantdImageReference = "ghcr.io/sealant-sh/sealantd:0.5.1";
+const sealantdImageReference =
+  process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.6.0";
 
 /**
  * In-container control socket `sealantd boot` listens on. Build-static; promoted to
@@ -543,15 +546,17 @@ const mapBlueprintToResolvedImagePlan = (
             sourceRef: dotfiles.authRef,
           },
         ];
+  // Mount sources have nothing to clone: no runtime clone key is baked.
+  const workspaceSource = blueprint.sources.workspace;
   const runtimeSecrets =
-    blueprint.sources.workspace.authRef === undefined
+    workspaceSource.kind === "mount" || workspaceSource.authRef === undefined
       ? []
       : [
           {
             id: "workspace_git_key",
             kind: "ssh-key" as const,
             phase: "runtime" as const,
-            sourceRef: blueprint.sources.workspace.authRef,
+            sourceRef: workspaceSource.authRef,
           },
         ];
 
@@ -891,6 +896,18 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     // without bundling a local build context.
     `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     "RUN chmod 755 /usr/local/bin/sealantd",
+    // Mount-sourced workspaces bind a HOST-owned directory as the working directory; its uid
+    // differs from the container user, which trips git's dubious-ownership check and would make
+    // every git command fail. Trusting the fixed working directory keeps exec/record semantics
+    // identical to clone-based workspaces. (Clone images stay byte-identical: no step emitted.)
+    ...(plan.blueprint.sources.workspace.kind === "mount"
+      ? [
+          "",
+          `RUN git config --system --add safe.directory ${shellQuote(
+            plan.blueprint.runtime.workingDirectory,
+          )}`,
+        ]
+      : []),
     ...(dotfilesStep === undefined ? [] : ["", dotfilesStep]),
     "",
     renderBootEnv(plan),

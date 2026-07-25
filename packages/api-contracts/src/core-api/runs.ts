@@ -26,12 +26,21 @@ export type RunStatusWire = typeof runStatusSchema.Type;
 export const runModeSchema = Schema.Literals(["one-shot", "interactive"]);
 export type RunModeWire = typeof runModeSchema.Type;
 
-export const ioStreamSchema = Schema.Literals(["stdout", "stderr"]);
+// "pty" is the interactive stream: PTY output as recorded from sessions (StreamKind 5).
+export const ioStreamSchema = Schema.Literals(["stdout", "stderr", "pty"]);
 export type IoStreamWire = typeof ioStreamSchema.Type;
 
 // ---------------------------------------------------------------------------------------------
 // Run resource
 // ---------------------------------------------------------------------------------------------
+
+/** The one-shot harness invocation the control plane execs in the workspace. */
+export const runCommandSchema = Schema.Struct({
+  executable: NonEmptyString,
+  args: Schema.Array(Schema.String),
+  cwd: Schema.optional(NonEmptyString),
+});
+export type RunCommandWire = typeof runCommandSchema.Type;
 
 export const runSchema = Schema.Struct({
   runId: NonEmptyString,
@@ -42,6 +51,10 @@ export const runSchema = Schema.Struct({
   mode: runModeSchema,
   status: runStatusSchema,
   prompt: Schema.optional(Schema.String),
+  /** The resolved invocation the control plane executed (server-side runs) — self-describing. */
+  command: Schema.optional(runCommandSchema),
+  /** Opaque caller correlation bag, echoed verbatim (no platform semantics). */
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
   startedAt: Schema.optional(Schema.String),
@@ -50,14 +63,6 @@ export const runSchema = Schema.Struct({
   updatedAt: Schema.String,
 });
 export type Run = typeof runSchema.Type;
-
-/** The one-shot harness invocation the control plane execs in the workspace. */
-export const runCommandSchema = Schema.Struct({
-  executable: NonEmptyString,
-  args: Schema.Array(Schema.String),
-  cwd: Schema.optional(NonEmptyString),
-});
-export type RunCommandWire = typeof runCommandSchema.Type;
 
 export const runFileChangeSchema = Schema.Struct({
   path: NonEmptyString,
@@ -74,10 +79,14 @@ export const createRunRequestSchema = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   attemptId: Schema.optional(NonEmptyString),
   // When present, the control plane EXECUTES the run SERVER-SIDE: the worker docker-execs this command
-  // in the workspace, ingests telemetry, and captures the diff. When absent, the run row is created but
-  // not executed (the legacy host-local path where the caller runs it itself). This field is the gate
-  // that lets the thin SDK opt into server-side execution without a breaking contract change.
+  // in the workspace, ingests telemetry, and captures the diff. When absent AND `prompt` is present
+  // for a built-in harness, the control plane CONSTRUCTS the command itself (server-side invoke
+  // knowledge) — which is what lets a re-fetched workspace handle start a harness. An explicit
+  // command always wins (the escape hatch for custom harnesses). Absent both, the run row is
+  // created but not executed (the legacy host-local path where the caller runs it itself).
   command: Schema.optional(runCommandSchema),
+  /** Opaque caller correlation bag ({ projectId, sessionId, ... }): stored + echoed, no semantics. */
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 export type CreateRunRequest = typeof createRunRequestSchema.Type;
 
@@ -177,6 +186,10 @@ export const getRunScrollbackQuerySchema = Schema.Struct({
   processId: NonEmptyString,
   stream: ioStreamSchema,
   atSequence: Schema.optional(NonEmptyString),
+  /** Inclusive lower sequence bound — with `atSequence` this selects a sequence RANGE. */
+  fromSequence: Schema.optional(NonEmptyString),
+  /** Maximum chunks to reconstruct (server default 5000). */
+  limit: Schema.optional(NonEmptyString),
 });
 export type GetRunScrollbackQuery = typeof getRunScrollbackQuerySchema.Type;
 
@@ -184,7 +197,7 @@ export const runScrollbackResponseSchema = Schema.Struct({
   processId: NonEmptyString,
   stream: ioStreamSchema,
   byteCount: Schema.Number,
-  /** Base64-encoded reconstructed bytes (byte-exact). */
+  /** Base64-encoded reconstructed bytes (byte-exact as recorded; redaction happens upstream). */
   contentBase64: Schema.String,
 });
 export type RunScrollbackResponse = typeof runScrollbackResponseSchema.Type;

@@ -97,12 +97,64 @@ describe("harness.start()", () => {
     expect(run.changes.files).toEqual([]);
   });
 
-  it("rejects when the workspace handle has no harness", async () => {
+  it("a handle without a client harness reads the spec and defers command construction server-side", async () => {
+    // Re-fetched handles (workspaces.get) carry no harness value: the SDK reads the workspace's
+    // own spec for the harness id and registers the run WITHOUT a command — the control plane
+    // constructs the invocation (the server-side invoke-knowledge migration).
+    const seen: Array<Record<string, unknown>> = [];
     const { client } = makeStub({});
+    const clientWithWorkspace = {
+      ...(client as unknown as Record<string, unknown>),
+      runs: {
+        ...(client as unknown as { runs: Record<string, unknown> }).runs,
+        createRun: ({ payload }: { payload: Record<string, unknown> }) => {
+          seen.push(payload);
+          return Effect.sync(() => wireRun("queued"));
+        },
+      },
+      workspaces: {
+        getWorkspace: () =>
+          Effect.sync(() => ({
+            workspaceId: "ws_1",
+            name: "t",
+            ownerUserId: "usr_local",
+            status: "ready",
+            createdAt: "2026-07-06T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z",
+            spec: { harness: { id: "opencode" } },
+          })),
+      },
+    } as unknown as ControlPlaneClient;
+
     const handleWithoutHarness: WorkspaceInit = { id: "ws_1", name: "t", status: "ready" };
-    await expect(startHarness(makeCtx(client), handleWithoutHarness, "p")).rejects.toThrow(
-      /no harness/,
-    );
+    const run = await startHarness(makeCtx(clientWithWorkspace), handleWithoutHarness, "p");
+    expect(run.id).toBe("run_1");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.["harnessId"]).toBe("opencode");
+    expect(seen[0]?.["prompt"]).toBe("p");
+    expect(seen[0]?.["command"]).toBeUndefined();
+  });
+
+  it("rejects when neither the handle nor the workspace spec names a harness", async () => {
+    const { client } = makeStub({});
+    const clientWithSpeclessWorkspace = {
+      ...(client as unknown as Record<string, unknown>),
+      workspaces: {
+        getWorkspace: () =>
+          Effect.sync(() => ({
+            workspaceId: "ws_1",
+            name: "t",
+            ownerUserId: "usr_local",
+            status: "ready",
+            createdAt: "2026-07-06T00:00:00.000Z",
+            updatedAt: "2026-07-06T00:00:00.000Z",
+          })),
+      },
+    } as unknown as ControlPlaneClient;
+    const handleWithoutHarness: WorkspaceInit = { id: "ws_1", name: "t", status: "ready" };
+    await expect(
+      startHarness(makeCtx(clientWithSpeclessWorkspace), handleWithoutHarness, "p"),
+    ).rejects.toThrow(/no harness/);
   });
 
   it("wait() settles the handle: polls to terminal, then fetches the captured changes", async () => {

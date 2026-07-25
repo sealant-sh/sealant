@@ -1026,6 +1026,23 @@ function resolveWorkspaceSpecDetails(workspace: WorkspaceSummary): WorkspaceSpec
     };
   }
 
+  if (source.kind === "mount") {
+    return {
+      repositoryUrl: source.hostPath,
+      branch: "caller-owned mount",
+      isGitHubSource,
+      provider: "mount",
+      configRepo,
+      harness,
+      runtimeTarget,
+      ociRuntime,
+      osTarget,
+      workingDirectory,
+      ssh,
+      selectedPackages,
+    };
+  }
+
   return {
     repositoryUrl: source.url,
     branch: source.ref ?? "default branch",
@@ -1062,6 +1079,7 @@ function resolveWorkspaceSourceReference(
 function resolveIsGitHubSource(source: NewWorkspace["sources"]["workspace"] | undefined): boolean {
   return (
     source !== undefined &&
+    source.kind === "git" &&
     typeof source.authRef === "string" &&
     source.authRef.startsWith("github-installation-repository:")
   );
@@ -1151,7 +1169,7 @@ function suggestWorkspaceNames(workspace: {
 }
 
 function resolveSourceRef(spec: NewWorkspace | undefined): string | undefined {
-  if (spec === undefined) {
+  if (spec === undefined || spec.sources.workspace.kind === "mount") {
     return undefined;
   }
 
