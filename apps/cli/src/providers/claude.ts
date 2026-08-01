@@ -10,10 +10,13 @@ import { ExternalToolsService } from "../tools.js";
 
 /*
  * COMPLIANCE (docs/connected-accounts-design.md §2, Claude — strictest provider):
- * - The ONLY acquisition path is the user running Anthropic's official `claude setup-token` and
- *   pasting the resulting sk-ant-oat01-… token. We may spawn the official `claude` binary with
+ * - Acquisition is always operator-initiated: this command handles the `claude setup-token` paste
+ *   (sk-ant-oat01-… token). The platform also accepts a session credentials file the operator
+ *   deliberately minted for Sealant (e.g. `CLAUDE_CONFIG_DIR=… claude` + /login) and pasted in the
+ *   web settings UI — consent is the paste. We may spawn the official `claude` binary with
  *   inherited stdio for convenience; the OAuth loop is entirely Anthropic's.
- * - NEVER read ~/.claude/.credentials.json or any OS keychain.
+ * - NEVER read ~/.claude/.credentials.json or any OS keychain off the operator's machine — a
+ *   credential file only ever enters Sealant by the operator pasting it.
  * - NEVER make any request to Anthropic domains (no OAuth, no token, no inference endpoints).
  */
 

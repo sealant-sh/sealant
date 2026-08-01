@@ -56,11 +56,19 @@ You can manage connected accounts in two places:
 
 The stored provider payloads are:
 
-| Provider | Stored payload                                       | Injected into workspace as                          |
-| -------- | ---------------------------------------------------- | --------------------------------------------------- |
-| Claude   | Token from Anthropic's official `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` environment variable      |
-| Codex    | Official Codex CLI `auth.json`                       | `$HOME/.codex/auth.json` file with mode `600`       |
-| GitHub   | Token from `gh auth token` or a provided token       | `GITHUB_TOKEN` and `GH_TOKEN` environment variables |
+| Provider | Stored payload                                                                                               | Injected into workspace as                                                                                    |
+| -------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Claude   | Token from Anthropic's official `claude setup-token`, or a Claude Code session `.credentials.json` you paste | `CLAUDE_CODE_OAUTH_TOKEN` environment variable (token), or `$HOME/.claude/.credentials.json` file, mode `600` |
+| Codex    | Official Codex CLI `auth.json`                                                                               | `$HOME/.codex/auth.json` file with mode `600`                                                                 |
+| GitHub   | Token from `gh auth token` or a provided token                                                               | `GITHUB_TOKEN` and `GH_TOKEN` environment variables                                                           |
+
+For Claude, the session-file path is the recommended one: run
+`CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude` on your machine, `/login` inside it (this
+writes a fresh session without touching your main Claude login), and paste the contents of
+`~/.sealant/claude-session/.credentials.json`. A session file presents as your subscription;
+workspaces refresh it and Sealant syncs it back, like Codex. A `claude setup-token` value also
+works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used
+interactively.
 
 The API validates the provider shape, encrypts the payload with AES-256-GCM through
 `@sealant/credentials`, and stores only the sealed payload plus non-secret metadata in Postgres

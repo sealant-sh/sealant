@@ -32,22 +32,32 @@ posture.
 
 ### Claude (Anthropic) — strictest provider
 
-- **Only compliant acquisition:** the user runs `claude setup-token` themselves and pastes the
-  resulting `sk-ant-oat01-…` token into Sealant. This is the officially documented headless/CI path
-  (1-year, inference-scoped, **no refresh token — by design**). The CLI may _spawn_ the official
-  `claude` binary interactively for convenience; the OAuth loop is entirely Anthropic's.
-- **Hard don'ts (encoded in code, not just docs):** never read `~/.claude/.credentials.json` or the
-  OS keychain; never initiate OAuth or embed Claude Code's client id; never call Anthropic's token
-  or inference endpoints with the subscription token; never proxy Claude traffic through Sealant
+- **Compliant acquisition (two shapes, both operator-initiated):** (a) the user runs
+  `claude setup-token` themselves and pastes the resulting `sk-ant-oat01-…` token — the officially
+  documented headless/CI path (1-year, inference-scoped, **no refresh token — by design**; Anthropic
+  classifies setup tokens as API auth, so interactive use of some models is credit-gated on them).
+  (b) the user deliberately mints a **session credentials file for Sealant** — e.g.
+  `CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude` + `/login`, then pastes the contents of that
+  directory's `.credentials.json` — a full Claude Code session that presents as their subscription.
+  In both paths the CLI may _spawn_ the official `claude` binary interactively for convenience; the
+  OAuth loop is entirely Anthropic's.
+- **Hard don'ts (encoded in code, not just docs):** Sealant never READS credential files
+  (`~/.claude/.credentials.json`) or the OS keychain off the operator's machine — a session file
+  enters Sealant only when the operator deliberately pastes one they minted for it; consent is the
+  paste. Never initiate OAuth or embed Claude Code's client id; never call Anthropic's token or
+  inference endpoints with the subscription token; never proxy Claude traffic through Sealant
   services. Anthropic blocked and sent legal requests to tools that spoofed the Claude Code client
   (Jan–Apr 2026).
-- **Permitted consumption:** inject as `CLAUDE_CODE_OAUTH_TOKEN` where the **official Claude Code
-  CLI / Agent SDK** runs. Help Center 15036540 explicitly covers "third-party apps that authenticate
-  with your Claude subscription through the Agent SDK". Don't run `claude --bare` (ignores the env
-  var). Internal features (run summaries) must go through the Agent SDK, never raw
-  `POST /v1/messages`.
-- **Refresh story:** none. Detect 401s → mark the account `invalid` → prompt re-auth. Record
-  `connectedAt` and nudge near the 12-month mark.
+- **Permitted consumption:** setup tokens inject as `CLAUDE_CODE_OAUTH_TOKEN`; session files are
+  materialized at `$HOME/.claude/.credentials.json` (mode 600, exactly like codex's auth.json) —
+  both only where the **official Claude Code CLI / Agent SDK** runs. Help Center 15036540 explicitly
+  covers "third-party apps that authenticate with your Claude subscription through the Agent SDK".
+  Don't run `claude --bare` (ignores the env var). Internal features (run summaries) must go through
+  the Agent SDK, never raw `POST /v1/messages`.
+- **Refresh story:** setup tokens: none — detect 401s → mark the account `invalid` → prompt re-auth;
+  record `connectedAt` and nudge near the 12-month mark. Session files: the official CLI refreshes
+  the session in-container; Sealant syncs the mutated file back after runs, newest-wins on
+  `claudeAiOauth.expiresAt` (mirrors the codex sync-back).
 - Always offer `ANTHROPIC_API_KEY` as a first-class alternative; it is Anthropic's stated preference
   for products and our fallback if policy shifts again (four swings Jan–Jun 2026).
 
@@ -97,7 +107,7 @@ connected_accounts
   owner_user_id     text -> user.id (cascade)
   provider          enum^
   name              text not null default 'default'   -- multiple accounts per provider allowed
-  kind              text not null      -- "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token"
+  kind              text not null      -- "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token"
   status            enum^ default 'active'
   encrypted_payload text not null      -- AES-256-GCM sealed JSON (see §4)
   encryption_key_id text not null
@@ -123,12 +133,15 @@ reasoning as `profiles.activeRevisionId` living on the profile row.
 **Payload shapes** (the JSON that gets encrypted), defined as Effect Schemas in
 `@sealant/credentials`:
 
-- `claude`: `{ token: "sk-ant-oat01-…" }`
+- `claude`: `{ token: "sk-ant-oat01-…" }` (setup token) or
+  `{ credentialsJson: "<verbatim file contents>" }` (session credentials file) — consumers dispatch
+  on the payload shape, not the `kind` column.
 - `codex`: `{ authJson: "<verbatim file contents>" }` — stored verbatim so we can re-materialize the
   exact file; parsed on write to validate shape and extract metadata.
 - `github`: `{ token: "gho_…" }`
 
-**Metadata examples** (never secret): claude `{ tokenSuffix, connectedVia }`; codex
+**Metadata examples** (never secret): claude `{ tokenSuffix, connectedVia }` or (session file)
+`{ tokenSuffix, subscriptionType, expiresAt, scopeCount, connectedVia }`; codex
 `{ accountId, authMode, lastRefresh, email? }` (from the id_token claims, extracted server-side);
 github `{ login, scopes[], tokenType: "gh-cli" }`.
 
@@ -148,7 +161,8 @@ launch):
   check, gh token shape check + scope parsing).
 - **Injection planner**: pure function from decrypted credentials → an injection plan the runtime
   adapter executes:
-  - claude → env `CLAUDE_CODE_OAUTH_TOKEN`
+  - claude (setup token) → env `CLAUDE_CODE_OAUTH_TOKEN`; claude (session file) → file
+    `$HOME/.claude/.credentials.json` (mode 0600)
   - codex → file `$HOME/.codex/auth.json` (mode 0600)
   - github → env `GITHUB_TOKEN` + `GH_TOKEN`, optional git clone auth (§6)
 - Self-host bootstrap: `install.sh` / compose generate `SEALANT_CREDENTIALS_KEY` once (follow-up in
@@ -200,6 +214,10 @@ In `packages/sandboxes`:
 - **Codex sync-back:** when a run-exec job completes (and on sandbox stop where reachable), the
   worker `docker exec cat`s `$HOME/.codex/auth.json`, parses `last_refresh`, and updates the stored
   credential iff strictly newer (`last_synced_at` bookkeeping). Never write an older copy.
+- **Claude session sync-back:** same shape for `credentials-json` claude accounts —
+  `$HOME/.claude/.credentials.json` is read back after runs and persisted iff its
+  `claudeAiOauth.expiresAt` is strictly newer; setup-token accounts are never touched (and never
+  silently converted by a file the harness happens to write).
 - **GitHub as clone auth:** when a sandbox's source has no GitHub App installation authRef but the
   launch has a github credential, the worker may use it as `http-token` clone auth
   (`x-access-token:<token>`) — this is what lets self-hosters skip the GitHub App entirely.
