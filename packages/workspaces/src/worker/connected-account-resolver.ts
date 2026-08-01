@@ -64,6 +64,8 @@ const parseProviderPayload = (
 
   switch (provider) {
     case "claude": {
+      // Union parser: accepts the setup-token shape OR the session credentials-file shape; the
+      // planner dispatches on which one decoded (env var vs materialized file).
       return planCredentialInjections(provider, parseClaudeCredentialPayload(parsed));
     }
     case "codex": {

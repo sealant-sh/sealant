@@ -410,6 +410,70 @@ describe("processWorkspaceBuildJobEffect", () => {
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
   });
 
+  it.effect("injects a session-file claude account as a file, never the env var", () => {
+    const claudeCredentialsJson = JSON.stringify({
+      claudeAiOauth: { accessToken: "sk-ant-oat01-session", expiresAt: 1_750_000_000_000 },
+    });
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_claude_session",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({
+          osFamily: "nix",
+          credentialRefs: [{ provider: "claude", ref: "connected-account:cacc_claude_session" }],
+        }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const accountRows = [
+      {
+        ...connectedAccountStub({
+          id: "cacc_claude_session",
+          provider: "claude",
+          payload: { credentialsJson: claudeCredentialsJson },
+        }),
+        kind: "credentials-json",
+      },
+    ];
+    const connectedAccounts = {
+      getById: vi.fn((id: string) =>
+        Effect.succeed(accountRows.find((account) => account.id === id)),
+      ),
+      updateSyncState: vi.fn((_input: unknown) => Effect.succeed(accountRows[0])),
+    };
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_claude_session",
+          runtimeAdapters: [runtimeAdapter],
+          credentialCipher: fakeCredentialCipher,
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credentialFiles: [
+            {
+              path: "$HOME/.claude/.credentials.json",
+              contentBase64: Buffer.from(claudeCredentialsJson, "utf8").toString("base64"),
+              mode: "600",
+            },
+          ],
+        }),
+      );
+      // No env injection at all for the session-file shape (empty env is omitted from launch).
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.not.objectContaining({ credentialEnv: expect.anything() }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
+  });
+
   it.effect("fails the launch when refs are present but no credentials key is configured", () => {
     const jobs = workspaceBuildJobRepoStub({
       claimJobById: () => ({

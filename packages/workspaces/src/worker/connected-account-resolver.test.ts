@@ -157,8 +157,17 @@ describe("resolveCredentialInjections", () => {
       tokens: { refresh_token: "rt-1" },
       last_refresh: "2026-07-01T00:00:00.000Z",
     });
+    const claudeCredentialsJson = JSON.stringify({
+      claudeAiOauth: { accessToken: "sk-ant-oat01-session", expiresAt: 1_750_000_000_000 },
+    });
     const accounts = connectedAccountRepoStub([
       createAccount(),
+      createAccount({
+        id: "cacc_claude_session",
+        kind: "credentials-json",
+        encryptedPayload: `sealed:${JSON.stringify({ credentialsJson: claudeCredentialsJson })}`,
+        metadata: { expiresAt: 1_750_000_000_000 },
+      }),
       createAccount({
         id: "cacc_codex",
         provider: "codex",
@@ -178,6 +187,7 @@ describe("resolveCredentialInjections", () => {
       const resolved = yield* resolveCredentialInjections({
         blueprint: createBlueprint([
           { provider: "claude", ref: "connected-account:cacc_1" },
+          { provider: "claude", ref: "connected-account:cacc_claude_session" },
           { provider: "codex", ref: "connected-account:cacc_codex" },
           { provider: "github", ref: "connected-account:cacc_github" },
         ]),
@@ -186,6 +196,13 @@ describe("resolveCredentialInjections", () => {
 
       expect(resolved.injections).toEqual([
         { kind: "env", key: "CLAUDE_CODE_OAUTH_TOKEN", value: "sk-ant-oat01-test" },
+        // The session-file claude shape becomes a FILE injection, not the env var.
+        {
+          kind: "file",
+          path: "$HOME/.claude/.credentials.json",
+          contentBase64: Buffer.from(claudeCredentialsJson, "utf8").toString("base64"),
+          mode: "600",
+        },
         {
           kind: "file",
           path: "$HOME/.codex/auth.json",
@@ -198,7 +215,7 @@ describe("resolveCredentialInjections", () => {
       expect(resolved.codexAccounts).toEqual([
         { connectedAccountId: "cacc_codex", storedLastRefresh: "2026-06-30T00:00:00.000Z" },
       ]);
-      expect(accounts.updateSyncState).toHaveBeenCalledTimes(3);
+      expect(accounts.updateSyncState).toHaveBeenCalledTimes(4);
       expect(accounts.updateSyncState).toHaveBeenCalledWith(
         expect.objectContaining({ id: "cacc_1", lastUsedAt: expect.any(Date) }),
       );
