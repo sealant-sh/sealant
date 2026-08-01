@@ -115,7 +115,7 @@ export interface WorkspaceCredentialsOptions {
  * A workspace sourced from a CALLER-OWNED host directory instead of a fresh clone. The platform
  * bind-mounts `path` as the workspace working directory and treats it as caller-owned: writes
  * persist across workspace stop/restart/expiry, and the path is never reprovisioned or deleted.
- * The install must allowlist the path's root (`SEALANT_WORKSPACE_MOUNT_ALLOWED_ROOTS`); paths
+ * The install must allowlist the path's root (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); paths
  * outside the allowlist are rejected at create. Credentials and dotfiles options compose
  * unchanged. Clone-based workspaces remain the right shape for independent verification.
  */
@@ -123,6 +123,23 @@ export interface WorkspaceMountSource {
   readonly kind: "mount";
   /** Absolute, normalized host path (no `..` segments). */
   readonly path: string;
+}
+
+/**
+ * An ADDITIONAL caller-owned host directory bind-mounted beside the primary source — sibling
+ * repositories, reference clones, scratch material the workspace should see without adopting.
+ * Read-only by default: extra mounts widen what the workspace can see, not where its work product
+ * lands. Same allowlist as mount sources (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); the container path
+ * must not overlap the working directory. Like the primary mount, the host path is caller-owned —
+ * never reprovisioned, never cleaned.
+ */
+export interface WorkspaceExtraMount {
+  /** Absolute, normalized host path (no `..` segments). */
+  readonly hostPath: string;
+  /** Absolute container path to mount at, outside the working directory (e.g. `/workspace/ref/x`). */
+  readonly mountPath: string;
+  /** Defaults to `true`. Pass `false` deliberately — writes to extra mounts are unrecorded. */
+  readonly readOnly?: boolean;
 }
 
 export interface CreateOptions {
@@ -133,6 +150,8 @@ export interface CreateOptions {
   readonly repository?: string;
   /** Alternative to `repository`: source the workspace from a caller-owned mount. */
   readonly source?: WorkspaceMountSource;
+  /** Additional read-only-by-default mounts beside the primary source (see `WorkspaceExtraMount`). */
+  readonly mounts?: readonly WorkspaceExtraMount[];
   /** The harness to run inside the workspace. */
   readonly harness: Harness;
   /** Git ref to check out (defaults to the repository's default branch; `repository` only). */

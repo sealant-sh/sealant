@@ -274,6 +274,53 @@ describe("DockerRuntimeAdapter", () => {
     expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_REF="))).toBe(false);
   });
 
+  it("bind-mounts extra mounts read-only by default and read-write only when the blueprint says so", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-extra\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      mountAllowedStoreRoots: "/srv/store",
+    });
+
+    await adapter.launch(
+      createLaunchInput({
+        sources: {
+          workspace: { kind: "mount", hostPath: "/srv/store/worktrees/session-1" },
+          mounts: [
+            // No readOnly key: the blueprint default (read-only) must apply.
+            { hostPath: "/srv/store/_references/effect", mountPath: "/workspace/ref/effect" },
+            {
+              hostPath: "/srv/store/scratch",
+              mountPath: "/workspace/home/scratch",
+              readOnly: false,
+            },
+          ],
+        },
+      }),
+    );
+
+    const args = commandRunner.mock.calls[0]?.[1];
+    expect(args).toBeDefined();
+    const joined = args?.join(" ");
+    expect(joined).toContain("-v /srv/store/worktrees/session-1:/workspace/repo");
+    expect(joined).toContain("-v /srv/store/_references/effect:/workspace/ref/effect:ro");
+    expect(joined).toContain("-v /srv/store/scratch:/workspace/home/scratch");
+    expect(joined).not.toContain("/workspace/home/scratch:ro");
+    // Extra mounts ride only -v binds; the daemon's mount env contract stays primary-mount-only.
+    expect(args).toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH=/srv/store/worktrees/session-1");
+  });
+
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

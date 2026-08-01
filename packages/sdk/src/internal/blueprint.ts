@@ -71,6 +71,16 @@ export const buildCreateWorkspaceRequest = (
               ...(options.ref === undefined ? {} : { ref: options.ref }),
             }
           : { kind: "mount", hostPath: options.source?.path },
+      ...(options.mounts === undefined || options.mounts.length === 0
+        ? {}
+        : {
+            mounts: options.mounts.map((mount) => ({
+              hostPath: mount.hostPath,
+              mountPath: mount.mountPath,
+              // Omitted = the blueprint's default (read-only). Only an explicit choice is sent.
+              ...(mount.readOnly === undefined ? {} : { readOnly: mount.readOnly }),
+            })),
+          }),
     },
     harness: { id: options.harness.id },
     customization: { enableSealantd: true },

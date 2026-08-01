@@ -16,6 +16,7 @@ describe("K3sRuntimeAdapter", () => {
             ref: "main",
           },
           inputs: [],
+          mounts: [],
         },
         harness: {
           id: "opencode",
