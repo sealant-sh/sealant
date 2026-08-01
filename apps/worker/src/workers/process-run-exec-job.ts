@@ -28,6 +28,7 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
+  type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
 import {
   InlineByteaArtifactStoreLive,
@@ -200,8 +201,13 @@ const resolveContainerResourceId = (runId: string) =>
       );
     }
     // attemptId keys the stored attempt snapshot, from which the sync-back re-derives the launch
-    // blueprint (and thus the workspace's connected-account refs) without new columns.
-    return { resourceId: instance.resourceId, attemptId: workspace.latestRunId };
+    // blueprint (and thus the workspace's connected-account refs). The instance row additionally
+    // carries the launch-time injection shapes; null (legacy rows) means "nothing file-injected".
+    return {
+      resourceId: instance.resourceId,
+      attemptId: workspace.latestRunId,
+      launchCredentialInjections: instance.launchCredentialInjections ?? [],
+    };
   });
 
 /**
@@ -212,10 +218,23 @@ const resolveContainerResourceId = (runId: string) =>
  * re-derived from the stored attempt snapshot; workspaces without a matching credentialRef no-op
  * immediately.
  */
+/**
+ * Isolates one provider's sync-back with its own catchCause: a DEFECT escaping one (the helpers
+ * only catch their typed failures) must not skip the other provider's sync.
+ */
+const isolatedSyncBack = <E, R>(label: string, sync: Effect.Effect<void, E, R>) =>
+  sync.pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`${label} sync-back crashed after run exec; continuing.`, cause),
+    ),
+    Effect.asVoid,
+  );
+
 const syncBackHarnessCredentials = (
   attemptId: string,
   target: SealantTarget,
   credentialCipher: CredentialCipherService | undefined,
+  launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[],
 ) =>
   Effect.gen(function* () {
     const attempts = yield* WorkspaceAttemptRepo;
@@ -238,17 +257,28 @@ const syncBackHarnessCredentials = (
         Effect.map((result) => result.stdout),
       );
 
-    yield* syncBackCodexAuthJson({
-      blueprint,
-      credentialCipher,
-      readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
-    });
+    yield* isolatedSyncBack(
+      "Codex auth",
+      syncBackCodexAuthJson({
+        blueprint,
+        credentialCipher,
+        readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
+      }),
+    );
 
-    yield* syncBackClaudeCredentials({
-      blueprint,
-      credentialCipher,
-      readCredentialsJson: () => readWorkspaceFile(CLAUDE_CREDENTIALS_JSON_PATH),
-    });
+    yield* isolatedSyncBack(
+      "Claude credentials",
+      syncBackClaudeCredentials({
+        blueprint,
+        // Launch-time truth from the runtime instance row: only accounts Sealant seeded as a FILE
+        // in THIS workspace may sync back (env-injected workspaces never do).
+        launchFileInjectedAccountIds: launchCredentialInjections
+          .filter((entry) => entry.provider === "claude" && entry.injection === "file")
+          .map((entry) => entry.connectedAccountId),
+        credentialCipher,
+        readCredentialsJson: () => readWorkspaceFile(CLAUDE_CREDENTIALS_JSON_PATH),
+      }),
+    );
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("Credential sync-back failed after run exec; continuing.", cause),
@@ -330,7 +360,9 @@ export const processRunExecJobEffect = (
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
       );
     }
-    const { resourceId, attemptId } = yield* resolveContainerResourceId(options.runId);
+    const { resourceId, attemptId, launchCredentialInjections } = yield* resolveContainerResourceId(
+      options.runId,
+    );
     const target = sealantTargetForDockerContainer(resourceId);
 
     yield* runs.markRunRunning({ id: options.runId });
@@ -355,7 +387,14 @@ export const processRunExecJobEffect = (
           })
           .pipe(Effect.ignore),
       ),
-      Effect.ensuring(syncBackHarnessCredentials(attemptId, target, options.credentialCipher)),
+      Effect.ensuring(
+        syncBackHarnessCredentials(
+          attemptId,
+          target,
+          options.credentialCipher,
+          launchCredentialInjections,
+        ),
+      ),
     );
   });
 

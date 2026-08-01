@@ -12,6 +12,8 @@ import { vi } from "vitest";
 
 import {
   isNewerClaudeCredentials,
+  isPlausibleClaudeExpiry,
+  MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
   readStoredClaudeExpiresAt,
   syncBackClaudeCredentials,
 } from "./claude-credentials-sync-back.js";
@@ -103,6 +105,24 @@ describe("isNewerClaudeCredentials", () => {
   });
 });
 
+describe("isPlausibleClaudeExpiry", () => {
+  const now = Date.parse("2026-08-01T00:00:00.000Z");
+
+  it("accepts past and near-future expiries (real sessions live hours)", () => {
+    expect(isPlausibleClaudeExpiry(now - 60_000, now)).toBe(true);
+    expect(isPlausibleClaudeExpiry(now + 8 * 60 * 60 * 1_000, now)).toBe(true);
+    expect(isPlausibleClaudeExpiry(now + MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS, now)).toBe(true);
+  });
+
+  it("rejects sentinel expiries more than 30 days ahead", () => {
+    expect(isPlausibleClaudeExpiry(now + MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS + 1, now)).toBe(
+      false,
+    );
+    // The concrete poisoning case: a harness-seeded file stamped with a far-future sentinel.
+    expect(isPlausibleClaudeExpiry(9_999_999_999_999, now)).toBe(false);
+  });
+});
+
 describe("readStoredClaudeExpiresAt", () => {
   it("reads a numeric expiresAt and rejects everything else", () => {
     expect(readStoredClaudeExpiresAt({ expiresAt: 123 })).toBe(123);
@@ -123,6 +143,7 @@ describe("syncBackClaudeCredentials", () => {
       return Effect.gen(function* () {
         yield* syncBackClaudeCredentials({
           blueprint: claudeBlueprint,
+          launchFileInjectedAccountIds: ["cacc_claude"],
           credentialCipher: fakeCipher,
           readCredentialsJson: () => Effect.succeed(rotated),
         });
@@ -153,6 +174,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () => Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT)),
       });
@@ -168,6 +190,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () =>
           Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT - 1_000)),
@@ -189,9 +212,73 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () =>
           Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000)),
+      });
+
+      expect(accounts.replacePayload).not.toHaveBeenCalled();
+      expect(accounts.updateSyncState).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect(
+    "never touches an env-injected workspace: no exec, no repo reads (launch-shape gate)",
+    () => {
+      const accounts = connectedAccountRepoStub(createClaudeAccount());
+      const readCredentialsJson = vi.fn(() =>
+        Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000)),
+      );
+
+      return Effect.gen(function* () {
+        // The blueprint carries a claude ref, but the account was ENV-injected at launch (e.g. a
+        // setup-token workspace whose account was reconnected token→file mid-run). The container
+        // file — possibly harness-fabricated — must never be read, let alone synced.
+        yield* syncBackClaudeCredentials({
+          blueprint: claudeBlueprint,
+          launchFileInjectedAccountIds: [],
+          credentialCipher: fakeCipher,
+          readCredentialsJson,
+        });
+
+        expect(readCredentialsJson).not.toHaveBeenCalled();
+        expect(accounts.getById).not.toHaveBeenCalled();
+        expect(accounts.replacePayload).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(provideAccounts(accounts)));
+    },
+  );
+
+  it.effect("only syncs the accounts that were file-injected at launch", () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    const readCredentialsJson = vi.fn(() =>
+      Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000)),
+    );
+
+    return Effect.gen(function* () {
+      yield* syncBackClaudeCredentials({
+        blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_other"],
+        credentialCipher: fakeCipher,
+        readCredentialsJson,
+      });
+
+      expect(readCredentialsJson).not.toHaveBeenCalled();
+      expect(accounts.replacePayload).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("rejects a sentinel expiresAt more than 30 days in the future", () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+
+    return Effect.gen(function* () {
+      // Strictly newer than the stored copy, so it would pass newest-wins — but implausibly far
+      // in the future (a fabricated file), so the plausibility belt must reject it.
+      yield* syncBackClaudeCredentials({
+        blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
+        credentialCipher: fakeCipher,
+        readCredentialsJson: () => Effect.succeed(credentialsJsonWithExpiry(9_999_999_999_999)),
       });
 
       expect(accounts.replacePayload).not.toHaveBeenCalled();
@@ -205,6 +292,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () => Effect.fail(new Error("container is gone")),
       });
@@ -219,6 +307,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () => Effect.succeed("{ this is not json"),
       });
@@ -236,6 +325,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: noClaudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson,
       });
@@ -251,6 +341,7 @@ describe("syncBackClaudeCredentials", () => {
     return Effect.gen(function* () {
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () =>
           Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000)),
@@ -271,6 +362,7 @@ describe("syncBackClaudeCredentials", () => {
       // Must not fail even though replacePayload does.
       yield* syncBackClaudeCredentials({
         blueprint: claudeBlueprint,
+        launchFileInjectedAccountIds: ["cacc_claude"],
         credentialCipher: fakeCipher,
         readCredentialsJson: () =>
           Effect.succeed(credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000)),

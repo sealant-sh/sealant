@@ -216,8 +216,17 @@ In `packages/sandboxes`:
   credential iff strictly newer (`last_synced_at` bookkeeping). Never write an older copy.
 - **Claude session sync-back:** same shape for `credentials-json` claude accounts —
   `$HOME/.claude/.credentials.json` is read back after runs and persisted iff its
-  `claudeAiOauth.expiresAt` is strictly newer; setup-token accounts are never touched (and never
-  silently converted by a file the harness happens to write).
+  `claudeAiOauth.expiresAt` is strictly newer. Lineage guards: the runtime instance row records the
+  launch-time injection shape per account, and only workspaces where Sealant FILE-injected the
+  account may sync it back (env-injected workspaces never do — harnesses may fabricate the file
+  there); an observed `expiresAt` more than 30 days ahead is rejected as a sentinel; and the stored
+  payload must itself be a session file, so setup-token accounts are never silently converted.
+- **Known v1 limitation (sync-back vs reconnect race, codex parity):** if the operator reconnects a
+  credential with a NEW same-shape session while a workspace launched with the old one is still
+  alive, that workspace's end-of-run sync-back can win newest-wins (its rotation may carry the
+  freshest marker) and resurrect the old session's lineage over the deliberate replacement. Both
+  providers accept this in v1; the mitigation is stopping live workspaces that use the account
+  before reconnecting it.
 - **GitHub as clone auth:** when a sandbox's source has no GitHub App installation authRef but the
   launch has a github credential, the worker may use it as `http-token` clone auth
   (`x-access-token:<token>`) — this is what lets self-hosters skip the GitHub App entirely.

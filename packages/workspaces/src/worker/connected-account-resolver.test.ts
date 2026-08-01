@@ -69,7 +69,11 @@ describe("resolveCredentialInjections", () => {
         credentialCipher: undefined,
       });
 
-      expect(resolved).toEqual({ injections: [], codexAccounts: [] });
+      expect(resolved).toEqual({
+        injections: [],
+        codexAccounts: [],
+        launchCredentialInjections: [],
+      });
       expect(accounts.getById).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideAccounts(accounts)));
   });
@@ -214,6 +218,14 @@ describe("resolveCredentialInjections", () => {
       ]);
       expect(resolved.codexAccounts).toEqual([
         { connectedAccountId: "cacc_codex", storedLastRefresh: "2026-06-30T00:00:00.000Z" },
+      ]);
+      // Launch-time injection shapes, persisted so post-run sync-backs know what THIS workspace
+      // was seeded with (env-injected claude must never sync the file back).
+      expect(resolved.launchCredentialInjections).toEqual([
+        { provider: "claude", connectedAccountId: "cacc_1", injection: "env" },
+        { provider: "claude", connectedAccountId: "cacc_claude_session", injection: "file" },
+        { provider: "codex", connectedAccountId: "cacc_codex", injection: "file" },
+        { provider: "github", connectedAccountId: "cacc_github", injection: "env" },
       ]);
       expect(accounts.updateSyncState).toHaveBeenCalledTimes(4);
       expect(accounts.updateSyncState).toHaveBeenCalledWith(

@@ -15,13 +15,33 @@ account stores a SESSION credentials file (kind "credentials-json"), the officia
 inside the workspace refreshes the session and rewrites $HOME/.claude/.credentials.json. After a
 run completes, the worker reads the file back and persists it — but ONLY when its
 `claudeAiOauth.expiresAt` is strictly newer than the stored copy's (newest-wins; an equal-or-older
-copy could clobber a fresher rotation persisted by another run). Setup-token claude accounts are
-skipped entirely: they are injected as an env var, own no file, and must never be silently
-converted by a file the harness happens to write.
+copy could clobber a fresher rotation persisted by another run).
+
+Lineage guards (a workspace file is only trusted when Sealant put a file there):
+- Launch-shape gate: sync-back runs ONLY for accounts recorded as FILE-injected at THIS
+  workspace's launch (`launchFileInjectedAccountIds`, from the runtime instance row). Env-injected
+  workspaces never sync claude — a harness may fabricate $HOME/.claude/.credentials.json in them
+  (e.g. a seeded setup-token file), and a mid-run token→file reconnect must not let that fabricated
+  file clobber the freshly pasted session.
+- Plausibility belt: an observed `expiresAt` more than 30 days ahead of now is rejected outright.
+  Real session tokens live hours; a far-future value is a sentinel, and persisting one would make
+  the strictly-greater guard freeze out every real rotation afterward.
+- Stored-shape belt: the decrypted STORED payload must itself be a session file; setup-token
+  accounts are never silently converted.
 
 Everything here is best-effort: the run already completed, so a failed sync-back (container gone,
 unreadable file, repo hiccup) degrades to a logged warning, never a job failure.
 */
+
+/** Upper bound on how far ahead an observed claudeAiOauth.expiresAt may plausibly sit. */
+export const MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS = 30 * 24 * 60 * 60 * 1_000;
+
+/**
+ * Rejects sentinel expiries (see the plausibility belt above). `now` is injectable for tests.
+ */
+export const isPlausibleClaudeExpiry = (expiresAt: number, now: number = Date.now()): boolean => {
+  return expiresAt <= now + MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS;
+};
 
 /**
  * Newest-wins guard on `claudeAiOauth.expiresAt` (epoch millis): persist the observed file only
@@ -55,6 +75,12 @@ export const readStoredClaudeExpiresAt = (
 export interface SyncBackClaudeCredentialsInput<R = never> {
   /** The launch blueprint (re-derived from the stored attempt snapshot; carries only refs). */
   readonly blueprint: NewWorkspace;
+  /**
+   * Connected-account ids that were injected as a FILE at THIS workspace's launch (from the
+   * runtime instance row's `launchCredentialInjections`). Accounts not listed here — env-injected
+   * setup tokens, or legacy rows recorded before the column existed — are never synced.
+   */
+  readonly launchFileInjectedAccountIds: readonly string[];
   /** Undefined when SEALANT_CREDENTIALS_KEY is not configured on the worker. */
   readonly credentialCipher: CredentialCipherService | undefined;
   /**
@@ -71,17 +97,29 @@ const warn = (message: string, cause?: unknown): Effect.Effect<void> =>
  * Best-effort persistence of a workspace's refreshed claude session credentials file after a run
  * completes.
  *
- * No-ops (fast) when the blueprint has no claude credentialRef. Only file-kind accounts are
- * touched, and that is decided by decrypting the STORED payload and dispatching on its shape (not
- * the db `kind` column). Never fails: every abnormal condition is reported as a log warning so run
+ * No-ops (fast, without touching the container) when the blueprint has no claude credentialRef or
+ * none of its claude accounts were file-injected at launch. Beyond the launch gate, only
+ * stored-file-shape accounts are touched (decided by decrypting the STORED payload, not the db
+ * `kind` column). Never fails: every abnormal condition is reported as a log warning so run
  * completion is unaffected.
  */
 export const syncBackClaudeCredentials = Effect.fn("syncBackClaudeCredentials")(function* <
   R = never,
 >(input: SyncBackClaudeCredentialsInput<R>) {
-  const claudeRefs = input.blueprint.runtime.credentialRefs.filter(
-    (credentialRef) => credentialRef.provider === "claude",
-  );
+  // Launch-shape gate BEFORE any container exec: only refs whose account was file-injected at
+  // this workspace's launch qualify — an env-injected workspace pays no exec and syncs nothing.
+  const claudeRefs = input.blueprint.runtime.credentialRefs.filter((credentialRef) => {
+    if (credentialRef.provider !== "claude") {
+      return false;
+    }
+
+    const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
+
+    return (
+      connectedAccountId !== undefined &&
+      input.launchFileInjectedAccountIds.includes(connectedAccountId)
+    );
+  });
 
   if (claudeRefs.length === 0) {
     return;
@@ -116,6 +154,18 @@ export const syncBackClaudeCredentials = Effect.fn("syncBackClaudeCredentials")(
   if (!parsed.valid) {
     yield* warn(
       `Claude credentials sync-back skipped: workspace .credentials.json is invalid (${parsed.reason}).`,
+    );
+    return;
+  }
+
+  // Plausibility belt: real session tokens expire within hours; a far-future expiresAt is a
+  // sentinel (fabricated file), and persisting it would freeze out every real rotation after it.
+  if (
+    parsed.metadata.expiresAt !== undefined &&
+    !isPlausibleClaudeExpiry(parsed.metadata.expiresAt)
+  ) {
+    yield* warn(
+      "Claude credentials sync-back skipped: workspace .credentials.json carries an expiresAt more than 30 days in the future — not a live session file.",
     );
     return;
   }

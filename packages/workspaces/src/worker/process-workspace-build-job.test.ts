@@ -417,7 +417,8 @@ describe("processWorkspaceBuildJobEffect", () => {
     const jobs = workspaceBuildJobRepoStub({
       claimJobById: () => ({
         id: "job_claude_session",
-        runId: null,
+        // A real run id so the launch records its runtime instance row (asserted below).
+        runId: "run_claude_session",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
         requestPayload: createWorkspaceBuildSpec({
@@ -470,6 +471,15 @@ describe("processWorkspaceBuildJobEffect", () => {
       // No env injection at all for the session-file shape (empty env is omitted from launch).
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.not.objectContaining({ credentialEnv: expect.anything() }),
+      );
+      // The launch-time injection shape is persisted on the runtime instance row so the post-run
+      // sync-back can trust what THIS workspace was actually seeded with.
+      expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          launchCredentialInjections: [
+            { provider: "claude", connectedAccountId: "cacc_claude_session", injection: "file" },
+          ],
+        }),
       );
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
   });
