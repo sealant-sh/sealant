@@ -1,5 +1,12 @@
 # @sealant/sdk
 
+## 0.10.0
+
+### Patch Changes
+
+- Updated dependencies [cc7dddc]
+  - @sealant/api-contracts@0.10.0
+
 ## 0.9.0
 
 ### Minor Changes
