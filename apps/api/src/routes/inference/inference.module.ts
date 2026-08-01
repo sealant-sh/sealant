@@ -220,14 +220,15 @@ export const respond = (payload: InferenceRespondRequest) =>
       "Failed to decrypt the connected account credential.",
     );
     // Either claude payload shape works here: a setup-token directly, or a session credentials
-    // file whose claudeAiOauth.accessToken rides the same Agent-SDK env path. Both the access and
-    // refresh tokens are kept ONLY for redacting engine error text below.
+    // file whose claudeAiOauth.accessToken rides the same Agent-SDK env path. The shape drives the
+    // 401-feedback policy below; the access and refresh tokens are kept ONLY for redacting engine
+    // error text.
     const oauthCredentials = yield* Effect.try({
-      try: (): ClaudeOauthCredentials => {
+      try: (): ClaudeOauthCredentials & { readonly shape: "token" | "credentials-json" } => {
         const parsed = parseClaudeCredentialPayload(JSON.parse(payloadJson));
 
         if ("token" in parsed) {
-          return { accessToken: parsed.token, refreshToken: undefined };
+          return { shape: "token", accessToken: parsed.token, refreshToken: undefined };
         }
 
         const extracted = extractClaudeOauthCredentials(parsed.credentialsJson);
@@ -236,7 +237,7 @@ export const respond = (payload: InferenceRespondRequest) =>
           throw new Error("credentials.json payload is unusable");
         }
 
-        return extracted;
+        return { shape: "credentials-json", ...extracted };
       },
       catch: () =>
         new InferenceInternalServerError({
@@ -277,13 +278,23 @@ export const respond = (payload: InferenceRespondRequest) =>
           return redacted;
         }),
         // 401 feedback: a live auth rejection marks the account invalid (design doc §2), the same
-        // signal the worker's mark-invalid endpoint carries — best-effort, the caller's error wins.
+        // signal the worker's mark-invalid endpoint carries — best-effort, the caller's error
+        // wins. Setup tokens ONLY: a session file's access token expiring is the normal hourly
+        // rotation, and the stored credential stays refreshable in-container — marking it invalid
+        // here would needlessly block every workspace launch on the account.
         Effect.tapError((error) =>
-          error.reason === "auth"
+          error.reason === "auth" && oauthCredentials.shape === "token"
             ? accounts.markInvalid({ id: account.id }).pipe(Effect.ignore)
             : Effect.void,
         ),
-        Effect.mapError(mapEngineError),
+        Effect.mapError((error) =>
+          error.reason === "auth" && oauthCredentials.shape === "credentials-json"
+            ? new InferenceConflictError({
+                message:
+                  "The claude session access token has expired. It refreshes automatically when a workspace runs with this account; alternatively, reconnect the account with a fresh session file.",
+              })
+            : mapEngineError(error),
+        ),
       );
 
     return mapEngineTurn(engineTurn);
