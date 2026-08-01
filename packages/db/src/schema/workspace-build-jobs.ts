@@ -85,6 +85,19 @@ export const ociImageBuildJobs = pgTable(
   ],
 );
 
+/**
+ * How one connected-account credential was ACTUALLY injected at this instance's launch. Recorded
+ * so post-run sync-backs can trust launch-time truth instead of the account row's CURRENT payload
+ * shape (which a reconnect may have switched while the workspace was alive) — e.g. a claude
+ * account reconnected token→session-file mid-run must NOT have this env-injected workspace's
+ * harness-written credentials file synced back over the fresh paste.
+ */
+export interface WorkspaceLaunchCredentialInjection {
+  readonly provider: string;
+  readonly connectedAccountId: string;
+  readonly injection: "env" | "file";
+}
+
 export const workspaceRuntimeInstances = pgTable(
   "workspace_runtime_instances",
   {
@@ -94,6 +107,11 @@ export const workspaceRuntimeInstances = pgTable(
     status: text({ enum: workspaceRuntimeInstanceStatusValues }).notNull().default("pending"),
     adapter: text({ enum: ["docker", "k8s", "k3s"] }),
     resourceId: text("resource_id"),
+    // Null on rows written before this column existed (or before launch succeeded): sync-backs
+    // treat null as "no credential was file-injected here".
+    launchCredentialInjections: jsonb("launch_credential_injections").$type<
+      readonly WorkspaceLaunchCredentialInjection[]
+    >(),
     reference: text(),
     endpoint: text(),
     errorCode: text("error_code"),

@@ -9,7 +9,11 @@
  * Lives in the worker app (not @sealant/workspaces) because it needs @sealant/telemetry, which already
  * depends on @sealant/workspaces — putting it in workspaces would be a dependency cycle.
  */
-import type { CredentialCipherService } from "@sealant/credentials";
+import {
+  CLAUDE_CREDENTIALS_JSON_PATH,
+  CODEX_AUTH_JSON_PATH,
+  type CredentialCipherService,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
@@ -24,6 +28,7 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
+  type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
 import {
   InlineByteaArtifactStoreLive,
@@ -38,6 +43,7 @@ import {
   SealantRuntime,
   SealantRuntimeDockerExecLive,
   sealantTargetForDockerContainer,
+  syncBackClaudeCredentials,
   syncBackCodexAuthJson,
   type SealantTarget,
 } from "@sealant/workspaces";
@@ -63,7 +69,8 @@ export interface ProcessRunExecJobOptions {
   readonly db: DB;
   /**
    * Decrypt/encrypt for connected-account credentials; undefined when SEALANT_CREDENTIALS_KEY is
-   * not configured. Only exercised by the best-effort codex auth.json sync-back after the run.
+   * not configured. Only exercised by the best-effort credential sync-backs (codex auth.json,
+   * claude session .credentials.json) after the run.
    */
   readonly credentialCipher?: CredentialCipherService;
 }
@@ -194,20 +201,40 @@ const resolveContainerResourceId = (runId: string) =>
       );
     }
     // attemptId keys the stored attempt snapshot, from which the sync-back re-derives the launch
-    // blueprint (and thus the workspace's connected-account refs) without new columns.
-    return { resourceId: instance.resourceId, attemptId: workspace.latestRunId };
+    // blueprint (and thus the workspace's connected-account refs). The instance row additionally
+    // carries the launch-time injection shapes; null (legacy rows) means "nothing file-injected".
+    return {
+      resourceId: instance.resourceId,
+      attemptId: workspace.latestRunId,
+      launchCredentialInjections: instance.launchCredentialInjections ?? [],
+    };
   });
 
 /**
- * Best-effort codex auth.json sync-back after the run (design doc §2 codex / §6): the official
- * Codex CLI in the workspace rotates its refresh token, so the mutated file must be persisted —
- * newest-wins only, and never at the cost of the run result. The blueprint is re-derived from the
- * stored attempt snapshot; workspaces without a codex credentialRef no-op immediately.
+ * Best-effort credential sync-back after the run (design doc §2 / §6): the official CLIs in the
+ * workspace rotate their session files — codex rewrites auth.json (rotating its refresh token),
+ * claude rewrites .credentials.json for session-file accounts — so the mutated files must be
+ * persisted, newest-wins only, and never at the cost of the run result. The blueprint is
+ * re-derived from the stored attempt snapshot; workspaces without a matching credentialRef no-op
+ * immediately.
  */
-const syncBackCodexAuth = (
+/**
+ * Isolates one provider's sync-back with its own catchCause: a DEFECT escaping one (the helpers
+ * only catch their typed failures) must not skip the other provider's sync.
+ */
+const isolatedSyncBack = <E, R>(label: string, sync: Effect.Effect<void, E, R>) =>
+  sync.pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`${label} sync-back crashed after run exec; continuing.`, cause),
+    ),
+    Effect.asVoid,
+  );
+
+const syncBackHarnessCredentials = (
   attemptId: string,
   target: SealantTarget,
   credentialCipher: CredentialCipherService | undefined,
+  launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[],
 ) =>
   Effect.gen(function* () {
     const attempts = yield* WorkspaceAttemptRepo;
@@ -217,25 +244,44 @@ const syncBackCodexAuth = (
     }
     const blueprint = newWorkspaceSchema.parse(snapshot.blueprintPayload);
 
-    yield* syncBackCodexAuthJson({
-      blueprint,
-      credentialCipher,
-      // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
-      readAuthJson: () =>
-        execInWorkspace(target, {
-          executable: "sh",
-          args: ["-c", 'cat "$HOME/.codex/auth.json"'],
-        }).pipe(
-          Effect.filterOrFail(
-            (result) => result.exitCode === 0,
-            (result) => new Error(`Reading codex auth.json exited with code ${result.exitCode}.`),
-          ),
-          Effect.map((result) => result.stdout),
+    // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
+    const readWorkspaceFile = (path: string) =>
+      execInWorkspace(target, {
+        executable: "sh",
+        args: ["-c", `cat "${path}"`],
+      }).pipe(
+        Effect.filterOrFail(
+          (result) => result.exitCode === 0,
+          (result) => new Error(`Reading ${path} exited with code ${result.exitCode}.`),
         ),
-    });
+        Effect.map((result) => result.stdout),
+      );
+
+    yield* isolatedSyncBack(
+      "Codex auth",
+      syncBackCodexAuthJson({
+        blueprint,
+        credentialCipher,
+        readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
+      }),
+    );
+
+    yield* isolatedSyncBack(
+      "Claude credentials",
+      syncBackClaudeCredentials({
+        blueprint,
+        // Launch-time truth from the runtime instance row: only accounts Sealant seeded as a FILE
+        // in THIS workspace may sync back (env-injected workspaces never do).
+        launchFileInjectedAccountIds: launchCredentialInjections
+          .filter((entry) => entry.provider === "claude" && entry.injection === "file")
+          .map((entry) => entry.connectedAccountId),
+        credentialCipher,
+        readCredentialsJson: () => readWorkspaceFile(CLAUDE_CREDENTIALS_JSON_PATH),
+      }),
+    );
   }).pipe(
     Effect.catchCause((cause) =>
-      Effect.logWarning("Codex auth sync-back failed after run exec; continuing.", cause),
+      Effect.logWarning("Credential sync-back failed after run exec; continuing.", cause),
     ),
     Effect.asVoid,
   );
@@ -314,7 +360,9 @@ export const processRunExecJobEffect = (
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
       );
     }
-    const { resourceId, attemptId } = yield* resolveContainerResourceId(options.runId);
+    const { resourceId, attemptId, launchCredentialInjections } = yield* resolveContainerResourceId(
+      options.runId,
+    );
     const target = sealantTargetForDockerContainer(resourceId);
 
     yield* runs.markRunRunning({ id: options.runId });
@@ -328,8 +376,8 @@ export const processRunExecJobEffect = (
 
     // Never leave the run pinned in "running": reconcile to failed on ANY abnormal exit (onError fires
     // on typed failures AND defects, e.g. a "connection closed" surfaced as a die).
-    // The codex sync-back runs on EVERY exit path (`ensuring`): the CLI may have rotated its refresh
-    // token even when the run itself failed, and the helper never fails (warnings only).
+    // The credential sync-back runs on EVERY exit path (`ensuring`): the CLIs may have rotated their
+    // session files even when the run itself failed, and the helpers never fail (warnings only).
     yield* produce.pipe(
       Effect.onError(() =>
         runs
@@ -339,7 +387,14 @@ export const processRunExecJobEffect = (
           })
           .pipe(Effect.ignore),
       ),
-      Effect.ensuring(syncBackCodexAuth(attemptId, target, options.credentialCipher)),
+      Effect.ensuring(
+        syncBackHarnessCredentials(
+          attemptId,
+          target,
+          options.credentialCipher,
+          launchCredentialInjections,
+        ),
+      ),
     );
   });
 

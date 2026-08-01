@@ -7,7 +7,11 @@ import {
   type CredentialCipherService,
   type CredentialInjection,
 } from "@sealant/credentials";
-import { ConnectedAccountRepo, type ConnectedAccount } from "@sealant/db";
+import {
+  ConnectedAccountRepo,
+  type ConnectedAccount,
+  type WorkspaceLaunchCredentialInjection,
+} from "@sealant/db";
 import type { NewWorkspace } from "@sealant/validators";
 import { Effect } from "effect";
 
@@ -31,6 +35,12 @@ export interface ResolvedCodexAccount {
 export interface ResolvedCredentialInjections {
   readonly injections: readonly CredentialInjection[];
   readonly codexAccounts: readonly ResolvedCodexAccount[];
+  /**
+   * Launch-time record of how each resolved account was injected (env vs file), persisted on the
+   * runtime instance row so post-run sync-backs trust what THIS workspace was seeded with — not
+   * the account's current payload shape, which a reconnect may have switched mid-run.
+   */
+  readonly launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[];
 }
 
 export interface ResolveCredentialInjectionsInput {
@@ -64,6 +74,8 @@ const parseProviderPayload = (
 
   switch (provider) {
     case "claude": {
+      // Union parser: accepts the setup-token shape OR the session credentials-file shape; the
+      // planner dispatches on which one decoded (env var vs materialized file).
       return planCredentialInjections(provider, parseClaudeCredentialPayload(parsed));
     }
     case "codex": {
@@ -93,7 +105,11 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   const credentialRefs = input.blueprint.runtime.credentialRefs;
 
   if (credentialRefs.length === 0) {
-    const empty: ResolvedCredentialInjections = { injections: [], codexAccounts: [] };
+    const empty: ResolvedCredentialInjections = {
+      injections: [],
+      codexAccounts: [],
+      launchCredentialInjections: [],
+    };
     return empty;
   }
 
@@ -108,6 +124,7 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
   const accounts = yield* ConnectedAccountRepo;
   const injections: CredentialInjection[] = [];
   const codexAccounts: ResolvedCodexAccount[] = [];
+  const launchCredentialInjections: WorkspaceLaunchCredentialInjection[] = [];
 
   for (const credentialRef of credentialRefs) {
     const connectedAccountId = parseConnectedAccountRef(credentialRef.ref);
@@ -159,6 +176,11 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     });
 
     injections.push(...planned);
+    launchCredentialInjections.push({
+      provider: credentialRef.provider,
+      connectedAccountId: account.id,
+      injection: planned.some((injection) => injection.kind === "file") ? "file" : "env",
+    });
 
     if (credentialRef.provider === "codex") {
       codexAccounts.push({
@@ -179,6 +201,10 @@ export const resolveCredentialInjections = Effect.fn("resolveCredentialInjection
     );
   }
 
-  const resolved: ResolvedCredentialInjections = { injections, codexAccounts };
+  const resolved: ResolvedCredentialInjections = {
+    injections,
+    codexAccounts,
+    launchCredentialInjections,
+  };
   return resolved;
 });

@@ -22,6 +22,7 @@ export {
   ociImageBuildJobs,
   ociImageBuildJobs as workspaceBuildJobs,
   ociImageBuildJobStatusValues,
+  type WorkspaceLaunchCredentialInjection,
   workspaceRuntimeInstances,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,

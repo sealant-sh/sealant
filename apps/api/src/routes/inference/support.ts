@@ -9,6 +9,14 @@
 export const redactSecret = (text: string, secret: string): string =>
   secret.length === 0 ? text : text.split(secret).join("[redacted]");
 
+/** {@link redactSecret} over several secrets (e.g. a session file's access AND refresh tokens). */
+export const redactSecrets = (text: string, secrets: readonly (string | undefined)[]): string =>
+  secrets.reduce<string>(
+    (accumulated, secret) =>
+      secret === undefined ? accumulated : redactSecret(accumulated, secret),
+    text,
+  );
+
 /** Auth-shaped engine failures mark the connected account invalid (401-feedback, design doc §2). */
 export const isAuthFailureMessage = (message: string): boolean =>
   /authentication_failed|invalid api key|oauth token|401|unauthorized|token.*(expired|revoked)/i.test(

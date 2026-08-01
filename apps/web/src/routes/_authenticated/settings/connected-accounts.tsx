@@ -26,10 +26,11 @@ const PROVIDERS: readonly ProviderCopy[] = [
     provider: "claude",
     name: "Claude",
     valueProp: "Run Claude Code and the Agent SDK inside your workspaces on your own subscription.",
-    command: "claude setup-token",
-    commandNote: "Run on your machine — requires Claude Pro or Max.",
+    command: "CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude",
+    commandNote:
+      "Run on your machine and use /login inside it — that writes a fresh session file to ~/.sealant/claude-session/.credentials.json without touching your main Claude login. Requires Claude Pro or Max.",
     footnote:
-      "Stored encrypted in your control plane. Only used by the official Claude Code CLI / Agent SDK inside your workspaces.",
+      "Paste the contents of ~/.sealant/claude-session/.credentials.json (recommended: presents as your subscription). A `claude setup-token` value (sk-ant-oat01-…) also works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used interactively. Stored encrypted; only used by the official Claude Code CLI / Agent SDK inside your workspaces.",
   },
   {
     provider: "codex",
@@ -53,6 +54,29 @@ const PROVIDERS: readonly ProviderCopy[] = [
 
 const isCredentialsKeyError = (message: string): boolean =>
   message.toUpperCase().includes("SEALANT_CREDENTIALS_KEY");
+
+/** Local shape check for a pasted Claude Code session .credentials.json (claudeAiOauth object). */
+const isClaudeSessionCredentials = (value: string): boolean => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+
+    if (typeof parsed !== "object" || parsed === null || !("claudeAiOauth" in parsed)) {
+      return false;
+    }
+
+    const oauth: unknown = parsed.claudeAiOauth;
+
+    return (
+      typeof oauth === "object" &&
+      oauth !== null &&
+      "accessToken" in oauth &&
+      typeof oauth.accessToken === "string" &&
+      oauth.accessToken.length > 0
+    );
+  } catch {
+    return false;
+  }
+};
 
 const readString = (
   metadata: ConnectedAccountSummary["metadata"],
@@ -185,9 +209,13 @@ function ProviderCard({
 
   const validate = (value: string): string | null => {
     if (copy.provider === "claude") {
-      return value.startsWith("sk-ant-oat01-")
-        ? null
-        : "That doesn't look like a setup token. It should start with sk-ant-oat01-.";
+      if (value.startsWith("sk-ant-oat01-") || isClaudeSessionCredentials(value)) {
+        return null;
+      }
+
+      return value.startsWith("{")
+        ? "That doesn't look like a session file. Paste the full contents of .credentials.json — a JSON object with a claudeAiOauth.accessToken."
+        : "Paste the JSON contents of the session .credentials.json file, or a setup token starting with sk-ant-oat01-.";
     }
 
     if (copy.provider === "codex") {
@@ -312,7 +340,7 @@ function ProviderCard({
           </NumberedStep>
 
           <NumberedStep index={2} title="Paste the result" note={copy.footnote}>
-            {copy.provider === "codex" ? (
+            {copy.provider === "codex" || copy.provider === "claude" ? (
               <textarea
                 value={secret}
                 onChange={(event) => {
@@ -321,7 +349,11 @@ function ProviderCard({
                 }}
                 rows={6}
                 className="w-full rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
-                placeholder='{ "OPENAI_API_KEY": null, "tokens": { ... } }'
+                placeholder={
+                  copy.provider === "codex"
+                    ? '{ "OPENAI_API_KEY": null, "tokens": { ... } }'
+                    : '{ "claudeAiOauth": { ... } } — or sk-ant-oat01-...'
+                }
                 autoComplete="off"
                 spellCheck={false}
               />
@@ -334,12 +366,12 @@ function ProviderCard({
                   setValidationError(null);
                 }}
                 className="h-11 w-full rounded-lg border border-input bg-background px-3 font-mono text-sm text-foreground placeholder:text-faint focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none"
-                placeholder={copy.provider === "claude" ? "sk-ant-oat01-..." : "gho_..."}
+                placeholder="gho_..."
                 autoComplete="off"
                 spellCheck={false}
               />
             )}
-            {copy.provider === "codex" ? (
+            {copy.provider === "codex" || copy.provider === "claude" ? (
               <p className="mt-2 text-xs leading-relaxed text-faint">
                 This value is sensitive — it authenticates as you. It is masked in transit and
                 stored encrypted.
@@ -386,8 +418,10 @@ function ProviderCard({
 
       <p className="mt-5 border-t border-rule-faint pt-4 text-xs leading-relaxed text-muted-foreground">
         Prefer the terminal? Run{" "}
-        <span className="font-mono text-foreground">sealant auth {copy.provider}</span> — it does
-        the same thing.
+        <span className="font-mono text-foreground">sealant auth {copy.provider}</span>{" "}
+        {copy.provider === "claude"
+          ? "— it connects a setup token; session files paste here."
+          : "— it does the same thing."}
       </p>
     </section>
   );
@@ -398,6 +432,19 @@ function AccountMetadata({ account }: { readonly account: ConnectedAccountSummar
 
   if (account.provider === "claude") {
     const suffix = readString(account.metadata, "tokenSuffix");
+
+    if (account.kind === "credentials-json") {
+      const subscription = readString(account.metadata, "subscriptionType");
+      const synced =
+        account.lastSyncedAt === null ? null : `last synced ${formatDate(account.lastSyncedAt)}`;
+
+      return (
+        <p className="font-mono text-xs text-muted-foreground break-all">
+          {suffix === undefined ? "session" : `session …${suffix}`}
+          {subscription === undefined ? "" : ` · ${subscription}`} · {synced ?? connected}
+        </p>
+      );
+    }
 
     return (
       <p className="font-mono text-xs text-muted-foreground break-all">

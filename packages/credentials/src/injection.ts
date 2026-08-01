@@ -21,6 +21,7 @@ export type CredentialInjection =
     };
 
 export const CLAUDE_OAUTH_TOKEN_ENV_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
+export const CLAUDE_CREDENTIALS_JSON_PATH = "$HOME/.claude/.credentials.json";
 export const CODEX_AUTH_JSON_PATH = "$HOME/.codex/auth.json";
 export const GITHUB_TOKEN_ENV_KEYS = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
 
@@ -36,7 +37,21 @@ export const planCredentialInjections = (
 
   switch (provider) {
     case "claude": {
-      return [{ kind: "env", key: CLAUDE_OAUTH_TOKEN_ENV_KEY, value: payload.token }];
+      // Shape dispatch (not the db `kind` column): a setup-token rides the documented env var; a
+      // session credentials file is materialized exactly like codex's auth.json so the official
+      // CLI treats it as its own login (and can refresh it in-container).
+      if ("token" in payload) {
+        return [{ kind: "env", key: CLAUDE_OAUTH_TOKEN_ENV_KEY, value: payload.token }];
+      }
+
+      return [
+        {
+          kind: "file",
+          path: CLAUDE_CREDENTIALS_JSON_PATH,
+          contentBase64: Buffer.from(payload.credentialsJson, "utf8").toString("base64"),
+          mode: "600",
+        },
+      ];
     }
     case "codex": {
       return [

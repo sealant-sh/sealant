@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLAUDE_TOKEN_PREFIX,
+  extractClaudeOauthCredentials,
   hasKnownGitHubTokenPrefix,
   parseClaudeCredentialPayload,
+  parseClaudeCredentialsFilePayload,
+  parseClaudeCredentialsJson,
   parseCodexAuthJson,
   parseGitHubCredentialPayload,
 } from "./payloads.js";
@@ -18,6 +21,22 @@ const makeIdToken = (claims: Record<string, unknown>): string => {
   )}.signature`;
 };
 
+const makeClaudeCredentialsJson = (
+  overrides: Record<string, unknown> = {},
+  root: Record<string, unknown> = {},
+): string =>
+  JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "sk-ant-oat01-access-wxyz",
+      refreshToken: "sk-ant-ort01-refresh",
+      expiresAt: 1785000000000,
+      scopes: ["user:inference", "user:profile"],
+      subscriptionType: "max",
+      ...overrides,
+    },
+    ...root,
+  });
+
 describe("claude payload", () => {
   it("accepts tokens with the setup-token prefix", () => {
     const token = `${CLAUDE_TOKEN_PREFIX}abc123`;
@@ -27,6 +46,93 @@ describe("claude payload", () => {
 
   it("rejects tokens without the prefix", () => {
     expect(() => parseClaudeCredentialPayload({ token: "sk-ant-api03-nope" })).toThrow();
+  });
+
+  it("accepts the credentials-file shape through the union parser", () => {
+    const credentialsJson = makeClaudeCredentialsJson();
+
+    expect(parseClaudeCredentialPayload({ credentialsJson })).toEqual({ credentialsJson });
+    expect(parseClaudeCredentialsFilePayload({ credentialsJson })).toEqual({ credentialsJson });
+  });
+
+  it("rejects an empty credentials-file payload", () => {
+    expect(() => parseClaudeCredentialsFilePayload({ credentialsJson: "" })).toThrow();
+  });
+});
+
+describe("parseClaudeCredentialsJson", () => {
+  it("rejects non-JSON input", () => {
+    expect(parseClaudeCredentialsJson("not json {")).toEqual({
+      valid: false,
+      reason: ".credentials.json is not valid JSON.",
+    });
+  });
+
+  it("rejects non-object JSON", () => {
+    expect(parseClaudeCredentialsJson('["array"]').valid).toBe(false);
+  });
+
+  it("rejects a file without a claudeAiOauth object", () => {
+    expect(parseClaudeCredentialsJson(JSON.stringify({ other: true }))).toEqual({
+      valid: false,
+      reason: ".credentials.json must contain a claudeAiOauth object.",
+    });
+  });
+
+  it("rejects a claudeAiOauth without an accessToken", () => {
+    expect(
+      parseClaudeCredentialsJson(JSON.stringify({ claudeAiOauth: { refreshToken: "rt" } })),
+    ).toEqual({
+      valid: false,
+      reason: ".credentials.json must contain claudeAiOauth.accessToken.",
+    });
+  });
+
+  it("extracts non-secret metadata (token suffix, subscription, expiry, scope count)", () => {
+    expect(parseClaudeCredentialsJson(makeClaudeCredentialsJson())).toEqual({
+      valid: true,
+      metadata: {
+        tokenSuffix: "wxyz",
+        subscriptionType: "max",
+        expiresAt: 1785000000000,
+        scopeCount: 2,
+      },
+    });
+  });
+
+  it("degrades missing/odd optional fields to absent metadata, never a parse failure", () => {
+    const result = parseClaudeCredentialsJson(
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "sk-ant-oat01-abcd", expiresAt: "soon", scopes: "nope" },
+      }),
+    );
+
+    expect(result).toEqual({ valid: true, metadata: { tokenSuffix: "abcd" } });
+  });
+});
+
+describe("extractClaudeOauthCredentials", () => {
+  it("returns both tokens for the sdk env path", () => {
+    expect(extractClaudeOauthCredentials(makeClaudeCredentialsJson())).toEqual({
+      accessToken: "sk-ant-oat01-access-wxyz",
+      refreshToken: "sk-ant-ort01-refresh",
+    });
+  });
+
+  it("tolerates a missing refresh token", () => {
+    expect(
+      extractClaudeOauthCredentials(
+        JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-abcd" } }),
+      ),
+    ).toEqual({ accessToken: "sk-ant-oat01-abcd", refreshToken: undefined });
+  });
+
+  it("returns undefined for unusable shapes instead of throwing", () => {
+    expect(extractClaudeOauthCredentials("not json")).toBeUndefined();
+    expect(extractClaudeOauthCredentials(JSON.stringify({}))).toBeUndefined();
+    expect(
+      extractClaudeOauthCredentials(JSON.stringify({ claudeAiOauth: { accessToken: "" } })),
+    ).toBeUndefined();
   });
 });
 

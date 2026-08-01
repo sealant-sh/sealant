@@ -304,8 +304,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       gitHubSourceIntegration: options.gitHubSourceIntegration,
     });
     // Connected-account credentials resolve JUST before launch — blueprints only carry opaque
-    // refs, so nothing secret ever sits in job payloads. Codex sync-back later re-derives the
-    // refs from the stored attempt snapshot (no extra persistence needed here).
+    // refs, so nothing secret ever sits in job payloads. Post-run sync-backs re-derive the refs
+    // from the stored attempt snapshot; the runtime instance row additionally records the
+    // NON-secret launch-time injection shapes (env vs file) so a mid-run reconnect that switched
+    // an account's payload shape can never make a sync-back trust the wrong file.
     const resolvedCredentials = yield* resolveCredentialInjections({
       blueprint: spec,
       credentialCipher: options.credentialCipher,
@@ -354,6 +356,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(runtimeLaunchResult.endpoint === undefined
             ? {}
             : { endpoint: runtimeLaunchResult.endpoint }),
+          launchCredentialInjections: resolvedCredentials.launchCredentialInjections,
           launchedAt: new Date(),
         })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));

@@ -13,6 +13,7 @@ import {
 import {
   CLAUDE_TOKEN_PREFIX,
   CredentialCipher,
+  parseClaudeCredentialsJson,
   parseCodexAuthJson,
   sha256Hex,
   type ConnectedAccountProvider,
@@ -77,7 +78,7 @@ export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedA
 };
 
 interface NormalizedCredential {
-  /** "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
+  /** "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
   readonly kind: string;
   /** JSON payload string that gets sealed — the only place secret material lives. */
   readonly payloadJson: string;
@@ -156,9 +157,26 @@ const normalizeSecret = (
       case "claude": {
         const token = secret.trim();
 
+        // A pasted JSON object is a full Claude Code session credentials file (the contents of a
+        // .credentials.json the operator minted for Sealant); anything else must be a setup-token.
+        if (token.startsWith("{")) {
+          const parsed = parseClaudeCredentialsJson(secret);
+
+          if (!parsed.valid) {
+            return yield* new ConnectedAccountBadRequestError({ message: parsed.reason });
+          }
+
+          return {
+            kind: "credentials-json",
+            // Stored verbatim so the exact file can be re-materialized in the workspace.
+            payloadJson: JSON.stringify({ credentialsJson: secret }),
+            metadata: { ...parsed.metadata, connectedVia: "paste" },
+          };
+        }
+
         if (!token.startsWith(CLAUDE_TOKEN_PREFIX)) {
           return yield* new ConnectedAccountBadRequestError({
-            message: `Claude token must start with "${CLAUDE_TOKEN_PREFIX}" — run \`claude setup-token\` and paste its output.`,
+            message: `Claude credential must be a \`claude setup-token\` value (starts with "${CLAUDE_TOKEN_PREFIX}") or the JSON contents of a Claude Code .credentials.json session file.`,
           });
         }
 
@@ -247,6 +265,8 @@ export const createConnectedAccount = (input: {
       const replaced = yield* withInternalError(
         connectedAccountRepo.replacePayload({
           id: existing.id,
+          // Reconnecting may switch payload shapes (claude setup-token <-> session file).
+          kind: normalized.kind,
           encryptedPayload: sealed.sealed,
           encryptionKeyId: sealed.keyId,
           payloadSha256,

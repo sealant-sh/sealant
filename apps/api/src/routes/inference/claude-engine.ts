@@ -1,9 +1,11 @@
 /**
  * The Claude inference engine — runs the exchange through the OFFICIAL Claude Agent SDK.
  *
- * COMPLIANCE (docs/connected-accounts-design.md §2/§9, load-bearing): the stored subscription token
- * is consumed exactly the way Anthropic documents for third parties — `CLAUDE_CODE_OAUTH_TOKEN` in
- * the environment of the official Claude Code runtime, which the Agent SDK spawns and drives. This
+ * COMPLIANCE (docs/connected-accounts-design.md §2/§9, load-bearing): the stored subscription
+ * credential is consumed exactly the way Anthropic documents for third parties —
+ * `CLAUDE_CODE_OAUTH_TOKEN` in the environment of the official Claude Code runtime, which the
+ * Agent SDK spawns and drives (for session-file accounts the caller passes the file's
+ * claudeAiOauth.accessToken through the same env path). This
  * module NEVER calls a model API directly, never logs the token, and strips any ambient
  * `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so the exchange cannot
  * silently bill a different identity than the resolved connected account.

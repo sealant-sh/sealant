@@ -93,7 +93,7 @@ export interface CreateConnectedAccountInput {
   readonly ownerUserId: string;
   readonly provider: ConnectedAccountProvider;
   readonly name: string;
-  /** "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
+  /** "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github). */
   readonly kind: string;
   readonly encryptedPayload: string;
   readonly encryptionKeyId: string;
@@ -109,6 +109,11 @@ export interface GetConnectedAccountByOwnerProviderNameInput {
 
 export interface ReplaceConnectedAccountPayloadInput {
   readonly id: string;
+  /**
+   * New payload kind when the replacement switched shapes (e.g. a claude reconnect pasting a
+   * session credentials file over a setup-token row). Omitted -> the stored kind is kept.
+   */
+  readonly kind?: string;
   readonly encryptedPayload: string;
   readonly encryptionKeyId: string;
   readonly payloadSha256: string;
@@ -304,6 +309,7 @@ export const ConnectedAccountRepoLive = Layer.effect(
             const [connectedAccount] = yield* db
               .update(connectedAccounts)
               .set({
+                ...(input.kind === undefined ? {} : { kind: input.kind }),
                 encryptedPayload: input.encryptedPayload,
                 encryptionKeyId: input.encryptionKeyId,
                 payloadSha256: input.payloadSha256,
