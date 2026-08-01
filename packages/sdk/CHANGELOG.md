@@ -1,5 +1,21 @@
 # @sealant/sdk
 
+## 0.9.0
+
+### Minor Changes
+
+- 63824ae: Workspace creation accepts additional caller-owned mounts beside the primary source:
+  `workspaces.create({ mounts: [{ hostPath, mountPath, readOnly }] })`. Extra mounts are read-only by
+  default and bind at a container path outside the working directory (e.g. `/workspace/ref/effect`) —
+  they widen what the workspace can see, not where its work product lands. Host paths ride the same
+  operator allowlist as mount sources (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); the control plane rejects
+  container paths overlapping the working directory or the daemon control dir. Like the primary mount,
+  extra mount paths are caller-owned — never reprovisioned, never cleaned.
+
+### Patch Changes
+
+- @sealant/api-contracts@0.9.0
+
 ## 0.8.1
 
 ### Patch Changes
@@ -89,6 +105,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
