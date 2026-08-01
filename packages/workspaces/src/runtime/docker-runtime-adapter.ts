@@ -309,6 +309,20 @@ const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => 
 };
 
 /**
+ * `-v` binds for the ADDITIONAL caller-owned mounts beside the primary source. `readOnly` (the
+ * blueprint default) appends `:ro` — extra mounts widen what the workspace can see, not where its
+ * work product lands. Same caller-owned guarantee as the primary mount: no cleanup anywhere in
+ * stop/reap. The control plane has already enforced the allowlist and rejected container paths
+ * overlapping the working directory.
+ */
+const extraMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
+  return input.blueprint.sources.mounts.flatMap((mount) => [
+    "-v",
+    `${mount.hostPath}:${mount.mountPath}${mount.readOnly ? ":ro" : ""}`,
+  ]);
+};
+
+/**
  * Build the in-container shell command that writes one injected credential file from stdin.
  *
  * The path is embedded double-quoted inside the script so `$HOME` expands inside the container
@@ -858,6 +872,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...workspaceHttpAuthEnvArgs,
       ...controlSocketMountArgs,
       ...workspaceMountArgs(parsed),
+      ...extraMountArgs(parsed),
       ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
       // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
       // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token

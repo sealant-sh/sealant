@@ -20,6 +20,7 @@ const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWor
         ref: "main",
       },
       inputs: [],
+      mounts: [],
     },
     harness: {
       id: "opencode",
@@ -165,6 +166,7 @@ describe("compileWorkspaceBuildSpec", () => {
             authRef: "/workspace/.secrets/dotfiles_key",
           },
         ],
+        mounts: [],
       },
       tooling: {
         packages: [{ id: "nodejs" }, { id: "pnpm" }, { id: "tmux" }],
@@ -230,6 +232,7 @@ describe("compileWorkspaceBuildSpec", () => {
             authRef: "github-installation-repository:gh_installation_repo_1",
           },
         ],
+        mounts: [],
       },
       target: {
         os: {
@@ -294,6 +297,7 @@ describe("compileWorkspaceBuildSpec", () => {
             ref: "main",
           },
         ],
+        mounts: [],
       },
       customization: {
         defaultShell: "bash",

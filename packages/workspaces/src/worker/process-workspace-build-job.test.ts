@@ -199,6 +199,7 @@ const createWorkspaceBuildSpec = (
         ...(input.authRef === undefined ? {} : { authRef: input.authRef }),
       },
       inputs: input.inputSources ?? [],
+      mounts: [],
     },
     harness: {
       id: "opencode",

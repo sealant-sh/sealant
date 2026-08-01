@@ -19,6 +19,11 @@ interface SpecShape {
       readonly ref?: string;
       readonly hostPath?: string;
     };
+    readonly mounts?: ReadonlyArray<{
+      readonly hostPath: string;
+      readonly mountPath: string;
+      readonly readOnly?: boolean;
+    }>;
   };
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
@@ -72,6 +77,35 @@ describe("buildCreateWorkspaceRequest", () => {
       kind: "mount",
       hostPath: "/srv/store/worktrees/session-1",
     });
+  });
+
+  it("folds extra mounts into `spec.sources.mounts`, sending readOnly only when chosen", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        source: { kind: "mount", path: "/srv/store/worktrees/session-1" },
+        harness: opencode(),
+        mounts: [
+          { hostPath: "/srv/store/_references/effect", mountPath: "/workspace/ref/effect" },
+          { hostPath: "/srv/store/scratch", mountPath: "/workspace/home/scratch", readOnly: false },
+        ],
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.sources.mounts).toEqual([
+      // No readOnly key: the blueprint default (read-only) applies server-side.
+      { hostPath: "/srv/store/_references/effect", mountPath: "/workspace/ref/effect" },
+      { hostPath: "/srv/store/scratch", mountPath: "/workspace/home/scratch", readOnly: false },
+    ]);
+  });
+
+  it("omits `spec.sources.mounts` when no extra mounts were requested", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { source: { kind: "mount", path: "/srv/store/worktrees/session-1" }, harness: opencode() },
+      config,
+    );
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.sources.mounts).toBeUndefined();
   });
 
   it("rejects both or neither of repository and source, and ref on a mount", () => {

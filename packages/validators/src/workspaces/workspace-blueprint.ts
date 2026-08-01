@@ -35,18 +35,22 @@ export const workspaceGitSourceSchema = z.strictObject({
   authRef: nonEmptyStringSchema.optional(),
 });
 
-// An absolute, normalized host path: no relative segments, no trailing slash tricks. This is a
-// SHAPE check only — allowlist policy (which roots are mountable) is enforced by the control
-// plane, not here, because policy is deployment configuration.
-export const workspaceHostPathSchema = nonEmptyStringSchema
-  .refine((value) => value.startsWith("/"), { message: "host path must be absolute" })
-  .refine((value) => value.split("/").every((segment) => segment !== "." && segment !== ".."), {
-    message: "host path must not contain '.' or '..' segments",
-  })
-  .refine((value) => !value.includes("//") && (value === "/" ? true : !value.endsWith("/")), {
-    message: "host path must be normalized (no '//', no trailing slash)",
-  })
-  .refine((value) => value !== "/", { message: "host path must not be the filesystem root" });
+// An absolute, normalized path: no relative segments, no trailing slash tricks. This is a SHAPE
+// check only — allowlist policy (which roots are mountable) is enforced by the control plane, not
+// here, because policy is deployment configuration.
+const absoluteNormalizedPathSchema = (label: string) =>
+  nonEmptyStringSchema
+    .refine((value) => value.startsWith("/"), { message: `${label} must be absolute` })
+    .refine((value) => value.split("/").every((segment) => segment !== "." && segment !== ".."), {
+      message: `${label} must not contain '.' or '..' segments`,
+    })
+    .refine((value) => !value.includes("//") && (value === "/" ? true : !value.endsWith("/")), {
+      message: `${label} must be normalized (no '//', no trailing slash)`,
+    })
+    .refine((value) => value !== "/", { message: `${label} must not be the filesystem root` });
+
+export const workspaceHostPathSchema = absoluteNormalizedPathSchema("host path");
+export const workspaceMountPathSchema = absoluteNormalizedPathSchema("mount path");
 
 /**
  * A workspace sourced from a CALLER-OWNED host directory bind-mounted at the runtime working
@@ -65,6 +69,20 @@ export const workspaceSourceSchema = z.union([
   workspaceGitSourceSchema,
   workspaceMountSourceSchema,
 ]);
+
+/**
+ * An ADDITIONAL caller-owned host directory bind-mounted beside the primary source — sibling
+ * repositories, reference clones, scratch material. Read-only by default: extra mounts widen what
+ * the workspace can see, not where its work product lands. Like the primary mount, the host path
+ * is caller-owned — never reprovisioned, never cleaned. Shape only, as above; the control plane
+ * enforces allowlist policy plus overlap rules against the resolved working directory (which only
+ * it can see, because runtime defaults resolve at parse time).
+ */
+export const workspaceExtraMountSchema = z.strictObject({
+  hostPath: workspaceHostPathSchema,
+  mountPath: workspaceMountPathSchema,
+  readOnly: z.boolean().default(true),
+});
 
 export const workspaceInputSourceSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -208,6 +226,7 @@ export const workspaceBlueprintSchema = z.strictObject({
   sources: z.strictObject({
     workspace: workspaceSourceSchema,
     inputs: z.array(workspaceInputSourceSchema).default([]),
+    mounts: z.array(workspaceExtraMountSchema).default([]),
   }),
   harness: workspaceHarnessSchema,
   access: workspaceAccessSchema.prefault({}),

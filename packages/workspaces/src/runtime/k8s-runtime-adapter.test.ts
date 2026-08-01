@@ -16,6 +16,7 @@ describe("K8sRuntimeAdapter", () => {
             ref: "main",
           },
           inputs: [],
+          mounts: [],
         },
         harness: {
           id: "opencode",

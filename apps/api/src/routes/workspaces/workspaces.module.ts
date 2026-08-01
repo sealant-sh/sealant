@@ -492,23 +492,35 @@ const withInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: st
 const isProperDescendant = (path: string, root: string): boolean =>
   path !== root && path.startsWith(`${root}/`);
 
+// Container paths an extra mount must never shadow: the working directory (the reviewable work
+// product lands there; docker would also create root-owned dirs inside the caller-owned primary
+// mount) and the daemon's control-socket dir. Overlap in either direction is rejected.
+const pathsOverlap = (a: string, b: string): boolean =>
+  a === b || isProperDescendant(a, b) || isProperDescendant(b, a);
+
+const SEALANTD_CONTROL_DIR = "/run/sealant";
+
 /**
- * Mount-source policy gate. Mount-sourced workspaces bind a caller-named HOST path into the
- * container, which is an escalation surface — so the path must be a proper descendant of an
- * operator-configured allowlist root (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`, the same knob the
- * in-container daemon re-enforces at boot). No allowlist configured = every mount is rejected.
- * Mirrors the credentialRefs rule: the caller's spec is never trusted on its own.
+ * Mount policy gate — the primary mount source and the additional `sources.mounts` alike. Mounts
+ * bind a caller-named HOST path into the container, which is an escalation surface — so every host
+ * path must be a proper descendant of an operator-configured allowlist root
+ * (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`, the same knob the in-container daemon re-enforces at boot
+ * for the primary mount). No allowlist configured = every mount is rejected. Mirrors the
+ * credentialRefs rule: the caller's spec is never trusted on its own. Extra mounts additionally
+ * carry a caller-named CONTAINER path, checked here against the resolved working directory —
+ * only the parsed spec knows the runtime defaults.
  */
-const validateMountSource = (input: {
+const validateWorkspaceMounts = (input: {
   readonly spec: NewWorkspace;
   readonly sourceSelection: GitHubWorkspaceSourceSelection | undefined;
 }) => {
   return Effect.gen(function* () {
     const source = input.spec.sources.workspace;
-    if (source.kind !== "mount") {
+    const extraMounts = input.spec.sources.mounts;
+    if (source.kind !== "mount" && extraMounts.length === 0) {
       return;
     }
-    if (input.sourceSelection !== undefined) {
+    if (source.kind === "mount" && input.sourceSelection !== undefined) {
       return yield* new WorkspaceBadRequestError({
         message: "A mount-sourced workspace cannot also carry a GitHub source selection.",
       });
@@ -520,7 +532,7 @@ const validateMountSource = (input: {
     if (allowedRoots.length === 0) {
       return yield* new WorkspaceForbiddenError({
         message:
-          "Mount-sourced workspaces are not enabled on this install (set SEALANT_MOUNT_ALLOWED_STORE_ROOTS).",
+          "Workspace mounts are not enabled on this install (set SEALANT_MOUNT_ALLOWED_STORE_ROOTS).",
       });
     }
     const invalidRoot = allowedRoots.find(
@@ -531,12 +543,36 @@ const validateMountSource = (input: {
         message: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS contains an invalid root: ${invalidRoot}`,
       });
     }
-    if (
-      !allowedRoots.some((root) => isProperDescendant(source.hostPath, root.replace(/\/+$/, "")))
-    ) {
-      return yield* new WorkspaceForbiddenError({
-        message: `Mount path is not a proper descendant of an allowed store root: ${source.hostPath}`,
-      });
+    const hostPaths = [
+      ...(source.kind === "mount" ? [source.hostPath] : []),
+      ...extraMounts.map((mount) => mount.hostPath),
+    ];
+    for (const hostPath of hostPaths) {
+      if (!allowedRoots.some((root) => isProperDescendant(hostPath, root.replace(/\/+$/, "")))) {
+        return yield* new WorkspaceForbiddenError({
+          message: `Mount path is not a proper descendant of an allowed store root: ${hostPath}`,
+        });
+      }
+    }
+    const workingDirectory = input.spec.runtime.workingDirectory;
+    const seenMountPaths = new Set<string>();
+    for (const mount of extraMounts) {
+      if (pathsOverlap(mount.mountPath, workingDirectory)) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Extra mount path overlaps the working directory (${workingDirectory}): ${mount.mountPath}`,
+        });
+      }
+      if (pathsOverlap(mount.mountPath, SEALANTD_CONTROL_DIR)) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Extra mount path overlaps the daemon control dir (${SEALANTD_CONTROL_DIR}): ${mount.mountPath}`,
+        });
+      }
+      if (seenMountPaths.has(mount.mountPath)) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Duplicate extra mount path: ${mount.mountPath}`,
+        });
+      }
+      seenMountPaths.add(mount.mountPath);
     }
   });
 };
@@ -1104,7 +1140,7 @@ export const createWorkspace = (input: {
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
 
-    yield* validateMountSource({
+    yield* validateWorkspaceMounts({
       spec: parsedSpec,
       sourceSelection: body.sourceSelection,
     });
