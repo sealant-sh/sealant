@@ -15,6 +15,7 @@ export const connectedAccountSummarySchema = z.object({
   ownerUserId: z.string(),
   provider: connectedAccountProviderSchema,
   name: z.string(),
+  // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github).
   kind: z.string(),
   status: connectedAccountStatusSchema,
   // NON-secret display/ops data (claude token suffix, codex account id/email, github login+scopes).
@@ -31,8 +32,9 @@ export const createConnectedAccountRequestSchema = z.object({
   ownerUserId: z.string().trim().min(1),
   provider: connectedAccountProviderSchema,
   name: z.string().trim().min(1).max(120).optional(),
-  // Provider-shaped plaintext: claude setup-token / verbatim codex auth.json contents / github
-  // token. Encrypted server-side; never stored or echoed back as-is.
+  // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
+  // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
+  // echoed back as-is.
   secret: z.string().min(1),
 });
 

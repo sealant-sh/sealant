@@ -27,7 +27,7 @@ export const connectedAccountSummarySchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   provider: connectedAccountProviderSchema,
   name: NonEmptyString,
-  // "oauth-token" (claude) | "auth-json" (codex) | "gh-cli-token" (github).
+  // "oauth-token" | "credentials-json" (claude) | "auth-json" (codex) | "gh-cli-token" (github).
   kind: NonEmptyString,
   status: connectedAccountStatusSchema,
   // NON-secret display/ops data (claude token suffix, codex account id/email, github login+scopes).
@@ -44,9 +44,9 @@ export const createConnectedAccountRequestSchema = Schema.Struct({
   provider: connectedAccountProviderSchema,
   // Multiple accounts per provider are allowed; defaults to "default".
   name: Schema.optional(NonEmptyString),
-  // Provider-shaped plaintext: claude setup-token / verbatim codex auth.json contents / github
-  // token. Encrypted server-side; never stored or echoed back as-is. Not trimmed here — codex
-  // auth.json is stored verbatim.
+  // Provider-shaped plaintext: claude setup-token or verbatim .credentials.json contents /
+  // verbatim codex auth.json contents / github token. Encrypted server-side; never stored or
+  // echoed back as-is. Not trimmed here — pasted credential files are stored verbatim.
   secret: Schema.String.check(Schema.isNonEmpty()),
 });
 export type CreateConnectedAccountRequest = typeof createConnectedAccountRequestSchema.Type;

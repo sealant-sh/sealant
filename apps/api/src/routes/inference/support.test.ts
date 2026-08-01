@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractJson, isAuthFailureMessage, redactSecret } from "./support.js";
+import { extractJson, isAuthFailureMessage, redactSecret, redactSecrets } from "./support.js";
 
 describe("redactSecret", () => {
   it("strips every occurrence of the secret", () => {
@@ -12,6 +12,22 @@ describe("redactSecret", () => {
 
   it("is a no-op for an empty secret", () => {
     expect(redactSecret("message", "")).toBe("message");
+  });
+});
+
+describe("redactSecrets", () => {
+  it("strips every listed secret (access AND refresh tokens)", () => {
+    const accessToken = "sk-ant-oat01-access";
+    const refreshToken = "sk-ant-ort01-refresh";
+    expect(
+      redactSecrets(`rejected ${accessToken} / ${refreshToken}`, [accessToken, refreshToken]),
+    ).toBe("rejected [redacted] / [redacted]");
+  });
+
+  it("skips undefined entries (token-kind accounts have no refresh token)", () => {
+    expect(redactSecrets("bad sk-ant-oat01-a", ["sk-ant-oat01-a", undefined])).toBe(
+      "bad [redacted]",
+    );
   });
 });
 

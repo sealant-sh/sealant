@@ -18,7 +18,12 @@ import {
   type InferenceRespondResponse,
   type InferenceTurn,
 } from "@sealant/api-contracts";
-import { CredentialCipher, parseClaudeCredentialPayload } from "@sealant/credentials";
+import {
+  CredentialCipher,
+  extractClaudeOauthCredentials,
+  parseClaudeCredentialPayload,
+  type ClaudeOauthCredentials,
+} from "@sealant/credentials";
 import { ConnectedAccountRepo, ProfileRepo, type ConnectedAccount } from "@sealant/db";
 import { Effect } from "effect";
 
@@ -28,7 +33,7 @@ import {
   InferenceEngineError,
   type InferenceEngineTurn,
 } from "./claude-engine.js";
-import { redactSecret } from "./support.js";
+import { redactSecrets } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
   error instanceof Error ? error.message : fallback;
@@ -214,8 +219,25 @@ export const respond = (payload: InferenceRespondRequest) =>
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
     );
-    const token = yield* Effect.try({
-      try: () => parseClaudeCredentialPayload(JSON.parse(payloadJson)).token,
+    // Either claude payload shape works here: a setup-token directly, or a session credentials
+    // file whose claudeAiOauth.accessToken rides the same Agent-SDK env path. Both the access and
+    // refresh tokens are kept ONLY for redacting engine error text below.
+    const oauthCredentials = yield* Effect.try({
+      try: (): ClaudeOauthCredentials => {
+        const parsed = parseClaudeCredentialPayload(JSON.parse(payloadJson));
+
+        if ("token" in parsed) {
+          return { accessToken: parsed.token, refreshToken: undefined };
+        }
+
+        const extracted = extractClaudeOauthCredentials(parsed.credentialsJson);
+
+        if (extracted === undefined) {
+          throw new Error("credentials.json payload is unusable");
+        }
+
+        return extracted;
+      },
       catch: () =>
         new InferenceInternalServerError({
           message: "Stored claude credential payload is malformed.",
@@ -235,7 +257,7 @@ export const respond = (payload: InferenceRespondRequest) =>
 
     const engineTurn = yield* engine
       .start({
-        oauthToken: token,
+        oauthToken: oauthCredentials.accessToken,
         prompt: payload.prompt ?? "",
         ...(payload.system === undefined ? {} : { system: payload.system }),
         ...(payload.model === undefined ? {} : { model: payload.model }),
@@ -247,7 +269,10 @@ export const respond = (payload: InferenceRespondRequest) =>
         Effect.mapError((error) => {
           const redacted = new InferenceEngineError(
             error.reason,
-            redactSecret(error.message, token),
+            redactSecrets(error.message, [
+              oauthCredentials.accessToken,
+              oauthCredentials.refreshToken,
+            ]),
           );
           return redacted;
         }),
