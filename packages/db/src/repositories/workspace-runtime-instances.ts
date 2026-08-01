@@ -5,6 +5,7 @@ import { SealantDB } from "../client.js";
 import {
   workspaceRuntimeInstances,
   type NewWorkspaceRuntimeInstance,
+  type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,
@@ -19,6 +20,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly endpoint?: string;
   readonly errorCode?: string;
   readonly errorMessage?: string;
+  /** Launch-time record of how each connected-account credential was injected (env vs file). */
+  readonly launchCredentialInjections?: readonly WorkspaceLaunchCredentialInjection[];
   readonly launchedAt?: Date;
   readonly finishedAt?: Date;
 }
@@ -151,6 +154,9 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.endpoint === undefined ? {} : { endpoint: input.endpoint }),
               ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
               ...(input.errorMessage === undefined ? {} : { errorMessage: input.errorMessage }),
+              ...(input.launchCredentialInjections === undefined
+                ? {}
+                : { launchCredentialInjections: [...input.launchCredentialInjections] }),
               ...(input.launchedAt === undefined ? {} : { launchedAt: input.launchedAt }),
               ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
             };

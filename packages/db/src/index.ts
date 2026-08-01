@@ -333,6 +333,7 @@ export {
   type WorkspaceAttemptSnapshot,
   type WorkspaceAttemptStatus,
   type WorkspaceAttemptTriggerType,
+  type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,

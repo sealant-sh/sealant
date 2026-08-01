@@ -1,0 +1,1 @@
+ALTER TABLE "workspace_runtime_instances" ADD COLUMN "launch_credential_injections" jsonb;
