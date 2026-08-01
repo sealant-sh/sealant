@@ -159,7 +159,9 @@ export const SessionAttachRoute = HttpRouter.add(
                 typeof frame.cols === "number" &&
                 typeof frame.rows === "number"
               ) {
-                return daemon.resizePty(daemonSessionId, frame.cols, frame.rows).pipe(Effect.ignore);
+                return daemon
+                  .resizePty(daemonSessionId, frame.cols, frame.rows)
+                  .pipe(Effect.ignore);
               }
               return Effect.void;
             })
