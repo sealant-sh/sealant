@@ -21,6 +21,32 @@ describe("planCredentialInjections", () => {
       `);
   });
 
+  it("plans a claude credentials.json file injection for the session-file shape", () => {
+    const credentialsJson = JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-a" } });
+    const plan = planCredentialInjections("claude", { credentialsJson });
+
+    expect(plan).toMatchInlineSnapshot(`
+      [
+        {
+          "contentBase64": "eyJjbGF1ZGVBaU9hdXRoIjp7ImFjY2Vzc1Rva2VuIjoic2stYW50LW9hdDAxLWEifX0=",
+          "kind": "file",
+          "mode": "600",
+          "path": "$HOME/.claude/.credentials.json",
+        },
+      ]
+    `);
+
+    const fileInjection = plan[0];
+
+    if (fileInjection === undefined || fileInjection.kind !== "file") {
+      throw new Error("Expected a file injection.");
+    }
+
+    expect(Buffer.from(fileInjection.contentBase64, "base64").toString("utf8")).toBe(
+      credentialsJson,
+    );
+  });
+
   it("plans a codex auth.json file injection with base64 content and mode 600", () => {
     const authJson = JSON.stringify({ tokens: { refresh_token: "rt" } });
     const plan = planCredentialInjections("codex", { authJson });

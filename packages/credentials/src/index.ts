@@ -13,6 +13,7 @@ export {
 } from "./cipher.js";
 
 export {
+  CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
   CODEX_AUTH_JSON_PATH,
   CONNECTED_ACCOUNT_REF_PREFIX,
@@ -26,20 +27,30 @@ export {
 export {
   CLAUDE_TOKEN_PREFIX,
   claudeCredentialPayloadSchema,
+  claudeCredentialsFilePayloadSchema,
+  claudeTokenCredentialPayloadSchema,
   codexCredentialPayloadSchema,
   connectedAccountProviders,
   connectedAccountProviderSchema,
+  extractClaudeOauthCredentials,
   GITHUB_TOKEN_PREFIXES,
   githubCredentialPayloadSchema,
   hasKnownGitHubTokenPrefix,
   parseClaudeCredentialPayload,
+  parseClaudeCredentialsFilePayload,
+  parseClaudeCredentialsJson,
   parseCodexAuthJson,
   parseCodexCredentialPayload,
   parseGitHubCredentialPayload,
   type ClaudeCredentialPayload,
+  type ClaudeCredentialsFilePayload,
+  type ClaudeCredentialsMetadata,
+  type ClaudeOauthCredentials,
+  type ClaudeTokenCredentialPayload,
   type CodexAuthMetadata,
   type CodexCredentialPayload,
   type ConnectedAccountProvider,
   type GitHubCredentialPayload,
+  type ParseClaudeCredentialsJsonResult,
   type ParseCodexAuthJsonResult,
 } from "./payloads.js";

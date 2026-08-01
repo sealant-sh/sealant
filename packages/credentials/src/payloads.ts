@@ -11,18 +11,149 @@ export type ConnectedAccountProvider = (typeof connectedAccountProviders)[number
 
 export const connectedAccountProviderSchema = Schema.Literals(connectedAccountProviders);
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as Record<string, unknown>;
+};
+
+const asNonEmptyString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
 // ---------------------------------------------------------------------------
-// Claude — `claude setup-token` output (1-year, inference-scoped, no refresh).
+// Claude — two credential shapes:
+//  - setup-token: `claude setup-token` output (1-year, inference-scoped, no
+//    refresh; Anthropic classifies it as API auth).
+//  - credentials file: verbatim ~/.claude/.credentials.json contents that the
+//    operator minted for Sealant (e.g. via a second CLAUDE_CONFIG_DIR login) —
+//    a full Claude Code session that presents as the user's subscription.
+//    Stored as-is so the exact file can be re-materialized in the workspace.
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_TOKEN_PREFIX = "sk-ant-oat01-";
 
-export const claudeCredentialPayloadSchema = Schema.Struct({
+export const claudeTokenCredentialPayloadSchema = Schema.Struct({
   token: Schema.String.check(Schema.isStartsWith(CLAUDE_TOKEN_PREFIX)),
 });
+export type ClaudeTokenCredentialPayload = typeof claudeTokenCredentialPayloadSchema.Type;
+
+export const claudeCredentialsFilePayloadSchema = Schema.Struct({
+  credentialsJson: Schema.String.check(Schema.isNonEmpty()),
+});
+export type ClaudeCredentialsFilePayload = typeof claudeCredentialsFilePayloadSchema.Type;
+
+/**
+ * Either claude shape; consumers dispatch on the payload SHAPE (`"token" in payload`), never on
+ * the db `kind` column (which can lag behind a reconnect that switched shapes).
+ */
+export const claudeCredentialPayloadSchema = Schema.Union([
+  claudeTokenCredentialPayloadSchema,
+  claudeCredentialsFilePayloadSchema,
+]);
 export type ClaudeCredentialPayload = typeof claudeCredentialPayloadSchema.Type;
 
 export const parseClaudeCredentialPayload = Schema.decodeUnknownSync(claudeCredentialPayloadSchema);
+export const parseClaudeCredentialsFilePayload = Schema.decodeUnknownSync(
+  claudeCredentialsFilePayloadSchema,
+);
+
+/** Non-secret metadata extracted from .credentials.json at connect/sync time (design doc §3). */
+export interface ClaudeCredentialsMetadata {
+  /** Last 4 characters of the access token — display parity with setup-token accounts. */
+  readonly tokenSuffix?: string;
+  readonly subscriptionType?: string;
+  /** `claudeAiOauth.expiresAt` (epoch millis) — the sync-back's newest-wins freshness marker. */
+  readonly expiresAt?: number;
+  readonly scopeCount?: number;
+}
+
+export type ParseClaudeCredentialsJsonResult =
+  | { readonly valid: true; readonly metadata: ClaudeCredentialsMetadata }
+  | { readonly valid: false; readonly reason: string };
+
+/**
+ * Validates verbatim ~/.claude/.credentials.json contents and extracts non-secret metadata.
+ *
+ * Shape (extra fields tolerated): `{ claudeAiOauth: { accessToken, refreshToken?, expiresAt?,
+ * scopes?, subscriptionType? } }`. Requires a non-empty `claudeAiOauth.accessToken`; everything
+ * else degrades to absent metadata rather than failing the parse.
+ */
+export const parseClaudeCredentialsJson = (raw: string): ParseClaudeCredentialsJsonResult => {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { valid: false, reason: ".credentials.json is not valid JSON." };
+  }
+
+  const root = asRecord(parsed);
+
+  if (root === undefined) {
+    return { valid: false, reason: ".credentials.json must be a JSON object." };
+  }
+
+  const oauth = asRecord(root.claudeAiOauth);
+
+  if (oauth === undefined) {
+    return { valid: false, reason: ".credentials.json must contain a claudeAiOauth object." };
+  }
+
+  const accessToken = asNonEmptyString(oauth.accessToken);
+
+  if (accessToken === undefined) {
+    return { valid: false, reason: ".credentials.json must contain claudeAiOauth.accessToken." };
+  }
+
+  const subscriptionType = asNonEmptyString(oauth.subscriptionType);
+  const expiresAt =
+    typeof oauth.expiresAt === "number" && Number.isFinite(oauth.expiresAt)
+      ? oauth.expiresAt
+      : undefined;
+  const scopeCount = Array.isArray(oauth.scopes) ? oauth.scopes.length : undefined;
+
+  return {
+    valid: true,
+    metadata: {
+      tokenSuffix: accessToken.slice(-4),
+      ...(subscriptionType === undefined ? {} : { subscriptionType }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(scopeCount === undefined ? {} : { scopeCount }),
+    },
+  };
+};
+
+/** SECRET material pulled out of a .credentials.json for the Agent-SDK env path. */
+export interface ClaudeOauthCredentials {
+  readonly accessToken: string;
+  readonly refreshToken: string | undefined;
+}
+
+/**
+ * SECRET-bearing extraction (unlike {@link parseClaudeCredentialsJson}): returns the access and
+ * refresh tokens so callers can pass the access token to the Agent SDK and redact BOTH from any
+ * outbound error text. Returns undefined when the shape is unusable; never throws.
+ */
+export const extractClaudeOauthCredentials = (
+  credentialsJson: string,
+): ClaudeOauthCredentials | undefined => {
+  try {
+    const root = asRecord(JSON.parse(credentialsJson));
+    const oauth = root === undefined ? undefined : asRecord(root.claudeAiOauth);
+    const accessToken = oauth === undefined ? undefined : asNonEmptyString(oauth.accessToken);
+
+    if (oauth === undefined || accessToken === undefined) {
+      return undefined;
+    }
+
+    return { accessToken, refreshToken: asNonEmptyString(oauth.refreshToken) };
+  } catch {
+    return undefined;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Codex — verbatim ~/.codex/auth.json contents (stored as-is so the exact file
@@ -47,18 +178,6 @@ export interface CodexAuthMetadata {
 export type ParseCodexAuthJsonResult =
   | { readonly valid: true; readonly metadata: CodexAuthMetadata }
   | { readonly valid: false; readonly reason: string };
-
-const asRecord = (value: unknown): Record<string, unknown> | undefined => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-
-  return value as Record<string, unknown>;
-};
-
-const asNonEmptyString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-};
 
 /**
  * Best-effort decode of a JWT payload segment (base64url middle part, NO signature
