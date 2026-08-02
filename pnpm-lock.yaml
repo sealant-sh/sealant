@@ -6,6 +6,9 @@ settings:
 
 catalogs:
   default:
+    '@anthropic-ai/claude-agent-sdk':
+      specifier: ^0.3.201
+      version: 0.3.201
     '@cloudflare/vite-plugin':
       specifier: ^1.30.2
       version: 1.42.1
@@ -193,7 +196,7 @@ importers:
   apps/api:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.201
+        specifier: 'catalog:'
         version: 0.3.201(@anthropic-ai/sdk@0.110.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@effect/platform-node':
         specifier: 'catalog:'
@@ -657,6 +660,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: 'catalog:'
+        version: 0.3.201(@anthropic-ai/sdk@0.110.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@sealant/credentials':
         specifier: workspace:*
         version: link:../../packages/credentials
