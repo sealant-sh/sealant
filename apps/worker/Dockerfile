@@ -11,6 +11,11 @@ WORKDIR /app
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @sealant/worker build
+# The bundled Agent SDK spawns its vendored `claude` CLI (the session keep-fresh sweeper's refresh
+# ping), resolved at runtime as @anthropic-ai/claude-agent-sdk-{platform}-{arch} from a node_modules
+# next to the bundle. Stage the builder-resolved platform package so the runtime carries it at the
+# version the bundle expects — mirrors apps/api/Dockerfile.
+RUN node tooling/scripts/stage-agent-cli.mjs apps/worker /staged
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -19,5 +24,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/apps/worker/dist ./dist
+# The Agent SDK's platform package (the keep-fresh sweeper spawns its `claude` binary) — see the
+# builder stage.
+COPY --from=builder /staged/node_modules ./node_modules
+# Assert the vendored claude binary resolves exactly the way the bundle will resolve it at runtime,
+# per arch — a broken layout must fail the image build, not the first sweep in production.
+RUN node -e "const{createRequire}=require('node:module');const p=createRequire('/app/dist/index.js').resolve('@anthropic-ai/claude-agent-sdk-'+process.platform+'-'+process.arch+'/claude');require('node:fs').accessSync(p);console.log('claude CLI resolvable: '+p)"
 # Runs as root so it can reach the mounted /var/run/docker.sock (host root:docker).
 CMD ["node", "dist/index.js"]

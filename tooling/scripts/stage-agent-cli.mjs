@@ -10,18 +10,23 @@ import { dirname, join } from "node:path";
  * so the package must sit in a node_modules resolvable from dist/, at exactly the version the bundled
  * SDK shipped with. Run from the repo root in the builder stage (where pnpm installed the lockfile
  * version), then COPY `<out-dir>/node_modules` next to dist/ in the runtime stage.
+ *
+ * Any consumer that bundles the SDK needs this: apps/api (inference) and apps/worker (the claude
+ * session keep-fresh sweeper — its refresh ping spawns the same CLI). A missing platform package
+ * fails resolution here, aborting the image build for that arch instead of failing per-sweep at
+ * runtime.
  */
-const outDir = process.argv[2];
-if (!outDir) {
-  throw new Error("usage: node tooling/scripts/stage-agent-cli.mjs <out-dir>");
+const [appDir, outDir] = process.argv.slice(2);
+if (!appDir || !outDir) {
+  throw new Error("usage: node tooling/scripts/stage-agent-cli.mjs <app-dir> <out-dir>");
 }
 
-const apiRequire = createRequire(join(process.cwd(), "apps/api/package.json"));
-const sdkRequire = createRequire(apiRequire.resolve("@anthropic-ai/claude-agent-sdk"));
+const appRequire = createRequire(join(process.cwd(), appDir, "package.json"));
+const sdkRequire = createRequire(appRequire.resolve("@anthropic-ai/claude-agent-sdk"));
 const platformPackage = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
 const packageDir = dirname(sdkRequire.resolve(`${platformPackage}/claude`));
 const destination = join(outDir, "node_modules", platformPackage);
 
 mkdirSync(dirname(destination), { recursive: true });
 cpSync(packageDir, destination, { recursive: true, dereference: true });
-console.log(`staged ${platformPackage} -> ${destination}`);
+console.log(`staged ${platformPackage} (via ${appDir}) -> ${destination}`);
