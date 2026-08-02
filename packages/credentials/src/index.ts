@@ -13,6 +13,19 @@ export {
 } from "./cipher.js";
 
 export {
+  CLAUDE_CONFIG_DIR_ENV_KEY,
+  CLAUDE_CREDENTIALS_FILE_NAME,
+  isNewerClaudeCredentials,
+  isPlausibleClaudeExpiry,
+  MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
+  provisionClaudeConfigDir,
+  readClaudeConfigDirCredentials,
+  readStoredClaudeExpiresAt,
+  removeClaudeConfigDir,
+  type ProvisionedClaudeConfigDir,
+} from "./claude-session.js";
+
+export {
   CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
   CODEX_AUTH_JSON_PATH,

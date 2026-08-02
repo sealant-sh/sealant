@@ -1,5 +1,8 @@
+import type { CredentialCipherService } from "@sealant/credentials";
 import {
+  ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceAttemptRepoLive,
   WorkspaceRepo,
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -10,7 +13,9 @@ import {
 import { Effect, Layer } from "effect";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
+import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
 
 export interface ProcessWorkspaceStopEffectOptions {
   /**
@@ -23,6 +28,13 @@ export interface ProcessWorkspaceStopEffectOptions {
   readonly runId: string;
   readonly stopReason: WorkspaceRuntimeInstanceStopReason;
   readonly runtimeAdapters: readonly RuntimeAdapter[];
+  /**
+   * Enables the best-effort credential sync-back before the container is destroyed (rotated
+   * claude/codex session files must not die with the runtime — interactive/PTY sessions rotate
+   * tokens without ever running another exec job). Undefined when SEALANT_CREDENTIALS_KEY is not
+   * configured on the worker; the sync-back then only warns for workspaces that carry refs.
+   */
+  readonly credentialCipher?: CredentialCipherService;
 }
 
 export interface ProcessWorkspaceStopOptions extends ProcessWorkspaceStopEffectOptions {
@@ -104,6 +116,20 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       );
     }
 
+    // LAST CHANCE to read rotated session credentials out of the container: the official CLIs
+    // refresh claude/codex session files in-place, and an interactive/PTY workspace may never run
+    // another exec job to sync them. Best-effort by construction (the helper never fails), and it
+    // must run BEFORE the adapter destroys the container. Only the docker adapter is reachable
+    // over the exec bridge today.
+    if (adapterId === "docker") {
+      yield* syncBackWorkspaceCredentials({
+        attemptId: options.runId,
+        containerId: resourceId,
+        launchCredentialInjections: instance.launchCredentialInjections ?? [],
+        credentialCipher: options.credentialCipher,
+      });
+    }
+
     yield* Effect.tryPromise({
       try: () =>
         adapter.stop({
@@ -124,11 +150,18 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
 export const processWorkspaceStop = async (options: ProcessWorkspaceStopOptions): Promise<void> => {
   const { db, ...effectOptions } = options;
 
-  const dataAccessLayer = Layer.mergeAll(WorkspaceRepoLive, WorkspaceRuntimeInstanceRepoLive).pipe(
-    Layer.provide(Layer.succeed(SealantDB, db)),
-  );
+  const dataAccessLayer = Layer.mergeAll(
+    WorkspaceRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
+    // The pre-stop credential sync-back re-derives the blueprint from the attempt snapshot and
+    // persists rotated session files through the connected-account repo over the exec bridge.
+    WorkspaceAttemptRepoLive,
+    ConnectedAccountRepoLive,
+  ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   await Effect.runPromise(
-    processWorkspaceStopEffect(effectOptions).pipe(Effect.provide(dataAccessLayer)),
+    processWorkspaceStopEffect(effectOptions).pipe(
+      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeDockerExecLive)),
+    ),
   );
 };

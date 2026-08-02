@@ -22,10 +22,14 @@ import {
   CredentialCipher,
   extractClaudeOauthCredentials,
   parseClaudeCredentialPayload,
+  provisionClaudeConfigDir,
+  readClaudeConfigDirCredentials,
+  removeClaudeConfigDir,
   type ClaudeOauthCredentials,
 } from "@sealant/credentials";
 import { ConnectedAccountRepo, ProfileRepo, type ConnectedAccount } from "@sealant/db";
-import { Effect } from "effect";
+import { persistClaudeCredentialsIfNewer } from "@sealant/workspaces";
+import { Effect, Layer } from "effect";
 
 import { env } from "../../runtime-env.js";
 import {
@@ -219,16 +223,26 @@ export const respond = (payload: InferenceRespondRequest) =>
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
     );
-    // Either claude payload shape works here: a setup-token directly, or a session credentials
-    // file whose claudeAiOauth.accessToken rides the same Agent-SDK env path. The shape drives the
-    // 401-feedback policy below; the access and refresh tokens are kept ONLY for redacting engine
-    // error text.
+    // Either claude payload shape works here. A setup-token rides the documented
+    // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private
+    // per-invocation CLAUDE_CONFIG_DIR instead, so the official CLI authenticates from the FILE —
+    // and can rotate the session with its refresh token right at the point of use (the control
+    // plane never calls Anthropic's token endpoint). The shape drives the 401-feedback policy
+    // below; the access and refresh tokens are kept ONLY for redacting engine error text.
     const oauthCredentials = yield* Effect.try({
-      try: (): ClaudeOauthCredentials & { readonly shape: "token" | "credentials-json" } => {
+      try: (): ClaudeOauthCredentials & {
+        readonly shape: "token" | "credentials-json";
+        readonly credentialsJson: string | undefined;
+      } => {
         const parsed = parseClaudeCredentialPayload(JSON.parse(payloadJson));
 
         if ("token" in parsed) {
-          return { shape: "token", accessToken: parsed.token, refreshToken: undefined };
+          return {
+            shape: "token",
+            accessToken: parsed.token,
+            refreshToken: undefined,
+            credentialsJson: undefined,
+          };
         }
 
         const extracted = extractClaudeOauthCredentials(parsed.credentialsJson);
@@ -237,7 +251,7 @@ export const respond = (payload: InferenceRespondRequest) =>
           throw new Error("credentials.json payload is unusable");
         }
 
-        return { shape: "credentials-json", ...extracted };
+        return { shape: "credentials-json", credentialsJson: parsed.credentialsJson, ...extracted };
       },
       catch: () =>
         new InferenceInternalServerError({
@@ -256,9 +270,71 @@ export const respond = (payload: InferenceRespondRequest) =>
       Effect.asVoid,
     );
 
+    // Session-file accounts: materialize the decrypted file into a private per-invocation config
+    // dir (0700/0600) the engine points the official CLI at. When the session ends — success,
+    // failure, or idle expiry — the possibly-rotated file is read back and persisted through the
+    // same newest-wins guards the workspace sync-back uses, then the dir is removed. The repo and
+    // cipher service INSTANCES are captured here because the hook runs outside any request scope.
+    const sessionAuth = yield* Effect.try({
+      try: () => {
+        if (oauthCredentials.shape === "token" || oauthCredentials.credentialsJson === undefined) {
+          return {
+            auth: { kind: "oauth-token", oauthToken: oauthCredentials.accessToken },
+            onSessionEnd: undefined,
+          } as const;
+        }
+
+        const provisioned = provisionClaudeConfigDir({
+          credentialsJson: oauthCredentials.credentialsJson,
+        });
+
+        const persistRotatedCredentials = Effect.gen(function* () {
+          const observed = readClaudeConfigDirCredentials(provisioned.configDir);
+          if (observed === undefined) {
+            yield* Effect.logWarning(
+              `Claude credentials (inference refresh): account ${account.id} failed-read: provisioned config dir has no readable .credentials.json.`,
+            );
+            return;
+          }
+          yield* persistClaudeCredentialsIfNewer({
+            connectedAccountId: account.id,
+            observedCredentialsJson: observed,
+            credentialCipher: cipher,
+            source: "inference refresh",
+          });
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => removeClaudeConfigDir(provisioned.configDir))),
+          Effect.provide(Layer.succeed(ConnectedAccountRepo, accounts)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Claude credentials (inference refresh): account ${account.id} failed: persisting after the session crashed.`,
+              cause,
+            ),
+          ),
+          Effect.asVoid,
+        );
+
+        return {
+          auth: {
+            kind: "config-dir",
+            configDir: provisioned.configDir,
+            accessToken: oauthCredentials.accessToken,
+          },
+          onSessionEnd: () => Effect.runPromise(persistRotatedCredentials),
+        } as const;
+      },
+      catch: (cause) =>
+        new InferenceInternalServerError({
+          message: toErrorMessage(cause, "Failed to provision the claude session config dir."),
+        }),
+    });
+
     const engineTurn = yield* engine
       .start({
-        oauthToken: oauthCredentials.accessToken,
+        auth: sessionAuth.auth,
+        ...(sessionAuth.onSessionEnd === undefined
+          ? {}
+          : { onSessionEnd: sessionAuth.onSessionEnd }),
         prompt: payload.prompt ?? "",
         ...(payload.system === undefined ? {} : { system: payload.system }),
         ...(payload.model === undefined ? {} : { model: payload.model }),
@@ -279,9 +355,9 @@ export const respond = (payload: InferenceRespondRequest) =>
         }),
         // 401 feedback: a live auth rejection marks the account invalid (design doc §2), the same
         // signal the worker's mark-invalid endpoint carries — best-effort, the caller's error
-        // wins. Setup tokens ONLY: a session file's access token expiring is the normal hourly
-        // rotation, and the stored credential stays refreshable in-container — marking it invalid
-        // here would needlessly block every workspace launch on the account.
+        // wins. Setup tokens ONLY: a session file runs through the config-dir path where the
+        // official CLI refreshes the session itself, and the stored credential stays refreshable
+        // — marking it invalid here would needlessly block every workspace launch on the account.
         Effect.tapError((error) =>
           error.reason === "auth" && oauthCredentials.shape === "token"
             ? accounts.markInvalid({ id: account.id }).pipe(Effect.ignore)
@@ -291,7 +367,7 @@ export const respond = (payload: InferenceRespondRequest) =>
           error.reason === "auth" && oauthCredentials.shape === "credentials-json"
             ? new InferenceConflictError({
                 message:
-                  "The claude session access token has expired. It refreshes automatically when a workspace runs with this account; alternatively, reconnect the account with a fresh session file.",
+                  "The claude session could not authenticate. The session refreshes automatically at use and on a schedule, so this usually means the refresh token itself was revoked (e.g. by logging out of that session elsewhere) — reconnect the account with a fresh session file.",
               })
             : mapEngineError(error),
         ),

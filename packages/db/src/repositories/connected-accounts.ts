@@ -25,6 +25,7 @@ const connectedAccountRepoOperationSchema = Schema.Literals([
   "getById",
   "getByOwnerProviderName",
   "listByOwner",
+  "listActiveByProviderKind",
   "replacePayload",
   "updateSyncState",
   "markInvalid",
@@ -169,6 +170,15 @@ export interface ConnectedAccountRepoService {
   readonly listByOwner: (
     ownerUserId: string,
   ) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
+  /**
+   * ACTIVE (non-archived, non-invalid) accounts across all owners for one (provider, kind) pair —
+   * the keep-fresh sweeper's candidate set. `kind` is a cheap prefilter only; consumers still
+   * dispatch on the decrypted payload SHAPE before acting.
+   */
+  readonly listActiveByProviderKind: (input: {
+    readonly provider: ConnectedAccountProvider;
+    readonly kind: string;
+  }) => Effect.Effect<readonly ConnectedAccount[], ConnectedAccountRepoError>;
   /** Reconnect: swap the sealed payload, reset status to "active", clear invalid_at. */
   readonly replacePayload: (
     input: ReplaceConnectedAccountPayloadInput,
@@ -296,6 +306,23 @@ export const ConnectedAccountRepoLive = Layer.effect(
             .where(
               and(
                 eq(connectedAccounts.ownerUserId, ownerUserId),
+                isNull(connectedAccounts.archivedAt),
+              ),
+            )
+            .orderBy(desc(connectedAccounts.createdAt)),
+        ),
+
+      listActiveByProviderKind: (input) =>
+        withConnectedAccountRepoError(
+          "listActiveByProviderKind",
+          db
+            .select()
+            .from(connectedAccounts)
+            .where(
+              and(
+                eq(connectedAccounts.provider, input.provider),
+                eq(connectedAccounts.kind, input.kind),
+                eq(connectedAccounts.status, "active"),
                 isNull(connectedAccounts.archivedAt),
               ),
             )
