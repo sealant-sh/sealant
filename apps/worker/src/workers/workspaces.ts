@@ -23,6 +23,10 @@ import {
 import { Effect } from "effect";
 
 import { processRunExecJob } from "./process-run-exec-job.js";
+import {
+  CLAUDE_SESSION_REFRESH_INTERVAL_MS,
+  refreshClaudeSessionCredentials,
+} from "./refresh-claude-sessions.js";
 
 const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
   return createSealantDB(env.DATABASE_URL);
@@ -146,6 +150,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           stopReason: message.stopReason,
           db,
           runtimeAdapters,
+          // Rotated claude/codex session files are synced back before the container is destroyed.
+          ...(credentialCipher === undefined ? {} : { credentialCipher }),
         });
         ack();
       } catch (error) {
@@ -187,6 +193,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     reapExpiredWorkspaces({
       db,
       runtimeAdapters,
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
     }).catch((error: unknown) => {
       console.error("Workspace expiry reaper tick failed", { error });
     });
@@ -197,10 +204,28 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   );
   expiryReaperTimer.unref();
 
+  // Keep-fresh sweeper: claude SESSION credentials (kind "credentials-json") only stay fresh when
+  // the official CLI runs against them; when no workspace uses an account for hours, the stored
+  // access token expires. Every tick, stale accounts are refreshed with a minimal one-turn
+  // official-CLI exchange in a private CLAUDE_CONFIG_DIR and persisted newest-wins. Requires the
+  // credential cipher — without SEALANT_CREDENTIALS_KEY there is nothing to refresh.
+  const claudeRefreshTimer =
+    credentialCipher === undefined
+      ? undefined
+      : setInterval(() => {
+          refreshClaudeSessionCredentials({ db, credentialCipher }).catch((error: unknown) => {
+            console.error("Claude session refresh tick failed", { error });
+          });
+        }, CLAUDE_SESSION_REFRESH_INTERVAL_MS);
+  claudeRefreshTimer?.unref();
+
   return {
     stop: async () => {
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
+      if (claudeRefreshTimer !== undefined) {
+        clearInterval(claudeRefreshTimer);
+      }
       await lifecycleConsumer.cancel();
       await runExecConsumer.cancel();
       await consumer.cancel();

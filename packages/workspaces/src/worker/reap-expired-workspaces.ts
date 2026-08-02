@@ -1,5 +1,8 @@
+import type { CredentialCipherService } from "@sealant/credentials";
 import {
+  ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceAttemptRepoLive,
   WorkspaceRepo,
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -9,6 +12,7 @@ import {
 import { Effect, Layer } from "effect";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 export interface ReapExpiredWorkspacesOptions {
@@ -16,6 +20,12 @@ export interface ReapExpiredWorkspacesOptions {
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   /** Upper bound on workspaces stopped per tick, so a sweep can't run unbounded. Defaults to 5. */
   readonly maxReapsPerTick?: number;
+  /**
+   * Enables the shared stop path's pre-teardown credential sync-back (rotated claude/codex
+   * session files are read back before the container is destroyed). Undefined when
+   * SEALANT_CREDENTIALS_KEY is not configured on the worker.
+   */
+  readonly credentialCipher?: CredentialCipherService;
 }
 
 const DEFAULT_MAX_REAPS_PER_TICK = 5;
@@ -39,12 +49,17 @@ const DEFAULT_MAX_REAPS_PER_TICK = 5;
 export const reapExpiredWorkspaces = async (
   options: ReapExpiredWorkspacesOptions,
 ): Promise<number> => {
-  const { db, maxReapsPerTick, runtimeAdapters } = options;
+  const { db, maxReapsPerTick, runtimeAdapters, credentialCipher } = options;
   const maxReaps = maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
 
-  const dataAccessLayer = Layer.mergeAll(WorkspaceRepoLive, WorkspaceRuntimeInstanceRepoLive).pipe(
-    Layer.provide(Layer.succeed(SealantDB, db)),
-  );
+  const dataAccessLayer = Layer.mergeAll(
+    WorkspaceRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
+    // The shared stop path's pre-teardown credential sync-back needs the attempt snapshot (for
+    // the blueprint refs), the connected-account repo, and the docker exec bridge.
+    WorkspaceAttemptRepoLive,
+    ConnectedAccountRepoLive,
+  ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   const program = Effect.gen(function* () {
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
@@ -70,6 +85,7 @@ export const reapExpiredWorkspaces = async (
             runId: instance.runId,
             stopReason: "failed",
             runtimeAdapters,
+            ...(credentialCipher === undefined ? {} : { credentialCipher }),
           });
           return true;
         }
@@ -90,6 +106,7 @@ export const reapExpiredWorkspaces = async (
           runId: instance.runId,
           stopReason: expired ? "expired" : "user",
           runtimeAdapters,
+          ...(credentialCipher === undefined ? {} : { credentialCipher }),
         });
         return true;
       }).pipe(
@@ -109,5 +126,7 @@ export const reapExpiredWorkspaces = async (
     return reaped;
   });
 
-  return Effect.runPromise(program.pipe(Effect.provide(dataAccessLayer)));
+  return Effect.runPromise(
+    program.pipe(Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeDockerExecLive))),
+  );
 };

@@ -9,11 +9,7 @@
  * Lives in the worker app (not @sealant/workspaces) because it needs @sealant/telemetry, which already
  * depends on @sealant/workspaces — putting it in workspaces would be a dependency cycle.
  */
-import {
-  CLAUDE_CREDENTIALS_JSON_PATH,
-  CODEX_AUTH_JSON_PATH,
-  type CredentialCipherService,
-} from "@sealant/credentials";
+import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
@@ -28,7 +24,6 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
-  type WorkspaceLaunchCredentialInjection,
 } from "@sealant/db";
 import {
   InlineByteaArtifactStoreLive,
@@ -36,15 +31,13 @@ import {
   PostgresTelemetrySinkLive,
   TelemetrySink,
 } from "@sealant/telemetry";
-import { newWorkspaceSchema } from "@sealant/validators";
 import {
   execInWorkspace,
   type RunExecCommand,
   SealantRuntime,
   SealantRuntimeDockerExecLive,
   sealantTargetForDockerContainer,
-  syncBackClaudeCredentials,
-  syncBackCodexAuthJson,
+  syncBackWorkspaceCredentials,
   type SealantTarget,
 } from "@sealant/workspaces";
 import { Effect, Layer, Schedule, Stream } from "effect";
@@ -210,82 +203,6 @@ const resolveContainerResourceId = (runId: string) =>
     };
   });
 
-/**
- * Best-effort credential sync-back after the run (design doc §2 / §6): the official CLIs in the
- * workspace rotate their session files — codex rewrites auth.json (rotating its refresh token),
- * claude rewrites .credentials.json for session-file accounts — so the mutated files must be
- * persisted, newest-wins only, and never at the cost of the run result. The blueprint is
- * re-derived from the stored attempt snapshot; workspaces without a matching credentialRef no-op
- * immediately.
- */
-/**
- * Isolates one provider's sync-back with its own catchCause: a DEFECT escaping one (the helpers
- * only catch their typed failures) must not skip the other provider's sync.
- */
-const isolatedSyncBack = <E, R>(label: string, sync: Effect.Effect<void, E, R>) =>
-  sync.pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning(`${label} sync-back crashed after run exec; continuing.`, cause),
-    ),
-    Effect.asVoid,
-  );
-
-const syncBackHarnessCredentials = (
-  attemptId: string,
-  target: SealantTarget,
-  credentialCipher: CredentialCipherService | undefined,
-  launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[],
-) =>
-  Effect.gen(function* () {
-    const attempts = yield* WorkspaceAttemptRepo;
-    const snapshot = yield* attempts.getAttemptSnapshotByRunId(attemptId);
-    if (snapshot === undefined) {
-      return;
-    }
-    const blueprint = newWorkspaceSchema.parse(snapshot.blueprintPayload);
-
-    // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
-    const readWorkspaceFile = (path: string) =>
-      execInWorkspace(target, {
-        executable: "sh",
-        args: ["-c", `cat "${path}"`],
-      }).pipe(
-        Effect.filterOrFail(
-          (result) => result.exitCode === 0,
-          (result) => new Error(`Reading ${path} exited with code ${result.exitCode}.`),
-        ),
-        Effect.map((result) => result.stdout),
-      );
-
-    yield* isolatedSyncBack(
-      "Codex auth",
-      syncBackCodexAuthJson({
-        blueprint,
-        credentialCipher,
-        readAuthJson: () => readWorkspaceFile(CODEX_AUTH_JSON_PATH),
-      }),
-    );
-
-    yield* isolatedSyncBack(
-      "Claude credentials",
-      syncBackClaudeCredentials({
-        blueprint,
-        // Launch-time truth from the runtime instance row: only accounts Sealant seeded as a FILE
-        // in THIS workspace may sync back (env-injected workspaces never do).
-        launchFileInjectedAccountIds: launchCredentialInjections
-          .filter((entry) => entry.provider === "claude" && entry.injection === "file")
-          .map((entry) => entry.connectedAccountId),
-        credentialCipher,
-        readCredentialsJson: () => readWorkspaceFile(CLAUDE_CREDENTIALS_JSON_PATH),
-      }),
-    );
-  }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Credential sync-back failed after run exec; continuing.", cause),
-    ),
-    Effect.asVoid,
-  );
-
 /** Captures the staged git diff after execution (shared by both framings). */
 const captureChanges = (target: SealantTarget) =>
   Effect.gen(function* () {
@@ -388,12 +305,12 @@ export const processRunExecJobEffect = (
           .pipe(Effect.ignore),
       ),
       Effect.ensuring(
-        syncBackHarnessCredentials(
+        syncBackWorkspaceCredentials({
           attemptId,
-          target,
-          options.credentialCipher,
+          containerId: resourceId,
           launchCredentialInjections,
-        ),
+          credentialCipher: options.credentialCipher,
+        }),
       ),
     );
   });

@@ -2,13 +2,14 @@
  * The Claude inference engine — runs the exchange through the OFFICIAL Claude Agent SDK.
  *
  * COMPLIANCE (docs/connected-accounts-design.md §2/§9, load-bearing): the stored subscription
- * credential is consumed exactly the way Anthropic documents for third parties —
- * `CLAUDE_CODE_OAUTH_TOKEN` in the environment of the official Claude Code runtime, which the
- * Agent SDK spawns and drives (for session-file accounts the caller passes the file's
- * claudeAiOauth.accessToken through the same env path). This
- * module NEVER calls a model API directly, never logs the token, and strips any ambient
- * `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so the exchange cannot
- * silently bill a different identity than the resolved connected account.
+ * credential is consumed exactly the way Anthropic documents for third parties — through the
+ * environment of the official Claude Code runtime, which the Agent SDK spawns and drives. Setup
+ * tokens ride `CLAUDE_CODE_OAUTH_TOKEN`; session credential files are materialized into a private
+ * per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) so the official CLI reads the file
+ * itself AND can rotate the session with its refresh token — the control plane never calls
+ * Anthropic's token endpoint. This module NEVER calls a model API directly, never logs the token,
+ * and strips any ambient `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` from the subprocess env so
+ * the exchange cannot silently bill a different identity than the resolved connected account.
  *
  * Caller-defined tools are exposed to the model through an in-process MCP server registered with
  * the caller's JSON schemas VERBATIM (the low-level @modelcontextprotocol/sdk server — the agent
@@ -57,15 +58,42 @@ export interface InferenceToolDefinition {
   readonly inputSchema: unknown;
 }
 
+/**
+ * How the exchange authenticates the official Claude Code runtime. Secrets are used ONLY for the
+ * subprocess env (or the config dir the caller provisioned); never stored, never logged.
+ */
+export type InferenceAuth =
+  | {
+      /** Setup-token accounts: the documented `CLAUDE_CODE_OAUTH_TOKEN` env path. */
+      readonly kind: "oauth-token";
+      readonly oauthToken: string;
+    }
+  | {
+      /**
+       * Session-file accounts: a caller-provisioned private config dir holding the decrypted
+       * .credentials.json; the CLI reads it via `CLAUDE_CONFIG_DIR` and can rotate the session
+       * in place. `accessToken` is carried ONLY so engine error text can be redacted.
+       */
+      readonly kind: "config-dir";
+      readonly configDir: string;
+      readonly accessToken: string;
+    };
+
 export interface InferenceStartInput {
-  /** Decrypted connected-account OAuth token. Used ONLY for the subprocess env; never stored. */
-  readonly oauthToken: string;
+  readonly auth: InferenceAuth;
   readonly prompt: string;
   readonly system?: string;
   readonly model?: string;
   readonly maxTurns?: number;
   readonly tools: readonly InferenceToolDefinition[];
   readonly responseFormat?: { readonly type: "json"; readonly schema?: unknown };
+  /**
+   * Invoked exactly once when the session ends — result delivered, engine failure, OR idle
+   * expiry. Config-dir callers hook their read-back-and-persist + cleanup here (the CLI may have
+   * rotated the session file even when the exchange failed). Fire-and-forget: errors are the
+   * callback's own to swallow; they never affect the exchange result.
+   */
+  readonly onSessionEnd?: () => Promise<void>;
 }
 
 export interface InferenceContinueInput {
@@ -115,10 +143,26 @@ export class InferenceEngine extends Context.Service<InferenceEngine, InferenceE
 interface LiveSession {
   readonly state: InferenceSessionState;
   readonly close: () => void;
+  /** End-of-session hook (config-dir persist + cleanup); undefined for token auth. */
+  readonly onSessionEnd?: (() => Promise<void>) | undefined;
 }
 
 // Module-level on purpose — see the header comment.
 const sessions = new Map<string, LiveSession>();
+
+/**
+ * Fire the end-of-session hook exactly once (callers only invoke this right after removing the
+ * session from the map, so a double-fire cannot happen). Fire-and-forget: the exchange result
+ * never waits on — or fails because of — the hook.
+ */
+const notifySessionEnd = (session: LiveSession): void => {
+  if (session.onSessionEnd === undefined) {
+    return;
+  }
+  void session.onSessionEnd().catch((error: unknown) => {
+    console.warn("Inference onSessionEnd hook failed", { error });
+  });
+};
 
 let sweeper: NodeJS.Timeout | undefined;
 const ensureSweeper = (): void => {
@@ -132,6 +176,7 @@ const ensureSweeper = (): void => {
         session.state.expire("Inference session expired after inactivity.");
         session.close();
         sessions.delete(id);
+        notifySessionEnd(session);
       }
     }
   }, SWEEP_INTERVAL_MS);
@@ -143,6 +188,7 @@ const dropSession = (id: string): void => {
   if (session !== undefined) {
     session.close();
     sessions.delete(id);
+    notifySessionEnd(session);
   }
 };
 
@@ -181,18 +227,31 @@ const buildCallerToolServer = (
   return server;
 };
 
-/** Subprocess env: ambient Anthropic identities stripped, the resolved account's token injected. */
-const buildEnv = (oauthToken: string): Record<string, string | undefined> => {
+/** Subprocess env: ambient Anthropic identities stripped, the resolved account's auth injected. */
+const buildEnv = (auth: InferenceAuth): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...process.env };
   delete env["ANTHROPIC_API_KEY"];
   delete env["ANTHROPIC_AUTH_TOKEN"];
   delete env["ANTHROPIC_PROFILE"];
-  env["CLAUDE_CODE_OAUTH_TOKEN"] = oauthToken;
+  if (auth.kind === "oauth-token") {
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = auth.oauthToken;
+    delete env["CLAUDE_CONFIG_DIR"];
+  } else {
+    // Session file: the CLI must authenticate from the provisioned config dir's .credentials.json
+    // (and rotate it there with the refresh token). An ambient CLAUDE_CODE_OAUTH_TOKEN would
+    // shadow the file and disable the refresh, so it is stripped.
+    delete env["CLAUDE_CODE_OAUTH_TOKEN"];
+    env["CLAUDE_CONFIG_DIR"] = auth.configDir;
+  }
   env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "sealant-control-plane";
   return env;
 };
 
-const toEngineError = (error: unknown, oauthToken: string): InferenceEngineError => {
+/** The secret to redact from engine error text, per auth mode. */
+const authSecret = (auth: InferenceAuth): string =>
+  auth.kind === "oauth-token" ? auth.oauthToken : auth.accessToken;
+
+const toEngineError = (error: unknown, secret: string): InferenceEngineError => {
   if (error instanceof InferenceEngineError) {
     return error;
   }
@@ -200,7 +259,7 @@ const toEngineError = (error: unknown, oauthToken: string): InferenceEngineError
     return new InferenceEngineError("timeout", error.message);
   }
   const raw = error instanceof Error ? error.message : String(error);
-  const message = redactSecret(raw, oauthToken);
+  const message = redactSecret(raw, secret);
   return isAuthFailureMessage(message)
     ? new InferenceEngineError("auth", message, { cause: error })
     : new InferenceEngineError("engine", message, { cause: error });
@@ -230,7 +289,7 @@ const startExchange = async (input: InferenceStartInput): Promise<InferenceEngin
   const exchange = query({
     prompt: input.prompt,
     options: {
-      env: buildEnv(input.oauthToken),
+      env: buildEnv(input.auth),
       cwd: tmpdir(),
       // Inference, not an agent workspace: no built-in tools, no filesystem settings, no partials.
       tools: [],
@@ -292,7 +351,7 @@ const startExchange = async (input: InferenceStartInput): Promise<InferenceEngin
           });
         } else {
           const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-          state.fail(toEngineError(new Error(detail), input.oauthToken));
+          state.fail(toEngineError(new Error(detail), authSecret(input.auth)));
         }
       }
       if (!state.isSettled) {
@@ -301,7 +360,7 @@ const startExchange = async (input: InferenceStartInput): Promise<InferenceEngin
         );
       }
     } catch (error) {
-      state.fail(toEngineError(error, input.oauthToken));
+      state.fail(toEngineError(error, authSecret(input.auth)));
     }
   })();
 
@@ -314,7 +373,7 @@ const startExchange = async (input: InferenceStartInput): Promise<InferenceEngin
   } catch (error) {
     state.expire("Inference exchange failed.");
     dropSession(sessionId);
-    throw toEngineError(error, input.oauthToken);
+    throw toEngineError(error, authSecret(input.auth));
   }
 };
 
@@ -355,7 +414,7 @@ export const InferenceEngineLive = Layer.succeed(InferenceEngine, {
   start: (input) =>
     Effect.tryPromise({
       try: () => startExchange(input),
-      catch: (error) => toEngineError(error, input.oauthToken),
+      catch: (error) => toEngineError(error, authSecret(input.auth)),
     }),
   continueSession: (input) =>
     Effect.tryPromise({

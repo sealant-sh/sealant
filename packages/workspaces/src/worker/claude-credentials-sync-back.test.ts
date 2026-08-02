@@ -11,10 +11,7 @@ import { Effect, Layer } from "effect";
 import { vi } from "vitest";
 
 import {
-  isNewerClaudeCredentials,
-  isPlausibleClaudeExpiry,
-  MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS,
-  readStoredClaudeExpiresAt,
+  persistClaudeCredentialsIfNewer,
   syncBackClaudeCredentials,
 } from "./claude-credentials-sync-back.js";
 
@@ -80,56 +77,94 @@ const noClaudeBlueprint: NewWorkspace = newWorkspaceSchema.parse({
   harness: { id: "opencode" },
 });
 
-describe("isNewerClaudeCredentials", () => {
-  it("never persists when the observed file has no expiresAt", () => {
+/*
+The pure freshness guards (isNewerClaudeCredentials, isPlausibleClaudeExpiry,
+readStoredClaudeExpiresAt) moved to @sealant/credentials — their unit tests live in
+packages/credentials/src/claude-session.test.ts. Here we test the shared persist core and the
+workspace sync-back orchestration on top of it.
+*/
+
+describe("persistClaudeCredentialsIfNewer", () => {
+  const persist = (input: { readonly accounts: unknown; readonly observed: string }) =>
+    Effect.runPromise(
+      persistClaudeCredentialsIfNewer({
+        connectedAccountId: "cacc_claude",
+        observedCredentialsJson: input.observed,
+        credentialCipher: fakeCipher,
+        source: "test",
+      }).pipe(Effect.provide(provideAccounts(input.accounts))),
+    );
+
+  it("returns synced and writes when the observed file is strictly newer", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    const outcome = await persist({
+      accounts,
+      observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000),
+    });
+    expect(outcome).toBe("synced");
+    expect(accounts.replacePayload).toHaveBeenCalledOnce();
+    expect(accounts.updateSyncState).toHaveBeenCalledOnce();
+  });
+
+  it("returns skipped-not-newer for equal or older files, without writing", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
     expect(
-      isNewerClaudeCredentials({ observedExpiresAt: undefined, storedExpiresAt: undefined }),
-    ).toBe(false);
-    expect(isNewerClaudeCredentials({ observedExpiresAt: undefined, storedExpiresAt: 100 })).toBe(
-      false,
+      await persist({ accounts, observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT) }),
+    ).toBe("skipped-not-newer");
+    expect(
+      await persist({ accounts, observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT - 1_000) }),
+    ).toBe("skipped-not-newer");
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
+  });
+
+  it("returns skipped-invalid-file for unparseable content", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    expect(await persist({ accounts, observed: "{ this is not json" })).toBe(
+      "skipped-invalid-file",
     );
+    expect(accounts.getById).not.toHaveBeenCalled();
   });
 
-  it("persists a first-ever expiry", () => {
-    expect(isNewerClaudeCredentials({ observedExpiresAt: 100, storedExpiresAt: undefined })).toBe(
-      true,
+  it("returns skipped-implausible-expiry for sentinel expiries (30-day belt)", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    expect(
+      await persist({ accounts, observed: credentialsJsonWithExpiry(9_999_999_999_999) }),
+    ).toBe("skipped-implausible-expiry");
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
+  });
+
+  it("returns skipped-not-session-file for setup-token accounts (never converted)", async () => {
+    const accounts = connectedAccountRepoStub(
+      createClaudeAccount({
+        kind: "oauth-token",
+        encryptedPayload: `sealed:${JSON.stringify({ token: "sk-ant-oat01-test" })}`,
+        metadata: { tokenSuffix: "test" },
+      }),
     );
+    expect(
+      await persist({ accounts, observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000) }),
+    ).toBe("skipped-not-session-file");
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
   });
 
-  it("persists only strictly newer expiries (rotated-session safety)", () => {
-    expect(isNewerClaudeCredentials({ observedExpiresAt: 200, storedExpiresAt: 100 })).toBe(true);
-    // Equal must NOT write.
-    expect(isNewerClaudeCredentials({ observedExpiresAt: 100, storedExpiresAt: 100 })).toBe(false);
-    // Older must NOT write.
-    expect(isNewerClaudeCredentials({ observedExpiresAt: 50, storedExpiresAt: 100 })).toBe(false);
-  });
-});
-
-describe("isPlausibleClaudeExpiry", () => {
-  const now = Date.parse("2026-08-01T00:00:00.000Z");
-
-  it("accepts past and near-future expiries (real sessions live hours)", () => {
-    expect(isPlausibleClaudeExpiry(now - 60_000, now)).toBe(true);
-    expect(isPlausibleClaudeExpiry(now + 8 * 60 * 60 * 1_000, now)).toBe(true);
-    expect(isPlausibleClaudeExpiry(now + MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS, now)).toBe(true);
+  it("returns skipped-account-unavailable for archived accounts", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount({ archivedAt: new Date() }));
+    expect(
+      await persist({ accounts, observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000) }),
+    ).toBe("skipped-account-unavailable");
+    expect(accounts.replacePayload).not.toHaveBeenCalled();
   });
 
-  it("rejects sentinel expiries more than 30 days ahead", () => {
-    expect(isPlausibleClaudeExpiry(now + MAX_PLAUSIBLE_CLAUDE_EXPIRY_AHEAD_MS + 1, now)).toBe(
-      false,
-    );
-    // The concrete poisoning case: a harness-seeded file stamped with a far-future sentinel.
-    expect(isPlausibleClaudeExpiry(9_999_999_999_999, now)).toBe(false);
-  });
-});
-
-describe("readStoredClaudeExpiresAt", () => {
-  it("reads a numeric expiresAt and rejects everything else", () => {
-    expect(readStoredClaudeExpiresAt({ expiresAt: 123 })).toBe(123);
-    expect(readStoredClaudeExpiresAt({ expiresAt: "123" })).toBeUndefined();
-    expect(readStoredClaudeExpiresAt({ expiresAt: Number.NaN })).toBeUndefined();
-    expect(readStoredClaudeExpiresAt({})).toBeUndefined();
-    expect(readStoredClaudeExpiresAt(null)).toBeUndefined();
+  it("returns failed (never throws) when the repo write fails", async () => {
+    const accounts = {
+      getById: vi.fn((_id: string) => Effect.succeed(createClaudeAccount())),
+      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
+    };
+    expect(
+      await persist({ accounts, observed: credentialsJsonWithExpiry(STORED_EXPIRES_AT + 1_000) }),
+    ).toBe("failed");
+    expect(accounts.updateSyncState).not.toHaveBeenCalled();
   });
 });
 

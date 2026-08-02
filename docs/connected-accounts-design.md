@@ -56,8 +56,19 @@ posture.
   the Agent SDK, never raw `POST /v1/messages`.
 - **Refresh story:** setup tokens: none — detect 401s → mark the account `invalid` → prompt re-auth;
   record `connectedAt` and nudge near the 12-month mark. Session files: the official CLI refreshes
-  the session in-container; Sealant syncs the mutated file back after runs, newest-wins on
-  `claudeAiOauth.expiresAt` (mirrors the codex sync-back).
+  the session in-container; Sealant syncs the mutated file back after runs **and on every container
+  teardown path** (workspace stop, expiry reap — interactive/PTY sessions rotate tokens without ever
+  running an exec job), newest-wins on `claudeAiOauth.expiresAt` (mirrors the codex sync-back).
+  _Extended (Aug 2026):_ the control plane also lets the CLI refresh outside workspaces, always
+  through a private per-invocation `CLAUDE_CONFIG_DIR` (0700 dir / 0600 file) holding the decrypted
+  session file: (a) **inference at point of use** runs the Agent SDK against that config dir instead
+  of passing the access token via env, so an expired token is refreshed by the CLI right where it is
+  consumed; (b) a **keep-fresh worker sweeper** scans active session-file accounts every ~15 minutes
+  and, for any expiring within ~30 minutes, runs a minimal one-turn official-CLI exchange against
+  such a config dir (deliberately spending a trivial slice of the subscription — operator-approved).
+  Both read the rotated file back and persist it through the same newest-wins + 30-day-plausibility
+  guards. The hard rule is unchanged: Sealant NEVER calls Anthropic's token endpoint — every refresh
+  is performed by the official CLI/Agent SDK.
 - Always offer `ANTHROPIC_API_KEY` as a first-class alternative; it is Anthropic's stated preference
   for products and our fallback if policy shifts again (four swings Jan–Jun 2026).
 

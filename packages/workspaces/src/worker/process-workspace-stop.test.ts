@@ -5,15 +5,20 @@
  * container on a stored-"stopped" workspace as stranded and would kill the fresh runtime.
  */
 import {
+  ConnectedAccountRepo,
+  WorkspaceAttemptRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
+  type ConnectedAccountRepoService,
   type Workspace,
+  type WorkspaceAttemptRepoService,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { SealantRuntime } from "../sealantd/runtime.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 const runtimeInstance = (
@@ -66,7 +71,14 @@ const stubAdapter = (stop: RuntimeAdapter["stop"]): RuntimeAdapter => ({
 interface Harness {
   readonly markStopped: ReturnType<typeof vi.fn>;
   readonly setWorkspaceStatus: ReturnType<typeof vi.fn>;
-  readonly layer: Layer.Layer<WorkspaceRepo | WorkspaceRuntimeInstanceRepo>;
+  readonly getAttemptSnapshotByRunId: ReturnType<typeof vi.fn>;
+  readonly layer: Layer.Layer<
+    | WorkspaceRepo
+    | WorkspaceRuntimeInstanceRepo
+    | WorkspaceAttemptRepo
+    | ConnectedAccountRepo
+    | SealantRuntime
+  >;
 }
 
 const makeHarness = (input: {
@@ -98,10 +110,31 @@ const makeHarness = (input: {
     listRunningDockerInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
   });
 
+  // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
+  // returning undefined makes it a logged no-op without touching accounts or the exec bridge.
+  const getAttemptSnapshotByRunId = vi.fn((_runId: string) => Effect.succeed(undefined));
+  const attemptRepoLayer = Layer.succeed(WorkspaceAttemptRepo, {
+    getAttemptSnapshotByRunId,
+  } as unknown as WorkspaceAttemptRepoService);
+  const connectedAccountRepoLayer = Layer.succeed(
+    ConnectedAccountRepo,
+    {} as ConnectedAccountRepoService,
+  );
+  const sealantRuntimeLayer = Layer.succeed(SealantRuntime, {
+    connect: () => Effect.die("exec bridge unused in stop tests"),
+  });
+
   return {
     markStopped,
     setWorkspaceStatus,
-    layer: Layer.mergeAll(workspaceRepoLayer, runtimeInstanceRepoLayer),
+    getAttemptSnapshotByRunId,
+    layer: Layer.mergeAll(
+      workspaceRepoLayer,
+      runtimeInstanceRepoLayer,
+      attemptRepoLayer,
+      connectedAccountRepoLayer,
+      sealantRuntimeLayer,
+    ),
   };
 };
 
@@ -205,5 +238,37 @@ describe("processWorkspaceStopEffect", () => {
     expect(stop).not.toHaveBeenCalled();
     expect(harness.markStopped).not.toHaveBeenCalled();
     expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+  });
+
+  it("runs the credential sync-back BEFORE the container is destroyed (docker teardown path)", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const order: string[] = [];
+    harness.getAttemptSnapshotByRunId.mockImplementation((_runId: string) => {
+      order.push("sync-back");
+      return Effect.succeed(undefined);
+    });
+    const stop = vi.fn(async () => {
+      order.push("adapter-stop");
+      return {
+        adapter: "docker" as const,
+        resourceId: "container-1",
+        outcome: "stopped" as const,
+      };
+    });
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    // Rotated session files can only be read while the container is alive.
+    expect(order).toEqual(["sync-back", "adapter-stop"]);
   });
 });
