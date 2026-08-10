@@ -9,7 +9,7 @@ RUN corepack enable
 WORKDIR /app
 
 COPY . .
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --lockfile=false
 RUN pnpm --filter @sealant/ssh-gateway build
 
 FROM node:24-bookworm-slim AS runtime
