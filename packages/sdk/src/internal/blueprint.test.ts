@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { opencode } from "../harness.js";
@@ -77,6 +81,53 @@ describe("buildCreateWorkspaceRequest", () => {
       kind: "mount",
       hostPath: "/srv/store/worktrees/session-1",
     });
+  });
+
+  it("automatically carries a linked worktree's shared Git directory as a writable bind", () => {
+    const root = mkdtempSync(join(tmpdir(), "sealant-blueprint-worktree-"));
+    try {
+      const repository = join(root, "repo.git");
+      const worktree = join(root, "worktrees", "session-1");
+      const gitDirectory = join(repository, "worktrees", "session-1");
+      mkdirSync(gitDirectory, { recursive: true });
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(gitDirectory, "commondir"), "../..\n");
+      writeFileSync(join(worktree, ".git"), `gitdir: ${gitDirectory}\n`);
+
+      const { payload } = buildCreateWorkspaceRequest(
+        { source: { kind: "mount", path: worktree }, harness: opencode() },
+        config,
+      );
+      const spec = payload.spec as unknown as SpecShape;
+
+      expect(spec.sources.mounts).toEqual([
+        { hostPath: repository, mountPath: repository, readOnly: false },
+      ]);
+
+      const withExistingBind = buildCreateWorkspaceRequest(
+        {
+          source: { kind: "mount", path: worktree },
+          harness: opencode(),
+          mounts: [{ hostPath: repository, mountPath: repository, readOnly: false }],
+        },
+        config,
+      );
+      const existingSpec = withExistingBind.payload.spec as unknown as SpecShape;
+      expect(existingSpec.sources.mounts).toHaveLength(1);
+
+      expect(() =>
+        buildCreateWorkspaceRequest(
+          {
+            source: { kind: "mount", path: worktree },
+            harness: opencode(),
+            mounts: [{ hostPath: repository, mountPath: repository }],
+          },
+          config,
+        ),
+      ).toThrow(/required for writable linked-worktree Git metadata/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("folds extra mounts into `spec.sources.mounts`, sending readOnly only when chosen", () => {

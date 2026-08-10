@@ -19,6 +19,7 @@ import type { CreateOptions } from "../types.js";
 import type { SealantInternalConfig } from "./config.js";
 import { mapWorkspaceCredentials } from "./credentials.js";
 import { parseTtlSeconds } from "./duration.js";
+import { discoverLinkedWorktreeMetadataMount } from "./linked-worktree.js";
 
 const sanitizeRepoSlug = (value: string): string => {
   const slug = value
@@ -58,6 +59,30 @@ export const buildCreateWorkspaceRequest = (
       .filter((s) => s.length > 0)
       .pop() ?? sourceName;
   const credentials = mapWorkspaceCredentials(options.credentials);
+  const linkedWorktreeMount =
+    options.source === undefined ? null : discoverLinkedWorktreeMetadataMount(options.source.path);
+  const explicitMounts = options.mounts ?? [];
+  const existingMetadataMount =
+    linkedWorktreeMount === null
+      ? undefined
+      : explicitMounts.find((mount) => mount.mountPath === linkedWorktreeMount.mountPath);
+  if (
+    linkedWorktreeMount !== null &&
+    existingMetadataMount !== undefined &&
+    (existingMetadataMount.hostPath !== linkedWorktreeMount.hostPath ||
+      existingMetadataMount.readOnly !== false)
+  ) {
+    throw new SealantError(
+      `Mount path ${linkedWorktreeMount.mountPath} is required for writable linked-worktree Git metadata and conflicts with an explicit mount.`,
+      { code: "linked_worktree_mount_conflict" },
+    );
+  }
+  const mounts = [
+    ...explicitMounts,
+    ...(linkedWorktreeMount === null || existingMetadataMount !== undefined
+      ? []
+      : [linkedWorktreeMount]),
+  ];
   const spec = {
     version: "1",
     sources: {
@@ -71,10 +96,10 @@ export const buildCreateWorkspaceRequest = (
               ...(options.ref === undefined ? {} : { ref: options.ref }),
             }
           : { kind: "mount", hostPath: options.source?.path },
-      ...(options.mounts === undefined || options.mounts.length === 0
+      ...(mounts.length === 0
         ? {}
         : {
-            mounts: options.mounts.map((mount) => ({
+            mounts: mounts.map((mount) => ({
               hostPath: mount.hostPath,
               mountPath: mount.mountPath,
               // Omitted = the blueprint's default (read-only). Only an explicit choice is sent.
