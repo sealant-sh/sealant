@@ -158,13 +158,15 @@ jobs:
             exec npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Build
-        run: pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" run build
+        run:
+          pnpm --config.lockfile=false --filter "@sealant/api-contracts" --filter "@sealant/sdk" run
+          build
 
       # Tokenless OIDC Trusted Publishing: `registry-url` + `id-token: write` is the whole auth
       # mechanism (no NPM_TOKEN secret). `--provenance` attaches the public build attestation.
       - name: Publish to npm
         run: |
-          pnpm --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
+          pnpm --config.lockfile=false --filter "@sealant/api-contracts" --filter "@sealant/sdk" \
             publish --access public --no-git-checks --provenance
 
   release:

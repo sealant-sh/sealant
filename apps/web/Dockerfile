@@ -13,7 +13,7 @@ RUN corepack enable
 WORKDIR /app
 
 COPY . .
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --lockfile=false
 RUN pnpm --filter @sealant/web build
 RUN pnpm --filter @sealant/web deploy --legacy --prod /deploy
 

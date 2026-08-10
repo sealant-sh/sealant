@@ -9,7 +9,7 @@ RUN corepack enable
 WORKDIR /app
 
 COPY . .
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --lockfile=false
 RUN pnpm --filter @sealant/worker build
 # The bundled Agent SDK spawns its vendored `claude` CLI (the session keep-fresh sweeper's refresh
 # ping), resolved at runtime as @anthropic-ai/claude-agent-sdk-{platform}-{arch} from a node_modules
