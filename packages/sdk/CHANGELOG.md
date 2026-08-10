@@ -1,5 +1,12 @@
 # @sealant/sdk
 
+## 0.12.1
+
+### Patch Changes
+
+- Updated dependencies [7ca347a]
+  - @sealant/api-contracts@0.12.1
+
 ## 0.12.0
 
 ### Minor Changes
