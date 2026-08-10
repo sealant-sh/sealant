@@ -1,5 +1,18 @@
 # @sealant/sdk
 
+## 0.12.0
+
+### Minor Changes
+
+- 7fc7aef: Mount-sourced linked Git worktrees now automatically carry their shared Git metadata into the
+  workspace. The worktree remains the single public source and all repository data stays in
+  caller-owned host storage, while Git commands inside the workspace can follow the existing `.git`
+  pointer normally.
+
+### Patch Changes
+
+- @sealant/api-contracts@0.12.0
+
 ## 0.11.0
 
 ### Patch Changes
