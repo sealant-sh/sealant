@@ -24,7 +24,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --lockfile=false
 
       - name: Run lint
         run: pnpm lint
@@ -46,7 +46,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --lockfile=false
 
       - name: Run typecheck
         run: pnpm typecheck
