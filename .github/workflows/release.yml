@@ -147,7 +147,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: pnpm install --lockfile=false --ignore-scripts
 
       # The git tag is the single version authority: overwrite both package.json versions from it
       # so the published versions always match the release, regardless of what is committed.

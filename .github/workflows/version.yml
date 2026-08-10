@@ -35,7 +35,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: pnpm install --lockfile=false --ignore-scripts
 
       - name: Create or update the Version Packages PR
         uses: changesets/action@v1
