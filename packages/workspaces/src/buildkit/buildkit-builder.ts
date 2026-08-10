@@ -262,7 +262,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
  * images without touching the released pin.
  */
 const sealantdImageReference =
-  process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.6.0";
+  process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.6.2";
 
 /**
  * In-container control socket `sealantd boot` listens on. Build-static; promoted to
