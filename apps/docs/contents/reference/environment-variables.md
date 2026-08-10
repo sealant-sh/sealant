@@ -58,14 +58,24 @@ install command.
 The default `compose.selfhost.yaml` reads these variables when present, but `install.sh` does not
 write them for you.
 
-| Variable                       | Default                                | Meaning                                                                                                                         |
-| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `SEALANT_IMAGE_NS`             | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too. |
-| `SEALANT_SSH_HOST`             | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                   |
-| `SEALANT_WEB_URL`              | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                      |
-| `SEALANT_WEB_TRUSTED_ORIGINS`  | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                              |
-| `SEALANT_CORS_ALLOWED_ORIGINS` | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                  |
-| `DOCKER_SOCKET_PATH`           | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                     |
+| Variable                            | Default                                | Meaning                                                                                                                                  |
+| ----------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_IMAGE_NS`                  | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.          |
+| `SEALANT_SSH_HOST`                  | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                            |
+| `SEALANT_WEB_URL`                   | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                               |
+| `SEALANT_WEB_TRUSTED_ORIGINS`       | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                       |
+| `SEALANT_CORS_ALLOWED_ORIGINS`      | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                           |
+| `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                              |
+| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute host roots allowed as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset. |
+| `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                   |
+
+For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
+absolute path to `~/.sealant/.env` and reconcile the stack:
+
+```sh
+printf '\nSEALANT_MOUNT_ALLOWED_STORE_ROOTS=%s/.mend/store\n' "$HOME" >>~/.sealant/.env
+docker compose --project-directory ~/.sealant up -d
+```
 
 ## GitHub App variables
 
@@ -97,20 +107,14 @@ See [GitHub App setup](/docs/guides/github-app) for the full walkthrough.
 
 Connected accounts require one extra secret: `SEALANT_CREDENTIALS_KEY`, a base64 string that decodes
 to exactly 32 random bytes. The API uses it to seal connected-account payloads, and the worker uses
-the same key to decrypt them before launch.
+the same key to decrypt them before launch. The installer does not generate it, but the self-host
+compose file passes it to both services when present. Generate it once, append it to the install
+environment, and reconcile the stack:
 
-The runtime code accepts this variable, but the current default `compose.selfhost.yaml` does **not**
-generate or pass it through. To enable connected accounts on a self-host install, generate a key,
-add it to `~/.sealant/.env`, and add the same environment entry to both the `api` and `worker`
-services in `~/.sealant/compose.yaml`:
-
-```yaml
-SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:?set in .env}
+```sh
+printf '\nSEALANT_CREDENTIALS_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >>~/.sealant/.env
+docker compose --project-directory ~/.sealant up -d
 ```
-
-Then restart with `docker compose --project-directory ~/.sealant up -d`. A later installer re-run
-downloads a fresh compose file, so you would need to reapply this compose edit until the packaged
-compose file includes it.
 
 ## Notable runtime defaults
 
