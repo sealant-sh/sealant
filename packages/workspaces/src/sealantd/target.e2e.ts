@@ -174,8 +174,8 @@ describe.skipIf(!imageAvailable)(
           runtime: { env: { SEALANT_FOREGROUND_COMMAND: "sleep infinity" } },
         }),
         publishedImage: {
-          repository: "sealant-workspace-fedora-claude-code",
-          tag: "claude-code",
+          repository: "sealant-workspace-fedora",
+          tag: "latest",
           reference: DEFAULT_IMAGE_REF,
           // `launch` runs `docker run ... <digestReference>`; the local tag resolves directly.
           digestReference: DEFAULT_IMAGE_REF,

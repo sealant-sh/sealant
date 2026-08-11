@@ -323,6 +323,9 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("SEALANT_WORKSPACE_REPO_URL=https://github.com/example/repo.git");
     expect(args).toContain("SEALANT_WORKSPACE_REPO_REF=main");
     expect(args).toContain("SEALANT_OCI_RUNTIME=runc");
+    // Harness identity rides launch env, not image ENV — the image carries every baked harness.
+    expect(args).toContain("SEALANT_HARNESS_BANNER=Starting opencode workspace");
+    expect(args).toContain("SEALANT_HARNESS_LAUNCH_COMMAND=opencode");
     expect(result.adapter).toBe("docker");
     expect(result.resourceId).toBe("container-id-123");
     expect(result.status).toBe("ready");
