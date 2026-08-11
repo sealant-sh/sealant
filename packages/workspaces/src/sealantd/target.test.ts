@@ -57,6 +57,17 @@ describe("sealantTargetForDockerContainer", () => {
 });
 
 describe("sealantTargetForRuntimeInstance", () => {
+  it("uses the persisted Unix control endpoint when the runtime exposes one", () => {
+    const target = sealantTargetForRuntimeInstance(
+      runtimeInstance({ endpoint: "unix:///run/sealant/sockets/workspace-123/control.sock" }),
+    );
+
+    expect(target).toEqual({
+      kind: "unix-socket",
+      socketPath: "/run/sealant/sockets/workspace-123/control.sock",
+    });
+  });
+
   it("derives a target from a running docker instance using its resourceId", () => {
     const target = sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "ctr-running" }));
 

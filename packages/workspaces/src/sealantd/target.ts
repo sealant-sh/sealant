@@ -1,17 +1,13 @@
 /**
- * The P6 consumer seam: derive a `SealantTarget` from the existing Docker runtime path, then drive a
- * real control session through the P5 `SealantRuntime` service.
+ * Derive the reachable sealantd control target for a persisted runtime instance, then drive a real
+ * control session through `SealantRuntime`.
  *
- * Two layers live here, both additive and default-off — they introduce no new behavior on the
- * existing workspace-launch path (`DockerRuntimeAdapter.launch` is unchanged; nothing here is invoked
- * by it):
+ * Two layers live here:
  *
  *   1. Pure target derivation (`sealantTargetForDockerContainer` /
- *      `sealantTargetForRuntimeInstance`). Maps a docker container id — exactly the `resourceId` that
- *      `DockerRuntimeAdapter.launch` already returns and persists via
- *      `packages/db/.../workspace-runtime-instances.ts` — onto the `{ kind: "docker-exec";
- *      containerId; socketPath }` shape `SealantRuntime.connect` consumes. No I/O, fully unit
- *      testable.
+ *      `sealantTargetForRuntimeInstance`). Prefers the persisted `unix://` endpoint exposed by the
+ *      Docker adapter and falls back to the container `resourceId` plus docker-exec. No I/O, fully
+ *      unit testable.
  *
  *   2. A worker-consumable Effect helper (`execInWorkspace`). This is the realistic "what a worker
  *      calls" API: hand it a target + a command, get back decoded stdout + the exit code. It owns the
@@ -37,7 +33,10 @@ export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
 export interface RuntimeInstanceTargetSource {
   readonly adapter: "docker" | "k8s" | "k3s" | null;
   readonly resourceId: string | null;
+  readonly endpoint: string | null;
 }
+
+const UNIX_ENDPOINT_PREFIX = "unix://";
 
 /**
  * Derives the docker-exec target for a container id. Pure. `containerId` is the `resourceId` returned
@@ -54,10 +53,9 @@ export const sealantTargetForDockerContainer = (
 });
 
 /**
- * Derives a target from a persisted runtime instance, or `undefined` when the instance can't be
- * reached over the docker-exec transport — i.e. it isn't a docker adapter, or it has no resource id
- * yet (still pending). Only the `docker` adapter is bridgeable today; k8s/k3s return `undefined`
- * until their own transports exist. Pure.
+ * Derives a target from a persisted runtime instance, preferring a host Unix socket and falling back
+ * to docker-exec. Returns `undefined` for unsupported adapters or when neither endpoint nor resource
+ * id can address the runtime. Pure.
  */
 export const sealantTargetForRuntimeInstance = (
   instance: RuntimeInstanceTargetSource,
@@ -65,6 +63,14 @@ export const sealantTargetForRuntimeInstance = (
 ): SealantTarget | undefined => {
   if (instance.adapter !== "docker") {
     return undefined;
+  }
+
+  const endpoint = instance.endpoint?.trim();
+  if (endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)) {
+    const endpointSocketPath = endpoint.slice(UNIX_ENDPOINT_PREFIX.length);
+    if (endpointSocketPath.length > 0) {
+      return { kind: "unix-socket", socketPath: endpointSocketPath };
+    }
   }
 
   if (instance.resourceId === null || instance.resourceId.length === 0) {
@@ -96,7 +102,7 @@ export interface ExecInWorkspaceCommand {
  * arrives; the exit code comes from that terminal event. Events are filtered to this exec's
  * `processId` so a shared event stream can't cross-contaminate.
  *
- * Requires `SealantRuntime` in context (provide e.g. `SealantRuntimeDockerExecLive`). All failures
+ * Requires `SealantRuntime` in context (provide e.g. `SealantRuntimeControlLive`). All failures
  * land on the typed `SealantError` channel.
  */
 export const execInWorkspace = (

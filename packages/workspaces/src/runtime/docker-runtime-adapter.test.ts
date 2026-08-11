@@ -820,7 +820,7 @@ describe("DockerRuntimeAdapter", () => {
     expect(dockerSubcommands).not.toContain("port");
   });
 
-  it("surfaces the host socket path as the control endpoint when the bind-mount fast path is enabled", async () => {
+  it("surfaces the host socket endpoint for control-plane sessions even when SSH is disabled", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "sealant-sockets-"));
     const socketHostDir = join(tempDir, "sealant-sockets");
 
@@ -862,7 +862,7 @@ describe("DockerRuntimeAdapter", () => {
         createLaunchInput({
           access: {
             ssh: {
-              enabled: true,
+              enabled: false,
               listenPort: 2222,
             },
           },
@@ -1070,7 +1070,7 @@ describe("DockerRuntimeAdapter", () => {
     expect(writeCalls).toHaveLength(0);
   });
 
-  it("omits a control endpoint when SSH access is disabled", async () => {
+  it("surfaces the docker-exec fallback endpoint when SSH access is disabled", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
     >(async (_command, args) => {
@@ -1112,7 +1112,7 @@ describe("DockerRuntimeAdapter", () => {
     );
 
     expect(result.status).toBe("ready");
-    expect(result.endpoint).toBeUndefined();
+    expect(result.endpoint).toBe("docker-exec://container-id-no-ssh/run/sealant/control.sock");
   });
 
   it("stops a workspace container with docker rm -f", async () => {

@@ -921,7 +921,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
     // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`
     // env is plumbed here.
-    const sshEnabled = parsed.blueprint.access.ssh.enabled;
     const workspaceCloneAuth = this.resolveWorkspaceCloneAuth(parsed);
     const workspaceAuthKeyBase64 =
       workspaceCloneAuth?.type === "file-ref"
@@ -1003,11 +1002,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         await this.writeCredentialFiles(containerId, containerName, credentialFiles);
       }
 
-      // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still
-      // reaches the daemon via the runtime `resourceId` (container id) + the fixed in-container socket
-      // path, so this descriptor is informational; it just must never advertise an sshd host.
-      const endpoint =
-        sshEnabled === true ? this.resolveControlEndpoint(containerId, containerName) : undefined;
+      // The endpoint is the daemon control target used by every control-plane session, independent
+      // of whether the workspace also allows SSH access. Persisting it is what lets API containers
+      // without a Docker CLI connect through the bind-mounted host Unix socket.
+      const endpoint = this.resolveControlEndpoint(containerId, containerName);
 
       return parseRuntimeAdapterLaunchResult({
         adapter: this.id,
@@ -1015,7 +1013,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         reference: containerName,
         // "ready" (not "running"): the readiness probe above proved the control socket accepts.
         status: "ready",
-        ...(endpoint === undefined ? {} : { endpoint }),
+        endpoint,
       });
     } catch (error) {
       if (dockerServiceEnabled) {

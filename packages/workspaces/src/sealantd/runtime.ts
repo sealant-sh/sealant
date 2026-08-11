@@ -11,15 +11,16 @@
  *
  * What this adds on top of that idiom — and why it is new ground for the package:
  *   - `SealantTransport` is a *pluggable* seam. `open(target)` yields a scoped Node `Duplex` carrying
- *     the length-prefixed protobuf control frames. `DockerExecTransport` is the P3
- *     `docker exec -i <ctr> socat - UNIX-CONNECT:<sock>` bridge; an SSH-gateway / k8s exec impl can
- *     slot in later behind the same Tag without touching `SealantRuntime`.
+ *     the length-prefixed protobuf control frames. The live transport connects directly to a
+ *     persisted host Unix socket when available and retains the P3
+ *     `docker exec -i <ctr> socat - UNIX-CONNECT:<sock>` bridge as a fallback.
  *   - `SealantRuntime.connect(target)` is `Scope`-d: it acquires the transport + a `SealantClient`
  *     via `Effect.acquireRelease`, and the release finalizer closes the client (and, transitively,
  *     the transport child). This is the first scoped-resource service in the package; it follows the
  *     Effect resource-safety contract rather than ad-hoc `try/finally`.
  */
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { Duplex } from "node:stream";
 
 import {
@@ -45,13 +46,19 @@ import type * as Scope from "effect/Scope";
  * so additional transports (ssh-gateway, k8s exec) can introduce their own variants without widening
  * the docker case.
  */
-export type SealantTarget = {
-  readonly kind: "docker-exec";
-  /** Container id or name to `docker exec` into. */
-  readonly containerId: string;
-  /** Absolute path of the control socket inside the container. */
-  readonly socketPath: string;
-};
+export type SealantTarget =
+  | {
+      readonly kind: "docker-exec";
+      /** Container id or name to `docker exec` into. */
+      readonly containerId: string;
+      /** Absolute path of the control socket inside the container. */
+      readonly socketPath: string;
+    }
+  | {
+      readonly kind: "unix-socket";
+      /** Absolute path of a control socket exposed on this host. */
+      readonly socketPath: string;
+    };
 
 // ---------------------------------------------------------------------------------------------
 // Errors (Schema.TaggedError — matches packages/db + source-integrations idiom)
@@ -211,44 +218,109 @@ export class SealantTransport extends Context.Service<SealantTransport, SealantT
   "@sealant/workspaces/SealantTransport",
 ) {}
 
-/**
- * P3 bridge as a transport: `docker exec -i <ctr> socat - UNIX-CONNECT:<sock>`. Deliberately no `-t`
- * (a PTY would mangle the binary framing). `docker exec` runs as root (uid 0), which sealantd's
- * `SO_PEERCRED` check always allows, so no `--user`/allowlist flag is needed. The Scope finalizer
- * SIGKILLs the child so the daemon-side connection is dropped.
- */
-const dockerExecTransport: SealantTransportService = {
+/** A live control stream and the teardown operation owned by its enclosing Effect Scope. */
+interface OpenTransport {
+  readonly duplex: Duplex;
+  readonly close: () => void;
+}
+
+const openUnixSocket = (socketPath: string) =>
+  Effect.callback<OpenTransport, TransportError>((resume) => {
+    const socket = createConnection(socketPath);
+
+    const onConnect = () => {
+      socket.off("error", onError);
+      resume(
+        Effect.succeed({
+          duplex: socket,
+          close: () => socket.destroy(),
+        }),
+      );
+    };
+    const onError = (cause: Error) => {
+      socket.off("connect", onConnect);
+      socket.destroy();
+      resume(
+        Effect.fail(
+          new TransportError({
+            operation: "open",
+            message: cause.message,
+            cause,
+          }),
+        ),
+      );
+    };
+
+    socket.once("connect", onConnect);
+    socket.once("error", onError);
+
+    return Effect.sync(() => {
+      socket.off("connect", onConnect);
+      socket.off("error", onError);
+      socket.destroy();
+    });
+  });
+
+const openDockerExec = (target: Extract<SealantTarget, { readonly kind: "docker-exec" }>) =>
+  Effect.callback<OpenTransport, TransportError>((resume) => {
+    const child = spawn(
+      "docker",
+      ["exec", "-i", target.containerId, "socat", "-", `UNIX-CONNECT:${target.socketPath}`],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const onOpenError = (cause: Error) => {
+      resume(
+        Effect.fail(
+          new TransportError({
+            operation: "open",
+            message: cause.message,
+            cause,
+          }),
+        ),
+      );
+    };
+    const onSpawn = () => {
+      child.off("error", onOpenError);
+      const duplex = Duplex.from({
+        readable: child.stdout as NodeJS.ReadableStream,
+        writable: child.stdin as NodeJS.WritableStream,
+      });
+      const close = () => {
+        duplex.destroy();
+        child.kill("SIGKILL");
+      };
+      child.on("error", () => duplex.destroy());
+      child.on("exit", () => duplex.destroy());
+      resume(Effect.succeed({ duplex, close }));
+    };
+
+    child.once("error", onOpenError);
+    child.once("spawn", onSpawn);
+
+    return Effect.sync(() => {
+      child.off("error", onOpenError);
+      child.off("spawn", onSpawn);
+      child.kill("SIGKILL");
+    });
+  });
+
+const controlTransport: SealantTransportService = {
   open: (target) =>
     withTransportError(
       "open",
       Effect.acquireRelease(
-        Effect.sync(() => {
-          const child = spawn(
-            "docker",
-            ["exec", "-i", target.containerId, "socat", "-", `UNIX-CONNECT:${target.socketPath}`],
-            { stdio: ["pipe", "pipe", "pipe"] },
-          );
-
-          // Adapt the child's (readable stdout, writable stdin) into one Duplex transport.
-          const duplex = Duplex.from({
-            readable: child.stdout as NodeJS.ReadableStream,
-            writable: child.stdin as NodeJS.WritableStream,
-          });
-
-          return { child, duplex };
-        }),
-        // Release: drop the transport then kill the bridge child so the daemon sees the disconnect.
-        ({ child, duplex }) =>
-          Effect.sync(() => {
-            duplex.destroy();
-            child.kill("SIGKILL");
-          }),
+        target.kind === "unix-socket" ? openUnixSocket(target.socketPath) : openDockerExec(target),
+        ({ close }) => Effect.sync(close),
       ).pipe(Effect.map(({ duplex }) => duplex)),
     ),
 };
 
-/** Live `SealantTransport` layer backed by the docker-exec/socat bridge proven in P3. */
-export const DockerExecTransportLive = Layer.succeed(SealantTransport, dockerExecTransport);
+/** Live control transport supporting persisted host Unix sockets and docker-exec fallback. */
+export const ControlTransportLive = Layer.succeed(SealantTransport, controlTransport);
+
+/** @deprecated Use `ControlTransportLive`; retained for source compatibility. */
+export const DockerExecTransportLive = ControlTransportLive;
 
 /** Narrower error wrapper for transport-only failures (defect -> typed `TransportError`). */
 function withTransportError<A, R>(
@@ -600,7 +672,7 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
 
 /**
  * Live `SealantRuntime` layer. Requires a `SealantTransport` in context (e.g.
- * `DockerExecTransportLive`); the transport is resolved once here, mirroring the
+ * `ControlTransportLive`); the transport is resolved once here, mirroring the
  * `Layer.effect` + `yield* DepTag` idiom in `packages/rabbitmq/src/service.ts`.
  */
 export const SealantRuntimeLive = Layer.effect(
@@ -613,9 +685,12 @@ export const SealantRuntimeLive = Layer.effect(
 );
 
 /**
- * Convenience composition: the runtime service wired to the docker-exec transport. Equivalent to
- * `SealantRuntimeLive` provided with `DockerExecTransportLive`.
+ * Convenience composition: the runtime service wired to persisted Unix sockets with docker-exec
+ * fallback.
  */
-export const SealantRuntimeDockerExecLive = SealantRuntimeLive.pipe(
-  Layer.provideMerge(DockerExecTransportLive),
+export const SealantRuntimeControlLive = SealantRuntimeLive.pipe(
+  Layer.provideMerge(ControlTransportLive),
 );
+
+/** @deprecated Use `SealantRuntimeControlLive`; retained for source compatibility. */
+export const SealantRuntimeDockerExecLive = SealantRuntimeControlLive;
