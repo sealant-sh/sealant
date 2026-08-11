@@ -102,6 +102,14 @@ services:
 
   api:
     image: ${SEALANT_IMAGE_NS:-ghcr.io/sealant-sh}/sealant-api:${SEALANT_VERSION:-latest}
+    # sealantd deliberately exposes its control socket as 0600/root and validates SO_PEERCRED.
+    # The API is a trusted control-plane caller, so it must connect as that uid. Its socket mount is
+    # read-only and does not expose the host Docker daemon.
+    user: "0:0"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,6 +119,8 @@ services:
         condition: service_completed_successfully
     ports:
       - "${SEALANT_BIND_HOST:-127.0.0.1}:${SEALANT_API_PORT:-4000}:4000"
+    volumes:
+      - /run/sealant/sockets:/run/sealant/sockets:ro
     environment:
       PORT: "4000"
       DATABASE_URL: *db-url
