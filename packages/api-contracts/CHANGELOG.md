@@ -1,5 +1,12 @@
 # @sealant/api-contracts
 
+## 0.13.3
+
+### Patch Changes
+
+- 145295d: Include the Docker Compose CLI plugin in workspace images whenever the workspace-scoped Docker
+  service is enabled, so `docker compose` works against the workspace's disposable daemon.
+
 ## 0.13.2
 
 ### Patch Changes
