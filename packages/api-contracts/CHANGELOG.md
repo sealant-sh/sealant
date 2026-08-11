@@ -1,5 +1,12 @@
 # @sealant/api-contracts
 
+## 0.13.2
+
+### Patch Changes
+
+- c245231: Keep API-backed workspace sessions on the persisted Unix control socket, including workspaces that
+  do not enable SSH, so self-hosted API containers can supervise runs without a Docker CLI.
+
 ## 0.13.1
 
 ### Patch Changes
