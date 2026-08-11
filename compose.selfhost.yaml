@@ -130,6 +130,10 @@ services:
       # these lines the values would never reach the container.
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      # Shared with the worker: API encrypts connected-account credentials, worker decrypts them.
+      SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:-}
+      # Mount-sourced workspaces are opt-in: the API rejects host paths outside these roots.
+      SEALANT_MOUNT_ALLOWED_STORE_ROOTS: ${SEALANT_MOUNT_ALLOWED_STORE_ROOTS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -170,8 +174,11 @@ services:
       REGISTRY_PUSH_REGISTRY: 127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:-}
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
       WORKSPACE_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
+      # The worker passes the same allowlist into every workspace daemon for defense in depth.
+      SEALANT_MOUNT_ALLOWED_STORE_ROOTS: ${SEALANT_MOUNT_ALLOWED_STORE_ROOTS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
