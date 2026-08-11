@@ -263,6 +263,7 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
  */
 const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.6.2";
+const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**
  * In-container control socket `sealantd boot` listens on. Build-static; promoted to
@@ -375,6 +376,15 @@ const getBuildkitSupportForOs = (
   }
 
   for (const pkg of blueprint.tooling.packages) {
+    if (pkg.id === "docker") {
+      return parseOsBuilderSupport({
+        supported: false,
+        reason: "unsupported-package",
+        message:
+          "Docker must be requested through tooling.services.docker.enabled, not tooling.packages.",
+      });
+    }
+
     if (pkg.version !== undefined) {
       return parseOsBuilderSupport({
         supported: false,
@@ -896,6 +906,13 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     // without bundling a local build context.
     `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     "RUN chmod 755 /usr/local/bin/sealantd",
+    ...(plan.blueprint.tooling.services?.docker?.enabled === true
+      ? [
+          "",
+          `COPY --from=${dockerCliImageReference} /usr/local/bin/docker /usr/local/bin/docker`,
+          "RUN chmod 755 /usr/local/bin/docker",
+        ]
+      : []),
     // Mount-sourced workspaces bind a HOST-owned directory as the working directory; its uid
     // differs from the container user, which trips git's dubious-ownership check and would make
     // every git command fail. Trusting the fixed working directory keeps exec/record semantics

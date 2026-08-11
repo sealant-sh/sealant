@@ -83,6 +83,15 @@ export const buildCreateWorkspaceRequest = (
       ? []
       : [linkedWorktreeMount]),
   ];
+  const toolingPackages = options.packages?.map((id) => ({ id })) ?? [];
+  const dockerService = options.services?.docker === true;
+  const tooling =
+    toolingPackages.length === 0 && !dockerService
+      ? undefined
+      : {
+          ...(toolingPackages.length === 0 ? {} : { packages: toolingPackages }),
+          ...(dockerService ? { services: { docker: { enabled: true } } } : {}),
+        };
   const spec = {
     version: "1",
     sources: {
@@ -116,9 +125,7 @@ export const buildCreateWorkspaceRequest = (
     lifecycle: {
       startup: { foreground: { kind: "command", run: "sleep infinity", shell: "bash" } },
     },
-    ...(options.packages === undefined || options.packages.length === 0
-      ? {}
-      : { tooling: { packages: options.packages.map((id) => ({ id })) } }),
+    ...(tooling === undefined ? {} : { tooling }),
     ...(credentials === undefined ? {} : { credentials }),
   };
 

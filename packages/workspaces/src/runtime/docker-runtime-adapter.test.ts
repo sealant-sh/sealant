@@ -147,6 +147,96 @@ const createRuntimeCatalogLoader = (runtimes: ReadonlyArray<string> = ["runc", "
 };
 
 describe("DockerRuntimeAdapter", () => {
+  it("provisions an isolated Docker daemon service instead of mounting the host socket", async () => {
+    let runCount = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "network" && args[1] === "create") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      if (args[0] === "run") {
+        runCount += 1;
+        return {
+          stdout: runCount === 1 ? "docker-service-id\n" : "workspace-id\n",
+          stderr: "",
+        };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+    });
+
+    await adapter.launch(
+      createLaunchInput({
+        tooling: {
+          packages: [],
+          services: { docker: { enabled: true } },
+        },
+      }),
+    );
+
+    const runCalls = commandRunner.mock.calls.filter((call) => call[1]?.[0] === "run");
+    expect(runCalls).toHaveLength(2);
+    const daemonArgs = runCalls[0]?.[1] ?? [];
+    const workspaceArgs = runCalls[1]?.[1] ?? [];
+    expect(daemonArgs).toContain("--privileged");
+    expect(daemonArgs).toContain("--network-alias");
+    expect(daemonArgs).toContain("docker");
+    expect(daemonArgs).toContain("docker:27.5.1-dind-rootless");
+    expect(daemonArgs).toContain("--tls=false");
+    expect(workspaceArgs).toContain("DOCKER_HOST=tcp://docker:2375");
+    expect(workspaceArgs).toContain("--network");
+    expect(workspaceArgs.join(" ")).not.toContain("/var/run/docker.sock");
+  });
+
+  it("removes the Docker service when the workspace container fails to launch", async () => {
+    let runCount = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        runCount += 1;
+        if (runCount === 2) {
+          throw new Error("workspace image failed");
+        }
+        return { stdout: "docker-service-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      verifyRunning: false,
+    });
+
+    await expect(
+      adapter.launch(
+        createLaunchInput({
+          tooling: {
+            packages: [],
+            services: { docker: { enabled: true } },
+          },
+        }),
+      ),
+    ).rejects.toThrow("workspace image failed");
+
+    const removeCalls = commandRunner.mock.calls.filter(
+      (call) => call[1]?.[0] === "rm" || call[1]?.[0] === "network",
+    );
+    expect(removeCalls).toEqual(
+      expect.arrayContaining([
+        ["docker", ["rm", "-f", expect.stringMatching(/-docker$/)]],
+        ["docker", ["network", "rm", expect.stringMatching(/-network$/)]],
+      ]),
+    );
+  });
+
   it("supports SSH-enabled blueprints without any key material configured", () => {
     // The gateway reaches workspaces over the daemon control socket; client keys are authorized
     // against the control plane, so the adapter needs no authorized-keys source.
@@ -1039,8 +1129,14 @@ describe("DockerRuntimeAdapter", () => {
       reference: "sealant-run-abc",
     });
 
-    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(commandRunner).toHaveBeenCalledTimes(3);
     expect(commandRunner).toHaveBeenCalledWith("docker", ["rm", "-f", "container-id-123"]);
+    expect(commandRunner).toHaveBeenCalledWith("docker", ["rm", "-f", "sealant-run-abc-docker"]);
+    expect(commandRunner).toHaveBeenCalledWith("docker", [
+      "network",
+      "rm",
+      "sealant-run-abc-network",
+    ]);
     expect(result).toEqual({
       adapter: "docker",
       resourceId: "container-id-123",
