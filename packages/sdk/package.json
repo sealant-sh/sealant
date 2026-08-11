@@ -37,12 +37,15 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/api-contracts": "workspace:^",
-    "effect": "catalog:"
+    "@sealant/api-contracts": "workspace:^"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@sealant/typescript": "workspace:*"
+    "@sealant/typescript": "workspace:*",
+    "effect": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": ">=4.0.0-beta.85 <5"
   },
   "engines": {
     "node": ">=20"
