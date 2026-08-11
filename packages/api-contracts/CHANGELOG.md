@@ -1,5 +1,13 @@
 # @sealant/api-contracts
 
+## 0.13.4
+
+### Patch Changes
+
+- 6b91552: Allow the self-host API to open persisted workspace control sockets by mounting the socket directory
+  read-only and using sealantd's required root peer identity, while dropping all Linux capabilities
+  and forbidding privilege escalation.
+
 ## 0.13.3
 
 ### Patch Changes
