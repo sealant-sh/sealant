@@ -45,6 +45,7 @@ type CatalogOsMapping = {
 type CatalogEntry = {
   readonly id: string;
   readonly aliases: readonly string[];
+  /** Empty when the capability is platform-managed and must not be installed as an OS package. */
   readonly targets: Partial<Record<PackageTargetOs, CatalogOsMapping>>;
 };
 
@@ -75,6 +76,11 @@ const catalogEntries: readonly CatalogEntry[] = [
       fedora: { packageName: "curl" },
       nix: { packageName: "curl" },
     },
+  },
+  {
+    id: "docker",
+    aliases: ["docker"],
+    targets: {},
   },
   {
     id: "fish",
@@ -362,7 +368,7 @@ const buildCatalogResolution = (input: {
   return packageResolutionSchema.parse({
     requested: input.requested,
     normalized: input.normalized,
-    status: "resolved",
+    status: Object.keys(input.entry.targets).length === 0 ? "unsupported" : "resolved",
     source: "override",
     canonicalId: input.entry.id,
     selectedProject: input.entry.id,

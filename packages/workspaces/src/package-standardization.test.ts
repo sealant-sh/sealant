@@ -94,6 +94,24 @@ describe("createPackageStandardizer.resolvePackage", () => {
     });
   });
 
+  it.effect("treats Docker as a runtime-managed service, not an OS package", () => {
+    const repologyClient = fakeRepologyClient();
+    const standardizer = createPackageStandardizer({
+      repologyClient,
+      cacheStore: fakeCacheStore(),
+    });
+
+    return Effect.gen(function* () {
+      const resolution = yield* standardizer.resolvePackage({ query: "docker", targetOs: "arch" });
+
+      expect(resolution.status).toBe("unsupported");
+      expect(resolution.source).toBe("override");
+      expect(resolution.osSupport.arch.supported).toBe(false);
+      expect(repologyClient.getProject).not.toHaveBeenCalled();
+      expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+    });
+  });
+
   it.effect("resolves Mend's standard Arch toolchain without a network lookup", () => {
     const repologyClient = fakeRepologyClient();
     const standardizer = createPackageStandardizer({

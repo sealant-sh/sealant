@@ -186,6 +186,7 @@ const createWorkspaceBuildSpec = (
     readonly sshEnabled?: boolean;
     readonly inputSources?: NewWorkspace["sources"]["inputs"];
     readonly credentialRefs?: NewWorkspace["runtime"]["credentialRefs"];
+    readonly packages?: NewWorkspace["tooling"]["packages"];
   } = {},
 ): NewWorkspace => {
   return {
@@ -211,7 +212,7 @@ const createWorkspaceBuildSpec = (
       },
     },
     tooling: {
-      packages: [],
+      packages: input.packages ?? [],
     },
     customization: {
       defaultShell: "bash",
@@ -342,6 +343,37 @@ const connectedAccountStub = (input: {
 });
 
 describe("processWorkspaceBuildJobEffect", () => {
+  it.effect("passes selected packages from the build job to the image compiler", () => {
+    const packages = [{ id: "bat" }, { id: "lazygit" }, { id: "python" }];
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_packages",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "arch", packages }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "arch" }));
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_packages",
+          compileWorkspaceSpec,
+        }),
+      );
+
+      expect(compileWorkspaceSpec).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tooling: expect.objectContaining({ packages }),
+        }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
   it.effect("resolves connected-account refs into launch credential env + files", () => {
     const codexAuthJson = JSON.stringify({ tokens: { refresh_token: "rt" } });
     const jobs = workspaceBuildJobRepoStub({

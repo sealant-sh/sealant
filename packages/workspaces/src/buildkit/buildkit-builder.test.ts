@@ -464,6 +464,22 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(osFamily).toBe("fedora");
   });
 
+  it("rejects Docker when it is requested as an OS package", () => {
+    const blueprint = createWorkspaceBuildSpec({
+      tooling: {
+        packages: [{ id: "docker" }],
+      },
+      target: {
+        os: { family: "arch", mode: "prefer" },
+        runtime: { family: "docker", mode: "require" },
+      },
+    });
+
+    expect(() => selectBuildkitOsFamily({ blueprint })).toThrow(
+      "Docker must be requested through tooling.services.docker",
+    );
+  });
+
   it("renders a build context and invokes docker build plus docker save", async () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>

@@ -376,6 +376,15 @@ const getBuildkitSupportForOs = (
   }
 
   for (const pkg of blueprint.tooling.packages) {
+    if (pkg.id === "docker") {
+      return parseOsBuilderSupport({
+        supported: false,
+        reason: "unsupported-package",
+        message:
+          "Docker must be requested through tooling.services.docker.enabled, not tooling.packages.",
+      });
+    }
+
     if (pkg.version !== undefined) {
       return parseOsBuilderSupport({
         supported: false,
