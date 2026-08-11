@@ -119,9 +119,20 @@ export const workspacePackageRequestSchema = z.strictObject({
   version: nonEmptyStringSchema.optional(),
 });
 
+export const workspaceDockerServiceSchema = z
+  .strictObject({
+    enabled: z.boolean().default(false),
+  })
+  .prefault({});
+
+export const workspaceServicesSchema = z.strictObject({
+  docker: workspaceDockerServiceSchema.optional(),
+});
+
 export const workspaceToolingSchema = z
   .strictObject({
     packages: z.array(workspacePackageRequestSchema).default([]),
+    services: workspaceServicesSchema.optional(),
   })
   .prefault({});
 

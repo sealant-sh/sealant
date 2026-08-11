@@ -31,6 +31,9 @@ interface SpecShape {
   };
   readonly harness: { readonly id: string };
   readonly customization: { readonly enableSealantd: boolean };
+  readonly tooling?: {
+    readonly services?: { readonly docker?: { readonly enabled: boolean } };
+  };
   readonly target: { readonly runtime: { readonly family: string } };
   readonly credentials?: {
     readonly profileId?: string;
@@ -58,6 +61,20 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(spec.harness.id).toBe("opencode");
     expect(spec.customization.enableSealantd).toBe(true);
     expect(spec.target.runtime.family).toBe("docker");
+  });
+
+  it("preserves a requested workspace-scoped Docker service", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/billing-service",
+        harness: opencode(),
+        services: { docker: true },
+      },
+      config,
+    );
+
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.tooling?.services?.docker).toEqual({ enabled: true });
   });
 
   it("passes through full git urls and honors an explicit ref", () => {

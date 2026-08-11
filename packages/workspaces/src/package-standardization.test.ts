@@ -94,6 +94,107 @@ describe("createPackageStandardizer.resolvePackage", () => {
     });
   });
 
+  it.effect("treats Docker as a runtime-managed service, not an OS package", () => {
+    const repologyClient = fakeRepologyClient();
+    const standardizer = createPackageStandardizer({
+      repologyClient,
+      cacheStore: fakeCacheStore(),
+    });
+
+    return Effect.gen(function* () {
+      const resolution = yield* standardizer.resolvePackage({ query: "docker", targetOs: "arch" });
+
+      expect(resolution.status).toBe("unsupported");
+      expect(resolution.source).toBe("override");
+      expect(resolution.osSupport.arch.supported).toBe(false);
+      expect(repologyClient.getProject).not.toHaveBeenCalled();
+      expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("resolves Mend's standard Arch toolchain without a network lookup", () => {
+    const repologyClient = fakeRepologyClient();
+    const standardizer = createPackageStandardizer({
+      repologyClient,
+      cacheStore: fakeCacheStore(),
+    });
+
+    return Effect.gen(function* () {
+      const requested = [
+        "pnpm",
+        "python",
+        "uv",
+        "mise",
+        "github-cli",
+        "lazygit",
+        "bat",
+        "curl",
+        "jq",
+        "ripgrep",
+        "fd",
+        "fzf",
+      ];
+      const resolved: string[] = [];
+      for (const query of requested) {
+        const resolution = yield* standardizer.resolvePackage({ query, targetOs: "arch" });
+        const packageName = resolution.osSupport.arch.packageName;
+        if (packageName !== undefined) resolved.push(packageName);
+      }
+
+      expect(resolved).toEqual(requested);
+      expect(repologyClient.getProject).not.toHaveBeenCalled();
+      expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+    });
+  });
+
+  it.effect("resolves Mend's standard Nix toolchain without a network lookup", () => {
+    const repologyClient = fakeRepologyClient();
+    const standardizer = createPackageStandardizer({
+      repologyClient,
+      cacheStore: fakeCacheStore(),
+    });
+
+    return Effect.gen(function* () {
+      const requested = [
+        "pnpm",
+        "python",
+        "uv",
+        "mise",
+        "github-cli",
+        "lazygit",
+        "bat",
+        "curl",
+        "jq",
+        "ripgrep",
+        "fd",
+        "fzf",
+      ];
+      const resolved: string[] = [];
+      for (const query of requested) {
+        const resolution = yield* standardizer.resolvePackage({ query, targetOs: "nix" });
+        const packageName = resolution.osSupport.nix.packageName;
+        if (packageName !== undefined) resolved.push(packageName);
+      }
+
+      expect(resolved).toEqual([
+        "pnpm",
+        "python3",
+        "uv",
+        "mise",
+        "gh",
+        "lazygit",
+        "bat",
+        "curl",
+        "jq",
+        "ripgrep",
+        "fd",
+        "fzf",
+      ]);
+      expect(repologyClient.getProject).not.toHaveBeenCalled();
+      expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+    });
+  });
+
   it.effect("falls through to repology on a cache miss and caches the result", () => {
     const repologyClient = fakeRepologyClient({
       getProject: vi.fn(async () => [

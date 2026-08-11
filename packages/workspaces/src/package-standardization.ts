@@ -45,6 +45,7 @@ type CatalogOsMapping = {
 type CatalogEntry = {
   readonly id: string;
   readonly aliases: readonly string[];
+  /** Empty when the capability is platform-managed and must not be installed as an OS package. */
   readonly targets: Partial<Record<PackageTargetOs, CatalogOsMapping>>;
 };
 
@@ -75,6 +76,11 @@ const catalogEntries: readonly CatalogEntry[] = [
       fedora: { packageName: "curl" },
       nix: { packageName: "curl" },
     },
+  },
+  {
+    id: "docker",
+    aliases: ["docker"],
+    targets: {},
   },
   {
     id: "fish",
@@ -131,6 +137,50 @@ const catalogEntries: readonly CatalogEntry[] = [
     },
   },
   {
+    id: "python",
+    aliases: ["python", "python3"],
+    targets: {
+      arch: { packageName: "python" },
+      fedora: { packageName: "python3" },
+      nix: { packageName: "python3" },
+    },
+  },
+  {
+    id: "uv",
+    aliases: ["uv"],
+    targets: {
+      arch: { packageName: "uv" },
+      fedora: { packageName: "uv" },
+      nix: { packageName: "uv" },
+    },
+  },
+  {
+    id: "mise",
+    aliases: ["mise"],
+    targets: {
+      arch: { packageName: "mise" },
+      nix: { packageName: "mise" },
+    },
+  },
+  {
+    id: "github-cli",
+    aliases: ["github-cli", "gh"],
+    targets: {
+      arch: { packageName: "github-cli" },
+      fedora: { packageName: "gh" },
+      nix: { packageName: "gh" },
+    },
+  },
+  {
+    id: "lazygit",
+    aliases: ["lazygit"],
+    targets: {
+      arch: { packageName: "lazygit" },
+      fedora: { packageName: "lazygit" },
+      nix: { packageName: "lazygit" },
+    },
+  },
+  {
     id: "ripgrep",
     aliases: ["ripgrep", "rg"],
     targets: {
@@ -146,6 +196,24 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "tmux" },
       fedora: { packageName: "tmux" },
       nix: { packageName: "tmux" },
+    },
+  },
+  {
+    id: "fd",
+    aliases: ["fd", "fd-find", "fdfind"],
+    targets: {
+      arch: { packageName: "fd" },
+      fedora: { packageName: "fd-find" },
+      nix: { packageName: "fd" },
+    },
+  },
+  {
+    id: "fzf",
+    aliases: ["fzf"],
+    targets: {
+      arch: { packageName: "fzf" },
+      fedora: { packageName: "fzf" },
+      nix: { packageName: "fzf" },
     },
   },
   {
@@ -300,7 +368,7 @@ const buildCatalogResolution = (input: {
   return packageResolutionSchema.parse({
     requested: input.requested,
     normalized: input.normalized,
-    status: "resolved",
+    status: Object.keys(input.entry.targets).length === 0 ? "unsupported" : "resolved",
     source: "override",
     canonicalId: input.entry.id,
     selectedProject: input.entry.id,

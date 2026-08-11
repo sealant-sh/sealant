@@ -103,6 +103,26 @@ field wins over the profile's binding for that provider. Only account references
 surface — secret material never does; the control plane resolves references to encrypted credentials
 and injects them at launch.
 
+## Workspace tools and services
+
+Choose a supported operating-system family, request portable package names, and opt into services
+that need runtime support rather than a package install:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  os: "arch",
+  packages: ["pnpm", "python", "uv", "mise", "github-cli", "lazygit", "bat"],
+  services: { docker: true },
+  credentials: { codex: true, github: true },
+});
+```
+
+`services.docker` installs the Docker client in the image and starts a disposable, workspace-scoped
+rootless daemon at launch. The workspace receives `DOCKER_HOST`; Sealant never mounts the host
+Docker socket. GitHub credentials provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
+
 ## Inference on connected accounts
 
 Run short, tool-calling inference loops on the caller's own subscription — server-side, through the

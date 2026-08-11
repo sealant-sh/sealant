@@ -35,6 +35,7 @@ const CONTROL_SOCKET_CONTAINER_PATH = "/run/sealant/control.sock";
 /** Readiness-probe cadence and default budget (overridable via DockerRuntimeAdapterOptions). */
 const READINESS_POLL_INTERVAL_MS = 250;
 const DEFAULT_READINESS_TIMEOUT_MS = 120_000;
+const DEFAULT_DOCKER_SERVICE_IMAGE = "docker:27.5.1-dind-rootless";
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -72,6 +73,8 @@ export interface DockerRuntimeAdapterOptions {
   readonly containerNamePrefix?: string;
   readonly autoRemove?: boolean;
   readonly verifyRunning?: boolean;
+  /** Pinned rootless Docker-in-Docker image used for workspace-scoped Docker services. */
+  readonly dockerServiceImage?: string;
   /**
    * Max time to wait for the in-workspace daemon's control socket to start accepting after the container
    * is up (the readiness probe in `launch`). Must exceed the worst-case `git clone` + boot; defaults to
@@ -390,6 +393,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly verifyRunning: boolean;
 
+  private readonly dockerServiceImage: string;
+
   private readonly readinessTimeoutMs: number;
 
   private readonly controlSocketHostDir: string | undefined;
@@ -405,6 +410,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
     this.autoRemove = options.autoRemove ?? false;
     this.verifyRunning = options.verifyRunning ?? true;
+    this.dockerServiceImage = options.dockerServiceImage ?? DEFAULT_DOCKER_SERVICE_IMAGE;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
@@ -602,6 +608,84 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private async forceRemoveContainer(containerId: string): Promise<void> {
     await this.commandRunner("docker", ["rm", "-f", containerId]).catch(() => undefined);
+  }
+
+  private async provisionDockerService(containerName: string): Promise<string> {
+    const networkName = `${containerName}-network`;
+    const serviceName = `${containerName}-docker`;
+    try {
+      await this.commandRunner("docker", ["network", "create", networkName]);
+    } catch (error) {
+      try {
+        await this.commandRunner("docker", ["network", "inspect", networkName]);
+      } catch {
+        throw error;
+      }
+    }
+
+    const args = [
+      "run",
+      "-d",
+      "--privileged",
+      "--name",
+      serviceName,
+      "--network",
+      networkName,
+      "--network-alias",
+      "docker",
+      "-e",
+      "DOCKER_TLS_CERTDIR=",
+      "--label",
+      `sealant.workspace=${containerName}`,
+      this.dockerServiceImage,
+      "--tls=false",
+    ];
+    if (this.autoRemove) {
+      args.splice(2, 0, "--rm");
+    }
+
+    try {
+      const serviceId = await this.runOrAdoptContainer(args, serviceName);
+      const deadline = Date.now() + this.readinessTimeoutMs;
+      for (;;) {
+        try {
+          await this.commandRunner("docker", [
+            "exec",
+            serviceId,
+            "docker",
+            "-H",
+            "tcp://127.0.0.1:2375",
+            "info",
+          ]);
+          return networkName;
+        } catch (error) {
+          if (Date.now() > deadline) {
+            await this.forceRemoveContainer(serviceId);
+            await this.commandRunner("docker", ["network", "rm", networkName]).catch(
+              () => undefined,
+            );
+            const message = error instanceof Error ? error.message : "Docker daemon unavailable.";
+            throw createAdapterError(
+              "adapter-unavailable",
+              `Workspace Docker service '${serviceName}' did not become ready: ${message}`,
+            );
+          }
+          await delay(READINESS_POLL_INTERVAL_MS);
+        }
+      }
+    } catch (error) {
+      await this.commandRunner("docker", ["network", "rm", networkName]).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async removeDockerService(containerName: string): Promise<void> {
+    await this.commandRunner("docker", ["rm", "-f", `${containerName}-docker`]).catch(
+      () => undefined,
+    );
+    await this.commandRunner("docker", ["network", "rm", `${containerName}-network`]).catch(
+      () => undefined,
+    );
   }
 
   private async inspectContainerByName(
@@ -804,6 +888,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       outcome = "not-found";
     }
 
+    if (parsed.reference !== undefined) {
+      await this.removeDockerService(parsed.reference);
+    }
+
     return parseRuntimeAdapterStopResult({
       adapter: this.id,
       resourceId: parsed.resourceId,
@@ -824,6 +912,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     await this.assertRuntimeConfigured(parsed.blueprint.runtime.ociRuntime);
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
+    const dockerServiceEnabled = parsed.blueprint.tooling.services?.docker?.enabled === true;
+    const dockerNetworkName = dockerServiceEnabled
+      ? await this.provisionDockerService(containerName)
+      : undefined;
     const imageReference = parsed.publishedImage.digestReference;
     // SSH "access" now means the gateway should be able to reach a shell over the daemon control
     // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
@@ -866,6 +958,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       parsed.blueprint.runtime.ociRuntime,
       "--name",
       containerName,
+      ...(dockerNetworkName === undefined
+        ? []
+        : [
+            "--network",
+            dockerNetworkName,
+            "-e",
+            "DOCKER_HOST=tcp://docker:2375",
+            "-e",
+            "DOCKER_TLS_CERTDIR=",
+          ]),
       "-w",
       parsed.blueprint.runtime.workingDirectory,
       ...workspaceAuthEnvArgs,
@@ -883,36 +985,43 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     if (this.autoRemove) {
       args.splice(2, 0, "--rm");
     }
-    const containerId = await this.runOrAdoptContainer(args, containerName);
+    try {
+      const containerId = await this.runOrAdoptContainer(args, containerName);
 
-    if (this.verifyRunning) {
-      await this.assertContainerRunning(containerId, containerName);
-      // Don't report a launch as done until the daemon's control socket is actually accepting —
-      // otherwise the control plane reports "ready" before the socket binds (the readiness TOCTOU
-      // that surfaced as intermittent "connection closed" in harness.run()).
-      await this.awaitControlSocketReady(containerId, containerName);
+      if (this.verifyRunning) {
+        await this.assertContainerRunning(containerId, containerName);
+        // Don't report a launch as done until the daemon's control socket is actually accepting —
+        // otherwise the control plane reports "ready" before the socket binds (the readiness TOCTOU
+        // that surfaced as intermittent "connection closed" in harness.run()).
+        await this.awaitControlSocketReady(containerId, containerName);
+      }
+
+      // Credential FILE injections happen only after the container is up (and, when verification is
+      // enabled, after the readiness wait): the write is a `docker exec` into the live container.
+      const credentialFiles = parsed.credentialFiles ?? [];
+      if (credentialFiles.length > 0) {
+        await this.writeCredentialFiles(containerId, containerName, credentialFiles);
+      }
+
+      // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still
+      // reaches the daemon via the runtime `resourceId` (container id) + the fixed in-container socket
+      // path, so this descriptor is informational; it just must never advertise an sshd host.
+      const endpoint =
+        sshEnabled === true ? this.resolveControlEndpoint(containerId, containerName) : undefined;
+
+      return parseRuntimeAdapterLaunchResult({
+        adapter: this.id,
+        resourceId: containerId,
+        reference: containerName,
+        // "ready" (not "running"): the readiness probe above proved the control socket accepts.
+        status: "ready",
+        ...(endpoint === undefined ? {} : { endpoint }),
+      });
+    } catch (error) {
+      if (dockerServiceEnabled) {
+        await this.removeDockerService(containerName);
+      }
+      throw error;
     }
-
-    // Credential FILE injections happen only after the container is up (and, when verification is
-    // enabled, after the readiness wait): the write is a `docker exec` into the live container.
-    const credentialFiles = parsed.credentialFiles ?? [];
-    if (credentialFiles.length > 0) {
-      await this.writeCredentialFiles(containerId, containerName, credentialFiles);
-    }
-
-    // §4.3: the endpoint is now the daemon *control* target (not an `ssh://` URI). The gateway still
-    // reaches the daemon via the runtime `resourceId` (container id) + the fixed in-container socket
-    // path, so this descriptor is informational; it just must never advertise an sshd host.
-    const endpoint =
-      sshEnabled === true ? this.resolveControlEndpoint(containerId, containerName) : undefined;
-
-    return parseRuntimeAdapterLaunchResult({
-      adapter: this.id,
-      resourceId: containerId,
-      reference: containerName,
-      // "ready" (not "running"): the readiness probe above proved the control socket accepts.
-      status: "ready",
-      ...(endpoint === undefined ? {} : { endpoint }),
-    });
   }
 }
