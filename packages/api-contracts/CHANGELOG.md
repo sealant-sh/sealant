@@ -1,5 +1,12 @@
 # @sealant/api-contracts
 
+## 0.12.3
+
+### Patch Changes
+
+- bf5a55b: Forward the workspace mount allowlist and connected-account encryption key from self-host `.env`
+  configuration into the API and worker containers.
+
 ## 0.12.2
 
 ### Patch Changes
