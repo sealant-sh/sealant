@@ -145,6 +145,67 @@ const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWor
 };
 
 describe("compileWorkspaceBuildSpec", () => {
+  it("renders Mend's complete Arch profile into one sealantd workspace image", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const packages = [
+      "pnpm",
+      "python",
+      "uv",
+      "mise",
+      "github-cli",
+      "lazygit",
+      "bat",
+      "curl",
+      "jq",
+      "ripgrep",
+      "fd",
+      "fzf",
+    ];
+    const blueprint = createWorkspaceBuildSpec({
+      tooling: {
+        packages: packages.map((id) => ({ id })),
+        services: { docker: { enabled: true } },
+      },
+      target: {
+        os: { family: "arch", mode: "prefer" },
+        runtime: { family: "docker", mode: "require" },
+      },
+    });
+
+    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain("FROM archlinux:latest");
+    for (const packageName of packages) {
+      expect(containerfile).toContain(packageName);
+    }
+    expect(containerfile).toContain("/usr/local/bin/sealantd");
+    expect(containerfile).toContain("/usr/local/bin/docker");
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+  });
+
+  it("adds the Docker client for the runtime-managed Docker service", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const blueprint = createWorkspaceBuildSpec({
+      tooling: {
+        packages: [],
+        services: { docker: { enabled: true } },
+      },
+    });
+
+    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain(
+      "COPY --from=docker:27.5.1-cli /usr/local/bin/docker /usr/local/bin/docker",
+    );
+    expect(containerfile).not.toContain("dockerd");
+  });
+
   it("maps a blueprint into a resolved BuildKit image plan", () => {
     const blueprint = createWorkspaceBuildSpec({
       sources: {

@@ -145,6 +145,15 @@ export interface WorkspaceExtraMount {
   readonly readOnly?: boolean;
 }
 
+/** Runtime-managed services attached only to this workspace. */
+export interface WorkspaceServicesOptions {
+  /**
+   * Give the workspace a Docker client connected to its own disposable daemon. The platform never
+   * mounts the host Docker socket.
+   */
+  readonly docker?: boolean;
+}
+
 export interface CreateOptions {
   /**
    * Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`).
@@ -165,6 +174,8 @@ export interface CreateOptions {
   readonly os?: WorkspaceOs;
   /** Extra OS packages to install in the workspace. */
   readonly packages?: readonly string[];
+  /** Runtime-managed services that need more than installing an OS package. */
+  readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */
   readonly wait?: boolean;
   /** Observe provisioning events as they happen. */
