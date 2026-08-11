@@ -910,7 +910,8 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
       ? [
           "",
           `COPY --from=${dockerCliImageReference} /usr/local/bin/docker /usr/local/bin/docker`,
-          "RUN chmod 755 /usr/local/bin/docker",
+          `COPY --from=${dockerCliImageReference} /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose`,
+          "RUN chmod 755 /usr/local/bin/docker /usr/local/libexec/docker/cli-plugins/docker-compose",
         ]
       : []),
     // Mount-sourced workspaces bind a HOST-owned directory as the working directory; its uid
