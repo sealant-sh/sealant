@@ -1,5 +1,17 @@
 # @sealant/sdk
 
+## 0.13.0
+
+### Minor Changes
+
+- 62d46d4: Add `workspaces.create({ services: { docker: true } })`. Docker-enabled workspaces include the
+  client and connect to a disposable workspace-scoped rootless daemon without mounting the host Docker
+  socket.
+
+### Patch Changes
+
+- @sealant/api-contracts@0.13.0
+
 ## 0.12.3
 
 ### Patch Changes
