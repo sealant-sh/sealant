@@ -186,7 +186,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
   });
 
-  it("adds the Docker client for the runtime-managed Docker service", async () => {
+  it("adds the Docker client and Compose plugin for the runtime-managed Docker service", async () => {
     const commandRunner = vi.fn<
       (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
     >(async () => ({ stdout: "", stderr: "" }));
@@ -202,6 +202,9 @@ describe("compileWorkspaceBuildSpec", () => {
 
     expect(containerfile).toContain(
       "COPY --from=docker:27.5.1-cli /usr/local/bin/docker /usr/local/bin/docker",
+    );
+    expect(containerfile).toContain(
+      "COPY --from=docker:27.5.1-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose",
     );
     expect(containerfile).not.toContain("dockerd");
   });

@@ -121,4 +121,18 @@ describe("selected packages in an Arch workspace image", () => {
 
     expect(result.stdout).toContain("package-image-ok");
   }, 60_000);
+
+  it("includes Docker Compose with the runtime-managed Docker client", async () => {
+    const result = await docker("docker", [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/usr/local/bin/docker",
+      imageReference ?? "missing-package-e2e-image",
+      "compose",
+      "version",
+    ]);
+
+    expect(result.stdout).toContain("Docker Compose version");
+  }, 60_000);
 });
