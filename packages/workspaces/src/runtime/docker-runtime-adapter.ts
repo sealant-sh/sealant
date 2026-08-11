@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { join as joinPath } from "node:path";
 import { promisify } from "node:util";
 
+import { getHarnessIntegration } from "../harness/integrations.js";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
@@ -269,6 +270,20 @@ const envArgsFromBlueprint = (
     `${key}=${value}`,
   ]);
 
+  // The image carries every supported harness CLI; WHICH one this workspace
+  // fronts is a launch fact, so its boot env is injected here rather than
+  // baked as image ENV. Old per-harness images keep working: run env wins.
+  const harnessIntegration = getHarnessIntegration(input.blueprint.harness.id);
+  const harnessEnvArgs =
+    harnessIntegration === undefined
+      ? []
+      : [
+          "-e",
+          `SEALANT_HARNESS_BANNER=Starting ${input.blueprint.harness.id} workspace`,
+          "-e",
+          `SEALANT_HARNESS_LAUNCH_COMMAND=${harnessIntegration.launchCommand}`,
+        ];
+
   const source = input.blueprint.sources.workspace;
   const sourceEnvArgs =
     source.kind === "mount"
@@ -294,6 +309,7 @@ const envArgsFromBlueprint = (
     ...sourceEnvArgs,
     "-e",
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
+    ...harnessEnvArgs,
     ...runtimeEnvArgs,
   ];
 };

@@ -18,7 +18,12 @@ import {
   type WorkspaceBlueprint,
 } from "@sealant/validators";
 
-import { getHarnessIntegration, type HarnessIntegration } from "../harness/integrations.js";
+import {
+  getHarnessIntegration,
+  imageHarnessIntegrations,
+  isBakedHarnessId,
+  type HarnessIntegration,
+} from "../harness/integrations.js";
 
 /**
  * This module contains the full BuildKit-backed executor implementation used by worker-side build
@@ -282,7 +287,11 @@ const defaultImageNameForBlueprint = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): string => {
-  return `sealant-workspace-${osFamily}-${blueprint.harness.id}`;
+  // One shared image per OS family — every baked harness is in it. A blueprint whose harness is
+  // an extra beyond the baked set (e.g. opencode) gets its own name; its content differs.
+  return isBakedHarnessId(blueprint.harness.id)
+    ? `sealant-workspace-${osFamily}`
+    : `sealant-workspace-${osFamily}-${blueprint.harness.id}`;
 };
 
 /**
@@ -482,9 +491,11 @@ const resolvePackages = (
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePackage[] => {
   const distro = distroDefinitions[osFamily];
-  const harnessIntegration = resolveHarnessIntegration(blueprint);
+  // Every baked harness contributes its packages (dedup happens at render).
   const harnessPackageRequests: WorkspaceBlueprint["tooling"]["packages"] =
-    harnessIntegration.installPackages.map((id) => ({ id }));
+    imageHarnessIntegrations(resolveHarnessIntegration(blueprint)).flatMap((integration) =>
+      integration.installPackages.map((id) => ({ id })),
+    );
   const requests: Array<WorkspaceBlueprint["tooling"]["packages"][number]> = [
     ...blueprint.tooling.packages,
     ...harnessPackageRequests,
@@ -651,22 +662,26 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
 };
 
 /**
- * Renders the harness install layer.
+ * Renders the harness install layers: one `RUN` per baked harness (plus the blueprint's own when
+ * not baked), in a stable order, so one harness's release never busts another's layer cache.
  *
  * Nix images rewrite plain `npm install -g ...` commands to include `--prefix /usr/local` to avoid
  * relying on npm global locations that can be awkward in nix-based containers.
  */
 const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
-  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
-  if (plan.osFamily === "nix") {
-    const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
-    const match = npmInstallGlobalPattern.exec(harnessIntegration.installCommand);
-    if (match !== null) {
-      return `RUN npm install -g --prefix /usr/local ${match[1]}`;
-    }
-  }
-
-  return `RUN ${harnessIntegration.installCommand}`;
+  const integrations = imageHarnessIntegrations(resolveHarnessIntegration(plan.blueprint));
+  return integrations
+    .map((integration) => {
+      if (plan.osFamily === "nix") {
+        const npmInstallGlobalPattern = /^npm\s+install\s+-g\s+(.+)$/;
+        const match = npmInstallGlobalPattern.exec(integration.installCommand);
+        if (match !== null) {
+          return `RUN npm install -g --prefix /usr/local ${match[1]}`;
+        }
+      }
+      return `RUN ${integration.installCommand}`;
+    })
+    .join("\n");
 };
 
 /**
@@ -730,13 +745,15 @@ const renderEnvBlock = (entries: ReadonlyArray<readonly [string, string]>): stri
 const renderBootEnv = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const loginShellPath = distro.shellPaths[plan.customization.defaultShell];
-  const harnessIntegration = resolveHarnessIntegration(plan.blueprint);
 
   const setupJson = JSON.stringify(plan.blueprint.lifecycle.setup.map(toBootLifecycleStepJson));
   const startupJson = JSON.stringify(
     plan.blueprint.lifecycle.startup.steps.map(toBootLifecycleStepJson),
   );
 
+  // Harness identity (SEALANT_HARNESS_BANNER / SEALANT_HARNESS_LAUNCH_COMMAND) is deliberately
+  // NOT baked here: one image carries every supported harness, so the docker runtime adapter
+  // injects those at launch from the blueprint.
   const entries: Array<[string, string]> = [
     ["SEALANT_OS_FAMILY", plan.osFamily],
     ["SEALANT_WORKSPACE_ROOT", plan.blueprint.runtime.workspaceRoot],
@@ -745,8 +762,6 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
     ["SEALANT_BASH_SHELL_PATH", distro.shellPaths.bash],
     ["SEALANT_SSHD_PATH", distro.sshdPath],
     ["SEALANT_CONTROL_SOCKET", sealantdControlSocketPath],
-    ["SEALANT_HARNESS_BANNER", `Starting ${plan.blueprint.harness.id} workspace`],
-    ["SEALANT_HARNESS_LAUNCH_COMMAND", harnessIntegration.launchCommand],
     ["SEALANT_LIFECYCLE_SETUP_JSON", setupJson],
     ["SEALANT_LIFECYCLE_STARTUP_JSON", startupJson],
   ];
@@ -870,7 +885,7 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
 /**
  * Renders the full Containerfile used for Docker build.
  *
- * This is now a thin per-distro template: it installs packages + the harness, configures the login
+ * This is now a thin per-distro template: it installs packages + every baked harness, configures the login
  * shell, `COPY --from`'s the `sealantd` binary, emits the build-static `ENV SEALANT_*` block, and
  * sets `ENTRYPOINT ["sealantd", "boot"]`. All container orchestration that the deleted bash
  * entrypoint performed (workspace prep, clone, ssh bring-up, runtime dotfiles, lifecycle, harness
@@ -950,7 +965,7 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
   const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
   const buildSpecPath = join(contextDirectory, "buildkit-spec.json");
   const imageTarPath = join(contextDirectory, "workspace-image.tar");
-  const imageReference = `${defaultImageNameForBlueprint(plan.blueprint, plan.osFamily)}:${plan.blueprint.harness.id}`;
+  const imageReference = `${defaultImageNameForBlueprint(plan.blueprint, plan.osFamily)}:latest`;
   const spec: BuildkitBuildSpec = {
     contextDirectory,
     containerfilePath,

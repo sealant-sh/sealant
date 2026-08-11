@@ -37,7 +37,7 @@ import { SealantClient, StreamKind, RuntimeState } from "@sealant/runtime-client
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /** Image produced by the P3-Build phase (Fedora + sealantd baked in). */
-const IMAGE_REF = "sealant-workspace-fedora-claude-code:claude-code";
+const IMAGE_REF = "sealant-workspace-fedora:latest";
 /** Control socket path `sealantd boot` serves on (matches SEALANT_CONTROL_SOCKET in the builder). */
 const CONTROL_SOCKET = "/run/sealant/control.sock";
 /** Resolved `workingDirectory` default; the entrypoint checks `<this>/.git` to decide whether to clone. */

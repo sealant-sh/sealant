@@ -34,10 +34,14 @@ workspace:
 | Codex       | `codex`       | `codex exec <prompt>`   |
 | Claude Code | `claude-code` | `claude -p <prompt>`    |
 
+Every workspace image carries the Codex and Claude Code CLIs regardless of which harness the
+workspace was created with — the harness choice decides what launches and what a run invokes, not
+what is installed. An `opencode` workspace additionally installs OpenCode. This means a shell in any
+workspace can open either baked agent against the same files and state.
+
 > OpenCode is the only harness exercised end to end today. The Codex and Claude Code invocation
-> forms are the expected headless shapes but are still pending live verification against the baked
-> workspace image. If you rely on one of the latter two, confirm the one-shot command against your
-> image.
+> forms are the expected headless shapes but are still pending live verification. If you rely on one
+> of the latter two, confirm the one-shot command against your image.
 
 ## Custom harnesses
 

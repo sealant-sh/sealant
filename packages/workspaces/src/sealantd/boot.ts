@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Image produced by the P3-Build phase (Fedora + sealantd baked in). */
-export const DEFAULT_IMAGE_REF = "sealant-workspace-fedora-claude-code:claude-code";
+export const DEFAULT_IMAGE_REF = "sealant-workspace-fedora:latest";
 /** Control socket path `sealantd boot` listens on (matches SEALANT_CONTROL_SOCKET in the builder). */
 export const DEFAULT_CONTROL_SOCKET = "/run/sealant/control.sock";
 /** Resolved `workingDirectory` default; `sealantd boot` checks `<this>/.git` to decide whether to clone. */

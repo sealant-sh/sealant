@@ -534,8 +534,11 @@ describe("compileWorkspaceBuildSpec", () => {
     const containerfilePath = result.buildkit.spec.containerfilePath;
     const containerfile = await readFile(containerfilePath, "utf8");
 
-    // Thin per-distro template: FROM + harness install + sealantd copy + boot ENV + boot entrypoint.
+    // Thin per-distro template: FROM + harness installs + sealantd copy + boot ENV + boot entrypoint.
     expect(containerfile).toContain("FROM fedora:41");
+    // Every baked harness is installed; the blueprint's own (opencode) rides as an extra.
+    expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
+    expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain(
       "COPY --from=ghcr.io/sealant-sh/sealantd:0.6.2 /usr/local/bin/sealantd /usr/local/bin/sealantd",
@@ -550,8 +553,10 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/bin/bash'");
     expect(containerfile).toContain("SEALANT_SSHD_PATH='/usr/sbin/sshd'");
     expect(containerfile).toContain("SEALANT_CONTROL_SOCKET='/run/sealant/control.sock'");
-    expect(containerfile).toContain("SEALANT_HARNESS_BANNER='Starting opencode workspace'");
-    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='opencode'");
+    // Harness identity is a LAUNCH fact (docker runtime adapter `-e`), never image ENV: one
+    // image serves every baked harness.
+    expect(containerfile).not.toContain("SEALANT_HARNESS_BANNER");
+    expect(containerfile).not.toContain("SEALANT_HARNESS_LAUNCH_COMMAND");
     // The literal `command` foreground is carried as build-static JSON, not baked bash.
     expect(containerfile).toContain(
       `SEALANT_FOREGROUND_RUN_JSON='${JSON.stringify({ run: "pnpm dev", shell: "bash" })}'`,
@@ -615,9 +620,10 @@ describe("compileWorkspaceBuildSpec", () => {
 
     expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
-    // Harness foreground carries the launch command + login shell as build-static ENV; `boot`
-    // resolves and supervises the harness child. No `SEALANT_FOREGROUND_RUN_JSON` for harness kind.
-    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='codex'");
+    expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
+    // Harness foreground resolves its launch command from RUNTIME env (docker `-e`), not image
+    // ENV. No `SEALANT_FOREGROUND_RUN_JSON` for harness kind.
+    expect(containerfile).not.toContain("SEALANT_HARNESS_LAUNCH_COMMAND");
     expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/usr/bin/zsh'");
     expect(containerfile).not.toContain("SEALANT_FOREGROUND_RUN_JSON");
     expect(containerfile).not.toContain("exec /usr/bin/zsh -lc 'codex'");
@@ -674,6 +680,9 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("nixpkgs#gitMinimal");
     expect(containerfile).not.toContain("nixpkgs#git'");
     expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
+    expect(containerfile).toContain(
+      "RUN npm install -g --prefix /usr/local @anthropic-ai/claude-code@latest",
+    );
     expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
     expect(containerfile).not.toContain("RUN usermod -s");
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
@@ -684,7 +693,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/root/.nix-profile/bin/bash'");
     expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/root/.nix-profile/bin/zsh'");
     expect(containerfile).toContain("SEALANT_SSHD_PATH='/root/.nix-profile/bin/sshd'");
-    expect(containerfile).toContain("SEALANT_HARNESS_LAUNCH_COMMAND='codex'");
+    expect(containerfile).not.toContain("SEALANT_HARNESS_LAUNCH_COMMAND");
 
     // The deleted bash entrypoint (glibc shim, shadow rewrite, sshd config, harness exec) is gone.
     expect(containerfile).not.toContain("/lib64/ld-linux-x86-64.so.2");

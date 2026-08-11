@@ -43,6 +43,29 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
   },
 };
 
+/**
+ * The harness CLIs baked into EVERY workspace image. One image carries all
+ * supported agents, so a workspace (or a shell inside one) can open any of
+ * them against the same state — harness identity is a launch-time fact, not
+ * an image fact. Deliberately codex + claude-code for now.
+ */
+const bakedHarnessIds: readonly HarnessId[] = ["codex", "claude-code"];
+
+export const isBakedHarnessId = (id: string): boolean =>
+  bakedHarnessIds.some((baked) => baked === id);
+
+/**
+ * The integrations an image build installs: the baked set, plus the
+ * blueprint's own harness when it is not already baked (an opencode
+ * blueprint still gets a working opencode).
+ */
+export const imageHarnessIntegrations = (
+  primary: HarnessIntegration,
+): readonly HarnessIntegration[] => {
+  const baked = bakedHarnessIds.map((id) => harnessIntegrations[id]);
+  return baked.some((integration) => integration.id === primary.id) ? baked : [...baked, primary];
+};
+
 const harnessIds = new Set<HarnessId>(Object.keys(harnessIntegrations) as HarnessId[]);
 
 export const isHarnessId = (value: string): value is HarnessId => {
