@@ -1,5 +1,15 @@
 # @sealant/sdk
 
+## 0.13.1
+
+### Patch Changes
+
+- bb4ae55: Declare Effect as a consumer-provided peer dependency so `@sealant/sdk/effect` and
+  `@sealant/api-contracts` compose with the consumer's compatible Effect runtime instead of installing
+  an incompatible second copy.
+- Updated dependencies [bb4ae55]
+  - @sealant/api-contracts@0.13.1
+
 ## 0.13.0
 
 ### Minor Changes
