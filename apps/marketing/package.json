@@ -13,7 +13,7 @@
     "dev": "vite dev --port 3002",
     "lint": "oxlint .",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {

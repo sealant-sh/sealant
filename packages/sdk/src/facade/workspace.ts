@@ -25,6 +25,7 @@ import type {
   SessionOptions,
   Workspace,
   WorkspaceEvent,
+  WorkspaceForward,
   WorkspaceSessions,
   WorkspaceStatus,
 } from "../types.js";
@@ -283,7 +284,119 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }),
       );
     },
+
+    forward: (port) => openForward(ctx, init.id, port),
   };
 
   return workspace;
+};
+
+/**
+ * Open the held-WebSocket port forward (the byte-pipe data plane, mirroring
+ * the session attachment): binary frames are payload bytes in both
+ * directions; text frames are control JSON — `{"t":"eof"}` up for half-close,
+ * `{"t":"end"}` down when the remote closes. Auth rides the connect
+ * (`?token=` / `?ownerUserId=`), never per frame. The server refuses the
+ * upgrade with a plain HTTP status when nothing listens on the port, which
+ * surfaces here as the connect rejection.
+ */
+const openForward = (
+  ctx: SdkContext,
+  workspaceId: string,
+  port: number,
+): Promise<WorkspaceForward> => {
+  const config = ctx.config;
+  const url = new URL(`/v1/workspaces/${workspaceId}/forward`, config.baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("port", String(port));
+  if (config.apiKey === undefined) {
+    url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
+  } else {
+    url.searchParams.set("token", config.apiKey);
+  }
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+
+    // Push-queue bridging WS message events to the pull-based async iterable.
+    const pending: Uint8Array[] = [];
+    let wake: (() => void) | undefined;
+    let finished = false;
+    const closedResolver = Promise.withResolvers<"end" | "closed">();
+    const closed = closedResolver.promise;
+    const finish = (reason: "end" | "closed") => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      closedResolver.resolve(reason);
+      wake?.();
+    };
+
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data === "string") {
+        try {
+          const frame = JSON.parse(event.data) as { t?: string };
+          if (frame.t === "end") {
+            finish("end");
+          }
+        } catch {
+          // Unknown text frame — ignore.
+        }
+        return;
+      }
+      pending.push(new Uint8Array(event.data as ArrayBuffer));
+      wake?.();
+    });
+    ws.addEventListener("close", () => finish("closed"));
+
+    const output: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async (): Promise<IteratorResult<Uint8Array>> => {
+          for (;;) {
+            const chunk = pending.shift();
+            if (chunk !== undefined) {
+              return { done: false, value: chunk };
+            }
+            if (finished) {
+              return { done: true, value: undefined };
+            }
+            await new Promise<void>((r) => {
+              wake = r;
+            });
+            wake = undefined;
+          }
+        },
+      }),
+    };
+
+    const forward: WorkspaceForward = {
+      send: (input) => {
+        // Copy into a plain ArrayBuffer-backed view (WebSocket.send rejects SharedArrayBuffer views).
+        ws.send(new Uint8Array(input).buffer);
+      },
+      eof: () => {
+        ws.send(JSON.stringify({ t: "eof" }));
+      },
+      output,
+      closed,
+      close: () => {
+        finish("closed");
+        ws.close();
+      },
+    };
+
+    ws.addEventListener("open", () => resolve(forward), { once: true });
+    ws.addEventListener(
+      "error",
+      () =>
+        reject(
+          new Error(
+            `workspace forward failed: could not connect to ${url.host} (is anything listening on 127.0.0.1:${port} in the workspace?)`,
+          ),
+        ),
+      { once: true },
+    );
+  });
 };

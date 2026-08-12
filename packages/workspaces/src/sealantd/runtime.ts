@@ -81,6 +81,8 @@ const sealantOperationSchema = Schema.Literals([
   "listSessions",
   "writeSessionInput",
   "attachSession",
+  "openForward",
+  "closeForward",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -437,6 +439,18 @@ export interface SealantSession {
     sessionId: string,
     options?: { readonly fromSequence?: bigint },
   ) => Effect.Effect<Channel, SealantError>;
+  /**
+   * Opens a raw TCP forward to `127.0.0.1:port` INSIDE the workspace and
+   * returns its byte channel. The host is deliberately not a parameter —
+   * exposing it would hand out an in-container SSRF primitive. Like an
+   * attach, the channel is CONNECTION-scoped: dropping this control
+   * connection reaps the forward's socket and pumps daemon-side.
+   */
+  readonly openForward: (
+    port: number,
+  ) => Effect.Effect<{ readonly channelId: string; readonly channel: Channel }, SealantError>;
+  /** Closes a forward explicitly — cheaper than waiting for connection teardown. */
+  readonly closeForward: (channelId: string) => Effect.Effect<void, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -637,6 +651,18 @@ const makeSession = (client: SealantClient): SealantSession => ({
         ),
       ),
     ).pipe(Effect.map(({ channel }) => channel)),
+
+  openForward: (port) =>
+    withSealantError(
+      "openForward",
+      Effect.tryPromise(() => client.openForward("127.0.0.1", port)),
+    ).pipe(Effect.map(({ result, channel }) => ({ channelId: result.channelId, channel }))),
+
+  closeForward: (channelId) =>
+    withSealantError(
+      "closeForward",
+      Effect.tryPromise(() => client.closeForward(channelId)),
+    ),
 
   shutdown: (graceMillis) =>
     withSealantError(

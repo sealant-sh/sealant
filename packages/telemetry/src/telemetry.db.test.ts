@@ -139,6 +139,8 @@ const stubSession: SealantSession = {
   listSessions: Effect.die("unused in test"),
   writeSessionInput: () => Effect.die("unused in test"),
   attachSession: () => Effect.die("unused in test"),
+  openForward: () => Effect.die("unused in test"),
+  closeForward: () => Effect.die("unused in test"),
   shutdown: () => Effect.die("unused in test"),
   events: Stream.fromIterable(EVENTS),
 };

@@ -13,7 +13,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -122,6 +122,62 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
 
     expect(health.state).toBe(RuntimeState.HEALTHY);
     expect(health.runtimeId).toMatch(/^rt_/);
+  });
+
+  it("openForward bridges bytes to a TCP listener and drains the tail on half-close", async () => {
+    // Echo server on an ephemeral port. The daemon runs locally in this
+    // suite, so its 127.0.0.1 is ours.
+    const server = createServer((socket) => {
+      socket.on("data", (data) => socket.write(data));
+      socket.on("end", () => socket.end());
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const echoed = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(TARGET);
+            const forward = yield* session.openForward(port);
+            return yield* Effect.promise(async () => {
+              forward.channel.write(new TextEncoder().encode("ping"));
+              // Half-close outbound; the echo's response must still drain.
+              forward.channel.end();
+              const chunks: Uint8Array[] = [];
+              for await (const chunk of forward.channel) {
+                chunks.push(chunk);
+              }
+              return Buffer.concat(chunks).toString();
+            });
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+      );
+      expect(echoed).toBe("ping");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("openForward to a port nobody listens on fails on the typed channel", async () => {
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* SealantRuntime;
+          const session = yield* runtime.connect(TARGET);
+          // Port 1 on loopback: reserved, never listening in this suite.
+          return yield* session.openForward(1);
+        }),
+      ).pipe(Effect.provide(TestLayer)),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+      expect(error).toBeInstanceOf(SealantControlError);
+      expect((error as SealantControlError).operation).toBe("openForward");
+    }
   });
 
   it("connect -> exec -> events Stream yields processStarted + STDOUT + processExited(0)", async () => {

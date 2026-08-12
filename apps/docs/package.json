@@ -16,7 +16,7 @@
     "prelint": "pnpm run docs:generate",
     "pretypecheck": "pnpm run docs:generate",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
