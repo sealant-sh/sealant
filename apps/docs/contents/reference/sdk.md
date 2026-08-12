@@ -79,6 +79,10 @@ These call the live API and work end-to-end:
   plus `create({ ..., ttl: "2h" })` for a create-time TTL
 - **Harness:** `workspace.harness.run(prompt)` — registers a run server-side and blocks until
   terminal; `workspace.harness.start(prompt)` — same run, returns the live handle immediately
+- **Port forwarding:** `workspace.forward(port)` — a raw TCP byte pipe to `127.0.0.1:port` inside
+  the workspace over one held WebSocket (`send`/`output`/`eof` for half-close/`close`). Protocol
+  agnostic and never recorded; the target host is fixed at loopback by design. Rejects when nothing
+  listens on the port.
 - **Runs:** `sealant.runs.get(runId)`, `run.wait()` (polls to terminal, then fetches the captured
   changes), `run.result`, `run.changes` (files + diff)
 - **Execution record** (`run.record`): `replay()`, `timeline()`, `stream()` (poll-backed),

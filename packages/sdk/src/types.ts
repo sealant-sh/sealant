@@ -246,6 +246,32 @@ export interface Workspace {
    * now (the platform reaper stops it shortly), `expire({ in: null })` clears the TTL.
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
+  /**
+   * Open a raw TCP byte pipe to `127.0.0.1:port` INSIDE the workspace — the
+   * primitive for reaching a dev server or database the workspace runs.
+   * Protocol-agnostic: nothing inspects or records the payload. One held
+   * WebSocket per forward; rejects when nothing accepts the connection. The
+   * target host is fixed at loopback by design.
+   */
+  forward(port: number): Promise<WorkspaceForward>;
+}
+
+/**
+ * A live port forward — one WebSocket, held until `close()` or the remote
+ * closes. A raw duplex byte stream: write with `send`, read from `output`,
+ * signal outbound EOF with `eof` (half-close; inbound keeps flowing).
+ */
+export interface WorkspaceForward {
+  /** Write bytes toward the workspace port on the held socket. */
+  send(input: Uint8Array): void;
+  /** Half-close: no more outbound bytes; the remote's response keeps flowing. */
+  eof(): void;
+  /** Bytes from the workspace port, until the remote closes or `close()`. */
+  readonly output: AsyncIterable<Uint8Array>;
+  /** Resolves when the forward ends: the remote closed (`"end"`) or the socket closed. */
+  readonly closed: Promise<"end" | "closed">;
+  /** Tear the forward down. */
+  close(): void;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -16,6 +16,7 @@ import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
+import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 
@@ -208,7 +209,12 @@ const sseLayer = SessionOutputStreamRoute.pipe(HttpRouter.provideRequest(request
 /** The WS terminal data plane (sessions.ws.ts): auth once, one held daemon connection. */
 const wsLayer = SessionAttachRoute.pipe(HttpRouter.provideRequest(requestDependenciesLayer));
 
-const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, docsLayer);
+/** The WS port-forward data plane (workspaces.ws.ts): raw bytes to an in-workspace port. */
+const forwardLayer = WorkspaceForwardRoute.pipe(
+  HttpRouter.provideRequest(requestDependenciesLayer),
+);
+
+const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsLayer);
 
 /**
  * Server layer.
