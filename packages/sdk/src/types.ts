@@ -247,7 +247,7 @@ export interface Workspace {
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
   /**
-   * Open a raw TCP byte pipe INSIDE the workspace — the primitive for
+   * Open a raw TCP byte pipe (or a UDP datagram pipe) INSIDE the workspace — the primitive for
    * reaching a dev server or database the workspace runs. Protocol-agnostic:
    * nothing inspects or records the payload. One held WebSocket per forward;
    * rejects when nothing accepts the connection. The target host is a CLOSED
@@ -262,6 +262,13 @@ export interface Workspace {
 export interface WorkspaceForwardOptions {
   /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
   readonly host?: "127.0.0.1" | "localhost" | "docker";
+  /**
+   * Forward transport. TCP (default) is a byte stream; `"udp"` opens a
+   * connected UDP socket where one frame on this pipe is exactly one
+   * datagram, both directions. UDP has no connection handshake: opening
+   * succeeds even when nothing listens yet — datagrams simply drop.
+   */
+  readonly protocol?: "tcp" | "udp";
 }
 
 /**

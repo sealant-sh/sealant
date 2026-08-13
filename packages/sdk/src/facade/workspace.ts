@@ -314,6 +314,9 @@ const openForward = (
   if (options?.host !== undefined) {
     url.searchParams.set("host", options.host);
   }
+  if (options?.protocol === "udp") {
+    url.searchParams.set("protocol", "udp");
+  }
   if (config.apiKey === undefined) {
     url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
   } else {

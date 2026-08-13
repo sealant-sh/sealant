@@ -17,7 +17,7 @@
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/rabbitmq": "workspace:*",
-    "@sealant/runtime-client": "^0.6.0",
+    "@sealant/runtime-client": "^0.7.0",
     "@sealant/runtime-protocol": "^0.6.0",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",

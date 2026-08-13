@@ -1,5 +1,8 @@
 /**
  * Workspace port forwarding as a WebSocket — `GET /v1/workspaces/:workspaceId/forward?port=N`.
+ * `?protocol=udp` opens a connected-UDP forward instead of TCP: one WS binary
+ * frame is exactly one datagram, both directions — the daemon conduit is
+ * message-framed, so nothing on this path re-chunks.
  *
  * The DATA PLANE for reaching a server that listens inside a workspace (a dev
  * server, a database) from outside it. Authenticates ONCE at the upgrade,
@@ -93,6 +96,11 @@ export const WorkspaceForwardRoute = HttpRouter.add(
           status: 400,
         });
       }
+      const protocolRaw = url.searchParams.get("protocol") ?? "tcp";
+      const protocol = protocolRaw === "tcp" || protocolRaw === "udp" ? protocolRaw : undefined;
+      if (protocol === undefined) {
+        return HttpServerResponse.text("protocol must be one of: tcp, udp", { status: 400 });
+      }
       const ownerUserId = url.searchParams.get("ownerUserId") ?? undefined;
 
       // Browser WebSocket clients cannot set headers; accept the bearer via query.
@@ -156,9 +164,11 @@ export const WorkspaceForwardRoute = HttpRouter.add(
           // gateway connects before accepting the channel: a refused connect
           // is an HTTP failure the client can read, not a cryptic WS close.
           const forward = yield* daemon
-            .openForward(port, host)
+            .openForward(port, host, protocol)
             .pipe(Effect.catch(() => Effect.succeed(undefined)));
           if (forward === undefined) {
+            // For UDP there is no handshake to refuse — a 502 here means the
+            // daemon could not bind/resolve, not that nothing listens.
             return HttpServerResponse.text(
               `Nothing accepted the connection to ${host}:${port} inside the workspace.`,
               { status: 502 },
