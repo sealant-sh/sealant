@@ -20,9 +20,11 @@
  * Auth: `Authorization: Bearer` when the client can set headers, else
  * `?token=` (browser WebSocket cannot). Scope: `workspace:exec` — a forward
  * reaches arbitrary in-workspace servers, the same trust as exec. The target
- * host is FIXED at 127.0.0.1: a host parameter would be an in-container SSRF
- * primitive reaching anything the workspace can route to. Registered as a RAW
- * route (HttpApi cannot express an upgrade).
+ * host is a CLOSED set: `127.0.0.1` (default) or `docker`, the
+ * workspace-scoped dind sidecar's network alias, where inner `docker compose`
+ * publishes its ports. Never caller-arbitrary — that would be an
+ * in-container SSRF primitive reaching anything the workspace can route to.
+ * Registered as a RAW route (HttpApi cannot express an upgrade).
  */
 import {
   SessionBadRequestError,
@@ -80,6 +82,16 @@ export const WorkspaceForwardRoute = HttpRouter.add(
       const port = portRaw === null ? Number.NaN : Number(portRaw);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         return HttpServerResponse.text("port must be an integer in 1..65535", { status: 400 });
+      }
+      const hostRaw = url.searchParams.get("host") ?? "127.0.0.1";
+      const host =
+        hostRaw === "127.0.0.1" || hostRaw === "localhost" || hostRaw === "docker"
+          ? hostRaw
+          : undefined;
+      if (host === undefined) {
+        return HttpServerResponse.text("host must be one of: 127.0.0.1, localhost, docker", {
+          status: 400,
+        });
       }
       const ownerUserId = url.searchParams.get("ownerUserId") ?? undefined;
 
@@ -144,11 +156,11 @@ export const WorkspaceForwardRoute = HttpRouter.add(
           // gateway connects before accepting the channel: a refused connect
           // is an HTTP failure the client can read, not a cryptic WS close.
           const forward = yield* daemon
-            .openForward(port)
+            .openForward(port, host)
             .pipe(Effect.catch(() => Effect.succeed(undefined)));
           if (forward === undefined) {
             return HttpServerResponse.text(
-              `Nothing accepted the connection to 127.0.0.1:${port} inside the workspace.`,
+              `Nothing accepted the connection to ${host}:${port} inside the workspace.`,
               { status: 502 },
             );
           }
