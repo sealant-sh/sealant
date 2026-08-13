@@ -90,6 +90,13 @@ export type SealantOperation = typeof sealantOperationSchema.Type;
 /** The closed set of forward targets: workspace loopback, or the dind sidecar's alias. */
 export type SealantForwardHost = "127.0.0.1" | "localhost" | "docker";
 
+/**
+ * Forward transport: a TCP byte stream (default), or connected UDP where one
+ * channel frame is exactly one datagram — the conduit is message-framed end
+ * to end, so boundaries survive the whole relay.
+ */
+export type SealantForwardProtocol = "tcp" | "udp";
+
 /** Failure opening/holding the underlying transport (spawn failure, child exit, stream error). */
 export class TransportError extends Schema.TaggedErrorClass<TransportError>()("TransportError", {
   operation: sealantOperationSchema,
@@ -443,7 +450,7 @@ export interface SealantSession {
     options?: { readonly fromSequence?: bigint },
   ) => Effect.Effect<Channel, SealantError>;
   /**
-   * Opens a raw TCP forward INSIDE the workspace and returns its byte
+   * Opens a raw TCP (or connected-UDP) forward INSIDE the workspace and returns its byte
    * channel. The target host is a CLOSED workspace-private set — the
    * container's own loopback, or `docker`: the workspace-scoped dind
    * sidecar's network alias, where inner `docker compose` publishes its
@@ -454,6 +461,7 @@ export interface SealantSession {
   readonly openForward: (
     port: number,
     host?: SealantForwardHost,
+    protocol?: SealantForwardProtocol,
   ) => Effect.Effect<{ readonly channelId: string; readonly channel: Channel }, SealantError>;
   /** Closes a forward explicitly — cheaper than waiting for connection teardown. */
   readonly closeForward: (channelId: string) => Effect.Effect<void, SealantError>;
@@ -658,10 +666,10 @@ const makeSession = (client: SealantClient): SealantSession => ({
       ),
     ).pipe(Effect.map(({ channel }) => channel)),
 
-  openForward: (port, host) =>
+  openForward: (port, host, protocol) =>
     withSealantError(
       "openForward",
-      Effect.tryPromise(() => client.openForward(host ?? "127.0.0.1", port)),
+      Effect.tryPromise(() => client.openForward(host ?? "127.0.0.1", port, undefined, protocol)),
     ).pipe(Effect.map(({ result, channel }) => ({ channelId: result.channelId, channel }))),
 
   closeForward: (channelId) =>

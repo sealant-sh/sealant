@@ -13,13 +13,13 @@ catalogs:
       specifier: ^1.30.2
       version: 1.42.1
     '@effect/platform-node':
-      specifier: ^4.0.0-beta.85
+      specifier: 4.0.0-beta.85
       version: 4.0.0-beta.85
     '@effect/sql-pg':
-      specifier: ^4.0.0-beta.85
+      specifier: 4.0.0-beta.85
       version: 4.0.0-beta.85
     '@effect/vitest':
-      specifier: ^4.0.0-beta.85
+      specifier: 4.0.0-beta.85
       version: 4.0.0-beta.85
     '@fontsource/plus-jakarta-sans':
       specifier: ^5.2.8
@@ -97,7 +97,7 @@ catalogs:
       specifier: ^11.0.0
       version: 11.0.0
     effect:
-      specifier: ^4.0.0-beta.85
+      specifier: 4.0.0-beta.85
       version: 4.0.0-beta.85
     framer-motion:
       specifier: ^12.23.24
@@ -696,14 +696,13 @@ importers:
         version: 11.0.0
 
   packages/api-contracts:
-    dependencies:
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0-beta.85
     devDependencies:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
 
   packages/auth:
     dependencies:
@@ -786,9 +785,6 @@ importers:
       '@sealant/api-contracts':
         specifier: workspace:^
         version: link:../api-contracts
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0-beta.85
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
@@ -796,6 +792,9 @@ importers:
       '@sealant/typescript':
         specifier: workspace:*
         version: link:../../tooling/typescript
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85
 
   packages/source-integrations:
     dependencies:
@@ -809,6 +808,9 @@ importers:
 
   packages/telemetry:
     dependencies:
+      '@effect/sql-pg':
+        specifier: 'catalog:'
+        version: 4.0.0-beta.85(effect@4.0.0-beta.85)
       '@sealant/db':
         specifier: workspace:*
         version: link:../db
