@@ -155,6 +155,27 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
         ).pipe(Effect.provide(TestLayer)),
       );
       expect(echoed).toBe("ping");
+
+      // The named-host form resolves inside the daemon's own namespace too.
+      const echoedNamed = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(TARGET);
+            const forward = yield* session.openForward(port, "localhost");
+            return yield* Effect.promise(async () => {
+              forward.channel.write(new TextEncoder().encode("named"));
+              forward.channel.end();
+              const chunks: Uint8Array[] = [];
+              for await (const chunk of forward.channel) {
+                chunks.push(chunk);
+              }
+              return Buffer.concat(chunks).toString();
+            });
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+      );
+      expect(echoedNamed).toBe("named");
     } finally {
       server.close();
     }

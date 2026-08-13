@@ -26,6 +26,7 @@ import type {
   Workspace,
   WorkspaceEvent,
   WorkspaceForward,
+  WorkspaceForwardOptions,
   WorkspaceSessions,
   WorkspaceStatus,
 } from "../types.js";
@@ -285,7 +286,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       );
     },
 
-    forward: (port) => openForward(ctx, init.id, port),
+    forward: (port, options) => openForward(ctx, init.id, port, options),
   };
 
   return workspace;
@@ -304,11 +305,15 @@ const openForward = (
   ctx: SdkContext,
   workspaceId: string,
   port: number,
+  options?: WorkspaceForwardOptions,
 ): Promise<WorkspaceForward> => {
   const config = ctx.config;
   const url = new URL(`/v1/workspaces/${workspaceId}/forward`, config.baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("port", String(port));
+  if (options?.host !== undefined) {
+    url.searchParams.set("host", options.host);
+  }
   if (config.apiKey === undefined) {
     url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
   } else {

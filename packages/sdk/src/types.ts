@@ -247,13 +247,21 @@ export interface Workspace {
    */
   expire(options?: { readonly in?: string | null }): Promise<void>;
   /**
-   * Open a raw TCP byte pipe to `127.0.0.1:port` INSIDE the workspace — the
-   * primitive for reaching a dev server or database the workspace runs.
-   * Protocol-agnostic: nothing inspects or records the payload. One held
-   * WebSocket per forward; rejects when nothing accepts the connection. The
-   * target host is fixed at loopback by design.
+   * Open a raw TCP byte pipe INSIDE the workspace — the primitive for
+   * reaching a dev server or database the workspace runs. Protocol-agnostic:
+   * nothing inspects or records the payload. One held WebSocket per forward;
+   * rejects when nothing accepts the connection. The target host is a CLOSED
+   * workspace-private set: the container's loopback (default), or `docker` —
+   * the workspace-scoped Docker sidecar's alias, where `docker compose`
+   * publishes its ports.
    */
-  forward(port: number): Promise<WorkspaceForward>;
+  forward(port: number, options?: WorkspaceForwardOptions): Promise<WorkspaceForward>;
+}
+
+/** Options for {@link Workspace.forward}. */
+export interface WorkspaceForwardOptions {
+  /** Target inside the workspace: its loopback (default) or the Docker sidecar. */
+  readonly host?: "127.0.0.1" | "localhost" | "docker";
 }
 
 /**
