@@ -58,8 +58,8 @@ catalog:
   zod: ^4.1.12
 
 minimumReleaseAgeExclude:
-  - "@sealant/runtime-client@0.6.2"
-  - "@sealant/runtime-protocol@0.6.2"
+  - '@sealant/runtime-client@0.6.2 || 0.7.0'
+  - '@sealant/runtime-protocol@0.6.2 || 0.7.0'
 
 onlyBuiltDependencies:
   - better-sqlite3

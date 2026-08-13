@@ -947,8 +947,8 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.0
+        version: 0.7.0
       '@sealant/runtime-protocol':
         specifier: ^0.6.0
         version: 0.6.0
@@ -3322,12 +3322,20 @@ packages:
     resolution: {integrity: sha512-kZIF3Y7UbattTp60n0LjCjSDSut/1ww7B12/n4af6AEAmpbYgbohkEFTvdVES45fWAtF+EMKv4Vq/1jwRm+h5w==}
     engines: {node: '>=20'}
 
+  '@sealant/runtime-client@0.7.0':
+    resolution: {integrity: sha512-2m7m+QBrZlRJMurbk9TUZCJJmtnGZgoqA1QSZb830IsNK67PUN8sti6HsIbf61SNXKP0muw18L20QscTOjNcuw==}
+    engines: {node: '>=20'}
+
   '@sealant/runtime-protocol@0.4.0':
     resolution: {integrity: sha512-17Z66LI+t9wjnnFvfOHKKMAXBVol2rt5rLdx6eSKPv8OAMGJFxW2VIb7qmako2ZYRMNGZzoYuKzerO2O8cbt3Q==}
     engines: {node: '>=20'}
 
   '@sealant/runtime-protocol@0.6.0':
     resolution: {integrity: sha512-qP2v9vbr08l6Rl77opAIV9sNUEiI78+ljIsPmn0IUckv6/aZWvvZ7wsJxA/2kCBDbGjth6PMPq98NeTybLZqhA==}
+    engines: {node: '>=20'}
+
+  '@sealant/runtime-protocol@0.7.0':
+    resolution: {integrity: sha512-S+YFUYWJLC3F9kemXWGLhv6nc76X2QVQaWX6H5Wy0QXPErMD7uIKXqmiRPbLd2jIKaf8oG6ei70KRD99DLWHNw==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -9495,11 +9503,20 @@ snapshots:
       '@bufbuild/protobuf': 2.12.0
       '@sealant/runtime-protocol': 0.6.0
 
+  '@sealant/runtime-client@0.7.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': 0.7.0
+
   '@sealant/runtime-protocol@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
   '@sealant/runtime-protocol@0.6.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+
+  '@sealant/runtime-protocol@0.7.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
