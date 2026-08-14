@@ -966,6 +966,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // so the gateway can connect directly. We mount the parent (the daemon creates control.sock
     // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
     const controlSocketMountArgs = await this.buildControlSocketMountArgs(containerName);
+    // Worker-staged dotfiles archives ride a read-only bind; boot consumes them synchronously
+    // before the control socket binds, so the mount must exist at `docker run` time.
+    const dotfilesArchiveArgs =
+      parsed.dotfilesArchiveDir === undefined
+        ? []
+        : [
+            "-v",
+            `${parsed.dotfilesArchiveDir}:/run/sealant/dotfiles:ro`,
+            "-e",
+            "SEALANT_DOTFILES_ARCHIVE_DIR=/run/sealant/dotfiles",
+          ];
     const args = [
       "run",
       "-d",
@@ -988,6 +999,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...workspaceAuthEnvArgs,
       ...workspaceHttpAuthEnvArgs,
       ...controlSocketMountArgs,
+      ...dotfilesArchiveArgs,
       ...workspaceMountArgs(parsed),
       ...extraMountArgs(parsed),
       ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),

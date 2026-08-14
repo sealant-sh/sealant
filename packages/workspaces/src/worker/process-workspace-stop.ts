@@ -1,3 +1,7 @@
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepoLive,
@@ -139,6 +143,13 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       catch: toWorkspaceStopProcessingError,
     });
   }
+
+  // Best-effort: remove the worker-staged dotfiles archive dir (bind-mounted ro into the
+  // container we just stopped). The path is deterministic per run (see stageDotfilesArchives);
+  // a relaunch re-stages from the job payload, so removal is always safe.
+  yield* Effect.promise(() =>
+    rm(join(tmpdir(), `sealant-dotfiles-${options.runId}`), { recursive: true, force: true }),
+  );
 
   yield* runtimeInstances
     .markStopped({ runId: options.runId, stopReason: options.stopReason })

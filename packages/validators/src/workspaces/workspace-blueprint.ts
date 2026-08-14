@@ -208,10 +208,32 @@ export const workspaceCredentialRefSchema = z.strictObject({
   ref: nonEmptyStringSchema,
 });
 
+/**
+ * A caller-provided dotfiles archive: a gzipped tar the daemon extracts and applies at boot
+ * through the same manager dispatch as a cloned repo. This is the transport for callers that
+ * resolve dotfiles host-side (a checkout cloned with the caller's own ssh identity, or a scanned
+ * selection of home files) instead of handing the workspace a URL plus credentials. Applied in
+ * order, after any repo-based dotfiles.
+ */
+export const workspaceDotfilesArchiveSchema = z.strictObject({
+  // base64 of a .tar.gz; ~5.6MB of base64 ≈ 4MB decoded. Dotfiles are text — anything larger
+  // is almost certainly a mistake (bundled binaries, a .git directory) and deserves a loud no.
+  data: z
+    .string()
+    .min(1)
+    .max(6 * 1024 * 1024)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, "data must be base64"),
+  manager: workspaceDotfilesManagerSchema.optional(),
+  target: workspaceDotfilesTargetSchema.optional(),
+  bootstrap: z.boolean().default(true),
+  bootstrapCommand: nonEmptyStringSchema.optional(),
+});
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
     credentialRefs: z.array(workspaceCredentialRefSchema).default([]),
+    dotfilesArchives: z.array(workspaceDotfilesArchiveSchema).max(4).default([]),
     workspaceRoot: nonEmptyStringSchema.default("/workspace"),
     workingDirectory: nonEmptyStringSchema.default("/workspace/repo"),
     persistence: workspacePersistenceSchema.default("ephemeral"),

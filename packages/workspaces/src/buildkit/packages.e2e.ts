@@ -61,6 +61,7 @@ const blueprintForOs = (
   runtime: {
     env: {},
     credentialRefs: [],
+    dotfilesArchives: [],
     workspaceRoot: "/workspace",
     workingDirectory: "/workspace/repo",
     persistence: "ephemeral",
