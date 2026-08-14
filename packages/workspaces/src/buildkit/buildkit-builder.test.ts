@@ -790,7 +790,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.9.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
@@ -979,7 +979,7 @@ describe("compileWorkspaceBuildSpec", () => {
 
     // sealantd binary + socat relay dependency are always present.
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.9.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain("socat");
@@ -1041,7 +1041,7 @@ describe("compileWorkspaceBuildSpec", () => {
       // socat (the host<->control-socket relay dependency) is always part of the install layer.
       expect(containerfile).toContain(osFamily === "nix" ? sealantdLayer : "socat");
       expect(containerfile).toContain(
-        "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+        "COPY --from=ghcr.io/sealant-sh/sealantd:0.9.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
       );
       expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
     }
@@ -1179,10 +1179,10 @@ describe("custom base images", () => {
     expect(containerfile).toContain("the custom base image has no npm");
     // Static binaries via COPY --chmod: nothing assumes coreutils in the base.
     expect(containerfile).toContain(
-      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.9.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain(
-      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/socat /usr/local/bin/socat",
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.9.0 /usr/local/bin/socat /usr/local/bin/socat",
     );
     // No distro package installs, no shell reconfiguration.
     expect(containerfile).not.toContain("dnf ");
