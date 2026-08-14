@@ -124,6 +124,31 @@ const workspace = await sealant.workspaces.create({
 rootless daemon at launch. The workspace receives `DOCKER_HOST`; Sealant never mounts the host
 Docker socket. GitHub credentials provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
+## Dotfiles and shell
+
+Bring your own environment: a login shell and dotfiles applied before the workspace accepts work.
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  shell: "zsh",
+  dotfiles: {
+    // A repo the platform clones and applies (chezmoi/stow layouts detected, else copied):
+    repository: { url: "github.com/acme/dotfiles" },
+    // And/or caller-resolved archives — a checkout cloned host-side with your own ssh identity,
+    // or a scanned selection of home files, sent as gzipped tars (max 4, ~4MB decoded each):
+    archives: [{ data: tarGzBase64, manager: "copy", bootstrap: false }],
+  },
+});
+```
+
+`shell` installs the shell package and switches the login shell, so `.zshrc`/`.fishrc` actually take
+effect. The `repository` applies first, then each archive in order, so local selections override
+repo files. A failing apply fails the launch loudly rather than handing the agent a half-prepared
+home. Managed OS families only — with `baseImage`, `dotfiles` and non-bash `shell` are rejected
+client-side with the platform's reasoning.
+
 ## Custom base images
 
 Instead of a managed OS family, a workspace image can be built from any image reference you already

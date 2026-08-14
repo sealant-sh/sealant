@@ -146,6 +146,57 @@ export interface WorkspaceExtraMount {
   readonly readOnly?: boolean;
 }
 
+/** How a dotfiles tree is applied inside the workspace. */
+export type WorkspaceDotfilesManager = "auto" | "chezmoi" | "stow" | "copy";
+
+/**
+ * A dotfiles repository the platform clones and applies before the workspace accepts work. Public
+ * or GitHub-App-reachable repos work as-is; for a repo only the caller's own ssh identity can
+ * reach, resolve it host-side and send the checkout as an archive instead (see
+ * `WorkspaceDotfilesArchive`).
+ */
+export interface WorkspaceDotfilesRepository {
+  /** Clone URL (or `"github.com/acme/dotfiles"` shorthand). */
+  readonly url: string;
+  /** Git ref. Omitted = the remote's default branch — never assumed to be `main`. */
+  readonly ref?: string;
+  /** Defaults to `"auto"`: chezmoi/stow layouts are detected, everything else is copied. */
+  readonly manager?: WorkspaceDotfilesManager;
+  /** Run the repo's bootstrap command after applying (skipped when absent). Defaults to true. */
+  readonly bootstrap?: boolean;
+  /** Bootstrap command, relative to the checkout. Defaults to `./install.sh`. */
+  readonly bootstrapCommand?: string;
+}
+
+/**
+ * A caller-resolved dotfiles tree: a gzipped tar the daemon extracts and applies at boot through
+ * the same manager dispatch as a cloned repo. This is the shape for dotfiles resolved host-side —
+ * a checkout cloned with the caller's own ssh identity, or a scanned selection of home files —
+ * so no URL or credential ever has to reach the workspace. Max 4 archives, ~4MB decoded each.
+ */
+export interface WorkspaceDotfilesArchive {
+  /** base64 of a `.tar.gz` whose contents apply relative to the target. */
+  readonly data: string;
+  /** Defaults to `"auto"`. Scanned home files usually want `"copy"`. */
+  readonly manager?: WorkspaceDotfilesManager;
+  /** Where the tree lands: `"home"` (default) or `"config"` (`$HOME/.config`, copy manager only). */
+  readonly target?: "home" | "config";
+  /** Run `./install.sh` (or `bootstrapCommand`) after applying when present. Defaults to true. */
+  readonly bootstrap?: boolean;
+  readonly bootstrapCommand?: string;
+}
+
+/**
+ * Dotfiles for the workspace: a repository the platform clones, caller-resolved archives, or both
+ * (the repository applies first, archives after — in order — so local selections override repo
+ * files). Applied before the workspace reports ready; a failing apply fails the launch loudly.
+ * Not supported with `baseImage` (custom bases guarantee only a POSIX shell).
+ */
+export interface WorkspaceDotfilesOptions {
+  readonly repository?: WorkspaceDotfilesRepository;
+  readonly archives?: readonly WorkspaceDotfilesArchive[];
+}
+
 /** Runtime-managed services attached only to this workspace. */
 export interface WorkspaceServicesOptions {
   /**
@@ -184,6 +235,14 @@ export interface CreateOptions {
   readonly baseImage?: string;
   /** Extra OS packages to install in the workspace. */
   readonly packages?: readonly string[];
+  /**
+   * Login shell for the workspace user (`"bash"` default). The shell package is installed and the
+   * login shell switched, so dotfiles like `.zshrc` actually take effect. Managed OS families
+   * only — custom bases guarantee just a POSIX shell.
+   */
+  readonly shell?: "bash" | "zsh" | "fish";
+  /** Dotfiles applied before the workspace accepts work (see `WorkspaceDotfilesOptions`). */
+  readonly dotfiles?: WorkspaceDotfilesOptions;
   /** Runtime-managed services that need more than installing an OS package. */
   readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */
