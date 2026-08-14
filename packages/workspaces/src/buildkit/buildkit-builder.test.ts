@@ -931,10 +931,10 @@ describe("custom base images", () => {
     expect(containerfile).toContain("the custom base image has no npm");
     // Static binaries via COPY --chmod: nothing assumes coreutils in the base.
     expect(containerfile).toContain(
-      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.7.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain(
-      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.7.0 /usr/local/bin/socat /usr/local/bin/socat",
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/socat /usr/local/bin/socat",
     );
     // No distro package installs, no shell reconfiguration.
     expect(containerfile).not.toContain("dnf ");
