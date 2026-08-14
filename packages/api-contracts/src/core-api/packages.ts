@@ -3,7 +3,7 @@ import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
-export const packageTargetOsSchema = Schema.Literals(["arch", "fedora", "nix"]);
+export const packageTargetOsSchema = Schema.Literals(["arch", "fedora", "nix", "ubuntu"]);
 export type PackageTargetOs = typeof packageTargetOsSchema.Type;
 
 export const packageResolutionStatusSchema = Schema.Literals([
@@ -40,6 +40,7 @@ export const packageResolutionSchema = Schema.Struct({
     arch: packageOsSupportSchema,
     fedora: packageOsSupportSchema,
     nix: packageOsSupportSchema,
+    ubuntu: packageOsSupportSchema,
   }),
   alternatives: Schema.Array(packageResolutionAlternativeSchema),
   fetchedAt: Schema.String,

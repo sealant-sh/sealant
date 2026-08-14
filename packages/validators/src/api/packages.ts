@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const packageTargetOsSchema = z.enum(["arch", "fedora", "nix"]);
+export const packageTargetOsSchema = z.enum(["arch", "fedora", "nix", "ubuntu"]);
 
 export const packageResolutionStatusSchema = z.enum([
   "resolved",
@@ -36,6 +36,7 @@ export const packageResolutionSchema = z.strictObject({
     arch: packageOsSupportSchema,
     fedora: packageOsSupportSchema,
     nix: packageOsSupportSchema,
+    ubuntu: packageOsSupportSchema,
   }),
   alternatives: z.array(packageResolutionAlternativeSchema).default([]),
   fetchedAt: z.string().datetime(),

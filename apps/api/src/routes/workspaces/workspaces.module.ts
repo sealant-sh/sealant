@@ -324,7 +324,9 @@ const parseRequestedPackageIds = (spec: NewWorkspace): string[] => {
   return spec.tooling.packages.map((pkg) => pkg.id);
 };
 
-const parseRequestedOsFamily = (spec: NewWorkspace): "auto" | "arch" | "fedora" | "nix" => {
+const parseRequestedOsFamily = (
+  spec: NewWorkspace,
+): "auto" | "arch" | "fedora" | "nix" | "ubuntu" => {
   return spec.target.os.family;
 };
 
@@ -362,7 +364,7 @@ const standardizeRequestedPackages = (spec: NewWorkspace) => {
       return {
         spec,
         errors: [
-          "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, or nix for this request.",
+          "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, nix, or ubuntu for this request.",
         ],
       };
     }

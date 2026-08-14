@@ -11,7 +11,7 @@ type ConfigRepoMode = "none" | "git" | "github";
 type LoginShell = "bash" | "zsh" | "fish";
 type DotfilesManager = "auto" | "chezmoi" | "stow" | "copy";
 type DotfilesTarget = "home" | "config";
-type TargetOs = "fedora" | "arch" | "nix";
+type TargetOs = "fedora" | "arch" | "nix" | "ubuntu";
 type OciRuntime = "runc" | "runsc";
 
 interface NewWorkspaceFormState {
@@ -72,6 +72,7 @@ const TARGET_OS_OPTIONS: ReadonlyArray<{ readonly value: TargetOs; readonly labe
   { value: "fedora", label: "Fedora" },
   { value: "arch", label: "Arch" },
   { value: "nix", label: "NixOS" },
+  { value: "ubuntu", label: "Ubuntu" },
 ];
 
 const OCI_RUNTIME_OPTIONS: ReadonlyArray<{

@@ -105,8 +105,9 @@ and injects them at launch.
 
 ## Workspace tools and services
 
-Choose a supported operating-system family, request portable package names, and opt into services
-that need runtime support rather than a package install:
+Choose a supported operating-system family — `fedora` (the default), `arch`, `nix`, or `ubuntu` —
+request portable package names, and opt into services that need runtime support rather than a
+package install:
 
 ```ts
 const workspace = await sealant.workspaces.create({
