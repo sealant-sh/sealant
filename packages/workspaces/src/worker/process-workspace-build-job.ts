@@ -1,3 +1,7 @@
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -115,6 +119,7 @@ const launchPublishedImage = async (input: {
   readonly workspaceCloneAuth?: WorkspaceCloneAuth;
   readonly credentialEnv?: Record<string, string>;
   readonly credentialFiles?: readonly CredentialFileInjection[];
+  readonly dotfilesArchiveDir?: string;
   readonly runId?: string;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
@@ -131,9 +136,51 @@ const launchPublishedImage = async (input: {
       : { workspaceCloneAuth: input.workspaceCloneAuth }),
     ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
     ...(input.credentialFiles === undefined ? {} : { credentialFiles: [...input.credentialFiles] }),
+    ...(input.dotfilesArchiveDir === undefined
+      ? {}
+      : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
     // Deterministic per-run container name -> idempotent launch/adopt (#4).
     ...(input.runId === undefined ? {} : { runId: input.runId }),
   });
+};
+
+/**
+ * Stage the spec's dotfiles archives into a host directory the adapter bind-mounts read-only:
+ * `manifest.json` plus one `<index>.tar.gz` per archive, the exact contract
+ * `crates/sealantd/src/boot/dotfiles.rs::apply_archives` consumes. The path is deterministic per
+ * run so a redelivered launch overwrites its own staging instead of leaking a new directory, and
+ * a workspace restart re-stages from the job payload. Returns undefined when there is nothing to
+ * stage (no archives, or the apply is disabled).
+ */
+const stageDotfilesArchives = async (
+  spec: NewWorkspace,
+  runId: string | null,
+): Promise<string | undefined> => {
+  const archives = spec.runtime.dotfilesArchives;
+  if (!spec.customization.applyDotfiles || archives.length === 0) {
+    return undefined;
+  }
+
+  const directory = join(tmpdir(), `sealant-dotfiles-${runId ?? "unkeyed"}`);
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+
+  const manifest = {
+    archives: archives.map((archive, index) => ({
+      file: `${index}.tar.gz`,
+      ...(archive.manager === undefined ? {} : { manager: archive.manager }),
+      ...(archive.target === undefined ? {} : { target: archive.target }),
+      bootstrap: archive.bootstrap,
+      ...(archive.bootstrapCommand === undefined
+        ? {}
+        : { bootstrapCommand: archive.bootstrapCommand }),
+    })),
+  };
+  await writeFile(join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
+  for (const [index, archive] of archives.entries()) {
+    await writeFile(join(directory, `${index}.tar.gz`), Buffer.from(archive.data, "base64"));
+  }
+  return directory;
 };
 
 /** Split the resolver's injection plan into the adapter-launch env record + file list. */
@@ -484,6 +531,11 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             },
           };
 
+    const dotfilesArchiveDir = yield* Effect.tryPromise({
+      try: () => stageDotfilesArchives(runtimeSpec, job.runId),
+      catch: toWorkspaceBuildJobProcessingError,
+    });
+
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
         launchPublishedImage({
@@ -494,6 +546,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
           ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
           ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
+          ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),
           ...(job.runId === null ? {} : { runId: job.runId }),
         }),
       catch: toWorkspaceBuildJobProcessingError,

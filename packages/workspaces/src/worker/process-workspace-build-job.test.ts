@@ -1,3 +1,6 @@
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "@effect/vitest";
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
@@ -192,6 +195,7 @@ const createWorkspaceBuildSpec = (
     readonly credentialRefs?: NewWorkspace["runtime"]["credentialRefs"];
     readonly packages?: NewWorkspace["tooling"]["packages"];
     readonly applyDotfiles?: boolean;
+    readonly dotfilesArchives?: NewWorkspace["runtime"]["dotfilesArchives"];
   } = {},
 ): NewWorkspace => {
   return {
@@ -245,6 +249,7 @@ const createWorkspaceBuildSpec = (
     runtime: {
       env: {},
       credentialRefs: input.credentialRefs ?? [],
+      dotfilesArchives: input.dotfilesArchives ?? [],
       workspaceRoot: "/workspace",
       workingDirectory: "/workspace/repo",
       persistence: "ephemeral",
@@ -848,6 +853,107 @@ describe("processWorkspaceBuildJobEffect", () => {
             }),
           }),
         }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("stages dotfiles archives and hands the adapter the staging dir", () => {
+    const archiveData = Buffer.from("not-a-real-tarball").toString("base64");
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_dotfiles_archives",
+        runId: "run_dotfiles_archives",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({
+          url: "https://github.com/example/repo.git",
+          osFamily: "nix",
+          dotfilesArchives: [
+            { data: archiveData, manager: "copy", bootstrap: false },
+            { data: archiveData, bootstrap: true },
+          ],
+        }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_dotfiles_archives",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dotfilesArchiveDir: expect.stringContaining("sealant-dotfiles-run_dotfiles_archives"),
+        }),
+      );
+      const launchMock = vi.mocked(runtimeAdapter.launch);
+      const launchInput = launchMock.mock.calls[0]?.[0];
+      const stagedDir = launchInput?.dotfilesArchiveDir;
+      expect(stagedDir).toBeDefined();
+      if (stagedDir !== undefined) {
+        const manifest = JSON.parse(readFileSync(join(stagedDir, "manifest.json"), "utf8")) as {
+          archives: Array<Record<string, unknown>>;
+        };
+        expect(manifest.archives).toEqual([
+          { file: "0.tar.gz", manager: "copy", bootstrap: false },
+          { file: "1.tar.gz", bootstrap: true },
+        ]);
+        expect(readFileSync(join(stagedDir, "0.tar.gz")).toString()).toBe("not-a-real-tarball");
+        rmSync(stagedDir, { recursive: true, force: true });
+      }
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("stages nothing when the dotfiles apply is disabled", () => {
+    const archiveData = Buffer.from("unused").toString("base64");
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_dotfiles_archives_disabled",
+        runId: "run_archives_disabled",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({
+          url: "https://github.com/example/repo.git",
+          osFamily: "nix",
+          applyDotfiles: false,
+          dotfilesArchives: [{ data: archiveData, bootstrap: true }],
+        }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_dotfiles_archives_disabled",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.not.objectContaining({ dotfilesArchiveDir: expect.anything() }),
       );
     }).pipe(
       Effect.provide(

@@ -49,6 +49,7 @@ describe("K8sRuntimeAdapter", () => {
         runtime: {
           env: {},
           credentialRefs: [],
+          dotfilesArchives: [],
           workspaceRoot: "/workspace",
           workingDirectory: "/workspace/repo",
           persistence: "ephemeral",

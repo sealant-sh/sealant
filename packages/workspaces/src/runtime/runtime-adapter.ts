@@ -69,6 +69,10 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   // tracked, pre-existing item).
   credentialEnv: z.record(z.string(), z.string()).optional(),
   credentialFiles: z.array(credentialFileInjectionSchema).optional(),
+  // Host directory staged by the worker with manifest.json + *.tar.gz dotfiles archives. The
+  // adapter bind-mounts it read-only and points SEALANT_DOTFILES_ARCHIVE_DIR at the mount so
+  // `sealantd boot` applies the archives before the control socket binds.
+  dotfilesArchiveDir: z.string().trim().min(1).optional(),
   // The run (workspace attempt) this launch belongs to. When present the docker adapter derives a
   // DETERMINISTIC per-run container name, so a redelivered/reaper-republished or concurrent launch
   // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).

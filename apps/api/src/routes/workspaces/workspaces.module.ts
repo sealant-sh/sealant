@@ -1263,9 +1263,19 @@ export const createWorkspace = (input: {
           relation: "launch",
         });
 
+        // The attempt snapshot backs sync-backs and the workspace detail view; the dotfiles
+        // archive payloads (multi-MB base64 of the caller's shell configs) belong only in the
+        // job payload the worker consumes, not in the durable, API-visible snapshot.
+        const snapshotSpec: NewWorkspace =
+          resolvedSpec.runtime.dotfilesArchives.length === 0
+            ? resolvedSpec
+            : {
+                ...resolvedSpec,
+                runtime: { ...resolvedSpec.runtime, dotfilesArchives: [] },
+              };
         yield* workspaceAttempts.setAttemptSnapshot({
           runId: attempt.id,
-          specPayload: resolvedSpec,
+          specPayload: snapshotSpec,
         });
 
         yield* workspaceBuildJobs.insertQueuedJob({

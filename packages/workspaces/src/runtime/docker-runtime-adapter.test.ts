@@ -516,6 +516,38 @@ describe("DockerRuntimeAdapter", () => {
     expect(forceRemoved).toBe(true);
   });
 
+  it("bind-mounts the staged dotfiles archive dir read-only and points boot at it", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-run\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput(),
+        dotfilesArchiveDir: "/tmp/sealant-dotfiles-run-1",
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
+    expect(runArgs).toContain("/tmp/sealant-dotfiles-run-1:/run/sealant/dotfiles:ro");
+    expect(runArgs).toContain("SEALANT_DOTFILES_ARCHIVE_DIR=/run/sealant/dotfiles");
+  });
+
   it("derives a deterministic per-run container name from runId", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

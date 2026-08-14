@@ -183,6 +183,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
       stow: { installPackages: ["stow"] },
+      tar: { installPackages: ["tar"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -221,6 +222,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
       stow: { installPackages: ["stow"] },
+      tar: { installPackages: ["tar"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -254,6 +256,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       // with apt's own readable error.
       ripgrep: { installPackages: ["ripgrep"] },
       stow: { installPackages: ["stow"] },
+      tar: { installPackages: ["tar"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -292,6 +295,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
       pnpm: { installPackages: ["nodejs", "pnpm"] },
       ripgrep: { installPackages: ["ripgrep"] },
       stow: { installPackages: ["stow"] },
+      tar: { installPackages: ["gnutar"] },
       tmux: { installPackages: ["tmux"] },
       zsh: { installPackages: ["zsh"] },
     },
@@ -499,7 +503,10 @@ const getBuildkitSupportForOs = (
       });
     }
 
-    if (blueprint.customization.applyDotfiles && dotfilesInputs.length > 0) {
+    if (
+      blueprint.customization.applyDotfiles &&
+      (dotfilesInputs.length > 0 || blueprint.runtime.dotfilesArchives.length > 0)
+    ) {
       return parseOsBuilderSupport({
         supported: false,
         reason: "unsupported-runtime-requirement",
@@ -616,6 +623,21 @@ const resolvePackages = (
     }
 
     if (blueprint.customization.dotfilesManager === "stow") {
+      requests.push({ id: "stow" });
+    }
+  }
+
+  // Caller-provided archives are extracted with `tar` and applied through the same manager
+  // dispatch as a cloned repo (no git involved). Each archive carries its own manager choice.
+  if (blueprint.customization.applyDotfiles && blueprint.runtime.dotfilesArchives.length > 0) {
+    requests.push({ id: "tar" });
+    const archiveManagers = new Set(
+      blueprint.runtime.dotfilesArchives.map((archive) => archive.manager ?? "auto"),
+    );
+    if (archiveManagers.has("auto") || archiveManagers.has("chezmoi")) {
+      requests.push({ id: "chezmoi" });
+    }
+    if (archiveManagers.has("auto") || archiveManagers.has("stow")) {
       requests.push({ id: "stow" });
     }
   }
@@ -1076,9 +1098,20 @@ const chezmoiRelease = {
 };
 
 /** Whether the plan's dotfiles can invoke chezmoi (explicitly or through auto-detection). */
-const planWantsChezmoi = (plan: ResolvedImagePlan): boolean =>
-  plan.dotfiles !== undefined &&
-  (plan.dotfiles.manager === "auto" || plan.dotfiles.manager === "chezmoi");
+const planWantsChezmoi = (plan: ResolvedImagePlan): boolean => {
+  if (
+    plan.dotfiles !== undefined &&
+    (plan.dotfiles.manager === "auto" || plan.dotfiles.manager === "chezmoi")
+  ) {
+    return true;
+  }
+  return (
+    plan.blueprint.customization.applyDotfiles &&
+    plan.blueprint.runtime.dotfilesArchives.some(
+      (archive) => (archive.manager ?? "auto") === "auto" || archive.manager === "chezmoi",
+    )
+  );
+};
 
 /**
  * Renders the checksum-verified chezmoi install for distros without an archive package. The

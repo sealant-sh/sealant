@@ -54,6 +54,7 @@ const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWor
     runtime: {
       env: {},
       credentialRefs: [],
+      dotfilesArchives: [],
       workspaceRoot: "/workspace",
       workingDirectory: "/workspace/repo",
       persistence: "ephemeral",
@@ -526,6 +527,83 @@ describe("compileWorkspaceBuildSpec", () => {
       "git clone --depth=1 'https://github.com/example/dotfiles.git'",
     );
     expect(containerfile).not.toContain("--branch");
+  });
+
+  it("requests tar and the managers dotfiles archives can invoke", () => {
+    const archiveData = Buffer.from("archive").toString("base64");
+    const blueprint = createWorkspaceBuildSpec({
+      runtime: {
+        env: {},
+        credentialRefs: [],
+        dotfilesArchives: [
+          { data: archiveData, manager: "copy", bootstrap: false },
+          { data: archiveData, bootstrap: true },
+        ],
+        workspaceRoot: "/workspace",
+        workingDirectory: "/workspace/repo",
+        persistence: "ephemeral",
+        ociRuntime: "runc",
+        network: { outbound: true },
+      },
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const requestIds = plan.packages.map((pkg) => pkg.requestId);
+    // The second archive defaults to "auto", which can invoke chezmoi or stow; no git — archives
+    // are staged by the worker, not cloned.
+    expect(requestIds).toEqual(expect.arrayContaining(["tar", "chezmoi", "stow"]));
+    expect(requestIds).not.toContain("git");
+  });
+
+  it("requests only tar for copy-manager archives", () => {
+    const archiveData = Buffer.from("archive").toString("base64");
+    const blueprint = createWorkspaceBuildSpec({
+      runtime: {
+        env: {},
+        credentialRefs: [],
+        dotfilesArchives: [{ data: archiveData, manager: "copy", bootstrap: false }],
+        workspaceRoot: "/workspace",
+        workingDirectory: "/workspace/repo",
+        persistence: "ephemeral",
+        ociRuntime: "runc",
+        network: { outbound: true },
+      },
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    const requestIds = plan.packages.map((pkg) => pkg.requestId);
+    expect(requestIds).toContain("tar");
+    expect(requestIds).not.toContain("chezmoi");
+    expect(requestIds).not.toContain("stow");
+  });
+
+  it("rejects dotfiles archives with a custom base image", () => {
+    const archiveData = Buffer.from("archive").toString("base64");
+    const blueprint = createWorkspaceBuildSpec({
+      runtime: {
+        env: {},
+        credentialRefs: [],
+        dotfilesArchives: [{ data: archiveData, bootstrap: true }],
+        workspaceRoot: "/workspace",
+        workingDirectory: "/workspace/repo",
+        persistence: "ephemeral",
+        ociRuntime: "runc",
+        network: { outbound: true },
+      },
+      target: {
+        os: {
+          family: "custom",
+          mode: "require",
+          baseImage: "node:22-bookworm",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
+    });
+
+    expect(() => selectBuildkitOsFamily({ blueprint })).toThrow(/Dotfiles are not supported/);
   });
 
   it("emits no SEALANT_DOTFILES_REPO_REF for a ref-less runtime apply", async () => {
@@ -1259,6 +1337,7 @@ describe("planWorkspaceImageBuild", () => {
         runtime: {
           env: { EXAMPLE: "per-session-value" },
           credentialRefs: [],
+          dotfilesArchives: [],
           workspaceRoot: "/workspace",
           workingDirectory: "/workspace/repo",
           persistence: "ephemeral",
