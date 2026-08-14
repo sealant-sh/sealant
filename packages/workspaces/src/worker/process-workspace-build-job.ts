@@ -19,7 +19,11 @@ import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 
-import { compileWorkspaceBuildSpec } from "../buildkit/index.js";
+import {
+  compileWorkspaceBuildSpec,
+  planWorkspaceImageBuild,
+  type PlannedWorkspaceImageBuild,
+} from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
@@ -67,6 +71,13 @@ export interface ProcessWorkspaceBuildJobOptions {
    */
   readonly credentialCipher?: CredentialCipherService;
   readonly compileWorkspaceSpec?: (spec: NewWorkspace) => Promise<WorkspaceBuild>;
+  /**
+   * Docker-free planner used for the plan-hash short-circuit. Defaults to the real BuildKit
+   * planner when `compileWorkspaceSpec` is not overridden; when a custom compiler is injected
+   * without a matching planner the short-circuit is disabled (the planner's hash would not
+   * describe what the custom compiler builds).
+   */
+  readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
 }
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
@@ -152,6 +163,113 @@ const splitCredentialInjections = (
 
 const swallowingFailure = (operation: string) =>
   sharedSwallowingFailure("Workspace build job", operation);
+
+interface PlanHashReuse {
+  readonly publishedImage: PublishedImage;
+  readonly builderId: string;
+  readonly resultPayload: WorkspaceBuild;
+  readonly planHash: string;
+}
+
+/**
+ * The plan-hash short-circuit: when the Docker-free plan of this job hashes identically to the
+ * plan recorded by the latest succeeded publish in the same registry, AND that publish's tag still
+ * resolves to its recorded digest, the BuildKit walk + publish can be skipped entirely — the
+ * already-published image is byte-equivalent to what this build would produce.
+ *
+ * The lookup is keyed by plan hash, not repository:tag: the SDK stamps every create with a fresh
+ * random tag, so consecutive sessions over an unchanged plan share nothing BUT the hash. The
+ * reused image keeps living under the prior job's tag; this job records the prior content
+ * references while keeping its own repository:tag for naming.
+ *
+ * Strictly best-effort: any failure (planning, repo lookup, registry HEAD) resolves to `null` and
+ * the job falls through to a full build, which surfaces the real error if one exists.
+ */
+const attemptPlanHashReuse = (input: {
+  readonly job: {
+    readonly registryId: string;
+    readonly repository: string;
+    readonly tag: string;
+  };
+  readonly spec: NewWorkspace;
+  readonly planSpec: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
+  readonly registryClient: RegistryClient;
+}): Effect.Effect<PlanHashReuse | null, never, WorkspaceBuildJobRepo> =>
+  Effect.gen(function* () {
+    const jobs = yield* WorkspaceBuildJobRepo;
+
+    const planned = yield* Effect.try(() => input.planSpec(input.spec));
+
+    const priorJob = yield* jobs.getLatestSucceededJobByPlanHash({
+      registryId: input.job.registryId,
+      planHash: planned.planHash,
+    });
+
+    if (
+      priorJob === undefined ||
+      priorJob.publishedReference === null ||
+      priorJob.publishedDigestReference === null ||
+      priorJob.publishedDigest === null
+    ) {
+      return null;
+    }
+
+    // The prior publish's tag must still point at the digest we recorded — a registry GC or an
+    // out-of-band push makes the stored publish unusable and forces a fresh build.
+    const registryDigest = yield* Effect.tryPromise(() =>
+      input.registryClient.headManifest(priorJob.repository, priorJob.tag),
+    );
+
+    if (registryDigest !== priorJob.publishedDigest) {
+      return null;
+    }
+
+    const publishedImage: PublishedImage = {
+      repository: input.job.repository,
+      tag: input.job.tag,
+      reference: priorJob.publishedReference,
+      digestReference: priorJob.publishedDigestReference,
+      digest: priorJob.publishedDigest,
+    };
+
+    const artifactName =
+      priorJob.resultPayload?.metadata?.defaultArtifactName ??
+      `sealant-workspace-${planned.osFamily}`;
+
+    return {
+      publishedImage,
+      builderId: planned.osFamily,
+      planHash: planned.planHash,
+      resultPayload: {
+        builder: {
+          id: planned.osFamily,
+          osFamily: planned.osFamily,
+        },
+        artifacts: [
+          {
+            kind: "oci-image" as const,
+            name: artifactName,
+            reference: priorJob.publishedReference,
+            loader: "registry" as const,
+          },
+        ],
+        metadata: {
+          defaultArtifactName: artifactName,
+          notes: [
+            `Reused published image ${priorJob.publishedDigestReference}: plan hash ${planned.planHash} unchanged; build and publish skipped.`,
+          ],
+          planHash: planned.planHash,
+        },
+      },
+    };
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logDebug(
+        "Workspace build job plan-hash reuse check failed; falling through to a full build.",
+        cause,
+      ).pipe(Effect.as(null)),
+    ),
+  );
 
 /**
  * Process a single workspace build job as one Effect program.
@@ -245,6 +363,42 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       options.compileWorkspaceSpec ??
       ((inputSpec: NewWorkspace): Promise<WorkspaceBuild> =>
         compileWorkspaceBuildSpec({ blueprint: inputSpec }));
+
+    const planSpec =
+      options.planWorkspaceSpec ??
+      (options.compileWorkspaceSpec === undefined
+        ? (inputSpec: NewWorkspace): PlannedWorkspaceImageBuild =>
+            planWorkspaceImageBuild({ blueprint: inputSpec })
+        : undefined);
+
+    const reuse =
+      planSpec === undefined
+        ? null
+        : yield* attemptPlanHashReuse({
+            job,
+            spec,
+            planSpec,
+            registryClient: options.registryClient,
+          });
+
+    if (reuse !== null) {
+      yield* jobs
+        .markJobSucceeded({
+          id: job.id,
+          builderId: reuse.builderId,
+          resultPayload: reuse.resultPayload,
+          publishedReference: reuse.publishedImage.reference,
+          publishedDigestReference: reuse.publishedImage.digestReference,
+          publishedDigest: reuse.publishedImage.digest,
+        })
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+
+      yield* Effect.logInfo(
+        `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
+      );
+
+      return { publishedImage: reuse.publishedImage, spec };
+    }
 
     const compileResult = yield* Effect.tryPromise({
       try: () => compileSpec(spec),

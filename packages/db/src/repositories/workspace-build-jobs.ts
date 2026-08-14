@@ -1,5 +1,5 @@
 import type { NewWorkspace } from "@sealant/validators";
-import { and, asc, desc, eq, inArray, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -77,6 +77,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "getJobById",
   "getJobByIdempotencyKey",
   "getLatestJobByRunId",
+  "getLatestSucceededJobByPlanHash",
   "insertQueuedJob",
   "listJobsByStatus",
   "listLatestJobsByRunIds",
@@ -149,6 +150,15 @@ export interface WorkspaceBuildJobRepoService {
   readonly getLatestJobByRunId: (
     runId: string,
   ) => Effect.Effect<WorkspaceBuildJob | undefined, WorkspaceBuildJobRepoError>;
+  /**
+   * Latest succeeded job (in the given registry) whose recorded compile-result
+   * `metadata.planHash` matches. Keyed by hash, NOT repository:tag — the SDK names every create
+   * with a fresh random tag, so the hash is the only stable identity an unchanged plan has.
+   */
+  readonly getLatestSucceededJobByPlanHash: (input: {
+    readonly registryId: string;
+    readonly planHash: string;
+  }) => Effect.Effect<WorkspaceBuildJob | undefined, WorkspaceBuildJobRepoError>;
   readonly listLatestJobsByRunIds: (
     runIds: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, WorkspaceBuildJob>, WorkspaceBuildJobRepoError>;
@@ -254,6 +264,27 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .from(workspaceBuildJobs)
               .where(eq(workspaceBuildJobs.runId, runId))
               .orderBy(desc(workspaceBuildJobs.createdAt))
+              .limit(1);
+
+            return job;
+          }),
+        ),
+
+      getLatestSucceededJobByPlanHash: (input) =>
+        withWorkspaceBuildJobRepoError(
+          "getLatestSucceededJobByPlanHash",
+          Effect.gen(function* () {
+            const [job] = yield* db
+              .select()
+              .from(workspaceBuildJobs)
+              .where(
+                and(
+                  eq(workspaceBuildJobs.status, "succeeded"),
+                  eq(workspaceBuildJobs.registryId, input.registryId),
+                  sql`${workspaceBuildJobs.resultPayload} #>> '{metadata,planHash}' = ${input.planHash}`,
+                ),
+              )
+              .orderBy(desc(workspaceBuildJobs.finishedAt))
               .limit(1);
 
             return job;
