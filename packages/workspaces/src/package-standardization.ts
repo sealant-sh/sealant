@@ -34,6 +34,7 @@ const repologyRepoByTargetOs: Record<PackageTargetOs, string> = {
   arch: "arch",
   fedora: "fedora_41",
   nix: "nix_unstable",
+  ubuntu: "ubuntu_24_04",
 };
 
 const packageQueryPattern = /^[a-z0-9][a-z0-9._:+-]*$/;
@@ -57,6 +58,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "bash" },
       fedora: { packageName: "bash" },
       nix: { packageName: "bash" },
+      ubuntu: { packageName: "bash" },
     },
   },
   {
@@ -66,6 +68,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "bat" },
       fedora: { packageName: "bat" },
       nix: { packageName: "bat" },
+      ubuntu: { packageName: "bat" },
     },
   },
   {
@@ -75,6 +78,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "curl" },
       fedora: { packageName: "curl" },
       nix: { packageName: "curl" },
+      ubuntu: { packageName: "curl" },
     },
   },
   {
@@ -89,6 +93,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "fish" },
       fedora: { packageName: "fish" },
       nix: { packageName: "fish" },
+      ubuntu: { packageName: "fish" },
     },
   },
   {
@@ -98,6 +103,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "git" },
       fedora: { packageName: "git" },
       nix: { packageName: "git" },
+      ubuntu: { packageName: "git" },
     },
   },
   {
@@ -107,6 +113,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "jq" },
       fedora: { packageName: "jq" },
       nix: { packageName: "jq" },
+      ubuntu: { packageName: "jq" },
     },
   },
   {
@@ -116,6 +123,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "neovim" },
       fedora: { packageName: "neovim" },
       nix: { packageName: "neovim" },
+      ubuntu: { packageName: "neovim" },
     },
   },
   {
@@ -125,6 +133,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "nodejs" },
       fedora: { packageName: "nodejs" },
       nix: { packageName: "nodejs" },
+      ubuntu: { packageName: "nodejs" },
     },
   },
   {
@@ -143,6 +152,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "python" },
       fedora: { packageName: "python3" },
       nix: { packageName: "python3" },
+      ubuntu: { packageName: "python3" },
     },
   },
   {
@@ -169,6 +179,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "github-cli" },
       fedora: { packageName: "gh" },
       nix: { packageName: "gh" },
+      ubuntu: { packageName: "gh" },
     },
   },
   {
@@ -187,6 +198,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "ripgrep" },
       fedora: { packageName: "ripgrep" },
       nix: { packageName: "ripgrep" },
+      ubuntu: { packageName: "ripgrep" },
     },
   },
   {
@@ -196,6 +208,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "tmux" },
       fedora: { packageName: "tmux" },
       nix: { packageName: "tmux" },
+      ubuntu: { packageName: "tmux" },
     },
   },
   {
@@ -205,6 +218,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "fd" },
       fedora: { packageName: "fd-find" },
       nix: { packageName: "fd" },
+      ubuntu: { packageName: "fd-find" },
     },
   },
   {
@@ -214,6 +228,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "fzf" },
       fedora: { packageName: "fzf" },
       nix: { packageName: "fzf" },
+      ubuntu: { packageName: "fzf" },
     },
   },
   {
@@ -223,6 +238,7 @@ const catalogEntries: readonly CatalogEntry[] = [
       arch: { packageName: "zsh" },
       fedora: { packageName: "zsh" },
       nix: { packageName: "zsh" },
+      ubuntu: { packageName: "zsh" },
     },
   },
 ];
@@ -351,6 +367,7 @@ const emptyOsSupport = {
   arch: { supported: false },
   fedora: { supported: false },
   nix: { supported: false },
+  ubuntu: { supported: false },
 } as const;
 
 const toNowIso = (value: Date): string => {
@@ -400,6 +417,15 @@ const buildCatalogResolution = (input: {
               packageName: input.entry.targets.nix.packageName,
               projectName: input.entry.id,
             },
+      ubuntu:
+        input.entry.targets.ubuntu === undefined
+          ? emptyOsSupport.ubuntu
+          : {
+              supported: true,
+              repo: repologyRepoByTargetOs.ubuntu,
+              packageName: input.entry.targets.ubuntu.packageName,
+              projectName: input.entry.id,
+            },
     },
     alternatives: [],
     fetchedAt: toNowIso(input.now),
@@ -423,6 +449,11 @@ const buildRepologyResolution = (input: {
     input.normalized,
   );
   const nixEntry = getBestRepoEntry(input.entries, repologyRepoByTargetOs.nix, input.normalized);
+  const ubuntuEntry = getBestRepoEntry(
+    input.entries,
+    repologyRepoByTargetOs.ubuntu,
+    input.normalized,
+  );
 
   const osSupport = {
     arch:
@@ -457,6 +488,17 @@ const buildRepologyResolution = (input: {
             projectName: input.selectedProject,
             version: nixEntry.version,
             status: nixEntry.status,
+          },
+    ubuntu:
+      ubuntuEntry === undefined
+        ? emptyOsSupport.ubuntu
+        : {
+            supported: true,
+            repo: repologyRepoByTargetOs.ubuntu,
+            packageName: sourceNameFromEntry(ubuntuEntry),
+            projectName: input.selectedProject,
+            version: ubuntuEntry.version,
+            status: ubuntuEntry.status,
           },
   };
 
@@ -513,6 +555,7 @@ const bestProjectFromSearch = (
       getBestRepoEntry(entries, repologyRepoByTargetOs.arch, normalizedQuery),
       getBestRepoEntry(entries, repologyRepoByTargetOs.fedora, normalizedQuery),
       getBestRepoEntry(entries, repologyRepoByTargetOs.nix, normalizedQuery),
+      getBestRepoEntry(entries, repologyRepoByTargetOs.ubuntu, normalizedQuery),
     ].filter((entry) => entry !== undefined).length;
 
     const exact = lower === normalizedQuery ? 10 : 0;

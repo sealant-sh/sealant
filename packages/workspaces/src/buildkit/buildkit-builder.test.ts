@@ -770,6 +770,10 @@ describe("compileWorkspaceBuildSpec", () => {
         osFamily: "nix",
         sealantdLayer: "nixpkgs#socat",
       },
+      {
+        osFamily: "ubuntu",
+        sealantdLayer: "nixpkgs#socat",
+      },
     ] as const) {
       const commandRunner = vi.fn<
         (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
@@ -826,6 +830,74 @@ describe("compileWorkspaceBuildSpec", () => {
         },
       ]),
     );
+  });
+});
+
+describe("ubuntu distro family", () => {
+  it("renders an apt install layer with cache mounts and non-interactive frontend", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec({
+        tooling: { packages: [{ id: "ripgrep" }, { id: "fd-find" }] },
+        customization: {
+          defaultShell: "zsh",
+          dotfilesManager: "auto",
+          dotfilesTarget: "home",
+          applyDotfiles: false,
+          dotfilesBootstrap: false,
+        },
+        target: {
+          os: { family: "ubuntu", mode: "prefer" },
+          runtime: { family: "auto", mode: "prefer" },
+        },
+      }),
+      options: { commandRunner },
+    });
+
+    expect(result.builder).toEqual({ id: "ubuntu", osFamily: "ubuntu" });
+    // opencode is not a baked harness, so the image name carries the harness suffix.
+    expect(result.buildkit.spec.imageReference).toBe("sealant-workspace-ubuntu-opencode:latest");
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain("FROM ubuntu:24.04");
+    expect(containerfile).toContain("RUN --mount=type=cache,target=/var/cache/apt,sharing=locked");
+    expect(containerfile).toContain("--mount=type=cache,target=/var/lib/apt,sharing=locked");
+    expect(containerfile).toContain("rm -f /etc/apt/apt.conf.d/docker-clean");
+    expect(containerfile).toContain(
+      "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends",
+    );
+    // Internal + sealantd + requested packages all land in the single install layer.
+    for (const expectedPackage of [
+      "ca-certificates",
+      "openssh-client",
+      "passwd",
+      "socat",
+      "ripgrep",
+      "fd-find",
+      "zsh",
+    ]) {
+      expect(containerfile).toContain(expectedPackage);
+    }
+    expect(containerfile).toContain("RUN usermod -s '/usr/bin/zsh' root");
+    expect(containerfile).toContain("SEALANT_OS_FAMILY='ubuntu'");
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+  });
+
+  it("selects ubuntu when target.os.family requests it explicitly", () => {
+    const osFamily = selectBuildkitOsFamily({
+      blueprint: createWorkspaceBuildSpec({
+        target: {
+          os: { family: "ubuntu", mode: "prefer" },
+          runtime: { family: "auto", mode: "prefer" },
+        },
+      }),
+    });
+
+    expect(osFamily).toBe("ubuntu");
   });
 });
 

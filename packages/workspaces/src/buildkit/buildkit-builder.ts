@@ -230,6 +230,46 @@ const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
     },
     sshdPath: "/usr/sbin/sshd",
   },
+  ubuntu: {
+    baseImage: "ubuntu:24.04",
+    packageManager: "apt",
+    packageMap: {
+      bash: { installPackages: ["bash"] },
+      curl: { installPackages: ["curl"] },
+      fish: { installPackages: ["fish"] },
+      git: { installPackages: ["git"] },
+      jq: { installPackages: ["jq"] },
+      neovim: { installPackages: ["neovim"] },
+      nodejs: { installPackages: ["nodejs", "npm"] },
+      // NOTE: no `pnpm` mapping — Ubuntu 24.04 does not package pnpm. The standardization
+      // catalog marks it unsupported for ubuntu, so API-validated creates fail readable at
+      // create time; a raw blueprint request falls through to `apt-get install pnpm` and fails
+      // with apt's own readable error.
+      ripgrep: { installPackages: ["ripgrep"] },
+      stow: { installPackages: ["stow"] },
+      tmux: { installPackages: ["tmux"] },
+      zsh: { installPackages: ["zsh"] },
+    },
+    internalPackages: [
+      "bash",
+      "ca-certificates",
+      "coreutils",
+      "git",
+      // openssh-client (Debian naming): git-over-ssh clone needs the ssh client, same as the
+      // fedora note above. No inner sshd — the gateway reaches the daemon control socket.
+      "openssh-client",
+      // usermod lives in `passwd` on Debian/Ubuntu (preinstalled in the base image, pinned
+      // explicitly so the `usermod -s` shell step never depends on base-image contents).
+      "passwd",
+    ],
+    sealantdPackages: ["socat"],
+    shellPaths: {
+      bash: "/bin/bash",
+      zsh: "/usr/bin/zsh",
+      fish: "/usr/bin/fish",
+    },
+    sshdPath: "/usr/sbin/sshd",
+  },
   nix: {
     baseImage: "nixos/nix:latest",
     packageManager: "nix",
@@ -651,6 +691,19 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
       "    pacman -Syu --noconfirm && \\",
       `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
       "    pacman -Scc --noconfirm || true",
+    ].join("\n");
+  }
+
+  if (plan.packageManager === "apt") {
+    // `sharing=locked` because dpkg/apt cannot tolerate concurrent access to its caches the way
+    // dnf/pacman can; docker-clean is removed so the cache mount actually retains .debs across
+    // builds instead of apt deleting them after every install.
+    return [
+      "RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \\",
+      "    --mount=type=cache,target=/var/lib/apt,sharing=locked \\",
+      "    rm -f /etc/apt/apt.conf.d/docker-clean && \\",
+      "    apt-get update && \\",
+      `    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${packageList.join(" ")}`,
     ].join("\n");
   }
 

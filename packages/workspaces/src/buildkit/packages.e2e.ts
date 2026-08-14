@@ -31,7 +31,10 @@ const selectedPackages = [
   "fzf",
 ] as const;
 
-const blueprint: NewWorkspace = {
+const blueprintForOs = (
+  osFamily: "arch" | "ubuntu",
+  packages: readonly string[],
+): NewWorkspace => ({
   version: "1",
   sources: {
     workspace: { kind: "mount", hostPath: "/tmp/sealant-package-e2e-source" },
@@ -41,7 +44,7 @@ const blueprint: NewWorkspace = {
   harness: { id: "opencode" },
   access: { ssh: { enabled: false, listenPort: 2222 } },
   tooling: {
-    packages: selectedPackages.map((id) => ({ id })),
+    packages: packages.map((id) => ({ id })),
     services: { docker: { enabled: true } },
   },
   customization: {
@@ -65,10 +68,12 @@ const blueprint: NewWorkspace = {
     network: { outbound: true },
   },
   target: {
-    os: { family: "arch", mode: "prefer" },
+    os: { family: osFamily, mode: "prefer" },
     runtime: { family: "docker", mode: "require" },
   },
-};
+});
+
+const blueprint: NewWorkspace = blueprintForOs("arch", selectedPackages);
 
 describe("selected packages in an Arch workspace image", () => {
   let contextDirectory: string | undefined;
@@ -114,6 +119,91 @@ describe("selected packages in an Arch workspace image", () => {
         "command -v fd",
         "command -v fzf",
         "command -v docker",
+        "command -v sealantd",
+        "printf package-image-ok",
+      ].join(" && "),
+    ]);
+
+    expect(result.stdout).toContain("package-image-ok");
+  }, 60_000);
+
+  it("includes Docker Compose with the runtime-managed Docker client", async () => {
+    const result = await docker("docker", [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/usr/local/bin/docker",
+      imageReference ?? "missing-package-e2e-image",
+      "compose",
+      "version",
+    ]);
+
+    expect(result.stdout).toContain("Docker Compose version");
+  }, 60_000);
+});
+
+// The Ubuntu list uses the CONCRETE apt package names the API's standardization pass would
+// produce (python → python3, fd → fd-find, github-cli → gh, bat's binary is batcat) — the
+// compiler receives resolved names in production, not catalog ids.
+const ubuntuSelectedPackages = [
+  "python3",
+  "gh",
+  "bat",
+  "curl",
+  "jq",
+  "ripgrep",
+  "fd-find",
+  "fzf",
+  "neovim",
+  "tmux",
+  "zsh",
+] as const;
+
+describe("selected packages in an Ubuntu workspace image", () => {
+  let contextDirectory: string | undefined;
+  let imageReference: string | undefined;
+
+  beforeAll(async () => {
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: blueprintForOs("ubuntu", ubuntuSelectedPackages),
+      options: { commandRunner: docker },
+    });
+    contextDirectory = result.buildkit.spec.contextDirectory;
+    imageReference = result.buildkit.spec.imageReference;
+  }, 600_000);
+
+  afterAll(async () => {
+    if (imageReference !== undefined) {
+      await docker("docker", ["image", "rm", "-f", imageReference]).catch(() => undefined);
+    }
+    if (contextDirectory !== undefined) {
+      await rm(contextDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("builds through apt and contains every selected executable beside sealantd", async () => {
+    const result = await docker("docker", [
+      "run",
+      "--rm",
+      "--entrypoint",
+      "/bin/bash",
+      imageReference ?? "missing-package-e2e-image",
+      "-lc",
+      [
+        "command -v python3",
+        "command -v gh",
+        "command -v batcat",
+        "command -v curl",
+        "command -v jq",
+        "command -v rg",
+        "command -v fdfind",
+        "command -v fzf",
+        "command -v nvim",
+        "command -v tmux",
+        "command -v zsh",
+        "command -v node",
+        "command -v docker",
+        "command -v socat",
         "command -v sealantd",
         "printf package-image-ok",
       ].join(" && "),

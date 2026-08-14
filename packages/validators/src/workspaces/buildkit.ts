@@ -13,7 +13,7 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 
 export const buildkitTargetOsFamilySchema = concreteWorkspaceTargetOsFamilySchema;
 
-export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix"]);
+export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix", "apt"]);
 
 export const buildkitSecretUsePhaseSchema = z.enum(["build", "runtime"]);
 export const buildkitSecretKindSchema = z.enum(["secret", "ssh-key", "ssh-known-hosts"]);

@@ -141,6 +141,10 @@ export const createPassthroughPackageStandardizer = (): PackageStandardizer => {
               supported: true,
               packageName: normalized,
             },
+            ubuntu: {
+              supported: true,
+              packageName: normalized,
+            },
           },
           alternatives: [],
           fetchedAt: now.toISOString(),

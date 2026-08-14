@@ -84,7 +84,8 @@ export interface WorkspaceEvent {
 }
 
 /** The supported workspace OS families (maps to the blueprint target). */
-export type WorkspaceOs = "fedora" | "arch" | "nix";
+/** Supported workspace image OS families. `fedora` is the default when `os` is omitted. */
+export type WorkspaceOs = "fedora" | "arch" | "nix" | "ubuntu";
 
 /**
  * Connected-account credentials to attach to a workspace at creation time, per provider — so the

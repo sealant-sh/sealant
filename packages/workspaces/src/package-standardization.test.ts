@@ -36,6 +36,7 @@ const validResolution = (selectedProject: string) =>
       arch: { supported: true, packageName: selectedProject },
       fedora: { supported: true, packageName: selectedProject },
       nix: { supported: true, packageName: selectedProject },
+      ubuntu: { supported: true, packageName: selectedProject },
     },
     alternatives: [],
     fetchedAt: new Date().toISOString(),
@@ -194,6 +195,49 @@ describe("createPackageStandardizer.resolvePackage", () => {
       expect(repologyClient.searchProjects).not.toHaveBeenCalled();
     });
   });
+
+  it.effect(
+    "resolves the Ubuntu-supported toolchain from the catalog, unsupported stays closed",
+    () => {
+      const repologyClient = fakeRepologyClient();
+      const standardizer = createPackageStandardizer({
+        repologyClient,
+        cacheStore: fakeCacheStore(),
+      });
+
+      return Effect.gen(function* () {
+        // The Ubuntu 24.04 archive carries these (with its own naming quirks)…
+        const supported = [
+          ["python", "python3"],
+          ["github-cli", "gh"],
+          ["bat", "bat"],
+          ["curl", "curl"],
+          ["jq", "jq"],
+          ["ripgrep", "ripgrep"],
+          ["fd", "fd-find"],
+          ["fzf", "fzf"],
+          ["neovim", "neovim"],
+          ["tmux", "tmux"],
+          ["zsh", "zsh"],
+        ] as const;
+        for (const [query, packageName] of supported) {
+          const resolution = yield* standardizer.resolvePackage({ query, targetOs: "ubuntu" });
+          expect(resolution.osSupport.ubuntu).toEqual(
+            expect.objectContaining({ supported: true, packageName }),
+          );
+        }
+
+        // …and does NOT package these: the catalog stays closed instead of guessing.
+        for (const query of ["pnpm", "uv", "mise", "lazygit"]) {
+          const resolution = yield* standardizer.resolvePackage({ query, targetOs: "ubuntu" });
+          expect(resolution.osSupport.ubuntu).toEqual({ supported: false });
+        }
+
+        expect(repologyClient.getProject).not.toHaveBeenCalled();
+        expect(repologyClient.searchProjects).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.effect("falls through to repology on a cache miss and caches the result", () => {
     const repologyClient = fakeRepologyClient({

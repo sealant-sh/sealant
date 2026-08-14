@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { workspaceBlueprintSchema, workspaceTargetOsFamilySchema } from "./workspace-blueprint.js";
 
-export const osBuilderIdSchema = z.enum(["nix", "fedora", "arch"]);
+export const osBuilderIdSchema = z.enum(["nix", "fedora", "arch", "ubuntu"]);
 
 export const concreteWorkspaceTargetOsFamilySchema = workspaceTargetOsFamilySchema.exclude([
   "auto",

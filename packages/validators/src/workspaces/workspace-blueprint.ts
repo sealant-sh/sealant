@@ -19,7 +19,7 @@ export const workspaceDotfilesTargetSchema = z.enum(["home", "config"]);
 export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
 export const workspaceOciRuntimeSchema = z.enum(["runc", "runsc"]);
 
-export const workspaceTargetOsFamilySchema = z.enum(["auto", "nix", "fedora", "arch"]);
+export const workspaceTargetOsFamilySchema = z.enum(["auto", "nix", "fedora", "arch", "ubuntu"]);
 export const workspaceTargetOsModeSchema = z.enum(["prefer", "require"]);
 export const workspaceTargetRuntimeFamilySchema = z.enum(["auto", "docker", "k8s", "k3s"]);
 export const workspaceTargetRuntimeModeSchema = z.enum(["prefer", "require"]);
