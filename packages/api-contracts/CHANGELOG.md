@@ -4,59 +4,58 @@
 
 ### Minor Changes
 
-- ae55cdd: Custom base images: `workspaces.create({ baseImage: "node:22-bookworm" })` builds the workspace
-  image from any caller-supplied OCI reference instead of a managed OS family. Distro package installs
-  are skipped; the build overlays only the sealantd supervisor, the harness CLIs (npm), and a fully
-  static socat relay (vendored beside sealantd). The base-image contract (documented in the SDK
-  README): any Linux base on amd64/arm64 with a POSIX shell, node + npm for the harness CLIs, git for
-  clone/mount sources — each checked at build time with readable failures, including a shell-less
-  base. `packages` pass through verbatim to the base's own detected package manager
-  (apt/apk/dnf/pacman). `baseImage` and `os` are mutually exclusive.
-- cd4ce97: Ubuntu as a first-class workspace OS family: `workspaces.create({ os: "ubuntu" })` builds the
-  workspace image from `ubuntu:24.04` with apt-installed packages (cached, non-interactive), the same
-  baked harness CLIs, socat relay, and `sealantd boot` entrypoint as the other families. Package
-  standardization resolves portable package names against the Ubuntu 24.04 archive (`python` →
-  `python3`, `fd` → `fd-find`, `github-cli` → `gh`); packages the archive does not carry (`pnpm`,
+- ae55cdd: Custom base images: `workspaces.create({ baseImage: "node:22-bookworm" })` builds the
+  workspace image from any caller-supplied OCI reference instead of a managed OS family. Distro
+  package installs are skipped; the build overlays only the sealantd supervisor, the harness CLIs
+  (npm), and a fully static socat relay (vendored beside sealantd). The base-image contract
+  (documented in the SDK README): any Linux base on amd64/arm64 with a POSIX shell, node + npm for
+  the harness CLIs, git for clone/mount sources — each checked at build time with readable failures,
+  including a shell-less base. `packages` pass through verbatim to the base's own detected package
+  manager (apt/apk/dnf/pacman). `baseImage` and `os` are mutually exclusive.
+- cd4ce97: Ubuntu as a first-class workspace OS family: `workspaces.create({ os: "ubuntu" })` builds
+  the workspace image from `ubuntu:24.04` with apt-installed packages (cached, non-interactive), the
+  same baked harness CLIs, socat relay, and `sealantd boot` entrypoint as the other families.
+  Package standardization resolves portable package names against the Ubuntu 24.04 archive (`python`
+  → `python3`, `fd` → `fd-find`, `github-cli` → `gh`); packages the archive does not carry (`pnpm`,
   `uv`, `mise`, `lazygit`) are reported unsupported at create time. The `resolvePackage` response's
-  `osSupport` now always carries an `ubuntu` entry, so an SDK at this version needs a control plane at
-  the same version.
+  `osSupport` now always carries an `ubuntu` entry, so an SDK at this version needs a control plane
+  at the same version.
 
 ## 0.16.0
 
 ### Minor Changes
 
-- 9472211: UDP forwards: `workspace.forward(port, { protocol: "udp" })` opens a
-  connected-UDP forward in the workspace instead of a TCP stream — one frame
-  on the pipe is exactly one datagram, both directions (`?protocol=udp` on the
-  forward WS route; sealantd 0.7.0 underneath). TCP is unchanged and remains
-  the default.
+- 9472211: UDP forwards: `workspace.forward(port, { protocol: "udp" })` opens a connected-UDP
+  forward in the workspace instead of a TCP stream — one frame on the pipe is exactly one datagram,
+  both directions (`?protocol=udp` on the forward WS route; sealantd 0.7.0 underneath). TCP is
+  unchanged and remains the default.
 
 ## 0.15.0
 
 ### Minor Changes
 
-- cfb6965: `workspace.forward(port, { host })`: the forward target grows from fixed loopback to a closed
-  workspace-private set — `127.0.0.1` (default) or `docker`, the workspace-scoped Docker sidecar's
-  network alias. Inner `docker compose` publishes its ports on that sidecar, so a database started by
-  compose is now reachable through the same forward surface. Never caller-arbitrary: the allowlist is
-  the SSRF boundary.
+- cfb6965: `workspace.forward(port, { host })`: the forward target grows from fixed loopback to a
+  closed workspace-private set — `127.0.0.1` (default) or `docker`, the workspace-scoped Docker
+  sidecar's network alias. Inner `docker compose` publishes its ports on that sidecar, so a database
+  started by compose is now reachable through the same forward surface. Never caller-arbitrary: the
+  allowlist is the SSRF boundary.
 
 ## 0.14.0
 
 ### Minor Changes
 
-- 4a735c8: `workspace.forward(port)`: a raw TCP byte pipe to `127.0.0.1:port` inside the workspace, over one
-  held WebSocket (`GET /v1/workspaces/:id/forward?port=N`, scope `workspace:exec`). The public surface
-  for sealantd's existing forward primitive — protocol-agnostic, never recorded, host fixed at
-  loopback. Nothing listening on the port is an HTTP 502 before the upgrade; a text `{"t":"eof"}`
-  frame carries TCP half-close, which WebSockets lack natively.
+- 4a735c8: `workspace.forward(port)`: a raw TCP byte pipe to `127.0.0.1:port` inside the workspace,
+  over one held WebSocket (`GET /v1/workspaces/:id/forward?port=N`, scope `workspace:exec`). The
+  public surface for sealantd's existing forward primitive — protocol-agnostic, never recorded, host
+  fixed at loopback. Nothing listening on the port is an HTTP 502 before the upgrade; a text
+  `{"t":"eof"}` frame carries TCP half-close, which WebSockets lack natively.
 
 ## 0.13.5
 
 ### Patch Changes
 
-- efcee92: Bake every supported harness CLI into each workspace image (codex + claude-code; opencode installs
-  as an extra when a blueprint requests it), and inject `SEALANT_HARNESS_BANNER` /
+- efcee92: Bake every supported harness CLI into each workspace image (codex + claude-code; opencode
+  installs as an extra when a blueprint requests it), and inject `SEALANT_HARNESS_BANNER` /
   `SEALANT_HARNESS_LAUNCH_COMMAND` at container launch instead of baking them as image ENV. Harness
   choice now decides what launches, not what is installed — a shell in any workspace can open either
   baked agent against the same files and state.
@@ -65,31 +64,32 @@
 
 ### Patch Changes
 
-- 6b91552: Allow the self-host API to open persisted workspace control sockets by mounting the socket directory
-  read-only and using sealantd's required root peer identity, while dropping all Linux capabilities
-  and forbidding privilege escalation.
+- 6b91552: Allow the self-host API to open persisted workspace control sockets by mounting the
+  socket directory read-only and using sealantd's required root peer identity, while dropping all
+  Linux capabilities and forbidding privilege escalation.
 
 ## 0.13.3
 
 ### Patch Changes
 
-- 145295d: Include the Docker Compose CLI plugin in workspace images whenever the workspace-scoped Docker
-  service is enabled, so `docker compose` works against the workspace's disposable daemon.
+- 145295d: Include the Docker Compose CLI plugin in workspace images whenever the workspace-scoped
+  Docker service is enabled, so `docker compose` works against the workspace's disposable daemon.
 
 ## 0.13.2
 
 ### Patch Changes
 
-- c245231: Keep API-backed workspace sessions on the persisted Unix control socket, including workspaces that
-  do not enable SSH, so self-hosted API containers can supervise runs without a Docker CLI.
+- c245231: Keep API-backed workspace sessions on the persisted Unix control socket, including
+  workspaces that do not enable SSH, so self-hosted API containers can supervise runs without a
+  Docker CLI.
 
 ## 0.13.1
 
 ### Patch Changes
 
 - bb4ae55: Declare Effect as a consumer-provided peer dependency so `@sealant/sdk/effect` and
-  `@sealant/api-contracts` compose with the consumer's compatible Effect runtime instead of installing
-  an incompatible second copy.
+  `@sealant/api-contracts` compose with the consumer's compatible Effect runtime instead of
+  installing an incompatible second copy.
 
 ## 0.13.0
 
@@ -97,28 +97,29 @@
 
 ### Patch Changes
 
-- bf5a55b: Forward the workspace mount allowlist and connected-account encryption key from self-host `.env`
-  configuration into the API and worker containers.
+- bf5a55b: Forward the workspace mount allowlist and connected-account encryption key from self-host
+  `.env` configuration into the API and worker containers.
 
 ## 0.12.2
 
 ### Patch Changes
 
-- f605a8b: Workspace images now bake sealantd 0.6.2, so an interactive harness returns the terminal as soon as
-  its session leader exits instead of waiting for helper processes that inherited the PTY. The
-  platform release also admits the matching 0.6.2 runtime SDK packages through the minimum-age gate.
+- f605a8b: Workspace images now bake sealantd 0.6.2, so an interactive harness returns the terminal
+  as soon as its session leader exits instead of waiting for helper processes that inherited the
+  PTY. The platform release also admits the matching 0.6.2 runtime SDK packages through the
+  minimum-age gate.
 
 ## 0.12.1
 
 ### Patch Changes
 
-- 7ca347a: The sealant-worker image now carries the Claude Agent SDK's vendored `claude` platform binary, so
-  the session keep-fresh sweeper's refresh ping actually runs in production (v0.11.0 shipped without
-  it; the sweeper's own logging caught the gap — "Native CLI binary for linux-x64 not found" — and
-  degraded safely to skipped-not-newer). The staging script is shared with the api image, and both
-  runtime images now assert at build time, per arch, that the binary resolves exactly the way the
-  bundle resolves it at runtime — a broken layout fails the image build, never the first
-  sweep/inference in production.
+- 7ca347a: The sealant-worker image now carries the Claude Agent SDK's vendored `claude` platform
+  binary, so the session keep-fresh sweeper's refresh ping actually runs in production (v0.11.0
+  shipped without it; the sweeper's own logging caught the gap — "Native CLI binary for linux-x64
+  not found" — and degraded safely to skipped-not-newer). The staging script is shared with the api
+  image, and both runtime images now assert at build time, per arch, that the binary resolves
+  exactly the way the bundle resolves it at runtime — a broken layout fails the image build, never
+  the first sweep/inference in production.
 
 ## 0.12.0
 
@@ -126,27 +127,27 @@
 
 ### Minor Changes
 
-- 8d86e05: Claude session credentials (`kind: "credentials-json"`) stay fresh instead of expiring whenever no
-  workspace happens to run. Refresh was coupled solely to run-exec jobs; now the official Claude Code
-  CLI/Agent SDK refreshes the session on three paths and the control plane persists the rotated file
-  newest-wins on `claudeAiOauth.expiresAt`: inference runs the CLI against a private per-invocation
-  `CLAUDE_CONFIG_DIR` holding the decrypted session file (refresh at point of use; setup-token
-  accounts keep the env-var path), a worker sweeper refreshes any active session account expiring
-  within 30 minutes every 15 minutes via a minimal one-turn exchange, and the workspace sync-back now
-  also runs on every container teardown path (stop, expiry reap) so interactive sessions no longer
-  lose rotated tokens. Every considered account logs exactly one sync outcome line. The compliance
-  rule is unchanged: Sealant never calls Anthropic's token endpoint.
+- 8d86e05: Claude session credentials (`kind: "credentials-json"`) stay fresh instead of expiring
+  whenever no workspace happens to run. Refresh was coupled solely to run-exec jobs; now the
+  official Claude Code CLI/Agent SDK refreshes the session on three paths and the control plane
+  persists the rotated file newest-wins on `claudeAiOauth.expiresAt`: inference runs the CLI against
+  a private per-invocation `CLAUDE_CONFIG_DIR` holding the decrypted session file (refresh at point
+  of use; setup-token accounts keep the env-var path), a worker sweeper refreshes any active session
+  account expiring within 30 minutes every 15 minutes via a minimal one-turn exchange, and the
+  workspace sync-back now also runs on every container teardown path (stop, expiry reap) so
+  interactive sessions no longer lose rotated tokens. Every considered account logs exactly one sync
+  outcome line. The compliance rule is unchanged: Sealant never calls Anthropic's token endpoint.
 
 ## 0.10.0
 
 ### Minor Changes
 
-- cc7dddc: Claude connected accounts accept a second credential shape: the full Claude Code session credentials
-  file (the JSON contents of `~/.claude/.credentials.json`) pasted by the operator. Session-file
-  accounts (`kind: "credentials-json"`) are injected into workspaces as a
-  `$HOME/.claude/.credentials.json` file with mode 600 — mirroring codex's auth.json — instead of the
-  `CLAUDE_CODE_OAUTH_TOKEN` env var, present as the user's subscription (Anthropic treats setup tokens
-  as API auth, which credit-gates some models interactively), and are synced back after runs
+- cc7dddc: Claude connected accounts accept a second credential shape: the full Claude Code session
+  credentials file (the JSON contents of `~/.claude/.credentials.json`) pasted by the operator.
+  Session-file accounts (`kind: "credentials-json"`) are injected into workspaces as a
+  `$HOME/.claude/.credentials.json` file with mode 600 — mirroring codex's auth.json — instead of
+  the `CLAUDE_CODE_OAUTH_TOKEN` env var, present as the user's subscription (Anthropic treats setup
+  tokens as API auth, which credit-gates some models interactively), and are synced back after runs
   newest-wins on `claudeAiOauth.expiresAt`. Existing `sk-ant-oat01-…` setup-token accounts keep
   working unchanged; reconnecting can switch shapes in place.
 
@@ -223,7 +224,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and

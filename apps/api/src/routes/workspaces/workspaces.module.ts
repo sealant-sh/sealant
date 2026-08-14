@@ -73,6 +73,7 @@ import {
   WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
 import { mapRun } from "../runs/runs.module.js";
+import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
 
 interface WorkspaceEventDraft {
   readonly workspaceId: string;
@@ -1154,6 +1155,13 @@ export const createWorkspace = (input: {
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+
+    // Validate BEFORE the selection resolvers so what we check is exactly what the caller sent;
+    // the refs the resolvers mint afterwards are server-owned.
+    yield* validateClientSuppliedAuthRefs({
+      ownerUserId: body.ownerUserId,
+      spec: parsedSpec,
+    });
 
     yield* validateWorkspaceMounts({
       spec: parsedSpec,
