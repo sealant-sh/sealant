@@ -4,22 +4,22 @@
 
 ### Minor Changes
 
-- ae55cdd: Custom base images: `workspaces.create({ baseImage: "node:22-bookworm" })` builds the workspace
-  image from any caller-supplied OCI reference instead of a managed OS family. Distro package installs
-  are skipped; the build overlays only the sealantd supervisor, the harness CLIs (npm), and a fully
-  static socat relay (vendored beside sealantd). The base-image contract (documented in the SDK
-  README): any Linux base on amd64/arm64 with a POSIX shell, node + npm for the harness CLIs, git for
-  clone/mount sources — each checked at build time with readable failures, including a shell-less
-  base. `packages` pass through verbatim to the base's own detected package manager
-  (apt/apk/dnf/pacman). `baseImage` and `os` are mutually exclusive.
-- cd4ce97: Ubuntu as a first-class workspace OS family: `workspaces.create({ os: "ubuntu" })` builds the
-  workspace image from `ubuntu:24.04` with apt-installed packages (cached, non-interactive), the same
-  baked harness CLIs, socat relay, and `sealantd boot` entrypoint as the other families. Package
-  standardization resolves portable package names against the Ubuntu 24.04 archive (`python` →
-  `python3`, `fd` → `fd-find`, `github-cli` → `gh`); packages the archive does not carry (`pnpm`,
+- ae55cdd: Custom base images: `workspaces.create({ baseImage: "node:22-bookworm" })` builds the
+  workspace image from any caller-supplied OCI reference instead of a managed OS family. Distro
+  package installs are skipped; the build overlays only the sealantd supervisor, the harness CLIs
+  (npm), and a fully static socat relay (vendored beside sealantd). The base-image contract
+  (documented in the SDK README): any Linux base on amd64/arm64 with a POSIX shell, node + npm for
+  the harness CLIs, git for clone/mount sources — each checked at build time with readable failures,
+  including a shell-less base. `packages` pass through verbatim to the base's own detected package
+  manager (apt/apk/dnf/pacman). `baseImage` and `os` are mutually exclusive.
+- cd4ce97: Ubuntu as a first-class workspace OS family: `workspaces.create({ os: "ubuntu" })` builds
+  the workspace image from `ubuntu:24.04` with apt-installed packages (cached, non-interactive), the
+  same baked harness CLIs, socat relay, and `sealantd boot` entrypoint as the other families.
+  Package standardization resolves portable package names against the Ubuntu 24.04 archive (`python`
+  → `python3`, `fd` → `fd-find`, `github-cli` → `gh`); packages the archive does not carry (`pnpm`,
   `uv`, `mise`, `lazygit`) are reported unsupported at create time. The `resolvePackage` response's
-  `osSupport` now always carries an `ubuntu` entry, so an SDK at this version needs a control plane at
-  the same version.
+  `osSupport` now always carries an `ubuntu` entry, so an SDK at this version needs a control plane
+  at the same version.
 
 ### Patch Changes
 
@@ -31,11 +31,10 @@
 
 ### Minor Changes
 
-- 9472211: UDP forwards: `workspace.forward(port, { protocol: "udp" })` opens a
-  connected-UDP forward in the workspace instead of a TCP stream — one frame
-  on the pipe is exactly one datagram, both directions (`?protocol=udp` on the
-  forward WS route; sealantd 0.7.0 underneath). TCP is unchanged and remains
-  the default.
+- 9472211: UDP forwards: `workspace.forward(port, { protocol: "udp" })` opens a connected-UDP
+  forward in the workspace instead of a TCP stream — one frame on the pipe is exactly one datagram,
+  both directions (`?protocol=udp` on the forward WS route; sealantd 0.7.0 underneath). TCP is
+  unchanged and remains the default.
 
 ### Patch Changes
 
@@ -46,11 +45,11 @@
 
 ### Minor Changes
 
-- cfb6965: `workspace.forward(port, { host })`: the forward target grows from fixed loopback to a closed
-  workspace-private set — `127.0.0.1` (default) or `docker`, the workspace-scoped Docker sidecar's
-  network alias. Inner `docker compose` publishes its ports on that sidecar, so a database started by
-  compose is now reachable through the same forward surface. Never caller-arbitrary: the allowlist is
-  the SSRF boundary.
+- cfb6965: `workspace.forward(port, { host })`: the forward target grows from fixed loopback to a
+  closed workspace-private set — `127.0.0.1` (default) or `docker`, the workspace-scoped Docker
+  sidecar's network alias. Inner `docker compose` publishes its ports on that sidecar, so a database
+  started by compose is now reachable through the same forward surface. Never caller-arbitrary: the
+  allowlist is the SSRF boundary.
 
 ### Patch Changes
 
@@ -61,11 +60,11 @@
 
 ### Minor Changes
 
-- 4a735c8: `workspace.forward(port)`: a raw TCP byte pipe to `127.0.0.1:port` inside the workspace, over one
-  held WebSocket (`GET /v1/workspaces/:id/forward?port=N`, scope `workspace:exec`). The public surface
-  for sealantd's existing forward primitive — protocol-agnostic, never recorded, host fixed at
-  loopback. Nothing listening on the port is an HTTP 502 before the upgrade; a text `{"t":"eof"}`
-  frame carries TCP half-close, which WebSockets lack natively.
+- 4a735c8: `workspace.forward(port)`: a raw TCP byte pipe to `127.0.0.1:port` inside the workspace,
+  over one held WebSocket (`GET /v1/workspaces/:id/forward?port=N`, scope `workspace:exec`). The
+  public surface for sealantd's existing forward primitive — protocol-agnostic, never recorded, host
+  fixed at loopback. Nothing listening on the port is an HTTP 502 before the upgrade; a text
+  `{"t":"eof"}` frame carries TCP half-close, which WebSockets lack natively.
 
 ### Patch Changes
 
@@ -76,8 +75,8 @@
 
 ### Patch Changes
 
-- efcee92: Bake every supported harness CLI into each workspace image (codex + claude-code; opencode installs
-  as an extra when a blueprint requests it), and inject `SEALANT_HARNESS_BANNER` /
+- efcee92: Bake every supported harness CLI into each workspace image (codex + claude-code; opencode
+  installs as an extra when a blueprint requests it), and inject `SEALANT_HARNESS_BANNER` /
   `SEALANT_HARNESS_LAUNCH_COMMAND` at container launch instead of baking them as image ENV. Harness
   choice now decides what launches, not what is installed — a shell in any workspace can open either
   baked agent against the same files and state.
@@ -88,9 +87,9 @@
 
 ### Patch Changes
 
-- 6b91552: Allow the self-host API to open persisted workspace control sockets by mounting the socket directory
-  read-only and using sealantd's required root peer identity, while dropping all Linux capabilities
-  and forbidding privilege escalation.
+- 6b91552: Allow the self-host API to open persisted workspace control sockets by mounting the
+  socket directory read-only and using sealantd's required root peer identity, while dropping all
+  Linux capabilities and forbidding privilege escalation.
 - Updated dependencies [6b91552]
   - @sealant/api-contracts@0.13.4
 
@@ -98,8 +97,8 @@
 
 ### Patch Changes
 
-- 145295d: Include the Docker Compose CLI plugin in workspace images whenever the workspace-scoped Docker
-  service is enabled, so `docker compose` works against the workspace's disposable daemon.
+- 145295d: Include the Docker Compose CLI plugin in workspace images whenever the workspace-scoped
+  Docker service is enabled, so `docker compose` works against the workspace's disposable daemon.
 - Updated dependencies [145295d]
   - @sealant/api-contracts@0.13.3
 
@@ -107,8 +106,9 @@
 
 ### Patch Changes
 
-- c245231: Keep API-backed workspace sessions on the persisted Unix control socket, including workspaces that
-  do not enable SSH, so self-hosted API containers can supervise runs without a Docker CLI.
+- c245231: Keep API-backed workspace sessions on the persisted Unix control socket, including
+  workspaces that do not enable SSH, so self-hosted API containers can supervise runs without a
+  Docker CLI.
 - Updated dependencies [c245231]
   - @sealant/api-contracts@0.13.2
 
@@ -117,8 +117,8 @@
 ### Patch Changes
 
 - bb4ae55: Declare Effect as a consumer-provided peer dependency so `@sealant/sdk/effect` and
-  `@sealant/api-contracts` compose with the consumer's compatible Effect runtime instead of installing
-  an incompatible second copy.
+  `@sealant/api-contracts` compose with the consumer's compatible Effect runtime instead of
+  installing an incompatible second copy.
 - Updated dependencies [bb4ae55]
   - @sealant/api-contracts@0.13.1
 
@@ -126,9 +126,9 @@
 
 ### Minor Changes
 
-- 62d46d4: Add `workspaces.create({ services: { docker: true } })`. Docker-enabled workspaces include the
-  client and connect to a disposable workspace-scoped rootless daemon without mounting the host Docker
-  socket.
+- 62d46d4: Add `workspaces.create({ services: { docker: true } })`. Docker-enabled workspaces
+  include the client and connect to a disposable workspace-scoped rootless daemon without mounting
+  the host Docker socket.
 
 ### Patch Changes
 
@@ -138,8 +138,8 @@
 
 ### Patch Changes
 
-- bf5a55b: Forward the workspace mount allowlist and connected-account encryption key from self-host `.env`
-  configuration into the API and worker containers.
+- bf5a55b: Forward the workspace mount allowlist and connected-account encryption key from self-host
+  `.env` configuration into the API and worker containers.
 - Updated dependencies [bf5a55b]
   - @sealant/api-contracts@0.12.3
 
@@ -161,8 +161,8 @@
 
 ### Minor Changes
 
-- 7fc7aef: Mount-sourced linked Git worktrees now automatically carry their shared Git metadata into the
-  workspace. The worktree remains the single public source and all repository data stays in
+- 7fc7aef: Mount-sourced linked Git worktrees now automatically carry their shared Git metadata into
+  the workspace. The worktree remains the single public source and all repository data stays in
   caller-owned host storage, while Git commands inside the workspace can follow the existing `.git`
   pointer normally.
 
@@ -189,12 +189,13 @@
 ### Minor Changes
 
 - 63824ae: Workspace creation accepts additional caller-owned mounts beside the primary source:
-  `workspaces.create({ mounts: [{ hostPath, mountPath, readOnly }] })`. Extra mounts are read-only by
-  default and bind at a container path outside the working directory (e.g. `/workspace/ref/effect`) —
-  they widen what the workspace can see, not where its work product lands. Host paths ride the same
-  operator allowlist as mount sources (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); the control plane rejects
-  container paths overlapping the working directory or the daemon control dir. Like the primary mount,
-  extra mount paths are caller-owned — never reprovisioned, never cleaned.
+  `workspaces.create({ mounts: [{ hostPath, mountPath, readOnly }] })`. Extra mounts are read-only
+  by default and bind at a container path outside the working directory (e.g.
+  `/workspace/ref/effect`) — they widen what the workspace can see, not where its work product
+  lands. Host paths ride the same operator allowlist as mount sources
+  (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); the control plane rejects container paths overlapping the
+  working directory or the daemon control dir. Like the primary mount, extra mount paths are
+  caller-owned — never reprovisioned, never cleaned.
 
 ### Patch Changes
 
@@ -289,7 +290,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
