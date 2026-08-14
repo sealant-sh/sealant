@@ -124,6 +124,36 @@ const workspace = await sealant.workspaces.create({
 rootless daemon at launch. The workspace receives `DOCKER_HOST`; Sealant never mounts the host
 Docker socket. GitHub credentials provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
+## Custom base images
+
+Instead of a managed OS family, a workspace image can be built from any image reference you already
+trust:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  baseImage: "node:22-bookworm",
+});
+```
+
+Distro package installs are skipped entirely — the build overlays only the `sealantd` supervisor
+(PID 1), the harness CLIs (installed with `npm`), and a fully static `socat` (the control-socket
+relay), all copied in as static binaries. This is the **base-image contract**, checked at build time
+with readable failures:
+
+- **Any Linux base, `amd64`/`arm64`**, with a **POSIX shell** at `/bin/sh`. Shells beyond that are
+  not assumed: the workspace login shell is `/bin/sh`, and `defaultShell` selection is not supported
+  with `baseImage`.
+- **Node.js + npm** at or above the harness CLIs' floor (the CLIs are installed with
+  `npm install -g` and run on the base's node).
+- **git**, for clone- and mount-sourced workspaces.
+
+`packages` still works: names pass through **verbatim** (no portable-name resolution) to the base's
+own package manager — `apt`, `apk`, `dnf`, or `pacman`, autodetected — and the build fails with a
+readable error when the base has none. Dotfiles are not supported with `baseImage`. `baseImage` and
+`os` are mutually exclusive.
+
 ## Inference on connected accounts
 
 Run short, tool-calling inference loops on the caller's own subscription — server-side, through the

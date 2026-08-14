@@ -326,7 +326,7 @@ const parseRequestedPackageIds = (spec: NewWorkspace): string[] => {
 
 const parseRequestedOsFamily = (
   spec: NewWorkspace,
-): "auto" | "arch" | "fedora" | "nix" | "ubuntu" => {
+): "auto" | "arch" | "fedora" | "nix" | "ubuntu" | "custom" => {
   return spec.target.os.family;
 };
 
@@ -366,6 +366,19 @@ const standardizeRequestedPackages = (spec: NewWorkspace) => {
         errors: [
           "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, nix, or ubuntu for this request.",
         ],
+      };
+    }
+
+    // Custom base images have no managed package catalog: requested names pass through verbatim
+    // to whatever package manager the base itself carries (the build fails readable when it has
+    // none). Standardizing against a distro archive here would only reject valid base-native
+    // names.
+    if (targetOs === "custom") {
+      const customPassthroughErrors: string[] = [];
+
+      return {
+        spec,
+        errors: customPassthroughErrors,
       };
     }
 

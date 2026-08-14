@@ -19,7 +19,15 @@ export const workspaceDotfilesTargetSchema = z.enum(["home", "config"]);
 export const workspacePersistenceSchema = z.enum(["ephemeral", "persistent"]);
 export const workspaceOciRuntimeSchema = z.enum(["runc", "runsc"]);
 
-export const workspaceTargetOsFamilySchema = z.enum(["auto", "nix", "fedora", "arch", "ubuntu"]);
+export const workspaceTargetOsFamilySchema = z.enum([
+  "auto",
+  "nix",
+  "fedora",
+  "arch",
+  "ubuntu",
+  // A caller-supplied base image instead of a managed distro family; requires target.os.baseImage.
+  "custom",
+]);
 export const workspaceTargetOsModeSchema = z.enum(["prefer", "require"]);
 export const workspaceTargetRuntimeFamilySchema = z.enum(["auto", "docker", "k8s", "k3s"]);
 export const workspaceTargetRuntimeModeSchema = z.enum(["prefer", "require"]);
@@ -215,8 +223,19 @@ export const workspaceTargetOsSchema = z
   .strictObject({
     family: workspaceTargetOsFamilySchema.default("auto"),
     mode: workspaceTargetOsModeSchema.default("prefer"),
+    /**
+     * Arbitrary OCI image reference the workspace image is built FROM instead of a managed
+     * distro base. Only meaningful (and required) with family "custom": distro package installs
+     * are skipped and the build overlays only sealantd + the harness CLIs + the static socat
+     * relay. Contract: any Linux base (amd64/arm64) with a POSIX shell; node >= the harness
+     * floor for node-based harness CLIs; git for clone/mount sources.
+     */
+    baseImage: z.string().trim().min(1).optional(),
   })
-  .prefault({});
+  .prefault({})
+  .refine((os) => (os.family === "custom") === (os.baseImage !== undefined), {
+    message: 'target.os.baseImage is required when family is "custom" (and only then).',
+  });
 
 export const workspaceTargetRuntimeSchema = z
   .strictObject({

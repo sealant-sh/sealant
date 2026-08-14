@@ -171,8 +171,17 @@ export interface CreateOptions {
   readonly ref?: string;
   /** Human-friendly name for the workspace. */
   readonly name?: string;
-  /** OS family for the workspace image. */
+  /** OS family for the workspace image. Mutually exclusive with `baseImage`. */
   readonly os?: WorkspaceOs;
+  /**
+   * Build the workspace image FROM this arbitrary OCI image reference instead of a managed OS
+   * family (e.g. `"node:22-bookworm"`). Distro package installs are skipped; the build overlays
+   * only the sealantd supervisor, the harness CLIs (npm), and a static socat relay. See "Custom
+   * base images" in the SDK README for the base-image contract. Mutually exclusive with `os`;
+   * `packages` install through the base's own package manager (apt/apk/dnf/pacman) and fail the
+   * build readable when it has none.
+   */
+  readonly baseImage?: string;
   /** Extra OS packages to install in the workspace. */
   readonly packages?: readonly string[];
   /** Runtime-managed services that need more than installing an OS package. */
