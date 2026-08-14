@@ -173,6 +173,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     packageManager: "dnf",
     packageMap: {
       bash: { installPackages: ["bash"] },
+      chezmoi: { installPackages: ["chezmoi"] },
       curl: { installPackages: ["curl"] },
       fish: { installPackages: ["fish"] },
       git: { installPackages: ["git"] },
@@ -210,6 +211,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     packageManager: "pacman",
     packageMap: {
       bash: { installPackages: ["bash"] },
+      chezmoi: { installPackages: ["chezmoi"] },
       curl: { installPackages: ["curl"] },
       fish: { installPackages: ["fish"] },
       git: { installPackages: ["git"] },
@@ -236,6 +238,10 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     packageManager: "apt",
     packageMap: {
       bash: { installPackages: ["bash"] },
+      // Ubuntu 24.04 does not package chezmoi (it appears in the archive only from 26.10) —
+      // the binary is fetched from the pinned upstream release by `renderChezmoiInstallStep`,
+      // which needs curl + CA roots. This mapping installs only those prerequisites.
+      chezmoi: { installPackages: ["curl", "ca-certificates"] },
       curl: { installPackages: ["curl"] },
       fish: { installPackages: ["fish"] },
       git: { installPackages: ["git"] },
@@ -276,6 +282,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
     packageManager: "nix",
     packageMap: {
       bash: { installPackages: ["bash"] },
+      chezmoi: { installPackages: ["chezmoi"] },
       curl: { installPackages: ["curl"] },
       fish: { installPackages: ["fish"] },
       git: { installPackages: ["gitMinimal"] },
@@ -689,7 +696,7 @@ const mapBlueprintToResolvedImagePlan = (
             sourceId: dotfiles.id,
             manager: blueprint.customization.dotfilesManager,
             url: dotfiles.url,
-            ref: dotfiles.ref,
+            ...(dotfiles.ref === undefined ? {} : { ref: dotfiles.ref }),
             target: blueprint.customization.dotfilesTarget,
             bootstrap: blueprint.customization.dotfilesBootstrap,
             ...(blueprint.customization.dotfilesBootstrapCommand === undefined
@@ -941,10 +948,13 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
   }
 
   if (plan.dotfiles !== undefined && plan.dotfiles.applyAt === "runtime") {
+    // No ref env means boot clones the remote's default branch.
+    const refEntries: Array<[string, string]> =
+      plan.dotfiles.ref === undefined ? [] : [["SEALANT_DOTFILES_REPO_REF", plan.dotfiles.ref]];
     entries.push(
       ["SEALANT_DOTFILES_RUNTIME_APPLY", "1"],
       ["SEALANT_DOTFILES_REPO_URL", plan.dotfiles.url],
-      ["SEALANT_DOTFILES_REPO_REF", plan.dotfiles.ref],
+      ...refEntries,
       ["SEALANT_DOTFILES_MANAGER", plan.dotfiles.manager],
       ["SEALANT_DOTFILES_TARGET", plan.dotfiles.target],
       ["SEALANT_DOTFILES_BOOTSTRAP", plan.dotfiles.bootstrap ? "1" : "0"],
@@ -1026,18 +1036,21 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
     "esac",
   ].join("\n");
 
+  // No ref means the remote's default branch — `--branch` would also reject commit SHAs.
+  const branchArguments =
+    plan.dotfiles.ref === undefined ? "" : `--branch ${shellQuote(plan.dotfiles.ref)} `;
   const cloneCommand =
     plan.dotfiles.authSecretId === undefined
       ? [
           `mkdir -p ${shellQuote(sourceParentDirectory)}`,
           `rm -rf ${shellQuote(sourceDirectory)}`,
-          `git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
+          `git clone --depth=1 ${branchArguments}${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
           `/bin/bash -lc ${shellQuote(applyCommand)}`,
         ].join(" && ")
       : [
           `mkdir -p ${shellQuote(sourceParentDirectory)}`,
           `rm -rf ${shellQuote(sourceDirectory)}`,
-          `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 --branch ${shellQuote(plan.dotfiles.ref)} ${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
+          `GIT_SSH_COMMAND='ssh -i /run/sealant/dotfiles_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=no' git clone --depth=1 ${branchArguments}${shellQuote(plan.dotfiles.url)} ${shellQuote(sourceDirectory)}`,
           `/bin/bash -lc ${shellQuote(applyCommand)}`,
         ].join(" && ");
   const mountPrefix =
@@ -1046,6 +1059,51 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
       : "RUN --mount=type=secret,id=dotfiles_git_key,target=/run/sealant/dotfiles_key,required=true \\\n    ";
 
   return `${mountPrefix}${cloneCommand}`;
+};
+
+/**
+ * The pinned upstream chezmoi release baked into distros whose archive does not package it
+ * (currently Ubuntu 24.04 — chezmoi enters the Ubuntu archive only at 26.10). The binary is
+ * static Go, fetched over TLS and checksum-verified per architecture, so the layer is exactly as
+ * deterministic as a distro package install.
+ */
+const chezmoiRelease = {
+  version: "2.72.0",
+  sha256: {
+    amd64: "0d6665b96c527d57fdc562bf19e808f80f48c2d977062c03e3e65c6b09eafbce",
+    arm64: "e79a27621256390f03166d3965e6a1946f983a096c4d90f02c43d2aa5b563728",
+  },
+};
+
+/** Whether the plan's dotfiles can invoke chezmoi (explicitly or through auto-detection). */
+const planWantsChezmoi = (plan: ResolvedImagePlan): boolean =>
+  plan.dotfiles !== undefined &&
+  (plan.dotfiles.manager === "auto" || plan.dotfiles.manager === "chezmoi");
+
+/**
+ * Renders the checksum-verified chezmoi install for distros without an archive package. The
+ * `chezmoi` packageMap entry on those distros installs the prerequisites (curl + CA roots), so
+ * this step always runs after the package layer.
+ */
+const renderChezmoiInstallStep = (plan: ResolvedImagePlan): string | undefined => {
+  if (plan.osFamily !== "ubuntu" || !planWantsChezmoi(plan)) {
+    return undefined;
+  }
+  const { version, sha256 } = chezmoiRelease;
+  return [
+    "RUN set -e; \\",
+    '    arch="$(dpkg --print-architecture)"; \\',
+    '    case "$arch" in \\',
+    `      amd64) sha=${sha256.amd64} ;; \\`,
+    `      arm64) sha=${sha256.arm64} ;; \\`,
+    '      *) echo "unsupported architecture for chezmoi: $arch" >&2; exit 1 ;; \\',
+    "    esac; \\",
+    `    curl -fsSL -o /tmp/chezmoi.tar.gz "https://github.com/twpayne/chezmoi/releases/download/v${version}/chezmoi_${version}_linux_\${arch}.tar.gz"; \\`,
+    '    echo "$sha  /tmp/chezmoi.tar.gz" | sha256sum -c -; \\',
+    "    tar -xzf /tmp/chezmoi.tar.gz -C /usr/local/bin chezmoi; \\",
+    "    chmod 755 /usr/local/bin/chezmoi; \\",
+    "    rm /tmp/chezmoi.tar.gz",
+  ].join("\n");
 };
 
 /**
@@ -1125,6 +1183,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
   const distro = distroDefinitions[plan.osFamily];
   const shellPath = distro.shellPaths[plan.customization.defaultShell];
   const dotfilesStep = renderDotfilesStep(plan);
+  const chezmoiInstallStep = renderChezmoiInstallStep(plan);
   const harnessInstallStep = renderHarnessInstallCommand(plan);
 
   return [
@@ -1132,6 +1191,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     `FROM ${plan.baseImage}`,
     "",
     renderPackageInstallCommand(plan),
+    ...(chezmoiInstallStep === undefined ? [] : ["", chezmoiInstallStep]),
     "",
     harnessInstallStep,
     "",

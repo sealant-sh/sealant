@@ -133,6 +133,11 @@ export const resolveWorkspaceCloneAuth = Effect.fn("resolveWorkspaceCloneAuth")(
 export const resolveDotfilesRuntimeEnv = Effect.fn("resolveDotfilesRuntimeEnv")(function* (
   input: ResolveWorkspaceAuthInput,
 ) {
+  // A disabled apply must not mint a live token: the image carries no
+  // SEALANT_DOTFILES_RUNTIME_APPLY, so an injected token would sit unused in the container env.
+  if (!input.spec.customization.applyDotfiles) {
+    return {} as Record<string, string>;
+  }
   const dotfilesSource = input.spec.sources.inputs.find((source) => source.purpose === "dotfiles");
 
   const token = yield* resolveInstallationAccessToken({
