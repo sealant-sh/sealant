@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -959,7 +960,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
  * generated `entrypoint.sh` is gone: the container's PID 1 is now the baked-in `sealantd boot`
  * binary, configured via the `ENV SEALANT_*` block in the Containerfile.
  */
-const writeBuildContext = async (plan: ResolvedImagePlan) => {
+const writeBuildContext = async (plan: ResolvedImagePlan, containerfile: string) => {
   const contextDirectory = await mkdtemp(join(tmpdir(), `sealant-buildkit-${plan.osFamily}-`));
   const containerfilePath = join(contextDirectory, "Containerfile");
   const imagePlanPath = join(contextDirectory, "resolved-image-plan.json");
@@ -979,7 +980,7 @@ const writeBuildContext = async (plan: ResolvedImagePlan) => {
   };
 
   await mkdir(dirname(containerfilePath), { recursive: true });
-  await writeFile(containerfilePath, renderContainerfile(plan), "utf8");
+  await writeFile(containerfilePath, containerfile, "utf8");
   await writeFile(imagePlanPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   await writeFile(buildSpecPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
 
@@ -1027,10 +1028,27 @@ const buildImageTarball = async (
   });
 };
 
-export const compileWorkspaceBuildSpec = async (input: {
+/**
+ * The Docker-free planning half of a compile: blueprint → OS family → resolved plan → rendered
+ * Containerfile → content hash.
+ *
+ * `planHash` hashes the rendered Containerfile — the exact build input — so two plans with the
+ * same hash produce byte-identical build instructions (and, modulo upstream base image/package
+ * drift that Docker layer caching is equally blind to, identical image content). The worker uses
+ * this to skip the BuildKit walk + publish entirely when the hash matches an already-published
+ * image.
+ */
+export interface PlannedWorkspaceImageBuild {
+  readonly osFamily: BuildkitTargetOsFamily;
+  readonly imagePlan: ResolvedImagePlan;
+  readonly containerfile: string;
+  readonly planHash: string;
+}
+
+export const planWorkspaceImageBuild = (input: {
   readonly blueprint: WorkspaceBlueprint;
-  readonly options?: BuildkitCompilerOptions;
-}): Promise<BuildkitOsBuilderCompileResult> => {
+  readonly options?: Pick<BuildkitCompilerOptions, "autoOsFamilyOrder">;
+}): PlannedWorkspaceImageBuild => {
   const parsed = parseBuildkitOsBuilderCompileInput({
     blueprint: parseWorkspaceBlueprint(input.blueprint),
   });
@@ -1041,7 +1059,23 @@ export const compileWorkspaceBuildSpec = async (input: {
       : { autoOsFamilyOrder: input.options.autoOsFamilyOrder }),
   });
   const imagePlan = mapBlueprintToResolvedImagePlan(parsed.blueprint, osFamily);
-  const buildContext = await writeBuildContext(imagePlan);
+  const containerfile = renderContainerfile(imagePlan);
+
+  return {
+    osFamily,
+    imagePlan,
+    containerfile,
+    planHash: createHash("sha256").update(containerfile, "utf8").digest("hex"),
+  };
+};
+
+export const compileWorkspaceBuildSpec = async (input: {
+  readonly blueprint: WorkspaceBlueprint;
+  readonly options?: BuildkitCompilerOptions;
+}): Promise<BuildkitOsBuilderCompileResult> => {
+  const planned = planWorkspaceImageBuild(input);
+  const { osFamily, imagePlan } = planned;
+  const buildContext = await writeBuildContext(imagePlan, planned.containerfile);
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
 
   await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, osFamily);
@@ -1054,27 +1088,28 @@ export const compileWorkspaceBuildSpec = async (input: {
     artifacts: [
       {
         kind: "oci-image",
-        name: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+        name: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
         path: buildContext.imageTarPath,
         reference: buildContext.spec.imageReference,
         loader: "docker-load",
       },
       {
         kind: "metadata",
-        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-image-plan`,
+        name: `${defaultImageNameForBlueprint(imagePlan.blueprint, osFamily)}-image-plan`,
         path: buildContext.imagePlanPath,
         format: "json",
       },
       {
         kind: "metadata",
-        name: `${defaultImageNameForBlueprint(parsed.blueprint, osFamily)}-buildkit-spec`,
+        name: `${defaultImageNameForBlueprint(imagePlan.blueprint, osFamily)}-buildkit-spec`,
         path: buildContext.buildSpecPath,
         format: "json",
       },
     ],
     metadata: {
-      defaultArtifactName: defaultImageNameForBlueprint(parsed.blueprint, osFamily),
+      defaultArtifactName: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
       notes: [`Compiled by the ${osFamily} BuildKit compiler.`],
+      planHash: planned.planHash,
     },
     buildkit: {
       imagePlan,

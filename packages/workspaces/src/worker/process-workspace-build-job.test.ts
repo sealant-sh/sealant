@@ -30,10 +30,14 @@ import {
 const workspaceBuildJobRepoStub = (
   overrides: {
     readonly claimJobById?: () => unknown;
+    readonly getLatestSucceededJobByPlanHash?: () => unknown;
   } = {},
 ) => ({
   claimJobById: vi.fn((_input: { id: string; workerId: string; leaseDurationMs: number }) =>
     Effect.succeed(overrides.claimJobById?.() ?? null),
+  ),
+  getLatestSucceededJobByPlanHash: vi.fn((_input: { registryId: string; planHash: string }) =>
+    Effect.succeed(overrides.getLatestSucceededJobByPlanHash?.() ?? undefined),
   ),
   markJobSucceeded: vi.fn((_input: unknown) => Effect.succeed({})),
   markJobFailed: vi.fn((_input: unknown) => Effect.succeed({})),
@@ -371,6 +375,196 @@ describe("processWorkspaceBuildJobEffect", () => {
           tooling: expect.objectContaining({ packages }),
         }),
       );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("skips build and publish when the plan hash matches a published image", () => {
+    const priorPlanHash = "a".repeat(64);
+    const jobs = workspaceBuildJobRepoStub({
+      // The new create has its own fresh repository:tag (the SDK stamps a random tag per
+      // create) — only the plan hash links it to the prior publish.
+      claimJobById: () => ({
+        id: "job_reuse",
+        runId: null,
+        registryId: "local-zot",
+        repository: "session-bbbb",
+        tag: "sdk-22222222",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      }),
+      getLatestSucceededJobByPlanHash: () => ({
+        id: "job_prior",
+        status: "succeeded",
+        registryId: "local-zot",
+        repository: "session-aaaa",
+        tag: "sdk-11111111",
+        resultPayload: {
+          ...createCompileResult({ id: "fedora" }),
+          metadata: {
+            defaultArtifactName: "sealant-workspace-fedora",
+            notes: [],
+            planHash: priorPlanHash,
+          },
+        },
+        publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+        publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+        publishedDigest: "sha256:prior",
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "fedora" as const,
+      imagePlan: {} as never,
+      containerfile: "FROM fedora:41",
+      planHash: priorPlanHash,
+    }));
+    const headManifest = vi.fn(async () => "sha256:prior");
+    const registryClient = {
+      publishOciImage: vi.fn(async () => {
+        throw new Error("publishOciImage must not run on the reuse path");
+      }),
+      headManifest,
+    } as unknown as RegistryClient;
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      const published = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_reuse",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+          registryClient,
+          runtimeAdapters: [runtimeAdapter],
+        }),
+      );
+
+      expect(compileWorkspaceSpec).not.toHaveBeenCalled();
+      expect(jobs.getLatestSucceededJobByPlanHash).toHaveBeenCalledWith({
+        registryId: "local-zot",
+        planHash: priorPlanHash,
+      });
+      // The liveness check HEADs the PRIOR publish's tag — the new job's tag was never pushed.
+      expect(headManifest).toHaveBeenCalledWith("session-aaaa", "sdk-11111111");
+      expect(published).toEqual(
+        expect.objectContaining({
+          digestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+        }),
+      );
+      expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "job_reuse",
+          builderId: "fedora",
+          publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+          publishedDigest: "sha256:prior",
+          resultPayload: expect.objectContaining({
+            metadata: expect.objectContaining({ planHash: priorPlanHash }),
+          }),
+        }),
+      );
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          publishedImage: expect.objectContaining({ digest: "sha256:prior" }),
+        }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("builds fresh when the registry tag no longer points at the recorded digest", () => {
+    const priorPlanHash = "b".repeat(64);
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_stale_digest",
+        runId: null,
+        registryId: "local-zot",
+        repository: "session-bbbb",
+        tag: "sdk-22222222",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      }),
+      getLatestSucceededJobByPlanHash: () => ({
+        id: "job_prior",
+        status: "succeeded",
+        registryId: "local-zot",
+        repository: "session-aaaa",
+        tag: "sdk-11111111",
+        resultPayload: {
+          ...createCompileResult({ id: "fedora" }),
+          metadata: { notes: [], planHash: priorPlanHash },
+        },
+        publishedReference: "127.0.0.1:5000/session-aaaa:sdk-11111111",
+        publishedDigestReference: "127.0.0.1:5000/session-aaaa@sha256:prior",
+        publishedDigest: "sha256:prior",
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "fedora" as const,
+      imagePlan: {} as never,
+      containerfile: "FROM fedora:41",
+      planHash: priorPlanHash,
+    }));
+    const publishOciImage = vi.fn(async () => ({
+      repository: "sealant/workspaces/demo",
+      tag: "opencode",
+      reference: "127.0.0.1:5000/sealant/workspaces/demo:opencode",
+      digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:fresh",
+      digest: "sha256:fresh",
+    }));
+    const registryClient = {
+      publishOciImage,
+      // The tag was re-pushed (or GC'd) out-of-band: the recorded digest is gone.
+      headManifest: vi.fn(async () => "sha256:overwritten"),
+    } as unknown as RegistryClient;
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_stale_digest",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+          registryClient,
+        }),
+      );
+
+      expect(compileWorkspaceSpec).toHaveBeenCalledTimes(1);
+      expect(publishOciImage).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("builds fresh when no prior published plan hash exists", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_no_prior",
+        runId: null,
+        registryId: "local-zot",
+        repository: "session-bbbb",
+        tag: "sdk-33333333",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "fedora" as const,
+      imagePlan: {} as never,
+      containerfile: "FROM fedora:41",
+      planHash: "c".repeat(64),
+    }));
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_no_prior",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+        }),
+      );
+
+      expect(planWorkspaceSpec).toHaveBeenCalledTimes(1);
+      expect(compileWorkspaceSpec).toHaveBeenCalledTimes(1);
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 

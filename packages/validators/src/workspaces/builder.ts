@@ -69,6 +69,12 @@ export const osBuilderCompileInputSchema = z.strictObject({
 export const osBuilderCompileMetadataSchema = z.strictObject({
   defaultArtifactName: z.string().trim().min(1).optional(),
   notes: z.array(z.string().trim().min(1)).default([]),
+  /**
+   * Content hash of the resolved build inputs (the rendered Containerfile). Two compiles with the
+   * same hash produce identical image content, so a publish whose hash matches an already-published
+   * image can be skipped entirely.
+   */
+  planHash: z.string().trim().min(1).optional(),
 });
 
 export const osBuilderCompileResultSchema = z.strictObject({

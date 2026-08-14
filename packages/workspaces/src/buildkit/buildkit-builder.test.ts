@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   compileWorkspaceBuildSpec,
   mapBlueprintToBuildkitImagePlan,
+  planWorkspaceImageBuild,
   selectBuildkitOsFamily,
 } from "./buildkit-builder.js";
 
@@ -824,6 +825,67 @@ describe("compileWorkspaceBuildSpec", () => {
           installPackages: ["nodejs", "npm"],
         },
       ]),
+    );
+  });
+});
+
+describe("planWorkspaceImageBuild", () => {
+  it("hashes the rendered Containerfile deterministically without running Docker", () => {
+    const blueprint = createWorkspaceBuildSpec();
+
+    const first = planWorkspaceImageBuild({ blueprint });
+    const second = planWorkspaceImageBuild({ blueprint });
+
+    expect(first.planHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.planHash).toBe(first.planHash);
+    expect(second.containerfile).toBe(first.containerfile);
+    expect(first.osFamily).toBe("fedora");
+  });
+
+  it("changes the hash when the plan changes the image content", () => {
+    const base = planWorkspaceImageBuild({ blueprint: createWorkspaceBuildSpec() });
+    const withPackage = planWorkspaceImageBuild({
+      blueprint: createWorkspaceBuildSpec({
+        tooling: { packages: [{ id: "ripgrep" }] },
+      }),
+    });
+
+    expect(withPackage.planHash).not.toBe(base.planHash);
+  });
+
+  it("keeps the hash stable across launch-only differences (runtime env)", () => {
+    const base = planWorkspaceImageBuild({ blueprint: createWorkspaceBuildSpec() });
+    const withRuntimeEnv = planWorkspaceImageBuild({
+      blueprint: createWorkspaceBuildSpec({
+        runtime: {
+          env: { EXAMPLE: "per-session-value" },
+          credentialRefs: [],
+          workspaceRoot: "/workspace",
+          workingDirectory: "/workspace/repo",
+          persistence: "ephemeral",
+          ociRuntime: "runc",
+          network: { outbound: true },
+        },
+      }),
+    });
+
+    // runtime.env is injected at `docker run`, not baked into the image, so it must not force
+    // a rebuild of an already-published image.
+    expect(withRuntimeEnv.planHash).toBe(base.planHash);
+  });
+
+  it("records the plan hash in the compile result metadata and writes the same Containerfile", async () => {
+    const blueprint = createWorkspaceBuildSpec();
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const planned = planWorkspaceImageBuild({ blueprint });
+    const result = await compileWorkspaceBuildSpec({ blueprint, options: { commandRunner } });
+
+    expect(result.metadata?.planHash).toBe(planned.planHash);
+    await expect(readFile(result.buildkit.spec.containerfilePath, "utf8")).resolves.toBe(
+      planned.containerfile,
     );
   });
 });
