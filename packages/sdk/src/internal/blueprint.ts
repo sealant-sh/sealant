@@ -58,6 +58,28 @@ export const buildCreateWorkspaceRequest = (
       { code: "invalid_create_options" },
     );
   }
+  if (options.baseImage !== undefined && options.dotfiles !== undefined) {
+    throw new SealantError(
+      "`dotfiles` is not supported with `baseImage`: custom bases guarantee only a POSIX shell, so the dotfiles managers are not provisioned.",
+      { code: "invalid_create_options" },
+    );
+  }
+  if (options.baseImage !== undefined && options.shell !== undefined && options.shell !== "bash") {
+    throw new SealantError(
+      "`shell` is not supported with `baseImage`: custom bases run /bin/sh and the login shell cannot be switched.",
+      { code: "invalid_create_options" },
+    );
+  }
+  if (
+    options.dotfiles !== undefined &&
+    options.dotfiles.repository === undefined &&
+    (options.dotfiles.archives === undefined || options.dotfiles.archives.length === 0)
+  ) {
+    throw new SealantError(
+      "`dotfiles` requires a `repository`, at least one entry in `archives`, or both.",
+      { code: "invalid_create_options" },
+    );
+  }
   const sourceName = options.repository ?? options.source?.path ?? "workspace";
   const tail =
     sourceName
@@ -98,6 +120,8 @@ export const buildCreateWorkspaceRequest = (
           ...(toolingPackages.length === 0 ? {} : { packages: toolingPackages }),
           ...(dockerService ? { services: { docker: { enabled: true } } } : {}),
         };
+  const dotfilesRepository = options.dotfiles?.repository;
+  const dotfilesArchives = options.dotfiles?.archives ?? [];
   const spec = {
     version: "1",
     sources: {
@@ -111,6 +135,21 @@ export const buildCreateWorkspaceRequest = (
               ...(options.ref === undefined ? {} : { ref: options.ref }),
             }
           : { kind: "mount", hostPath: options.source?.path },
+      ...(dotfilesRepository === undefined
+        ? {}
+        : {
+            inputs: [
+              {
+                id: "dotfiles",
+                kind: "git",
+                purpose: "dotfiles",
+                provider: "generic",
+                url: toGitUrl(dotfilesRepository.url),
+                // Omitted ref = the remote's default branch — never assumed to be `main`.
+                ...(dotfilesRepository.ref === undefined ? {} : { ref: dotfilesRepository.ref }),
+              },
+            ],
+          }),
       ...(mounts.length === 0
         ? {}
         : {
@@ -123,7 +162,35 @@ export const buildCreateWorkspaceRequest = (
           }),
     },
     harness: { id: options.harness.id },
-    customization: { enableSealantd: true },
+    customization: {
+      enableSealantd: true,
+      ...(options.shell === undefined ? {} : { defaultShell: options.shell }),
+      // The repository path's knobs live at customization level; archives carry their own.
+      ...(dotfilesRepository?.manager === undefined
+        ? {}
+        : { dotfilesManager: dotfilesRepository.manager }),
+      ...(dotfilesRepository?.bootstrap === undefined
+        ? {}
+        : { dotfilesBootstrap: dotfilesRepository.bootstrap }),
+      ...(dotfilesRepository?.bootstrapCommand === undefined
+        ? {}
+        : { dotfilesBootstrapCommand: dotfilesRepository.bootstrapCommand }),
+    },
+    ...(dotfilesArchives.length === 0
+      ? {}
+      : {
+          runtime: {
+            dotfilesArchives: dotfilesArchives.map((archive) => ({
+              data: archive.data,
+              ...(archive.manager === undefined ? {} : { manager: archive.manager }),
+              ...(archive.target === undefined ? {} : { target: archive.target }),
+              ...(archive.bootstrap === undefined ? {} : { bootstrap: archive.bootstrap }),
+              ...(archive.bootstrapCommand === undefined
+                ? {}
+                : { bootstrapCommand: archive.bootstrapCommand }),
+            })),
+          },
+        }),
     target: {
       os:
         options.baseImage !== undefined

@@ -224,3 +224,124 @@ describe("buildCreateWorkspaceRequest", () => {
     });
   });
 });
+
+interface DotfilesSpecShape {
+  readonly sources: {
+    readonly inputs?: ReadonlyArray<{
+      readonly id: string;
+      readonly purpose: string;
+      readonly url: string;
+      readonly ref?: string;
+    }>;
+  };
+  readonly customization: {
+    readonly defaultShell?: string;
+    readonly dotfilesManager?: string;
+    readonly dotfilesBootstrap?: boolean;
+    readonly dotfilesBootstrapCommand?: string;
+  };
+  readonly runtime?: {
+    readonly dotfilesArchives?: ReadonlyArray<{
+      readonly data: string;
+      readonly manager?: string;
+      readonly target?: string;
+      readonly bootstrap?: boolean;
+    }>;
+  };
+}
+
+describe("dotfiles and shell lowering", () => {
+  it("lowers a dotfiles repository onto sources.inputs + customization", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/app",
+        harness: opencode(),
+        shell: "zsh",
+        dotfiles: {
+          repository: {
+            url: "github.com/acme/dotfiles",
+            manager: "chezmoi",
+            bootstrap: false,
+          },
+        },
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as DotfilesSpecShape;
+    expect(spec.sources.inputs).toEqual([
+      {
+        id: "dotfiles",
+        kind: "git",
+        purpose: "dotfiles",
+        provider: "generic",
+        url: "https://github.com/acme/dotfiles.git",
+      },
+    ]);
+    expect(spec.customization.defaultShell).toBe("zsh");
+    expect(spec.customization.dotfilesManager).toBe("chezmoi");
+    expect(spec.customization.dotfilesBootstrap).toBe(false);
+    // No ref requested → none sent; the clone resolves the remote's default branch.
+    expect(spec.sources.inputs?.[0]?.ref).toBeUndefined();
+  });
+
+  it("lowers dotfiles archives onto runtime.dotfilesArchives", () => {
+    const data = Buffer.from("tar").toString("base64");
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/app",
+        harness: opencode(),
+        dotfiles: {
+          archives: [{ data, manager: "copy", bootstrap: false }, { data }],
+        },
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as DotfilesSpecShape;
+    expect(spec.runtime?.dotfilesArchives).toEqual([
+      { data, manager: "copy", bootstrap: false },
+      { data },
+    ]);
+    expect(spec.sources.inputs).toBeUndefined();
+  });
+
+  it("rejects dotfiles with a custom base image, client-side and readable", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          baseImage: "node:22-bookworm",
+          dotfiles: { repository: { url: "github.com/acme/dotfiles" } },
+        },
+        config,
+      ),
+    ).toThrow(/not supported with `baseImage`/);
+  });
+
+  it("rejects a non-bash shell with a custom base image", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          baseImage: "node:22-bookworm",
+          shell: "zsh",
+        },
+        config,
+      ),
+    ).toThrow(/`shell` is not supported/);
+  });
+
+  it("rejects an empty dotfiles option", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          dotfiles: {},
+        },
+        config,
+      ),
+    ).toThrow(/requires a `repository`/);
+  });
+});
