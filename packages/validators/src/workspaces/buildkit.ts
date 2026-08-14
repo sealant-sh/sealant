@@ -46,7 +46,8 @@ export const resolvedDotfilesPlanSchema = z.strictObject({
   sourceId: nonEmptyStringSchema,
   manager: z.enum(["auto", "chezmoi", "stow", "copy"]),
   url: z.string().url(),
-  ref: nonEmptyStringSchema,
+  // Absent means the remote's default branch — the clone omits `--branch`.
+  ref: nonEmptyStringSchema.optional(),
   target: z.enum(["home", "config"]).default("home"),
   bootstrap: z.boolean().default(true),
   bootstrapCommand: nonEmptyStringSchema.optional(),

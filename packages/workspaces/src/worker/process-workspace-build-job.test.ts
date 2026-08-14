@@ -191,6 +191,7 @@ const createWorkspaceBuildSpec = (
     readonly inputSources?: NewWorkspace["sources"]["inputs"];
     readonly credentialRefs?: NewWorkspace["runtime"]["credentialRefs"];
     readonly packages?: NewWorkspace["tooling"]["packages"];
+    readonly applyDotfiles?: boolean;
   } = {},
 ): NewWorkspace => {
   return {
@@ -222,7 +223,7 @@ const createWorkspaceBuildSpec = (
       defaultShell: "bash",
       dotfilesManager: "auto",
       dotfilesTarget: "home",
-      applyDotfiles: true,
+      applyDotfiles: input.applyDotfiles ?? true,
       dotfilesBootstrap: true,
     },
     lifecycle: {
@@ -843,6 +844,69 @@ describe("processWorkspaceBuildJobEffect", () => {
               env: expect.objectContaining({
                 SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
                 SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+              }),
+            }),
+          }),
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("mints no dotfiles token when the apply is disabled", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_dotfiles_disabled",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({
+          url: "https://github.com/example/repo.git",
+          osFamily: "nix",
+          applyDotfiles: false,
+          inputSources: [
+            {
+              id: "dotfiles",
+              kind: "git",
+              purpose: "dotfiles",
+              provider: "github",
+              url: "https://github.com/sealant-ops/core.git",
+              ref: "main",
+              authRef: "github-installation-repository:gh_installation_repo_1",
+            },
+          ],
+        }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const gitHubSourceIntegration = githubSourceIntegrationStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_dotfiles_disabled",
+          runtimeAdapters: [runtimeAdapter],
+          gitHubSourceIntegration,
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      // The image carries no SEALANT_DOTFILES_RUNTIME_APPLY when the apply is off, so a minted
+      // token would sit unused in the container env — the worker must not create one.
+      expect(gitHubSourceIntegration.createInstallationAccessToken).not.toHaveBeenCalled();
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          blueprint: expect.objectContaining({
+            runtime: expect.objectContaining({
+              env: expect.not.objectContaining({
+                SEALANT_DOTFILES_HTTP_TOKEN: expect.anything(),
               }),
             }),
           }),

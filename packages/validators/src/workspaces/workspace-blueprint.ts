@@ -98,7 +98,8 @@ export const workspaceInputSourceSchema = z.strictObject({
   purpose: workspaceInputPurposeSchema,
   provider: workspaceSourceProviderSchema.default("generic"),
   url: z.string().url(),
-  ref: nonEmptyStringSchema.default("main"),
+  // Absent means the remote's default branch — never assume `main`, same as the workspace source.
+  ref: nonEmptyStringSchema.optional(),
   authRef: nonEmptyStringSchema.optional(),
   mountPath: nonEmptyStringSchema.optional(),
 });

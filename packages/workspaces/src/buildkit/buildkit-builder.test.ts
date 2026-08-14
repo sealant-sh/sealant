@@ -393,6 +393,176 @@ describe("compileWorkspaceBuildSpec", () => {
     );
   });
 
+  it("installs chezmoi from the pinned upstream release on ubuntu (no archive package)", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const blueprint = createWorkspaceBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "generic",
+            url: "https://github.com/example/dotfiles.git",
+            ref: "main",
+          },
+        ],
+        mounts: [],
+      },
+      target: {
+        os: {
+          family: "ubuntu",
+          mode: "require",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu");
+    // The `auto` manager requests chezmoi; ubuntu maps that to the download prerequisites
+    // instead of an apt package that does not exist in 24.04.
+    const chezmoiRequest = plan.packages.find((pkg) => pkg.requestId === "chezmoi");
+    expect(chezmoiRequest?.installPackages).toEqual(["curl", "ca-certificates"]);
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint,
+      options: { commandRunner },
+    });
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+    expect(containerfile).toContain("github.com/twpayne/chezmoi/releases/download");
+    expect(containerfile).toContain("sha256sum -c -");
+    expect(containerfile).toContain("tar -xzf /tmp/chezmoi.tar.gz -C /usr/local/bin chezmoi");
+  });
+
+  it("omits the release install when the manager can never invoke chezmoi", () => {
+    const blueprint = createWorkspaceBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "generic",
+            url: "https://github.com/example/dotfiles.git",
+            ref: "main",
+          },
+        ],
+        mounts: [],
+      },
+      customization: {
+        defaultShell: "bash",
+        dotfilesManager: "copy",
+        dotfilesTarget: "home",
+        applyDotfiles: true,
+        dotfilesBootstrap: true,
+      },
+      target: {
+        os: {
+          family: "ubuntu",
+          mode: "require",
+        },
+        runtime: {
+          family: "auto",
+          mode: "prefer",
+        },
+      },
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "ubuntu");
+    expect(plan.packages.find((pkg) => pkg.requestId === "chezmoi")).toBeUndefined();
+  });
+
+  it("clones the remote default branch when the dotfiles input has no ref", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const blueprint = createWorkspaceBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "generic",
+            url: "https://github.com/example/dotfiles.git",
+          },
+        ],
+        mounts: [],
+      },
+    });
+
+    const plan = mapBlueprintToBuildkitImagePlan(blueprint, "fedora");
+    expect(plan.dotfiles?.ref).toBeUndefined();
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint,
+      options: { commandRunner },
+    });
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+    expect(containerfile).toContain(
+      "git clone --depth=1 'https://github.com/example/dotfiles.git'",
+    );
+    expect(containerfile).not.toContain("--branch");
+  });
+
+  it("emits no SEALANT_DOTFILES_REPO_REF for a ref-less runtime apply", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+    const blueprint = createWorkspaceBuildSpec({
+      sources: {
+        workspace: {
+          kind: "git",
+          provider: "generic",
+          url: "https://github.com/example/repo.git",
+          ref: "main",
+        },
+        inputs: [
+          {
+            id: "dotfiles",
+            kind: "git",
+            purpose: "dotfiles",
+            provider: "github",
+            url: "https://github.com/example/dotfiles.git",
+            authRef: "github-installation-repository:gh_installation_repo_1",
+          },
+        ],
+        mounts: [],
+      },
+    });
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint,
+      options: { commandRunner },
+    });
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+    expect(containerfile).toContain("SEALANT_DOTFILES_RUNTIME_APPLY='1'");
+    expect(containerfile).not.toContain("SEALANT_DOTFILES_REPO_REF");
+  });
+
   it("includes npm when Node.js-backed harness tooling is requested on Linux distros", () => {
     const fedoraPlan = mapBlueprintToBuildkitImagePlan(
       createWorkspaceBuildSpec({
