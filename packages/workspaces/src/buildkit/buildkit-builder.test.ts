@@ -542,7 +542,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/sealant-sh/sealantd:0.7.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
@@ -731,7 +731,7 @@ describe("compileWorkspaceBuildSpec", () => {
 
     // sealantd binary + socat relay dependency are always present.
     expect(containerfile).toContain(
-      "COPY --from=ghcr.io/sealant-sh/sealantd:0.7.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+      "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
     expect(containerfile).toContain("socat");
@@ -793,7 +793,7 @@ describe("compileWorkspaceBuildSpec", () => {
       // socat (the host<->control-socket relay dependency) is always part of the install layer.
       expect(containerfile).toContain(osFamily === "nix" ? sealantdLayer : "socat");
       expect(containerfile).toContain(
-        "COPY --from=ghcr.io/sealant-sh/sealantd:0.7.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+        "COPY --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
       );
       expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
     }
