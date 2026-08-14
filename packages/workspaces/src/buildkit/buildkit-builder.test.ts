@@ -901,6 +901,163 @@ describe("ubuntu distro family", () => {
   });
 });
 
+const customTarget = (baseImage: string) =>
+  ({
+    os: { family: "custom", mode: "require", baseImage },
+    runtime: { family: "auto", mode: "prefer" },
+  }) as const;
+
+describe("custom base images", () => {
+  it("renders an overlay-only Containerfile: preflight, harness CLIs, static sealantd+socat", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec({
+        target: customTarget("node:22-bookworm"),
+      }),
+      options: { commandRunner },
+    });
+
+    expect(result.builder).toEqual({ id: "custom", osFamily: "custom" });
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain("FROM node:22-bookworm");
+    // Contract preflight with readable failures for each requirement.
+    expect(containerfile).toContain("the custom base image has no git");
+    expect(containerfile).toContain("the custom base image has no node");
+    expect(containerfile).toContain("the custom base image has no npm");
+    // Static binaries via COPY --chmod: nothing assumes coreutils in the base.
+    expect(containerfile).toContain(
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
+    );
+    expect(containerfile).toContain(
+      "COPY --chmod=755 --from=ghcr.io/sealant-sh/sealantd:0.8.0 /usr/local/bin/socat /usr/local/bin/socat",
+    );
+    // No distro package installs, no shell reconfiguration.
+    expect(containerfile).not.toContain("dnf ");
+    expect(containerfile).not.toContain("pacman ");
+    expect(containerfile).not.toContain("nix profile");
+    expect(containerfile).not.toContain("usermod");
+    // Harness CLIs still install through npm.
+    expect(containerfile).toContain("RUN npm install -g");
+    expect(containerfile).toContain("SEALANT_OS_FAMILY='custom'");
+    expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/bin/sh'");
+    expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/bin/sh'");
+    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+  });
+
+  it("installs requested packages through the base's detected package manager", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec({
+        tooling: { packages: [{ id: "ripgrep" }, { id: "jq" }] },
+        target: customTarget("node:22-alpine"),
+      }),
+      options: { commandRunner },
+    });
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain("apt-get install -y --no-install-recommends ripgrep jq");
+    expect(containerfile).toContain("apk add --no-cache ripgrep jq");
+    expect(containerfile).toContain("dnf -y install ripgrep jq");
+    expect(containerfile).toContain("pacman -Sy --noconfirm --needed ripgrep jq");
+    expect(containerfile).toContain("no supported package manager (apt/apk/dnf/pacman)");
+  });
+
+  it("omits the package-manager detection layer when no packages are requested", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec({ target: customTarget("node:22-bookworm") }),
+      options: { commandRunner },
+    });
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).not.toContain("apk add");
+    expect(containerfile).not.toContain("apt-get update");
+  });
+
+  it("rejects non-default shells: custom bases guarantee /bin/sh and nothing more", () => {
+    expect(() =>
+      selectBuildkitOsFamily({
+        blueprint: createWorkspaceBuildSpec({
+          customization: {
+            defaultShell: "zsh",
+            dotfilesManager: "auto",
+            dotfilesTarget: "home",
+            applyDotfiles: false,
+            dotfilesBootstrap: false,
+          },
+          target: customTarget("node:22-bookworm"),
+        }),
+      }),
+    ).toThrow(/custom base images run \/bin\/sh/i);
+  });
+
+  it("translates a shell-less base's build failure into the contract's own words", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "build") {
+        throw new Error(
+          'BuildKit command failed with exit 1: docker build\nrunc run failed: unable to start container process: exec: "/bin/sh": stat /bin/sh: no such file or directory',
+        );
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      compileWorkspaceBuildSpec({
+        blueprint: createWorkspaceBuildSpec({ target: customTarget("gcr.io/distroless/static") }),
+        options: { commandRunner },
+      }),
+    ).rejects.toThrow(
+      "The custom base image 'gcr.io/distroless/static' has no /bin/sh — the custom base contract requires a POSIX shell.",
+    );
+  });
+
+  it("keeps mount-sourced git trust and names the image after the base reference", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async () => ({ stdout: "", stderr: "" }));
+
+    // The helper's deep-merge would splice mount keys over the base git source, so replace the
+    // sources block wholesale.
+    const blueprint: NewWorkspace = {
+      ...createWorkspaceBuildSpec({ target: customTarget("node:22-bookworm") }),
+      sources: {
+        workspace: { kind: "mount", hostPath: "/tmp/example-worktree" },
+        inputs: [],
+        mounts: [],
+      },
+    };
+
+    const result = await compileWorkspaceBuildSpec({
+      blueprint,
+      options: { commandRunner },
+    });
+
+    const containerfile = await readFile(result.buildkit.spec.containerfilePath, "utf8");
+
+    expect(containerfile).toContain(
+      "RUN git config --system --add safe.directory '/workspace/repo'",
+    );
+    expect(result.buildkit.spec.imageReference).toBe(
+      "sealant-workspace-custom-node-22-bookworm-opencode:latest",
+    );
+  });
+});
+
 describe("planWorkspaceImageBuild", () => {
   it("hashes the rendered Containerfile deterministically without running Docker", () => {
     const blueprint = createWorkspaceBuildSpec();

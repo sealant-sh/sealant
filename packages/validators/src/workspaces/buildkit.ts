@@ -13,7 +13,18 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 
 export const buildkitTargetOsFamilySchema = concreteWorkspaceTargetOsFamilySchema;
 
-export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix", "apt"]);
+/**
+ * The managed distro families — the subset of target OS families with a distro definition
+ * (base image + package manager + package map). "custom" is deliberately NOT here: a custom
+ * base image skips distro package installs entirely.
+ */
+export const buildkitDistroOsFamilySchema = concreteWorkspaceTargetOsFamilySchema.exclude([
+  "custom",
+]);
+
+// "none" is the custom-base mode: no distro package manager — requested packages install through
+// the base image's own detected package manager (apt/apk/dnf/pacman) or fail readable.
+export const buildkitPackageManagerSchema = z.enum(["dnf", "pacman", "nix", "apt", "none"]);
 
 export const buildkitSecretUsePhaseSchema = z.enum(["build", "runtime"]);
 export const buildkitSecretKindSchema = z.enum(["secret", "ssh-key", "ssh-known-hosts"]);
@@ -104,6 +115,8 @@ export const parseBuildkitOsBuilderCompileResult = (
 };
 
 export type BuildkitTargetOsFamily = z.infer<typeof buildkitTargetOsFamilySchema>;
+
+export type BuildkitDistroOsFamily = z.infer<typeof buildkitDistroOsFamilySchema>;
 
 export type BuildkitPackageManager = z.infer<typeof buildkitPackageManagerSchema>;
 

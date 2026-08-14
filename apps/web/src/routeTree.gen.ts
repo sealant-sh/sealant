@@ -24,11 +24,11 @@ import { Route as AuthenticatedRegistryIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedProfilesIndexRouteImport } from './routes/_authenticated/profiles/index'
 import { Route as ApiTrpcSplatRouteImport } from './routes/api/trpc/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
-import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
 import { Route as AuthenticatedWorkspacesNewRouteImport } from './routes/_authenticated/workspaces/new'
 import { Route as AuthenticatedWorkspacesFailedRouteImport } from './routes/_authenticated/workspaces/failed'
 import { Route as AuthenticatedWorkspacesActiveRouteImport } from './routes/_authenticated/workspaces/active'
+import { Route as AuthenticatedSettingsSshKeysRouteImport } from './routes/_authenticated/settings/ssh-keys'
+import { Route as AuthenticatedSettingsConnectedAccountsRouteImport } from './routes/_authenticated/settings/connected-accounts'
 import { Route as AuthenticatedProfilesCreateRouteImport } from './routes/_authenticated/profiles/create'
 import { Route as AuthenticatedGithubSetupRouteImport } from './routes/_authenticated/github/setup'
 import { Route as AuthenticatedWorkspacesWorkspaceIdIndexRouteImport } from './routes/_authenticated/workspaces/$workspaceId/index'
@@ -39,9 +39,9 @@ import { Route as AuthenticatedWorkspacesWorkspaceIdValidationRouteImport } from
 import { Route as AuthenticatedWorkspacesWorkspaceIdTraceRouteImport } from './routes/_authenticated/workspaces/$workspaceId/trace'
 import { Route as AuthenticatedWorkspacesWorkspaceIdSpecRouteImport } from './routes/_authenticated/workspaces/$workspaceId/spec'
 import { Route as AuthenticatedWorkspacesWorkspaceIdDiffRouteImport } from './routes/_authenticated/workspaces/$workspaceId/diff'
+import { Route as AuthenticatedRepositoriesRepoIdWorkspacesRouteImport } from './routes/_authenticated/repositories/$repoId/workspaces'
 import { Route as AuthenticatedRepositoriesRepoIdSetupRouteImport } from './routes/_authenticated/repositories/$repoId/setup'
 import { Route as AuthenticatedRepositoriesRepoIdSettingsRouteImport } from './routes/_authenticated/repositories/$repoId/settings'
-import { Route as AuthenticatedRepositoriesRepoIdWorkspacesRouteImport } from './routes/_authenticated/repositories/$repoId/workspaces'
 import { Route as AuthenticatedProfilesProfileIdSetupRouteImport } from './routes/_authenticated/profiles/$profileId/setup'
 import { Route as AuthenticatedProfilesProfileIdSecretsRouteImport } from './routes/_authenticated/profiles/$profileId/secrets'
 import { Route as AuthenticatedProfilesProfileIdPackagesRouteImport } from './routes/_authenticated/profiles/$profileId/packages'
@@ -128,18 +128,6 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedSettingsSshKeysRoute =
-  AuthenticatedSettingsSshKeysRouteImport.update({
-    id: '/settings/ssh-keys',
-    path: '/settings/ssh-keys',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedSettingsConnectedAccountsRoute =
-  AuthenticatedSettingsConnectedAccountsRouteImport.update({
-    id: '/settings/connected-accounts',
-    path: '/settings/connected-accounts',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
 const AuthenticatedWorkspacesNewRoute =
   AuthenticatedWorkspacesNewRouteImport.update({
     id: '/workspaces/new',
@@ -156,6 +144,18 @@ const AuthenticatedWorkspacesActiveRoute =
   AuthenticatedWorkspacesActiveRouteImport.update({
     id: '/workspaces/active',
     path: '/workspaces/active',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSettingsSshKeysRoute =
+  AuthenticatedSettingsSshKeysRouteImport.update({
+    id: '/settings/ssh-keys',
+    path: '/settings/ssh-keys',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedSettingsConnectedAccountsRoute =
+  AuthenticatedSettingsConnectedAccountsRouteImport.update({
+    id: '/settings/connected-accounts',
+    path: '/settings/connected-accounts',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesCreateRoute =
@@ -218,6 +218,12 @@ const AuthenticatedWorkspacesWorkspaceIdDiffRoute =
     path: '/workspaces/$workspaceId/diff',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedRepositoriesRepoIdWorkspacesRoute =
+  AuthenticatedRepositoriesRepoIdWorkspacesRouteImport.update({
+    id: '/repositories/$repoId/workspaces',
+    path: '/repositories/$repoId/workspaces',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedRepositoriesRepoIdSetupRoute =
   AuthenticatedRepositoriesRepoIdSetupRouteImport.update({
     id: '/repositories/$repoId/setup',
@@ -228,12 +234,6 @@ const AuthenticatedRepositoriesRepoIdSettingsRoute =
   AuthenticatedRepositoriesRepoIdSettingsRouteImport.update({
     id: '/repositories/$repoId/settings',
     path: '/repositories/$repoId/settings',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedRepositoriesRepoIdWorkspacesRoute =
-  AuthenticatedRepositoriesRepoIdWorkspacesRouteImport.update({
-    id: '/repositories/$repoId/workspaces',
-    path: '/repositories/$repoId/workspaces',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedProfilesProfileIdSetupRoute =
@@ -295,11 +295,11 @@ export interface FileRoutesByFullPath {
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
+  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
   '/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
   '/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
-  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
-  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/profiles/': typeof AuthenticatedProfilesIndexRoute
@@ -312,9 +312,9 @@ export interface FileRoutesByFullPath {
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
   '/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
   '/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
@@ -336,11 +336,11 @@ export interface FileRoutesByTo {
   '/about': typeof AuthenticatedAboutRoute
   '/github/setup': typeof AuthenticatedGithubSetupRoute
   '/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
+  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
   '/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
   '/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
-  '/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
-  '/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/profiles': typeof AuthenticatedProfilesIndexRoute
@@ -353,9 +353,9 @@ export interface FileRoutesByTo {
   '/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
   '/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
   '/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
@@ -380,11 +380,11 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/github/setup': typeof AuthenticatedGithubSetupRoute
   '/_authenticated/profiles/create': typeof AuthenticatedProfilesCreateRoute
+  '/_authenticated/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
+  '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/_authenticated/workspaces/active': typeof AuthenticatedWorkspacesActiveRoute
   '/_authenticated/workspaces/failed': typeof AuthenticatedWorkspacesFailedRoute
   '/_authenticated/workspaces/new': typeof AuthenticatedWorkspacesNewRoute
-  '/_authenticated/settings/connected-accounts': typeof AuthenticatedSettingsConnectedAccountsRoute
-  '/_authenticated/settings/ssh-keys': typeof AuthenticatedSettingsSshKeysRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/trpc/$': typeof ApiTrpcSplatRoute
   '/_authenticated/profiles/': typeof AuthenticatedProfilesIndexRoute
@@ -397,9 +397,9 @@ export interface FileRoutesById {
   '/_authenticated/profiles/$profileId/packages': typeof AuthenticatedProfilesProfileIdPackagesRoute
   '/_authenticated/profiles/$profileId/secrets': typeof AuthenticatedProfilesProfileIdSecretsRoute
   '/_authenticated/profiles/$profileId/setup': typeof AuthenticatedProfilesProfileIdSetupRoute
-  '/_authenticated/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/_authenticated/repositories/$repoId/settings': typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   '/_authenticated/repositories/$repoId/setup': typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  '/_authenticated/repositories/$repoId/workspaces': typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   '/_authenticated/workspaces/$workspaceId/diff': typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
   '/_authenticated/workspaces/$workspaceId/spec': typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
   '/_authenticated/workspaces/$workspaceId/trace': typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
@@ -423,11 +423,11 @@ export interface FileRouteTypes {
     | '/about'
     | '/github/setup'
     | '/profiles/create'
+    | '/settings/connected-accounts'
+    | '/settings/ssh-keys'
     | '/workspaces/active'
     | '/workspaces/failed'
     | '/workspaces/new'
-    | '/settings/connected-accounts'
-    | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/profiles/'
@@ -440,9 +440,9 @@ export interface FileRouteTypes {
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/workspaces'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
+    | '/repositories/$repoId/workspaces'
     | '/workspaces/$workspaceId/diff'
     | '/workspaces/$workspaceId/spec'
     | '/workspaces/$workspaceId/trace'
@@ -464,11 +464,11 @@ export interface FileRouteTypes {
     | '/about'
     | '/github/setup'
     | '/profiles/create'
+    | '/settings/connected-accounts'
+    | '/settings/ssh-keys'
     | '/workspaces/active'
     | '/workspaces/failed'
     | '/workspaces/new'
-    | '/settings/connected-accounts'
-    | '/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/profiles'
@@ -481,9 +481,9 @@ export interface FileRouteTypes {
     | '/profiles/$profileId/packages'
     | '/profiles/$profileId/secrets'
     | '/profiles/$profileId/setup'
-    | '/repositories/$repoId/workspaces'
     | '/repositories/$repoId/settings'
     | '/repositories/$repoId/setup'
+    | '/repositories/$repoId/workspaces'
     | '/workspaces/$workspaceId/diff'
     | '/workspaces/$workspaceId/spec'
     | '/workspaces/$workspaceId/trace'
@@ -507,11 +507,11 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/github/setup'
     | '/_authenticated/profiles/create'
+    | '/_authenticated/settings/connected-accounts'
+    | '/_authenticated/settings/ssh-keys'
     | '/_authenticated/workspaces/active'
     | '/_authenticated/workspaces/failed'
     | '/_authenticated/workspaces/new'
-    | '/_authenticated/settings/connected-accounts'
-    | '/_authenticated/settings/ssh-keys'
     | '/api/auth/$'
     | '/api/trpc/$'
     | '/_authenticated/profiles/'
@@ -524,9 +524,9 @@ export interface FileRouteTypes {
     | '/_authenticated/profiles/$profileId/packages'
     | '/_authenticated/profiles/$profileId/secrets'
     | '/_authenticated/profiles/$profileId/setup'
-    | '/_authenticated/repositories/$repoId/workspaces'
     | '/_authenticated/repositories/$repoId/settings'
     | '/_authenticated/repositories/$repoId/setup'
+    | '/_authenticated/repositories/$repoId/workspaces'
     | '/_authenticated/workspaces/$workspaceId/diff'
     | '/_authenticated/workspaces/$workspaceId/spec'
     | '/_authenticated/workspaces/$workspaceId/trace'
@@ -654,20 +654,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/settings/ssh-keys': {
-      id: '/_authenticated/settings/ssh-keys'
-      path: '/settings/ssh-keys'
-      fullPath: '/settings/ssh-keys'
-      preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/settings/connected-accounts': {
-      id: '/_authenticated/settings/connected-accounts'
-      path: '/settings/connected-accounts'
-      fullPath: '/settings/connected-accounts'
-      preLoaderRoute: typeof AuthenticatedSettingsConnectedAccountsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/_authenticated/workspaces/new': {
       id: '/_authenticated/workspaces/new'
       path: '/workspaces/new'
@@ -687,6 +673,20 @@ declare module '@tanstack/react-router' {
       path: '/workspaces/active'
       fullPath: '/workspaces/active'
       preLoaderRoute: typeof AuthenticatedWorkspacesActiveRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/settings/ssh-keys': {
+      id: '/_authenticated/settings/ssh-keys'
+      path: '/settings/ssh-keys'
+      fullPath: '/settings/ssh-keys'
+      preLoaderRoute: typeof AuthenticatedSettingsSshKeysRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/settings/connected-accounts': {
+      id: '/_authenticated/settings/connected-accounts'
+      path: '/settings/connected-accounts'
+      fullPath: '/settings/connected-accounts'
+      preLoaderRoute: typeof AuthenticatedSettingsConnectedAccountsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/create': {
@@ -759,6 +759,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/repositories/$repoId/workspaces': {
+      id: '/_authenticated/repositories/$repoId/workspaces'
+      path: '/repositories/$repoId/workspaces'
+      fullPath: '/repositories/$repoId/workspaces'
+      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/repositories/$repoId/setup': {
       id: '/_authenticated/repositories/$repoId/setup'
       path: '/repositories/$repoId/setup'
@@ -771,13 +778,6 @@ declare module '@tanstack/react-router' {
       path: '/repositories/$repoId/settings'
       fullPath: '/repositories/$repoId/settings'
       preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/repositories/$repoId/workspaces': {
-      id: '/_authenticated/repositories/$repoId/workspaces'
-      path: '/repositories/$repoId/workspaces'
-      fullPath: '/repositories/$repoId/workspaces'
-      preLoaderRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/profiles/$profileId/setup': {
@@ -860,11 +860,11 @@ interface AuthenticatedRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedGithubSetupRoute: typeof AuthenticatedGithubSetupRoute
   AuthenticatedProfilesCreateRoute: typeof AuthenticatedProfilesCreateRoute
+  AuthenticatedSettingsConnectedAccountsRoute: typeof AuthenticatedSettingsConnectedAccountsRoute
+  AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
   AuthenticatedWorkspacesActiveRoute: typeof AuthenticatedWorkspacesActiveRoute
   AuthenticatedWorkspacesFailedRoute: typeof AuthenticatedWorkspacesFailedRoute
   AuthenticatedWorkspacesNewRoute: typeof AuthenticatedWorkspacesNewRoute
-  AuthenticatedSettingsConnectedAccountsRoute: typeof AuthenticatedSettingsConnectedAccountsRoute
-  AuthenticatedSettingsSshKeysRoute: typeof AuthenticatedSettingsSshKeysRoute
   AuthenticatedProfilesIndexRoute: typeof AuthenticatedProfilesIndexRoute
   AuthenticatedRegistryIndexRoute: typeof AuthenticatedRegistryIndexRoute
   AuthenticatedRepositoriesIndexRoute: typeof AuthenticatedRepositoriesIndexRoute
@@ -875,9 +875,9 @@ interface AuthenticatedRouteChildren {
   AuthenticatedProfilesProfileIdPackagesRoute: typeof AuthenticatedProfilesProfileIdPackagesRoute
   AuthenticatedProfilesProfileIdSecretsRoute: typeof AuthenticatedProfilesProfileIdSecretsRoute
   AuthenticatedProfilesProfileIdSetupRoute: typeof AuthenticatedProfilesProfileIdSetupRoute
-  AuthenticatedRepositoriesRepoIdWorkspacesRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   AuthenticatedRepositoriesRepoIdSettingsRoute: typeof AuthenticatedRepositoriesRepoIdSettingsRoute
   AuthenticatedRepositoriesRepoIdSetupRoute: typeof AuthenticatedRepositoriesRepoIdSetupRoute
+  AuthenticatedRepositoriesRepoIdWorkspacesRoute: typeof AuthenticatedRepositoriesRepoIdWorkspacesRoute
   AuthenticatedWorkspacesWorkspaceIdDiffRoute: typeof AuthenticatedWorkspacesWorkspaceIdDiffRoute
   AuthenticatedWorkspacesWorkspaceIdSpecRoute: typeof AuthenticatedWorkspacesWorkspaceIdSpecRoute
   AuthenticatedWorkspacesWorkspaceIdTraceRoute: typeof AuthenticatedWorkspacesWorkspaceIdTraceRoute
@@ -895,12 +895,12 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedGithubSetupRoute: AuthenticatedGithubSetupRoute,
   AuthenticatedProfilesCreateRoute: AuthenticatedProfilesCreateRoute,
-  AuthenticatedWorkspacesActiveRoute: AuthenticatedWorkspacesActiveRoute,
-  AuthenticatedWorkspacesFailedRoute: AuthenticatedWorkspacesFailedRoute,
-  AuthenticatedWorkspacesNewRoute: AuthenticatedWorkspacesNewRoute,
   AuthenticatedSettingsConnectedAccountsRoute:
     AuthenticatedSettingsConnectedAccountsRoute,
   AuthenticatedSettingsSshKeysRoute: AuthenticatedSettingsSshKeysRoute,
+  AuthenticatedWorkspacesActiveRoute: AuthenticatedWorkspacesActiveRoute,
+  AuthenticatedWorkspacesFailedRoute: AuthenticatedWorkspacesFailedRoute,
+  AuthenticatedWorkspacesNewRoute: AuthenticatedWorkspacesNewRoute,
   AuthenticatedProfilesIndexRoute: AuthenticatedProfilesIndexRoute,
   AuthenticatedRegistryIndexRoute: AuthenticatedRegistryIndexRoute,
   AuthenticatedRepositoriesIndexRoute: AuthenticatedRepositoriesIndexRoute,
@@ -917,12 +917,12 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
     AuthenticatedProfilesProfileIdSecretsRoute,
   AuthenticatedProfilesProfileIdSetupRoute:
     AuthenticatedProfilesProfileIdSetupRoute,
-  AuthenticatedRepositoriesRepoIdWorkspacesRoute:
-    AuthenticatedRepositoriesRepoIdWorkspacesRoute,
   AuthenticatedRepositoriesRepoIdSettingsRoute:
     AuthenticatedRepositoriesRepoIdSettingsRoute,
   AuthenticatedRepositoriesRepoIdSetupRoute:
     AuthenticatedRepositoriesRepoIdSetupRoute,
+  AuthenticatedRepositoriesRepoIdWorkspacesRoute:
+    AuthenticatedRepositoriesRepoIdWorkspacesRoute,
   AuthenticatedWorkspacesWorkspaceIdDiffRoute:
     AuthenticatedWorkspacesWorkspaceIdDiffRoute,
   AuthenticatedWorkspacesWorkspaceIdSpecRoute:

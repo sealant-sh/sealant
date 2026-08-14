@@ -10,6 +10,7 @@ import {
   parseBuildkitOsBuilderCompileResult,
   parseOsBuilderSupport,
   type BuildkitBuildSpec,
+  type BuildkitDistroOsFamily,
   type BuildkitOsBuilderCompileResult,
   type BuildkitPackageManager,
   type BuildkitTargetOsFamily,
@@ -65,7 +66,7 @@ export type BuildkitCommandRunner = (
 
 export interface BuildkitCompilerOptions {
   readonly commandRunner?: BuildkitCommandRunner;
-  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+  readonly autoOsFamilyOrder?: readonly BuildkitDistroOsFamily[];
 }
 
 /** Maps a logical package request id to concrete distro packages to install. */
@@ -166,7 +167,7 @@ const defaultCommandRunner: BuildkitCommandRunner = (command, args, options) => 
  *
  * When adding a new distro, this object is the first place to update.
  */
-const distroDefinitions: Record<BuildkitTargetOsFamily, DistroDefinition> = {
+const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   fedora: {
     baseImage: "fedora:41",
     packageManager: "dnf",
@@ -324,15 +325,32 @@ const sealantdControlSocketPath = "/run/sealant/control.sock";
  * Keeping this naming centralized prevents subtle drift between the image reference, default
  * artifact name, and metadata artifact names.
  */
+/** Reduce an arbitrary OCI image reference to a stable, docker-safe name token. */
+const baseImageNameToken = (baseImage: string): string => {
+  const token = baseImage
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return token.length === 0 ? "image" : token;
+};
+
 const defaultImageNameForBlueprint = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): string => {
+  // Custom bases: one local image name per base reference (different bases must not fight over
+  // one local tag between build and publish).
+  const familyToken =
+    osFamily === "custom"
+      ? `custom-${baseImageNameToken(blueprint.target.os.baseImage ?? "image")}`
+      : osFamily;
   // One shared image per OS family — every baked harness is in it. A blueprint whose harness is
   // an extra beyond the baked set (e.g. opencode) gets its own name; its content differs.
   return isBakedHarnessId(blueprint.harness.id)
-    ? `sealant-workspace-${osFamily}`
-    : `sealant-workspace-${osFamily}-${blueprint.harness.id}`;
+    ? `sealant-workspace-${familyToken}`
+    : `sealant-workspace-${familyToken}-${blueprint.harness.id}`;
 };
 
 /**
@@ -462,14 +480,35 @@ const getBuildkitSupportForOs = (
     });
   }
 
+  if (osFamily === "custom") {
+    // Custom bases guarantee a POSIX shell and nothing more, so shell selection cannot be
+    // honored, and dotfiles managers (git + chezmoi/stow at build time) are not provisioned.
+    if (blueprint.customization.defaultShell !== "bash") {
+      return parseOsBuilderSupport({
+        supported: false,
+        reason: "unsupported-runtime-requirement",
+        message:
+          "Custom base images run /bin/sh; customization.defaultShell selection is not supported with target.os.family custom.",
+      });
+    }
+
+    if (blueprint.customization.applyDotfiles && dotfilesInputs.length > 0) {
+      return parseOsBuilderSupport({
+        supported: false,
+        reason: "unsupported-runtime-requirement",
+        message: "Dotfiles are not supported with target.os.family custom yet.",
+      });
+    }
+  }
+
   return parseOsBuilderSupport({ supported: true });
 };
 
-const defaultAutoOsFamilyOrder: readonly BuildkitTargetOsFamily[] = ["fedora", "arch", "nix"];
+const defaultAutoOsFamilyOrder: readonly BuildkitDistroOsFamily[] = ["fedora", "arch", "nix"];
 
 const resolveCandidateOsFamilies = (
   blueprint: WorkspaceBlueprint,
-  autoOsFamilyOrder: readonly BuildkitTargetOsFamily[],
+  autoOsFamilyOrder: readonly BuildkitDistroOsFamily[],
 ): readonly BuildkitTargetOsFamily[] => {
   if (blueprint.target.os.family === "auto") {
     return autoOsFamilyOrder;
@@ -480,7 +519,7 @@ const resolveCandidateOsFamilies = (
 
 export const selectBuildkitOsFamily = (input: {
   readonly blueprint: WorkspaceBlueprint;
-  readonly autoOsFamilyOrder?: readonly BuildkitTargetOsFamily[];
+  readonly autoOsFamilyOrder?: readonly BuildkitDistroOsFamily[];
 }): BuildkitTargetOsFamily => {
   const autoOsFamilyOrder = input.autoOsFamilyOrder ?? defaultAutoOsFamilyOrder;
   const candidates = resolveCandidateOsFamilies(input.blueprint, autoOsFamilyOrder);
@@ -531,6 +570,17 @@ const resolvePackages = (
   blueprint: WorkspaceBlueprint,
   osFamily: BuildkitTargetOsFamily,
 ): ResolvedImagePackage[] => {
+  if (osFamily === "custom") {
+    // No distro map: requested names pass through verbatim to the base's own detected package
+    // manager. Harness runtime packages (nodejs/npm) are NOT added — the custom-base contract
+    // requires node in the base — and shell/dotfiles helpers cannot apply (support-checked).
+    return blueprint.tooling.packages.map((request) => ({
+      requestId: request.id,
+      ...(request.version === undefined ? {} : { requestedVersion: request.version }),
+      installPackages: [request.id],
+    }));
+  }
+
   const distro = distroDefinitions[osFamily];
   // Every baked harness contributes its packages (dedup happens at render).
   const harnessPackageRequests: WorkspaceBlueprint["tooling"]["packages"] =
@@ -625,8 +675,11 @@ const mapBlueprintToResolvedImagePlan = (
   return {
     blueprint,
     osFamily,
-    baseImage: distroDefinitions[osFamily].baseImage,
-    packageManager: distroDefinitions[osFamily].packageManager,
+    baseImage:
+      osFamily === "custom"
+        ? (blueprint.target.os.baseImage ?? "")
+        : distroDefinitions[osFamily].baseImage,
+    packageManager: osFamily === "custom" ? "none" : distroDefinitions[osFamily].packageManager,
     packages: resolvePackages(blueprint, osFamily),
     customization: blueprint.customization,
     ...(dotfiles === undefined || !blueprint.customization.applyDotfiles
@@ -665,7 +718,58 @@ const mapBlueprintToResolvedImagePlan = (
  * Output is a single Dockerfile `RUN` block per package manager family so cache behavior is easy to
  * reason about. Internal packages are always merged with resolved package requests.
  */
+/**
+ * Custom-base package installs: no distro definition exists, so requested packages install
+ * through whatever supported package manager the base image itself carries. A base with none
+ * fails the build with a readable one-liner instead of a cryptic exec error.
+ */
+const renderCustomBasePackageInstallCommand = (
+  packageList: readonly string[],
+): string | undefined => {
+  if (packageList.length === 0) {
+    return undefined;
+  }
+
+  const quotedList = packageList.join(" ");
+  // One physical line: a raw newline inside RUN would end the Dockerfile instruction.
+  const script = [
+    "if command -v apt-get >/dev/null 2>&1;",
+    `then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${quotedList};`,
+    "elif command -v apk >/dev/null 2>&1;",
+    `then apk add --no-cache ${quotedList};`,
+    "elif command -v dnf >/dev/null 2>&1;",
+    `then dnf -y install ${quotedList} && dnf clean all;`,
+    "elif command -v pacman >/dev/null 2>&1;",
+    `then pacman -Sy --noconfirm --needed ${quotedList};`,
+    "else echo 'sealant: the custom base image has no supported package manager (apt/apk/dnf/pacman) — remove the extra packages or bake them into the base image.' >&2; exit 1;",
+    "fi",
+  ].join(" ");
+
+  return `RUN /bin/sh -c ${shellQuote(script)}`;
+};
+
+/**
+ * Custom-base contract preflight: fail the BUILD with a readable one-liner when the base is
+ * missing a required tool, instead of letting a later layer die with "command not found". The
+ * shell itself is checked implicitly — this RUN is the first one, so a shell-less base fails
+ * right here (mapped to a readable error by the compile wrapper).
+ */
+const renderCustomBaseContractPreflight = (): string => {
+  // One physical line: a raw newline inside RUN would end the Dockerfile instruction.
+  const script = [
+    `command -v git >/dev/null 2>&1 || { echo 'sealant: the custom base image has no git — the custom base contract requires git for clone/mount workspace sources.' >&2; exit 1; };`,
+    `command -v node >/dev/null 2>&1 || { echo 'sealant: the custom base image has no node — the custom base contract requires Node.js for the node-based harness CLIs.' >&2; exit 1; };`,
+    `command -v npm >/dev/null 2>&1 || { echo 'sealant: the custom base image has no npm — the custom base contract requires npm to install the harness CLIs.' >&2; exit 1; }`,
+  ].join(" ");
+
+  return `RUN /bin/sh -c ${shellQuote(script)}`;
+};
+
 const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
+  if (plan.osFamily === "custom") {
+    throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
+  }
+
   const distro = distroDefinitions[plan.osFamily];
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
@@ -797,8 +901,16 @@ const renderEnvBlock = (entries: ReadonlyArray<readonly [string, string]>): stri
  *   layer (see `renderDotfilesStep`) and emit no boot env.
  */
 const renderBootEnv = (plan: ResolvedImagePlan): string => {
-  const distro = distroDefinitions[plan.osFamily];
-  const loginShellPath = distro.shellPaths[plan.customization.defaultShell];
+  // Custom bases guarantee a POSIX shell and nothing more: every shell path degrades to /bin/sh
+  // (support checks reject non-default shells), and the sshd path keeps the conventional
+  // location for the env contract's sake.
+  const shellPaths =
+    plan.osFamily === "custom"
+      ? { bash: "/bin/sh", zsh: "/bin/sh", fish: "/bin/sh" }
+      : distroDefinitions[plan.osFamily].shellPaths;
+  const sshdPath =
+    plan.osFamily === "custom" ? "/usr/sbin/sshd" : distroDefinitions[plan.osFamily].sshdPath;
+  const loginShellPath = shellPaths[plan.customization.defaultShell];
 
   const setupJson = JSON.stringify(plan.blueprint.lifecycle.setup.map(toBootLifecycleStepJson));
   const startupJson = JSON.stringify(
@@ -813,8 +925,8 @@ const renderBootEnv = (plan: ResolvedImagePlan): string => {
     ["SEALANT_WORKSPACE_ROOT", plan.blueprint.runtime.workspaceRoot],
     ["SEALANT_WORKING_DIRECTORY", plan.blueprint.runtime.workingDirectory],
     ["SEALANT_LOGIN_SHELL_PATH", loginShellPath],
-    ["SEALANT_BASH_SHELL_PATH", distro.shellPaths.bash],
-    ["SEALANT_SSHD_PATH", distro.sshdPath],
+    ["SEALANT_BASH_SHELL_PATH", shellPaths.bash],
+    ["SEALANT_SSHD_PATH", sshdPath],
     ["SEALANT_CONTROL_SOCKET", sealantdControlSocketPath],
     ["SEALANT_LIFECYCLE_SETUP_JSON", setupJson],
     ["SEALANT_LIFECYCLE_STARTUP_JSON", startupJson],
@@ -952,7 +1064,64 @@ const renderDotfilesStep = (plan: ResolvedImagePlan): string | undefined => {
  * - optional build-time dotfiles `RUN` layer near the end because it can be highly variable
  * - the boot `ENV` block + `ENTRYPOINT` last so config changes do not bust earlier cache layers
  */
+/**
+ * The custom-base Containerfile: an arbitrary caller-supplied base, overlaid with ONLY the
+ * sealantd supervisor (+ its static socat relay, vendored in the sealantd image), the harness
+ * CLIs via npm, and any explicitly requested packages through the base's own package manager.
+ * No distro package installs, no shell reconfiguration — the contract (see the SDK README's
+ * "Custom base images") is: any Linux base, amd64/arm64, with a POSIX shell; node + npm for the
+ * node-based harness CLIs; git for clone/mount workspace sources.
+ *
+ * `COPY --chmod` is used instead of a chmod RUN so nothing here assumes coreutils in the base.
+ */
+const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
+  const packageInstallStep = renderCustomBasePackageInstallCommand(
+    normalizeInstallPackages(plan.packages.flatMap((pkg) => pkg.installPackages)),
+  );
+
+  return [
+    "# syntax=docker/dockerfile:1.7",
+    `FROM ${plan.baseImage}`,
+    "",
+    renderCustomBaseContractPreflight(),
+    ...(packageInstallStep === undefined ? [] : ["", packageInstallStep]),
+    "",
+    renderHarnessInstallCommand(plan),
+    "",
+    // sealantd is the mandatory PID-1 entrypoint; socat is its host<->control-socket relay.
+    // Both are fully static binaries vendored in the sealantd image, so any Linux base can host
+    // them without package-manager involvement.
+    `COPY --chmod=755 --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
+    `COPY --chmod=755 --from=${sealantdImageReference} /usr/local/bin/socat /usr/local/bin/socat`,
+    ...(plan.blueprint.tooling.services?.docker?.enabled === true
+      ? [
+          "",
+          `COPY --chmod=755 --from=${dockerCliImageReference} /usr/local/bin/docker /usr/local/bin/docker`,
+          `COPY --chmod=755 --from=${dockerCliImageReference} /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose`,
+        ]
+      : []),
+    ...(plan.blueprint.sources.workspace.kind === "mount"
+      ? [
+          "",
+          `RUN git config --system --add safe.directory ${shellQuote(
+            plan.blueprint.runtime.workingDirectory,
+          )}`,
+        ]
+      : []),
+    "",
+    renderBootEnv(plan),
+    "",
+    "WORKDIR /workspace",
+    'ENTRYPOINT ["sealantd", "boot"]',
+    "",
+  ].join("\n");
+};
+
 const renderContainerfile = (plan: ResolvedImagePlan): string => {
+  if (plan.osFamily === "custom") {
+    return renderCustomBaseContainerfile(plan);
+  }
+
   const distro = distroDefinitions[plan.osFamily];
   const shellPath = distro.shellPaths[plan.customization.defaultShell];
   const dotfilesStep = renderDotfilesStep(plan);
@@ -1057,9 +1226,9 @@ const buildImageTarball = async (
   spec: BuildkitBuildSpec,
   imageTarPath: string,
   commandRunner: BuildkitCommandRunner,
-  osFamily: BuildkitTargetOsFamily,
+  plan: ResolvedImagePlan,
 ) => {
-  const platformArgs = osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
+  const platformArgs = plan.osFamily === "arch" ? ["--platform", "linux/amd64"] : [];
   const buildArgs = [
     "build",
     "--file",
@@ -1072,9 +1241,27 @@ const buildImageTarball = async (
     spec.contextDirectory,
   ];
 
-  await commandRunner("docker", buildArgs, {
-    cwd: spec.contextDirectory,
-  });
+  try {
+    await commandRunner("docker", buildArgs, {
+      cwd: spec.contextDirectory,
+    });
+  } catch (error) {
+    // A shell-less custom base dies on the very first RUN with runc's exec error; translate it
+    // into the contract's own words instead of surfacing a container-runtime stack line.
+    if (
+      plan.osFamily === "custom" &&
+      error instanceof Error &&
+      /\/bin\/sh.*(no such file|not found)|(no such file|not found).*\/bin\/sh/is.test(
+        error.message,
+      )
+    ) {
+      throw createBuildkitCompilerError(
+        "custom-base-missing-shell",
+        `The custom base image '${plan.baseImage}' has no /bin/sh — the custom base contract requires a POSIX shell.`,
+      );
+    }
+    throw error;
+  }
 
   await commandRunner("docker", ["save", "--output", imageTarPath, spec.imageReference], {
     cwd: spec.contextDirectory,
@@ -1131,7 +1318,7 @@ export const compileWorkspaceBuildSpec = async (input: {
   const buildContext = await writeBuildContext(imagePlan, planned.containerfile);
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
 
-  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, osFamily);
+  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, imagePlan);
 
   return parseBuildkitOsBuilderCompileResult({
     builder: {

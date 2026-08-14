@@ -52,6 +52,12 @@ export const buildCreateWorkspaceRequest = (
       code: "invalid_create_options",
     });
   }
+  if (options.os !== undefined && options.baseImage !== undefined) {
+    throw new SealantError(
+      "workspaces.create accepts either `os` (a managed OS family) or `baseImage` (a custom base image reference), not both.",
+      { code: "invalid_create_options" },
+    );
+  }
   const sourceName = options.repository ?? options.source?.path ?? "workspace";
   const tail =
     sourceName
@@ -119,7 +125,10 @@ export const buildCreateWorkspaceRequest = (
     harness: { id: options.harness.id },
     customization: { enableSealantd: true },
     target: {
-      os: { family: options.os ?? "fedora", mode: "prefer" },
+      os:
+        options.baseImage !== undefined
+          ? { family: "custom", mode: "require", baseImage: options.baseImage }
+          : { family: options.os ?? "fedora", mode: "prefer" },
       runtime: { family: "docker", mode: "require" },
     },
     lifecycle: {
