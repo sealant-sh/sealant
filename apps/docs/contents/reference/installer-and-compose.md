@@ -78,8 +78,9 @@ source.
 ## What the installer does
 
 1. Checks prerequisites.
-2. Moves an existing default install from `~/.sealant` to the XDG config directory when the new path
-   does not exist. Explicit `SEALANT_INSTALL_DIR` values are never moved.
+2. Moves an existing default install from `~/.sealant` to the XDG config directory. If that
+   directory already contains CLI or SSH config, the installer merges non-conflicting entries but
+   never overwrites an existing path. Explicit `SEALANT_INSTALL_DIR` values are never moved.
 3. Resolves the version.
 4. Creates the install dir (`~/.config/sealant` by default).
 5. Downloads the compose file to `~/.config/sealant/compose.yaml`.

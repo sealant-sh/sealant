@@ -30,9 +30,9 @@ The script is idempotent and never overwrites your secrets or data. In order, it
 
 1. **Checks prerequisites** — curl, the Docker CLI, a running Docker daemon, and Compose
    `>= 2.23.1`.
-2. **Adopts the XDG config path** — an existing default install at `~/.sealant` moves to
-   `~/.config/sealant` when the new path does not exist. Explicit `SEALANT_INSTALL_DIR` values are
-   never moved.
+2. **Adopts the XDG config path** — an existing default install at `~/.sealant` moves into
+   `~/.config/sealant`. Existing CLI or SSH config is preserved: non-conflicting entries are merged,
+   but no path is overwritten. Explicit `SEALANT_INSTALL_DIR` values are never moved.
 3. **Resolves a version** — the newest release by default, or the exact version in `SEALANT_VERSION`
    (see [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall)).
 4. **Creates the install directory** — `~/.config/sealant` by default (override with

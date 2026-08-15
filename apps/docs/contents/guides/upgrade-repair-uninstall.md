@@ -10,8 +10,9 @@ generated secrets and knobs (`.env`), and pointers to Docker volumes that hold y
 installer is idempotent, so the same one-liner both installs and repairs.
 
 If you installed an older release in `~/.sealant`, the next installer run moves that directory to
-the XDG config location before repairing or upgrading it. The move only happens when
-`SEALANT_INSTALL_DIR` is unset and `~/.config/sealant` does not already exist.
+the XDG config location before repairing or upgrading it. If `~/.config/sealant` already contains
+CLI or SSH config, non-conflicting entries are merged; a name collision leaves the legacy install
+untouched. The migration only runs when `SEALANT_INSTALL_DIR` is unset.
 
 ## Repair the current install
 
