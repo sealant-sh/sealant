@@ -16,11 +16,14 @@
 #   the variable must be set on the sh side of the pipe — prefixed to curl it only
 #   applies to the download and this script never sees it)
 #
-# Uninstall: docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
+# Uninstall: docker compose --project-directory ~/.config/sealant down -v && rm -rf ~/.config/sealant
 set -eu
 
 REPO="sealant-sh/sealant"
-INSTALL_DIR="${SEALANT_INSTALL_DIR:-$HOME/.sealant}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+DEFAULT_INSTALL_DIR="$CONFIG_HOME/sealant"
+LEGACY_INSTALL_DIR="$HOME/.sealant"
+INSTALL_DIR="${SEALANT_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 ENV_FILE="$INSTALL_DIR/.env"
 COMPOSE_FILE="$INSTALL_DIR/compose.yaml"
 
@@ -115,6 +118,19 @@ if sort -V </dev/null >/dev/null 2>&1; then
   fi
 fi
 ok "Docker is ready"
+
+# Adopt the XDG path without making existing installs look fresh. Explicit install directories are
+# never moved. If both paths exist, prefer the new default and leave the legacy directory alone so
+# the installer never merges or overwrites potentially different secrets.
+if [ -z "${SEALANT_INSTALL_DIR:-}" ] && [ -d "$LEGACY_INSTALL_DIR" ]; then
+  if [ -e "$INSTALL_DIR" ] || [ -L "$INSTALL_DIR" ]; then
+    info "Legacy install left unchanged at $LEGACY_INSTALL_DIR (using $INSTALL_DIR)"
+  else
+    mkdir -p "$CONFIG_HOME"
+    mv "$LEGACY_INSTALL_DIR" "$INSTALL_DIR" || die "Could not move $LEGACY_INSTALL_DIR to $INSTALL_DIR."
+    ok "Moved existing install to $INSTALL_DIR"
+  fi
+fi
 
 # --- Resolve the version to install -------------------------------------------------------------------
 # Precedence: explicit SEALANT_VERSION > version pinned by a previous install > latest release.

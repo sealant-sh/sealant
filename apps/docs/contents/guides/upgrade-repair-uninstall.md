@@ -5,9 +5,13 @@ description:
   everything down — with the one caveat about workspace containers on the host.
 ---
 
-Everything Sealant needs lives in `~/.sealant`: the compose file (`compose.yaml`), your generated
-secrets and knobs (`.env`), and pointers to Docker volumes that hold your data. The installer is
-idempotent, so the same one-liner both installs and repairs.
+Everything Sealant needs lives in `~/.config/sealant`: the compose file (`compose.yaml`), your
+generated secrets and knobs (`.env`), and pointers to Docker volumes that hold your data. The
+installer is idempotent, so the same one-liner both installs and repairs.
+
+If you installed an older release in `~/.sealant`, the next installer run moves that directory to
+the XDG config location before repairing or upgrading it. The move only happens when
+`SEALANT_INSTALL_DIR` is unset and `~/.config/sealant` does not already exist.
 
 ## Repair the current install
 
@@ -19,7 +23,7 @@ the stack. Your generated secrets and your data are **never** regenerated or los
 curl -fsSL https://get.sealant.dev | sh
 ```
 
-Use this after editing `~/.sealant/.env` (for example, to add
+Use this after editing `~/.config/sealant/.env` (for example, to add
 [GitHub App credentials](/docs/guides/github-app)) — it restarts the services with the new
 environment.
 
@@ -35,8 +39,8 @@ Note the placement: the variable must be set on the `sh` side of the pipe. Prefi
 would apply to the download only and the installer would silently repair the current version
 instead.
 
-The resolved version is written back to `~/.sealant/.env` and pinned there, so subsequent plain
-re-runs stay on that version until you upgrade again.
+The resolved version is written back to `~/.config/sealant/.env` and pinned there, so subsequent
+plain re-runs stay on that version until you upgrade again.
 
 ## Pin an exact version
 
@@ -54,18 +58,19 @@ The installer requires a running Docker daemon and Docker Compose `>= 2.23.1`.
 To stop the stack but keep your database, registry, and secrets:
 
 ```sh
-docker compose --project-directory ~/.sealant down
+docker compose --project-directory ~/.config/sealant down
 ```
 
-Start it again with the installer, or with `docker compose --project-directory ~/.sealant up -d`.
+Start it again with the installer, or with
+`docker compose --project-directory ~/.config/sealant up -d`.
 
 ## Logs
 
 Tail everything, or one service:
 
 ```sh
-docker compose --project-directory ~/.sealant logs -f
-docker compose --project-directory ~/.sealant logs -f api
+docker compose --project-directory ~/.config/sealant logs -f
+docker compose --project-directory ~/.config/sealant logs -f api
 ```
 
 Service names are `api`, `worker`, `web`, `ssh-gateway`, `postgres`, `rabbitmq`, and `zot` (the
@@ -77,7 +82,7 @@ registry).
 and the SSH gateway host key. This is destructive and irreversible.
 
 ```sh
-docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
+docker compose --project-directory ~/.config/sealant down -v && rm -rf ~/.config/sealant
 ```
 
 ### Caveat: workspace containers outlive uninstall
@@ -100,7 +105,7 @@ you want a fully clean host.
 
 | Item                        | Location                       | Survives `down` |  Survives `down -v`  |
 | --------------------------- | ------------------------------ | :-------------: | :------------------: |
-| Secrets and knobs           | `~/.sealant/.env`              |       yes       | yes (until `rm -rf`) |
+| Secrets and knobs           | `~/.config/sealant/.env`       |       yes       | yes (until `rm -rf`) |
 | Postgres data               | volume `sealant_postgres-data` |       yes       |          no          |
 | Registry data               | volume `sealant_zot-data`      |       yes       |          no          |
 | SSH gateway host key        | volume `sealant_gateway-keys`  |       yes       |          no          |

@@ -13,7 +13,8 @@ authentication enforcement**, so exposing Sealant exposes it to anyone who can r
 ## Bind to a routable interface
 
 `SEALANT_BIND_HOST` controls the host interface for the web app, API, and SSH gateway. Set it to
-`0.0.0.0` (or a specific interface IP) in `~/.sealant/.env`, then re-run the installer to restart:
+`0.0.0.0` (or a specific interface IP) in `~/.config/sealant/.env`, then re-run the installer to
+restart:
 
 ```sh
 SEALANT_BIND_HOST=0.0.0.0

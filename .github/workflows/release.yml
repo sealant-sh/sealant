@@ -110,12 +110,12 @@ jobs:
             sleep 2
           done
           echo "gateway did not come up" >&2
-          docker compose --project-directory ~/.sealant logs ssh-gateway >&2
+          docker compose --project-directory ~/.config/sealant logs ssh-gateway >&2
           exit 1
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose --project-directory ~/.sealant logs
+        run: docker compose --project-directory ~/.config/sealant logs
 
   npm:
     name: Publish npm packages

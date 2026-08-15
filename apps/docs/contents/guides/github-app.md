@@ -38,7 +38,7 @@ both.
 
 ## 3. Wire the credentials into Sealant
 
-Both values go into `~/.sealant/.env`. The self-host compose file passes `GITHUB_APP_ID` and
+Both values go into `~/.config/sealant/.env`. The self-host compose file passes `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY` through to the API and worker.
 
 ```sh
@@ -96,8 +96,8 @@ installation-repository change events. It is not required for the clone flow.
 To enable signature verification, the API reads `GITHUB_APP_WEBHOOK_SECRET`. **Caveat:** the
 self-host compose file does **not** pass this variable through by default. If the secret is absent,
 the webhook endpoint returns service-unavailable. To use webhooks you must edit
-`~/.sealant/compose.yaml` to add `GITHUB_APP_WEBHOOK_SECRET` to the API service environment (and set
-a matching secret in your GitHub App's webhook config). Expected request headers are
+`~/.config/sealant/compose.yaml` to add `GITHUB_APP_WEBHOOK_SECRET` to the API service environment
+(and set a matching secret in your GitHub App's webhook config). Expected request headers are
 `x-github-delivery`, `x-github-event`, and `x-hub-signature-256`.
 
 ## Notes

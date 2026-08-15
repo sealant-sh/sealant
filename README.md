@@ -112,8 +112,8 @@ changes:
 curl -fsSL https://get.sealant.dev | sh
 ```
 
-That downloads the compose file for the latest release, generates secrets into `~/.sealant/.env`,
-pulls the prebuilt images, and starts the whole product: the web app on
+That downloads the compose file for the latest release, generates secrets into
+`~/.config/sealant/.env`, pulls the prebuilt images, and starts the whole product: the web app on
 [http://localhost:3000](http://localhost:3000), the API on 4000, the SSH gateway on 2222 (all bound
 to loopback). Sign up, add your SSH public key (Settings → SSH keys), create a workspace, then:
 
@@ -126,7 +126,7 @@ the `sh` side of the pipe); re-running plain repairs the current install (secret
 regenerated). Uninstall:
 
 ```bash
-docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant
+docker compose --project-directory ~/.config/sealant down -v && rm -rf ~/.config/sealant
 ```
 
 Private GitHub repos need `GITHUB_APP_*` configured in the api + worker environment.

@@ -37,10 +37,10 @@ posture.
   documented headless/CI path (1-year, inference-scoped, **no refresh token — by design**; Anthropic
   classifies setup tokens as API auth, so interactive use of some models is credit-gated on them).
   (b) the user deliberately mints a **session credentials file for Sealant** — e.g.
-  `CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude` + `/login`, then pastes the contents of that
-  directory's `.credentials.json` — a full Claude Code session that presents as their subscription.
-  In both paths the CLI may _spawn_ the official `claude` binary interactively for convenience; the
-  OAuth loop is entirely Anthropic's.
+  `CLAUDE_CONFIG_DIR=~/.config/sealant/claude-session claude` + `/login`, then pastes the contents
+  of that directory's `.credentials.json` — a full Claude Code session that presents as their
+  subscription. In both paths the CLI may _spawn_ the official `claude` binary interactively for
+  convenience; the OAuth loop is entirely Anthropic's.
 - **Hard don'ts (encoded in code, not just docs):** Sealant never READS credential files
   (`~/.claude/.credentials.json`) or the OS keychain off the operator's machine — a session file
   enters Sealant only when the operator deliberately pastes one they minted for it; consent is the

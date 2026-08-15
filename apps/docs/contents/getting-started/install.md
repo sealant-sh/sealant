@@ -30,19 +30,22 @@ The script is idempotent and never overwrites your secrets or data. In order, it
 
 1. **Checks prerequisites** — curl, the Docker CLI, a running Docker daemon, and Compose
    `>= 2.23.1`.
-2. **Resolves a version** — the newest release by default, or the exact version in `SEALANT_VERSION`
+2. **Adopts the XDG config path** — an existing default install at `~/.sealant` moves to
+   `~/.config/sealant` when the new path does not exist. Explicit `SEALANT_INSTALL_DIR` values are
+   never moved.
+3. **Resolves a version** — the newest release by default, or the exact version in `SEALANT_VERSION`
    (see [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall)).
-3. **Creates the install directory** — `~/.sealant` by default (override with
+4. **Creates the install directory** — `~/.config/sealant` by default (override with
    `SEALANT_INSTALL_DIR`).
-4. **Downloads the compose file** to `~/.sealant/compose.yaml` for the resolved release.
-5. **Writes `~/.sealant/.env`** with mode `0600`, pins `SEALANT_VERSION`, persists the selected
-   API/web/SSH/registry ports and bind host, and **generates any missing infrastructure secrets**
-   once (database and RabbitMQ passwords, the SSH gateway token, and the auth secret). Existing
-   values are left untouched.
-6. **Pulls the prebuilt images** — API, worker, SSH gateway, and web.
-7. **Runs database migrations** with `docker compose ... run --rm migrate`.
-8. **Starts the stack** with `docker compose ... up -d`.
-9. **Waits for health** — the API's `/healthz` and the web app's root URL — before it returns.
+5. **Downloads the compose file** to `~/.config/sealant/compose.yaml` for the resolved release.
+6. **Writes `~/.config/sealant/.env`** with mode `0600`, pins `SEALANT_VERSION`, persists the
+   selected API/web/SSH/registry ports and bind host, and **generates any missing infrastructure
+   secrets** once (database and RabbitMQ passwords, the SSH gateway token, and the auth secret).
+   Existing values are left untouched.
+7. **Pulls the prebuilt images** — API, worker, SSH gateway, and web.
+8. **Runs database migrations** with `docker compose ... run --rm migrate`.
+9. **Starts the stack** with `docker compose ... up -d`.
+10. **Waits for health** — the API's `/healthz` and the web app's root URL — before it returns.
 
 ## Ports and binding
 
@@ -73,6 +76,6 @@ private GitHub repositories, set up the [GitHub App](/docs/guides/github-app).
 
 ## Managing the install
 
-Your install lives entirely in `~/.sealant` (the compose file, `.env`, and Docker named volumes for
-data). To upgrade to a newer release, repair a broken install, view logs, or remove everything, see
-[Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
+Your install lives entirely in `~/.config/sealant` (the compose file, `.env`, and Docker named
+volumes for data). To upgrade to a newer release, repair a broken install, view logs, or remove
+everything, see [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).

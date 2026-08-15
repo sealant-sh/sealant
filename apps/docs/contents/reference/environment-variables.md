@@ -5,7 +5,7 @@ description:
   and bind knobs, GitHub App variables, and the runtime defaults worth knowing.
 ---
 
-Self-hosted Sealant reads deployment variables from `~/.sealant/.env` (mode `0600`) through
+Self-hosted Sealant reads deployment variables from `~/.config/sealant/.env` (mode `0600`) through
 `docker compose`. This page is the operator's reference for what belongs there.
 
 The [installer](/docs/reference/installer-and-compose) writes only a small subset: generated
@@ -15,7 +15,7 @@ URLs, CORS origins, or image mirrors. After editing, apply it by re-running the 
 restarting the stack:
 
 ```sh
-docker compose --project-directory ~/.sealant up -d
+docker compose --project-directory ~/.config/sealant up -d
 ```
 
 ## Installer-generated secrets
@@ -70,17 +70,17 @@ write them for you.
 | `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                   |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
-absolute path to `~/.sealant/.env` and reconcile the stack:
+absolute path to `~/.config/sealant/.env` and reconcile the stack:
 
 ```sh
-printf '\nSEALANT_MOUNT_ALLOWED_STORE_ROOTS=%s/.mend/store\n' "$HOME" >>~/.sealant/.env
-docker compose --project-directory ~/.sealant up -d
+printf '\nSEALANT_MOUNT_ALLOWED_STORE_ROOTS=%s/.mend/store\n' "$HOME" >>~/.config/sealant/.env
+docker compose --project-directory ~/.config/sealant up -d
 ```
 
 ## GitHub App variables
 
 Private repositories need a GitHub App. Only the first two variables are wired through the self-host
-compose file into the API and worker by default — set them in `~/.sealant/.env` and restart.
+compose file into the API and worker by default — set them in `~/.config/sealant/.env` and restart.
 
 | Variable                 | Default | Meaning                                                               |
 | ------------------------ | ------- | --------------------------------------------------------------------- |
@@ -89,8 +89,8 @@ compose file into the API and worker by default — set them in `~/.sealant/.env
 
 The runtime code also accepts the variables below, but the default `compose.selfhost.yaml` does
 **not** pass them through. To use one, add it to the `environment:` block of the `api` (and
-`worker`) service in `~/.sealant/compose.yaml`, or inject it another way — setting it in `.env`
-alone has no effect.
+`worker`) service in `~/.config/sealant/compose.yaml`, or inject it another way — setting it in
+`.env` alone has no effect.
 
 | Variable                      | Default                  | Meaning                                                                                                     |
 | ----------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------- |
@@ -112,8 +112,8 @@ compose file passes it to both services when present. Generate it once, append i
 environment, and reconcile the stack:
 
 ```sh
-printf '\nSEALANT_CREDENTIALS_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >>~/.sealant/.env
-docker compose --project-directory ~/.sealant up -d
+printf '\nSEALANT_CREDENTIALS_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')" >>~/.config/sealant/.env
+docker compose --project-directory ~/.config/sealant up -d
 ```
 
 ## Notable runtime defaults

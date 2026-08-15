@@ -59,7 +59,7 @@ Facts that make this easy (verified in code):
 | Zot config           | Inline via `configs: content:`; installer enforces compose ≥ 2.23.1                                                                                                                                                       | Single-file distribution beats a second download                                                                                                                                                                                                     |
 | Migrate ordering     | Installer runs `docker compose run --rm migrate` explicitly; compose also keeps `depends_on: service_completed_successfully` for manual `up` users                                                                        | One-shot services are awkward across repeated `up`s                                                                                                                                                                                                  |
 | Default binds        | `127.0.0.1` for web (3000), api (4000), gateway (2222); zot **always** loopback (5000, host daemon push/pull path). `SEALANT_BIND_HOST` opt-out for web/api/gateway                                                       | Plain-http auth cookies; local-first v1                                                                                                                                                                                                              |
-| Install dir          | `~/.sealant` (override `SEALANT_INSTALL_DIR`), holds `compose.yaml` + `.env` (0600)                                                                                                                                       |                                                                                                                                                                                                                                                      |
+| Install dir          | `~/.config/sealant` (override `SEALANT_INSTALL_DIR`), holds `compose.yaml` + `.env` (0600)                                                                                                                                |                                                                                                                                                                                                                                                      |
 | Platform scope       | **Linux hosts fully supported in v1; Docker Desktop best-effort/untested**                                                                                                                                                | `/run/sealant/sockets` + docker.sock semantics live inside Docker Desktop's VM — plausibly consistent but unverified. Document, don't promise                                                                                                        |
 | Versioning           | Git tag `vX.Y.Z` is the single source of truth (sealantd model). Installer resolves `releases/latest` once, pins `SEALANT_VERSION=X.Y.Z` into `.env`; re-runs stay pinned; `SEALANT_VERSION=latest` re-resolves (upgrade) |                                                                                                                                                                                                                                                      |
 
@@ -149,9 +149,9 @@ POSIX sh, no git. Hosted at `raw.githubusercontent.com/sealant-sh/sealant/main/i
 1. Preflight: `docker` present + daemon reachable, `docker compose version` ≥ 2.23.1, `curl`.
 2. Resolve version: `SEALANT_VERSION` env override, else GitHub API `releases/latest` `tag_name` via
    `sed` (no jq).
-3. Download the release-asset `compose.selfhost.yaml` → `$INSTALL_DIR/compose.yaml` (`~/.sealant`;
-   overwrite = upgrade; fallback raw-at-tag URL). Support `SEALANT_COMPOSE_URL` / local-file
-   override for testing.
+3. Download the release-asset `compose.selfhost.yaml` → `$INSTALL_DIR/compose.yaml`
+   (`~/.config/sealant`; overwrite = upgrade; fallback raw-at-tag URL). Support
+   `SEALANT_COMPOSE_URL` / local-file override for testing.
 4. `.env` bootstrap, idempotent: generate missing `SEALANT_DB_PASSWORD`,
    `SEALANT_RABBITMQ_PASSWORD`, `SANDBOX_SSH_GATEWAY_TOKEN`, `BETTER_AUTH_SECRET`
    (`head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'`), `chmod 600`. **Never overwrite existing
@@ -161,8 +161,8 @@ POSIX sh, no git. Hosted at `raw.githubusercontent.com/sealant-sh/sealant/main/i
 7. Summary output: open `http://localhost:3000` → sign up → Settings → SSH keys → create sandbox →
    `ssh sbx-<sandbox-id>@localhost -p 2222`. Upgrade: re-run installer with
    `SEALANT_VERSION=latest`. Uninstall:
-   `docker compose --project-directory ~/.sealant down -v && rm -rf ~/.sealant` (+ note about
-   `docker ps` cleanup of sandbox containers on the host daemon).
+   `docker compose --project-directory ~/.config/sealant down -v && rm -rf ~/.config/sealant` (+
+   note about `docker ps` cleanup of sandbox containers on the host daemon).
 
 ## Phase 4 — CI: `.github/workflows/release.yml` (modeled on sealantd's)
 

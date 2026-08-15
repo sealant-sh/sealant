@@ -5,8 +5,8 @@ description:
 ---
 
 A Sealant install is a small set of cooperating services, all started by Docker Compose from
-`~/.sealant`. This page is the one-page mental model; for exact ports, volumes, and file locations
-see [Ports and data](/docs/reference/ports-and-data).
+`~/.config/sealant`. This page is the one-page mental model; for exact ports, volumes, and file
+locations see [Ports and data](/docs/reference/ports-and-data).
 
 ## The services
 
@@ -20,9 +20,9 @@ see [Ports and data](/docs/reference/ports-and-data).
 | Postgres          | Control-plane state: users, workspaces, runs, SSH keys, events.                                                                            | internal only                    |
 | RabbitMQ          | Message transport between the API and the worker.                                                                                          | internal only                    |
 
-The installer writes two files — `~/.sealant/compose.yaml` and `~/.sealant/.env` — and everything
-else lives in Docker named volumes. By default every published port binds to `127.0.0.1`; nothing is
-exposed to your network unless you change `SEALANT_BIND_HOST`
+The installer writes two files — `~/.config/sealant/compose.yaml` and `~/.config/sealant/.env` — and
+everything else lives in Docker named volumes. By default every published port binds to `127.0.0.1`;
+nothing is exposed to your network unless you change `SEALANT_BIND_HOST`
 ([Beyond localhost](/docs/guides/beyond-localhost)).
 
 One important detail: the worker mounts the host Docker socket. Workspace containers and images are

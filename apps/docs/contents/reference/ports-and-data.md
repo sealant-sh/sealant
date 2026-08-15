@@ -28,14 +28,14 @@ the bind host. See [Beyond localhost](/docs/guides/beyond-localhost) for exposin
 
 ## State
 
-| State                           | Location                                                | Kind                |
-| ------------------------------- | ------------------------------------------------------- | ------------------- |
-| Install metadata                | `~/.sealant/compose.yaml`, `~/.sealant/.env`            | Host files          |
-| Postgres data                   | `sealant_postgres-data`                                 | Docker named volume |
-| Registry data                   | `sealant_zot-data`                                      | Docker named volume |
-| SSH gateway host key            | `sealant_gateway-keys`, at `/keys/ssh_gateway_host_key` | Docker named volume |
-| Workspace control sockets       | `/run/sealant/sockets`                                  | Host path           |
-| Workspace containers and images | Host Docker daemon (via the mounted socket)             | Docker objects      |
+| State                           | Location                                                   | Kind                |
+| ------------------------------- | ---------------------------------------------------------- | ------------------- |
+| Install metadata                | `~/.config/sealant/compose.yaml`, `~/.config/sealant/.env` | Host files          |
+| Postgres data                   | `sealant_postgres-data`                                    | Docker named volume |
+| Registry data                   | `sealant_zot-data`                                         | Docker named volume |
+| SSH gateway host key            | `sealant_gateway-keys`, at `/keys/ssh_gateway_host_key`    | Docker named volume |
+| Workspace control sockets       | `/run/sealant/sockets`                                     | Host path           |
+| Workspace containers and images | Host Docker daemon (via the mounted socket)                | Docker objects      |
 
 A few things worth knowing:
 
@@ -53,8 +53,8 @@ A few things worth knowing:
 
 To capture a full install, preserve:
 
-1. `~/.sealant/.env` — your secrets and knobs. Without it you cannot match the DB password to the
-   volume, preserve web session signing, or keep the SSH gateway token stable. Back this up
+1. `~/.config/sealant/.env` — your secrets and knobs. Without it you cannot match the DB password to
+   the volume, preserve web session signing, or keep the SSH gateway token stable. Back this up
    somewhere safe.
 2. The `sealant_postgres-data` volume — all durable control-plane state.
 
@@ -64,10 +64,11 @@ existing users.
 
 ## A note on uninstall
 
-`docker compose --project-directory ~/.sealant down -v` removes the compose services and the three
-named volumes. It does **not** remove workspace containers or images the worker created on your host
-Docker daemon — those are separate Docker objects. Clean them up with the usual `docker` commands if
-needed. Full sequence in [Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
+`docker compose --project-directory ~/.config/sealant down -v` removes the compose services and the
+three named volumes. It does **not** remove workspace containers or images the worker created on
+your host Docker daemon — those are separate Docker objects. Clean them up with the usual `docker`
+commands if needed. Full sequence in
+[Upgrade, repair, uninstall](/docs/guides/upgrade-repair-uninstall).
 
 Related: [Environment variables](/docs/reference/environment-variables) ·
 [Installer and compose](/docs/reference/installer-and-compose)
