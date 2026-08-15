@@ -13,7 +13,8 @@ worth knowing before you dive in.
 ## Prerequisites
 
 - **Docker** running — the worker and SSH gateway drive it to build and launch workspaces.
-- The **Nix dev shell** — `direnv allow` (or `nix develop`) gives you Node 24 and `pnpm`.
+- The **Nix dev shell** — `direnv allow` (or `nix develop`) gives you Node.js 26.4 and the pnpm
+  version declared in the root `package.json`.
 
 ## Topology
 
