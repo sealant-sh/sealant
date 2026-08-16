@@ -1,4 +1,5 @@
 import { readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
@@ -26,6 +27,7 @@ import type { RegistryClient } from "../registry/index.js";
 import type { RuntimeAdapter } from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
 import {
+  dotfilesStagingRoot,
   processWorkspaceBuildJobEffect,
   type ProcessWorkspaceBuildJobEffectOptions,
 } from "./process-workspace-build-job.js";
@@ -919,6 +921,21 @@ describe("processWorkspaceBuildJobEffect", () => {
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
       ),
     );
+  });
+
+  it("stages under the control-socket shared dir inside the compose stack", () => {
+    // `docker run -v` resolves on the daemon's host: only the control-socket dir is mounted at
+    // the same path in the worker container and on the host, so staging must go through it.
+    const previous = process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"];
+    try {
+      process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"] = "/run/sealant/sockets";
+      expect(dotfilesStagingRoot()).toBe("/run/sealant/sockets/_dotfiles");
+      delete process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"];
+      expect(dotfilesStagingRoot()).toBe(tmpdir());
+    } finally {
+      if (previous === undefined) delete process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"];
+      else process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"] = previous;
+    }
   });
 
   it.effect("stages nothing when the dotfiles apply is disabled", () => {

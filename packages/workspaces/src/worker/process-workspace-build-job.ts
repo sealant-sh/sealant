@@ -145,6 +145,18 @@ const launchPublishedImage = async (input: {
 };
 
 /**
+ * Where staged dotfiles archive dirs must live. `docker run -v` resolves paths on the DAEMON'S
+ * host filesystem: a worker running inside the self-host compose stack must write through the
+ * control-socket directory — the one path the stack bind-mounts at the SAME location on both
+ * sides — or the workspace receives an empty mount and boot aborts. A host-run worker (dev,
+ * tests) stages in the system tmpdir as before.
+ */
+export const dotfilesStagingRoot = (): string => {
+  const shared = process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"];
+  return shared === undefined || shared === "" ? tmpdir() : join(shared, "_dotfiles");
+};
+
+/**
  * Stage the spec's dotfiles archives into a host directory the adapter bind-mounts read-only:
  * `manifest.json` plus one `<index>.tar.gz` per archive, the exact contract
  * `crates/sealantd/src/boot/dotfiles.rs::apply_archives` consumes. The path is deterministic per
@@ -161,7 +173,7 @@ const stageDotfilesArchives = async (
     return undefined;
   }
 
-  const directory = join(tmpdir(), `sealant-dotfiles-${runId ?? "unkeyed"}`);
+  const directory = join(dotfilesStagingRoot(), `sealant-dotfiles-${runId ?? "unkeyed"}`);
   await rm(directory, { recursive: true, force: true });
   await mkdir(directory, { recursive: true });
 
