@@ -1,5 +1,4 @@
 import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { CredentialCipherService } from "@sealant/credentials";
@@ -20,6 +19,7 @@ import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
+import { dotfilesStagingRoot } from "./process-workspace-build-job.js";
 
 export interface ProcessWorkspaceStopEffectOptions {
   /**
@@ -148,7 +148,10 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   // container we just stopped). The path is deterministic per run (see stageDotfilesArchives);
   // a relaunch re-stages from the job payload, so removal is always safe.
   yield* Effect.promise(() =>
-    rm(join(tmpdir(), `sealant-dotfiles-${options.runId}`), { recursive: true, force: true }),
+    rm(join(dotfilesStagingRoot(), `sealant-dotfiles-${options.runId}`), {
+      recursive: true,
+      force: true,
+    }),
   );
 
   yield* runtimeInstances
