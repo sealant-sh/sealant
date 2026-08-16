@@ -27,8 +27,10 @@
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
             bat
-            nodejs_24
-            nodePackages.pnpm
+            nodejs_26
+            # Corepack reads package.json's packageManager field, keeping pnpm
+            # aligned with the repository instead of nixpkgs' pnpm alias.
+            corepack
             postgresql
           ];
         };
