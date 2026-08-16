@@ -182,7 +182,8 @@ disables the normal download flow (the part that fails on NixOS). Place end-to-e
 
 ## Tooling baseline
 
-- `direnv` + Nix provide a reproducible shell with `nodejs_24` and `pnpm`.
+- `direnv` + Nix provide a reproducible shell with Node.js 26.4 and the pnpm version declared in
+  `package.json`.
 - `Turborepo` + `pnpm` give task orchestration, caching, and strict, centralized dependencies.
 - `oxlint` (with `oxlint-tsgolint` for type-aware rules) handles linting; `oxfmt` handles
   formatting.
