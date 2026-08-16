@@ -1,5 +1,18 @@
 # @sealant/sdk
 
+## 0.18.1
+
+### Patch Changes
+
+- 98521fc: Dotfiles archives now stage under the control-socket shared directory when the worker runs inside
+  the self-host compose stack. `docker run -v` resolves bind paths on the daemon's host filesystem, so
+  archives staged in the worker container's private tmpdir arrived as an empty mount and boot aborted
+  with "manifest.json: No such file or directory". The staging root now follows
+  `WORKSPACE_CONTROL_SOCKET_HOST_DIR` (`<dir>/_dotfiles/…`) — the one path the stack bind-mounts at
+  the same location on both sides — and host-run workers keep using the system tmpdir.
+- Updated dependencies [98521fc]
+  - @sealant/api-contracts@0.18.1
+
 ## 0.18.0
 
 ### Minor Changes
@@ -312,6 +325,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
