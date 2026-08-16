@@ -84,9 +84,9 @@ this page will change when it lands.
 
 ## Secrets and connected accounts
 
-The installer generates the stack's secrets once into `~/.sealant/.env` with `0600` permissions and
-never overwrites existing values. `GITHUB_APP_PRIVATE_KEY`, database and queue passwords, and the
-SSH gateway token are environment-level operator secrets.
+The installer generates the stack's secrets once into `~/.config/sealant/.env` with `0600`
+permissions and never overwrites existing values. `GITHUB_APP_PRIVATE_KEY`, database and queue
+passwords, and the SSH gateway token are environment-level operator secrets.
 
 Connected accounts for Claude, Codex, and GitHub are a separate provider-credential path. They are
 stored sealed in Postgres and require `SEALANT_CREDENTIALS_KEY` on the API and worker. The current

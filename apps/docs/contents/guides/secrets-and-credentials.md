@@ -11,9 +11,9 @@ general secrets surface that is not wired yet.
 
 ## Installer-generated secrets
 
-On first install, the installer generates these values into `~/.sealant/.env` (file mode `0600`)
-using 32 random bytes each, hex-encoded to 64 characters. They are generated **once** and never
-overwritten on re-runs, so repairs and upgrades keep them stable.
+On first install, the installer generates these values into `~/.config/sealant/.env` (file mode
+`0600`) using 32 random bytes each, hex-encoded to 64 characters. They are generated **once** and
+never overwritten on re-runs, so repairs and upgrades keep them stable.
 
 | Variable                      | What it's for                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -22,9 +22,9 @@ overwritten on re-runs, so repairs and upgrades keep them stable.
 | `WORKSPACE_SSH_GATEWAY_TOKEN` | Shared secret the SSH gateway uses to call the API's principal-resolution and SSH-target endpoints. |
 | `BETTER_AUTH_SECRET`          | Better Auth signing secret for web sessions (minimum 32 chars).                                     |
 
-These are infrastructure secrets. Keep `~/.sealant/.env` readable only by you, and back it up if you
-care about not regenerating the auth secret. Rotating `BETTER_AUTH_SECRET` invalidates existing web
-sessions.
+These are infrastructure secrets. Keep `~/.config/sealant/.env` readable only by you, and back it up
+if you care about not regenerating the auth secret. Rotating `BETTER_AUTH_SECRET` invalidates
+existing web sessions.
 
 The SSH gateway also holds a host key, auto-generated once into the `sealant_gateway-keys` Docker
 volume. It is not rotated on upgrades. See [SSH access](/docs/guides/ssh-access) for the connection
@@ -33,7 +33,7 @@ model and how your personal SSH public keys map to workspaces.
 ## GitHub App credentials and clone tokens
 
 Cloning **private** repositories uses a GitHub App, not a stored personal token. You set these in
-`~/.sealant/.env`:
+`~/.config/sealant/.env`:
 
 - `GITHUB_APP_ID`
 - `GITHUB_APP_PRIVATE_KEY`
@@ -63,9 +63,9 @@ The stored provider payloads are:
 | GitHub   | Token from `gh auth token` or a provided token                                                               | `GITHUB_TOKEN` and `GH_TOKEN` environment variables                                                           |
 
 For Claude, the session-file path is the recommended one: run
-`CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude` on your machine, `/login` inside it (this
-writes a fresh session without touching your main Claude login), and paste the contents of
-`~/.sealant/claude-session/.credentials.json`. A session file presents as your subscription;
+`CLAUDE_CONFIG_DIR=~/.config/sealant/claude-session claude` on your machine, `/login` inside it
+(this writes a fresh session without touching your main Claude login), and paste the contents of
+`~/.config/sealant/claude-session/.credentials.json`. A session file presents as your subscription;
 workspaces refresh it and Sealant syncs it back, like Codex. A `claude setup-token` value also
 works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used
 interactively.
@@ -82,12 +82,12 @@ decrypt and inject them.
 
 The current self-host installer does **not** generate this key, and the current self-host compose
 file does **not** pass it to `api` or `worker` by default. If you enable connected accounts on
-self-host, generate the key yourself, put it in `~/.sealant/.env`, and add it to both service
-environments in `~/.sealant/compose.yaml`. Without it, connected-account create calls return
+self-host, generate the key yourself, put it in `~/.config/sealant/.env`, and add it to both service
+environments in `~/.config/sealant/compose.yaml`. Without it, connected-account create calls return
 service-unavailable, and a workspace that requests credential refs fails launch rather than silently
-running without credentials. Restart with `docker compose --project-directory ~/.sealant up -d`;
-re-running the installer downloads a fresh compose file, so you would need to reapply the compose
-edit afterward.
+running without credentials. Restart with
+`docker compose --project-directory ~/.config/sealant up -d`; re-running the installer downloads a
+fresh compose file, so you would need to reapply the compose edit afterward.
 
 ## Profile bindings and workspace injection
 
@@ -150,8 +150,8 @@ path; general named secret injection is not shipped.
 
 | Secret or credential                        | Where it lives                                    | Managed by                 |
 | ------------------------------------------- | ------------------------------------------------- | -------------------------- |
-| Infra secrets (`SEALANT_DB_PASSWORD`, etc.) | `~/.sealant/.env`                                 | Installer, once            |
-| GitHub App key                              | `~/.sealant/.env`                                 | You                        |
+| Infra secrets (`SEALANT_DB_PASSWORD`, etc.) | `~/.config/sealant/.env`                          | Installer, once            |
+| GitHub App key                              | `~/.config/sealant/.env`                          | You                        |
 | GitHub installation clone tokens            | In-memory, short-lived                            | API/worker, at build time  |
 | Connected-account payloads                  | Postgres `connected_accounts`, AES-256-GCM sealed | Web app, CLI, API          |
 | Profile connected-account bindings          | Postgres `profile_connected_accounts`             | Web app, CLI, API          |

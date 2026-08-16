@@ -26,11 +26,11 @@ const PROVIDERS: readonly ProviderCopy[] = [
     provider: "claude",
     name: "Claude",
     valueProp: "Run Claude Code and the Agent SDK inside your workspaces on your own subscription.",
-    command: "CLAUDE_CONFIG_DIR=~/.sealant/claude-session claude",
+    command: "CLAUDE_CONFIG_DIR=~/.config/sealant/claude-session claude",
     commandNote:
-      "Run on your machine and use /login inside it — that writes a fresh session file to ~/.sealant/claude-session/.credentials.json without touching your main Claude login. Requires Claude Pro or Max.",
+      "Run on your machine and use /login inside it — that writes a fresh session file to ~/.config/sealant/claude-session/.credentials.json without touching your main Claude login. Requires Claude Pro or Max.",
     footnote:
-      "Paste the contents of ~/.sealant/claude-session/.credentials.json (recommended: presents as your subscription). A `claude setup-token` value (sk-ant-oat01-…) also works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used interactively. Stored encrypted; only used by the official Claude Code CLI / Agent SDK inside your workspaces.",
+      "Paste the contents of ~/.config/sealant/claude-session/.credentials.json (recommended: presents as your subscription). A `claude setup-token` value (sk-ant-oat01-…) also works, but Anthropic treats setup tokens as API auth, so some models are credit-gated when used interactively. Stored encrypted; only used by the official Claude Code CLI / Agent SDK inside your workspaces.",
   },
   {
     provider: "codex",
