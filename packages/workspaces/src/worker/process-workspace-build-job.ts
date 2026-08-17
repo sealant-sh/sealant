@@ -117,6 +117,7 @@ const launchPublishedImage = async (input: {
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly publishedImage: PublishedImage;
   readonly workspaceCloneAuth?: WorkspaceCloneAuth;
+  readonly platformEnv?: Record<string, string>;
   readonly credentialEnv?: Record<string, string>;
   readonly credentialFiles?: readonly CredentialFileInjection[];
   readonly dotfilesArchiveDir?: string;
@@ -134,6 +135,7 @@ const launchPublishedImage = async (input: {
     ...(input.workspaceCloneAuth === undefined
       ? {}
       : { workspaceCloneAuth: input.workspaceCloneAuth }),
+    ...(input.platformEnv === undefined ? {} : { platformEnv: input.platformEnv }),
     ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
     ...(input.credentialFiles === undefined ? {} : { credentialFiles: [...input.credentialFiles] }),
     ...(input.dotfilesArchiveDir === undefined
@@ -529,33 +531,25 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       resolvedCredentials.injections,
     );
 
-    const runtimeSpec: NewWorkspace =
-      Object.keys(dotfilesRuntimeEnv).length === 0
-        ? spec
-        : {
-            ...spec,
-            runtime: {
-              ...spec.runtime,
-              env: {
-                ...spec.runtime.env,
-                ...dotfilesRuntimeEnv,
-              },
-            },
-          };
-
     const dotfilesArchiveDir = yield* Effect.tryPromise({
-      try: () => stageDotfilesArchives(runtimeSpec, job.runId),
+      try: () => stageDotfilesArchives(spec, job.runId),
       catch: toWorkspaceBuildJobProcessingError,
     });
 
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
         launchPublishedImage({
-          spec: runtimeSpec,
+          spec,
           runtimeAdapters: options.runtimeAdapters,
           defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
           publishedImage,
           ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
+          // Worker-resolved dotfiles clone auth rides the TRANSIENT platform launch field, never a
+          // blueprint env map: the blueprint is the persisted restart source and must stay free of
+          // resolved tokens. A restart re-resolves fresh tokens through this same path.
+          ...(Object.keys(dotfilesRuntimeEnv).length === 0
+            ? {}
+            : { platformEnv: dotfilesRuntimeEnv }),
           ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
           ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
           ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),

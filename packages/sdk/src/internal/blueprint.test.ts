@@ -345,3 +345,77 @@ describe("dotfiles and shell lowering", () => {
     ).toThrow(/requires a `repository`/);
   });
 });
+
+describe("workspace env lowering", () => {
+  interface EnvSpecShape {
+    readonly runtime?: {
+      readonly userEnv?: Record<string, string>;
+      readonly dotfilesArchives?: ReadonlyArray<{ readonly data: string }>;
+    };
+  }
+
+  it("lowers env onto runtime.userEnv in name order", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/app",
+        harness: opencode(),
+        env: { ZULU: "last", APP_MODE: "review", EMPTY_VALUE: "" },
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as EnvSpecShape;
+    expect(spec.runtime?.userEnv).toEqual({ APP_MODE: "review", EMPTY_VALUE: "", ZULU: "last" });
+    expect(Object.keys(spec.runtime?.userEnv ?? {})).toEqual(["APP_MODE", "EMPTY_VALUE", "ZULU"]);
+  });
+
+  it("omits `spec.runtime` entirely when no env and no archives were requested", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { repository: "github.com/acme/app", harness: opencode(), env: {} },
+      config,
+    );
+    const spec = payload.spec as unknown as EnvSpecShape;
+    expect(spec.runtime).toBeUndefined();
+  });
+
+  it("composes env with dotfiles archives in ONE runtime object", () => {
+    const data = Buffer.from("tar").toString("base64");
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/app",
+        harness: opencode(),
+        env: { APP_MODE: "review" },
+        dotfiles: { archives: [{ data }] },
+      },
+      config,
+    );
+    const spec = payload.spec as unknown as EnvSpecShape;
+    expect(spec.runtime?.userEnv).toEqual({ APP_MODE: "review" });
+    expect(spec.runtime?.dotfilesArchives).toEqual([{ data }]);
+  });
+
+  it("rejects reserved and malformed env client-side with every issue in one message", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          env: { GITHUB_TOKEN: "x", "BAD NAME": "y" },
+        },
+        config,
+      ),
+    ).toThrow(/GITHUB_TOKEN is reserved[\s\S]*A-Za-z_/);
+  });
+
+  it("rejects secret-looking names with the daemon-filter explanation", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          env: { DB_PASSWORD: "hunter2" },
+        },
+        config,
+      ),
+    ).toThrow(/non-secret configuration/);
+  });
+});

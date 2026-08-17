@@ -57,7 +57,13 @@ import {
   parseRuntimeAdapterSupportInput,
   type DockerCommandRunner,
 } from "../runtime/index.js";
-import { DEFAULT_IMAGE_REF, DEFAULT_WORKING_DIRECTORY, docker, isImagePresent } from "./boot.js";
+import {
+  assertImageRequirement,
+  DEFAULT_IMAGE_REF,
+  DEFAULT_WORKING_DIRECTORY,
+  docker,
+  isImagePresent,
+} from "./boot.js";
 import { SealantRuntimeDockerExecLive } from "./runtime.js";
 import { execInWorkspace, sealantTargetForDockerContainer } from "./target.js";
 
@@ -120,6 +126,7 @@ const createBlueprint = (overrides: Record<string, unknown> = {}): unknown => {
 };
 
 const imageAvailable = await isImagePresent();
+assertImageRequirement(imageAvailable);
 
 describe.skipIf(!imageAvailable)(
   "P6 seam: DockerRuntimeAdapter container id -> SealantTarget -> execInWorkspace (real container)",
@@ -171,7 +178,16 @@ describe.skipIf(!imageAvailable)(
       // Drive the REAL launch(): keep-alive via blueprint env; the local tag as the published image.
       const launchInput = parseRuntimeAdapterLaunchInput({
         blueprint: createBlueprint({
-          runtime: { env: { SEALANT_FOREGROUND_COMMAND: "sleep infinity" } },
+          runtime: {
+            env: {
+              SEALANT_FOREGROUND_COMMAND: "sleep infinity",
+              // Legacy env is unrestricted, so this secret-marker name DOES land in the container
+              // env — and the daemon's passthrough filter must then drop it (asserted below).
+              PROOF_TOKEN: "dropped-by-daemon-filter",
+            },
+            // The caller/project map under test: policy-valid, expected to reach every child.
+            userEnv: { WORKSPACE_ENV_PROOF: "canary-e2e-value" },
+          },
         }),
         publishedImage: {
           repository: "sealant-workspace-fedora",
@@ -244,6 +260,41 @@ describe.skipIf(!imageAvailable)(
       );
 
       expect(result.stdout).toBe("hi\n");
+      expect(result.exitCode).toBe(0);
+    }, 45_000);
+
+    it("workspace userEnv reaches an exec'd child through the daemon's boot snapshot", async () => {
+      expect(containerId).toBeDefined();
+
+      // The `-e` was on `docker run`; the daemon snapshotted its own env at boot, filtered it, and
+      // rebuilt the child env — the child does NOT inherit the daemon's live environment.
+      expect(capturedRunArgs).toContain("WORKSPACE_ENV_PROOF=canary-e2e-value");
+      const result = await Effect.runPromise(
+        execInWorkspace(sealantTargetForDockerContainer(containerId!), {
+          executable: "/bin/sh",
+          args: ["-c", 'printf %s "$WORKSPACE_ENV_PROOF"'],
+        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
+
+      expect(result.stdout).toBe("canary-e2e-value");
+      expect(result.exitCode).toBe(0);
+    }, 45_000);
+
+    it("secret-marker names in container env are DROPPED by the daemon filter", async () => {
+      expect(containerId).toBeDefined();
+
+      // This is the live proof behind the policy's secret-marker rejections: the name reached the
+      // container env (via unrestricted legacy `runtime.env`), yet no child ever sees it. A
+      // `userEnv` entry with such a name would vanish identically — hence the loud parse failure.
+      expect(capturedRunArgs).toContain("PROOF_TOKEN=dropped-by-daemon-filter");
+      const result = await Effect.runPromise(
+        execInWorkspace(sealantTargetForDockerContainer(containerId!), {
+          executable: "/bin/sh",
+          args: ["-c", 'printf %s "${PROOF_TOKEN-unset}"'],
+        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
+
+      expect(result.stdout).toBe("unset");
       expect(result.exitCode).toBe(0);
     }, 45_000);
   },

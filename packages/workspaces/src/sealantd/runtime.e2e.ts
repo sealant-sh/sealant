@@ -13,10 +13,16 @@ import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { bootSealantdContainer, isImagePresent, type BootedSealantd } from "./boot.js";
+import {
+  assertImageRequirement,
+  bootSealantdContainer,
+  isImagePresent,
+  type BootedSealantd,
+} from "./boot.js";
 import { SealantRuntime, SealantRuntimeDockerExecLive, type SealantTarget } from "./runtime.js";
 
 const imageAvailable = await isImagePresent();
+assertImageRequirement(imageAvailable);
 
 describe.skipIf(!imageAvailable)(
   "SealantRuntime service over DockerExecTransport (real image)",

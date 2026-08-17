@@ -48,6 +48,7 @@ describe("K8sRuntimeAdapter", () => {
         },
         runtime: {
           env: {},
+          userEnv: {},
           credentialRefs: [],
           dotfilesArchives: [],
           workspaceRoot: "/workspace",

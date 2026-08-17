@@ -60,6 +60,21 @@ export const isImagePresent = async (imageRef = DEFAULT_IMAGE_REF): Promise<bool
   }
 };
 
+/**
+ * Release-gating mode for the e2e specs: with `SEALANT_E2E_REQUIRE_IMAGE=1` an absent baked image
+ * is a FAILURE, not a graceful skip — the release pipeline must prove the runtime contract against
+ * the pinned sealantd image rather than silently skipping the suite. Call at module top level
+ * right after `isImagePresent()`; the throw fails the whole file loudly.
+ */
+export const assertImageRequirement = (imageAvailable: boolean): void => {
+  if (!imageAvailable && process.env["SEALANT_E2E_REQUIRE_IMAGE"] === "1") {
+    throw new Error(
+      `SEALANT_E2E_REQUIRE_IMAGE=1 but ${DEFAULT_IMAGE_REF} is not present. ` +
+        "Build it first: DOCKER_BUILDKIT=1 pnpm --filter @sealant/workspaces exec tsx scripts/sealantd-build-image.mts",
+    );
+  }
+};
+
 export interface BootedSealantd {
   /** Container id of the booted workspace. */
   readonly containerId: string;

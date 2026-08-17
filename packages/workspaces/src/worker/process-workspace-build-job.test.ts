@@ -198,6 +198,7 @@ const createWorkspaceBuildSpec = (
     readonly packages?: NewWorkspace["tooling"]["packages"];
     readonly applyDotfiles?: boolean;
     readonly dotfilesArchives?: NewWorkspace["runtime"]["dotfilesArchives"];
+    readonly userEnv?: NewWorkspace["runtime"]["userEnv"];
   } = {},
 ): NewWorkspace => {
   return {
@@ -250,6 +251,7 @@ const createWorkspaceBuildSpec = (
     },
     runtime: {
       env: {},
+      userEnv: input.userEnv ?? {},
       credentialRefs: input.credentialRefs ?? [],
       dotfilesArchives: input.dotfilesArchives ?? [],
       workspaceRoot: "/workspace",
@@ -844,14 +846,67 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
 
       expect(gitHubSourceIntegration.createInstallationAccessToken).toHaveBeenCalledWith("1001");
+      // Resolved tokens ride the TRANSIENT platformEnv launch field, never a blueprint env map:
+      // the blueprint is the persisted restart source and must stay free of resolved secrets.
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          platformEnv: {
+            SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
+            SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+          },
+        }),
+      );
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.objectContaining({
           blueprint: expect.objectContaining({
             runtime: expect.objectContaining({
-              env: expect.objectContaining({
-                SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token",
-                SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
+              env: expect.not.objectContaining({
+                SEALANT_DOTFILES_HTTP_TOKEN: expect.anything(),
               }),
+            }),
+          }),
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("hands the adapter the caller userEnv unchanged through the job payload parse", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_user_env",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({
+          osFamily: "nix",
+          userEnv: { APP_MODE: "review", EMPTY_VALUE: "" },
+        }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_user_env",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+
+      expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          blueprint: expect.objectContaining({
+            runtime: expect.objectContaining({
+              userEnv: { APP_MODE: "review", EMPTY_VALUE: "" },
             }),
           }),
         }),
@@ -1025,15 +1080,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       // token would sit unused in the container env — the worker must not create one.
       expect(gitHubSourceIntegration.createInstallationAccessToken).not.toHaveBeenCalled();
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          blueprint: expect.objectContaining({
-            runtime: expect.objectContaining({
-              env: expect.not.objectContaining({
-                SEALANT_DOTFILES_HTTP_TOKEN: expect.anything(),
-              }),
-            }),
-          }),
-        }),
+        expect.not.objectContaining({ platformEnv: expect.anything() }),
       );
     }).pipe(
       Effect.provide(

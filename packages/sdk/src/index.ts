@@ -23,3 +23,21 @@ export {
   SealantRuntimeError,
 } from "./errors.js";
 export type * from "./types.js";
+// The workspace environment policy (`CreateOptions.env` validation) is public API: downstream
+// products validate at their own boundaries with the exact rules the platform enforces.
+export {
+  findWorkspaceEnvReservedRule,
+  formatWorkspaceEnvIssue,
+  parseWorkspaceEnv,
+  WORKSPACE_ENV_MAX_ENTRIES,
+  WORKSPACE_ENV_MAX_NAME_LENGTH,
+  WORKSPACE_ENV_MAX_TOTAL_BYTES,
+  WORKSPACE_ENV_MAX_VALUE_BYTES,
+  WORKSPACE_ENV_NAME_PATTERN,
+  WORKSPACE_ENV_SECRET_MARKERS,
+} from "@sealant/api-contracts/workspace-environment";
+export type {
+  WorkspaceEnvIssue,
+  WorkspaceEnvParseResult,
+  WorkspaceEnvReservedRule,
+} from "@sealant/api-contracts/workspace-environment";

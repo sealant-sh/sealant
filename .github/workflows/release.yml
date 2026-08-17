@@ -117,8 +117,46 @@ jobs:
         if: failure()
         run: docker compose --project-directory ~/.config/sealant logs
 
+  # Prove the workspace runtime contract against the PINNED sealantd image before anything
+  # publishes: build the baked fedora workspace image (which pulls the exact
+  # ghcr.io/sealant-sh/sealantd pin from buildkit-builder.ts), then run the sealantd e2e suite in
+  # required mode — an absent image FAILS the job instead of skipping the specs. A daemon/pin
+  # mismatch (e.g. env inheritance drift) stops the release here rather than shipping an SDK whose
+  # documented behavior the runtime does not honor.
+  workspace-e2e:
+    name: Workspace runtime e2e (pinned sealantd)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --lockfile=false
+
+      - name: Build the baked workspace image (pulls the pinned sealantd)
+        run:
+          DOCKER_BUILDKIT=1 pnpm --filter @sealant/workspaces exec tsx
+          scripts/sealantd-build-image.mts
+
+      - name: Run sealantd e2e suite (image required, never skipped)
+        env:
+          SEALANT_E2E_REQUIRE_IMAGE: "1"
+        run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
+
   npm:
     name: Publish npm packages
+    needs: workspace-e2e
     # Kept on a github-hosted runner: OIDC Trusted Publishing (tokenless npm auth + provenance)
     # should mint its id-token on infrastructure GitHub controls, not a third-party runner.
     runs-on: ubuntu-latest
@@ -173,7 +211,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: selfhost-smoke
+    needs: [selfhost-smoke, workspace-e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write

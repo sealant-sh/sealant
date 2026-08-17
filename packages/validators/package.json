@@ -14,6 +14,7 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@sealant/api-contracts": "workspace:*",
     "@t3-oss/env-core": "catalog:",
     "zod": "catalog:"
   },

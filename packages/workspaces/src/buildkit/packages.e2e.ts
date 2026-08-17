@@ -60,6 +60,7 @@ const blueprintForOs = (
   },
   runtime: {
     env: {},
+    userEnv: {},
     credentialRefs: [],
     dotfilesArchives: [],
     workspaceRoot: "/workspace",

@@ -261,6 +261,21 @@ const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): s
   return `${prefix}-${repositoryToken}-${tagToken}-${suffix}`;
 };
 
+/**
+ * Caller/project (`runtime.userEnv`) `-e` args. Emitted FIRST in the `docker run` argv: docker
+ * applies last-wins for duplicate `-e` flags, so everything platform-owned emitted later — the
+ * sidecar `DOCKER_HOST`, clone auth, `SEALANT_*` controls, `platformEnv`, `credentialEnv` — beats
+ * a user entry. Reserved-name validation already forbids those collisions at parse time; this
+ * ordering is defense in depth, unlike legacy `runtime.env`, which keeps its historical
+ * late-emission reach for stored-spec compatibility.
+ */
+const userEnvArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
+  return Object.entries(input.blueprint.runtime.userEnv).flatMap(([key, value]) => [
+    "-e",
+    `${key}=${value}`,
+  ]);
+};
+
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
   mountAllowedStoreRoots: string | undefined,
@@ -977,6 +992,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             "-e",
             "SEALANT_DOTFILES_ARCHIVE_DIR=/run/sealant/dotfiles",
           ];
+    // Worker-resolved platform launch env (dotfiles clone auth). After every blueprint env so a
+    // stored-spec entry cannot shadow a resolved token; before credentialEnv, which stays last.
+    const platformEnvArgs = Object.entries(parsed.platformEnv ?? {}).flatMap(([key, value]) => [
+      "-e",
+      `${key}=${value}`,
+    ]);
     const args = [
       "run",
       "-d",
@@ -984,6 +1005,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       parsed.blueprint.runtime.ociRuntime,
       "--name",
       containerName,
+      // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
+      ...userEnvArgs(parsed),
       ...(dockerNetworkName === undefined
         ? []
         : [
@@ -1003,6 +1026,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...workspaceMountArgs(parsed),
       ...extraMountArgs(parsed),
       ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
+      ...platformEnvArgs,
       // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
       // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
       // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).
