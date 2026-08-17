@@ -1001,6 +1001,40 @@ describe("DockerRuntimeAdapter", () => {
     );
   });
 
+  it("binds the staged secret env dir read-only and names it via SEALANT_SECRET_ENV_FILE only", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-secret-env\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput(),
+        secretEnvDir: "/host/staging/sealant-secret-env-run_1",
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("/host/staging/sealant-secret-env-run_1:/run/sealant/secrets:ro");
+    expect(runArgs).toContain("SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json");
+    // The channel is a FILE: no secret name or value ever reaches the docker argv.
+    expect(runArgs.filter((arg) => arg.includes("env.json"))).toHaveLength(1);
+  });
+
   it("rejects launch input whose userEnv violates the workspace environment policy", () => {
     expect(() => createLaunchInput({ runtime: { userEnv: { GITHUB_TOKEN: "x" } } })).toThrow(
       /reserved/,

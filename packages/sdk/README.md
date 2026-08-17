@@ -161,6 +161,49 @@ The contract, stated plainly:
   values for interpolation, but child containers receive only what the Compose file or the command
   explicitly passes (`environment`, `env_file`, `-e`). Docker runtime only.
 
+## Secret environment variables
+
+The half of a real `.env` that `env` deliberately refuses — API keys, database URLs with passwords —
+goes through the **transient secret channel**:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  env: { APP_MODE: "review" },
+  secretEnv: {
+    DATABASE_URL: "postgres://app:s3cret@db.internal/billing",
+    STRIPE_API_KEY: "sk_live_…",
+  },
+});
+```
+
+What the platform guarantees for `secretEnv`, and how it differs from `env`:
+
+- **Same grammar and size bounds** (`parseWorkspaceSecretEnv`, exported), and the same
+  platform-owned names are reserved — but secret-shaped names are exactly what belongs here.
+  Connected-account names (`GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`) stay reserved:
+  attach those through `credentials`.
+- **Never persisted in the clear.** The map rides the create request beside the spec, is sealed with
+  the install's credential key on the build job, is decrypted by the worker just before launch, and
+  the sealed row is cleared once the launch settles. It is never in the blueprint, the attempt
+  snapshot, `WorkspaceDetails`, or any read API.
+- **Never in `docker run` argv or container env.** The worker stages a `0600` file the workspace
+  daemon reads once at boot and removes it the moment the workspace is ready. `docker inspect` shows
+  a file path, not values.
+- **Inherited by every process the platform starts in the workspace**, winning over `env` and
+  container env for the same name — the harness, later shells, exec'd commands, Services.
+- **Masked in captured output.** Every value seeds the daemon's redactor regardless of its name, so
+  a `DATABASE_URL` a process echoes is recorded as `***REDACTED***`, like a token.
+- **Fixed at creation.** A platform-side _restart_ of the workspace runs **without** secret env (the
+  sealed copy is gone by design); create a new workspace to re-supply it. Docker runtime only;
+  nested containers started by Compose or `docker run` inside the workspace still receive only what
+  you explicitly pass.
+
+Not covered, and worth saying plainly: a process that _deliberately_ writes a secret to a file in
+the repository or to a mount is producing ordinary workspace state, and the redactor masks captured
+I/O, not files.
+
 ## Dotfiles and shell
 
 Bring your own environment: a login shell and dotfiles applied before the workspace accepts work.

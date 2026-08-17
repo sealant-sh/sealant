@@ -998,6 +998,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       "-e",
       `${key}=${value}`,
     ]);
+    // The transient secret channel: a read-only bind of the worker-staged file plus the boot input
+    // naming it. The values never appear in this argv, in container env, or in `docker inspect`.
+    const secretEnvArgs =
+      parsed.secretEnvDir === undefined
+        ? []
+        : [
+            "-v",
+            `${parsed.secretEnvDir}:/run/sealant/secrets:ro`,
+            "-e",
+            "SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json",
+          ];
     const args = [
       "run",
       "-d",
@@ -1023,6 +1034,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       ...workspaceHttpAuthEnvArgs,
       ...controlSocketMountArgs,
       ...dotfilesArchiveArgs,
+      ...secretEnvArgs,
       ...workspaceMountArgs(parsed),
       ...extraMountArgs(parsed),
       ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),

@@ -79,6 +79,11 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   // adapter bind-mounts it read-only and points SEALANT_DOTFILES_ARCHIVE_DIR at the mount so
   // `sealantd boot` applies the archives before the control socket binds.
   dotfilesArchiveDir: z.string().trim().min(1).optional(),
+  // Host directory holding the worker-staged `env.json` for the transient secret channel. The
+  // adapter bind-mounts it read-only at /run/sealant/secrets and points SEALANT_SECRET_ENV_FILE at
+  // the file so `sealantd boot` merges the entries into every child environment and seeds its
+  // redactor. The worker deletes the staged file once the workspace is ready.
+  secretEnvDir: z.string().trim().min(1).optional(),
   // The run (workspace attempt) this launch belongs to. When present the docker adapter derives a
   // DETERMINISTIC per-run container name, so a redelivered/reaper-republished or concurrent launch
   // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).

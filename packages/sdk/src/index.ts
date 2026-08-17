@@ -27,8 +27,10 @@ export type * from "./types.js";
 // products validate at their own boundaries with the exact rules the platform enforces.
 export {
   findWorkspaceEnvReservedRule,
+  findWorkspaceSecretEnvReservedRule,
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
+  parseWorkspaceSecretEnv,
   WORKSPACE_ENV_MAX_ENTRIES,
   WORKSPACE_ENV_MAX_NAME_LENGTH,
   WORKSPACE_ENV_MAX_TOTAL_BYTES,

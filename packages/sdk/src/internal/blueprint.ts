@@ -16,6 +16,7 @@ import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
+  parseWorkspaceSecretEnv,
 } from "@sealant/api-contracts/workspace-environment";
 
 import { SealantError } from "../errors.js";
@@ -138,6 +139,22 @@ export const buildCreateWorkspaceRequest = (
     );
   }
   const userEnv = envResult === undefined ? undefined : envResult.env;
+  const secretEnvResult =
+    options.secretEnv === undefined ? undefined : parseWorkspaceSecretEnv(options.secretEnv);
+  if (secretEnvResult !== undefined && !secretEnvResult.ok) {
+    throw new SealantError(
+      `workspaces.create \`secretEnv\` was rejected: ${secretEnvResult.issues
+        .map(formatWorkspaceEnvIssue)
+        .join("; ")}`,
+      { code: "invalid_workspace_secret_env" },
+    );
+  }
+  // Secrets ride the request TOP LEVEL, never the spec: the spec is the durable, API-visible
+  // blueprint; the transient channel is a separate field the control plane seals until launch.
+  const secretEnv =
+    secretEnvResult === undefined || Object.keys(secretEnvResult.env).length === 0
+      ? undefined
+      : secretEnvResult.env;
   // One `runtime` object for every runtime-scoped field: two conditional `runtime:` spreads in the
   // spec literal would let the later one silently clobber the earlier.
   const runtime = {
@@ -234,6 +251,7 @@ export const buildCreateWorkspaceRequest = (
       ...(options.name === undefined ? {} : { name: options.name }),
       ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
       spec,
+      ...(secretEnv === undefined ? {} : { secretEnv }),
     },
   };
 };

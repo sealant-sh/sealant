@@ -1,4 +1,5 @@
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +21,7 @@ import {
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { vi } from "vitest";
 
 import type { RegistryClient } from "../registry/index.js";
@@ -46,6 +47,7 @@ const workspaceBuildJobRepoStub = (
   ),
   markJobSucceeded: vi.fn((_input: unknown) => Effect.succeed({})),
   markJobFailed: vi.fn((_input: unknown) => Effect.succeed({})),
+  clearSecretEnv: vi.fn((_id: string) => Effect.void),
 });
 
 const workspaceAttemptRepoStub = () => ({
@@ -911,6 +913,166 @@ describe("processWorkspaceBuildJobEffect", () => {
           }),
         }),
       );
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect(
+    "unseals secretEnv, stages a 0600 boot file, removes it at readiness, clears the row",
+    () => {
+      const secretEnv = { DATABASE_URL: "postgres://u:hunter2@h/db", STRIPE_API_KEY: "sk_live_x" };
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_secret_env",
+          runId: "run_secret_env",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+          secretEnvSealed: `sealed:${JSON.stringify(secretEnv)}`,
+        }),
+      });
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const installations = githubInstallationRepoStub();
+      const installationRepositories = githubInstallationRepositoryCacheStub();
+      let stagedContents: string | undefined;
+      let stagedMode: number | undefined;
+      let stagedFileWhileLaunching: string | undefined;
+      let launchedBlueprintJson: string | undefined;
+      const runtimeAdapter = createRuntimeAdapterStub("docker", {
+        launch: vi.fn(async (input) => {
+          launchedBlueprintJson = JSON.stringify(input.blueprint);
+          // The file must exist, 0600, with exactly the unsealed map, WHILE the launch runs.
+          const dir = input.secretEnvDir;
+          if (dir !== undefined) {
+            stagedFileWhileLaunching = join(dir, "env.json");
+            stagedContents = await readFile(stagedFileWhileLaunching, "utf8");
+            stagedMode = (await stat(stagedFileWhileLaunching)).mode & 0o777;
+          }
+          return {
+            adapter: "docker" as const,
+            resourceId: "resource_secret",
+            reference: "sealant-secret",
+            status: "ready" as const,
+          };
+        }),
+      });
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_secret_env",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        );
+
+        expect(runtimeAdapter.launch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            secretEnvDir: expect.stringContaining("sealant-secret-env-run_secret_env"),
+          }),
+        );
+        expect(stagedContents).toBe(JSON.stringify(secretEnv));
+        expect(stagedMode).toBe(0o600);
+        // Ready => the daemon consumed it; the host copy is gone.
+        expect(stagedFileWhileLaunching).toBeDefined();
+        expect(existsSync(stagedFileWhileLaunching ?? "")).toBe(false);
+        // And the sealed row is cleared once the launch phase settles.
+        expect(jobs.clearSecretEnv).toHaveBeenCalledWith("job_secret_env");
+        // The blueprint handed to the adapter never carries the secrets.
+        expect(launchedBlueprintJson).toBeDefined();
+        expect(launchedBlueprintJson).not.toContain("hunter2");
+      }).pipe(
+        Effect.provide(
+          provideRepos({
+            jobs,
+            runtimeInstances,
+            attempts,
+            installations,
+            installationRepositories,
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("fails the launch loudly when a sealed secretEnv arrives without a cipher", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_secret_env_no_cipher",
+        runId: "run_secret_env_no_cipher",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        secretEnvSealed: "sealed:{}",
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_secret_env_no_cipher",
+            runtimeAdapters: [runtimeAdapter],
+            // No credentialCipher option -> misconfiguration, not a silent launch without secrets.
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        ),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+      // Even a failed launch phase clears the sealed row.
+      expect(jobs.clearSecretEnv).toHaveBeenCalledWith("job_secret_env_no_cipher");
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("rejects a sealed secretEnv that fails the policy at the last hop", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_secret_env_bad",
+        runId: "run_secret_env_bad",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        secretEnvSealed: `sealed:${JSON.stringify({ GITHUB_TOKEN: "ghp_smuggled" })}`,
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_secret_env_bad",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        ),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(String(result.failure)).toContain("GITHUB_TOKEN");
+        expect(String(result.failure)).not.toContain("ghp_smuggled");
+      }
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
     }).pipe(
       Effect.provide(
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),

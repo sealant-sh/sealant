@@ -43,7 +43,7 @@
  * Skips gracefully when the image is absent.
  */
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -132,6 +132,7 @@ describe.skipIf(!imageAvailable)(
   "P6 seam: DockerRuntimeAdapter container id -> SealantTarget -> execInWorkspace (real container)",
   () => {
     let workspaceMount: string | undefined;
+    let secretEnvDir: string | undefined;
     let containerId: string | undefined;
     /** Captured run argv, to assert the only delta vs the adapter's own argv is our `-v` splice. */
     let capturedRunArgs: ReadonlyArray<string> | undefined;
@@ -175,6 +176,19 @@ describe.skipIf(!imageAvailable)(
         containerNamePrefix: "sealant-p6",
       });
 
+      // The transient secret channel, staged exactly as the worker stages it (0700 dir, 0600 file).
+      secretEnvDir = mkdtempSync(join(tmpdir(), "sealantd-p6-secrets-"));
+      chmodSync(secretEnvDir, 0o700);
+      writeFileSync(
+        join(secretEnvDir, "env.json"),
+        JSON.stringify({
+          DATABASE_URL: "postgres://user:hunter2-e2e-pass@db.internal/app",
+          // A secret-shaped name: rejected on the plaintext lane, exactly right on this one.
+          STRIPE_API_KEY: "sk_live_e2e_secret_value_1234",
+        }),
+        { mode: 0o600 },
+      );
+
       // Drive the REAL launch(): keep-alive via blueprint env; the local tag as the published image.
       const launchInput = parseRuntimeAdapterLaunchInput({
         blueprint: createBlueprint({
@@ -197,6 +211,7 @@ describe.skipIf(!imageAvailable)(
           digestReference: DEFAULT_IMAGE_REF,
           digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         },
+        secretEnvDir,
       });
 
       const result = await adapter.launch(launchInput);
@@ -226,6 +241,9 @@ describe.skipIf(!imageAvailable)(
       if (workspaceMount) {
         rmSync(workspaceMount, { recursive: true, force: true });
       }
+      if (secretEnvDir) {
+        rmSync(secretEnvDir, { recursive: true, force: true });
+      }
     });
 
     it("launched via the real adapter argv, augmented only by the `.git` mount", () => {
@@ -239,8 +257,11 @@ describe.skipIf(!imageAvailable)(
       expect(capturedRunArgs).toContain("SEALANT_FOREGROUND_COMMAND=sleep infinity");
       // The published image (local tag) is the trailing arg the adapter passes to docker run.
       expect(capturedRunArgs?.[capturedRunArgs.length - 1]).toBe(DEFAULT_IMAGE_REF);
-      // The adapter does NOT add the volume mount itself (proves the splice is the only delta).
-      expect(capturedRunArgs).not.toContain("-v");
+      // The adapter adds no working-directory mount itself (proves the splice is the only delta
+      // there); its one `-v` is the read-only secret-env bind this test stages.
+      const volumeArgs = (capturedRunArgs ?? []).filter((_, index, all) => all[index - 1] === "-v");
+      expect(volumeArgs).toHaveLength(1);
+      expect(volumeArgs[0]).toBe(`${secretEnvDir}:/run/sealant/secrets:ro`);
     });
 
     it("container-id -> sealantTargetForDockerContainer -> execInWorkspace runs /bin/echo hi", async () => {
@@ -278,6 +299,42 @@ describe.skipIf(!imageAvailable)(
 
       expect(result.stdout).toBe("canary-e2e-value");
       expect(result.exitCode).toBe(0);
+    }, 45_000);
+
+    it("the transient secret channel: secrets reach children, never argv/container env, and are redacted in capture", async () => {
+      expect(containerId).toBeDefined();
+
+      // The argv carried a bind + a file path — never a secret name or value.
+      expect(capturedRunArgs).toContain("SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json");
+      expect(capturedRunArgs?.join(" ")).not.toContain("hunter2-e2e-pass");
+      expect(capturedRunArgs?.join(" ")).not.toContain("STRIPE_API_KEY");
+      // Container env (what `docker inspect` shows) holds no secret value either.
+      const containerEnv = await docker(["exec", containerId!, "sh", "-c", "env"]);
+      expect(containerEnv).not.toContain("hunter2-e2e-pass");
+      expect(containerEnv).not.toContain("sk_live_e2e_secret_value_1234");
+
+      // A daemon-managed child DOES inherit them (proved in-process, so the values never have to
+      // cross the redacted capture to be asserted)…
+      const check = await Effect.runPromise(
+        execInWorkspace(sealantTargetForDockerContainer(containerId!), {
+          executable: "/bin/sh",
+          args: [
+            "-c",
+            'test "$STRIPE_API_KEY" = "sk_live_e2e_secret_value_1234" && test "$DATABASE_URL" = "postgres://user:hunter2-e2e-pass@db.internal/app" && echo INHERITED',
+          ],
+        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
+      expect(check.stdout).toBe("INHERITED\n");
+      expect(check.exitCode).toBe(0);
+
+      // …and echoing them shows the redactor was seeded with EVERY value, whatever the name.
+      const echoed = await Effect.runPromise(
+        execInWorkspace(sealantTargetForDockerContainer(containerId!), {
+          executable: "/bin/sh",
+          args: ["-c", 'printf "%s|%s" "$DATABASE_URL" "$STRIPE_API_KEY"'],
+        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+      );
+      expect(echoed.stdout).toBe("***REDACTED***|***REDACTED***");
     }, 45_000);
 
     it("secret-marker names in container env are DROPPED by the daemon filter", async () => {

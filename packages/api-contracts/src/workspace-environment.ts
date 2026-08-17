@@ -209,7 +209,33 @@ const utf8Bytes = (value: string): number => new TextEncoder().encode(value).len
  */
 export const parseWorkspaceEnv = (
   input: Readonly<Record<string, string>>,
+): WorkspaceEnvParseResult => parseEnvMap(input, "env");
+
+/**
+ * Validate a caller-supplied SECRET environment map — the transient secret channel
+ * (`CreateOptions.secretEnv`): same grammar and size bounds as `env`, and the same platform-owned
+ * name classes are reserved, but secret-shaped names are exactly what belongs here, so the
+ * `secret-marker` rule does not apply. Account-lookup names (`GITHUB_TOKEN`,
+ * `CLAUDE_CODE_OAUTH_TOKEN`, …) stay reserved: connected accounts own those.
+ */
+export const parseWorkspaceSecretEnv = (
+  input: Readonly<Record<string, string>>,
+): WorkspaceEnvParseResult => parseEnvMap(input, "secretEnv");
+
+/** Reserved-rule lookup for the secret lane: everything but `secret-marker`. */
+export const findWorkspaceSecretEnvReservedRule = (
+  name: string,
+): WorkspaceEnvReservedRule | undefined => {
+  const rule = findWorkspaceEnvReservedRule(name);
+  return rule === "secret-marker" ? undefined : rule;
+};
+
+const parseEnvMap = (
+  input: Readonly<Record<string, string>>,
+  lane: "env" | "secretEnv",
 ): WorkspaceEnvParseResult => {
+  const findReserved =
+    lane === "env" ? findWorkspaceEnvReservedRule : findWorkspaceSecretEnvReservedRule;
   const issues: Array<WorkspaceEnvIssue> = [];
   const entries = Object.entries(input);
   if (entries.length > WORKSPACE_ENV_MAX_ENTRIES) {
@@ -225,7 +251,7 @@ export const parseWorkspaceEnv = (
       issues.push({ rule: "name-length", index, nameDisplay: boundedNameDisplay(name) });
       continue;
     }
-    const reservedRule = findWorkspaceEnvReservedRule(name);
+    const reservedRule = findReserved(name);
     if (reservedRule !== undefined) {
       issues.push({ rule: "name-reserved", name, reservedRule });
       continue;

@@ -258,6 +258,21 @@ export interface CreateOptions {
    * command explicitly passes. Docker runtime only.
    */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * SECRET environment variables for the workspace — API keys, database URLs with passwords,
+   * anything a dev server needs that must not be persisted or echoed. Same grammar and size
+   * bounds as `env`, validated client-side by `parseWorkspaceSecretEnv`; secret-shaped names are
+   * exactly what belongs here, while platform-owned names and connected-account names
+   * (`GITHUB_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`) stay reserved. Delivered through the transient
+   * secret channel: encrypted at rest on the build job until launch, handed to the workspace
+   * daemon as a boot file that is removed once the workspace is ready, never written to the
+   * blueprint, the attempt snapshot, `docker inspect`, or any read API — and every value is
+   * masked in captured process output. Inherited by every process the platform starts in the
+   * workspace, winning over `env` and container env for the same name. Fixed at creation; a
+   * platform-side RESTART of the workspace runs without secret env (create a new workspace
+   * instead). Docker runtime only.
+   */
+  readonly secretEnv?: Readonly<Record<string, string>>;
   /** Runtime-managed services that need more than installing an OS package. */
   readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */

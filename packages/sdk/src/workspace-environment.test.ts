@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   findWorkspaceEnvReservedRule,
+  findWorkspaceSecretEnvReservedRule,
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
+  parseWorkspaceSecretEnv,
   WORKSPACE_ENV_MAX_ENTRIES,
   WORKSPACE_ENV_MAX_TOTAL_BYTES,
   WORKSPACE_ENV_MAX_VALUE_BYTES,
@@ -200,5 +202,52 @@ describe("parseWorkspaceEnv", () => {
       expect(message).not.toContain("value-");
       expect(message.length).toBeGreaterThan(10);
     }
+  });
+});
+
+describe("parseWorkspaceSecretEnv", () => {
+  it("accepts secret-shaped names — that is what the lane is for", () => {
+    const result = parseWorkspaceSecretEnv({
+      STRIPE_API_KEY: "sk_live_x",
+      DB_PASSWORD: "hunter2",
+      DATABASE_URL: "postgres://u:p@h/db",
+      KEY: "k",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(Object.keys(result.env)).toEqual([
+        "DATABASE_URL",
+        "DB_PASSWORD",
+        "KEY",
+        "STRIPE_API_KEY",
+      ]);
+    }
+  });
+
+  it.each([
+    ["SEALANT_WORKSPACE_ROOT", "platform-prefix"],
+    ["PATH", "process-identity"],
+    ["http_proxy", "runtime-network"],
+    ["GITHUB_TOKEN", "account-lookup"],
+    ["CLAUDE_CODE_OAUTH_TOKEN", "account-lookup"],
+    ["LD_PRELOAD", "dynamic-loader"],
+    ["BASH_ENV", "shell-startup"],
+    ["NODE_OPTIONS", "runtime-injection"],
+    ["GIT_SSH_COMMAND", "git-ssh"],
+  ] as const)("still reserves platform-owned %s (%s)", (name, reservedRule) => {
+    expect(findWorkspaceSecretEnvReservedRule(name)).toBe(reservedRule);
+    const result = parseWorkspaceSecretEnv({ [name]: "v" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual([{ rule: "name-reserved", name, reservedRule }]);
+    }
+  });
+
+  it("keeps the shared grammar and size bounds", () => {
+    expect(parseWorkspaceSecretEnv({ "BAD NAME": "v" }).ok).toBe(false);
+    expect(parseWorkspaceSecretEnv({ BIG: "x".repeat(WORKSPACE_ENV_MAX_VALUE_BYTES + 1) }).ok).toBe(
+      false,
+    );
+    expect(parseWorkspaceSecretEnv({ HAS_NUL: "a\u0000b" }).ok).toBe(false);
   });
 });

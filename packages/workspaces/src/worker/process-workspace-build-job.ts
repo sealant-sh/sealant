@@ -1,7 +1,11 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  formatWorkspaceEnvIssue,
+  parseWorkspaceSecretEnv,
+} from "@sealant/api-contracts/workspace-environment";
 import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
@@ -22,6 +26,7 @@ import {
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
 import { Effect, Layer } from "effect";
+import { z } from "zod";
 
 import {
   compileWorkspaceBuildSpec,
@@ -121,6 +126,7 @@ const launchPublishedImage = async (input: {
   readonly credentialEnv?: Record<string, string>;
   readonly credentialFiles?: readonly CredentialFileInjection[];
   readonly dotfilesArchiveDir?: string;
+  readonly secretEnvDir?: string;
   readonly runId?: string;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
@@ -141,6 +147,7 @@ const launchPublishedImage = async (input: {
     ...(input.dotfilesArchiveDir === undefined
       ? {}
       : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
+    ...(input.secretEnvDir === undefined ? {} : { secretEnvDir: input.secretEnvDir }),
     // Deterministic per-run container name -> idempotent launch/adopt (#4).
     ...(input.runId === undefined ? {} : { runId: input.runId }),
   });
@@ -196,6 +203,73 @@ const stageDotfilesArchives = async (
   }
   return directory;
 };
+
+/** Where the transient secret env file is staged; same daemon-host constraint as dotfiles. */
+const secretEnvStagingDir = (runId: string | null): string =>
+  join(dotfilesStagingRoot(), `sealant-secret-env-${runId ?? "unkeyed"}`);
+
+/**
+ * Stage the launch's secret environment as `<dir>/env.json` (dir 0700, file 0600) for the adapter
+ * to bind-mount read-only; `sealantd boot` consumes it once. Deterministic per run so a redelivered
+ * launch overwrites its own staging. The caller removes it the moment the workspace is ready.
+ */
+const stageSecretEnv = async (
+  secretEnv: Readonly<Record<string, string>>,
+  runId: string | null,
+): Promise<string> => {
+  const directory = secretEnvStagingDir(runId);
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = join(directory, "env.json");
+  await writeFile(file, JSON.stringify(secretEnv), { encoding: "utf8", mode: 0o600 });
+  await chmod(file, 0o600);
+  return directory;
+};
+
+/** Best-effort removal of the staged secret env; safe to call when nothing was staged. */
+export const removeStagedSecretEnv = (runId: string | null): Promise<void> =>
+  rm(secretEnvStagingDir(runId), { recursive: true, force: true });
+
+/**
+ * Unseal the job's `secretEnv` (the transient secret channel) and re-validate it with the public
+ * policy — the same check the API ran at create, applied again at the last hop before it becomes
+ * a boot file. Never logs or embeds a value; failures name the rule.
+ */
+const unsealSecretEnv = (
+  sealed: string,
+  credentialCipher: CredentialCipherService | undefined,
+): Effect.Effect<Readonly<Record<string, string>>, WorkspaceBuildJobProcessingError> =>
+  Effect.gen(function* () {
+    if (credentialCipher === undefined) {
+      return yield* toWorkspaceBuildJobProcessingError(
+        new Error(
+          "This launch carries a sealed secretEnv but the worker has no credential cipher configured (SEALANT_CREDENTIALS_KEY).",
+        ),
+      );
+    }
+    const plaintext = yield* credentialCipher
+      .decrypt(sealed)
+      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    const parsedJson = yield* Effect.try({
+      try: (): unknown => JSON.parse(plaintext),
+      catch: () => toWorkspaceBuildJobProcessingError(new Error("Sealed secretEnv is not JSON.")),
+    });
+    const record = z.record(z.string(), z.string()).safeParse(parsedJson);
+    if (!record.success) {
+      return yield* toWorkspaceBuildJobProcessingError(
+        new Error("Sealed secretEnv is not a string map."),
+      );
+    }
+    const policy = parseWorkspaceSecretEnv(record.data);
+    if (!policy.ok) {
+      return yield* toWorkspaceBuildJobProcessingError(
+        new Error(
+          `Sealed secretEnv failed policy at launch: ${policy.issues.map(formatWorkspaceEnvIssue).join("; ")}`,
+        ),
+      );
+    }
+    return policy.env;
+  });
 
 /** Split the resolver's injection plan into the adapter-launch env record + file list. */
 const splitCredentialInjections = (
@@ -536,6 +610,22 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
+    // The transient secret channel: unseal, re-validate, stage as a 0600 boot file the adapter
+    // bind-mounts read-only. Removed as soon as the workspace is READY (the daemon has consumed
+    // it by then), and the sealed row is cleared once this phase settles either way — see the
+    // ensuring/finalizer below.
+    const secretEnv =
+      job.secretEnvSealed === null || job.secretEnvSealed === undefined
+        ? undefined
+        : yield* unsealSecretEnv(job.secretEnvSealed, options.credentialCipher);
+    const secretEnvDir =
+      secretEnv === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => stageSecretEnv(secretEnv, job.runId),
+            catch: toWorkspaceBuildJobProcessingError,
+          });
+
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
         launchPublishedImage({
@@ -553,10 +643,18 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(Object.keys(credentialEnv).length === 0 ? {} : { credentialEnv }),
           ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
           ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),
+          ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
           ...(job.runId === null ? {} : { runId: job.runId }),
         }),
       catch: toWorkspaceBuildJobProcessingError,
-    });
+    }).pipe(
+      // Ready = the daemon has already read the file at boot; nothing may still need it.
+      Effect.tap((result) =>
+        result.status === "ready" && secretEnvDir !== undefined
+          ? Effect.promise(() => removeStagedSecretEnv(job.runId))
+          : Effect.void,
+      ),
+    );
 
     if (job.runId !== null) {
       yield* runtimeInstances
@@ -582,7 +680,22 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     }
   });
 
-  yield* launchAndRecord.pipe(Effect.tapError((error) => failureCleanup(error, false)));
+  yield* launchAndRecord.pipe(
+    Effect.tapError((error) => failureCleanup(error, false)),
+    // Whatever happened, a settled launch phase leaves no sealed secret behind on the job row and
+    // no staged file behind on the host (a failed launch may not have reached readiness).
+    Effect.ensuring(
+      Effect.all(
+        [
+          job.secretEnvSealed === null || job.secretEnvSealed === undefined
+            ? Effect.void
+            : jobs.clearSecretEnv(job.id).pipe(swallowingFailure("clear-secret-env update")),
+          Effect.promise(() => removeStagedSecretEnv(job.runId)),
+        ],
+        { discard: true },
+      ),
+    ),
+  );
 
   return publishedImage;
 });
