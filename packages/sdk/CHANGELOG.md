@@ -1,5 +1,46 @@
 # @sealant/sdk
 
+## 0.19.0
+
+### Minor Changes
+
+- a761e8c: Secret environment variables on `workspaces.create({ secretEnv })` — the transient secret channel.
+
+  The map is validated by the exported `parseWorkspaceSecretEnv` (same grammar/bounds as `env`, same
+  platform-owned reservations, but secret-shaped names allowed; connected-account names stay
+  reserved), rides the create request beside the spec, is sealed with the install's credential key on
+  the build job, decrypted by the worker just before launch, staged as a `0600` boot file the
+  workspace daemon (sealantd ≥ 0.10.0) reads once, removed from the host the moment the workspace is
+  ready, and cleared from the job row when the launch settles. It never enters the blueprint, the
+  attempt snapshot, `docker run` argv, container env, or any read API; every value is masked in
+  captured process output; every process the platform starts in the workspace inherits it, winning
+  over `env` and container env for the same name. Platform-side restarts run without secret env by
+  design. The workspace image now bakes sealantd 0.10.0.
+
+- e621c78: Non-secret workspace environment variables on `workspaces.create({ env })`.
+
+  The map is validated against a public policy (grammar, size bounds, reserved platform names, and
+  secret-looking names the workspace runtime would silently drop), lowered into a new strict
+  `runtime.userEnv` blueprint field, set on the workspace container, and inherited by every process
+  the platform starts inside the workspace — the harness, later shells, and exec'd commands. Values
+  are ordinary configuration by contract: they persist verbatim in the durable workspace spec and are
+  returned by workspace-details APIs; secrets stay on `credentials`. Live workspaces are never
+  mutated, restarts reuse the stored spec, and caller values can never override platform controls or
+  injected credentials (caller env is emitted first under docker's last-wins `-e` ordering).
+
+  The policy is exported from both packages (`parseWorkspaceEnv`, `findWorkspaceEnvReservedRule`,
+  `formatWorkspaceEnvIssue`, `WORKSPACE_ENV_*` constants; also importable via
+  `@sealant/api-contracts/workspace-environment`) so downstream settings surfaces validate with the
+  platform's exact rules. Legacy `runtime.env` keeps its unrestricted stored-spec semantics and is not
+  emitted by the SDK; worker-resolved dotfiles clone auth moved off that field onto a transient
+  adapter launch input and no longer rides any blueprint env map.
+
+### Patch Changes
+
+- Updated dependencies [a761e8c]
+- Updated dependencies [e621c78]
+  - @sealant/api-contracts@0.19.0
+
 ## 0.18.1
 
 ### Patch Changes
