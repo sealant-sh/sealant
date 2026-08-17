@@ -243,6 +243,21 @@ export interface CreateOptions {
   readonly shell?: "bash" | "zsh" | "fish";
   /** Dotfiles applied before the workspace accepts work (see `WorkspaceDotfilesOptions`). */
   readonly dotfiles?: WorkspaceDotfilesOptions;
+  /**
+   * Ordinary (non-secret) environment variables set on the workspace container and inherited by
+   * every process the platform starts inside it — the harness, later shells, exec'd commands, and
+   * their descendants. Validated client-side against the public policy re-exported from this
+   * package (`parseWorkspaceEnv`): names are `[A-Za-z_][A-Za-z0-9_]*`, platform-owned and
+   * secret-looking names are rejected loudly (the workspace runtime filters names containing
+   * `TOKEN`/`SECRET`/`PASSWORD`/`PASSWD`/`CREDENTIAL`/`APIKEY`, ending in `_KEY`, or exactly
+   * `KEY` — a value under such a name would silently never arrive). Not for secrets: values are
+   * persisted verbatim in the durable workspace spec and returned by workspace-details APIs; use
+   * `credentials` for connected-account material. The map is fixed at creation — a live workspace
+   * is never mutated, and a platform-side restart reuses the stored spec. Containers started
+   * INSIDE the workspace by Docker Compose or `docker run` receive only what the Compose file or
+   * command explicitly passes. Docker runtime only.
+   */
+  readonly env?: Readonly<Record<string, string>>;
   /** Runtime-managed services that need more than installing an OS package. */
   readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */

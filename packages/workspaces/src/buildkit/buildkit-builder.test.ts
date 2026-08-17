@@ -53,6 +53,7 @@ const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWor
     },
     runtime: {
       env: {},
+      userEnv: {},
       credentialRefs: [],
       dotfilesArchives: [],
       workspaceRoot: "/workspace",
@@ -534,6 +535,7 @@ describe("compileWorkspaceBuildSpec", () => {
     const blueprint = createWorkspaceBuildSpec({
       runtime: {
         env: {},
+        userEnv: {},
         credentialRefs: [],
         dotfilesArchives: [
           { data: archiveData, manager: "copy", bootstrap: false },
@@ -560,6 +562,7 @@ describe("compileWorkspaceBuildSpec", () => {
     const blueprint = createWorkspaceBuildSpec({
       runtime: {
         env: {},
+        userEnv: {},
         credentialRefs: [],
         dotfilesArchives: [{ data: archiveData, manager: "copy", bootstrap: false }],
         workspaceRoot: "/workspace",
@@ -582,6 +585,7 @@ describe("compileWorkspaceBuildSpec", () => {
     const blueprint = createWorkspaceBuildSpec({
       runtime: {
         env: {},
+        userEnv: {},
         credentialRefs: [],
         dotfilesArchives: [{ data: archiveData, bootstrap: true }],
         workspaceRoot: "/workspace",
@@ -1336,6 +1340,7 @@ describe("planWorkspaceImageBuild", () => {
       blueprint: createWorkspaceBuildSpec({
         runtime: {
           env: { EXAMPLE: "per-session-value" },
+          userEnv: {},
           credentialRefs: [],
           dotfilesArchives: [],
           workspaceRoot: "/workspace",

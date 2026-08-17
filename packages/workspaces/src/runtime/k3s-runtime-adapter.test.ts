@@ -48,6 +48,7 @@ describe("K3sRuntimeAdapter", () => {
         },
         runtime: {
           env: {},
+          userEnv: {},
           credentialRefs: [],
           dotfilesArchives: [],
           workspaceRoot: "/workspace",

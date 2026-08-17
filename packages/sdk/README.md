@@ -124,6 +124,43 @@ const workspace = await sealant.workspaces.create({
 rootless daemon at launch. The workspace receives `DOCKER_HOST`; Sealant never mounts the host
 Docker socket. GitHub credentials provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
+## Workspace environment variables
+
+Ordinary (non-secret) configuration set on the workspace at creation and inherited by every process
+the platform starts inside it — the harness, later shells, exec'd commands, and their descendants:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  repository: "github.com/acme/billing-service",
+  harness: codex(),
+  env: { APP_MODE: "review", FEATURE_FLAGS: "checkout,invoices" },
+});
+```
+
+The contract, stated plainly:
+
+- **Not for secrets.** Values are persisted verbatim in the durable workspace spec and are returned
+  by workspace-details APIs to authorized clients for the life of that record. Use `credentials` for
+  connected-account material. There is no partial support: secret-looking names — containing
+  `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, or `APIKEY` (as a substring, so
+  `TOKENIZER_PATH` counts), ending in `_KEY`, or exactly `KEY` — are rejected at create, because the
+  workspace runtime's secret filter would silently drop them before any process could see them. A
+  loud rejection beats a variable that never arrives.
+- **Validated, client-side and server-side, with the same policy.** Names are
+  `[A-Za-z_][A-Za-z0-9_]*` (max 128 chars); values are any UTF-8 up to 4 KiB (empty and multiline
+  included, NUL excluded); at most 128 entries and 32 KiB total per workspace. Platform-owned names
+  (`SEALANT_*`, `HOME`, `PATH`, `TERM`, `DOCKER_HOST`, proxy variables, loader/shell/
+  runtime-injection controls like `LD_*`, `BASH_ENV`, `NODE_OPTIONS`, `PYTHONPATH`, and Git/SSH
+  config controls) are rejected. The policy is exported (`parseWorkspaceEnv`,
+  `findWorkspaceEnvReservedRule`, `formatWorkspaceEnvIssue`, `WORKSPACE_ENV_*` constants) so your
+  own settings surface can validate with the platform's exact rules.
+- **Fixed at creation.** A live workspace is never mutated; a platform-side restart reuses the
+  stored spec. Caller values can never override platform controls or injected connected-account
+  credentials.
+- **No nested-container injection.** Docker Compose or `docker run` inside the workspace can use the
+  values for interpolation, but child containers receive only what the Compose file or the command
+  explicitly passes (`environment`, `env_file`, `-e`). Docker runtime only.
+
 ## Dotfiles and shell
 
 Bring your own environment: a login shell and dotfiles applied before the workspace accepts work.

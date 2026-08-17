@@ -1,3 +1,7 @@
+import {
+  formatWorkspaceEnvIssue,
+  parseWorkspaceEnv,
+} from "@sealant/api-contracts/workspace-environment";
 import { z } from "zod";
 
 export const workspaceBlueprintVersion = "1" as const;
@@ -229,9 +233,29 @@ export const workspaceDotfilesArchiveSchema = z.strictObject({
   bootstrapCommand: nonEmptyStringSchema.optional(),
 });
 
+/**
+ * Caller-owned workspace environment, validated against the public policy in
+ * `@sealant/api-contracts/workspace-environment` on EVERY parse — create, worker execution, and
+ * restart alike (stored pre-feature specs simply decode to the empty default). Distinct from the
+ * legacy `env` field below, which predates the policy and keeps its unrestricted semantics for
+ * stored-spec compatibility; new callers and the fluent SDK use only `userEnv`.
+ */
+export const workspaceUserEnvSchema = z
+  .record(z.string(), z.string())
+  .default({})
+  .superRefine((value, ctx) => {
+    const result = parseWorkspaceEnv(value);
+    if (!result.ok) {
+      for (const issue of result.issues) {
+        ctx.addIssue({ code: "custom", message: formatWorkspaceEnvIssue(issue) });
+      }
+    }
+  });
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
+    userEnv: workspaceUserEnvSchema,
     credentialRefs: z.array(workspaceCredentialRefSchema).default([]),
     dotfilesArchives: z.array(workspaceDotfilesArchiveSchema).max(4).default([]),
     workspaceRoot: nonEmptyStringSchema.default("/workspace"),

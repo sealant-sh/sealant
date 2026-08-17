@@ -69,6 +69,12 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   // tracked, pre-existing item).
   credentialEnv: z.record(z.string(), z.string()).optional(),
   credentialFiles: z.array(credentialFileInjectionSchema).optional(),
+  // TRANSIENT platform-owned launch environment resolved by the worker just before launch (today:
+  // dotfiles clone auth, `SEALANT_DOTFILES_HTTP_*`). Deliberately NOT part of the blueprint: the
+  // blueprint is the persisted restart source, and worker-resolved tokens must never be conflated
+  // with either caller env field or written to a job/attempt payload. Emitted after every
+  // blueprint env so it cannot be shadowed, before `credentialEnv`.
+  platformEnv: z.record(z.string(), z.string()).optional(),
   // Host directory staged by the worker with manifest.json + *.tar.gz dotfiles archives. The
   // adapter bind-mounts it read-only and points SEALANT_DOTFILES_ARCHIVE_DIR at the mount so
   // `sealantd boot` applies the archives before the control socket binds.

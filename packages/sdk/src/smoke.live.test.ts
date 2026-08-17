@@ -91,4 +91,57 @@ describe.skipIf(SMOKE_BASE_URL === undefined)("@sealant/sdk live smoke (control-
       await sealant.close();
     }
   });
+
+  it("accepts `env` on create and the map survives a handle reacquired via workspaces.get()", async () => {
+    const sealant = new Sealant({ baseUrl });
+    try {
+      const workspace = await sealant.workspaces.create({
+        repository: "github.com/sindresorhus/is-odd",
+        harness: opencode(),
+        env: { WORKSPACE_ENV_PROOF: "sdk-smoke-canary" },
+        wait: false,
+      });
+      expect(workspace.id).toBeTruthy();
+      const reacquired = await sealant.workspaces.get(workspace.id);
+      expect(reacquired.id).toBe(workspace.id);
+    } finally {
+      await sealant.close();
+    }
+  });
+
+  // The heavyweight full proof: wait for the build, exec inside the live workspace through the
+  // PUBLIC facade, and read the created-with env back — on the original handle AND on one
+  // reacquired via workspaces.get(). First build on a cold stack can take minutes; opt in with
+  // SEALANT_SMOKE_FULL=1 alongside SEALANT_SMOKE_BASE_URL.
+  it.skipIf(process.env["SEALANT_SMOKE_FULL"] !== "1")(
+    "a live workspace's processes inherit the created-with env (original + reacquired handle)",
+    async () => {
+      const sealant = new Sealant({ baseUrl });
+      let workspace;
+      try {
+        workspace = await sealant.workspaces.create({
+          repository: "github.com/sindresorhus/is-odd",
+          harness: opencode(),
+          env: { WORKSPACE_ENV_PROOF: "sdk-smoke-canary" },
+        });
+
+        const direct = await workspace.exec(["/bin/sh", "-c", 'printf %s "$WORKSPACE_ENV_PROOF"']);
+        expect(direct.exitCode).toBe(0);
+        expect(direct.stdout).toBe("sdk-smoke-canary");
+
+        const reacquired = await sealant.workspaces.get(workspace.id);
+        const viaReacquired = await reacquired.exec([
+          "/bin/sh",
+          "-c",
+          'printf %s "$WORKSPACE_ENV_PROOF"',
+        ]);
+        expect(viaReacquired.exitCode).toBe(0);
+        expect(viaReacquired.stdout).toBe("sdk-smoke-canary");
+      } finally {
+        await workspace?.stop().catch(() => {});
+        await sealant.close();
+      }
+    },
+    600_000,
+  );
 });

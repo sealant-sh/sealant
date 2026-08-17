@@ -955,6 +955,100 @@ describe("DockerRuntimeAdapter", () => {
     expect(runArgs).toContain("GITHUB_TOKEN=gho_test");
   });
 
+  it("emits caller userEnv -e args before every platform-owned emission", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-user-env\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        ...createLaunchInput({
+          runtime: { userEnv: { APP_MODE: "review", EMPTY_VALUE: "" } },
+        }),
+        platformEnv: { SEALANT_DOTFILES_HTTP_USERNAME: "x-access-token" },
+        credentialEnv: { GITHUB_TOKEN: "gho_test" },
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs).toContain("APP_MODE=review");
+    expect(runArgs).toContain("EMPTY_VALUE=");
+    // docker applies last-wins for duplicate -e flags: userEnv < SEALANT_* controls < platformEnv
+    // < credentialEnv, so a caller entry can never shadow anything platform-owned.
+    expect(runArgs.indexOf("APP_MODE=review")).toBeLessThan(
+      runArgs.indexOf("SEALANT_OCI_RUNTIME=runc"),
+    );
+    expect(runArgs.indexOf("SEALANT_OCI_RUNTIME=runc")).toBeLessThan(
+      runArgs.indexOf("SEALANT_DOTFILES_HTTP_USERNAME=x-access-token"),
+    );
+    expect(runArgs.indexOf("SEALANT_DOTFILES_HTTP_USERNAME=x-access-token")).toBeLessThan(
+      runArgs.indexOf("GITHUB_TOKEN=gho_test"),
+    );
+  });
+
+  it("rejects launch input whose userEnv violates the workspace environment policy", () => {
+    expect(() => createLaunchInput({ runtime: { userEnv: { GITHUB_TOKEN: "x" } } })).toThrow(
+      /reserved/,
+    );
+    expect(() => createLaunchInput({ runtime: { userEnv: { SEALANT_ANYTHING: "x" } } })).toThrow(
+      /reserved/,
+    );
+    expect(() => createLaunchInput({ runtime: { userEnv: { "BAD NAME": "x" } } })).toThrow(
+      /A-Za-z_/,
+    );
+  });
+
+  it("orders credentialEnv after legacy runtime.env so the injected token wins", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-cred-order\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.launch(
+      parseRuntimeAdapterLaunchInput({
+        // Legacy `runtime.env` is unrestricted, so a stored spec CAN carry GITHUB_TOKEN; the
+        // securely-resolved connected-account value must still win via last-wins ordering.
+        ...createLaunchInput({ runtime: { env: { GITHUB_TOKEN: "user-set" } } }),
+        credentialEnv: { GITHUB_TOKEN: "gho_test" },
+      }),
+    );
+
+    const runArgs = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(runArgs.indexOf("GITHUB_TOKEN=user-set")).toBeGreaterThan(-1);
+    expect(runArgs.indexOf("GITHUB_TOKEN=user-set")).toBeLessThan(
+      runArgs.indexOf("GITHUB_TOKEN=gho_test"),
+    );
+  });
+
   it("writes credential files over stdin after the container is ready", async () => {
     const contentBase64 = Buffer.from('{"tokens":{}}', "utf8").toString("base64");
     const commandRunner = vi.fn<

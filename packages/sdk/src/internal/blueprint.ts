@@ -13,6 +13,10 @@
 import { randomUUID } from "node:crypto";
 
 import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
+import {
+  formatWorkspaceEnvIssue,
+  parseWorkspaceEnv,
+} from "@sealant/api-contracts/workspace-environment";
 
 import { SealantError } from "../errors.js";
 import type { CreateOptions } from "../types.js";
@@ -122,6 +126,36 @@ export const buildCreateWorkspaceRequest = (
         };
   const dotfilesRepository = options.dotfiles?.repository;
   const dotfilesArchives = options.dotfiles?.archives ?? [];
+  // Client-side rejection with the exact policy the control plane re-applies on parse: same
+  // module, same messages, so a bad name fails here instead of as an opaque 400.
+  const envResult = options.env === undefined ? undefined : parseWorkspaceEnv(options.env);
+  if (envResult !== undefined && !envResult.ok) {
+    throw new SealantError(
+      `workspaces.create \`env\` was rejected: ${envResult.issues
+        .map(formatWorkspaceEnvIssue)
+        .join("; ")}`,
+      { code: "invalid_workspace_env" },
+    );
+  }
+  const userEnv = envResult === undefined ? undefined : envResult.env;
+  // One `runtime` object for every runtime-scoped field: two conditional `runtime:` spreads in the
+  // spec literal would let the later one silently clobber the earlier.
+  const runtime = {
+    ...(dotfilesArchives.length === 0
+      ? {}
+      : {
+          dotfilesArchives: dotfilesArchives.map((archive) => ({
+            data: archive.data,
+            ...(archive.manager === undefined ? {} : { manager: archive.manager }),
+            ...(archive.target === undefined ? {} : { target: archive.target }),
+            ...(archive.bootstrap === undefined ? {} : { bootstrap: archive.bootstrap }),
+            ...(archive.bootstrapCommand === undefined
+              ? {}
+              : { bootstrapCommand: archive.bootstrapCommand }),
+          })),
+        }),
+    ...(userEnv === undefined || Object.keys(userEnv).length === 0 ? {} : { userEnv }),
+  };
   const spec = {
     version: "1",
     sources: {
@@ -176,21 +210,7 @@ export const buildCreateWorkspaceRequest = (
         ? {}
         : { dotfilesBootstrapCommand: dotfilesRepository.bootstrapCommand }),
     },
-    ...(dotfilesArchives.length === 0
-      ? {}
-      : {
-          runtime: {
-            dotfilesArchives: dotfilesArchives.map((archive) => ({
-              data: archive.data,
-              ...(archive.manager === undefined ? {} : { manager: archive.manager }),
-              ...(archive.target === undefined ? {} : { target: archive.target }),
-              ...(archive.bootstrap === undefined ? {} : { bootstrap: archive.bootstrap }),
-              ...(archive.bootstrapCommand === undefined
-                ? {}
-                : { bootstrapCommand: archive.bootstrapCommand }),
-            })),
-          },
-        }),
+    ...(Object.keys(runtime).length === 0 ? {} : { runtime }),
     target: {
       os:
         options.baseImage !== undefined
