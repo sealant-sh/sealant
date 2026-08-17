@@ -50,6 +50,11 @@ export const ociImageBuildJobs = pgTable(
     repository: text().notNull(),
     tag: text().notNull(),
     requestPayload: jsonb("request_payload").$type<NewWorkspace>().notNull(),
+    // The transient secret channel: `secretEnv` sealed with the credential cipher at create,
+    // decrypted by the worker just before launch, and CLEARED once the launch phase settles —
+    // success or failure — so a settled row never carries it. Null on restart re-enqueues:
+    // restarted workspaces run without secret env by design.
+    secretEnvSealed: text("secret_env_sealed"),
     idempotencyKey: text(),
     attemptCount: integer().notNull().default(0),
     maxAttempts: integer().notNull().default(3),

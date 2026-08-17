@@ -406,6 +406,47 @@ describe("workspace env lowering", () => {
     ).toThrow(/GITHUB_TOKEN is reserved[\s\S]*A-Za-z_/);
   });
 
+  it("lowers secretEnv onto the request TOP LEVEL, never into the spec", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        repository: "github.com/acme/app",
+        harness: opencode(),
+        env: { APP_MODE: "review" },
+        secretEnv: { DATABASE_URL: "postgres://u:p@h/db", STRIPE_API_KEY: "sk_live_x" },
+      },
+      config,
+    );
+    expect(payload.secretEnv).toEqual({
+      DATABASE_URL: "postgres://u:p@h/db",
+      STRIPE_API_KEY: "sk_live_x",
+    });
+    // The spec is the durable, API-visible blueprint — the secrets must not be anywhere in it.
+    expect(JSON.stringify(payload.spec)).not.toContain("postgres://u:p@h/db");
+    expect(JSON.stringify(payload.spec)).not.toContain("sk_live_x");
+    expect(JSON.stringify(payload.spec)).not.toContain("STRIPE_API_KEY");
+  });
+
+  it("omits secretEnv from the request when empty", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { repository: "github.com/acme/app", harness: opencode(), secretEnv: {} },
+      config,
+    );
+    expect(payload.secretEnv).toBeUndefined();
+  });
+
+  it("rejects secretEnv that names platform-owned or connected-account keys", () => {
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          repository: "github.com/acme/app",
+          harness: opencode(),
+          secretEnv: { GITHUB_TOKEN: "ghp_x" },
+        },
+        config,
+      ),
+    ).toThrow(/GITHUB_TOKEN is reserved/);
+  });
+
   it("rejects secret-looking names with the daemon-filter explanation", () => {
     expect(() =>
       buildCreateWorkspaceRequest(

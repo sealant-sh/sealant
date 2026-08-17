@@ -1,0 +1,1 @@
+ALTER TABLE "oci_image_build_jobs" ADD COLUMN "secret_env_sealed" text;

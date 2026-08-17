@@ -19,7 +19,7 @@ import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
-import { dotfilesStagingRoot } from "./process-workspace-build-job.js";
+import { dotfilesStagingRoot, removeStagedSecretEnv } from "./process-workspace-build-job.js";
 
 export interface ProcessWorkspaceStopEffectOptions {
   /**
@@ -153,6 +153,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       force: true,
     }),
   );
+  // Same for a staged secret env file: normally removed at readiness, but a launch that died
+  // in between must not leave a 0600 secret file on the host.
+  yield* Effect.promise(() => removeStagedSecretEnv(options.runId));
 
   yield* runtimeInstances
     .markStopped({ runId: options.runId, stopReason: options.stopReason })

@@ -37,7 +37,15 @@ import {
   type WorkspaceSshTarget,
   type WorkspaceSummary,
 } from "@sealant/api-contracts";
-import { connectedAccountProviders, createConnectedAccountRef } from "@sealant/credentials";
+import {
+  formatWorkspaceEnvIssue,
+  parseWorkspaceSecretEnv,
+} from "@sealant/api-contracts/workspace-environment";
+import {
+  connectedAccountProviders,
+  createConnectedAccountRef,
+  CredentialCipher,
+} from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   GitHubInstallationRepo,
@@ -172,6 +180,34 @@ const parseWorkspaceSpec = (spec: unknown) => {
 
   return Effect.succeed(parsed.data);
 };
+
+/**
+ * Validate and seal the create-request `secretEnv` (the transient secret channel). Rejections carry
+ * the policy's value-free wording; an empty/absent map seals nothing. Sealing uses the same
+ * credential cipher as connected accounts, so the row is unreadable without the install's key.
+ */
+const sealSecretEnv = (secretEnv: Readonly<Record<string, string>> | undefined) =>
+  Effect.gen(function* () {
+    if (secretEnv === undefined || Object.keys(secretEnv).length === 0) {
+      return undefined;
+    }
+    const parsed = parseWorkspaceSecretEnv(secretEnv);
+    if (!parsed.ok) {
+      return yield* new WorkspaceBadRequestError({
+        message: `secretEnv was rejected: ${parsed.issues.map(formatWorkspaceEnvIssue).join("; ")}`,
+      });
+    }
+    const cipher = yield* CredentialCipher;
+    const sealed = yield* cipher.encrypt(JSON.stringify(parsed.env)).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceInternalServerError({
+            message: `Could not seal secretEnv for launch: ${error.message}`,
+          }),
+      ),
+    );
+    return sealed.sealed;
+  });
 
 const readIdempotencyKey = (headers: CreateWorkspaceHeaders): string | undefined => {
   return headers["idempotency-key"];
@@ -1208,6 +1244,12 @@ export const createWorkspace = (input: {
     });
 
     resolvedSpec.runtime = { ...resolvedSpec.runtime, credentialRefs };
+
+    // The transient secret channel. Validated with the public policy (same messages the SDK
+    // showed client-side), then SEALED for the job row only: never the spec, never the attempt
+    // snapshot, never a read response. The worker decrypts just before launch and the row is
+    // cleared once the launch phase settles.
+    const secretEnvSealed = yield* sealSecretEnv(body.secretEnv);
     // The create-payload `credentials` key is now fully lowered into `runtime.credentialRefs` —
     // strip it before the spec is persisted for the build job: the worker's blueprint schema is
     // strict, and a spec that keeps the key fails every build at `parseWorkspaceBlueprint`
@@ -1285,6 +1327,7 @@ export const createWorkspace = (input: {
           repository: body.repository,
           tag: body.tag,
           requestPayload: resolvedSpec,
+          ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
           ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         });
       }),

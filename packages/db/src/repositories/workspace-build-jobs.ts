@@ -17,6 +17,8 @@ export interface EnqueueWorkspaceBuildJobInput {
   readonly repository: string;
   readonly tag: string;
   readonly requestPayload: NewWorkspace;
+  /** Sealed (encrypted) `secretEnv` JSON; cleared by `clearSecretEnv` after launch. */
+  readonly secretEnvSealed?: string;
   readonly idempotencyKey?: string;
   readonly availableAt?: Date;
   readonly maxAttempts?: number;
@@ -74,6 +76,7 @@ export type WorkspaceBuildJobRepository = WorkspaceBuildJobRepoService;
 const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "claimJobById",
   "claimNextQueuedJob",
+  "clearSecretEnv",
   "getJobById",
   "getJobByIdempotencyKey",
   "getLatestJobByRunId",
@@ -181,6 +184,8 @@ export interface WorkspaceBuildJobRepoService {
   readonly markJobFailed: (
     input: MarkWorkspaceBuildJobFailedInput,
   ) => Effect.Effect<WorkspaceBuildJob | null, WorkspaceBuildJobRepoError>;
+  /** Drop the sealed secret env once the launch phase has settled; idempotent. */
+  readonly clearSecretEnv: (id: string) => Effect.Effect<void, WorkspaceBuildJobRepoError>;
 }
 
 export class WorkspaceBuildJobRepo extends Context.Service<
@@ -208,6 +213,9 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 repository: input.repository,
                 tag: input.tag,
                 requestPayload: input.requestPayload,
+                ...(input.secretEnvSealed === undefined
+                  ? {}
+                  : { secretEnvSealed: input.secretEnvSealed }),
                 ...(input.idempotencyKey === undefined
                   ? {}
                   : { idempotencyKey: input.idempotencyKey }),
@@ -493,6 +501,17 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
               .returning();
 
             return job ?? null;
+          }),
+        ),
+
+      clearSecretEnv: (id) =>
+        withWorkspaceBuildJobRepoError(
+          "clearSecretEnv",
+          Effect.gen(function* () {
+            yield* db
+              .update(workspaceBuildJobs)
+              .set({ secretEnvSealed: null })
+              .where(eq(workspaceBuildJobs.id, id));
           }),
         ),
     } satisfies WorkspaceBuildJobRepoService;

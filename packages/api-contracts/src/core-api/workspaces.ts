@@ -78,6 +78,10 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   dotfilesSelection: Schema.optional(githubWorkspaceSourceSelectionSchema),
   credentials: Schema.optional(createWorkspaceCredentialsSchema),
   spec: Schema.Unknown,
+  // The transient secret channel: validated by `parseWorkspaceSecretEnv`, encrypted at rest on
+  // the build job until launch, delivered to the workspace daemon as a boot file, and NEVER part
+  // of the blueprint/spec, the attempt snapshot, or any read response. See the SDK README.
+  secretEnv: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
   // applies. The reaper stops the workspace once the TTL elapses.
   ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
