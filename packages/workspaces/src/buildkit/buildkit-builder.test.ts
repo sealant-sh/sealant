@@ -793,6 +793,8 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
     expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
+    // Codex's sandbox prerequisite is baked with the CLI — no "could not find bubblewrap" banner.
+    expect(containerfile).toMatch(/dnf -y install [^\n]*\bbubblewrap\b/);
     expect(containerfile).toContain(
       "COPY --from=ghcr.io/sealant-sh/sealantd:0.10.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
@@ -931,6 +933,7 @@ describe("compileWorkspaceBuildSpec", () => {
     );
     expect(containerfile).toContain("nixpkgs#openssh");
     expect(containerfile).toContain("nixpkgs#gitMinimal");
+    expect(containerfile).toContain("nixpkgs#bubblewrap");
     expect(containerfile).not.toContain("nixpkgs#git'");
     expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
     expect(containerfile).toContain(

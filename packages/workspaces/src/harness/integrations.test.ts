@@ -16,7 +16,8 @@ describe("harness integrations", () => {
     });
     expect(codex).toMatchObject({
       id: "codex",
-      installPackages: ["nodejs"],
+      // bubblewrap rides with the CLI: Codex's sandbox prerequisite, on every family.
+      installPackages: ["nodejs", "bubblewrap"],
       installCommand: "npm install -g @openai/codex@latest",
       launchCommand: "codex",
     });

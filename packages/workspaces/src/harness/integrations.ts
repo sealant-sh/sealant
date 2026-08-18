@@ -29,7 +29,10 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
   },
   codex: {
     id: "codex",
-    installPackages: ["nodejs"],
+    // bubblewrap: Codex's Linux sandbox wants a system `bwrap` and prints an amber "could not find
+    // bubblewrap on PATH … using the bundled bubblewrap" banner on every launch without it. The
+    // package is named `bubblewrap` on fedora, arch, ubuntu and nixpkgs alike, so no distro map.
+    installPackages: ["nodejs", "bubblewrap"],
     installCommand: "npm install -g @openai/codex@latest",
     launchCommand: "codex",
     buildRunCommand: (prompt) => ({ executable: "codex", args: ["exec", prompt] }),
