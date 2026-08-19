@@ -1184,6 +1184,12 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
     // them without package-manager involvement.
     `COPY --chmod=755 --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     `COPY --chmod=755 --from=${sealantdImageReference} /usr/local/bin/socat /usr/local/bin/socat`,
+    // Not every base has /usr/local/bin on PATH (nixos/nix ships only its profile dirs), and
+    // everything we bake lands there: in-container name lookups (docker, socat, sealantd's own
+    // manager detection) must resolve regardless of the base's PATH. The ENTRYPOINT is absolute
+    // for the same reason — exec-form bare names resolve against the image PATH at container
+    // init, before any shell profile runs.
+    "ENV PATH=/usr/local/bin:$PATH",
     ...(plan.blueprint.tooling.services?.docker?.enabled === true
       ? [
           "",
@@ -1203,7 +1209,7 @@ const renderCustomBaseContainerfile = (plan: ResolvedImagePlan): string => {
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
-    'ENTRYPOINT ["sealantd", "boot"]',
+    'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
     "",
   ].join("\n");
 };
@@ -1237,6 +1243,11 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     // without bundling a local build context.
     `COPY --from=${sealantdImageReference} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
     "RUN chmod 755 /usr/local/bin/sealantd",
+    // nixos/nix's PATH is only its profile dirs — /usr/local/bin (sealantd, the docker CLI
+    // below) must be reachable by name on every family. Redundant where the base already has
+    // it; load-bearing on nix. The ENTRYPOINT is absolute for the same reason: exec-form bare
+    // names resolve against the image PATH at container init.
+    "ENV PATH=/usr/local/bin:$PATH",
     ...(plan.blueprint.tooling.services?.docker?.enabled === true
       ? [
           "",
@@ -1262,7 +1273,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     renderBootEnv(plan),
     "",
     "WORKDIR /workspace",
-    'ENTRYPOINT ["sealantd", "boot"]',
+    'ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]',
     "",
   ].join("\n");
 };
