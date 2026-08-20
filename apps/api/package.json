@@ -18,6 +18,7 @@
     "@hono/node-server": "^1.18.1",
     "@hono/standard-validator": "^0.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/codex": "0.148.0",
     "@scalar/hono-api-reference": "^0.9.13",
     "@sealant/api-contracts": "workspace:*",
     "@sealant/credentials": "workspace:*",

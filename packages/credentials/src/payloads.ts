@@ -280,6 +280,37 @@ export const parseCodexAuthJson = (raw: string): ParseCodexAuthJsonResult => {
   };
 };
 
+/**
+ * SECRET-bearing extraction (unlike {@link parseCodexAuthJson}): returns every token-like value an
+ * auth.json can carry so callers can redact ALL of them from any outbound error text (the codex
+ * inference engine's stderr can echo whichever one the CLI used). Returns an empty list when the
+ * shape is unusable; never throws.
+ */
+export const extractCodexSecrets = (authJson: string): readonly string[] => {
+  try {
+    const root = asRecord(JSON.parse(authJson));
+
+    if (root === undefined) {
+      return [];
+    }
+
+    const tokens = asRecord(root.tokens);
+
+    return [
+      asNonEmptyString(root.OPENAI_API_KEY),
+      ...(tokens === undefined
+        ? []
+        : [
+            asNonEmptyString(tokens.access_token),
+            asNonEmptyString(tokens.refresh_token),
+            asNonEmptyString(tokens.id_token),
+          ]),
+    ].filter((secret): secret is string => secret !== undefined);
+  } catch {
+    return [];
+  }
+};
+
 // ---------------------------------------------------------------------------
 // GitHub — gh CLI token (`gh auth token`). Any non-empty token is accepted at
 // the schema level; prefix knowledge is warn-level and lives in callers.

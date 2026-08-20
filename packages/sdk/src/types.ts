@@ -886,15 +886,20 @@ export interface AccessTokensNamespace {
 /**
  * Connected-account selection for inference — the same reference shape as workspace creation,
  * minus GitHub (not a model provider). `true` means "my default account"; a string names one.
- * Only claude accounts are supported today; a codex selection is rejected until Codex inference
- * ships. SECURITY: only account references cross this surface — never token material.
+ * Selecting both providers in one exchange is ambiguous and rejected; a profile-only selection
+ * prefers the profile's claude binding and falls back to its codex binding. SECURITY: only
+ * account references cross this surface — never token material.
  */
 export interface InferenceCredentialsOptions {
-  /** Profile id whose claude binding applies when `claude` is not set explicitly. */
+  /** Profile id whose claude (else codex) binding applies when neither is set explicitly. */
   readonly profile?: string;
   /** `true` for the caller's default claude account, or a string naming a specific one. */
   readonly claude?: boolean | string;
-  /** Reserved — rejected until Codex inference ships. */
+  /**
+   * `true` for the caller's default codex account, or a string naming a specific one. Codex
+   * exchanges are tool-less today: caller-defined `tools` are rejected, and the exchange settles
+   * in a single turn.
+   */
   readonly codex?: boolean | string;
 }
 

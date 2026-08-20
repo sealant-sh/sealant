@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CLAUDE_TOKEN_PREFIX,
   extractClaudeOauthCredentials,
+  extractCodexSecrets,
   hasKnownGitHubTokenPrefix,
   parseClaudeCredentialPayload,
   parseClaudeCredentialsFilePayload,
@@ -262,5 +263,31 @@ describe("parseCodexAuthJson", () => {
     );
 
     expect(result).toEqual({ valid: true, metadata: {} });
+  });
+});
+
+describe("extractCodexSecrets", () => {
+  it("returns every token-like value a chatgpt-mode auth.json carries", () => {
+    const secrets = extractCodexSecrets(
+      JSON.stringify({
+        tokens: { access_token: "at-1", refresh_token: "rt-1", id_token: "idt-1" },
+        last_refresh: "2026-07-01T00:00:00Z",
+      }),
+    );
+
+    expect(secrets).toEqual(["at-1", "rt-1", "idt-1"]);
+  });
+
+  it("returns the API key for an api-key-mode auth.json", () => {
+    expect(extractCodexSecrets(JSON.stringify({ OPENAI_API_KEY: "sk-proj-123" }))).toEqual([
+      "sk-proj-123",
+    ]);
+  });
+
+  it("returns an empty list for malformed or empty shapes, never throwing", () => {
+    expect(extractCodexSecrets("not json {")).toEqual([]);
+    expect(extractCodexSecrets('["array"]')).toEqual([]);
+    expect(extractCodexSecrets(JSON.stringify({ tokens: {} }))).toEqual([]);
+    expect(extractCodexSecrets(JSON.stringify({ OPENAI_API_KEY: "" }))).toEqual([]);
   });
 });

@@ -20,6 +20,9 @@ RUN pnpm --filter @sealant/api build
 # @anthropic-ai/claude-agent-sdk-{platform}-{arch} from a node_modules next to the bundle. Stage the
 # builder-resolved platform package so the runtime carries it at the version the bundle expects.
 RUN node tooling/scripts/stage-agent-cli.mjs apps/api /staged
+# Same story for the Codex CLI: the codex inference engine spawns @openai/codex/bin/codex.js, which
+# resolves its @openai/codex-{platform}-{arch} vendored binary next to the bundle.
+RUN node tooling/scripts/stage-codex-cli.mjs apps/api /staged
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
@@ -32,5 +35,7 @@ COPY --from=builder /staged/node_modules ./node_modules
 # Assert the vendored claude binary resolves exactly the way the bundle will resolve it at runtime,
 # per arch — a broken layout must fail the image build, not the first inference in production.
 RUN node -e "const{createRequire}=require('node:module');const p=createRequire('/app/dist/index.js').resolve('@anthropic-ai/claude-agent-sdk-'+process.platform+'-'+process.arch+'/claude');require('node:fs').accessSync(p);console.log('claude CLI resolvable: '+p)"
+# Same assert for the Codex CLI: the launcher AND its platform binary package must both resolve.
+RUN node -e "const{createRequire}=require('node:module');const r=createRequire('/app/dist/index.js');const launcher=r.resolve('@openai/codex/bin/codex.js');require('node:fs').accessSync(launcher);const platform=createRequire(r.resolve('@openai/codex/package.json')).resolve('@openai/codex-'+process.platform+'-'+process.arch+'/package.json');console.log('codex CLI resolvable: '+launcher+' (+ '+platform+')')"
 USER node
 CMD ["node", "dist/index.js"]
