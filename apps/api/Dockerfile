@@ -26,6 +26,11 @@ RUN node tooling/scripts/stage-codex-cli.mjs apps/api /staged
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
+# System CA certificates: node ships its own TLS roots, but the vendored Codex CLI is a native
+# binary that validates against /etc/ssl/certs — without this, every codex inference exchange
+# dies with "invalid peer certificate: UnknownIssuer" (found live on v0.20.0; the claude path
+# never noticed because the Agent SDK runs through node).
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/apps/api/dist ./dist
 # Committed SQL migrations for dist/migrate.js (folder-per-migration layout drizzle-orm reads directly).
