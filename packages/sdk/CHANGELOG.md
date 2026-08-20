@@ -4,23 +4,24 @@
 
 ### Minor Changes
 
-- 7e8d789: Codex inference on connected accounts: `/v1/inference/respond` (and `sealant.inference.respond`) now
-  accepts `credentials: { codex: true | "<name>" }` and runs the exchange through the official Codex
-  CLI against a private per-invocation `CODEX_HOME`, on the caller's own OpenAI subscription. `model`
-  passes through verbatim on both arms. The rotated auth.json is read back at end of exchange and
-  persisted newest-wins, exactly like the workspace sync-back. Tool-less v1: caller-defined `tools`
-  stay claude-only (a codex exchange with tools is a 400), `maxTurns` is claude-only, and a
-  profile-only selection prefers the profile's claude binding before falling back to its codex
-  binding. Selecting both providers in one exchange is now an explicit 400.
+- 7e8d789: Codex inference on connected accounts: `/v1/inference/respond` (and
+  `sealant.inference.respond`) now accepts `credentials: { codex: true | "<name>" }` and runs the
+  exchange through the official Codex CLI against a private per-invocation `CODEX_HOME`, on the
+  caller's own OpenAI subscription. `model` passes through verbatim on both arms. The rotated
+  auth.json is read back at end of exchange and persisted newest-wins, exactly like the workspace
+  sync-back. Tool-less v1: caller-defined `tools` stay claude-only (a codex exchange with tools is a
+  400), `maxTurns` is claude-only, and a profile-only selection prefers the profile's claude binding
+  before falling back to its codex binding. Selecting both providers in one exchange is now an
+  explicit 400.
 
 ### Patch Changes
 
-- 8fce747: Nix-family workspace images boot again. The Containerfile set `ENTRYPOINT ["sealantd", "boot"]`
-  — exec form with a bare name, resolved against the image's `PATH` — but `nixos/nix` ships only
-  its profile dirs there, so every nix workspace died at container init with
-  `exec: "sealantd": executable file not found in $PATH` before ever reaching ready. The
-  entrypoint is now the absolute `/usr/local/bin/sealantd`, and both render paths (distro and
-  custom base) prepend `/usr/local/bin` to `PATH` so the other baked binaries (the docker CLI,
+- 8fce747: Nix-family workspace images boot again. The Containerfile set
+  `ENTRYPOINT ["sealantd", "boot"]` — exec form with a bare name, resolved against the image's
+  `PATH` — but `nixos/nix` ships only its profile dirs there, so every nix workspace died at
+  container init with `exec: "sealantd": executable file not found in $PATH` before ever reaching
+  ready. The entrypoint is now the absolute `/usr/local/bin/sealantd`, and both render paths (distro
+  and custom base) prepend `/usr/local/bin` to `PATH` so the other baked binaries (the docker CLI,
   socat, and anything sealantd resolves by name in-container) work on bases that don't include it.
 - Updated dependencies [7e8d789]
   - @sealant/api-contracts@0.20.0
@@ -29,12 +30,12 @@
 
 ### Patch Changes
 
-- efd0fe7: Workspace images bake `bubblewrap` alongside the Codex CLI. Codex's Linux sandbox wants a system
-  `bwrap` and printed "Codex could not find bubblewrap on PATH … will use the bundled bubblewrap" on
-  every launch without it — the first thing every new workspace showed. The prerequisite now travels
-  with the harness integration on every family (fedora, arch, ubuntu, nix), so the banner is gone and
-  Codex sandboxes with the distro's `bwrap`. Image plan hashes change, so existing workspace images
-  rebuild once.
+- efd0fe7: Workspace images bake `bubblewrap` alongside the Codex CLI. Codex's Linux sandbox wants a
+  system `bwrap` and printed "Codex could not find bubblewrap on PATH … will use the bundled
+  bubblewrap" on every launch without it — the first thing every new workspace showed. The
+  prerequisite now travels with the harness integration on every family (fedora, arch, ubuntu, nix),
+  so the banner is gone and Codex sandboxes with the distro's `bwrap`. Image plan hashes change, so
+  existing workspace images rebuild once.
 - Updated dependencies [efd0fe7]
   - @sealant/api-contracts@0.19.1
 
@@ -42,12 +43,13 @@
 
 ### Minor Changes
 
-- a761e8c: Secret environment variables on `workspaces.create({ secretEnv })` — the transient secret channel.
+- a761e8c: Secret environment variables on `workspaces.create({ secretEnv })` — the transient secret
+  channel.
 
   The map is validated by the exported `parseWorkspaceSecretEnv` (same grammar/bounds as `env`, same
   platform-owned reservations, but secret-shaped names allowed; connected-account names stay
-  reserved), rides the create request beside the spec, is sealed with the install's credential key on
-  the build job, decrypted by the worker just before launch, staged as a `0600` boot file the
+  reserved), rides the create request beside the spec, is sealed with the install's credential key
+  on the build job, decrypted by the worker just before launch, staged as a `0600` boot file the
   workspace daemon (sealantd ≥ 0.10.0) reads once, removed from the host the moment the workspace is
   ready, and cleared from the job row when the launch settles. It never enters the blueprint, the
   attempt snapshot, `docker run` argv, container env, or any read API; every value is masked in
@@ -61,16 +63,16 @@
   secret-looking names the workspace runtime would silently drop), lowered into a new strict
   `runtime.userEnv` blueprint field, set on the workspace container, and inherited by every process
   the platform starts inside the workspace — the harness, later shells, and exec'd commands. Values
-  are ordinary configuration by contract: they persist verbatim in the durable workspace spec and are
-  returned by workspace-details APIs; secrets stay on `credentials`. Live workspaces are never
+  are ordinary configuration by contract: they persist verbatim in the durable workspace spec and
+  are returned by workspace-details APIs; secrets stay on `credentials`. Live workspaces are never
   mutated, restarts reuse the stored spec, and caller values can never override platform controls or
   injected credentials (caller env is emitted first under docker's last-wins `-e` ordering).
 
   The policy is exported from both packages (`parseWorkspaceEnv`, `findWorkspaceEnvReservedRule`,
   `formatWorkspaceEnvIssue`, `WORKSPACE_ENV_*` constants; also importable via
   `@sealant/api-contracts/workspace-environment`) so downstream settings surfaces validate with the
-  platform's exact rules. Legacy `runtime.env` keeps its unrestricted stored-spec semantics and is not
-  emitted by the SDK; worker-resolved dotfiles clone auth moved off that field onto a transient
+  platform's exact rules. Legacy `runtime.env` keeps its unrestricted stored-spec semantics and is
+  not emitted by the SDK; worker-resolved dotfiles clone auth moved off that field onto a transient
   adapter launch input and no longer rides any blueprint env map.
 
 ### Patch Changes
@@ -83,10 +85,10 @@
 
 ### Patch Changes
 
-- 98521fc: Dotfiles archives now stage under the control-socket shared directory when the worker runs inside
-  the self-host compose stack. `docker run -v` resolves bind paths on the daemon's host filesystem, so
-  archives staged in the worker container's private tmpdir arrived as an empty mount and boot aborted
-  with "manifest.json: No such file or directory". The staging root now follows
+- 98521fc: Dotfiles archives now stage under the control-socket shared directory when the worker
+  runs inside the self-host compose stack. `docker run -v` resolves bind paths on the daemon's host
+  filesystem, so archives staged in the worker container's private tmpdir arrived as an empty mount
+  and boot aborted with "manifest.json: No such file or directory". The staging root now follows
   `WORKSPACE_CONTROL_SOCKET_HOST_DIR` (`<dir>/_dotfiles/…`) — the one path the stack bind-mounts at
   the same location on both sides — and host-run workers keep using the system tmpdir.
 - Updated dependencies [98521fc]
@@ -404,7 +406,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
