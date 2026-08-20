@@ -40,7 +40,11 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
   "claude-code": {
     id: "claude-code",
     installPackages: ["nodejs"],
-    installCommand: "npm install -g @anthropic-ai/claude-code@latest",
+    // --allow-scripts: recent npm blocks install scripts by default (supply-chain gate), and
+    // claude-code's postinstall is what links the native binary — without it the launcher dies
+    // with "claude native binary not installed". Older npm treats the unknown config as a warning.
+    installCommand:
+      "npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
     launchCommand: "claude",
     buildRunCommand: (prompt) => ({ executable: "claude", args: ["-p", prompt] }),
   },

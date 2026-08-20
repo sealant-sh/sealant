@@ -791,7 +791,9 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("FROM fedora:41");
     // Every baked harness is installed; the blueprint's own (opencode) rides as an extra.
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
-    expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
+    expect(containerfile).toContain(
+      "RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+    );
     expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
     // Codex's sandbox prerequisite is baked with the CLI — no "could not find bubblewrap" banner.
     expect(containerfile).toMatch(/dnf -y install [^\n]*\bbubblewrap\b/);
@@ -875,7 +877,9 @@ describe("compileWorkspaceBuildSpec", () => {
 
     expect(containerfile).toContain("RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf");
     expect(containerfile).toContain("RUN npm install -g @openai/codex@latest");
-    expect(containerfile).toContain("RUN npm install -g @anthropic-ai/claude-code@latest");
+    expect(containerfile).toContain(
+      "RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
+    );
     // Harness foreground resolves its launch command from RUNTIME env (docker `-e`), not image
     // ENV. No `SEALANT_FOREGROUND_RUN_JSON` for harness kind.
     expect(containerfile).not.toContain("SEALANT_HARNESS_LAUNCH_COMMAND");
@@ -937,7 +941,7 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).not.toContain("nixpkgs#git'");
     expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
     expect(containerfile).toContain(
-      "RUN npm install -g --prefix /usr/local @anthropic-ai/claude-code@latest",
+      "RUN npm install -g --prefix /usr/local --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
     );
     expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
     expect(containerfile).not.toContain("RUN usermod -s");

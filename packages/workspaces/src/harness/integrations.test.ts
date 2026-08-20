@@ -24,7 +24,8 @@ describe("harness integrations", () => {
     expect(claudeCode).toMatchObject({
       id: "claude-code",
       installPackages: ["nodejs"],
-      installCommand: "npm install -g @anthropic-ai/claude-code@latest",
+      installCommand:
+        "npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
       launchCommand: "claude",
     });
   });
