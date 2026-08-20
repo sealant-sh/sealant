@@ -186,7 +186,7 @@ describe("compileWorkspaceBuildSpec", () => {
     }
     expect(containerfile).toContain("/usr/local/bin/sealantd");
     expect(containerfile).toContain("/usr/local/bin/docker");
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
   });
 
   it("adds the Docker client and Compose plugin for the runtime-managed Docker service", async () => {
@@ -342,7 +342,7 @@ describe("compileWorkspaceBuildSpec", () => {
     // The HTTP token stays run-dynamic (injected by the runtime adapter), never baked into ENV.
     expect(containerfile).not.toContain("SEALANT_DOTFILES_HTTP_TOKEN");
     // No generated entrypoint.sh exists anymore.
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
   });
 
   it("installs stow when the dotfiles manager is stow", () => {
@@ -799,7 +799,7 @@ describe("compileWorkspaceBuildSpec", () => {
       "COPY --from=ghcr.io/sealant-sh/sealantd:0.10.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
     );
     expect(containerfile).toContain("RUN chmod 755 /usr/local/bin/sealantd");
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
 
     // Build-static orchestration is conveyed via the ENV SEALANT_* contract `boot` reads.
     expect(containerfile).toContain("SEALANT_OS_FAMILY='fedora'");
@@ -941,7 +941,10 @@ describe("compileWorkspaceBuildSpec", () => {
     );
     expect(containerfile).toContain("ENV SHELL='/root/.nix-profile/bin/zsh'");
     expect(containerfile).not.toContain("RUN usermod -s");
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
+    // nixos/nix's PATH is only its profile dirs; without this prepend the container dies at
+    // init with `exec: "sealantd": executable file not found in $PATH`.
+    expect(containerfile).toContain("ENV PATH=/usr/local/bin:$PATH");
 
     // Nix-specific shell paths flow to `boot` via the build-static ENV contract so the supervisor
     // (E3 glibc shim, ssh bring-up, harness launch) resolves the right binaries per distro.
@@ -996,7 +999,7 @@ describe("compileWorkspaceBuildSpec", () => {
     );
 
     // PID 1 is `sealantd boot`; the control socket is conveyed via build-static ENV.
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
     expect(containerfile).toContain("SEALANT_CONTROL_SOCKET='/run/sealant/control.sock'");
 
     // No generated bash entrypoint, no opt-out flag, no inline `&`+trap supervision.
@@ -1050,7 +1053,7 @@ describe("compileWorkspaceBuildSpec", () => {
       expect(containerfile).toContain(
         "COPY --from=ghcr.io/sealant-sh/sealantd:0.10.0 /usr/local/bin/sealantd /usr/local/bin/sealantd",
       );
-      expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+      expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
     }
   });
 
@@ -1139,7 +1142,7 @@ describe("ubuntu distro family", () => {
     }
     expect(containerfile).toContain("RUN usermod -s '/usr/bin/zsh' root");
     expect(containerfile).toContain("SEALANT_OS_FAMILY='ubuntu'");
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
   });
 
   it("selects ubuntu when target.os.family requests it explicitly", () => {
@@ -1201,7 +1204,9 @@ describe("custom base images", () => {
     expect(containerfile).toContain("SEALANT_OS_FAMILY='custom'");
     expect(containerfile).toContain("SEALANT_LOGIN_SHELL_PATH='/bin/sh'");
     expect(containerfile).toContain("SEALANT_BASH_SHELL_PATH='/bin/sh'");
-    expect(containerfile).toContain('ENTRYPOINT ["sealantd", "boot"]');
+    expect(containerfile).toContain('ENTRYPOINT ["/usr/local/bin/sealantd", "boot"]');
+    // A custom base makes no PATH promises; the baked binaries must resolve by name anyway.
+    expect(containerfile).toContain("ENV PATH=/usr/local/bin:$PATH");
   });
 
   it("installs requested packages through the base's detected package manager", async () => {
