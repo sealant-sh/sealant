@@ -1,5 +1,30 @@
 # @sealant/sdk
 
+## 0.20.0
+
+### Minor Changes
+
+- 7e8d789: Codex inference on connected accounts: `/v1/inference/respond` (and `sealant.inference.respond`) now
+  accepts `credentials: { codex: true | "<name>" }` and runs the exchange through the official Codex
+  CLI against a private per-invocation `CODEX_HOME`, on the caller's own OpenAI subscription. `model`
+  passes through verbatim on both arms. The rotated auth.json is read back at end of exchange and
+  persisted newest-wins, exactly like the workspace sync-back. Tool-less v1: caller-defined `tools`
+  stay claude-only (a codex exchange with tools is a 400), `maxTurns` is claude-only, and a
+  profile-only selection prefers the profile's claude binding before falling back to its codex
+  binding. Selecting both providers in one exchange is now an explicit 400.
+
+### Patch Changes
+
+- 8fce747: Nix-family workspace images boot again. The Containerfile set `ENTRYPOINT ["sealantd", "boot"]`
+  — exec form with a bare name, resolved against the image's `PATH` — but `nixos/nix` ships only
+  its profile dirs there, so every nix workspace died at container init with
+  `exec: "sealantd": executable file not found in $PATH` before ever reaching ready. The
+  entrypoint is now the absolute `/usr/local/bin/sealantd`, and both render paths (distro and
+  custom base) prepend `/usr/local/bin` to `PATH` so the other baked binaries (the docker CLI,
+  socat, and anything sealantd resolves by name in-container) work on bases that don't include it.
+- Updated dependencies [7e8d789]
+  - @sealant/api-contracts@0.20.0
+
 ## 0.19.1
 
 ### Patch Changes
