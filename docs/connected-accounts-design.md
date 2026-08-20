@@ -85,7 +85,13 @@ posture.
   staleness, reactively on 401) and **rotates the refresh token**. We must sync the mutated
   auth.json back after runs, only ever overwrite our stored copy with a _newer_ `last_refresh`, and
   keep one live copy per credential (concurrent refreshes can permanently brick it). Seed the
-  sandbox only at launch; never re-seed a stale copy over a fresh one.
+  sandbox only at launch; never re-seed a stale copy over a fresh one. _Extended (Aug 2026):_ the
+  control plane also lets the CLI run outside workspaces — **inference at point of use** spawns the
+  official `codex exec` against a private per-invocation `CODEX_HOME` (0700 dir / 0600 auth.json)
+  holding the decrypted file, reads the possibly-rotated auth.json back when the exchange ends, and
+  persists it through the same newest-wins guard the workspace sync-back uses
+  (`persistCodexAuthJsonIfNewer`). The hard rule is unchanged: Sealant NEVER calls OpenAI's token
+  endpoint — every refresh is performed by the official CLI.
 
 ### GitHub — gh CLI token now, own GitHub App user-tokens later
 
@@ -294,7 +300,10 @@ anything; `--yes` skips prompts for scripting.
   `CLAUDE_CODE_OAUTH_TOKEN` set — inside the user's own deployment, on the user's own subscription.
   Never raw API calls. _Built (July 2026):_ the `/v1/inference/respond` endpoint +
   `sealant.inference.respond(...)` run exactly this path, with a caller-executed tool loop; internal
-  features can reuse the same engine.
+  features can reuse the same engine. _Extended (Aug 2026):_ codex accounts run the same endpoint
+  through the **official Codex CLI** (`codex exec` against a private per-invocation `CODEX_HOME`;
+  see §2 codex refresh) — tool-less v1: caller-defined tools stay claude-only until a parked-tool
+  transport for codex ships, and `model` passes through verbatim on both arms.
 
 ## 10. Build order
 

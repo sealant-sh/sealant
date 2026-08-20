@@ -10,7 +10,11 @@ import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect, Layer } from "effect";
 import { vi } from "vitest";
 
-import { isNewerCodexAuthRefresh, syncBackCodexAuthJson } from "./codex-auth-sync-back.js";
+import {
+  isNewerCodexAuthRefresh,
+  persistCodexAuthJsonIfNewer,
+  syncBackCodexAuthJson,
+} from "./codex-auth-sync-back.js";
 
 const fakeCipher: CredentialCipherService = {
   encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k-test" }),
@@ -257,6 +261,93 @@ describe("syncBackCodexAuthJson", () => {
         readAuthJson: () => Effect.succeed(authJsonWithRefresh("2026-07-04T00:00:00.000Z")),
       });
 
+      expect(accounts.updateSyncState).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+});
+
+describe("persistCodexAuthJsonIfNewer", () => {
+  it.effect("persists a strictly newer auth.json and reports 'synced'", () => {
+    const accounts = connectedAccountRepoStub(createCodexAccount());
+    const rotated = authJsonWithRefresh("2026-07-04T12:00:00.000Z");
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: rotated,
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("synced");
+      expect(accounts.replacePayload).toHaveBeenCalledOnce();
+      expect(accounts.updateSyncState).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("reports 'skipped-not-newer' for an equal refresh without writing", () => {
+    const accounts = connectedAccountRepoStub(createCodexAccount());
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: authJsonWithRefresh("2026-07-01T00:00:00.000Z"),
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("skipped-not-newer");
+      expect(accounts.replacePayload).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("reports 'skipped-invalid-file' for unparseable contents", () => {
+    const accounts = connectedAccountRepoStub(createCodexAccount());
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: "{ not json",
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("skipped-invalid-file");
+      expect(accounts.getById).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("reports 'skipped-account-unavailable' for a missing or archived account", () => {
+    const accounts = connectedAccountRepoStub(undefined);
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: authJsonWithRefresh("2026-07-04T00:00:00.000Z"),
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("skipped-account-unavailable");
+    }).pipe(Effect.provide(provideAccounts(accounts)));
+  });
+
+  it.effect("reports 'failed' (never throwing) when the repo write crashes", () => {
+    const accounts = {
+      getById: vi.fn((_id: string) => Effect.succeed(createCodexAccount())),
+      replacePayload: vi.fn((_input: unknown) => Effect.fail(new Error("db down"))),
+      updateSyncState: vi.fn((_input: unknown) => Effect.succeed(undefined)),
+    };
+
+    return Effect.gen(function* () {
+      const outcome = yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: "cacc_codex",
+        observedAuthJson: authJsonWithRefresh("2026-07-04T00:00:00.000Z"),
+        credentialCipher: fakeCipher,
+        source: "test",
+      });
+
+      expect(outcome).toBe("failed");
       expect(accounts.updateSyncState).not.toHaveBeenCalled();
     }).pipe(Effect.provide(provideAccounts(accounts)));
   });

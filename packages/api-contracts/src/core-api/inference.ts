@@ -1,20 +1,23 @@
 /**
  * Inference on connected accounts — run short, tool-calling inference loops on the caller's OWN
- * subscription (their connected Claude account), server-side, WITHOUT the caller ever seeing
- * secret material.
+ * subscription (their connected Claude or Codex account), server-side, WITHOUT the caller ever
+ * seeing secret material.
  *
  * COMPLIANCE (docs/connected-accounts-design.md, load-bearing): stored subscription credentials are
  * NEVER used for raw model-API calls. The server resolves the account reference, decrypts, and
- * invokes the OFFICIAL Claude Agent SDK with `CLAUDE_CODE_OAUTH_TOKEN` — the exact consumption path
- * Anthropic documents for third-party apps. Requests carry account REFERENCES only; responses carry
- * assistant turns only; token material never crosses this surface in either direction.
+ * invokes the OFFICIAL runtime for the account's provider — the Claude Agent SDK for claude
+ * accounts, the Codex CLI (against a private per-invocation CODEX_HOME) for codex accounts — the
+ * exact consumption paths the vendors document for third-party apps. Requests carry account
+ * REFERENCES only; responses carry assistant turns only; token material never crosses this surface
+ * in either direction.
  *
  * The tool loop is CALLER-EXECUTED: the request may define JSON-schema tools; when the model calls
  * one, the server parks the run and responds with the pending `toolCalls` turn + a `sessionId`; the
  * caller executes the tools on ITS side and posts the results back with that `sessionId`, repeating
  * until a `text` turn arrives. Sessions are held in memory by the serving process and expire after
  * a few idle minutes — callers must handle `InferenceNotFoundError` on a continuation by starting
- * the exchange over.
+ * the exchange over. Caller-defined tools are claude-only today: a codex exchange settles in one
+ * turn, and sending `tools` with a codex account is a 400.
  */
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
@@ -24,8 +27,8 @@ const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed
 /**
  * Connected-account selection — the same reference shape as workspace creation: values are account
  * ids (`cacc_…`) or per-provider account names; explicit entries win over the profile's bindings.
- * `claude` is the only provider implemented today; a `codex` selection is accepted by the schema
- * (shape parity with workspaces) but rejected with a 400 until Codex inference ships.
+ * Selecting both `claude` and `codex` in one exchange is ambiguous (400). A profileId-only
+ * selection prefers the profile's claude binding and falls back to its codex binding.
  */
 export const inferenceCredentialsSchema = Schema.Struct({
   profileId: Schema.optional(NonEmptyString),
@@ -63,9 +66,9 @@ export const inferenceRespondRequestSchema = Schema.Struct({
   credentials: Schema.optional(inferenceCredentialsSchema),
   prompt: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   system: Schema.optional(Schema.String),
-  /** Model override passed to the agent SDK (defaults to the SDK's default model). */
+  /** Model override passed to the official runtime verbatim (defaults to the runtime's default). */
   model: Schema.optional(NonEmptyString),
-  /** Upper bound on agentic turns within one exchange (default 16). */
+  /** Upper bound on agentic turns within one exchange (default 16). Claude-only; ignored by codex. */
   maxTurns: Schema.optional(
     Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 64 })),
   ),

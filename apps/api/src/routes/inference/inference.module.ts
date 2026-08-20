@@ -2,11 +2,14 @@
  * Inference route handlers — inference on connected accounts, via the official agent SDKs.
  *
  * Flow (design doc §9): resolve the caller's account REFERENCE (same shape and ownership semantics
- * as workspace creation), decrypt the stored credential, hand the token to {@link InferenceEngine}
- * (the official Claude Agent SDK), and stamp `last_used_at` — the same per-account attribution
- * workspace injection does. A live auth failure marks the account invalid (the in-process
- * equivalent of the `mark-invalid` 401-feedback endpoint). No handler ever returns or logs secret
- * material; engine errors pass through `redactSecret` before leaving this module.
+ * as workspace creation), decrypt the stored credential, hand it to the provider's engine —
+ * {@link InferenceEngine} (the official Claude Agent SDK) for claude accounts,
+ * {@link CodexInferenceEngine} (the official Codex CLI) for codex accounts — and stamp
+ * `last_used_at`, the same per-account attribution workspace injection does. A live auth failure
+ * on a setup-token claude account marks it invalid (the in-process equivalent of the
+ * `mark-invalid` 401-feedback endpoint); self-refreshing credentials (claude session files, codex
+ * auth.json) get a 409 "reconnect" instead. No handler ever returns or logs secret material;
+ * engine errors pass through `redactSecret` before leaving this module.
  */
 import {
   InferenceBadRequestError,
@@ -21,14 +24,25 @@ import {
 import {
   CredentialCipher,
   extractClaudeOauthCredentials,
+  extractCodexSecrets,
   parseClaudeCredentialPayload,
+  parseCodexCredentialPayload,
   provisionClaudeConfigDir,
+  provisionCodexHome,
   readClaudeConfigDirCredentials,
+  readCodexHomeAuthJson,
   removeClaudeConfigDir,
+  removeCodexHome,
   type ClaudeOauthCredentials,
+  type CredentialCipherService,
 } from "@sealant/credentials";
-import { ConnectedAccountRepo, ProfileRepo, type ConnectedAccount } from "@sealant/db";
-import { persistClaudeCredentialsIfNewer } from "@sealant/workspaces";
+import {
+  ConnectedAccountRepo,
+  ProfileRepo,
+  type ConnectedAccount,
+  type ConnectedAccountRepoService,
+} from "@sealant/db";
+import { persistClaudeCredentialsIfNewer, persistCodexAuthJsonIfNewer } from "@sealant/workspaces";
 import { Effect, Layer } from "effect";
 
 import { env } from "../../runtime-env.js";
@@ -37,6 +51,7 @@ import {
   InferenceEngineError,
   type InferenceEngineTurn,
 } from "./claude-engine.js";
+import { CodexInferenceEngine } from "./codex-engine.js";
 import { redactSecrets } from "./support.js";
 
 const toErrorMessage = (error: unknown, fallback: string): string =>
@@ -60,50 +75,62 @@ const requireCredentialsKey = Effect.gen(function* () {
 });
 
 /**
- * Resolve the request's credential selection to the claude connected account, mirroring the
+ * Resolve the request's credential selection to a connected account, mirroring the
  * workspace-create semantics: explicit id/name wins over the profile binding; unknown, foreign,
- * wrong-provider, and archived accounts are a uniform 404; an explicitly-named non-active account
- * is a 409 ("reconnect it"). Codex selections are rejected until Codex inference ships.
+ * wrong-provider, and archived accounts are a uniform 404; a non-active account is a 409
+ * ("reconnect it"). Selecting both providers in one exchange is ambiguous (400). A profileId-only
+ * selection prefers the profile's claude binding and falls back to its codex binding.
  */
-const resolveClaudeAccount = (input: {
+const resolveAccount = (input: {
   readonly ownerUserId: string;
   readonly credentials: NonNullable<InferenceRespondRequest["credentials"]>;
 }) =>
   Effect.gen(function* () {
     const credentials = input.credentials;
-    if (credentials.codex !== undefined && credentials.claude === undefined) {
+    if (credentials.claude !== undefined && credentials.codex !== undefined) {
       return yield* new InferenceBadRequestError({
         message:
-          "Codex inference is not supported yet — select a claude connected account (the design doc's agent-SDK path currently covers Claude only).",
+          "Select one provider per exchange: set credentials.claude or credentials.codex, not both.",
       });
     }
 
     const accounts = yield* ConnectedAccountRepo;
+
+    const resolveExplicit = (provider: "claude" | "codex", explicit: string) =>
+      Effect.gen(function* () {
+        const account = explicit.startsWith("cacc_")
+          ? yield* withInternalError(
+              accounts.getById(explicit),
+              "Failed to load connected account.",
+            )
+          : yield* withInternalError(
+              accounts.getByOwnerProviderName({
+                ownerUserId: input.ownerUserId,
+                provider,
+                name: explicit,
+              }),
+              "Failed to load connected account.",
+            );
+        // Uniform 404: unknown, someone else's, wrong-provider, and archived all look identical.
+        if (
+          account === undefined ||
+          account.ownerUserId !== input.ownerUserId ||
+          account.provider !== provider ||
+          account.archivedAt !== null
+        ) {
+          return yield* new InferenceNotFoundError({
+            message: `No ${provider} connected account matches "${explicit}".`,
+          });
+        }
+        return account;
+      });
+
     let account: ConnectedAccount | undefined;
 
     if (credentials.claude !== undefined) {
-      const explicit = credentials.claude;
-      account = explicit.startsWith("cacc_")
-        ? yield* withInternalError(accounts.getById(explicit), "Failed to load connected account.")
-        : yield* withInternalError(
-            accounts.getByOwnerProviderName({
-              ownerUserId: input.ownerUserId,
-              provider: "claude",
-              name: explicit,
-            }),
-            "Failed to load connected account.",
-          );
-      // Uniform 404: unknown, someone else's, wrong-provider, and archived all look identical.
-      if (
-        account === undefined ||
-        account.ownerUserId !== input.ownerUserId ||
-        account.provider !== "claude" ||
-        account.archivedAt !== null
-      ) {
-        return yield* new InferenceNotFoundError({
-          message: `No claude connected account matches "${explicit}".`,
-        });
-      }
+      account = yield* resolveExplicit("claude", credentials.claude);
+    } else if (credentials.codex !== undefined) {
+      account = yield* resolveExplicit("codex", credentials.codex);
     } else if (credentials.profileId !== undefined) {
       const profiles = yield* ProfileRepo;
       const profile = yield* withInternalError(
@@ -119,23 +146,28 @@ const resolveClaudeAccount = (input: {
         accounts.getBindingsForProfileWithAccounts(profile.id),
         "Failed to load profile credential bindings.",
       );
-      account = bindings.find(({ binding }) => binding.provider === "claude")?.account;
-      if (account === undefined || account.archivedAt !== null) {
+      // Claude first (the richer inference surface — caller tools), codex as the fallback.
+      const usable = (provider: "claude" | "codex") => {
+        const bound = bindings.find(({ binding }) => binding.provider === provider)?.account;
+        return bound !== undefined && bound.archivedAt === null ? bound : undefined;
+      };
+      account = usable("claude") ?? usable("codex");
+      if (account === undefined) {
         return yield* new InferenceBadRequestError({
-          message: `Profile ${credentials.profileId} has no usable claude account binding.`,
+          message: `Profile ${credentials.profileId} has no usable claude or codex account binding.`,
         });
       }
     } else {
       return yield* new InferenceBadRequestError({
         message:
-          "Inference requires a claude connected account: set credentials.claude (id or name) or credentials.profileId with a claude binding.",
+          "Inference requires a connected account: set credentials.claude or credentials.codex (id or name), or credentials.profileId with a claude or codex binding.",
       });
     }
 
     // Inference IS the credential use — a non-active account is a hard error either way.
     if (account.status !== "active") {
       return yield* new InferenceConflictError({
-        message: `Connected claude account "${account.name}" is invalid — reconnect it.`,
+        message: `Connected ${account.provider} account "${account.name}" is invalid — reconnect it.`,
       });
     }
     return account;
@@ -180,6 +212,120 @@ const mapEngineError = (error: InferenceEngineError) => {
   }
 };
 
+/**
+ * The codex arm of a new exchange. Tool-less v1: codex has no in-process MCP transport, so
+ * caller-defined tools are a 400 until a parked-tool transport ships (`maxTurns` is likewise
+ * claude-only and ignored here — a codex exchange settles in one turn). Auth failures are a 409
+ * ("reconnect") WITHOUT markInvalid — auth.json self-refreshes at point of use exactly like a
+ * claude session file, so marking it invalid would needlessly block workspace launches on a
+ * credential that may still rotate itself back to health.
+ */
+const respondWithCodex = (input: {
+  readonly account: ConnectedAccount;
+  readonly payload: InferenceRespondRequest;
+  readonly payloadJson: string;
+  readonly cipher: CredentialCipherService;
+  readonly accounts: ConnectedAccountRepoService;
+}) =>
+  Effect.gen(function* () {
+    const { account, payload, cipher, accounts } = input;
+
+    if ((payload.tools ?? []).length > 0) {
+      return yield* new InferenceBadRequestError({
+        message:
+          "Codex inference does not support caller-defined tools yet — run tool exchanges on a claude connected account.",
+      });
+    }
+
+    const engine = yield* CodexInferenceEngine;
+
+    const authJson = yield* Effect.try({
+      try: () => parseCodexCredentialPayload(JSON.parse(input.payloadJson)).authJson,
+      catch: () =>
+        new InferenceInternalServerError({
+          message: "Stored codex credential payload is malformed.",
+        }),
+    });
+    // Every token-like value auth.json carries, kept ONLY for redacting engine error text.
+    const secrets = extractCodexSecrets(authJson);
+
+    // Attribute the use exactly like workspace injection does — best-effort, never fails the call.
+    yield* accounts.updateSyncState({ id: account.id, lastUsedAt: new Date() }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Failed to stamp last_used_at for connected account ${account.id}; continuing.`,
+          cause,
+        ),
+      ),
+      Effect.asVoid,
+    );
+
+    // Materialize the decrypted auth.json into a private per-invocation CODEX_HOME (0700/0600)
+    // the engine points the official CLI at. When the exchange ends — success or failure — the
+    // possibly-rotated file is read back and persisted through the same newest-wins guard the
+    // workspace sync-back uses, then the dir is removed. The repo and cipher service INSTANCES
+    // are captured here because the hook runs outside any request scope.
+    const provisioned = yield* Effect.try({
+      try: () => provisionCodexHome({ authJson }),
+      catch: (cause) =>
+        new InferenceInternalServerError({
+          message: toErrorMessage(cause, "Failed to provision the codex home dir."),
+        }),
+    });
+
+    const persistRotatedAuthJson = Effect.gen(function* () {
+      const observed = readCodexHomeAuthJson(provisioned.codexHome);
+      if (observed === undefined) {
+        yield* Effect.logWarning(
+          `Codex auth.json (inference refresh): account ${account.id} failed-read: provisioned home has no readable auth.json.`,
+        );
+        return;
+      }
+      yield* persistCodexAuthJsonIfNewer({
+        connectedAccountId: account.id,
+        observedAuthJson: observed,
+        credentialCipher: cipher,
+        source: "inference refresh",
+      });
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => removeCodexHome(provisioned.codexHome))),
+      Effect.provide(Layer.succeed(ConnectedAccountRepo, accounts)),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Codex auth.json (inference refresh): account ${account.id} failed: persisting after the exchange crashed.`,
+          cause,
+        ),
+      ),
+      Effect.asVoid,
+    );
+
+    const engineTurn = yield* engine
+      .start({
+        codexHome: provisioned.codexHome,
+        secrets,
+        prompt: payload.prompt ?? "",
+        ...(payload.system === undefined ? {} : { system: payload.system }),
+        ...(payload.model === undefined ? {} : { model: payload.model }),
+        ...(payload.responseFormat === undefined ? {} : { responseFormat: payload.responseFormat }),
+        onSessionEnd: () => Effect.runPromise(persistRotatedAuthJson),
+      })
+      .pipe(
+        Effect.mapError(
+          (error) => new InferenceEngineError(error.reason, redactSecrets(error.message, secrets)),
+        ),
+        Effect.mapError((error) =>
+          error.reason === "auth"
+            ? new InferenceConflictError({
+                message:
+                  "The codex session could not authenticate. auth.json refreshes automatically at use, so this usually means the refresh token itself was revoked (e.g. by logging out of that session elsewhere) — reconnect the account.",
+              })
+            : mapEngineError(error),
+        ),
+      );
+
+    return mapEngineTurn(engineTurn);
+  });
+
 export const respond = (payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
     const isNew = payload.prompt !== undefined;
@@ -212,7 +358,7 @@ export const respond = (payload: InferenceRespondRequest) =>
       });
     }
 
-    const account = yield* resolveClaudeAccount({
+    const account = yield* resolveAccount({
       ownerUserId: payload.ownerUserId,
       credentials: payload.credentials,
     });
@@ -223,6 +369,10 @@ export const respond = (payload: InferenceRespondRequest) =>
       cipher.decrypt(account.encryptedPayload),
       "Failed to decrypt the connected account credential.",
     );
+
+    if (account.provider === "codex") {
+      return yield* respondWithCodex({ account, payload, payloadJson, cipher, accounts });
+    }
     // Either claude payload shape works here. A setup-token rides the documented
     // CLAUDE_CODE_OAUTH_TOKEN env path. A session credentials file is materialized into a private
     // per-invocation CLAUDE_CONFIG_DIR instead, so the official CLI authenticates from the FILE —

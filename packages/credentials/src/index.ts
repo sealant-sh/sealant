@@ -26,6 +26,15 @@ export {
 } from "./claude-session.js";
 
 export {
+  CODEX_AUTH_FILE_NAME,
+  CODEX_HOME_ENV_KEY,
+  provisionCodexHome,
+  readCodexHomeAuthJson,
+  removeCodexHome,
+  type ProvisionedCodexHome,
+} from "./codex-session.js";
+
+export {
   CLAUDE_CREDENTIALS_JSON_PATH,
   CLAUDE_OAUTH_TOKEN_ENV_KEY,
   CODEX_AUTH_JSON_PATH,
@@ -46,6 +55,7 @@ export {
   connectedAccountProviders,
   connectedAccountProviderSchema,
   extractClaudeOauthCredentials,
+  extractCodexSecrets,
   GITHUB_TOKEN_PREFIXES,
   githubCredentialPayloadSchema,
   hasKnownGitHubTokenPrefix,

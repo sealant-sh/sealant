@@ -52,6 +52,23 @@ describe("buildInferenceRespondRequest", () => {
     );
     expect(payload.credentials).toEqual({ claude: "work-account" });
   });
+
+  it("lowers a default codex selection exactly like claude", () => {
+    const payload = buildInferenceRespondRequest(
+      { prompt: "p", model: "lunna", credentials: { codex: true } },
+      "usr_local",
+    );
+    expect(payload.credentials).toEqual({ codex: "default" });
+    expect(payload.model).toBe("lunna");
+  });
+
+  it("passes a named codex account through unchanged", () => {
+    const payload = buildInferenceRespondRequest(
+      { prompt: "p", credentials: { codex: "work-account" } },
+      "usr_local",
+    );
+    expect(payload.credentials).toEqual({ codex: "work-account" });
+  });
 });
 
 describe("mapInferenceResponse", () => {

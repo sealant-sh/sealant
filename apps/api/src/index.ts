@@ -14,6 +14,7 @@ import { HttpApiScalar } from "effect/unstable/httpapi";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
+import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
@@ -139,6 +140,8 @@ const requestDependenciesLayer = Layer.mergeAll(
   // The engine layer is a thin facade over module-level session state (sessions must survive
   // across requests regardless of this layer's lifecycle), so providing it here is safe.
   InferenceEngineLive,
+  // The codex engine is stateless (tool-less v1: every exchange settles in one spawn).
+  CodexInferenceEngineLive,
 ).pipe(Layer.provideMerge(databaseLayer));
 
 /**
