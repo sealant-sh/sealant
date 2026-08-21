@@ -263,6 +263,7 @@ export {
   runs,
   runStatusValues,
   workspaceSessions,
+  workspaceSessionModeValues,
   workspaceSessionStatusValues,
   accessTokens,
   accessTokenScopeValues,

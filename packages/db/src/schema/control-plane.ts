@@ -838,6 +838,8 @@ export const runs = pgTable(
 // (whose telemetry carries the byte-exact, sequence-keyed output that makes reattach possible).
 // ---------------------------------------------------------------------------------------------
 export const workspaceSessionStatusValues = ["starting", "running", "exited", "failed"] as const;
+export const workspaceSessionModeValues = ["pty", "pipe"] as const;
+export type WorkspaceSessionMode = (typeof workspaceSessionModeValues)[number];
 export type WorkspaceSessionStatus = (typeof workspaceSessionStatusValues)[number];
 
 export const workspaceSessions = pgTable(
@@ -857,11 +859,13 @@ export const workspaceSessions = pgTable(
     // Daemon-side identifiers (valid while the workspace runtime is alive).
     daemonSessionId: text("daemon_session_id"),
     daemonProcessId: text("daemon_process_id"),
-    // What the PTY runs: argv[0] is the program, the rest its arguments.
+    // What the session runs: argv[0] is the program, the rest its arguments.
     argv: jsonb().$type<readonly string[]>().notNull(),
     cwd: text(),
     cols: integer().notNull(),
     rows: integer().notNull(),
+    // Leader wiring: a pseudoterminal (interactive) or plain stdio pipes (protocol processes).
+    mode: text({ enum: workspaceSessionModeValues }).notNull().default("pty"),
     status: text({ enum: workspaceSessionStatusValues }).notNull().default("starting"),
     exitCode: integer("exit_code"),
     exitSignal: integer("exit_signal"),

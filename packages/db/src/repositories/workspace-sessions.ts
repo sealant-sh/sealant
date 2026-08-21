@@ -13,6 +13,7 @@ import {
   workspaceSessions,
   type NewWorkspaceSession,
   type WorkspaceSession,
+  type WorkspaceSessionMode,
   type WorkspaceSessionStatus,
 } from "../schema.js";
 
@@ -25,6 +26,7 @@ export interface CreateWorkspaceSessionInput {
   readonly cwd?: string;
   readonly cols: number;
   readonly rows: number;
+  readonly mode?: WorkspaceSessionMode;
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -158,6 +160,7 @@ export const WorkspaceSessionRepoLive = Layer.effect(
                 ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
                 cols: input.cols,
                 rows: input.rows,
+                ...(input.mode === undefined ? {} : { mode: input.mode }),
                 ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
               } satisfies NewWorkspaceSession)
               .returning();

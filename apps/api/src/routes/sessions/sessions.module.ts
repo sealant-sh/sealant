@@ -317,6 +317,7 @@ const mapSession = (session: WorkspaceSession, outputHighWater: bigint): Session
   ...(session.cwd === null ? {} : { cwd: session.cwd }),
   cols: session.cols,
   rows: session.rows,
+  mode: session.mode,
   ...(session.exitCode === null ? {} : { exitCode: session.exitCode }),
   ...(session.exitSignal === null ? {} : { exitSignal: session.exitSignal }),
   ...(session.errorMessage === null ? {} : { errorMessage: session.errorMessage }),
@@ -401,8 +402,10 @@ export const createSession = (input: {
     const sessionId = `sess_${randomUUID()}`;
     const argv = [...input.payload.argv];
     const cwd = input.payload.cwd ?? blueprintWorkingDirectory;
-    const cols = input.payload.cols ?? DEFAULT_COLS;
-    const rows = input.payload.rows ?? DEFAULT_ROWS;
+    const mode = input.payload.mode ?? "pty";
+    // A pipe leader has no terminal: size is meaningless, recorded as 0×0.
+    const cols = mode === "pipe" ? 0 : (input.payload.cols ?? DEFAULT_COLS);
+    const rows = mode === "pipe" ? 0 : (input.payload.rows ?? DEFAULT_ROWS);
 
     yield* withInternalError(
       runs.createRun({
@@ -428,6 +431,7 @@ export const createSession = (input: {
         cwd,
         cols,
         rows,
+        mode,
         ...(input.payload.metadata === undefined
           ? {}
           : { metadata: { ...input.payload.metadata } }),
@@ -437,7 +441,7 @@ export const createSession = (input: {
     // `running` is what the telemetry worker polls for — flipping it starts the recorder.
     yield* withInternalError(runs.markRunRunning({ id: runId }), "Failed to start session run.");
 
-    // Wait for the recorder before opening the PTY: the daemon telemetry protocol is live-tail
+    // Wait for the recorder before opening the session: the daemon telemetry protocol is live-tail
     // (no replay), so output emitted before the ingester attaches would be unrecoverable.
     const deadline = Date.now() + EPOCH_WAIT_TIMEOUT_MS;
     for (;;) {
@@ -482,11 +486,12 @@ export const createSession = (input: {
         cols,
         rows,
         term: input.payload.term ?? DEFAULT_TERM,
+        mode,
       }),
     ).pipe(
       Effect.mapError((error) => {
         return new SessionBadGatewayError({
-          message: `Failed to open the PTY session: ${toErrorMessage(error, "daemon error")}`,
+          message: `Failed to open the ${mode} session: ${toErrorMessage(error, "daemon error")}`,
         });
       }),
     );
@@ -710,7 +715,14 @@ export const resizeSession = (input: {
         requiredScope: "session:input",
       },
       (daemon, session) =>
-        daemon.resizePty(session.daemonSessionId, input.payload.cols, input.payload.rows),
+        Effect.gen(function* () {
+          if (session.mode === "pipe") {
+            return yield* new SessionBadRequestError({
+              message: "A pipe-mode session has no terminal to resize.",
+            });
+          }
+          yield* daemon.resizePty(session.daemonSessionId, input.payload.cols, input.payload.rows);
+        }),
     );
     const sessions = yield* WorkspaceSessionRepo;
     yield* withInternalError(
