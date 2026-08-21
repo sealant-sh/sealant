@@ -213,6 +213,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
+      '@openai/codex':
+        specifier: 0.148.0
+        version: 0.148.0
       '@scalar/hono-api-reference':
         specifier: ^0.9.13
         version: 0.9.48(hono@4.12.26)
@@ -924,6 +927,9 @@ importers:
 
   packages/validators:
     dependencies:
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../api-contracts
       '@t3-oss/env-core':
         specifier: 'catalog:'
         version: 0.13.11(typescript@5.9.3)(zod@4.4.3)
@@ -937,6 +943,9 @@ importers:
 
   packages/workspaces:
     dependencies:
+      '@sealant/api-contracts':
+        specifier: workspace:*
+        version: link:../api-contracts
       '@sealant/credentials':
         specifier: workspace:*
         version: link:../credentials
@@ -947,11 +956,11 @@ importers:
         specifier: workspace:*
         version: link:../rabbitmq
       '@sealant/runtime-client':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.11.0
+        version: 0.11.0
       '@sealant/runtime-protocol':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.11.0
+        version: 0.11.0
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -2370,6 +2379,47 @@ packages:
     resolution: {integrity: sha512-hAX0pT/73190NLqBPPWSdBVGtbY6VOhWYK3qqHqtXQ1gK7kS2yz4+ivsN07hpJ6I3aeMtKP6J6npsEKOAzuTLA==}
     engines: {node: '>=20.0'}
 
+  '@openai/codex@0.148.0':
+    resolution: {integrity: sha512-bh5kH9+BMrFaHGmLeoSansPdfRksvr4UXzjQInns/KRO7r8VJ+6AAW+SqUsE8XcG3+OW/mI4EEy8Gpo9UDXGvQ==}
+    engines: {node: '>=16'}
+    hasBin: true
+
+  '@openai/codex@0.148.0-darwin-arm64':
+    resolution: {integrity: sha512-xgBPFiF1fHUlRS7HE6wGB56LjBJh16kGD7b4TTbwdVBZNB4QDkTok+vdkAGrfpVkfKcwGNhPSKDgCw+KMZOVug==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@openai/codex@0.148.0-darwin-x64':
+    resolution: {integrity: sha512-qepQolhJutfOp+e9i7L3xsi8aoWeCUiiRq274WMWqRj50rKTrXxsuAgkAwDbqEfT3G5VynhYZuQvDsW37JgdNQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@openai/codex@0.148.0-linux-arm64':
+    resolution: {integrity: sha512-51DCd+izzk6n4mMh4w2utWj3lTLhSTnCOEJQfRh0LS9nBDkcYZcK3iSKOST6fByRIlLSXuLO33LlYYA1VPot6A==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@openai/codex@0.148.0-linux-x64':
+    resolution: {integrity: sha512-uDT9s7AfMr9xLuJX3ZLVWHgHkUpCnZ33CZjZEdVQhrYCIErkDHsCW5TG290nNjaKngK0WxGt5uCcxeUHv9MWWA==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
+  '@openai/codex@0.148.0-win32-arm64':
+    resolution: {integrity: sha512-a8iOwLzs8UdnlWDHjgK3W/YSBBsUImG8X5XLBjengp3XGJRruhiIsQtUDUOYimCmotKPM4aX7Ub6zjl/KPxMQQ==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@openai/codex@0.148.0-win32-x64':
+    resolution: {integrity: sha512-/Jg8eYw0BqTGNUpnrzzWlK2kbu29NWg7t6pnUDEfxqpTUf+mK8r3okXQn60Zjbk9InYZ4d8SwSjrtOa+i5hSPw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [win32]
+
   '@opentelemetry/semantic-conventions@1.41.1':
     resolution: {integrity: sha512-/UhIkaZgPutTFmQ7RnIJGgDXZmtEJ7Dvi86xNTFWcnRxVRNk/aotsqDJYeEvDP+FSMB2SdW+pQzNMcWP0rwuNA==}
     engines: {node: '>=14'}
@@ -3314,6 +3364,10 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
+  '@sealant/runtime-client@0.11.0':
+    resolution: {integrity: sha512-h+ObwBav6YG8WBW2I8bEM4rKAwfnXBjbczjwnOLEClHk0gSRQDnJTTwGAZYXNC7UKP7AP5DuYdqTHoxT2yWC5w==}
+    engines: {node: '>=20'}
+
   '@sealant/runtime-client@0.4.0':
     resolution: {integrity: sha512-ErDS3QNHbu9R/yu3kAfzuhQelIx87aC+ZM20uZcP3bHuPsY/JXuz6WrI3IsVugGaIsqKuNzfiO7DT6l9nwKdaQ==}
     engines: {node: '>=20'}
@@ -3322,8 +3376,8 @@ packages:
     resolution: {integrity: sha512-kZIF3Y7UbattTp60n0LjCjSDSut/1ww7B12/n4af6AEAmpbYgbohkEFTvdVES45fWAtF+EMKv4Vq/1jwRm+h5w==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client@0.7.0':
-    resolution: {integrity: sha512-2m7m+QBrZlRJMurbk9TUZCJJmtnGZgoqA1QSZb830IsNK67PUN8sti6HsIbf61SNXKP0muw18L20QscTOjNcuw==}
+  '@sealant/runtime-protocol@0.11.0':
+    resolution: {integrity: sha512-IjSnxwcqmM+vf7mcLpJ7BWQ9J3Sn6kFILpJ+Xzc3JIHaAb2Q62Q6aidHZD/zP+kS1u+hfcxrOCqnyukQ03Zv8w==}
     engines: {node: '>=20'}
 
   '@sealant/runtime-protocol@0.4.0':
@@ -3332,10 +3386,6 @@ packages:
 
   '@sealant/runtime-protocol@0.6.0':
     resolution: {integrity: sha512-qP2v9vbr08l6Rl77opAIV9sNUEiI78+ljIsPmn0IUckv6/aZWvvZ7wsJxA/2kCBDbGjth6PMPq98NeTybLZqhA==}
-    engines: {node: '>=20'}
-
-  '@sealant/runtime-protocol@0.7.0':
-    resolution: {integrity: sha512-S+YFUYWJLC3F9kemXWGLhv6nc76X2QVQaWX6H5Wy0QXPErMD7uIKXqmiRPbLd2jIKaf8oG6ei70KRD99DLWHNw==}
     engines: {node: '>=20'}
 
   '@sec-ant/readable-stream@0.4.1':
@@ -8689,6 +8739,33 @@ snapshots:
 
   '@oozcitak/util@10.0.0': {}
 
+  '@openai/codex@0.148.0':
+    optionalDependencies:
+      '@openai/codex-darwin-arm64': '@openai/codex@0.148.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.148.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.148.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.148.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.148.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.148.0-win32-x64'
+
+  '@openai/codex@0.148.0-darwin-arm64':
+    optional: true
+
+  '@openai/codex@0.148.0-darwin-x64':
+    optional: true
+
+  '@openai/codex@0.148.0-linux-arm64':
+    optional: true
+
+  '@openai/codex@0.148.0-linux-x64':
+    optional: true
+
+  '@openai/codex@0.148.0-win32-arm64':
+    optional: true
+
+  '@openai/codex@0.148.0-win32-x64':
+    optional: true
+
   '@opentelemetry/semantic-conventions@1.41.1': {}
 
   '@orama/orama@3.1.18': {}
@@ -9493,6 +9570,11 @@ snapshots:
       type-fest: 5.7.0
       zod: 4.4.3
 
+  '@sealant/runtime-client@0.11.0':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@sealant/runtime-protocol': 0.11.0
+
   '@sealant/runtime-client@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
@@ -9503,20 +9585,15 @@ snapshots:
       '@bufbuild/protobuf': 2.12.0
       '@sealant/runtime-protocol': 0.6.0
 
-  '@sealant/runtime-client@0.7.0':
+  '@sealant/runtime-protocol@0.11.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': 0.7.0
 
   '@sealant/runtime-protocol@0.4.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
   '@sealant/runtime-protocol@0.6.0':
-    dependencies:
-      '@bufbuild/protobuf': 2.12.0
-
-  '@sealant/runtime-protocol@0.7.0':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 
