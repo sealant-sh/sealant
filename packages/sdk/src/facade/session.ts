@@ -263,6 +263,7 @@ export const makeInteractiveSession = (ctx: SdkContext, wire: SessionWire): Inte
     id: sessionId,
     workspaceId: wire.workspaceId,
     runId: wire.runId,
+    mode: wire.mode ?? "pty",
 
     send: async (input) => {
       const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;

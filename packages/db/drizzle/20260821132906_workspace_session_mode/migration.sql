@@ -1,0 +1,1 @@
+ALTER TABLE "workspace_sessions" ADD COLUMN "mode" text DEFAULT 'pty' NOT NULL;

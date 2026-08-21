@@ -26,10 +26,20 @@ export const sessionAuthorizationHeadersSchema = Schema.Struct({
 });
 export type SessionAuthorizationHeaders = typeof sessionAuthorizationHeadersSchema.Type;
 
+/**
+ * How a session's leader is wired. `pty` (default) allocates a pseudoterminal — interactive
+ * shells and TUIs. `pipe` gives the leader plain stdio pipes and no tty — the shape for processes
+ * that speak a byte protocol over stdin/stdout (JSON-RPC / NDJSON servers): stdout is the recorded,
+ * attachable output, stderr is recorded as diagnostics only, input feeds stdin, and resize is
+ * rejected.
+ */
+export const sessionModeSchema = Schema.Literals(["pty", "pipe"]);
+export type SessionMode = typeof sessionModeSchema.Type;
+
 export const createSessionRequestSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   ownerUserId: NonEmptyString,
-  /** argv[0] is the program the PTY runs; the rest its arguments. */
+  /** argv[0] is the program the session runs; the rest its arguments. */
   argv: Schema.Array(NonEmptyString).check(Schema.isNonEmpty(), Schema.isMaxLength(64)),
   /** Working directory inside the workspace (defaults to the workspace working directory). */
   cwd: Schema.optional(NonEmptyString),
@@ -38,6 +48,8 @@ export const createSessionRequestSchema = Schema.Struct({
   cols: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   rows: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   term: Schema.optional(NonEmptyString),
+  /** Leader wiring; defaults to `pty`. `cols`/`rows`/`term` are ignored for `pipe`. */
+  mode: Schema.optional(sessionModeSchema),
   /** Opaque caller correlation bag: stored verbatim, echoed on reads, no platform semantics. */
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
@@ -54,6 +66,8 @@ export const sessionSchema = Schema.Struct({
   cwd: Schema.optional(NonEmptyString),
   cols: Schema.Number,
   rows: Schema.Number,
+  /** Leader wiring. Absent on servers from before pipe mode shipped, which means `pty`. */
+  mode: Schema.optional(sessionModeSchema),
   exitCode: Schema.optional(Schema.Number),
   exitSignal: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),

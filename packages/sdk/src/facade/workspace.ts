@@ -99,6 +99,7 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         ...(options?.cols === undefined ? {} : { cols: options.cols }),
         ...(options?.rows === undefined ? {} : { rows: options.rows }),
         ...(options?.term === undefined ? {} : { term: options.term }),
+        ...(options?.mode === undefined ? {} : { mode: options.mode }),
         ...(options?.metadata === undefined ? {} : { metadata: { ...options.metadata } }),
       }),
     );

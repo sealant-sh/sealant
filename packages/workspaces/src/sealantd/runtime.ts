@@ -28,11 +28,12 @@ import {
   SealantError as SdkSealantError,
   type Channel,
 } from "@sealant/runtime-client";
-import type {
-  Capabilities,
-  EventEnvelope,
-  ExecAccepted,
-  HealthReport,
+import {
+  SessionMode as WireSessionMode,
+  type Capabilities,
+  type EventEnvelope,
+  type ExecAccepted,
+  type HealthReport,
 } from "@sealant/runtime-protocol";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import type * as Scope from "effect/Scope";
@@ -369,10 +370,17 @@ export interface SealantExecOptions {
 }
 
 /** Options for opening a PTY session (mirrors the daemon's `OpenSessionArgs`). */
+/**
+ * How a session's leader is wired: a pseudoterminal (interactive shells, TUIs) or plain stdio
+ * pipes with no tty (protocol processes such as JSON-RPC servers — stdout is the recorded output,
+ * stderr is recorded as diagnostics only, `writeSessionInput` feeds stdin, resize is rejected).
+ */
+export type SealantSessionMode = "pty" | "pipe";
+
 export interface SealantOpenSessionOptions {
   /** The run id, threaded as the daemon execution id so the session's events attribute to it. */
   readonly executionId?: string;
-  /** The program the PTY runs (defaults to the daemon's configured shell, `/bin/bash`). */
+  /** The program the session runs (defaults to the daemon's configured shell, `/bin/bash`). */
   readonly shell?: string;
   readonly args?: readonly string[];
   readonly cwd?: string;
@@ -380,7 +388,15 @@ export interface SealantOpenSessionOptions {
   readonly cols: number;
   readonly rows: number;
   readonly term?: string;
+  /** Leader wiring; defaults to `pty`. */
+  readonly mode?: SealantSessionMode;
 }
+
+const toWireSessionMode = (mode: SealantSessionMode | undefined): WireSessionMode =>
+  mode === "pipe" ? WireSessionMode.PIPE : WireSessionMode.PTY;
+
+const fromWireSessionMode = (mode: WireSessionMode): SealantSessionMode =>
+  mode === WireSessionMode.PIPE ? "pipe" : "pty";
 
 /** The daemon's accepted-session handle. */
 export interface SealantSessionOpened {
@@ -396,6 +412,7 @@ export interface SealantSessionSummary {
   readonly pid: number;
   readonly cols: number;
   readonly rows: number;
+  readonly mode: SealantSessionMode;
   readonly executionId?: string;
 }
 
@@ -595,6 +612,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
           cols: options.cols,
           rows: options.rows,
           ...(options.term === undefined ? {} : { term: options.term }),
+          mode: toWireSessionMode(options.mode),
         },
       },
       "sessionOpened",
@@ -635,6 +653,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
           pid: number;
           cols: number;
           rows: number;
+          mode: WireSessionMode;
           executionId?: string;
         }>;
       };
@@ -644,6 +663,7 @@ const makeSession = (client: SealantClient): SealantSession => ({
         pid: s.pid,
         cols: s.cols,
         rows: s.rows,
+        mode: fromWireSessionMode(s.mode),
         ...(s.executionId === undefined ? {} : { executionId: s.executionId }),
       }));
     }),

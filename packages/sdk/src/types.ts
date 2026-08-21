@@ -405,14 +405,25 @@ export interface RunOptions {
 }
 
 /** Options for opening an interactive PTY session. */
+/**
+ * How a session's leader is wired. `pty` (default) allocates a pseudoterminal — interactive
+ * shells and TUIs. `pipe` gives the leader plain stdio pipes and no tty — the shape for processes
+ * that speak a byte protocol over stdin/stdout (JSON-RPC / NDJSON servers such as
+ * `codex app-server`): `send` feeds stdin, `output`/`attach` carry stdout byte-exact, stderr is
+ * recorded as diagnostics only, and `resize` is rejected.
+ */
+export type SessionMode = "pty" | "pipe";
+
 export interface SessionOptions {
   /** Working directory inside the workspace (defaults to the repository root). */
   readonly cwd?: string;
-  /** Extra environment for the PTY process (not for secrets — use `credentials`). */
+  /** Extra environment for the session process (not for secrets — use `credentials`). */
   readonly env?: Readonly<Record<string, string>>;
   readonly cols?: number;
   readonly rows?: number;
   readonly term?: string;
+  /** Leader wiring; defaults to `pty`. `cols`/`rows`/`term` are ignored for `pipe`. */
+  readonly mode?: SessionMode;
   /** Opaque correlation bag, stored verbatim and echoed on reads. */
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
@@ -783,7 +794,9 @@ export interface InteractiveSession {
   readonly workspaceId: string;
   /** The run recording this session — its record is the durable, replayable evidence. */
   readonly runId: string;
-  /** Send keystrokes. Strings are UTF-8-encoded; bytes pass through untouched. */
+  /** Leader wiring: a pseudoterminal or plain stdio pipes. */
+  readonly mode: SessionMode;
+  /** Send input: keystrokes to a PTY, bytes to a pipe leader's stdin. Strings are UTF-8-encoded. */
   send(input: string | Uint8Array): Promise<void>;
   /**
    * Byte-exact output as a RESUMABLE stream: recorded history from `from` (inclusive; default the
@@ -794,7 +807,7 @@ export interface InteractiveSession {
     readonly from?: bigint;
     readonly signal?: AbortSignal;
   }): AsyncIterable<SessionOutputChunk>;
-  /** Resize the PTY. */
+  /** Resize the PTY. Rejected for `pipe` sessions, which have no terminal. */
   resize(cols: number, rows: number): Promise<void>;
   /** Deliver a POSIX signal to the session's process (e.g. 2 = SIGINT). */
   signal(signal: number): Promise<void>;
