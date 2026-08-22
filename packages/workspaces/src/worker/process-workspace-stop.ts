@@ -1,6 +1,3 @@
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
-
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepoLive,
@@ -15,11 +12,15 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
+import { hostDirectoryLaunchMaterialStager } from "../runtime/launch-material.js";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
-import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
+import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
+import {
+  sealantTargetForRuntimeInstance,
+  type SealantTargetDerivationOptions,
+} from "../sealantd/target.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
-import { dotfilesStagingRoot, removeStagedSecretEnv } from "./process-workspace-build-job.js";
 
 export interface ProcessWorkspaceStopEffectOptions {
   /**
@@ -39,6 +40,8 @@ export interface ProcessWorkspaceStopEffectOptions {
    * configured on the worker; the sync-back then only warns for workspaces that carry refs.
    */
   readonly credentialCipher?: CredentialCipherService;
+  /** How this worker reaches each runtime family (client TLS for Kubernetes). */
+  readonly targetOptions?: SealantTargetDerivationOptions;
 }
 
 export interface ProcessWorkspaceStopOptions extends ProcessWorkspaceStopEffectOptions {
@@ -123,12 +126,13 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     // LAST CHANCE to read rotated session credentials out of the container: the official CLIs
     // refresh claude/codex session files in-place, and an interactive/PTY workspace may never run
     // another exec job to sync them. Best-effort by construction (the helper never fails), and it
-    // must run BEFORE the adapter destroys the container. Only the docker adapter is reachable
-    // over the exec bridge today.
-    if (adapterId === "docker") {
+    // must run BEFORE the adapter destroys the runtime. Any adapter whose instance this worker can
+    // address takes part; an unaddressable one (e.g. Kubernetes without client TLS) is skipped.
+    const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
+    if (target !== undefined) {
       yield* syncBackWorkspaceCredentials({
         attemptId: options.runId,
-        containerId: resourceId,
+        target,
         launchCredentialInjections: instance.launchCredentialInjections ?? [],
         credentialCipher: options.credentialCipher,
       });
@@ -144,18 +148,11 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     });
   }
 
-  // Best-effort: remove the worker-staged dotfiles archive dir (bind-mounted ro into the
-  // container we just stopped). The path is deterministic per run (see stageDotfilesArchives);
-  // a relaunch re-stages from the job payload, so removal is always safe.
-  yield* Effect.promise(() =>
-    rm(join(dotfilesStagingRoot(), `sealant-dotfiles-${options.runId}`), {
-      recursive: true,
-      force: true,
-    }),
-  );
-  // Same for a staged secret env file: normally removed at readiness, but a launch that died
-  // in between must not leave a 0600 secret file on the host.
-  yield* Effect.promise(() => removeStagedSecretEnv(options.runId));
+  // Best-effort: remove every piece of worker-staged launch material for this run (dotfiles
+  // archives, and a secret env file a launch that died before readiness may have left behind).
+  // Paths are deterministic per run; a relaunch re-stages from the job payload, so removal is
+  // always safe.
+  yield* Effect.promise(() => hostDirectoryLaunchMaterialStager.removeAll(options.runId));
 
   yield* runtimeInstances
     .markStopped({ runId: options.runId, stopReason: options.stopReason })
@@ -178,7 +175,7 @@ export const processWorkspaceStop = async (options: ProcessWorkspaceStopOptions)
 
   await Effect.runPromise(
     processWorkspaceStopEffect(effectOptions).pipe(
-      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeDockerExecLive)),
+      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
     ),
   );
 };

@@ -20,6 +20,7 @@
  *     Effect resource-safety contract rather than ad-hoc `try/finally`.
  */
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { Duplex } from "node:stream";
 
@@ -37,6 +38,7 @@ import {
 } from "@sealant/runtime-protocol";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import type * as Scope from "effect/Scope";
+import { WebSocket, createWebSocketStream } from "ws";
 
 // ---------------------------------------------------------------------------------------------
 // Targets
@@ -59,7 +61,28 @@ export type SealantTarget =
       readonly kind: "unix-socket";
       /** Absolute path of a control socket exposed on this host. */
       readonly socketPath: string;
+    }
+  | {
+      /**
+       * sealantd's native secure WebSocket frontend (Kubernetes). The socket carries the exact
+       * length-prefixed protobuf byte stream as binary messages; mTLS authenticates both sides.
+       */
+      readonly kind: "websocket";
+      /** `wss://<service>.<namespace>.svc:<port>/control`. */
+      readonly url: string;
+      readonly tls: SealantWebSocketClientTls;
     };
+
+/** Client-side mTLS material for the `websocket` target: PEM file paths, read at open time. */
+export interface SealantWebSocketClientTls {
+  /** CA bundle that signed the workspace server certificate. */
+  readonly caPath: string;
+  /** Control-plane client certificate (must carry the `clientAuth` EKU). */
+  readonly certPath: string;
+  readonly keyPath: string;
+  /** Overrides SNI/verification name; defaults to the URL host. */
+  readonly servername?: string;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Errors (Schema.TaggedError — matches packages/db + source-integrations idiom)
@@ -318,22 +341,96 @@ const openDockerExec = (target: Extract<SealantTarget, { readonly kind: "docker-
     });
   });
 
+/**
+ * Open a `wss://` control connection with client-certificate authentication. `createWebSocketStream`
+ * yields a Duplex whose bytes are exactly the binary message payloads, so the daemon's framing is
+ * untouched and `SealantClient.fromStream` works unchanged. Nothing about the handshake (or its
+ * failure) is logged here beyond the error message — TLS material never leaves this closure.
+ */
+const openWebSocket = (target: Extract<SealantTarget, { readonly kind: "websocket" }>) =>
+  Effect.callback<OpenTransport, TransportError>((resume) => {
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(target.url, {
+        ca: readFileSync(target.tls.caPath),
+        cert: readFileSync(target.tls.certPath),
+        key: readFileSync(target.tls.keyPath),
+        ...(target.tls.servername === undefined ? {} : { servername: target.tls.servername }),
+        rejectUnauthorized: true,
+        perMessageDeflate: false,
+        handshakeTimeout: 15_000,
+      });
+    } catch (cause) {
+      resume(
+        Effect.fail(
+          new TransportError({
+            operation: "open",
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
+        ),
+      );
+      return Effect.void;
+    }
+
+    const onOpenError = (cause: Error) => {
+      socket.off("open", onOpen);
+      resume(
+        Effect.fail(
+          new TransportError({
+            operation: "open",
+            message: cause.message,
+            cause,
+          }),
+        ),
+      );
+    };
+    const onOpen = () => {
+      socket.off("error", onOpenError);
+      const duplex = createWebSocketStream(socket, { allowHalfOpen: false });
+      const close = () => {
+        duplex.destroy();
+        socket.terminate();
+      };
+      resume(Effect.succeed({ duplex, close }));
+    };
+
+    socket.once("error", onOpenError);
+    socket.once("open", onOpen);
+
+    return Effect.sync(() => {
+      socket.off("error", onOpenError);
+      socket.off("open", onOpen);
+      socket.terminate();
+    });
+  });
+
+const openTarget = (target: SealantTarget) => {
+  switch (target.kind) {
+    case "unix-socket":
+      return openUnixSocket(target.socketPath);
+    case "docker-exec":
+      return openDockerExec(target);
+    case "websocket":
+      return openWebSocket(target);
+  }
+};
+
 const controlTransport: SealantTransportService = {
   open: (target) =>
     withTransportError(
       "open",
-      Effect.acquireRelease(
-        target.kind === "unix-socket" ? openUnixSocket(target.socketPath) : openDockerExec(target),
-        ({ close }) => Effect.sync(close),
-      ).pipe(Effect.map(({ duplex }) => duplex)),
+      Effect.acquireRelease(openTarget(target), ({ close }) => Effect.sync(close)).pipe(
+        Effect.map(({ duplex }) => duplex),
+      ),
     ),
 };
 
-/** Live control transport supporting persisted host Unix sockets and docker-exec fallback. */
+/**
+ * Live control transport: persisted host Unix sockets, docker-exec fallback, and sealantd's
+ * secure WebSocket frontend. One layer for every runtime adapter.
+ */
 export const ControlTransportLive = Layer.succeed(SealantTransport, controlTransport);
-
-/** @deprecated Use `ControlTransportLive`; retained for source compatibility. */
-export const DockerExecTransportLive = ControlTransportLive;
 
 /** Narrower error wrapper for transport-only failures (defect -> typed `TransportError`). */
 function withTransportError<A, R>(
@@ -744,13 +841,7 @@ export const SealantRuntimeLive = Layer.effect(
   }),
 );
 
-/**
- * Convenience composition: the runtime service wired to persisted Unix sockets with docker-exec
- * fallback.
- */
+/** Convenience composition: the runtime service wired to the live control transport. */
 export const SealantRuntimeControlLive = SealantRuntimeLive.pipe(
   Layer.provideMerge(ControlTransportLive),
 );
-
-/** @deprecated Use `SealantRuntimeControlLive`; retained for source compatibility. */
-export const SealantRuntimeDockerExecLive = SealantRuntimeControlLive;

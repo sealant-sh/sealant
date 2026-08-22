@@ -19,7 +19,7 @@ import {
   isImagePresent,
   type BootedSealantd,
 } from "./boot.js";
-import { SealantRuntime, SealantRuntimeDockerExecLive, type SealantTarget } from "./runtime.js";
+import { SealantRuntime, SealantRuntimeControlLive, type SealantTarget } from "./runtime.js";
 
 const imageAvailable = await isImagePresent();
 assertImageRequirement(imageAvailable);
@@ -51,7 +51,7 @@ describe.skipIf(!imageAvailable)(
             const session = yield* runtime.connect(target);
             return yield* session.health;
           }),
-        ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        ).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
 
       expect(health.state).toBe(RuntimeState.HEALTHY);
@@ -82,7 +82,7 @@ describe.skipIf(!imageAvailable)(
 
             return { accepted, events };
           }),
-        ).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        ).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
 
       expect(result.accepted.processId).toMatch(/^proc_/);

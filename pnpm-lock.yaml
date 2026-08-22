@@ -81,6 +81,9 @@ catalogs:
     '@types/react-dom':
       specifier: ^19.2.0
       version: 19.2.3
+    '@types/ws':
+      specifier: ^8.18.1
+      version: 8.18.1
     '@vitejs/plugin-react':
       specifier: ^5.1.4
       version: 5.2.0
@@ -135,6 +138,9 @@ catalogs:
     wrangler:
       specifier: ^4.78.0
       version: 4.103.0
+    ws:
+      specifier: ^8.18.3
+      version: 8.21.0
     zod:
       specifier: ^4.1.12
       version: 4.4.3
@@ -517,6 +523,9 @@ importers:
       ssh2:
         specifier: ^1.17.0
         version: 1.17.0
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.0
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -530,6 +539,9 @@ importers:
       '@types/ssh2':
         specifier: ^1.15.5
         version: 1.15.5
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
       dotenv-cli:
         specifier: 'catalog:'
         version: 11.0.0
@@ -973,6 +985,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.85
+      ws:
+        specifier: 'catalog:'
+        version: 8.21.0
       zod:
         specifier: 'catalog:'
         version: 4.4.3
@@ -986,6 +1001,9 @@ importers:
       '@types/amqplib':
         specifier: 'catalog:'
         version: 0.10.8
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
 
   tooling/typescript: {}
 

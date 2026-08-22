@@ -17,6 +17,7 @@ import {
   parseWorkspaceIdFromUsername,
   resolveWorkspaceControlTarget,
   toControlTarget,
+  type ControlTargetOptions,
 } from "./workspace-target.js";
 
 /*
@@ -41,6 +42,8 @@ export interface SshGatewayServerConfig {
   readonly gatewayToken: string;
   /** Resolves an offered key to its owning principal via the API (DB-registered keys). */
   readonly lookupPrincipal: PrincipalLookup;
+  /** How this gateway reaches each runtime family (client TLS for Kubernetes `wss://`). */
+  readonly controlTargetOptions?: ControlTargetOptions;
 }
 
 /** A key accepted for auth: who it belongs to + how to verify a signature made with it. */
@@ -209,7 +212,9 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
           workspaceId: resolvedWorkspaceId,
           ownerUserId: resolvedPrincipalId,
         });
-        const client = ControlClient.open(toControlTarget(target));
+        const client = ControlClient.open(
+          toControlTarget(target, config.controlTargetOptions ?? {}),
+        );
         controlClient = client;
         return client;
       })();

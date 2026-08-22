@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { ControlTarget } from "./control-transport.js";
+import type { ControlTarget, WebSocketClientTls } from "./control-transport.js";
 
 /*
 Routing + per-workspace authorization resolution (gateway-spec §3.4).
@@ -65,28 +65,53 @@ export const parseWorkspaceIdFromUsername = (
 };
 
 const UNIX_ENDPOINT_PREFIX = "unix://";
+const WSS_ENDPOINT_PREFIX = "wss://";
+
+/** What the gateway process has for reaching each runtime family. */
+export interface ControlTargetOptions {
+  /** Client mTLS material for `wss://` endpoints (Kubernetes); absent on Docker deployments. */
+  readonly websocketTls?: WebSocketClientTls;
+}
 
 /**
- * Map a resolved API target to a transport `ControlTarget`, driven by the runtime `endpoint`:
- *  - `unix://<host path>` (§2.2): the adapter bind-mounted the daemon socket to a host path the
- *    gateway can `net.connect` directly — NO Docker access needed. Preferred.
- *  - anything else (`docker-exec://…`, §2.1): bridge in with `docker exec … socat` into the container.
+ * Map a resolved API target to a transport `ControlTarget`, driven by the runtime adapter and
+ * `endpoint`:
+ *  - docker, `unix://<host path>` (§2.2): the adapter bind-mounted the daemon socket to a host path
+ *    the gateway can `net.connect` directly — NO Docker access needed. Preferred.
+ *  - docker, anything else (`docker-exec://…`, §2.1): bridge in with `docker exec … socat`.
+ *  - k8s/k3s, `wss://…`: sealantd's secure WebSocket frontend; needs the gateway's client TLS.
  */
-export const toControlTarget = (target: WorkspaceSshTarget): ControlTarget => {
-  if (target.runtime.adapter !== "docker") {
-    throw new Error(
-      `Unsupported runtime adapter '${target.runtime.adapter}' for control transport.`,
-    );
-  }
+export const toControlTarget = (
+  target: WorkspaceSshTarget,
+  options: ControlTargetOptions = {},
+): ControlTarget => {
   const endpoint = target.runtime.endpoint.trim();
-  if (endpoint.startsWith(UNIX_ENDPOINT_PREFIX)) {
-    return { kind: "unix-socket", socketPath: endpoint.slice(UNIX_ENDPOINT_PREFIX.length) };
+  switch (target.runtime.adapter) {
+    case "docker": {
+      if (endpoint.startsWith(UNIX_ENDPOINT_PREFIX)) {
+        return { kind: "unix-socket", socketPath: endpoint.slice(UNIX_ENDPOINT_PREFIX.length) };
+      }
+      return {
+        kind: "docker-exec",
+        containerId: target.runtime.resourceId,
+        socketPath: DEFAULT_CONTROL_SOCKET_PATH,
+      };
+    }
+    case "k8s":
+    case "k3s": {
+      if (!endpoint.startsWith(WSS_ENDPOINT_PREFIX)) {
+        throw new Error(
+          `Runtime adapter '${target.runtime.adapter}' recorded a non-wss endpoint; cannot open a control transport.`,
+        );
+      }
+      if (options.websocketTls === undefined) {
+        throw new Error(
+          `Runtime adapter '${target.runtime.adapter}' needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) which this gateway is not configured with.`,
+        );
+      }
+      return { kind: "websocket", url: endpoint, tls: options.websocketTls };
+    }
   }
-  return {
-    kind: "docker-exec",
-    containerId: target.runtime.resourceId,
-    socketPath: DEFAULT_CONTROL_SOCKET_PATH,
-  };
 };
 
 /**

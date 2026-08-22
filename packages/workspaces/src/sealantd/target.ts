@@ -5,9 +5,9 @@
  * Two layers live here:
  *
  *   1. Pure target derivation (`sealantTargetForDockerContainer` /
- *      `sealantTargetForRuntimeInstance`). Prefers the persisted `unix://` endpoint exposed by the
- *      Docker adapter and falls back to the container `resourceId` plus docker-exec. No I/O, fully
- *      unit testable.
+ *      `sealantTargetForRuntimeInstance`). Docker: prefers the persisted `unix://` endpoint and
+ *      falls back to the container `resourceId` plus docker-exec. Kubernetes: the persisted
+ *      `wss://` endpoint plus the caller's client TLS material. No I/O, fully unit testable.
  *
  *   2. A worker-consumable Effect helper (`execInWorkspace`). This is the realistic "what a worker
  *      calls" API: hand it a target + a command, get back decoded stdout + the exit code. It owns the
@@ -19,7 +19,12 @@ import { StreamKind } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
 import { Effect, Stream } from "effect";
 
-import { SealantRuntime, type SealantError, type SealantTarget } from "./runtime.js";
+import {
+  SealantRuntime,
+  type SealantError,
+  type SealantTarget,
+  type SealantWebSocketClientTls,
+} from "./runtime.js";
 
 /** Default control socket path the workspace entrypoint launches sealantd on (matches boot.ts). */
 export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
@@ -36,7 +41,19 @@ export interface RuntimeInstanceTargetSource {
   readonly endpoint: string | null;
 }
 
+/** How a consumer reaches each runtime family; everything optional so Docker needs nothing. */
+export interface SealantTargetDerivationOptions {
+  /** Control socket path inside a Docker container (docker-exec fallback). */
+  readonly socketPath?: string;
+  /**
+   * Client mTLS material for `wss://` endpoints (Kubernetes). Without it a Kubernetes instance
+   * yields no target — the consumer is not configured to authenticate to the daemon.
+   */
+  readonly websocketTls?: SealantWebSocketClientTls;
+}
+
 const UNIX_ENDPOINT_PREFIX = "unix://";
+const WSS_ENDPOINT_PREFIX = "wss://";
 
 /**
  * Derives the docker-exec target for a container id. Pure. `containerId` is the `resourceId` returned
@@ -53,31 +70,69 @@ export const sealantTargetForDockerContainer = (
 });
 
 /**
- * Derives a target from a persisted runtime instance, preferring a host Unix socket and falling back
- * to docker-exec. Returns `undefined` for unsupported adapters or when neither endpoint nor resource
- * id can address the runtime. Pure.
+ * Derives a target from a persisted runtime instance. Pure.
+ *
+ *  - Docker: prefers the persisted `unix://` host socket, falls back to docker-exec on the
+ *    container `resourceId`.
+ *  - Kubernetes (`k8s` / `k3s`): the persisted `wss://` endpoint, reachable only with client TLS
+ *    material in `options.websocketTls`.
+ *
+ * Returns `undefined` when the instance cannot be addressed with what the caller has. The second
+ * parameter accepts the legacy bare `socketPath` string for source compatibility.
  */
 export const sealantTargetForRuntimeInstance = (
   instance: RuntimeInstanceTargetSource,
-  socketPath: string = DEFAULT_CONTROL_SOCKET_PATH,
+  options: string | SealantTargetDerivationOptions = {},
 ): SealantTarget | undefined => {
-  if (instance.adapter !== "docker") {
-    return undefined;
-  }
-
+  const resolved: SealantTargetDerivationOptions =
+    typeof options === "string" ? { socketPath: options } : options;
+  const socketPath = resolved.socketPath ?? DEFAULT_CONTROL_SOCKET_PATH;
   const endpoint = instance.endpoint?.trim();
-  if (endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)) {
-    const endpointSocketPath = endpoint.slice(UNIX_ENDPOINT_PREFIX.length);
-    if (endpointSocketPath.length > 0) {
-      return { kind: "unix-socket", socketPath: endpointSocketPath };
+
+  switch (instance.adapter) {
+    case "docker": {
+      if (endpoint?.startsWith(UNIX_ENDPOINT_PREFIX)) {
+        const endpointSocketPath = endpoint.slice(UNIX_ENDPOINT_PREFIX.length);
+        if (endpointSocketPath.length > 0) {
+          return { kind: "unix-socket", socketPath: endpointSocketPath };
+        }
+      }
+      if (instance.resourceId === null || instance.resourceId.length === 0) {
+        return undefined;
+      }
+      return sealantTargetForDockerContainer(instance.resourceId, socketPath);
     }
+    case "k8s":
+    case "k3s": {
+      if (
+        endpoint === undefined ||
+        !endpoint.startsWith(WSS_ENDPOINT_PREFIX) ||
+        resolved.websocketTls === undefined
+      ) {
+        return undefined;
+      }
+      return { kind: "websocket", url: endpoint, tls: resolved.websocketTls };
+    }
+    case null:
+      return undefined;
   }
+};
 
-  if (instance.resourceId === null || instance.resourceId.length === 0) {
-    return undefined;
+/** Human-readable reason a runtime instance yields no target; for error messages, never thrown. */
+export const describeUnaddressableRuntimeInstance = (
+  instance: RuntimeInstanceTargetSource,
+  options: SealantTargetDerivationOptions = {},
+): string => {
+  if (instance.adapter === null) {
+    return "the runtime instance has no adapter recorded";
   }
-
-  return sealantTargetForDockerContainer(instance.resourceId, socketPath);
+  if (instance.adapter === "docker") {
+    return "the docker instance has neither a unix:// endpoint nor a container id";
+  }
+  if (options.websocketTls === undefined) {
+    return `the ${instance.adapter} instance needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) which is not configured`;
+  }
+  return `the ${instance.adapter} instance has no wss:// endpoint recorded`;
 };
 
 /** A finished one-shot exec: the decoded STDOUT and the process exit code. */

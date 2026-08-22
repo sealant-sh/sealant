@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_CONTROL_SOCKET_PATH,
+  describeUnaddressableRuntimeInstance,
   sealantTargetForDockerContainer,
   sealantTargetForRuntimeInstance,
 } from "./target.js";
@@ -84,12 +85,76 @@ describe("sealantTargetForRuntimeInstance", () => {
       "/var/lib/sealant.sock",
     );
 
-    expect(target?.socketPath).toBe("/var/lib/sealant.sock");
+    expect(target?.kind === "docker-exec" ? target.socketPath : undefined).toBe(
+      "/var/lib/sealant.sock",
+    );
   });
 
-  it("returns undefined for a non-docker adapter (no docker-exec transport for k8s yet)", () => {
-    expect(sealantTargetForRuntimeInstance(runtimeInstance({ adapter: "k8s" }))).toBeUndefined();
-    expect(sealantTargetForRuntimeInstance(runtimeInstance({ adapter: "k3s" }))).toBeUndefined();
+  it("accepts the socket path through the options object too", () => {
+    const target = sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "ctr" }), {
+      socketPath: "/var/lib/sealant.sock",
+    });
+
+    expect(target).toEqual({
+      kind: "docker-exec",
+      containerId: "ctr",
+      socketPath: "/var/lib/sealant.sock",
+    });
+  });
+
+  const websocketTls = {
+    caPath: "/etc/sealant/tls/ca.crt",
+    certPath: "/etc/sealant/tls/tls.crt",
+    keyPath: "/etc/sealant/tls/tls.key",
+  };
+
+  it("derives a websocket target for a Kubernetes instance with a wss endpoint and client TLS", () => {
+    for (const adapter of ["k8s", "k3s"] as const) {
+      const target = sealantTargetForRuntimeInstance(
+        runtimeInstance({
+          adapter,
+          resourceId: "ws-run-abc",
+          endpoint: "wss://ws-run-abc.sealant-workspaces.svc:7443/control",
+        }),
+        { websocketTls },
+      );
+      expect(target).toEqual({
+        kind: "websocket",
+        url: "wss://ws-run-abc.sealant-workspaces.svc:7443/control",
+        tls: websocketTls,
+      });
+    }
+  });
+
+  it("returns undefined for a Kubernetes instance without client TLS material", () => {
+    expect(
+      sealantTargetForRuntimeInstance(
+        runtimeInstance({ adapter: "k8s", endpoint: "wss://ws.svc:7443/control" }),
+      ),
+    ).toBeUndefined();
+    expect(describeUnaddressableRuntimeInstance(runtimeInstance({ adapter: "k8s" }))).toContain(
+      "SEALANT_CONTROL_CLIENT_CERT_PATH",
+    );
+  });
+
+  it("returns undefined for a Kubernetes instance whose endpoint is not wss://", () => {
+    expect(
+      sealantTargetForRuntimeInstance(
+        runtimeInstance({ adapter: "k8s", endpoint: "docker-exec://ctr/run/sealant/control.sock" }),
+        { websocketTls },
+      ),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(runtimeInstance({ adapter: "k3s", endpoint: null }), {
+        websocketTls,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("never lets client TLS material turn a docker instance into a websocket target", () => {
+    expect(
+      sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "ctr" }), { websocketTls }),
+    ).toEqual({ kind: "docker-exec", containerId: "ctr", socketPath: DEFAULT_CONTROL_SOCKET_PATH });
   });
 
   it("returns undefined when the adapter has not been recorded yet", () => {
