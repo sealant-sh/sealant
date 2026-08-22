@@ -443,6 +443,9 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
         ? {}
         : { priorityClassName: build.priorityClassName }),
       ...(runtimeClassName === undefined ? {} : { runtimeClassName }),
+      ...(Object.keys(config.nodeSelector).length === 0
+        ? {}
+        : { nodeSelector: { ...config.nodeSelector } }),
       ...(config.imagePullSecret === undefined
         ? {}
         : { imagePullSecrets: [{ name: config.imagePullSecret }] }),

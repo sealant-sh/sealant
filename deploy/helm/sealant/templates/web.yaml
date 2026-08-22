@@ -1,0 +1,52 @@
+{{- if .Values.web.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-web
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+  {{- with .Values.web.service.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.web.service.type }}
+  selector: {{ include "sealant.component" (dict "root" . "name" "web") | nindent 4 }}
+  ports: [{ name: http, port: 3000, targetPort: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-web
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "sealant.component" (dict "root" . "name" "web") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets: {{ toYaml .Values.image.pullSecrets | nindent 8 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: web
+          image: {{ include "sealant.image" (dict "root" . "name" "web") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 3000, name: http }]
+          env:
+            {{- include "sealant.secretEnv" . | nindent 12 }}
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3000" }
+            - name: DATABASE_URL
+              value: {{ include "sealant.databaseUrl" . | quote }}
+            - name: BETTER_AUTH_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: BETTER_AUTH_SECRET } }
+            - { name: BETTER_AUTH_URL, value: {{ .Values.web.url | quote }} }
+            - { name: BETTER_AUTH_TRUSTED_ORIGINS, value: {{ .Values.web.trustedOrigins | quote }} }
+            - { name: CORE_API_BASE_URL, value: http://{{ .Release.Name }}-api:4000 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+          resources: {{ toYaml .Values.web.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+{{- end }}

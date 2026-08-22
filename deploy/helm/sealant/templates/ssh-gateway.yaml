@@ -1,0 +1,74 @@
+{{- if .Values.sshGateway.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-gateway-keys
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.sshGateway.hostKeyStorageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.sshGateway.hostKeyStorage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ssh-gateway
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+  {{- with .Values.sshGateway.service.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.sshGateway.service.type }}
+  selector: {{ include "sealant.component" (dict "root" . "name" "ssh-gateway") | nindent 4 }}
+  ports: [{ name: ssh, port: {{ .Values.sshGateway.service.port }}, targetPort: ssh }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ssh-gateway
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.sshGateway.replicas }}
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "ssh-gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "sealant.component" (dict "root" . "name" "ssh-gateway") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-control-plane
+      automountServiceAccountToken: false
+      imagePullSecrets: {{ toYaml .Values.image.pullSecrets | nindent 8 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: ssh-gateway
+          image: {{ include "sealant.image" (dict "root" . "name" "ssh-gateway") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 2222, name: ssh }]
+          env:
+            {{- include "sealant.controlTlsEnv" . | nindent 12 }}
+            - { name: SSH_GATEWAY_HOST, value: "0.0.0.0" }
+            - { name: SSH_GATEWAY_PORT, value: "2222" }
+            - { name: SSH_GATEWAY_HOST_KEY_PATH, value: /keys/ssh_gateway_host_key }
+            - { name: SSH_GATEWAY_HOST_KEY_AUTOGENERATE, value: "true" }
+            - { name: SSH_GATEWAY_ALLOWED_KEYS_FILE, value: /keys/gateway_allowed_keys }
+            - { name: SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX, value: ws }
+            - { name: CORE_API_BASE_URL, value: http://{{ .Release.Name }}-api:4000 }
+            - name: WORKSPACE_SSH_GATEWAY_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: WORKSPACE_SSH_GATEWAY_TOKEN } }
+          volumeMounts:
+            - { name: keys, mountPath: /keys }
+            - { name: control-tls, mountPath: /etc/sealant/control-tls, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: ssh }
+            periodSeconds: 10
+          resources: {{ toYaml .Values.sshGateway.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+      volumes:
+        - name: keys
+          persistentVolumeClaim: { claimName: {{ .Release.Name }}-gateway-keys }
+        - name: control-tls
+          secret: { secretName: {{ .Release.Name }}-control-client-tls }
+{{- end }}

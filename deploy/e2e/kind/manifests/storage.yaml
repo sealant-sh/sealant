@@ -1,0 +1,141 @@
+# A generic RWX provider for the test cluster: the userspace nfs-ganesha server + external
+# provisioner (sig-storage/nfs-provisioner). Deliberately NOT Longhorn or any vendor CSI — the
+# application contract is "RWX + POSIX", and a userspace ganesha server is the smallest thing that
+# satisfies it with no kernel modules and no extra helm charts. Production clusters use whatever
+# RWX driver they already run.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-storage
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nfs-provisioner
+  namespace: e2e-storage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: e2e-nfs-provisioner
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: e2e-nfs-provisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: e2e-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: nfs-provisioner
+    namespace: e2e-storage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-nfs-provisioner
+  namespace: e2e-storage
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-nfs-provisioner
+  namespace: e2e-storage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: e2e-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: nfs-provisioner
+    namespace: e2e-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-provisioner
+  namespace: e2e-storage
+  labels: { app: nfs-provisioner }
+spec:
+  selector: { app: nfs-provisioner }
+  ports:
+    - { name: nfs, port: 2049 }
+    - { name: nfs-udp, port: 2049, protocol: UDP }
+    - { name: nlockmgr, port: 32803 }
+    - { name: nlockmgr-udp, port: 32803, protocol: UDP }
+    - { name: mountd, port: 20048 }
+    - { name: mountd-udp, port: 20048, protocol: UDP }
+    - { name: rquotad, port: 875 }
+    - { name: rquotad-udp, port: 875, protocol: UDP }
+    - { name: rpcbind, port: 111 }
+    - { name: rpcbind-udp, port: 111, protocol: UDP }
+    - { name: statd, port: 662 }
+    - { name: statd-udp, port: 662, protocol: UDP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-provisioner
+  namespace: e2e-storage
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: nfs-provisioner } }
+  template:
+    metadata:
+      labels: { app: nfs-provisioner }
+    spec:
+      serviceAccountName: nfs-provisioner
+      nodeSelector: { sealant.sh/e2e-role: store }
+      containers:
+        - name: nfs-provisioner
+          image: registry.k8s.io/sig-storage/nfs-provisioner:v4.0.8
+          ports:
+            - { containerPort: 2049, name: nfs }
+            - { containerPort: 20048, name: mountd }
+            - { containerPort: 111, name: rpcbind }
+          securityContext:
+            capabilities:
+              add: [DAC_READ_SEARCH, SYS_RESOURCE]
+          args: ["-provisioner=sealant.sh/e2e-nfs"]
+          env:
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - { name: SERVICE_NAME, value: nfs-provisioner }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          volumeMounts: [{ name: export, mountPath: /export }]
+      volumes:
+        - name: export
+          emptyDir: {}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: e2e-rwx
+provisioner: sealant.sh/e2e-nfs
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions: [vers=4.1, hard, noatime]

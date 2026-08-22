@@ -21,6 +21,7 @@ import {
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
+  reapOrphanedKubernetesResources,
   kubernetesBuildConfigFromEnv,
   kubernetesRuntimeConfigFromEnv,
   KubernetesWorkspaceImageBuilder,
@@ -242,6 +243,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Expiry reaper: stop live runtimes whose workspace TTL elapsed (and stranded containers whose
   // stop was lost), so a self-host install doesn't accumulate dead containers.
   const runExpiryReaperTick = (): void => {
+    // Kubernetes: objects that outlived their runtime instance row (worker crash, lost stop).
+    const kubernetesAdapter = kubernetesAdapters[0];
+    if (kubernetesAdapter !== undefined) {
+      reapOrphanedKubernetesResources({ db, adapter: kubernetesAdapter }).catch(
+        (error: unknown) => {
+          console.error("Kubernetes reconciler tick failed", { error });
+        },
+      );
+    }
     reapExpiredWorkspaces({
       db,
       runtimeAdapters,

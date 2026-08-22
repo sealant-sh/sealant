@@ -1,0 +1,39 @@
+{{- if .Values.networkPolicies.enabled }}
+# Control plane: components talk to each other, Postgres, RabbitMQ, the registry, workspaces
+# (WSS) and the internet (GitHub, npm, image pulls for BuildKit). Ingress only from in-cluster
+# peers by default — no public exposure without an operator-added Ingress/LoadBalancer.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-control-plane
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: sealant, app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: sealant, app.kubernetes.io/instance: {{ .Release.Name }} } }
+    # The web UI and API are reached through whatever the operator exposes; allow same-namespace
+    # and the ingress controller namespace if you run one (add a rule).
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+    {{- if .Values.sshGateway.enabled }}
+    # The SSH gateway is the one component meant to be reached from users; its Service type
+    # decides exposure, this rule admits the traffic.
+    - ports: [{ protocol: TCP, port: 2222 }]
+    {{- end }}
+    {{- with .Values.networkPolicies.clientCidrs }}
+    # Operator-declared client networks (LoadBalancer/Ingress traffic keeps its source IP).
+    - from:
+        {{- range . }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 2222 }
+    {{- end }}
+  egress:
+    - {}
+{{- end }}

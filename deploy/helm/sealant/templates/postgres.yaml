@@ -1,0 +1,56 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {{ include "sealant.component" (dict "root" . "name" "postgres") | nindent 4 }}
+  ports: [{ name: pg, port: 5432 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-postgres
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "sealant.component" (dict "root" . "name" "postgres") | nindent 8 }}
+    spec:
+      # postgres:*-alpine runs happily as its own uid; restricted-PSS-compliant.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          env:
+            - { name: POSTGRES_USER, value: sealant }
+            - { name: POSTGRES_DB, value: sealant_control_plane }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: SEALANT_DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432, name: pg }]
+          readinessProbe:
+            exec: { command: [pg_isready, -U, sealant, -d, sealant_control_plane] }
+            periodSeconds: 5
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if .Values.postgres.storageClassName }}
+        storageClassName: {{ .Values.postgres.storageClassName }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.postgres.storage }} } }
+{{- end }}

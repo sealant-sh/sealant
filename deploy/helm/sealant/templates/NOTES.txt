@@ -1,0 +1,11 @@
+Sealant {{ include "sealant.tag" . }} installed in {{ .Release.Namespace }}.
+
+Workspace namespace: {{ include "sealant.workspaceNamespace" . }}
+Control TLS:         {{ .Release.Name }}-control-client-tls (cert-manager, issuer {{ include "sealant.issuerName" . }})
+Registry:            {{ include "sealant.pushRegistry" . }}{{ if .Values.registry.enabled }} (plain HTTP; nodes must allow this insecure registry){{ end }}
+
+Nothing is exposed publicly. Reach the API/web through a port-forward or your own Ingress:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-api 4000:4000
+
+Mount roots workspaces may use: {{ include "sealant.allowedRoots" . }}
+Read apps/docs/contents/guides/kubernetes.md for upgrade, rollback and troubleshooting.

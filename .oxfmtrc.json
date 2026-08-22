@@ -12,7 +12,8 @@
     "**/coverage/**",
     "**/routeTree.gen.ts",
     ".turbo/**",
-    ".direnv/**"
+    ".direnv/**",
+    "deploy/helm/**/templates/**"
   ],
   "sortImports": {
     "ignoreCase": true,

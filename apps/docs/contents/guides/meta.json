@@ -7,6 +7,7 @@
     "runs-and-execution-records",
     "secrets-and-credentials",
     "upgrade-repair-uninstall",
-    "beyond-localhost"
+    "beyond-localhost",
+    "kubernetes"
   ]
 }

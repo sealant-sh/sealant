@@ -1,0 +1,17 @@
+# Three-node kind cluster for the cross-node workspace E2E: one node hosts the "store" (the
+# Mend stand-in writing linked worktrees onto the RWX claim), another hosts workspace Pods.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    labels: { sealant.sh/e2e-role: store }
+  - role: worker
+    labels: { sealant.sh/e2e-role: workspace }
+containerdConfigPatches:
+  # Enable hosts.d registry config (containerd 2.x plugin name); up.sh writes a per-registry
+  # hosts.toml on every node pointing "sealant-registry.sealant.svc:5000" at the Service
+  # ClusterIP — node containerd cannot resolve *.svc names, but it CAN reach ClusterIPs.
+  - |-
+    [plugins."io.containerd.cri.v1.images".registry]
+      config_path = "/etc/containerd/certs.d"
