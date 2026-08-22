@@ -107,11 +107,12 @@ export const mapRun = (run: RunRecord): Run => ({
   updatedAt: run.updatedAt.toISOString(),
 });
 
-const requireRun = (runId: string) =>
+const requireRun = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const run = yield* withRunInternalError(runs.getRunById(runId), "Failed to load run.");
-    if (run === undefined) {
+    // Owner-scoped reads answer a uniform 404 — never reveal that the id exists for someone else.
+    if (run === undefined || (ownerUserId !== undefined && run.ownerUserId !== ownerUserId)) {
       return yield* new RunNotFoundError({ message: `Run not found: ${runId}` });
     }
     return run;
@@ -246,15 +247,15 @@ export const listRuns = (query: ListRunsQuery) =>
     return { items: items.map(mapRun) } satisfies ListRunsResponse;
   });
 
-export const getRun = (runId: string) =>
+export const getRun = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
-    const run = yield* requireRun(runId);
+    const run = yield* requireRun(runId, ownerUserId);
     return mapRun(run);
   });
 
-export const getRunChanges = (runId: string) =>
+export const getRunChanges = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
-    const run = yield* requireRun(runId);
+    const run = yield* requireRun(runId, ownerUserId);
     return {
       files: (run.changedFiles ?? []).map((file) => ({
         path: file.path,
@@ -325,7 +326,7 @@ export const getRunTimeline = (input: {
   readonly query: GetRunTimelineQuery;
 }) =>
   Effect.gen(function* () {
-    yield* requireRun(input.runId);
+    yield* requireRun(input.runId, input.query.ownerUserId);
     const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
     const toSequence = yield* parseSequence(input.query.toSequence, "toSequence");
     const limit = yield* parseLimit(input.query.limit, 500, 5000);
@@ -362,9 +363,13 @@ export const getRunTimeline = (input: {
     return { items } satisfies RunTimelineResponse;
   });
 
-export const getRunEvent = (input: { readonly runId: string; readonly sequence: string }) =>
+export const getRunEvent = (input: {
+  readonly runId: string;
+  readonly sequence: string;
+  readonly ownerUserId?: string | undefined;
+}) =>
   Effect.gen(function* () {
-    yield* requireRun(input.runId);
+    yield* requireRun(input.runId, input.ownerUserId);
     const sequence = yield* parseSequence(input.sequence, "sequence");
     if (sequence === undefined) {
       return yield* new RunBadRequestError({ message: "sequence must be a decimal integer." });
@@ -409,7 +414,7 @@ export const getRunScrollback = (input: {
   readonly query: GetRunScrollbackQuery;
 }) =>
   Effect.gen(function* () {
-    yield* requireRun(input.runId);
+    yield* requireRun(input.runId, input.query.ownerUserId);
     const atSequence = (yield* parseSequence(input.query.atSequence, "atSequence")) ?? MAX_SEQUENCE;
     const fromSequence = yield* parseSequence(input.query.fromSequence, "fromSequence");
     const limit = yield* parseLimit(input.query.limit, 5000, 10_000);
@@ -448,9 +453,9 @@ export const getRunScrollback = (input: {
     } satisfies RunScrollbackResponse;
   });
 
-export const getRunLoss = (runId: string) =>
+export const getRunLoss = (runId: string, ownerUserId?: string) =>
   Effect.gen(function* () {
-    yield* requireRun(runId);
+    yield* requireRun(runId, ownerUserId);
     const query = yield* TelemetryQuery;
     const report = yield* withRunInternalError(
       query.getLossReport(runId),

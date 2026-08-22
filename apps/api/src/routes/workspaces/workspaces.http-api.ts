@@ -57,7 +57,9 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
         }),
       )
       .handle("listWorkspaces", ({ query }) => listWorkspaces(query))
-      .handle("getWorkspace", ({ params }) => getWorkspace(params.workspaceId))
+      .handle("getWorkspace", ({ params, query }) =>
+        getWorkspace(params.workspaceId, query.ownerUserId),
+      )
       .handle("listWorkspaceAttempts", ({ params, query }) =>
         listWorkspaceAttempts({
           workspaceId: params.workspaceId,

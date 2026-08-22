@@ -142,6 +142,10 @@ services:
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       # Shared with the worker: API encrypts connected-account credentials, worker decrypts them.
       SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:-}
+      # Service principals (comma-separated bearer secrets). Set = every /v1 request must carry
+      # one (a product such as Mend acting for its users); unset = the open loopback-only model.
+      # The web app does not hold a service key, so set this only on API-only deployments.
+      SEALANT_SERVICE_KEYS: ${SEALANT_SERVICE_KEYS:-}
       # Mount-sourced workspaces are opt-in: the API rejects host paths outside these roots.
       SEALANT_MOUNT_ALLOWED_STORE_ROOTS: ${SEALANT_MOUNT_ALLOWED_STORE_ROOTS:-}
     extra_hosts:

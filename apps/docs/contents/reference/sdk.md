@@ -62,9 +62,19 @@ live verification against the baked workspace image.
 
 ### Owner identity
 
-Workspaces and runs are attributed to a `usr_local` owner by default (override with the
-`SEALANT_OWNER_USER_ID` environment variable). This is the same temporary pre-auth model the API
-uses — it disappears when real authentication lands.
+Workspaces and runs are attributed to the client's owner: `SealantConfig.ownerUserId`, else the
+`SEALANT_OWNER_USER_ID` environment variable, else `usr_local`. A product that owns its own login
+provisions one Sealant user per person and builds one client per user:
+
+```ts
+const admin = new Sealant({ baseUrl, apiKey: serviceKey });
+const { userId } = await admin.users.ensure({ email, name }); // idempotent on email
+const mine = new Sealant({ baseUrl, apiKey: serviceKey, ownerUserId: userId });
+await mine.connectedAccounts.connect({ provider: "codex", secret: authJson });
+```
+
+`apiKey` is a service key (`SEALANT_SERVICE_KEYS` on the API) or a scoped user access token; see the
+[HTTP API auth section](/docs/reference/http-api).
 
 ## What is implemented
 

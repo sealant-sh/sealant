@@ -14,8 +14,8 @@
  *
  * AUTHORIZATION: three scopes, enforced when a bearer token is presented — `session:read`
  * (status/output), `session:input` (input/resize/signal), `workspace:exec` (create/close).
- * Without a token the pre-auth owner model applies (ownerUserId in payload/query), matching the
- * rest of the control plane today.
+ * Without a token — or with a SERVICE KEY (services/service-principals.ts) — the owner model
+ * applies (ownerUserId in payload/query), matching the rest of the control plane.
  */
 import { createHash, randomUUID } from "node:crypto";
 
@@ -58,6 +58,8 @@ import {
   type SealantTarget,
 } from "@sealant/workspaces";
 import { Effect, Stream } from "effect";
+
+import { servicePrincipals } from "../../services/service-principals.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_PTY_OUTPUT = 5;
@@ -124,7 +126,17 @@ export const authorize = (input: {
         message: "Malformed Authorization header (expected: Bearer <token>).",
       });
     }
-    const tokenHash = createHash("sha256").update(match[1].trim()).digest("hex");
+    const secret = match[1].trim();
+    // A service principal (Mend) acts on behalf of the asserted owner — same as no token.
+    if (servicePrincipals.matches(secret)) {
+      if (input.assertedOwnerUserId === undefined) {
+        return yield* new SessionBadRequestError({
+          message: "ownerUserId is required when authenticating as a service principal.",
+        });
+      }
+      return { ownerUserId: input.assertedOwnerUserId } satisfies SessionPrincipal;
+    }
+    const tokenHash = createHash("sha256").update(secret).digest("hex");
 
     const tokens = yield* AccessTokenRepo;
     const token = yield* withInternalError(

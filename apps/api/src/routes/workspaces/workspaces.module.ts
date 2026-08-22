@@ -1518,7 +1518,7 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
   });
 };
 
-export const getWorkspace = (workspaceId: string) => {
+export const getWorkspace = (workspaceId: string, ownerUserId?: string) => {
   return Effect.gen(function* () {
     const workspaceRepo = yield* WorkspaceRepo;
     const workspace = yield* withInternalError(
@@ -1526,7 +1526,11 @@ export const getWorkspace = (workspaceId: string) => {
       "Failed to load workspace.",
     );
 
-    if (workspace === undefined) {
+    // Owner-scoped reads answer a uniform 404 — never reveal that the id exists for someone else.
+    if (
+      workspace === undefined ||
+      (ownerUserId !== undefined && workspace.ownerUserId !== ownerUserId)
+    ) {
       return yield* new WorkspaceNotFoundError({
         message: `Workspace not found: ${workspaceId}`,
       });

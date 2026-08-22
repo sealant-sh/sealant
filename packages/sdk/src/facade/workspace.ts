@@ -135,7 +135,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     if (init.harness !== undefined) {
       return [init.harness.launchCommand ?? init.harness.id];
     }
-    const details = await ctx.runtime.run(getWorkspaceOp(init.id));
+    const details = await ctx.runtime.run(
+      getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+    );
     const spec = details.spec as { harness?: { id?: string } } | undefined;
     const harnessId = spec?.harness?.id;
     if (harnessId === undefined) {
@@ -175,14 +177,18 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     name: init.name,
 
     status: async () => {
-      const details: WorkspaceDetails = await ctx.runtime.run(getWorkspaceOp(init.id));
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
       return details.status;
     },
 
     ready: async () => {
       const deadline = Date.now() + READY_TIMEOUT_MS;
       for (;;) {
-        const details: WorkspaceDetails = await ctx.runtime.run(getWorkspaceOp(init.id));
+        const details: WorkspaceDetails = await ctx.runtime.run(
+          getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+        );
         // Gate on the coarse "ready" status, which the control plane now emits ONLY after the
         // in-workspace daemon's control socket is accepting (readiness probe in the launch path).
         // This is honest: when ready() resolves, harness.run() can connect without racing the socket.
@@ -218,7 +224,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         let lastStatus: WorkspaceStatus | undefined;
         const deadline = Date.now() + READY_TIMEOUT_MS;
         for (;;) {
-          const details = await ctxRun.run(getWorkspaceOp(init.id));
+          const details = await ctxRun.run(
+            getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+          );
           if (details.status !== lastStatus) {
             lastStatus = details.status;
             yield {
@@ -248,7 +256,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
       const deadline = Date.now() + STOP_TIMEOUT_MS;
       for (;;) {
-        const details: WorkspaceDetails = await ctx.runtime.run(getWorkspaceOp(init.id));
+        const details: WorkspaceDetails = await ctx.runtime.run(
+          getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+        );
         if (details.status === "stopped") {
           return;
         }

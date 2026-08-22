@@ -37,6 +37,11 @@ export type { SealantHostLocalConfig, SealantInternalConfig } from "../internal/
 // inference — the groups the operations above call). Re-exported so Effect consumers don't need to
 // depend on the contracts package directly to `Effect.catchTag` a failure.
 export {
+  ConnectedAccountBadRequestError,
+  ConnectedAccountConflictError,
+  ConnectedAccountInternalServerError,
+  ConnectedAccountNotFoundError,
+  ConnectedAccountServiceUnavailableError,
   InferenceBadRequestError,
   InferenceConflictError,
   InferenceInternalServerError,
@@ -45,6 +50,9 @@ export {
   RunBadRequestError,
   RunInternalServerError,
   RunNotFoundError,
+  UserBadRequestError,
+  UserInternalServerError,
+  UserNotFoundError,
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
   WorkspaceConflictError,

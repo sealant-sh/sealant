@@ -11,6 +11,7 @@ import { RunsGroup } from "./runs.js";
 import { SessionsGroup } from "./sessions.js";
 import { SshKeysGroup } from "./ssh-keys.js";
 import { SystemGroup } from "./system.js";
+import { UsersGroup } from "./users.js";
 import { WorkspacesGroup } from "./workspaces.js";
 
 export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
@@ -26,6 +27,7 @@ export const ControlPlaneAPI = HttpApi.make("sealantControlPlaneApi")
   .add(AccessTokensGroup.prefix("/v1/access-tokens"))
   .add(RegistriesGroup.prefix("/v1/registries"))
   .add(GitHubGroup.prefix("/v1/github"))
+  .add(UsersGroup.prefix("/v1/users"))
   .annotate(OpenApi.Title, "Sealant Control Plane API")
   .annotate(OpenApi.Version, "0.0.0")
   .annotate(OpenApi.Description, "Sealant control-plane HTTP API.");

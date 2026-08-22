@@ -81,12 +81,15 @@ export const makeRun = (ctx: SdkContext, init: RunInit): Run => {
           });
         }
         await delay(WAIT_POLL_INTERVAL_MS);
-        current = await ctx.runtime.run(getRunOp(runId));
+        current = await ctx.runtime.run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
       }
       // Settle the changes: a handle from `harness.start()` or `runs.get()` has none captured yet,
       // so read the server-side capture now that the run is terminal.
       const settledChanges =
-        changesData ?? toRunChangesData(await ctx.runtime.run(getRunChangesOp(runId)));
+        changesData ??
+        toRunChangesData(
+          await ctx.runtime.run(getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId)),
+        );
       return makeRun(ctx, { wire: current, changes: settledChanges });
     },
   };

@@ -13,6 +13,7 @@ import { RunsHandlersLive } from "./runs/runs.http-api.js";
 import { SessionsHandlersLive } from "./sessions/sessions.http-api.js";
 import { SshKeysHandlersLive } from "./ssh-keys/ssh-keys.http-api.js";
 import { SystemHandlersLive } from "./system/system.http-api.js";
+import { UsersHandlersLive } from "./users/users.http-api.js";
 import { WorkspacesHandlersLive } from "./workspaces/workspaces.http-api.js";
 
 const ControlPlaneHandlersLive = Layer.mergeAll(
@@ -28,6 +29,7 @@ const ControlPlaneHandlersLive = Layer.mergeAll(
   AccessTokensHandlersLive,
   RegistriesHandlersLive,
   GitHubHandlersLive,
+  UsersHandlersLive,
 );
 
 export const makeControlPlaneHttpApiLayer = () => {

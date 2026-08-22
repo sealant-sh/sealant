@@ -174,7 +174,10 @@ export const renderTranscript = (commands: readonly RunCommand[]): string => {
 export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
   const fetchTimeline = (from?: bigint): Promise<readonly WireTimelineEntry[]> =>
     ctx.runtime.run(
-      getRunTimelineOp(runId, from === undefined ? {} : { fromSequence: from.toString() }),
+      getRunTimelineOp(runId, {
+        ownerUserId: ctx.config.hostLocal.ownerUserId,
+        ...(from === undefined ? {} : { fromSequence: from.toString() }),
+      }),
     );
 
   return {
@@ -216,7 +219,10 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
         const deadline = Date.now() + STREAM_TIMEOUT_MS;
         for (;;) {
           const wire = await ctxRun.run(
-            getRunTimelineOp(runId, from === undefined ? {} : { fromSequence: from.toString() }),
+            getRunTimelineOp(runId, {
+              ownerUserId: ctx.config.hostLocal.ownerUserId,
+              ...(from === undefined ? {} : { fromSequence: from.toString() }),
+            }),
           );
           for (const entry of wire) {
             const mapped = toTimelineEntry(entry);
@@ -225,10 +231,13 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
           }
           // Stop once the run is terminal — with one final drain to catch entries written between the
           // last timeline fetch and the status check.
-          const run = await ctxRun.run(getRunOp(runId));
+          const run = await ctxRun.run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
           if (TERMINAL_RUN_STATUSES.has(run.status)) {
             const tail = await ctxRun.run(
-              getRunTimelineOp(runId, from === undefined ? {} : { fromSequence: from.toString() }),
+              getRunTimelineOp(runId, {
+                ownerUserId: ctx.config.hostLocal.ownerUserId,
+                ...(from === undefined ? {} : { fromSequence: from.toString() }),
+              }),
             );
             for (const entry of tail) {
               yield toTimelineEntry(entry);
@@ -263,7 +272,13 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
     scrollback: (processId, stream: IoStream) => {
       const run = ctx.runtime;
       async function* iterate(): AsyncGenerator<Uint8Array> {
-        const response = await run.run(getRunScrollbackOp(runId, { processId, stream }));
+        const response = await run.run(
+          getRunScrollbackOp(runId, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            processId,
+            stream,
+          }),
+        );
         const bytes = Buffer.from(response.contentBase64, "base64");
         if (bytes.byteLength > 0) {
           yield new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -272,10 +287,11 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
       return iterate();
     },
 
-    loss: async () => toLossReport(await ctx.runtime.run(getRunLossOp(runId))),
+    loss: async () =>
+      toLossReport(await ctx.runtime.run(getRunLossOp(runId, ctx.config.hostLocal.ownerUserId))),
 
     summary: async (): Promise<RunSummary> => {
-      const run: WireRun = await ctx.runtime.run(getRunOp(runId));
+      const run: WireRun = await ctx.runtime.run(getRunOp(runId, ctx.config.hostLocal.ownerUserId));
       const timeline = await fetchTimeline();
       const durationMs =
         run.startedAt !== undefined && run.finishedAt !== undefined

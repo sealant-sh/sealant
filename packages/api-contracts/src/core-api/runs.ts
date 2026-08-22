@@ -131,7 +131,18 @@ export const timelineEntrySchema = Schema.Struct({
 });
 export type TimelineEntry = typeof timelineEntrySchema.Type;
 
+/**
+ * Owner scoping on reads: when `ownerUserId` is present the run must belong to it (uniform 404
+ * otherwise). Service principals acting for a user always send it; omitted = unscoped (the open
+ * pre-auth model).
+ */
+export const runOwnerQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
+});
+export type RunOwnerQuery = typeof runOwnerQuerySchema.Type;
+
 export const getRunTimelineQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
   fromSequence: Schema.optional(NonEmptyString),
   toSequence: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
@@ -183,6 +194,7 @@ export type RunEvent = typeof runEventSchema.Type;
 // ---------------------------------------------------------------------------------------------
 
 export const getRunScrollbackQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
   processId: NonEmptyString,
   stream: ioStreamSchema,
   atSequence: Schema.optional(NonEmptyString),
@@ -284,6 +296,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("getRun", "/:runId", {
       params: runIdParams,
+      query: runOwnerQuerySchema,
       success: runSchema,
       error: [RunNotFoundError, RunInternalServerError],
     }),
@@ -307,6 +320,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("getRunEvent", "/:runId/events/:sequence", {
       params: runEventParams,
+      query: runOwnerQuerySchema,
       success: runEventSchema,
       error: [RunBadRequestError, RunNotFoundError, RunInternalServerError],
     }),
@@ -322,6 +336,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("getRunLoss", "/:runId/loss", {
       params: runIdParams,
+      query: runOwnerQuerySchema,
       success: runLossReportSchema,
       error: [RunNotFoundError, RunInternalServerError],
     }),
@@ -329,6 +344,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
   .add(
     HttpApiEndpoint.get("getRunChanges", "/:runId/changes", {
       params: runIdParams,
+      query: runOwnerQuerySchema,
       success: runChangesResponseSchema,
       error: [RunNotFoundError, RunInternalServerError],
     }),
