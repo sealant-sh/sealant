@@ -60,7 +60,8 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(spec.sources.workspace.ref).toBeUndefined();
     expect(spec.harness.id).toBe("opencode");
     expect(spec.customization.enableSealantd).toBe(true);
-    expect(spec.target.runtime.family).toBe("docker");
+    // `auto`: the deployment's default adapter decides (Docker self-host, Kubernetes clusters).
+    expect(spec.target.runtime).toEqual({ family: "auto", mode: "prefer" });
   });
 
   it("preserves a requested workspace-scoped Docker service", () => {

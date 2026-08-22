@@ -96,6 +96,7 @@ const sealantOperationSchema = Schema.Literals([
   "capabilities",
   "exec",
   "writeStdin",
+  "closeStdin",
   "signalProcess",
   "shutdown",
   "events",
@@ -527,6 +528,8 @@ export interface SealantSession {
   readonly exec: (options: SealantExecOptions) => Effect.Effect<ExecAccepted, SealantError>;
   /** Writes bytes to a process's stdin. */
   readonly writeStdin: (processId: string, data: Uint8Array) => Effect.Effect<void, SealantError>;
+  /** Half-close a process's stdin so `base64 -d`-style readers see EOF. */
+  readonly closeStdin: (processId: string) => Effect.Effect<void, SealantError>;
   /** Delivers a signal to a process. */
   readonly signalProcess: (processId: string, signal: number) => Effect.Effect<void, SealantError>;
   /**
@@ -687,6 +690,14 @@ const makeSession = (client: SealantClient): SealantSession => ({
       "writeStdin",
       Effect.tryPromise(() => client.writeStdin(processId, data)),
     ),
+
+  closeStdin: (processId) =>
+    requestResult(
+      client,
+      "closeStdin",
+      { case: "closeStdin", value: { processId } },
+      undefined,
+    ).pipe(Effect.asVoid),
 
   signalProcess: (processId, signal) =>
     withSealantError(

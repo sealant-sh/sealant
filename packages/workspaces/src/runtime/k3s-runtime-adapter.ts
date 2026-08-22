@@ -1,45 +1,19 @@
+/**
+ * The `k3s` runtime family: the same Kubernetes implementation with a single-node-friendly
+ * profile — no topology spread unless the operator turned it on explicitly. Nothing else differs;
+ * k3s is Kubernetes.
+ */
 import {
-  parseRuntimeAdapterLaunchInput,
-  parseRuntimeAdapterStopInput,
-  parseRuntimeAdapterSupportInput,
-  parseRuntimeAdapterSupport,
-  type RuntimeAdapter,
-  type RuntimeAdapterLaunchInput,
-  type RuntimeAdapterLaunchResult,
-  type RuntimeAdapterStopInput,
-  type RuntimeAdapterStopResult,
-  type RuntimeAdapterSupportInput,
-  type RuntimeAdapterSupport,
-} from "./runtime-adapter.js";
+  KubernetesRuntimeAdapter,
+  type KubernetesRuntimeAdapterOptions,
+} from "./kubernetes/adapter.js";
 
-const notImplementedMessage = "The K3s runtime adapter launch path is not implemented yet.";
-
-const notImplementedError = (): Error & { code: string } => {
-  const error = new Error(notImplementedMessage) as Error & { code: string };
-  error.code = "adapter-unavailable";
-  return error;
-};
-
-export class K3sRuntimeAdapter implements RuntimeAdapter {
-  public readonly id = "k3s" as const;
-
-  public supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
-    parseRuntimeAdapterSupportInput(input);
-
-    return parseRuntimeAdapterSupport({
-      supported: false,
-      reason: "adapter-unavailable",
-      message: notImplementedMessage,
+export class K3sRuntimeAdapter extends KubernetesRuntimeAdapter {
+  constructor(options: Omit<KubernetesRuntimeAdapterOptions, "id">) {
+    super({
+      ...options,
+      id: "k3s",
+      config: { ...options.config, topologySpread: options.config.topologySpread && false },
     });
-  }
-
-  public async launch(_input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
-    parseRuntimeAdapterLaunchInput(_input);
-    throw notImplementedError();
-  }
-
-  public async stop(_input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
-    parseRuntimeAdapterStopInput(_input);
-    throw notImplementedError();
   }
 }

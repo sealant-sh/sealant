@@ -14,6 +14,7 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@kubernetes/client-node": "catalog:",
     "@sealant/api-contracts": "workspace:*",
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",

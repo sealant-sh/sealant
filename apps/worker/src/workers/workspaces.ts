@@ -11,6 +11,8 @@ import {
   consumeRunExecJobs,
   consumeWorkspaceBuildJobs,
   consumeWorkspaceLifecycleJobs,
+  createKubernetesLaunchMaterialStager,
+  createLiveKubernetesApi,
   createZotRegistryClient,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
@@ -18,6 +20,7 @@ import {
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
+  kubernetesRuntimeConfigFromEnv,
   reapStaleWorkspaceBuildJobs,
   targetDerivationOptionsFromEnv,
 } from "@sealant/workspaces";
@@ -73,6 +76,27 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Kubernetes (sealantd's secure WebSocket frontend).
   const targetOptions = targetDerivationOptionsFromEnv(env);
 
+  // Kubernetes adapters exist only when the worker is configured for a cluster; a Docker worker
+  // registers neither, so a blueprint asking for k8s gets a readable "unsupported-runtime".
+  const kubernetesConfig = kubernetesRuntimeConfigFromEnv(env);
+  const kubernetesAdapters =
+    kubernetesConfig === undefined || targetOptions.websocketTls === undefined
+      ? []
+      : (() => {
+          const api = createLiveKubernetesApi({
+            namespace: kubernetesConfig.namespace,
+            ...(kubernetesConfig.kubeconfigPath === undefined
+              ? {}
+              : { kubeconfigPath: kubernetesConfig.kubeconfigPath }),
+          });
+          const shared = { config: kubernetesConfig, api, clientTls: targetOptions.websocketTls };
+          return [new K8sRuntimeAdapter(shared), new K3sRuntimeAdapter(shared)];
+        })();
+  const launchMaterialStager =
+    kubernetesConfig === undefined
+      ? undefined
+      : createKubernetesLaunchMaterialStager(kubernetesConfig);
+
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       dockerSocketPath: env.DOCKER_SOCKET_PATH,
@@ -87,8 +111,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         ? {}
         : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
     }),
-    new K8sRuntimeAdapter(),
-    new K3sRuntimeAdapter(),
+    ...kubernetesAdapters,
   ];
 
   const consumer = await consumeWorkspaceBuildJobs({
@@ -106,6 +129,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           gitHubSourceIntegration,
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
+          ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
         });
         ack();
       } catch (error) {
@@ -159,6 +183,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           // Rotated claude/codex session files are synced back before the container is destroyed.
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           targetOptions,
+          ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
         });
         ack();
       } catch (error) {

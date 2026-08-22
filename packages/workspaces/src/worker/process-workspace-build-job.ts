@@ -14,6 +14,8 @@ import {
   WorkspaceAttemptRepoLive,
   WorkspaceBuildJobRepo,
   WorkspaceBuildJobRepoLive,
+  WorkspaceRepo,
+  WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
@@ -21,7 +23,7 @@ import {
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import { z } from "zod";
 
 import {
@@ -132,7 +134,10 @@ const launchPublishedImage = async (input: {
   readonly credentialFiles?: readonly CredentialFileInjection[];
   readonly dotfilesArchiveDir?: string;
   readonly secretEnvDir?: string;
+  readonly secretEnv?: Readonly<Record<string, string>>;
   readonly runId?: string;
+  readonly workspaceId?: string;
+  readonly principalId?: string;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.spec,
@@ -153,8 +158,11 @@ const launchPublishedImage = async (input: {
       ? {}
       : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
     ...(input.secretEnvDir === undefined ? {} : { secretEnvDir: input.secretEnvDir }),
+    ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
     // Deterministic per-run container name -> idempotent launch/adopt (#4).
     ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
+    ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
   });
 };
 
@@ -517,6 +525,25 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
     }
 
+    // Labels only (workspace id, owner): lets Kubernetes resources be reconciled per workspace.
+    // Best-effort and optional — the WorkspaceRepo is consulted only when present in context.
+    const attemptIdentity =
+      job.runId === null
+        ? undefined
+        : yield* Effect.suspend(() => attempts.getAttemptById(job.runId ?? "")).pipe(
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          );
+    const workspaceRepo = yield* Effect.serviceOption(WorkspaceRepo);
+    const labelWorkspaceId =
+      job.runId === null || Option.isNone(workspaceRepo)
+        ? undefined
+        : yield* Effect.suspend(() =>
+            workspaceRepo.value.getWorkspaceByAttemptId(job.runId ?? ""),
+          ).pipe(
+            Effect.map((workspace) => workspace?.id),
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          );
+
     const workspaceCloneAuth = yield* resolveWorkspaceCloneAuth({
       spec,
       gitHubSourceIntegration: options.gitHubSourceIntegration,
@@ -547,7 +574,11 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       job.secretEnvSealed === null || job.secretEnvSealed === undefined
         ? undefined
         : yield* unsealSecretEnv(job.secretEnvSealed, options.credentialCipher);
-    const { dotfilesArchiveDir, secretEnvDir } = yield* Effect.tryPromise({
+    const {
+      dotfilesArchiveDir,
+      secretEnvDir,
+      secretEnv: passThroughSecretEnv,
+    } = yield* Effect.tryPromise({
       try: () =>
         stager.stage({
           spec,
@@ -575,7 +606,12 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(credentialFiles.length === 0 ? {} : { credentialFiles }),
           ...(dotfilesArchiveDir === undefined ? {} : { dotfilesArchiveDir }),
           ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
+          ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
           ...(job.runId === null ? {} : { runId: job.runId }),
+          ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
+          ...(attemptIdentity?.ownerUserId === undefined
+            ? {}
+            : { principalId: attemptIdentity.ownerUserId }),
         }),
       catch: toWorkspaceBuildJobProcessingError,
     }).pipe(
@@ -645,6 +681,7 @@ export const processWorkspaceBuildJob = (
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceBuildJobRepoLive,
     WorkspaceRuntimeInstanceRepoLive,
+    WorkspaceRepoLive,
     WorkspaceAttemptRepoLive,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,

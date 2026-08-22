@@ -12,7 +12,10 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
-import { hostDirectoryLaunchMaterialStager } from "../runtime/launch-material.js";
+import {
+  hostDirectoryLaunchMaterialStager,
+  type LaunchMaterialStager,
+} from "../runtime/launch-material.js";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import {
@@ -42,6 +45,8 @@ export interface ProcessWorkspaceStopEffectOptions {
   readonly credentialCipher?: CredentialCipherService;
   /** How this worker reaches each runtime family (client TLS for Kubernetes). */
   readonly targetOptions?: SealantTargetDerivationOptions;
+  /** Where this worker staged launch material; defaults to host directories (Docker). */
+  readonly launchMaterialStager?: LaunchMaterialStager;
 }
 
 export interface ProcessWorkspaceStopOptions extends ProcessWorkspaceStopEffectOptions {
@@ -152,7 +157,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   // archives, and a secret env file a launch that died before readiness may have left behind).
   // Paths are deterministic per run; a relaunch re-stages from the job payload, so removal is
   // always safe.
-  yield* Effect.promise(() => hostDirectoryLaunchMaterialStager.removeAll(options.runId));
+  yield* Effect.promise(() =>
+    (options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager).removeAll(options.runId),
+  );
 
   yield* runtimeInstances
     .markStopped({ runId: options.runId, stopReason: options.stopReason })

@@ -116,6 +116,29 @@ printf '\nSEALANT_CREDENTIALS_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr
 docker compose --project-directory ~/.config/sealant up -d
 ```
 
+## Kubernetes runtime (worker)
+
+Set these only when the worker runs workspaces as Kubernetes Pods (`DEFAULT_RUNTIME_ADAPTER=k8s` or
+`k3s`, or a blueprint that requests that family). A Docker deployment sets none of them. Design and
+object model: `docs/kubernetes-support-design.md` in the repository.
+
+| Variable                                                                                           | Default                      | Purpose                                                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_K8S_NAMESPACE`                                                                            | unset                        | Namespace for workspace Pods; setting it enables the adapter and makes the rest required.                                                                                           |
+| `SEALANT_K8S_VOLUME_MAPPINGS`                                                                      | —                            | JSON array of `{ "logicalRoot": "/var/lib/mend/store", "claimName": "mend-store" }`. Mount sources must be proper descendants of one root; the remainder becomes the PVC `subPath`. |
+| `SEALANT_K8S_CERT_ISSUER_NAME` / `SEALANT_K8S_CERT_ISSUER_KIND`                                    | — / `Issuer`                 | cert-manager issuer that signs per-workspace server certificates; it must be the same CA that signed the worker's and gateway's client certificates.                                |
+| `SEALANT_CONTROL_CLIENT_CERT_PATH` / `SEALANT_CONTROL_CLIENT_KEY_PATH` / `SEALANT_CONTROL_CA_PATH` | unset                        | Client mTLS material the API, worker and SSH gateway use to reach `sealantd`'s WebSocket frontend. All three or none.                                                               |
+| `SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT`                                                            | `sealant-workspace`          | ServiceAccount of workspace Pods (its token is never mounted).                                                                                                                      |
+| `SEALANT_K8S_CONTROL_PORT`                                                                         | `7443`                       | Port of the per-workspace Service and of `sealantd`'s listener.                                                                                                                     |
+| `SEALANT_K8S_IMAGE_PULL_SECRET`                                                                    | unset                        | imagePullSecret for the workspace image registry.                                                                                                                                   |
+| `SEALANT_K8S_WORKSPACE_PRIORITY_CLASS` / `SEALANT_K8S_HOT_POOL_PRIORITY_CLASS`                     | unset                        | PriorityClass for regular / hot-pool workspace Pods.                                                                                                                                |
+| `SEALANT_K8S_DEFAULT_CPU_REQUEST` / `_MEMORY_REQUEST` / `_CPU_LIMIT` / `_MEMORY_LIMIT`             | `500m` / `1Gi` / `4` / `8Gi` | Container resources.                                                                                                                                                                |
+| `SEALANT_K8S_GVISOR_RUNTIME_CLASS`                                                                 | unset                        | RuntimeClass used when a blueprint asks for `ociRuntime: runsc`; without it such blueprints are refused.                                                                            |
+| `SEALANT_K8S_STAGING_LOGICAL_ROOT` / `SEALANT_K8S_STAGING_MOUNT_PATH`                              | unset                        | RWX claim (also listed in the mappings) for dotfiles archives too large for a Secret, and where the worker sees it.                                                                 |
+| `SEALANT_K8S_READINESS_TIMEOUT_MS`                                                                 | `300000`                     | Scheduling + image pull + certificate issuance + daemon health budget.                                                                                                              |
+| `SEALANT_K8S_TOPOLOGY_SPREAD`                                                                      | `true` (`k3s`: off)          | Spread workspace Pods across nodes.                                                                                                                                                 |
+| `SEALANT_K8S_KUBECONFIG`                                                                           | unset                        | Development only: kubeconfig path instead of in-cluster credentials.                                                                                                                |
+
 ## Notable runtime defaults
 
 You should not need to set these for a standard self-host — compose already supplies sensible
