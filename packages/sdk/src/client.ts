@@ -10,12 +10,19 @@
  * stable surface and reject with `SealantNotImplementedError` so callers can compile and wire
  * against the final shape today.
  */
+import type { ConnectedAccountSummary } from "@sealant/api-contracts";
+
 import {
+  archiveConnectedAccountOp,
   createAccessTokenOp,
+  createConnectedAccountOp,
   createWorkspaceOp,
+  ensureUserOp,
   getRunOp,
+  getUserOp,
   getWorkspaceOp,
   inferenceRespondOp,
+  listConnectedAccountsOp,
   listWorkspacesOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
@@ -30,13 +37,30 @@ import { parseTtlSeconds } from "./internal/duration.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
 import type {
   AccessTokensNamespace,
+  ConnectedAccount,
+  ConnectedAccountsNamespace,
   CreateOptions,
   InferenceNamespace,
   ListOptions,
   Run,
   Workspace,
   SealantConfig,
+  UsersNamespace,
 } from "./types.js";
+
+const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount => ({
+  connectedAccountId: wire.connectedAccountId,
+  ownerUserId: wire.ownerUserId,
+  provider: wire.provider,
+  name: wire.name,
+  kind: wire.kind,
+  status: wire.status,
+  metadata: wire.metadata,
+  connectedAt: wire.connectedAt,
+  updatedAt: wire.updatedAt,
+  lastUsedAt: wire.lastUsedAt,
+  lastSyncedAt: wire.lastSyncedAt,
+});
 
 // Wire the run-execution implementations into the Workspace facade (the injection point exists to
 // break the workspace <-> run-harness import cycle; the client is the composition root).
@@ -94,7 +118,9 @@ export class Sealant {
     },
 
     get: async (id: string): Promise<Workspace> => {
-      const details = await this.#runtime.run(getWorkspaceOp(id));
+      const details = await this.#runtime.run(
+        getWorkspaceOp(id, this.#ctx.config.hostLocal.ownerUserId),
+      );
       return makeWorkspace(this.#ctx, {
         id: details.workspaceId,
         name: details.name,
@@ -138,6 +164,57 @@ export class Sealant {
    * the session endpoints enforce exactly those scopes (a read-stream token can stream but is
    * rejected for input and exec).
    */
+  /** Identity rows for products that own their own login (one client per user afterwards). */
+  readonly users: UsersNamespace = {
+    ensure: async (options) => {
+      const wire = await this.#runtime.run(
+        ensureUserOp({
+          email: options.email,
+          name: options.name,
+          ...(options.userId === undefined ? {} : { userId: options.userId }),
+        }),
+      );
+      return {
+        userId: wire.userId,
+        email: wire.email,
+        name: wire.name,
+        createdAt: wire.createdAt,
+        created: wire.created,
+      };
+    },
+    get: async (userId) => {
+      const wire = await this.#runtime.run(getUserOp(userId));
+      return { userId: wire.userId, email: wire.email, name: wire.name, createdAt: wire.createdAt };
+    },
+  };
+
+  /** This client's owner's Claude / Codex / GitHub accounts. Secrets go in; none come out. */
+  readonly connectedAccounts: ConnectedAccountsNamespace = {
+    list: async () => {
+      const wire = await this.#runtime.run(
+        listConnectedAccountsOp(this.#ctx.config.hostLocal.ownerUserId),
+      );
+      return wire.items.map(mapConnectedAccount);
+    },
+    connect: async (options) => {
+      const wire = await this.#runtime.run(
+        createConnectedAccountOp({
+          ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          provider: options.provider,
+          secret: options.secret,
+          ...(options.name === undefined ? {} : { name: options.name }),
+        }),
+      );
+      return mapConnectedAccount(wire);
+    },
+    disconnect: async (connectedAccountId) => {
+      const wire = await this.#runtime.run(
+        archiveConnectedAccountOp(connectedAccountId, this.#ctx.config.hostLocal.ownerUserId),
+      );
+      return mapConnectedAccount(wire);
+    },
+  };
+
   readonly accessTokens: AccessTokensNamespace = {
     create: async (options) => {
       const wire = await this.#runtime.run(
@@ -162,7 +239,7 @@ export class Sealant {
   /** Runs by id — so a record can be replayed long after its workspace is gone. */
   readonly runs = {
     get: async (runId: string): Promise<Run> => {
-      const wire = await this.#runtime.run(getRunOp(runId));
+      const wire = await this.#runtime.run(getRunOp(runId, this.#ctx.config.hostLocal.ownerUserId));
       return makeRun(this.#ctx, { wire });
     },
   };

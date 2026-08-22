@@ -20,6 +20,7 @@ import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
+import { servicePrincipalMiddleware, servicePrincipals } from "./services/service-principals.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -229,8 +230,14 @@ const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsL
  * Lifecycle reminder:
  * The full layer graph is initialized once when `Layer.launch(serverLayer)` runs.
  */
+/**
+ * Authentication gate (services/service-principals.ts). Runs INSIDE cors so preflights and the
+ * 401 itself carry CORS headers; a no-op while `SEALANT_SERVICE_KEYS` is unset.
+ */
+const authGate = servicePrincipalMiddleware(servicePrincipals);
+
 const serverLayer = HttpRouter.serve(appLayer, {
-  middleware: corsMiddleware,
+  middleware: (app) => corsMiddleware(authGate(app)),
 }).pipe(Layer.provide(NodeHttpServer.layer(createServer, { port: env.PORT })));
 
 /**
@@ -240,6 +247,11 @@ const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log(`[api] database: ${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`);
 console.log(`[api] repology endpoint: ${env.REPOLOGY_API_BASE_URL}`);
+console.log(
+  servicePrincipals.enabled
+    ? "[api] authentication: service keys required on /v1"
+    : "[api] authentication: OPEN (SEALANT_SERVICE_KEYS unset) — keep this API on loopback",
+);
 
 /**
  * Boot the server runtime.

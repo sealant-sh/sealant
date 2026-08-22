@@ -51,7 +51,7 @@ const createHarnessRunEffect = (
       });
     }
 
-    const details = yield* getWorkspaceOp(init.id);
+    const details = yield* getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId);
     const spec = details.spec as { harness?: { id?: string } } | undefined;
     const harnessId = spec?.harness?.id;
     if (harnessId === undefined) {
@@ -94,11 +94,13 @@ const runHarnessEffect = (
         );
       }
       yield* Effect.sleep(POLL_INTERVAL);
-      wire = yield* getRunOp(runId);
+      wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
     }
 
     // Read the changes the run produced (captured server-side).
-    const changes = toRunChangesData(yield* getRunChangesOp(runId));
+    const changes = toRunChangesData(
+      yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),
+    );
     return makeRun(ctx, { wire, changes });
   });
 

@@ -87,7 +87,7 @@ const execWorkspaceEffect = (
         );
       }
       yield* Effect.sleep(POLL_INTERVAL);
-      wire = yield* getRunOp(runId);
+      wire = yield* getRunOp(runId, ctx.config.hostLocal.ownerUserId);
     }
 
     // Exec framing: "completed" means every command executed and was recorded — anything else means
@@ -106,7 +106,9 @@ const execWorkspaceEffect = (
     const stdout = processId === undefined ? "" : yield* readScrollback(runId, processId, "stdout");
     const stderr = processId === undefined ? "" : yield* readScrollback(runId, processId, "stderr");
 
-    const changes = toRunChangesData(yield* getRunChangesOp(runId));
+    const changes = toRunChangesData(
+      yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),
+    );
     return {
       exitCode: wire.exitCode ?? -1,
       stdout,

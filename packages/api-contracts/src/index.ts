@@ -12,4 +12,5 @@ export * from "./core-api/access-tokens.js";
 export * from "./core-api/workspaces.js";
 export * from "./core-api/ssh-keys.js";
 export * from "./core-api/system.js";
+export * from "./core-api/users.js";
 export * from "./workspace-environment.js";

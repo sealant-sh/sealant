@@ -67,16 +67,19 @@ the worker builds or launches can, in principle, reach the host. Concretely:
 This is a deliberate tradeoff for a self-hosted, single-tenant runtime. It also means Sealant is not
 something to expose to untrusted users.
 
-## The API has no auth enforcement yet
+## The API is open unless you close it
 
-This is the most important honesty note on this page: **the control-plane API does not enforce
-authentication today.**
+**By default the control-plane API does not enforce authentication.** Set `SEALANT_SERVICE_KEYS` to
+close it — then every `/v1` request needs a service key (a trusted product acting for its users) or
+a scoped user access token on the session surface; see the
+[HTTP API auth section](/docs/reference/http-api).
 
-- There are **no API tokens** and no bearer-token verification on the contract endpoints.
-- Identity is temporary: many calls take an `ownerUserId` / `userId` directly in the request payload
-  or query string. The [SDK](/docs/reference/sdk) defaults this to a single static principal
-  (`usr_local`).
-- The web app's own sign-in is real, but the API behind it trusts the identity it is handed.
+- In the open mode there is no bearer-token verification on the contract endpoints.
+- Identity is asserted: calls take an `ownerUserId` / `userId` directly in the request payload or
+  query string. The [SDK](/docs/reference/sdk) defaults this to a single static principal
+  (`usr_local`). In the closed mode only a service key may assert it.
+- The web app's own sign-in is real, but the API behind it trusts the identity it is handed — and
+  the web app holds no service key, so it is for open-mode deployments.
 
 The practical rule: **do not expose the API (port 4000) beyond a trusted network.** Anyone who can
 reach it can act as any owner. Auth hardening — real tokens and enforced identity — is planned, and

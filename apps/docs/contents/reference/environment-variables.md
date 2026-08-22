@@ -122,25 +122,25 @@ You should not need to set these for a standard self-host — compose already su
 values, and most are internal to the container network. They are documented here so you can
 recognize them in logs and override them deliberately if you must.
 
-| Variable                                | Default                                                                                   | Meaning                                                                                      |
-| --------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `DOCKER_SOCKET_PATH`                    | `/var/run/docker.sock`                                                                    | Host Docker socket mounted into the worker to build and run workspaces.                      |
-| `DATABASE_URL`                          | compose-built from `SEALANT_DB_PASSWORD`                                                  | Control-plane Postgres connection string.                                                    |
-| `RABBITMQ_URL`                          | compose-built from `SEALANT_RABBITMQ_PASSWORD`                                            | Workspace-build queue transport.                                                             |
-| `REGISTRY_BASE_URL`                     | `http://zot:5000` in self-host compose (code default `http://127.0.0.1:5000`)             | Internal registry base URL the API and worker use inside the compose network.                |
-| `REGISTRY_PUSH_REGISTRY`                | `127.0.0.1:${SEALANT_REGISTRY_PORT}` in self-host compose (code default `127.0.0.1:5000`) | Host registry address embedded in image refs for Docker push/pull.                           |
-| `REGISTRY_NAME`                         | `default`                                                                                 | Registry id; must match the SDK's `SEALANT_REGISTRY_ID` (also `default`).                    |
-| `DEFAULT_RUNTIME_ADAPTER`               | `docker`                                                                                  | Workspace runtime backend.                                                                   |
-| `WORKSPACE_BUILD_QUEUE_PREFETCH`        | `1`                                                                                       | Concurrent workspace builds a worker leases.                                                 |
-| `WORKSPACE_BUILD_JOB_LEASE_DURATION_MS` | `900000`                                                                                  | Build-job lease before a stuck job is reaped.                                                |
-| `SSH_GATEWAY_BANNER`                    | Sealant welcome text                                                                      | Banner shown on SSH connect.                                                                 |
-| `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` | `ws`                                                                                      | Username prefix for `ssh ws-<workspace-id>@…`.                                               |
-| `SEALANT_OWNER_USER_ID`                 | `usr_local`                                                                               | Pre-auth owner principal the SDK attributes work to (temporary; disappears when auth lands). |
+| Variable                                | Default                                                                                   | Meaning                                                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DOCKER_SOCKET_PATH`                    | `/var/run/docker.sock`                                                                    | Host Docker socket mounted into the worker to build and run workspaces.                                                                    |
+| `DATABASE_URL`                          | compose-built from `SEALANT_DB_PASSWORD`                                                  | Control-plane Postgres connection string.                                                                                                  |
+| `RABBITMQ_URL`                          | compose-built from `SEALANT_RABBITMQ_PASSWORD`                                            | Workspace-build queue transport.                                                                                                           |
+| `REGISTRY_BASE_URL`                     | `http://zot:5000` in self-host compose (code default `http://127.0.0.1:5000`)             | Internal registry base URL the API and worker use inside the compose network.                                                              |
+| `REGISTRY_PUSH_REGISTRY`                | `127.0.0.1:${SEALANT_REGISTRY_PORT}` in self-host compose (code default `127.0.0.1:5000`) | Host registry address embedded in image refs for Docker push/pull.                                                                         |
+| `REGISTRY_NAME`                         | `default`                                                                                 | Registry id; must match the SDK's `SEALANT_REGISTRY_ID` (also `default`).                                                                  |
+| `DEFAULT_RUNTIME_ADAPTER`               | `docker`                                                                                  | Workspace runtime backend.                                                                                                                 |
+| `WORKSPACE_BUILD_QUEUE_PREFETCH`        | `1`                                                                                       | Concurrent workspace builds a worker leases.                                                                                               |
+| `WORKSPACE_BUILD_JOB_LEASE_DURATION_MS` | `900000`                                                                                  | Build-job lease before a stuck job is reaped.                                                                                              |
+| `SSH_GATEWAY_BANNER`                    | Sealant welcome text                                                                      | Banner shown on SSH connect.                                                                                                               |
+| `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` | `ws`                                                                                      | Username prefix for `ssh ws-<workspace-id>@…`.                                                                                             |
+| `SEALANT_OWNER_USER_ID`                 | `usr_local`                                                                               | Owner principal the SDK attributes work to when `SealantConfig.ownerUserId` is not set.                                                    |
+| `SEALANT_SERVICE_KEYS`                  | unset                                                                                     | API only. Comma-separated service-principal bearer secrets; set = every `/v1` request must authenticate, unset = open loopback-only model. |
 
-There is no API-token or bearer-auth configuration here today — the current identity model passes an
-`ownerUserId` in payloads and queries rather than authenticating requests. See the
-[HTTP API auth section](/docs/reference/http-api) and the
-[security model](/docs/concepts/security-model).
+With `SEALANT_SERVICE_KEYS` unset the identity model passes an `ownerUserId` in payloads and queries
+rather than authenticating requests. See the [HTTP API auth section](/docs/reference/http-api) and
+the [security model](/docs/concepts/security-model).
 
 Related: [Ports and data](/docs/reference/ports-and-data) ·
 [Installer and compose](/docs/reference/installer-and-compose) ·

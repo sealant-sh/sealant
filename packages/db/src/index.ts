@@ -184,6 +184,9 @@ export {
   UserRepo,
   UserRepoLive,
   UserRepoUnexpectedError,
+  type EnsureUserInput,
+  type EnsureUserResult,
+  type UserRecord,
   type UserRepoError,
   type UserRepoService,
 } from "./repositories/users.js";

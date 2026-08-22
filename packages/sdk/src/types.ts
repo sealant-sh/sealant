@@ -28,8 +28,18 @@
 export interface SealantConfig {
   /** Base URL of the Sealant control-plane API (e.g. `http://localhost:8080`). */
   readonly baseUrl: string;
-  /** Bearer token for authenticated deployments. Optional for a localhost demo with no auth. */
+  /**
+   * Bearer secret for authenticated deployments: a SERVICE KEY (`SEALANT_SERVICE_KEYS` on the
+   * control plane — lets this client act on behalf of any `ownerUserId`) or a scoped user access
+   * token (session surface only). Optional for a localhost demo with no auth.
+   */
   readonly apiKey?: string;
+  /**
+   * The user every call is attributed to. A product that owns its own login builds ONE client per
+   * user with that user's Sealant id (see `users.ensure`). Defaults to `SEALANT_OWNER_USER_ID`,
+   * then `usr_local`.
+   */
+  readonly ownerUserId?: string;
   /** Override the `fetch` implementation (tests, custom agents, proxies). */
   readonly fetch?: typeof fetch;
 }
@@ -988,4 +998,82 @@ export interface InferenceContinueOptions {
  */
 export interface InferenceNamespace {
   respond(options: InferenceRespondOptions | InferenceContinueOptions): Promise<InferenceResponse>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Users (service principals acting on behalf of their own users)
+// ---------------------------------------------------------------------------------------------
+
+export interface SealantUser {
+  readonly userId: string;
+  readonly email: string;
+  readonly name: string;
+  readonly createdAt: string;
+}
+
+export interface EnsureUserOptions {
+  readonly email: string;
+  readonly name: string;
+  /** Caller-chosen id for a NEW user; ignored when the email already exists. */
+  readonly userId?: string;
+}
+
+export interface EnsuredUser extends SealantUser {
+  /** True when this call created the user. */
+  readonly created: boolean;
+}
+
+/**
+ * Identity rows for products that own their own login. `ensure` is idempotent on email: call it on
+ * every sign-in and build the per-user client with the returned `userId` as `ownerUserId`.
+ */
+export interface UsersNamespace {
+  ensure(options: EnsureUserOptions): Promise<EnsuredUser>;
+  get(userId: string): Promise<SealantUser>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Connected accounts (the client's owner's Claude / Codex / GitHub credentials)
+// ---------------------------------------------------------------------------------------------
+
+export type ConnectedAccountProvider = "claude" | "codex" | "github";
+export type ConnectedAccountStatus = "active" | "invalid" | "archived";
+
+/** A connected account as every surface sees it — NEVER carries secret material. */
+export interface ConnectedAccount {
+  readonly connectedAccountId: string;
+  readonly ownerUserId: string;
+  readonly provider: ConnectedAccountProvider;
+  readonly name: string;
+  /** Provider-shaped payload kind: oauth-token | credentials-json | auth-json | gh-cli-token. */
+  readonly kind: string;
+  readonly status: ConnectedAccountStatus;
+  /** Non-secret display data (token suffix, codex account email, github login + scopes). */
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly connectedAt: string;
+  readonly updatedAt: string;
+  readonly lastUsedAt: string | null;
+  readonly lastSyncedAt: string | null;
+}
+
+export interface ConnectConnectedAccountOptions {
+  readonly provider: ConnectedAccountProvider;
+  /**
+   * Provider-shaped plaintext, passed through and sealed server-side: a Claude setup token or
+   * verbatim `.credentials.json`, verbatim Codex `auth.json`, or a GitHub token. Never logged.
+   */
+  readonly secret: string;
+  /** Account name under the provider; defaults to `default` (the one `credentials: { x: true }` picks). */
+  readonly name?: string;
+}
+
+/**
+ * The owner's connected provider accounts. `connect` upserts on (provider, name), so reconnecting
+ * swaps the sealed credential in place. Secrets flow one way — in; no call returns them.
+ */
+export interface ConnectedAccountsNamespace {
+  list(): Promise<readonly ConnectedAccount[]>;
+  connect(options: ConnectConnectedAccountOptions): Promise<ConnectedAccount>;
+  /** Soft-archives the account; uniform not-found for "does not exist" and "not yours". */
+  disconnect(connectedAccountId: string): Promise<ConnectedAccount>;
 }

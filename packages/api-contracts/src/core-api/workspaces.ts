@@ -219,6 +219,12 @@ export const workspaceDetailsSchema = Schema.Struct({
 });
 export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
 
+/** Owner scoping on a single read: present = must match (uniform 404), absent = unscoped. */
+export const getWorkspaceQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
+});
+export type GetWorkspaceQuery = typeof getWorkspaceQuerySchema.Type;
+
 export const listWorkspacesQuerySchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   status: Schema.optional(workspaceStatusSchema),
@@ -468,6 +474,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
   .add(
     HttpApiEndpoint.get("getWorkspace", "/:workspaceId", {
       params: workspaceIdParams,
+      query: getWorkspaceQuerySchema,
       success: workspaceDetailsSchema,
       error: [WorkspaceNotFoundError, WorkspaceInternalServerError],
     }),

@@ -7,6 +7,8 @@
 import type {
   CloseSessionRequest,
   CreateAccessTokenRequest,
+  CreateConnectedAccountRequest,
+  EnsureUserRequest,
   CreateRunRequest,
   CreateSessionRequest,
   CreateWorkspaceRequest,
@@ -40,9 +42,12 @@ export const createWorkspaceOp = (payload: CreateWorkspaceRequest, idempotencyKe
     }),
   );
 
-export const getWorkspaceOp = (workspaceId: string) =>
+export const getWorkspaceOp = (workspaceId: string, ownerUserId?: string) =>
   Effect.flatMap(SealantApiClient, (client) =>
-    client.workspaces.getWorkspace({ params: { workspaceId } }),
+    client.workspaces.getWorkspace({
+      params: { workspaceId },
+      query: ownerUserId === undefined ? {} : { ownerUserId },
+    }),
   );
 
 export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
@@ -73,8 +78,13 @@ export const expireWorkspaceOp = (workspaceId: string, payload: ExpireWorkspaceR
 export const createRunOp = (payload: CreateRunRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.createRun({ payload }));
 
-export const getRunOp = (runId: string) =>
-  Effect.flatMap(SealantApiClient, (client) => client.runs.getRun({ params: { runId } }));
+const ownerQuery = (ownerUserId: string | undefined) =>
+  ownerUserId === undefined ? {} : { ownerUserId };
+
+export const getRunOp = (runId: string, ownerUserId?: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.runs.getRun({ params: { runId }, query: ownerQuery(ownerUserId) }),
+  );
 
 export const listRunsOp = (query: ListRunsQuery) =>
   Effect.flatMap(SealantApiClient, (client) => client.runs.listRuns({ query }));
@@ -94,11 +104,15 @@ export const getRunScrollbackOp = (runId: string, query: GetRunScrollbackQuery) 
     client.runs.getRunScrollback({ params: { runId }, query }),
   );
 
-export const getRunLossOp = (runId: string) =>
-  Effect.flatMap(SealantApiClient, (client) => client.runs.getRunLoss({ params: { runId } }));
+export const getRunLossOp = (runId: string, ownerUserId?: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.runs.getRunLoss({ params: { runId }, query: ownerQuery(ownerUserId) }),
+  );
 
-export const getRunChangesOp = (runId: string) =>
-  Effect.flatMap(SealantApiClient, (client) => client.runs.getRunChanges({ params: { runId } }));
+export const getRunChangesOp = (runId: string, ownerUserId?: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.runs.getRunChanges({ params: { runId }, query: ownerQuery(ownerUserId) }),
+  );
 
 // ---- sessions ----
 
@@ -150,6 +164,34 @@ export const closeSessionOp = (sessionId: string, payload: CloseSessionRequest) 
 
 export const createAccessTokenOp = (payload: CreateAccessTokenRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.accessTokens.createAccessToken({ payload }));
+
+// ---- users ----
+
+export const ensureUserOp = (payload: EnsureUserRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.users.ensureUser({ payload }));
+
+export const getUserOp = (userId: string) =>
+  Effect.flatMap(SealantApiClient, (client) => client.users.getUser({ params: { userId } }));
+
+// ---- connected accounts ----
+
+export const listConnectedAccountsOp = (ownerUserId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.connectedAccounts.listConnectedAccounts({ query: { ownerUserId } }),
+  );
+
+export const createConnectedAccountOp = (payload: CreateConnectedAccountRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.connectedAccounts.createConnectedAccount({ payload }),
+  );
+
+export const archiveConnectedAccountOp = (connectedAccountId: string, ownerUserId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.connectedAccounts.archiveConnectedAccount({
+      params: { connectedAccountId },
+      query: { ownerUserId },
+    }),
+  );
 
 // ---- inference ----
 

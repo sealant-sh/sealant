@@ -43,6 +43,7 @@ The shipped resource groups and their operations:
 | Packages                 | `GET /v1/packages/resolve?query=&targetOs=`                                                                                                                                                                                                                                                                                                                                                                                           |
 | Workspaces               | `POST /v1/workspaces`, `POST /v1/workspaces/:workspaceId/exec`, `POST /v1/workspaces/:workspaceId/stop`, `POST /v1/workspaces/:workspaceId/restart`, `POST /v1/workspaces/:workspaceId/expire`, `PATCH /v1/workspaces/:workspaceId/name`, `GET /v1/workspaces`, `GET /v1/workspaces/:workspaceId`, `GET /v1/workspaces/:workspaceId/attempts`, `GET /v1/workspaces/:workspaceId/events`, `GET /v1/workspaces/:workspaceId/ssh-target` |
 | SSH keys                 | `POST /v1/ssh-keys`, `GET /v1/ssh-keys`, `DELETE /v1/ssh-keys/:sshKeyId`, `POST /v1/ssh-keys/resolve-principal`                                                                                                                                                                                                                                                                                                                       |
+| Users                    | `POST /v1/users` (idempotent on email), `GET /v1/users/:userId` — identity rows for service principals acting on behalf of their own users                                                                                                                                                                                                                                                                                            |
 | Connected accounts       | `POST /v1/connected-accounts`, `GET /v1/connected-accounts`, `DELETE /v1/connected-accounts/:connectedAccountId`, `POST /v1/connected-accounts/:connectedAccountId/mark-invalid`                                                                                                                                                                                                                                                      |
 | Profiles                 | `GET /v1/profiles`, `GET /v1/profiles/:profileId/credential-bindings`, `PUT /v1/profiles/:profileId/credential-bindings`                                                                                                                                                                                                                                                                                                              |
 | Runs / execution records | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:runId`, `PATCH /v1/runs/:runId`, `GET /v1/runs/:runId/timeline`, `GET /v1/runs/:runId/events/:sequence`, `GET /v1/runs/:runId/scrollback`, `GET /v1/runs/:runId/loss`, `GET /v1/runs/:runId/changes`                                                                                                                                                                                  |
@@ -59,27 +60,40 @@ subscriptions, and API-token management. Do not build against them — they are 
 
 ## Authentication
 
-There is **no bearer-token authentication and no API-token system today.** This is the single most
-important thing to understand about the current API.
+The control plane has two modes, chosen by one environment variable on the API.
 
-- **The API does not authenticate requests.** There is no bearer-auth middleware enforcing identity
-  on the resource groups. CORS permits an `Authorization` header, and the SDK can attach one, but
-  nothing on the server verifies it.
-- **Identity is passed in the payload.** User-scoped operations take an `ownerUserId` (or `userId`)
-  directly in the request body or query string. The SDK defaults this to `usr_local` (override with
-  `SEALANT_OWNER_USER_ID`). Whatever value you send is the owner the control plane attributes the
-  work to.
-- **This is a temporary model.** The `ownerUserId`-in-payload path is scaffolding that goes away
-  once real authentication lands. Do not build durable authorization assumptions on it.
-- **The exceptions are the internal SSH-gateway routes.** `POST /v1/ssh-keys/resolve-principal` and
-  `GET /v1/workspaces/:id/ssh-target` require the shared `x-sealant-gateway-token`
-  ([`WORKSPACE_SSH_GATEWAY_TOKEN`](/docs/reference/environment-variables)), and the SSH-target
-  lookup also checks workspace ownership. These exist for the gateway, not for general clients.
-
-Because the API trusts the `ownerUserId` you send, **treat network reachability as your only access
-control.** Keep the API on loopback unless you have put your own authenticating proxy in front of it
-— see [Beyond localhost](/docs/guides/beyond-localhost) and the
+**Open (default — `SEALANT_SERVICE_KEYS` unset).** The API does not authenticate requests. Identity
+is passed in the payload: user-scoped operations take an `ownerUserId` (or `userId`) in the request
+body or query string, the SDK defaults it to `usr_local` (override with `SEALANT_OWNER_USER_ID` or
+`SealantConfig.ownerUserId`), and whatever value you send is the owner the control plane attributes
+the work to. Treat network reachability as your only access control: keep the API on loopback unless
+you have put an authenticating proxy in front of it — see
+[Beyond localhost](/docs/guides/beyond-localhost) and the
 [security model](/docs/concepts/security-model).
+
+**Closed (`SEALANT_SERVICE_KEYS` set).** Every `/v1` request must carry a credential:
+
+- A **service key** — one of the comma-separated secrets in `SEALANT_SERVICE_KEYS`, sent as
+  `Authorization: Bearer <key>` (or `?token=<key>` on WebSocket routes). A service key belongs to a
+  trusted product that owns its own login (Mend) and may assert any `ownerUserId`; the payload
+  shapes are unchanged. Provision one Sealant user per person with `POST /v1/users` (idempotent on
+  email) and send that id as the owner from then on.
+- A **scoped user access token** (`POST /v1/access-tokens`; `slt_…`) authenticates the session
+  surface (`/v1/sessions/*`, `/v1/workspaces/:id/forward`) on its own — a paired phone or desktop
+  never holds a service key. A presented user token is authoritative: its owner and optional
+  workspace narrowing become the principal, and its scopes are enforced.
+- The internal SSH-gateway routes (`POST /v1/ssh-keys/resolve-principal`,
+  `GET /v1/workspaces/:id/ssh-target`) keep their shared `x-sealant-gateway-token`
+  ([`WORKSPACE_SSH_GATEWAY_TOKEN`](/docs/reference/environment-variables)); the SSH-target lookup
+  also checks workspace ownership.
+
+`/`, `/healthz`, `/readyz`, `/openapi.json` and `/docs` stay public in both modes. An
+unauthenticated request in closed mode is answered `401 {"_tag":"UnauthorizedError"}`.
+
+**Owner scoping on reads.** `GET /v1/workspaces/:id` and the `GET /v1/runs/:id` family (`/timeline`,
+`/events/:sequence`, `/scrollback`, `/loss`, `/changes`) accept an optional `ownerUserId` query;
+when present the resource must belong to that owner (uniform 404 otherwise). The SDK always sends
+it. Keys never appear in logs or responses.
 
 Related: [SDK](/docs/reference/sdk) · [Environment variables](/docs/reference/environment-variables)
 · [Runs and execution records](/docs/guides/runs-and-execution-records)

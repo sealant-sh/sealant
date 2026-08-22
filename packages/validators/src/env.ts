@@ -92,6 +92,14 @@ export const githubEnvSchema = githubApiEnvSchema
   .merge(githubAppEnvSchema)
   .merge(githubOAuthEnvSchema);
 
+export const servicePrincipalsEnvSchema = z.object({
+  // Comma-separated bearer secrets for SERVICE PRINCIPALS — trusted products (Mend) that act on
+  // behalf of any owner. When set, every /v1 request must carry one of these as a bearer, except
+  // the session surface (scoped user access tokens still authenticate alone) and the gateway
+  // routes (their own shared secret). Unset = the open, loopback-only pre-auth model.
+  SEALANT_SERVICE_KEYS: z.string().trim().min(1).optional(),
+});
+
 export const credentialsEnvSchema = z.object({
   // Generated once per install (install.sh / compose bootstrap write it into the deployment env);
   // encrypts connected-account credentials at rest (AES-256-GCM in @sealant/credentials).
@@ -226,6 +234,7 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(appCoreEnvSchema)
   .merge(credentialsEnvSchema)
+  .merge(servicePrincipalsEnvSchema)
   .merge(workspaceLifecycleEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {

@@ -3,9 +3,9 @@
  *
  * The PUBLIC surface (`SealantConfig` in `../types.ts`) is intentionally minimal: `{ baseUrl, apiKey }`.
  * The SDK is now a thin HTTP client (run execution + telemetry moved server-side), so the only
- * host-local concerns left are a pre-auth owner principal and the registry id used on create/run
- * payloads. These live HERE — resolved from the environment with docker-compose defaults — so they
- * never leak into the published `SealantConfig`, and they disappear entirely once auth lands.
+ * host-local concerns left are the owner principal and the registry id used on create/run
+ * payloads. The owner comes from `SealantConfig.ownerUserId` when a product acts on behalf of a
+ * specific user (one client per user), else from the environment with docker-compose defaults.
  */
 import type { SealantConfig } from "../types.js";
 
@@ -38,7 +38,7 @@ export const resolveInternalConfig = (config: SealantConfig): SealantInternalCon
   apiKey: config.apiKey,
   fetch: config.fetch,
   hostLocal: {
-    ownerUserId: env("SEALANT_OWNER_USER_ID") ?? DEFAULT_OWNER_USER_ID,
+    ownerUserId: config.ownerUserId ?? env("SEALANT_OWNER_USER_ID") ?? DEFAULT_OWNER_USER_ID,
     registryId: env("SEALANT_REGISTRY_ID") ?? DEFAULT_REGISTRY_ID,
   },
 });
