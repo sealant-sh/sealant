@@ -328,9 +328,10 @@ const openForward = (
   if (options?.protocol === "udp") {
     url.searchParams.set("protocol", "udp");
   }
-  if (config.apiKey === undefined) {
-    url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
-  } else {
+  // The owner assertion always rides the URL (a service principal needs it alongside its
+  // key, and WebSocket cannot carry headers — same contract as the session attach).
+  url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
+  if (config.apiKey !== undefined) {
     url.searchParams.set("token", config.apiKey);
   }
 
