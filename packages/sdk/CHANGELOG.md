@@ -1,5 +1,23 @@
 # @sealant/sdk
 
+## 0.23.0
+
+### Minor Changes
+
+- 3a9c68c: `workspaces.create` no longer pins the runtime target to Docker. The blueprint now carries
+  `target.runtime: { family: "auto", mode: "prefer" }`, so the deployment's default runtime adapter
+  decides — Docker on self-host (unchanged behaviour), Kubernetes when the control plane's worker is
+  configured for a cluster. Callers that genuinely need a specific runtime family can still say so
+  through the control-plane API's blueprint.
+
+### Patch Changes
+
+- 3a9c68c: Session attach, SSE output streams, and workspace port forwards now always send the `ownerUserId`
+  assertion in the URL. Previously it was sent only for host-local (no API key) clients, so a
+  service-principal client opening the attach WebSocket was rejected with "ownerUserId is required
+  when authenticating as a service principal."
+  - @sealant/api-contracts@0.23.0
+
 ## 0.22.0
 
 ### Minor Changes
@@ -472,6 +490,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
