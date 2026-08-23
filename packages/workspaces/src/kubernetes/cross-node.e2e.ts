@@ -21,6 +21,8 @@
  * performs, just routed.
  */
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { parseWorkspaceBlueprint } from "@sealant/validators";
@@ -57,7 +59,9 @@ const WORKTREE = `${STORE_ROOT}/${PROJECT}/worktrees/${SESSION}`;
 const COMMON_DIR = `${STORE_ROOT}/${PROJECT}/repo.git`;
 const RUN_ID = `run-e2e-${Date.now().toString(36)}`;
 
-const tlsDir = process.env["E2E_TLS_DIR"] ?? "deploy/e2e/kind/.tls";
+// Resolve relative to the repo root, not the suite's cwd (pnpm --filter runs in the package).
+const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../../..");
+const tlsDir = path.resolve(repoRoot, process.env["E2E_TLS_DIR"] ?? "deploy/e2e/kind/.tls");
 const clientTls = {
   caPath: `${tlsDir}/ca.crt`,
   certPath: `${tlsDir}/tls.crt`,

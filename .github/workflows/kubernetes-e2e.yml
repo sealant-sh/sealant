@@ -79,7 +79,7 @@ jobs:
       - name: Run the Kubernetes e2e suite
         env:
           SEALANT_K8S_E2E: "1"
-          E2E_TLS_DIR: deploy/e2e/kind/.tls
+          E2E_TLS_DIR: ${{ github.workspace }}/deploy/e2e/kind/.tls
           SEALANT_SEALANTD_IMAGE: sealant-registry.sealant.svc:5000/sealant/sealantd:e2e
         run: pnpm --filter @sealant/workspaces test:e2e src/kubernetes
 
