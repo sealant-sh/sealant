@@ -63,6 +63,8 @@ export interface StageLaunchMaterialInput {
 export interface StagedLaunchMaterial {
   readonly dotfilesArchiveDir?: string;
   readonly secretEnvDir?: string;
+  /** Pass-through for runtimes that project the secret env themselves (Kubernetes). */
+  readonly secretEnv?: Readonly<Record<string, string>>;
 }
 
 export interface LaunchMaterialStager {

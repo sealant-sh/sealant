@@ -1,0 +1,51 @@
+# Narrow RBAC for the Sealant worker in the WORKSPACE namespace (design §D5).
+#
+# This is exactly the verb set `packages/workspaces/src/runtime/kubernetes/api.ts` uses. The
+# worker never needs cluster scope, never reads Pod logs, and never touches other namespaces.
+# Workspace Pods themselves get `automountServiceAccountToken: false` and a ServiceAccount with
+# no bindings at all.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sealant-worker
+  namespace: sealant-workspaces
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sealant-workspace
+  namespace: sealant-workspaces
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sealant-worker
+  namespace: sealant-workspaces
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "update", "delete"]
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["create", "get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sealant-worker
+  namespace: sealant-workspaces
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sealant-worker
+subjects:
+  - kind: ServiceAccount
+    name: sealant-worker
+    namespace: sealant-workspaces

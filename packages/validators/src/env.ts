@@ -342,6 +342,35 @@ export const workerRuntimeEnvSchema = z.object({
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
 });
 
+/**
+ * Kubernetes runtime (worker only). Grammar only — semantic validation (mapping overlap, staging
+ * root membership, quantities) lives in `@sealant/workspaces`'s `kubernetesRuntimeConfigFromEnv`.
+ * All optional: a Docker worker sets none of these.
+ */
+export const kubernetesRuntimeEnvSchema = z.object({
+  SEALANT_K8S_NAMESPACE: z.string().trim().min(1).optional(),
+  SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT: z.string().trim().min(1).optional(),
+  /** JSON array of `{ "logicalRoot": "/var/lib/mend/store", "claimName": "mend-store" }`. */
+  SEALANT_K8S_VOLUME_MAPPINGS: z.string().trim().min(1).optional(),
+  SEALANT_K8S_CONTROL_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  SEALANT_K8S_IMAGE_PULL_SECRET: z.string().trim().min(1).optional(),
+  SEALANT_K8S_WORKSPACE_PRIORITY_CLASS: z.string().trim().min(1).optional(),
+  SEALANT_K8S_HOT_POOL_PRIORITY_CLASS: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DEFAULT_CPU_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DEFAULT_MEMORY_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DEFAULT_CPU_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DEFAULT_MEMORY_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_CERT_ISSUER_NAME: z.string().trim().min(1).optional(),
+  SEALANT_K8S_CERT_ISSUER_KIND: z.enum(["Issuer", "ClusterIssuer"]).optional(),
+  SEALANT_K8S_GVISOR_RUNTIME_CLASS: z.string().trim().min(1).optional(),
+  SEALANT_K8S_STAGING_LOGICAL_ROOT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_STAGING_MOUNT_PATH: z.string().trim().min(1).optional(),
+  SEALANT_K8S_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).optional(),
+  SEALANT_K8S_TOPOLOGY_SPREAD: z.stringbool().or(z.boolean()).optional(),
+  /** Development/test only: kubeconfig path instead of in-cluster configuration. */
+  SEALANT_K8S_KUBECONFIG: z.string().trim().min(1).optional(),
+});
+
 export const workerServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(registryConnectionEnvSchema)
@@ -350,9 +379,32 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(githubAppEnvSchema)
   .merge(credentialsEnvSchema)
   .merge(workerRuntimeEnvSchema)
-  .merge(controlClientTlsEnvSchema);
+  .merge(controlClientTlsEnvSchema)
+  .merge(kubernetesRuntimeEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
+  addControlClientTlsIssue(input, ctx);
+  if (
+    (input.DEFAULT_RUNTIME_ADAPTER === "k8s" || input.DEFAULT_RUNTIME_ADAPTER === "k3s") &&
+    input.SEALANT_K8S_NAMESPACE === undefined
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: `DEFAULT_RUNTIME_ADAPTER=${input.DEFAULT_RUNTIME_ADAPTER} requires SEALANT_K8S_NAMESPACE (and the rest of the SEALANT_K8S_* contract).`,
+      path: ["SEALANT_K8S_NAMESPACE"],
+    });
+  }
+  if (
+    input.SEALANT_K8S_NAMESPACE !== undefined &&
+    input.SEALANT_CONTROL_CLIENT_CERT_PATH === undefined
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "A Kubernetes worker needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) to reach sealantd.",
+      path: ["SEALANT_CONTROL_CLIENT_CERT_PATH"],
+    });
+  }
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(

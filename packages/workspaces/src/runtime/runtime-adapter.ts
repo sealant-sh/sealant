@@ -88,6 +88,17 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   // DETERMINISTIC per-run container name, so a redelivered/reaper-republished or concurrent launch
   // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).
   runId: z.string().trim().min(1).optional(),
+  /**
+   * Unsealed, policy-validated secret env for runtimes that cannot take a host directory
+   * (Kubernetes projects it as the boot secret file). Docker ignores it and uses `secretEnvDir`.
+   */
+  secretEnv: z.record(z.string(), z.string()).optional(),
+  /** Labelling only (never a secret): the workspace this run belongs to. */
+  workspaceId: z.string().trim().min(1).optional(),
+  /** Labelling only: an opaque principal id, when safe to stamp on resources. */
+  principalId: z.string().trim().min(1).optional(),
+  /** Hot-pool skeletons may get a different PriorityClass. */
+  pool: z.enum(["hot"]).optional(),
 });
 
 export const runtimeAdapterLaunchResultSchema = z.strictObject({

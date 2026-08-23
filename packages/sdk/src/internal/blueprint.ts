@@ -4,7 +4,8 @@
  * no contract change. The public `repository` is the SOURCE git repo (it becomes
  * `spec.sources.workspace.url`); the contract's `repository`/`tag` are the OCI push coordinates, which
  * we derive. `customization.enableSealantd` is forced on (it bakes + launches the daemon the run path
- * connects to), the runtime target is pinned to docker (the only bridgeable adapter today), and the
+ * connects to), the runtime target is `auto` (the deployment's default adapter — Docker on self-host, Kubernetes
+ * when the worker is configured for a cluster), and the
  * foreground is a keepalive so the workspace idles with the daemon up and the harness is exec'd on
  * demand by `run()` rather than launched at boot. `options.credentials`, if present, is lowered via
  * `mapWorkspaceCredentials` (see `./credentials.js`) and folded into `spec.credentials`; the control
@@ -233,7 +234,9 @@ export const buildCreateWorkspaceRequest = (
         options.baseImage !== undefined
           ? { family: "custom", mode: "require", baseImage: options.baseImage }
           : { family: options.os ?? "fedora", mode: "prefer" },
-      runtime: { family: "docker", mode: "require" },
+      // `auto` = the deployment's DEFAULT_RUNTIME_ADAPTER. SDK callers don't know (and must not
+      // care) whether the control plane runs workspaces as containers or Pods.
+      runtime: { family: "auto", mode: "prefer" },
     },
     lifecycle: {
       startup: { foreground: { kind: "command", run: "sleep infinity", shell: "bash" } },

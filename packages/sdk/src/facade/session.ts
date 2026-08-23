@@ -31,8 +31,9 @@ import type { SdkContext } from "./context.js";
  * Open the held-WebSocket terminal attachment (the data plane). One socket:
  * binary frames are PTY bytes in both directions, text frames are control
  * JSON (`{"t":"resize",...}` up, `{"t":"end"}` down). Auth rides the connect —
- * `?token=` for apiKey clients (WebSocket cannot set headers), `?ownerUserId=`
- * for host-local — and never repeats per event.
+ * `?ownerUserId=` always, plus `?token=` for apiKey clients (WebSocket cannot
+ * set headers; a service principal needs the owner assertion *and* its key) —
+ * and never repeats per event.
  */
 const openAttachment = (
   ctx: SdkContext,
@@ -43,9 +44,10 @@ const openAttachment = (
   const url = new URL(`/v1/sessions/${sessionId}/attach`, config.baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("from", (options?.from ?? 0n).toString());
-  if (config.apiKey === undefined) {
-    url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
-  } else {
+  // The owner assertion always rides the URL; a service principal needs it *alongside* its key,
+  // and WebSocket cannot carry headers, so the key rides the URL too.
+  url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
+  if (config.apiKey !== undefined) {
     url.searchParams.set("token", config.apiKey);
   }
 
@@ -176,9 +178,7 @@ async function* streamOverSse(
   const fetchImpl = config.fetch ?? fetch;
   const url = new URL(`/v1/sessions/${sessionId}/output/stream`, config.baseUrl);
   url.searchParams.set("from", from.toString());
-  if (config.apiKey === undefined) {
-    url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
-  }
+  url.searchParams.set("ownerUserId", config.hostLocal.ownerUserId);
 
   const response = await fetchImpl(url, {
     headers: {

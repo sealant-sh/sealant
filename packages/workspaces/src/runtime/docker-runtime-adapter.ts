@@ -6,6 +6,7 @@ import { join as joinPath } from "node:path";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
+import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
@@ -364,23 +365,6 @@ const extraMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
  * our own injection planner, but the command is still built defensively: any shell-metacharacter
  * beyond `$` is rejected rather than interpolated, and the mode is schema-validated octal.
  */
-const buildCredentialFileWriteScript = (file: CredentialFileInjection): string => {
-  if (!/^[A-Za-z0-9_$/.-]+$/.test(file.path)) {
-    throw createAdapterError(
-      "credential-file-injection-failed",
-      `Credential file path '${file.path}' contains characters that are not allowed in an injection path.`,
-    );
-  }
-  if (!/^[0-7]{3,4}$/.test(file.mode)) {
-    throw createAdapterError(
-      "credential-file-injection-failed",
-      `Credential file mode '${file.mode}' is not a valid octal mode.`,
-    );
-  }
-
-  return `umask 077 && mkdir -p "$(dirname "${file.path}")" && base64 -d > "${file.path}" && chmod ${file.mode} "${file.path}"`;
-};
-
 const supportForInput = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
   const targetRuntime = input.blueprint.target.runtime.family;
 

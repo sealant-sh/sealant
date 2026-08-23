@@ -28,6 +28,9 @@ export {
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 
+export * from "./kubernetes/index.js";
+export { buildCredentialFileWriteScript } from "./credential-files.js";
+
 export {
   DOTFILES_ARCHIVE_MOUNT_PATH,
   SECRET_ENV_MOUNT_PATH,

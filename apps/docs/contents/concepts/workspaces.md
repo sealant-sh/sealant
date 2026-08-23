@@ -88,7 +88,9 @@ This has two practical consequences:
 - BuildKit compilation supports **dotfiles** as the only additional input source beyond the main
   repository.
 - Package **version pinning** is not yet supported by the build.
-- The Docker runtime adapter is the default; Kubernetes/k3s adapters are not on this path yet.
+- The Docker runtime adapter is the default. The Kubernetes adapter (`k8s`/`k3s`) runs workspaces as
+  Pods that mount store subdirectories from an RWX claim and are controlled over mutual-TLS
+  WebSocket; it is enabled per worker with the `SEALANT_K8S_*` variables.
 
 ## Related
 
