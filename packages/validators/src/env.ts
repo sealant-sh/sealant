@@ -369,6 +369,17 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_TOPOLOGY_SPREAD: z.stringbool().or(z.boolean()).optional(),
   /** Development/test only: kubeconfig path instead of in-cluster configuration. */
   SEALANT_K8S_KUBECONFIG: z.string().trim().min(1).optional(),
+  // BuildKit Job image builder (defaults derive from the runtime namespace / registry settings).
+  SEALANT_K8S_BUILD_NAMESPACE: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_SERVICE_ACCOUNT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILDKIT_IMAGE: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_CPU_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_MEMORY_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_CPU_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_MEMORY_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_BUILD_TIMEOUT_MS: z.coerce.number().int().min(60_000).optional(),
+  SEALANT_K8S_BUILD_TTL_SECONDS: z.coerce.number().int().min(0).optional(),
+  SEALANT_K8S_REGISTRY_INSECURE: z.stringbool().or(z.boolean()).optional(),
 });
 
 export const workerServerEnvSchema = databaseEnvSchema

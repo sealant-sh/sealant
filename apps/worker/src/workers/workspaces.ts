@@ -13,6 +13,7 @@ import {
   consumeWorkspaceLifecycleJobs,
   createKubernetesLaunchMaterialStager,
   createLiveKubernetesApi,
+  createLiveKubernetesBuildApi,
   createZotRegistryClient,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
@@ -20,7 +21,9 @@ import {
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
+  kubernetesBuildConfigFromEnv,
   kubernetesRuntimeConfigFromEnv,
+  KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
   targetDerivationOptionsFromEnv,
 } from "@sealant/workspaces";
@@ -96,6 +99,22 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     kubernetesConfig === undefined
       ? undefined
       : createKubernetesLaunchMaterialStager(kubernetesConfig);
+  // Kubernetes workers build images with a rootless BuildKit Job that pushes to the registry —
+  // no Docker socket. Docker workers keep `docker build/save` + `docker load/tag/push`.
+  const kubernetesBuildConfig = kubernetesBuildConfigFromEnv(env);
+  const imageBuilder =
+    kubernetesBuildConfig === undefined
+      ? undefined
+      : new KubernetesWorkspaceImageBuilder({
+          config: kubernetesBuildConfig,
+          api: createLiveKubernetesBuildApi({
+            namespace: kubernetesBuildConfig.namespace,
+            ...(kubernetesBuildConfig.kubeconfigPath === undefined
+              ? {}
+              : { kubeconfigPath: kubernetesBuildConfig.kubeconfigPath }),
+          }),
+          registryClient,
+        });
 
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
@@ -130,6 +149,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+          ...(imageBuilder === undefined ? {} : { imageBuilder }),
         });
         ack();
       } catch (error) {

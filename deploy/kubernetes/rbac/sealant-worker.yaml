@@ -35,6 +35,24 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["create", "get", "list", "delete"]
+  # Image builds (BuildKit Jobs): context ConfigMap, Job, and the log tail on failure.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# Build Jobs run as this account; it has no bindings and no token mounted.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sealant-build
+  namespace: sealant-workspaces
+automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

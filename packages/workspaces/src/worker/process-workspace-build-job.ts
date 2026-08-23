@@ -26,11 +26,8 @@ import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sea
 import { Effect, Layer, Option } from "effect";
 import { z } from "zod";
 
-import {
-  compileWorkspaceBuildSpec,
-  planWorkspaceImageBuild,
-  type PlannedWorkspaceImageBuild,
-} from "../buildkit/index.js";
+import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
+import { createDockerWorkspaceImageBuilder, type WorkspaceImageBuilder } from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
@@ -90,6 +87,12 @@ export interface ProcessWorkspaceBuildJobOptions {
    */
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
   /**
+   * How images are built and published. Defaults to the Docker builder over `registryClient`
+   * (honouring `compileWorkspaceSpec` / `planWorkspaceSpec`); Kubernetes workers inject the
+   * BuildKit-Job builder.
+   */
+  readonly imageBuilder?: WorkspaceImageBuilder;
+  /**
    * Stages boot material (dotfiles archives, secret env) for the selected runtime. Defaults to
    * host directories the Docker adapter bind-mounts; Kubernetes deployments inject their own.
    */
@@ -98,30 +101,6 @@ export interface ProcessWorkspaceBuildJobOptions {
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
 export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJobOptions, "db">;
-
-const isPublishableOciImageArtifact = (
-  artifact: WorkspaceBuild["artifacts"][number],
-): artifact is WorkspaceBuild["artifacts"][number] & {
-  kind: "oci-image";
-  path: string;
-  loader: "docker-load";
-} => {
-  return (
-    artifact.kind === "oci-image" &&
-    artifact.path !== undefined &&
-    artifact.loader === "docker-load"
-  );
-};
-
-const selectPublishableImageArtifact = (compileResult: WorkspaceBuild) => {
-  const artifact = compileResult.artifacts.find(isPublishableOciImageArtifact);
-
-  if (artifact === undefined) {
-    throw new Error("The compiler did not return a publishable OCI image artifact.");
-  }
-
-  return artifact;
-};
 
 const launchPublishedImage = async (input: {
   readonly spec: NewWorkspace;
@@ -434,17 +413,18 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
-    const compileSpec =
-      options.compileWorkspaceSpec ??
-      ((inputSpec: NewWorkspace): Promise<WorkspaceBuild> =>
-        compileWorkspaceBuildSpec({ blueprint: inputSpec }));
-
-    const planSpec =
-      options.planWorkspaceSpec ??
-      (options.compileWorkspaceSpec === undefined
-        ? (inputSpec: NewWorkspace): PlannedWorkspaceImageBuild =>
-            planWorkspaceImageBuild({ blueprint: inputSpec })
-        : undefined);
+    const imageBuilder =
+      options.imageBuilder ??
+      createDockerWorkspaceImageBuilder({
+        registryClient: options.registryClient,
+        ...(options.compileWorkspaceSpec === undefined
+          ? {}
+          : { compileWorkspaceSpec: options.compileWorkspaceSpec }),
+        ...(options.planWorkspaceSpec === undefined
+          ? {}
+          : { planWorkspaceSpec: options.planWorkspaceSpec }),
+      });
+    const planSpec = imageBuilder.plan;
 
     const reuse =
       planSpec === undefined
@@ -475,25 +455,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       return { publishedImage: reuse.publishedImage, spec };
     }
 
-    const compileResult = yield* Effect.tryPromise({
-      try: () => compileSpec(spec),
-      catch: toWorkspaceBuildJobProcessingError,
-    });
-
-    const imageArtifact = yield* Effect.try({
-      try: () => selectPublishableImageArtifact(compileResult),
-      catch: toWorkspaceBuildJobProcessingError,
-    });
-
-    const publishedImage = yield* Effect.tryPromise({
+    const { publishedImage, build: compileResult } = yield* Effect.tryPromise({
       try: () =>
-        options.registryClient.publishOciImage({
-          artifactPath: imageArtifact.path,
+        imageBuilder.buildAndPublish({
+          spec,
           repository: job.repository,
           tag: job.tag,
-          ...(imageArtifact.reference === undefined
-            ? {}
-            : { sourceReference: imageArtifact.reference }),
+          buildId: job.id,
         }),
       catch: toWorkspaceBuildJobProcessingError,
     });
