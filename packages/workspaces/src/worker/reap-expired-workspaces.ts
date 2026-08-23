@@ -12,7 +12,8 @@ import {
 import { Effect, Layer } from "effect";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
-import { SealantRuntimeDockerExecLive } from "../sealantd/runtime.js";
+import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
+import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 export interface ReapExpiredWorkspacesOptions {
@@ -26,13 +27,15 @@ export interface ReapExpiredWorkspacesOptions {
    * SEALANT_CREDENTIALS_KEY is not configured on the worker.
    */
   readonly credentialCipher?: CredentialCipherService;
+  /** How this worker reaches each runtime family (client TLS for Kubernetes). */
+  readonly targetOptions?: SealantTargetDerivationOptions;
 }
 
 const DEFAULT_MAX_REAPS_PER_TICK = 5;
 
 /**
  * Workspace runtime reaper: the convergence net that guarantees no container outlives its
- * workspace's intent. It sweeps the live docker instances (status "ready") and drives the shared
+ * workspace's intent. It sweeps the live runtime instances (status "ready", any adapter) and drives the shared
  * stop path (`processWorkspaceStopEffect`) for every instance that should not be running:
  *
  *  - **expired** — the workspace's TTL elapsed (`expiresAt <= now`); reason "expired".
@@ -49,7 +52,7 @@ const DEFAULT_MAX_REAPS_PER_TICK = 5;
 export const reapExpiredWorkspaces = async (
   options: ReapExpiredWorkspacesOptions,
 ): Promise<number> => {
-  const { db, maxReapsPerTick, runtimeAdapters, credentialCipher } = options;
+  const { db, maxReapsPerTick, runtimeAdapters, credentialCipher, targetOptions } = options;
   const maxReaps = maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
 
   const dataAccessLayer = Layer.mergeAll(
@@ -65,7 +68,7 @@ export const reapExpiredWorkspaces = async (
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
     const workspaces = yield* WorkspaceRepo;
 
-    const live = yield* runtimeInstances.listRunningDockerInstances();
+    const live = yield* runtimeInstances.listRunningInstances();
     const now = Date.now();
 
     let reaped = 0;
@@ -86,6 +89,7 @@ export const reapExpiredWorkspaces = async (
             stopReason: "failed",
             runtimeAdapters,
             ...(credentialCipher === undefined ? {} : { credentialCipher }),
+            ...(targetOptions === undefined ? {} : { targetOptions }),
           });
           return true;
         }
@@ -107,6 +111,7 @@ export const reapExpiredWorkspaces = async (
           stopReason: expired ? "expired" : "user",
           runtimeAdapters,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
+          ...(targetOptions === undefined ? {} : { targetOptions }),
         });
         return true;
       }).pipe(
@@ -127,6 +132,6 @@ export const reapExpiredWorkspaces = async (
   });
 
   return Effect.runPromise(
-    program.pipe(Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeDockerExecLive))),
+    program.pipe(Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive))),
   );
 };

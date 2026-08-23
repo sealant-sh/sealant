@@ -230,14 +230,45 @@ export const workspaceLifecycleEnvSchema = z.object({
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
 });
 
+/**
+ * Client mTLS material for reaching sealantd's secure WebSocket frontend (Kubernetes runtimes).
+ * Shared by every process that opens control connections (API, worker, SSH gateway). All three
+ * are optional and unused for Docker; a Kubernetes instance is unaddressable until all are set.
+ */
+export const controlClientTlsEnvSchema = z.object({
+  SEALANT_CONTROL_CLIENT_CERT_PATH: z.string().trim().min(1).optional(),
+  SEALANT_CONTROL_CLIENT_KEY_PATH: z.string().trim().min(1).optional(),
+  SEALANT_CONTROL_CA_PATH: z.string().trim().min(1).optional(),
+});
+
+export type ControlClientTlsEnv = z.infer<typeof controlClientTlsEnvSchema>;
+
+const addControlClientTlsIssue = (input: ControlClientTlsEnv, ctx: z.RefinementCtx) => {
+  const present = [
+    input.SEALANT_CONTROL_CLIENT_CERT_PATH,
+    input.SEALANT_CONTROL_CLIENT_KEY_PATH,
+    input.SEALANT_CONTROL_CA_PATH,
+  ].filter((value) => value !== undefined).length;
+  if (present !== 0 && present !== 3) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "SEALANT_CONTROL_CLIENT_CERT_PATH, SEALANT_CONTROL_CLIENT_KEY_PATH and SEALANT_CONTROL_CA_PATH must be set together.",
+      path: ["SEALANT_CONTROL_CLIENT_CERT_PATH"],
+    });
+  }
+};
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(appCoreEnvSchema)
   .merge(credentialsEnvSchema)
   .merge(servicePrincipalsEnvSchema)
-  .merge(workspaceLifecycleEnvSchema);
+  .merge(workspaceLifecycleEnvSchema)
+  .merge(controlClientTlsEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
+  addControlClientTlsIssue(input, ctx);
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(
@@ -318,7 +349,8 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(githubApiEnvSchema)
   .merge(githubAppEnvSchema)
   .merge(credentialsEnvSchema)
-  .merge(workerRuntimeEnvSchema);
+  .merge(workerRuntimeEnvSchema)
+  .merge(controlClientTlsEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
@@ -393,9 +425,12 @@ export const sshGatewayServerEnvSchema = runtimeEnvSchema
         WORKSPACE_SSH_GATEWAY_TOKEN: z.string().trim().min(1),
       }),
   )
-  .merge(sshGatewayCoreEnvSchema);
+  .merge(sshGatewayCoreEnvSchema)
+  .merge(controlClientTlsEnvSchema);
 
-export const sshGatewayEnvSchema = sshGatewayServerEnvSchema;
+export const sshGatewayEnvSchema = sshGatewayServerEnvSchema.superRefine((input, ctx) => {
+  addControlClientTlsIssue(input, ctx);
+});
 
 export type SshGatewayEnv = z.infer<typeof sshGatewayEnvSchema>;
 export type HydratedSshGatewayEnv = SshGatewayEnv & {

@@ -7,12 +7,13 @@ import { WorkspaceAttemptRepo, type WorkspaceLaunchCredentialInjection } from "@
 import { newWorkspaceSchema } from "@sealant/validators";
 import { Effect, Schedule } from "effect";
 
-import { execInWorkspace, sealantTargetForDockerContainer } from "../sealantd/target.js";
+import type { SealantTarget } from "../sealantd/runtime.js";
+import { execInWorkspace } from "../sealantd/target.js";
 import { syncBackClaudeCredentials } from "./claude-credentials-sync-back.js";
 import { syncBackCodexAuthJson } from "./codex-auth-sync-back.js";
 
 /*
-Best-effort credential sync-back for a live workspace container (design doc §2 / §6): the official
+Best-effort credential sync-back for a live workspace runtime (design doc §2 / §6): the official
 CLIs in the workspace rotate their session files — codex rewrites auth.json (rotating its refresh
 token), claude rewrites .credentials.json for session-file accounts — so the mutated files must be
 persisted, newest-wins only, and never at the cost of the surrounding job. Invoked on EVERY path
@@ -24,7 +25,7 @@ The blueprint is re-derived from the stored attempt snapshot; workspaces without
 credentialRef no-op immediately.
 */
 
-/** The docker-exec/socat bridge can flake; retry the one-shot file reads with a spaced window. */
+/** The control transport can flake (socat bridge, WSS reconnect); retry the one-shot reads with a spaced window. */
 const READ_RETRY = { schedule: Schedule.spaced("400 millis"), times: 5 };
 
 /**
@@ -42,8 +43,8 @@ const isolatedSyncBack = <E, R>(label: string, sync: Effect.Effect<void, E, R>) 
 export interface SyncBackWorkspaceCredentialsInput {
   /** The attempt whose stored snapshot carries the launch blueprint (and thus the refs). */
   readonly attemptId: string;
-  /** The docker container id (`resourceId`) of the still-running workspace runtime. */
-  readonly containerId: string;
+  /** How to reach the still-running workspace runtime (any adapter). */
+  readonly target: SealantTarget;
   /** Launch-time injection shapes from the runtime instance row; null/legacy means none. */
   readonly launchCredentialInjections: readonly WorkspaceLaunchCredentialInjection[];
   /** Undefined when SEALANT_CREDENTIALS_KEY is not configured on the worker. */
@@ -67,7 +68,7 @@ export const syncBackWorkspaceCredentials = Effect.fn("syncBackWorkspaceCredenti
     }
     const blueprint = newWorkspaceSchema.parse(snapshot.blueprintPayload);
 
-    const target = sealantTargetForDockerContainer(input.containerId);
+    const target = input.target;
 
     // `$HOME` expands inside the container shell; a missing file surfaces as a non-zero exit.
     const readWorkspaceFile = (path: string) =>

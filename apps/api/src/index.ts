@@ -7,7 +7,7 @@ import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
-import { SealantRuntimeDockerExecLive } from "@sealant/workspaces";
+import { SealantRuntimeControlLive } from "@sealant/workspaces";
 import { Layer, Redacted } from "effect";
 import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
 import { HttpApiScalar } from "effect/unstable/httpapi";
@@ -137,7 +137,7 @@ const requestDependenciesLayer = Layer.mergeAll(
   // Daemon control-channel access for the interactive-session verbs: each request opens a
   // short-lived docker-exec bridge to the workspace daemon (sessions are daemon-owned, so no
   // connection registry is needed API-side).
-  SealantRuntimeDockerExecLive,
+  SealantRuntimeControlLive,
   // The engine layer is a thin facade over module-level session state (sessions must survive
   // across requests regardless of this layer's lifecycle), so providing it here is safe.
   InferenceEngineLive,

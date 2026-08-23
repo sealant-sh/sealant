@@ -33,7 +33,11 @@ import {
   TelemetryIngesterLive,
 } from "@sealant/telemetry";
 import type { WorkerEnv } from "@sealant/validators/env";
-import { SealantRuntimeDockerExecLive, sealantTargetForRuntimeInstance } from "@sealant/workspaces";
+import {
+  SealantRuntimeControlLive,
+  sealantTargetForRuntimeInstance,
+  targetDerivationOptionsFromEnv,
+} from "@sealant/workspaces";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 
 // 1s, not 5s: ingest attaches AFTER the gateway opens the session (live-tail protocol, no replay
@@ -45,6 +49,7 @@ const POLL_INTERVAL_MS = 1000;
  * `startWorkspaceWorker`'s shape so `startWorkers` can compose it.
  */
 export const startTelemetryWorker = async (env: WorkerEnv) => {
+  const targetOptions = targetDerivationOptionsFromEnv(env);
   const dbLayer = makeSealantDBLayer(env.DATABASE_URL);
   const artifactLayer = InlineByteaArtifactStoreLive.pipe(Layer.provide(dbLayer));
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
@@ -52,7 +57,7 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
   );
   const resolverLayer = ExecutionRunResolverLive.pipe(Layer.provide(dbLayer));
   const ingesterLayer = TelemetryIngesterLive.pipe(
-    Layer.provide(Layer.mergeAll(SealantRuntimeDockerExecLive, sinkLayer, resolverLayer)),
+    Layer.provide(Layer.mergeAll(SealantRuntimeControlLive, sinkLayer, resolverLayer)),
   );
   const repoLayer = Layer.mergeAll(
     RunRepoLive,
@@ -78,10 +83,10 @@ export const startTelemetryWorker = async (env: WorkerEnv) => {
         return undefined;
       }
       const instance = yield* instances.getRuntimeInstanceByRunId(workspace.latestRunId);
-      if (instance === undefined || instance.adapter !== "docker" || instance.status !== "ready") {
+      if (instance === undefined || instance.status !== "ready") {
         return undefined;
       }
-      return sealantTargetForRuntimeInstance(instance);
+      return sealantTargetForRuntimeInstance(instance, targetOptions);
     });
 
   const poll = async () => {

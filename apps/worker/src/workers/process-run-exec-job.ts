@@ -35,8 +35,10 @@ import {
   execInWorkspace,
   type RunExecCommand,
   SealantRuntime,
-  SealantRuntimeDockerExecLive,
-  sealantTargetForDockerContainer,
+  SealantRuntimeControlLive,
+  describeUnaddressableRuntimeInstance,
+  sealantTargetForRuntimeInstance,
+  type SealantTargetDerivationOptions,
   syncBackWorkspaceCredentials,
   type SealantTarget,
 } from "@sealant/workspaces";
@@ -45,8 +47,8 @@ import { Effect, Layer, Schedule, Stream } from "effect";
 const WORKDIR = "/workspace/repo";
 const BATCH_SIZE = 256;
 const BATCH_WINDOW = "250 millis";
-// The docker-exec/socat bridge can flake while a freshly-launched daemon's socket comes up; retry the
-// connect+health+exec unit with a spaced window. exec resolves on process-accept, so retry can't
+// The control transport can flake while a freshly-launched daemon comes up (socat bridge, WSS
+// service endpoints); retry the connect+health+exec unit with a spaced window. exec resolves on process-accept, so retry can't
 // double-run the harness.
 const BRIDGE_RETRY = { schedule: Schedule.spaced("400 millis"), times: 10 };
 
@@ -66,6 +68,8 @@ export interface ProcessRunExecJobOptions {
    * claude session .credentials.json) after the run.
    */
   readonly credentialCipher?: CredentialCipherService;
+  /** How this worker reaches each runtime family (client TLS for Kubernetes). */
+  readonly targetOptions?: SealantTargetDerivationOptions;
 }
 
 const parseNameStatus = (output: string): RunFileChange[] => {
@@ -169,7 +173,7 @@ const captureRun = (runId: string, target: SealantTarget, command: RunExecComman
     }),
   );
 
-const resolveContainerResourceId = (runId: string) =>
+const resolveRuntimeTarget = (runId: string, targetOptions: SealantTargetDerivationOptions) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
     const workspaces = yield* WorkspaceRepo;
@@ -186,10 +190,16 @@ const resolveContainerResourceId = (runId: string) =>
       );
     }
     const instance = yield* runtimeInstances.getRuntimeInstanceByRunId(workspace.latestRunId);
-    if (instance === undefined || instance.adapter !== "docker" || instance.resourceId === null) {
+    if (instance === undefined) {
+      return yield* Effect.fail(
+        new Error(`Workspace ${run.workspaceId} has no runtime instance for run ${runId}.`),
+      );
+    }
+    const target = sealantTargetForRuntimeInstance(instance, targetOptions);
+    if (target === undefined) {
       return yield* Effect.fail(
         new Error(
-          `Workspace ${run.workspaceId} is not a running docker workspace for run ${runId}.`,
+          `Workspace ${run.workspaceId} is not reachable for run ${runId}: ${describeUnaddressableRuntimeInstance(instance, targetOptions)}.`,
         ),
       );
     }
@@ -197,7 +207,7 @@ const resolveContainerResourceId = (runId: string) =>
     // blueprint (and thus the workspace's connected-account refs). The instance row additionally
     // carries the launch-time injection shapes; null (legacy rows) means "nothing file-injected".
     return {
-      resourceId: instance.resourceId,
+      target,
       attemptId: workspace.latestRunId,
       launchCredentialInjections: instance.launchCredentialInjections ?? [],
     };
@@ -277,10 +287,10 @@ export const processRunExecJobEffect = (
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
       );
     }
-    const { resourceId, attemptId, launchCredentialInjections } = yield* resolveContainerResourceId(
+    const { target, attemptId, launchCredentialInjections } = yield* resolveRuntimeTarget(
       options.runId,
+      options.targetOptions ?? {},
     );
-    const target = sealantTargetForDockerContainer(resourceId);
 
     yield* runs.markRunRunning({ id: options.runId });
 
@@ -307,7 +317,7 @@ export const processRunExecJobEffect = (
       Effect.ensuring(
         syncBackWorkspaceCredentials({
           attemptId,
-          containerId: resourceId,
+          target,
           launchCredentialInjections,
           credentialCipher: options.credentialCipher,
         }),
@@ -329,7 +339,7 @@ export const processRunExecJob = (options: ProcessRunExecJobOptions): Promise<vo
   const sinkLayer = PostgresTelemetrySinkLive.pipe(
     Layer.provide(Layer.mergeAll(dbLayer, artifactLayer)),
   );
-  const appLayer = Layer.mergeAll(dataAccessLayer, SealantRuntimeDockerExecLive, sinkLayer);
+  const appLayer = Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive, sinkLayer);
 
   return Effect.runPromise(processRunExecJobEffect(options).pipe(Effect.provide(appLayer)));
 };

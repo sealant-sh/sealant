@@ -39,7 +39,7 @@ export type WorkspaceRuntimeInstanceRepository = WorkspaceRuntimeInstanceRepoSer
 const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
-  "listRunningDockerInstances",
+  "listRunningInstances",
   "markStopped",
   "upsertRuntimeInstance",
 ]);
@@ -124,8 +124,12 @@ export interface WorkspaceRuntimeInstanceRepoService {
     ReadonlyMap<string, WorkspaceRuntimeInstance>,
     WorkspaceRuntimeInstanceRepoError
   >;
-  /** All runtime instances currently `running` on the docker adapter (reachable by the telemetry ingester). */
-  readonly listRunningDockerInstances: () => Effect.Effect<
+  /**
+   * All runtime instances currently `ready` (control channel accepting) on any adapter. Consumers
+   * derive a transport target per row (`sealantTargetForRuntimeInstance`) and skip what they can't
+   * reach.
+   */
+  readonly listRunningInstances: () => Effect.Effect<
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
@@ -282,20 +286,15 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
           }),
         ),
 
-      listRunningDockerInstances: () =>
+      listRunningInstances: () =>
         withWorkspaceRuntimeInstanceRepoError(
-          "listRunningDockerInstances",
+          "listRunningInstances",
           db
             .select()
             .from(workspaceRuntimeInstances)
-            .where(
-              and(
-                // "ready" = control socket accepting. The launch path no longer emits "running", so
-                // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
-                eq(workspaceRuntimeInstances.status, "ready"),
-                eq(workspaceRuntimeInstances.adapter, "docker"),
-              ),
-            )
+            // "ready" = control channel accepting. The launch path no longer emits "running", so
+            // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
+            .where(eq(workspaceRuntimeInstances.status, "ready"))
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;

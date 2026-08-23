@@ -1,7 +1,3 @@
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceSecretEnv,
@@ -42,6 +38,10 @@ import {
   type RuntimeAdapterId,
   type WorkspaceCloneAuth,
 } from "../runtime/index.js";
+import {
+  hostDirectoryLaunchMaterialStager,
+  type LaunchMaterialStager,
+} from "../runtime/launch-material.js";
 import { resolveCredentialInjections } from "./connected-account-resolver.js";
 import {
   WorkspaceBuildJobProcessingError,
@@ -87,6 +87,11 @@ export interface ProcessWorkspaceBuildJobOptions {
    * describe what the custom compiler builds).
    */
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
+  /**
+   * Stages boot material (dotfiles archives, secret env) for the selected runtime. Defaults to
+   * host directories the Docker adapter bind-mounts; Kubernetes deployments inject their own.
+   */
+  readonly launchMaterialStager?: LaunchMaterialStager;
 }
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
@@ -153,82 +158,9 @@ const launchPublishedImage = async (input: {
   });
 };
 
-/**
- * Where staged dotfiles archive dirs must live. `docker run -v` resolves paths on the DAEMON'S
- * host filesystem: a worker running inside the self-host compose stack must write through the
- * control-socket directory — the one path the stack bind-mounts at the SAME location on both
- * sides — or the workspace receives an empty mount and boot aborts. A host-run worker (dev,
- * tests) stages in the system tmpdir as before.
- */
-export const dotfilesStagingRoot = (): string => {
-  const shared = process.env["WORKSPACE_CONTROL_SOCKET_HOST_DIR"];
-  return shared === undefined || shared === "" ? tmpdir() : join(shared, "_dotfiles");
-};
-
-/**
- * Stage the spec's dotfiles archives into a host directory the adapter bind-mounts read-only:
- * `manifest.json` plus one `<index>.tar.gz` per archive, the exact contract
- * `crates/sealantd/src/boot/dotfiles.rs::apply_archives` consumes. The path is deterministic per
- * run so a redelivered launch overwrites its own staging instead of leaking a new directory, and
- * a workspace restart re-stages from the job payload. Returns undefined when there is nothing to
- * stage (no archives, or the apply is disabled).
- */
-const stageDotfilesArchives = async (
-  spec: NewWorkspace,
-  runId: string | null,
-): Promise<string | undefined> => {
-  const archives = spec.runtime.dotfilesArchives;
-  if (!spec.customization.applyDotfiles || archives.length === 0) {
-    return undefined;
-  }
-
-  const directory = join(dotfilesStagingRoot(), `sealant-dotfiles-${runId ?? "unkeyed"}`);
-  await rm(directory, { recursive: true, force: true });
-  await mkdir(directory, { recursive: true });
-
-  const manifest = {
-    archives: archives.map((archive, index) => ({
-      file: `${index}.tar.gz`,
-      ...(archive.manager === undefined ? {} : { manager: archive.manager }),
-      ...(archive.target === undefined ? {} : { target: archive.target }),
-      bootstrap: archive.bootstrap,
-      ...(archive.bootstrapCommand === undefined
-        ? {}
-        : { bootstrapCommand: archive.bootstrapCommand }),
-    })),
-  };
-  await writeFile(join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
-  for (const [index, archive] of archives.entries()) {
-    await writeFile(join(directory, `${index}.tar.gz`), Buffer.from(archive.data, "base64"));
-  }
-  return directory;
-};
-
-/** Where the transient secret env file is staged; same daemon-host constraint as dotfiles. */
-const secretEnvStagingDir = (runId: string | null): string =>
-  join(dotfilesStagingRoot(), `sealant-secret-env-${runId ?? "unkeyed"}`);
-
-/**
- * Stage the launch's secret environment as `<dir>/env.json` (dir 0700, file 0600) for the adapter
- * to bind-mount read-only; `sealantd boot` consumes it once. Deterministic per run so a redelivered
- * launch overwrites its own staging. The caller removes it the moment the workspace is ready.
- */
-const stageSecretEnv = async (
-  secretEnv: Readonly<Record<string, string>>,
-  runId: string | null,
-): Promise<string> => {
-  const directory = secretEnvStagingDir(runId);
-  await rm(directory, { recursive: true, force: true });
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const file = join(directory, "env.json");
-  await writeFile(file, JSON.stringify(secretEnv), { encoding: "utf8", mode: 0o600 });
-  await chmod(file, 0o600);
-  return directory;
-};
-
-/** Best-effort removal of the staged secret env; safe to call when nothing was staged. */
-export const removeStagedSecretEnv = (runId: string | null): Promise<void> =>
-  rm(secretEnvStagingDir(runId), { recursive: true, force: true });
+// Staging of launch material (dotfiles archives, secret env) lives in
+// `../runtime/launch-material.ts`; these re-exports keep the historical import paths working.
+export { dotfilesStagingRoot, removeStagedSecretEnv } from "../runtime/launch-material.js";
 
 /**
  * Unseal the job's `secretEnv` (the transient secret channel) and re-validate it with the public
@@ -577,6 +509,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   );
 
   // Phase B: launch the runtime instance and record its state.
+  const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
   const launchAndRecord = Effect.gen(function* () {
     if (job.runId !== null) {
       yield* runtimeInstances
@@ -605,26 +538,24 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       resolvedCredentials.injections,
     );
 
-    const dotfilesArchiveDir = yield* Effect.tryPromise({
-      try: () => stageDotfilesArchives(spec, job.runId),
-      catch: toWorkspaceBuildJobProcessingError,
-    });
-
-    // The transient secret channel: unseal, re-validate, stage as a 0600 boot file the adapter
-    // bind-mounts read-only. Removed as soon as the workspace is READY (the daemon has consumed
-    // it by then), and the sealed row is cleared once this phase settles either way — see the
+    // The transient secret channel: unseal, re-validate, then hand it to the stager with the
+    // dotfiles archives. For Docker the stager writes a 0600 boot file the adapter bind-mounts
+    // read-only. Removed as soon as the workspace is READY (the daemon has consumed it by then),
+    // and the sealed row is cleared once this phase settles either way — see the
     // ensuring/finalizer below.
     const secretEnv =
       job.secretEnvSealed === null || job.secretEnvSealed === undefined
         ? undefined
         : yield* unsealSecretEnv(job.secretEnvSealed, options.credentialCipher);
-    const secretEnvDir =
-      secretEnv === undefined
-        ? undefined
-        : yield* Effect.tryPromise({
-            try: () => stageSecretEnv(secretEnv, job.runId),
-            catch: toWorkspaceBuildJobProcessingError,
-          });
+    const { dotfilesArchiveDir, secretEnvDir } = yield* Effect.tryPromise({
+      try: () =>
+        stager.stage({
+          spec,
+          runId: job.runId,
+          ...(secretEnv === undefined ? {} : { secretEnv }),
+        }),
+      catch: toWorkspaceBuildJobProcessingError,
+    });
 
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
@@ -651,7 +582,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       // Ready = the daemon has already read the file at boot; nothing may still need it.
       Effect.tap((result) =>
         result.status === "ready" && secretEnvDir !== undefined
-          ? Effect.promise(() => removeStagedSecretEnv(job.runId))
+          ? Effect.promise(() => stager.removeSecretEnv(job.runId))
           : Effect.void,
       ),
     );
@@ -690,7 +621,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           job.secretEnvSealed === null || job.secretEnvSealed === undefined
             ? Effect.void
             : jobs.clearSecretEnv(job.id).pipe(swallowingFailure("clear-secret-env update")),
-          Effect.promise(() => removeStagedSecretEnv(job.runId)),
+          Effect.promise(() => stager.removeSecretEnv(job.runId)),
         ],
         { discard: true },
       ),

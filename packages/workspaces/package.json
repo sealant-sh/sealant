@@ -24,11 +24,13 @@
     "@sealant/validators": "workspace:*",
     "amqplib": "catalog:",
     "effect": "catalog:",
+    "ws": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*",
-    "@types/amqplib": "catalog:"
+    "@types/amqplib": "catalog:",
+    "@types/ws": "catalog:"
   }
 }

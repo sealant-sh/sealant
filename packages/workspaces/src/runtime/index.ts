@@ -28,6 +28,28 @@ export {
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 
+export {
+  DOTFILES_ARCHIVE_MOUNT_PATH,
+  SECRET_ENV_MOUNT_PATH,
+  collectMountIntents,
+  dockerBindArgsForIntent,
+  type RuntimeMountIntent,
+  type RuntimeMountPurpose,
+} from "./mount-intent.js";
+
+export {
+  buildDotfilesArchiveManifest,
+  dotfilesStagingRoot,
+  hasDotfilesArchives,
+  hostDirectoryLaunchMaterialStager,
+  removeStagedDotfilesArchives,
+  removeStagedSecretEnv,
+  type DotfilesArchiveManifestEntry,
+  type LaunchMaterialStager,
+  type StageLaunchMaterialInput,
+  type StagedLaunchMaterial,
+} from "./launch-material.js";
+
 export { K8sRuntimeAdapter } from "./k8s-runtime-adapter.js";
 
 export type {

@@ -107,7 +107,7 @@ const makeHarness = (input: {
     markStopped,
     getRuntimeInstanceByRunId: () => Effect.succeed(input.instance),
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),
-    listRunningDockerInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
+    listRunningInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
   });
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;

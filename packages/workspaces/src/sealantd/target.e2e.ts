@@ -64,7 +64,7 @@ import {
   docker,
   isImagePresent,
 } from "./boot.js";
-import { SealantRuntimeDockerExecLive } from "./runtime.js";
+import { SealantRuntimeControlLive } from "./runtime.js";
 import { execInWorkspace, sealantTargetForDockerContainer } from "./target.js";
 
 const execFileAsync = promisify(execFile);
@@ -276,7 +276,7 @@ describe.skipIf(!imageAvailable)(
 
       const result = await Effect.runPromise(
         execInWorkspace(target, { executable: "/bin/echo", args: ["hi"] }).pipe(
-          Effect.provide(SealantRuntimeDockerExecLive),
+          Effect.provide(SealantRuntimeControlLive),
         ),
       );
 
@@ -294,7 +294,7 @@ describe.skipIf(!imageAvailable)(
         execInWorkspace(sealantTargetForDockerContainer(containerId!), {
           executable: "/bin/sh",
           args: ["-c", 'printf %s "$WORKSPACE_ENV_PROOF"'],
-        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        }).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
 
       expect(result.stdout).toBe("canary-e2e-value");
@@ -322,7 +322,7 @@ describe.skipIf(!imageAvailable)(
             "-c",
             'test "$STRIPE_API_KEY" = "sk_live_e2e_secret_value_1234" && test "$DATABASE_URL" = "postgres://user:hunter2-e2e-pass@db.internal/app" && echo INHERITED',
           ],
-        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        }).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
       expect(check.stdout).toBe("INHERITED\n");
       expect(check.exitCode).toBe(0);
@@ -332,7 +332,7 @@ describe.skipIf(!imageAvailable)(
         execInWorkspace(sealantTargetForDockerContainer(containerId!), {
           executable: "/bin/sh",
           args: ["-c", 'printf "%s|%s" "$DATABASE_URL" "$STRIPE_API_KEY"'],
-        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        }).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
       expect(echoed.stdout).toBe("***REDACTED***|***REDACTED***");
     }, 45_000);
@@ -348,7 +348,7 @@ describe.skipIf(!imageAvailable)(
         execInWorkspace(sealantTargetForDockerContainer(containerId!), {
           executable: "/bin/sh",
           args: ["-c", 'printf %s "${PROOF_TOKEN-unset}"'],
-        }).pipe(Effect.provide(SealantRuntimeDockerExecLive)),
+        }).pipe(Effect.provide(SealantRuntimeControlLive)),
       );
 
       expect(result.stdout).toBe("unset");

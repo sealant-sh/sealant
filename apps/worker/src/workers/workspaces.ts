@@ -19,6 +19,7 @@ import {
   processWorkspaceStop,
   reapExpiredWorkspaces,
   reapStaleWorkspaceBuildJobs,
+  targetDerivationOptionsFromEnv,
 } from "@sealant/workspaces";
 import { Effect } from "effect";
 
@@ -68,6 +69,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
     ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
   });
+  // How this worker reaches each runtime family: nothing extra for Docker, client mTLS for
+  // Kubernetes (sealantd's secure WebSocket frontend).
+  const targetOptions = targetDerivationOptionsFromEnv(env);
+
   const runtimeAdapters = [
     new DockerRuntimeAdapter({
       dockerSocketPath: env.DOCKER_SOCKET_PATH,
@@ -127,6 +132,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(message.commands === undefined ? {} : { commands: message.commands }),
           db,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
+          targetOptions,
         });
         ack();
       } catch (error) {
@@ -152,6 +158,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           runtimeAdapters,
           // Rotated claude/codex session files are synced back before the container is destroyed.
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
+          targetOptions,
         });
         ack();
       } catch (error) {
@@ -194,6 +201,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      targetOptions,
     }).catch((error: unknown) => {
       console.error("Workspace expiry reaper tick failed", { error });
     });

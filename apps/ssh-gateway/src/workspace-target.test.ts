@@ -71,11 +71,47 @@ describe("toControlTarget", () => {
     });
   });
 
-  it("rejects non-docker adapters", () => {
-    const target: WorkspaceSshTarget = {
-      ...dockerTarget("ctr-abc"),
-      runtime: { ...dockerTarget("ctr-abc").runtime, adapter: "k8s" },
-    };
-    expect(() => toControlTarget(target)).toThrow("Unsupported runtime adapter");
+  const websocketTls = {
+    caPath: "/etc/sealant/tls/ca.crt",
+    certPath: "/etc/sealant/tls/tls.crt",
+    keyPath: "/etc/sealant/tls/tls.key",
+  };
+  const k8sTarget = (adapter: "k8s" | "k3s", endpoint: string): WorkspaceSshTarget => ({
+    ...dockerTarget("ws-run-abc"),
+    runtime: { ...dockerTarget("ws-run-abc").runtime, adapter, endpoint },
+  });
+
+  it("maps a Kubernetes wss endpoint onto a websocket target with the gateway's client TLS", () => {
+    for (const adapter of ["k8s", "k3s"] as const) {
+      expect(
+        toControlTarget(k8sTarget(adapter, "wss://ws-run-abc.ns.svc:7443/control"), {
+          websocketTls,
+        }),
+      ).toEqual({
+        kind: "websocket",
+        url: "wss://ws-run-abc.ns.svc:7443/control",
+        tls: websocketTls,
+      });
+    }
+  });
+
+  it("refuses a Kubernetes target when the gateway has no client TLS material", () => {
+    expect(() => toControlTarget(k8sTarget("k8s", "wss://ws-run-abc.ns.svc:7443/control"))).toThrow(
+      "client TLS material",
+    );
+  });
+
+  it("refuses a Kubernetes target whose endpoint is not wss://", () => {
+    expect(() =>
+      toControlTarget(k8sTarget("k8s", "docker-exec://ctr/run/sealant/control.sock"), {
+        websocketTls,
+      }),
+    ).toThrow("non-wss endpoint");
+  });
+
+  it("never lets client TLS material change how a docker target is reached", () => {
+    expect(toControlTarget(dockerTarget("ctr-abc"), { websocketTls })).toEqual(
+      toControlTarget(dockerTarget("ctr-abc")),
+    );
   });
 });

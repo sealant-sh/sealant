@@ -54,11 +54,13 @@ import {
   SealantControlError,
   SealantRuntime,
   sealantTargetForRuntimeInstance,
+  targetDerivationOptionsFromEnv,
   type SealantSession as DaemonConnection,
   type SealantTarget,
 } from "@sealant/workspaces";
 import { Effect, Stream } from "effect";
 
+import { env } from "../../runtime-env.js";
 import { servicePrincipals } from "../../services/service-principals.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
@@ -202,7 +204,7 @@ export const resolveDaemonTarget = (workspaceId: string) =>
     if (instance === undefined || instance.status !== "ready") {
       return undefined;
     }
-    return sealantTargetForRuntimeInstance(instance);
+    return sealantTargetForRuntimeInstance(instance, targetDerivationOptionsFromEnv(env));
   });
 
 /** Run `f` over a short-lived daemon connection (scoped: the bridge is torn down after). */
