@@ -1,0 +1,11 @@
+apiVersion: v2
+name: sealant
+description:
+  Sealant control plane on Kubernetes — API, worker, SSH gateway, web, and the workspace namespace
+  (RBAC, mTLS CA, NetworkPolicies).
+type: application
+version: 0.1.0
+appVersion: "0.22.0"
+keywords: [sealant, workspaces, coding-agents]
+sources:
+  - https://github.com/sealant-sh/sealant

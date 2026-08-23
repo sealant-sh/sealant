@@ -1,0 +1,53 @@
+{{- if .Values.certManager.enabled }}
+{{- $wsns := include "sealant.workspaceNamespace" . }}
+{{- if not .Values.certManager.issuerRef.name }}
+# Bootstrap PKI, cluster-scoped so certificates can be issued into BOTH the release namespace
+# (control-plane client cert) and the workspace namespace (per-workspace server certs): a
+# self-signed ClusterIssuer signs one internal CA whose Secret lives in cert-manager's
+# cluster-resource namespace; the CA ClusterIssuer then serves every namespace.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-internal-ca
+  namespace: {{ .Values.certManager.clusterResourceNamespace }}
+spec:
+  isCA: true
+  commonName: sealant internal CA
+  secretName: {{ .Release.Name }}-internal-ca
+  duration: {{ .Values.certManager.caDuration }}
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: {{ .Release.Name }}-selfsigned, kind: ClusterIssuer }
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Release.Name }}-internal-ca
+spec:
+  ca: { secretName: {{ .Release.Name }}-internal-ca }
+---
+{{- end }}
+# Control-plane CLIENT certificate (clientAuth only), issued into the release namespace where the
+# API/worker/gateway mount it. Workspace server certificates are issued per run by the worker with
+# serverAuth only, so a workspace can never present itself as this.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-control-client
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-control-client-tls
+  commonName: sealant-control-plane
+  dnsNames: [sealant-control-plane]
+  usages: [client auth, digital signature]
+  duration: 2160h
+  renewBefore: 360h
+  privateKey: { algorithm: ECDSA, size: 256, rotationPolicy: Always }
+  issuerRef: { name: {{ include "sealant.issuerName" . }}, kind: {{ include "sealant.issuerKind" . }} }
+{{- end }}

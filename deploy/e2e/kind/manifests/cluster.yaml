@@ -1,0 +1,127 @@
+# Everything the Sealant K8s adapter needs in the test cluster, minus the control plane itself
+# (the E2E drives the adapter in-process with a kubeconfig): the workspace namespace with
+# baseline Pod Security, RBAC, the internal CA + control client certificate, the registry, the
+# RWX store claim, and a "store" Pod on the store node that plays Mend (creates the linked
+# worktree on the claim and observes the agent's writes).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sealant
+  labels:
+    # Workspace Pods are baseline-compatible, but the rootless BuildKit Job needs Unconfined
+    # seccomp/AppArmor, which baseline forbids — a namespace that runs BOTH must be privileged
+    # (or point SEALANT_K8S_BUILD_NAMESPACE at a separate privileged namespace).
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mend-store
+  namespace: sealant
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: e2e-rwx
+  resources: { requests: { storage: 2Gi } }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: sealant-workspace, namespace: sealant }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: sealant-build, namespace: sealant }
+automountServiceAccountToken: false
+---
+# The Mend stand-in: git + a shell, pinned to the store node, the claim mounted at the canonical
+# path so `gitdir:` pointers it writes are the same absolute paths workspace Pods see.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: store
+  namespace: sealant
+  labels: { app: store }
+spec:
+  nodeSelector: { sealant.sh/e2e-role: store }
+  automountServiceAccountToken: false
+  containers:
+    - name: store
+      image: alpine/git:v2.47.2
+      command:
+        [
+          "sh",
+          "-c",
+          "git config --global user.email e2e@sealant.sh; git config --global user.name e2e; git
+          config --global --add safe.directory '*'; sleep infinity",
+        ]
+      volumeMounts: [{ name: store, mountPath: /var/lib/mend/store }]
+  volumes:
+    - name: store
+      persistentVolumeClaim: { claimName: mend-store }
+---
+# cert-manager: self-signed bootstrap → internal CA → client certificate for the control plane.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: { name: selfsigned, namespace: sealant }
+spec: { selfSigned: {} }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: sealant-internal-ca, namespace: sealant }
+spec:
+  isCA: true
+  commonName: sealant internal CA
+  secretName: sealant-internal-ca
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: selfsigned, kind: Issuer }
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: { name: sealant-internal, namespace: sealant }
+spec: { ca: { secretName: sealant-internal-ca } }
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata: { name: control-client, namespace: sealant }
+spec:
+  secretName: control-client-tls
+  commonName: sealant-control-plane
+  dnsNames: [sealant-control-plane]
+  usages: [client auth, digital signature]
+  privateKey: { algorithm: ECDSA, size: 256 }
+  issuerRef: { name: sealant-internal, kind: Issuer }
+---
+# zot registry; nodes mirror it via hosts.toml (up.sh), the host pushes through a port-forward.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: sealant-registry, namespace: sealant }
+data:
+  config.json: |
+    { "distSpecVersion": "1.1.1", "storage": { "rootDirectory": "/var/lib/registry" },
+      "http": { "address": "0.0.0.0", "port": "5000", "compat": ["docker2s2"] }, "log": { "level": "info" } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: sealant-registry, namespace: sealant }
+spec:
+  selector: { app: sealant-registry }
+  ports: [{ name: http, port: 5000, targetPort: 5000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: sealant-registry, namespace: sealant }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: sealant-registry } }
+  template:
+    metadata: { labels: { app: sealant-registry } }
+    spec:
+      containers:
+        - name: zot
+          image: ghcr.io/project-zot/zot-minimal:v2.1.15
+          args: [serve, /etc/zot/config.json]
+          ports: [{ containerPort: 5000 }]
+          volumeMounts: [{ name: config, mountPath: /etc/zot }]
+      volumes:
+        - name: config
+          configMap: { name: sealant-registry }

@@ -1,0 +1,92 @@
+# ONE replica: launches are idempotent per run id, but a second worker is untested here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "sealant.component" (dict "root" . "name" "worker") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-worker
+      imagePullSecrets: {{ toYaml .Values.image.pullSecrets | nindent 8 }}
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: {{ include "sealant.image" (dict "root" . "name" "worker") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "sealant.secretEnv" . | nindent 12 }}
+            {{- include "sealant.controlTlsEnv" . | nindent 12 }}
+            - name: DATABASE_URL
+              value: {{ include "sealant.databaseUrl" . | quote }}
+            - name: RABBITMQ_URL
+              value: {{ include "sealant.amqpUrl" . | quote }}
+            - { name: REGISTRY_BASE_URL, value: {{ include "sealant.registryBaseUrl" . | quote }} }
+            - { name: REGISTRY_PUSH_REGISTRY, value: {{ include "sealant.pushRegistry" . | quote }} }
+            - { name: GITHUB_APP_ID, value: {{ .Values.github.appId | quote }} }
+            - { name: DEFAULT_RUNTIME_ADAPTER, value: k8s }
+            - { name: SEALANT_K8S_NAMESPACE, value: {{ include "sealant.workspaceNamespace" . | quote }} }
+            - { name: SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT, value: {{ .Values.workspaces.serviceAccount | quote }} }
+            - { name: SEALANT_K8S_BUILD_SERVICE_ACCOUNT, value: {{ .Values.workspaces.buildServiceAccount | quote }} }
+            - { name: SEALANT_K8S_VOLUME_MAPPINGS, value: {{ include "sealant.volumeMappings" . | quote }} }
+            - { name: SEALANT_K8S_CONTROL_PORT, value: {{ .Values.workspaces.controlPort | quote }} }
+            - { name: SEALANT_K8S_CERT_ISSUER_NAME, value: {{ include "sealant.issuerName" . | quote }} }
+            - { name: SEALANT_K8S_CERT_ISSUER_KIND, value: {{ include "sealant.issuerKind" . | quote }} }
+            - { name: SEALANT_K8S_DEFAULT_CPU_REQUEST, value: {{ .Values.workspaces.resources.requests.cpu | quote }} }
+            - { name: SEALANT_K8S_DEFAULT_MEMORY_REQUEST, value: {{ .Values.workspaces.resources.requests.memory | quote }} }
+            - { name: SEALANT_K8S_DEFAULT_CPU_LIMIT, value: {{ .Values.workspaces.resources.limits.cpu | quote }} }
+            - { name: SEALANT_K8S_DEFAULT_MEMORY_LIMIT, value: {{ .Values.workspaces.resources.limits.memory | quote }} }
+            - { name: SEALANT_K8S_TOPOLOGY_SPREAD, value: {{ .Values.workspaces.topologySpread | quote }} }
+            - { name: SEALANT_K8S_READINESS_TIMEOUT_MS, value: {{ .Values.workspaces.readinessTimeoutMs | quote }} }
+            {{- with .Values.workspaces.priorityClass }}
+            - { name: SEALANT_K8S_WORKSPACE_PRIORITY_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.workspaces.hotPoolPriorityClass }}
+            - { name: SEALANT_K8S_HOT_POOL_PRIORITY_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.workspaces.gvisorRuntimeClass }}
+            - { name: SEALANT_K8S_GVISOR_RUNTIME_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.workspaces.nodeSelector }}
+            - { name: SEALANT_K8S_WORKSPACE_NODE_SELECTOR, value: {{ toJson .Values.workspaces.nodeSelector | quote }} }
+            {{- end }}
+            {{- with .Values.image.pullSecrets }}
+            - { name: SEALANT_K8S_IMAGE_PULL_SECRET, value: {{ (index . 0).name | quote }} }
+            {{- end }}
+            {{- if .Values.workspaces.staging.claimName }}
+            - { name: SEALANT_K8S_STAGING_LOGICAL_ROOT, value: {{ .Values.workspaces.staging.logicalRoot | quote }} }
+            - { name: SEALANT_K8S_STAGING_MOUNT_PATH, value: {{ .Values.workspaces.staging.logicalRoot | quote }} }
+            {{- end }}
+            - { name: SEALANT_K8S_BUILDKIT_IMAGE, value: {{ .Values.workspaces.build.buildkitImage | quote }} }
+            - { name: SEALANT_K8S_BUILD_CPU_REQUEST, value: {{ .Values.workspaces.build.resources.requests.cpu | quote }} }
+            - { name: SEALANT_K8S_BUILD_MEMORY_REQUEST, value: {{ .Values.workspaces.build.resources.requests.memory | quote }} }
+            - { name: SEALANT_K8S_BUILD_CPU_LIMIT, value: {{ .Values.workspaces.build.resources.limits.cpu | quote }} }
+            - { name: SEALANT_K8S_BUILD_MEMORY_LIMIT, value: {{ .Values.workspaces.build.resources.limits.memory | quote }} }
+            - { name: SEALANT_K8S_BUILD_TIMEOUT_MS, value: {{ .Values.workspaces.build.timeoutMs | quote }} }
+            - { name: SEALANT_K8S_BUILD_TTL_SECONDS, value: {{ .Values.workspaces.build.ttlSeconds | quote }} }
+            - { name: SEALANT_K8S_REGISTRY_INSECURE, value: {{ include "sealant.registryInsecure" . | quote }} }
+            - name: SEALANT_MOUNT_ALLOWED_STORE_ROOTS
+              value: {{ (include "sealant.allowedRoots" .) | quote }}
+            {{- range .Values.worker.extraEnv }}
+            - { name: {{ .name | quote }}, value: {{ .value | quote }} }
+            {{- end }}
+          volumeMounts:
+            - { name: control-tls, mountPath: /etc/sealant/control-tls, readOnly: true }
+            {{- if .Values.workspaces.staging.claimName }}
+            - { name: staging, mountPath: {{ .Values.workspaces.staging.logicalRoot }} }
+            {{- end }}
+          resources: {{ toYaml .Values.worker.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+      volumes:
+        - name: control-tls
+          secret: { secretName: {{ .Release.Name }}-control-client-tls }
+        {{- if .Values.workspaces.staging.claimName }}
+        - name: staging
+          persistentVolumeClaim: { claimName: {{ .Values.workspaces.staging.claimName }} }
+        {{- end }}

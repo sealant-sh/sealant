@@ -367,6 +367,8 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_STAGING_MOUNT_PATH: z.string().trim().min(1).optional(),
   SEALANT_K8S_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).optional(),
   SEALANT_K8S_TOPOLOGY_SPREAD: z.stringbool().or(z.boolean()).optional(),
+  /** JSON object of node labels workspace Pods must match. */
+  SEALANT_K8S_WORKSPACE_NODE_SELECTOR: z.string().trim().min(1).optional(),
   /** Development/test only: kubeconfig path instead of in-cluster configuration. */
   SEALANT_K8S_KUBECONFIG: z.string().trim().min(1).optional(),
   // BuildKit Job image builder (defaults derive from the runtime namespace / registry settings).

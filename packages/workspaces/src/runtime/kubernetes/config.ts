@@ -143,6 +143,8 @@ export const kubernetesRuntimeConfigSchema = z.strictObject({
   readinessTimeoutMs: z.number().int().min(1000).default(300_000),
   /** Spread Pods across nodes; `k3s` defaults this off (single-node is common). */
   topologySpread: z.boolean().default(true),
+  /** Pin workspace Pods to a node pool (e.g. `{ "sealant.sh/pool": "workspaces" }`). */
+  nodeSelector: z.record(z.string().min(1), z.string()).default({}),
   /** Development/test only: path to a kubeconfig instead of in-cluster configuration. */
   kubeconfigPath: z.string().trim().min(1).optional(),
   /** Stamped on every object; lets operators see which worker created a resource. */
@@ -184,12 +186,23 @@ export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_STAGING_MOUNT_PATH?: string | undefined;
   readonly SEALANT_K8S_READINESS_TIMEOUT_MS?: number | undefined;
   readonly SEALANT_K8S_TOPOLOGY_SPREAD?: boolean | undefined;
+  readonly SEALANT_K8S_WORKSPACE_NODE_SELECTOR?: string | undefined;
   readonly SEALANT_K8S_KUBECONFIG?: string | undefined;
 }
 
 export class KubernetesRuntimeConfigError extends Error {
   override readonly name = "KubernetesRuntimeConfigError";
 }
+
+const parseJsonObject = (key: string, raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new KubernetesRuntimeConfigError(
+      `${key} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+};
 
 const parseMappings = (raw: string): unknown => {
   try {
@@ -270,6 +283,14 @@ export const kubernetesRuntimeConfigFromEnv = (
     ...(env.SEALANT_K8S_TOPOLOGY_SPREAD === undefined
       ? {}
       : { topologySpread: env.SEALANT_K8S_TOPOLOGY_SPREAD }),
+    ...(env.SEALANT_K8S_WORKSPACE_NODE_SELECTOR === undefined
+      ? {}
+      : {
+          nodeSelector: parseJsonObject(
+            "SEALANT_K8S_WORKSPACE_NODE_SELECTOR",
+            env.SEALANT_K8S_WORKSPACE_NODE_SELECTOR,
+          ),
+        }),
     ...(env.SEALANT_K8S_KUBECONFIG === undefined
       ? {}
       : { kubeconfigPath: env.SEALANT_K8S_KUBECONFIG }),

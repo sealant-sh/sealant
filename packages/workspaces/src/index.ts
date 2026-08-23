@@ -14,4 +14,5 @@ export * from "./worker/harness-credentials-sync-back.js";
 export * from "./worker/process-workspace-build-job.js";
 export * from "./worker/process-workspace-stop.js";
 export * from "./worker/reap-expired-workspaces.js";
+export * from "./worker/reap-orphaned-kubernetes-resources.js";
 export * from "./worker/reap-stale-workspace-build-jobs.js";

@@ -1,0 +1,91 @@
+name: Kubernetes e2e
+
+# The cross-node workspace E2E (design §3, PR 6) plus the existing Docker runtime E2E in one
+# matrix, so a change to the runtime seams is proven against both lowerings.
+#
+# The Kubernetes leg: kind (3 nodes), a generic RWX StorageClass (NFS CSI — deliberately not a
+# vendor driver), cert-manager, an in-cluster registry, and a sealantd built from the ref below
+# (it must carry the WSS frontend, sealant-sh/sealantd#60).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sealantd_ref:
+        description: sealant-sh/sealantd git ref to build the daemon from
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    name: Docker runtime e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Build the baked workspace image (pinned sealantd)
+        run:
+          DOCKER_BUILDKIT=1 pnpm --filter @sealant/workspaces exec tsx
+          scripts/sealantd-build-image.mts
+      - name: Run the Docker sealantd e2e suite
+        env: { SEALANT_E2E_REQUIRE_IMAGE: "1" }
+        run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
+
+  kubernetes:
+    name: Kubernetes cross-node e2e (kind, generic RWX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build sealantd (with the WSS frontend)
+        uses: actions/checkout@v4
+        with:
+          repository: sealant-sh/sealantd
+          ref: ${{ github.event.inputs.sealantd_ref || 'main' }}
+          path: .sealantd
+      - run: docker build -t sealantd:e2e -f .sealantd/docker/Dockerfile .sealantd
+
+      - name: Install kind, kubectl, helm
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+          version: v0.27.0
+
+      - name: Bring the cluster up
+        env: { SEALANTD_IMAGE: sealantd:e2e }
+        # up.sh exports KUBECONFIG only inside its own shell; persist it for the test step,
+        # or the client falls back to in-cluster config on the runner ("Invalid URL").
+        run: |
+          deploy/e2e/kind/up.sh
+          echo "KUBECONFIG=${KUBECONFIG:-$HOME/.kube/config}" >> "$GITHUB_ENV"
+
+      - name: Run the Kubernetes e2e suite
+        env:
+          SEALANT_K8S_E2E: "1"
+          E2E_TLS_DIR: ${{ github.workspace }}/deploy/e2e/kind/.tls
+          SEALANT_SEALANTD_IMAGE: sealant-registry.sealant.svc:5000/sealant/sealantd:e2e
+        run: pnpm --filter @sealant/workspaces test:e2e src/kubernetes
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl -n sealant get pods,svc,secrets,certificates,jobs -o wide || true
+          kubectl -n sealant describe pods || true
+          for p in $(kubectl -n sealant get pods -o name); do echo "== $p"; kubectl -n sealant logs "$p" --all-containers --tail=200 || true; done

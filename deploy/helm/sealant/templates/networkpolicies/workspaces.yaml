@@ -1,0 +1,74 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $wsns := include "sealant.workspaceNamespace" . }}
+# Workspace Pods: default-deny ingress; the control plane (worker, API, SSH gateway) may reach
+# sealantd's WSS port; egress = DNS + allowed in-cluster services + the internet minus private
+# ranges and cloud metadata. This supplements mTLS and session tokens; it does not replace them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-workspace-default-deny
+  namespace: {{ $wsns }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/managed-by: sealant, app.kubernetes.io/component: workspace }
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-workspace-control-ingress
+  namespace: {{ $wsns }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/managed-by: sealant, app.kubernetes.io/component: workspace }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+          podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/component, operator: In, values: [worker, api, ssh-gateway] }
+      ports: [{ protocol: TCP, port: {{ .Values.workspaces.controlPort }} }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-workspace-egress
+  namespace: {{ $wsns }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/managed-by: sealant, app.kubernetes.io/component: workspace }
+  policyTypes: [Egress]
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    # In-cluster services a workspace may call (the Mend session endpoint, ...).
+    {{- range .Values.networkPolicies.workspaceEgressAllow }}
+    - to:
+        - namespaceSelector: {{ toYaml .namespaceSelector | nindent 12 }}
+          {{- with .podSelector }}
+          podSelector: {{ toYaml . | nindent 12 }}
+          {{- end }}
+      ports: [{ protocol: TCP, port: {{ .port }} }]
+    {{- end }}
+    # The image registry (pull by kubelet happens on the node, but `docker`-less tooling may fetch).
+    {{- if .Values.registry.enabled }}
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+          podSelector: { matchLabels: { app.kubernetes.io/component: registry } }
+      ports: [{ protocol: TCP, port: 5000 }]
+    {{- end }}
+    # The internet, minus private ranges and the metadata endpoint. The Kubernetes API is
+    # reachable only via ClusterIP (a private range) or the excluded metadata/IP, so this also
+    # blocks it — and the Pod carries no ServiceAccount token anyway.
+    {{- range .Values.networkPolicies.workspaceEgressCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+            {{- with .except }}
+            except: {{ toYaml . | nindent 14 }}
+            {{- end }}
+    {{- end }}
+{{- end }}

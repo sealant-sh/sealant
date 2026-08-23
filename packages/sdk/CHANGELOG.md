@@ -5,13 +5,12 @@
 ### Minor Changes
 
 - b45e4a4: Per-user identity for products that own their own login.
-
-  - **Service principals.** `SEALANT_SERVICE_KEYS` (API) closes the control plane: every `/v1` request
-    must carry a service key as a bearer (may assert any `ownerUserId`) or, on the session surface, a
-    scoped user access token. Unset keeps the open loopback-only model. Public routes (`/healthz`,
-    `/readyz`, `/openapi.json`, `/docs`) and the gateway routes are unaffected.
-  - **Users endpoint.** `POST /v1/users` upserts a user by email and `GET /v1/users/:userId` reads one
-    — the provisioning path for a product that maps each of its users to a Sealant user.
+  - **Service principals.** `SEALANT_SERVICE_KEYS` (API) closes the control plane: every `/v1`
+    request must carry a service key as a bearer (may assert any `ownerUserId`) or, on the session
+    surface, a scoped user access token. Unset keeps the open loopback-only model. Public routes
+    (`/healthz`, `/readyz`, `/openapi.json`, `/docs`) and the gateway routes are unaffected.
+  - **Users endpoint.** `POST /v1/users` upserts a user by email and `GET /v1/users/:userId` reads
+    one — the provisioning path for a product that maps each of its users to a Sealant user.
   - **Owner scoping on reads.** `GET /v1/workspaces/:id` and the `GET /v1/runs/:id` family accept an
     optional `ownerUserId` query and answer 404 when it does not match; the SDK always sends it,
     closing the by-id reads that previously leaked across owners.
@@ -28,13 +27,13 @@
 
 ### Minor Changes
 
-- 06295a9: Pipe-mode sessions: `workspace.sessions.open(argv, { mode: "pipe" })` (and `POST /v1/sessions` with
-  `mode: "pipe"`) starts the leader with plain stdio pipes and no controlling terminal — the shape for
-  processes that speak a byte protocol over stdin/stdout, such as `codex app-server` or
-  `claude --print --input-format stream-json`. `send` feeds stdin, `output`/`attach` carry stdout
-  byte-exact with the same replay-from-sequence semantics as PTY sessions, stderr is recorded as
-  diagnostics only, and `resize` is rejected. Sessions report `mode`; the default stays `pty`.
-  Requires sealantd ≥ 0.11 in the workspace image.
+- 06295a9: Pipe-mode sessions: `workspace.sessions.open(argv, { mode: "pipe" })` (and
+  `POST /v1/sessions` with `mode: "pipe"`) starts the leader with plain stdio pipes and no
+  controlling terminal — the shape for processes that speak a byte protocol over stdin/stdout, such
+  as `codex app-server` or `claude --print --input-format stream-json`. `send` feeds stdin,
+  `output`/`attach` carry stdout byte-exact with the same replay-from-sequence semantics as PTY
+  sessions, stderr is recorded as diagnostics only, and `resize` is rejected. Sessions report
+  `mode`; the default stays `pty`. Requires sealantd ≥ 0.11 in the workspace image.
 
 ### Patch Changes
 
@@ -45,12 +44,12 @@
 
 ### Patch Changes
 
-- fb27d3f: Workspace images install claude-code with `--allow-scripts=@anthropic-ai/claude-code`: recent npm
-  blocks install scripts by default, and claude-code's postinstall is what links its native binary —
-  without it every `claude` launch died with "claude native binary not installed" once the v0.20.0
-  plan-hash rotation rebuilt images. Codex was unaffected (no install script). Older npm treats the
-  unknown config as a warning; plan hashes rotate once so broken images rebuild. No API surface
-  changes; this release exists to rebuild workspace images.
+- fb27d3f: Workspace images install claude-code with `--allow-scripts=@anthropic-ai/claude-code`:
+  recent npm blocks install scripts by default, and claude-code's postinstall is what links its
+  native binary — without it every `claude` launch died with "claude native binary not installed"
+  once the v0.20.0 plan-hash rotation rebuilt images. Codex was unaffected (no install script).
+  Older npm treats the unknown config as a warning; plan hashes rotate once so broken images
+  rebuild. No API surface changes; this release exists to rebuild workspace images.
 - Updated dependencies [fb27d3f]
   - @sealant/api-contracts@0.20.2
 
@@ -58,11 +57,12 @@
 
 ### Patch Changes
 
-- 4effb57: The api image bakes system CA certificates. The Codex CLI the codex inference engine spawns is a
-  native binary that validates TLS against `/etc/ssl/certs`, which `node:24-bookworm-slim` does not
-  ship — every codex exchange failed with "invalid peer certificate: UnknownIssuer" until the store
-  exists. Node's own TLS (and therefore the claude engine, which runs through the Agent SDK) was never
-  affected. No API surface changes; this release exists to rebuild the image.
+- 4effb57: The api image bakes system CA certificates. The Codex CLI the codex inference engine
+  spawns is a native binary that validates TLS against `/etc/ssl/certs`, which
+  `node:24-bookworm-slim` does not ship — every codex exchange failed with "invalid peer
+  certificate: UnknownIssuer" until the store exists. Node's own TLS (and therefore the claude
+  engine, which runs through the Agent SDK) was never affected. No API surface changes; this release
+  exists to rebuild the image.
 - Updated dependencies [4effb57]
   - @sealant/api-contracts@0.20.1
 
@@ -472,7 +472,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and

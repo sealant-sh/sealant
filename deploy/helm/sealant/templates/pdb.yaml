@@ -1,0 +1,23 @@
+{{- if .Values.podDisruptionBudgets.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-api
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "api") | nindent 6 }}
+{{- if .Values.sshGateway.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-ssh-gateway
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "ssh-gateway") | nindent 6 }}
+{{- end }}
+{{- end }}

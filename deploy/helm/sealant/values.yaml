@@ -1,0 +1,169 @@
+# Sealant on Kubernetes. Defaults are cluster-internal only: no Ingress, no NodePorts beyond the
+# registry (off by default). See apps/docs/contents/guides/kubernetes.md.
+
+image:
+  namespace: ghcr.io/sealant-sh
+  tag: "" # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+  pullSecrets: [] # e.g. [{ name: ghcr-pull }]
+
+# Secrets are referenced, never rendered from values. Create them before installing:
+#   kubectl -n <ns> create secret generic sealant-secrets \
+#     --from-literal=WORKSPACE_SSH_GATEWAY_TOKEN=... --from-literal=BETTER_AUTH_SECRET=... \
+#     --from-literal=SEALANT_CREDENTIALS_KEY=... --from-literal=SEALANT_DB_PASSWORD=... \
+#     --from-literal=SEALANT_RABBITMQ_PASSWORD=...
+secrets:
+  existingSecret: sealant-secrets
+
+postgres:
+  enabled: true # set false and fill externalUrl for a managed database
+  image: postgres:17-alpine
+  storage: 20Gi
+  storageClassName: ""
+  externalUrl: "" # postgresql://user:pass@host:5432/sealant_control_plane
+
+rabbitmq:
+  enabled: true
+  image: rabbitmq:4.2-management
+  externalUrl: "" # amqp://user:pass@host:5672
+
+registry:
+  # The in-cluster zot registry workspace images are pushed to (by BuildKit Jobs) and pulled
+  # from (by kubelet). Plain HTTP inside the cluster; nodes must trust it as an insecure registry
+  # or you point `external` at a TLS registry you already run.
+  enabled: true
+  image: ghcr.io/project-zot/zot-minimal:v2.1.15
+  storage: 50Gi
+  storageClassName: ""
+  external:
+    baseUrl: "" # https://registry.example.com
+    pushRegistry: "" # registry.example.com
+    insecure: false
+
+api:
+  replicas: 1
+  service:
+    type: ClusterIP
+    annotations: {}
+  resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: "2", memory: 2Gi } }
+  corsAllowedOrigins: "*"
+  sshGateway:
+    host: "" # what the UI renders into `ssh` commands (operator-facing address)
+    port: 2222
+
+worker:
+  replicas: 1
+  resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: "2", memory: 2Gi } }
+  # Extra plain env for the worker (e.g. SEALANT_SEALANTD_IMAGE to pin the daemon image the
+  # generated Containerfiles copy from).
+  extraEnv: []
+
+sshGateway:
+  enabled: true
+  replicas: 1
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+  service:
+    type: ClusterIP # LoadBalancer to expose; no public exposure by default
+    annotations: {}
+    port: 2222
+  hostKeyStorage: 1Gi
+  hostKeyStorageClassName: "" # empty = the cluster default StorageClass
+
+web:
+  enabled: true
+  replicas: 1
+  service:
+    type: ClusterIP
+    annotations: {}
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { cpu: "1", memory: 1Gi } }
+  url: http://localhost:3000 # BETTER_AUTH_URL
+  trustedOrigins: http://localhost:3000
+
+github:
+  appId: ""
+  # Private key via the secret's GITHUB_APP_PRIVATE_KEY key (optional).
+
+# ─── Workspaces ────────────────────────────────────────────────────────────────
+workspaces:
+  # Workspace Pods live here. May equal the release namespace; the chart creates the
+  # ServiceAccounts, Role/RoleBinding, the CA issuer and NetworkPolicies in it.
+  namespace: ""
+  createNamespace: false
+  # Pod Security: workspace Pods are baseline-compatible (root user, no privilege), but the
+  # rootless BuildKit Jobs need Unconfined seccomp/AppArmor, which baseline FORBIDS. A namespace
+  # that hosts both must be `privileged`; keep `baseline` only if you point the build side at a
+  # separate privileged namespace (SEALANT_K8S_BUILD_NAMESPACE via worker env).
+  podSecurityEnforce: privileged
+  serviceAccount: sealant-workspace
+  buildServiceAccount: sealant-build
+  controlPort: 7443
+  # Logical root → RWX claim. The Mend store is the typical entry. Claims must exist.
+  volumeMappings:
+    - logicalRoot: /var/lib/mend/store
+      claimName: mend-store
+  # Optional RWX claim for oversize dotfiles archives (also listed in volumeMappings). When the
+  # workspace namespace differs from the release namespace the claim must exist under this NAME
+  # in BOTH — the worker mounts it here, workspace Pods mount subPaths of it there (two PVC
+  # objects onto one RWX volume; Longhorn/NFS-class storage supports that).
+  staging:
+    logicalRoot: ""
+    claimName: ""
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "4", memory: 8Gi }
+  priorityClass: ""
+  hotPoolPriorityClass: ""
+  gvisorRuntimeClass: ""
+  topologySpread: true
+  nodeSelector: {} # e.g. { sealant.sh/pool: workspaces }
+  readinessTimeoutMs: 300000
+  build:
+    buildkitImage: moby/buildkit:v0.20.2-rootless
+    resources:
+      requests: { cpu: "1", memory: 2Gi }
+      limits: { cpu: "4", memory: 8Gi }
+    timeoutMs: 1800000
+    ttlSeconds: 3600
+
+# ─── mTLS between control plane and sealantd (design §D3) ─────────────────────
+certManager:
+  enabled: true
+  # A self-signed bootstrap ClusterIssuer signs the internal CA; the CA ClusterIssuer signs
+  # per-workspace server certificates (serverAuth) and the control-plane client certificate
+  # (clientAuth) — cluster-scoped so the two can live in different namespaces. Set `issuerRef`
+  # to use an issuer you already operate instead.
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+  # Where cert-manager reads ClusterIssuer CA secrets from (its --cluster-resource-namespace).
+  clusterResourceNamespace: cert-manager
+  caDuration: 8760h
+
+# ─── Network policies (supplement mTLS + session tokens; do not replace them) ──
+networkPolicies:
+  enabled: true
+  # Client networks allowed to reach the operator-exposed surfaces (web 3000, API 4000, SSH 2222)
+  # through whatever Service/Ingress you expose. Empty = in-cluster peers only. NOTE: with
+  # `externalTrafficPolicy: Cluster` (the Service default) a cross-node hop SNATs the source to
+  # the CLUSTER'S POD CIDR — include it here, or set externalTrafficPolicy: Local to keep real
+  # client addresses.
+  clientCidrs: []
+  # Egress the workspace may reach besides DNS and the control plane. Coding agents need the
+  # internet; narrow this for air-gapped clusters.
+  workspaceEgressCidrs:
+    - cidr: 0.0.0.0/0
+      except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.169.254/32 # cloud metadata
+  # In-cluster services the workspace may call (the Mend session endpoint, the registry).
+  workspaceEgressAllow:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: mend } }
+      podSelector: { matchLabels: { app.kubernetes.io/name: mend } }
+      port: 3106
+  # Kubernetes API server addresses to deny explicitly (kubernetes.default is cluster-internal).
+  blockApiServer: true
+
+podDisruptionBudgets:
+  enabled: true

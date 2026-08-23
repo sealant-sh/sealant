@@ -1,0 +1,44 @@
+{{- if .Values.rabbitmq.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-rabbitmq
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  selector: {{ include "sealant.component" (dict "root" . "name" "rabbitmq") | nindent 4 }}
+  ports: [{ name: amqp, port: 5672 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-rabbitmq
+  labels: {{ include "sealant.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{ include "sealant.component" (dict "root" . "name" "rabbitmq") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "sealant.component" (dict "root" . "name" "rabbitmq") | nindent 8 }}
+    spec:
+      # The official image's rabbitmq user is uid 999; restricted-PSS-compliant.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: rabbitmq
+          image: {{ .Values.rabbitmq.image }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          env:
+            - { name: RABBITMQ_DEFAULT_USER, value: sealant }
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: SEALANT_RABBITMQ_PASSWORD } }
+          ports: [{ containerPort: 5672, name: amqp }]
+          readinessProbe:
+            exec: { command: [rabbitmq-diagnostics, -q, ping] }
+            periodSeconds: 15
+{{- end }}
