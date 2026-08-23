@@ -70,7 +70,11 @@ jobs:
 
       - name: Bring the cluster up
         env: { SEALANTD_IMAGE: sealantd:e2e }
-        run: deploy/e2e/kind/up.sh
+        # up.sh exports KUBECONFIG only inside its own shell; persist it for the test step,
+        # or the client falls back to in-cluster config on the runner ("Invalid URL").
+        run: |
+          deploy/e2e/kind/up.sh
+          echo "KUBECONFIG=${KUBECONFIG:-$HOME/.kube/config}" >> "$GITHUB_ENV"
 
       - name: Run the Kubernetes e2e suite
         env:
