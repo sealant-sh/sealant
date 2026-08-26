@@ -14,6 +14,7 @@ import {
   ConnectedAccountRepo,
   ConnectedAccountRepoLive,
   type DB,
+  type RunExecClaim,
   type RunFileChange,
   RunRepo,
   RunRepoLive,
@@ -265,7 +266,28 @@ const produceExecRun = (
     yield* runs.markRunCompleted({ id: runId, exitCode: lastExitCode, diff, changedFiles });
   });
 
-/** The Effect pipeline: resolve container, mark running, exec+capture, diff, mark terminal. */
+/**
+ * Pure dispatch on the claim outcome. The queue is at-least-once: a redelivered job must never
+ * re-run the harness. `already-running` means a previous delivery died mid-run (worker crash,
+ * AMQP drop) or is still executing elsewhere — either way this delivery cannot safely execute,
+ * so the honest move is to fail the run with a message rather than run it twice or strand it.
+ */
+export const runExecClaimAction = (
+  claim: RunExecClaim,
+): "execute" | "skip-terminal" | "fail-already-running" | "fail-missing" => {
+  switch (claim.outcome) {
+    case "claimed":
+      return "execute";
+    case "terminal":
+      return "skip-terminal";
+    case "already-running":
+      return "fail-already-running";
+    case "not-found":
+      return "fail-missing";
+  }
+};
+
+/** The Effect pipeline: claim the run, resolve container, exec+capture, diff, mark terminal. */
 export const processRunExecJobEffect = (
   options: Omit<ProcessRunExecJobOptions, "db">,
 ): Effect.Effect<
@@ -287,12 +309,44 @@ export const processRunExecJobEffect = (
         new Error(`Run-exec job for ${options.runId} must carry exactly one framing.`),
       );
     }
+    const claim = yield* runs.claimRunForExec({ id: options.runId });
+    const action = runExecClaimAction(claim);
+    if (action === "skip-terminal") {
+      yield* Effect.logInfo(
+        `Run-exec job for ${options.runId} redelivered after the run reached ${
+          claim.outcome === "not-found" ? "an unknown state" : claim.run.status
+        }; nothing to do.`,
+      );
+      return;
+    }
+    if (action === "fail-missing") {
+      return yield* Effect.fail(new Error(`Run-exec job for unknown run ${options.runId}.`));
+    }
+    if (action === "fail-already-running") {
+      yield* runs
+        .markRunFailed({
+          id: options.runId,
+          errorMessage:
+            "Run-exec job was redelivered while the run was already marked running: a previous delivery died mid-run or is still executing. Failed rather than executed twice.",
+        })
+        .pipe(Effect.ignore);
+      return;
+    }
+
+    // From here the run is claimed: every exit path must move it off "running".
     const { target, attemptId, launchCredentialInjections } = yield* resolveRuntimeTarget(
       options.runId,
       options.targetOptions ?? {},
+    ).pipe(
+      Effect.onError(() =>
+        runs
+          .markRunFailed({
+            id: options.runId,
+            errorMessage: "Run execution failed before the workspace runtime was resolved.",
+          })
+          .pipe(Effect.ignore),
+      ),
     );
-
-    yield* runs.markRunRunning({ id: options.runId });
 
     const produce =
       commands !== undefined

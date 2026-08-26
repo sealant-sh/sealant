@@ -346,24 +346,28 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
             Effect.gen(function* () {
               const now = requiredDate(input.now);
               const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
+              const claimable = or(
+                and(
+                  eq(workspaceBuildJobs.status, "queued"),
+                  lte(workspaceBuildJobs.availableAt, now),
+                ),
+                and(
+                  eq(workspaceBuildJobs.status, "running"),
+                  lte(workspaceBuildJobs.leaseExpiresAt, now),
+                ),
+              );
 
+              // SKIP LOCKED + the claimable guard repeated in the UPDATE: two workers claiming
+              // concurrently must not both win the same job (under read committed the plain
+              // SELECT-then-UPDATE both saw the row as claimable), and a worker must not block
+              // on — or return empty because of — a row a sibling is mid-claim on.
               const [candidate] = yield* tx
                 .select()
                 .from(workspaceBuildJobs)
-                .where(
-                  or(
-                    and(
-                      eq(workspaceBuildJobs.status, "queued"),
-                      lte(workspaceBuildJobs.availableAt, now),
-                    ),
-                    and(
-                      eq(workspaceBuildJobs.status, "running"),
-                      lte(workspaceBuildJobs.leaseExpiresAt, now),
-                    ),
-                  ),
-                )
+                .where(claimable)
                 .orderBy(asc(workspaceBuildJobs.availableAt), asc(workspaceBuildJobs.createdAt))
-                .limit(1);
+                .limit(1)
+                .for("update", { skipLocked: true });
 
               if (candidate === undefined) {
                 return null;
@@ -376,10 +380,10 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                   workerId: input.workerId,
                   claimedAt: now,
                   leaseExpiresAt,
-                  startedAt: candidate.startedAt ?? now,
-                  attemptCount: candidate.attemptCount + 1,
+                  startedAt: sql`coalesce(${workspaceBuildJobs.startedAt}, ${now})`,
+                  attemptCount: sql`${workspaceBuildJobs.attemptCount} + 1`,
                 })
-                .where(eq(workspaceBuildJobs.id, candidate.id))
+                .where(and(eq(workspaceBuildJobs.id, candidate.id), claimable))
                 .returning();
 
               return claimed ?? null;
@@ -390,48 +394,38 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
       claimJobById: (input) =>
         withWorkspaceBuildJobRepoError(
           "claimJobById",
-          db.transaction((tx) =>
-            Effect.gen(function* () {
-              const now = requiredDate(input.now);
-              const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
+          Effect.gen(function* () {
+            const now = requiredDate(input.now);
+            const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
 
-              const [candidate] = yield* tx
-                .select()
-                .from(workspaceBuildJobs)
-                .where(
-                  and(
-                    eq(workspaceBuildJobs.id, input.id),
-                    or(
-                      eq(workspaceBuildJobs.status, "queued"),
-                      and(
-                        eq(workspaceBuildJobs.status, "running"),
-                        lte(workspaceBuildJobs.leaseExpiresAt, now),
-                      ),
+            // One guarded UPDATE: the claimable predicate lives in the WHERE so a concurrent
+            // claimer's committed win makes this a no-op instead of a double claim.
+            const [claimed] = yield* db
+              .update(workspaceBuildJobs)
+              .set({
+                status: "running",
+                workerId: input.workerId,
+                claimedAt: now,
+                leaseExpiresAt,
+                startedAt: sql`coalesce(${workspaceBuildJobs.startedAt}, ${now})`,
+                attemptCount: sql`${workspaceBuildJobs.attemptCount} + 1`,
+              })
+              .where(
+                and(
+                  eq(workspaceBuildJobs.id, input.id),
+                  or(
+                    eq(workspaceBuildJobs.status, "queued"),
+                    and(
+                      eq(workspaceBuildJobs.status, "running"),
+                      lte(workspaceBuildJobs.leaseExpiresAt, now),
                     ),
                   ),
-                )
-                .limit(1);
+                ),
+              )
+              .returning();
 
-              if (candidate === undefined) {
-                return null;
-              }
-
-              const [claimed] = yield* tx
-                .update(workspaceBuildJobs)
-                .set({
-                  status: "running",
-                  workerId: input.workerId,
-                  claimedAt: now,
-                  leaseExpiresAt,
-                  startedAt: candidate.startedAt ?? now,
-                  attemptCount: candidate.attemptCount + 1,
-                })
-                .where(eq(workspaceBuildJobs.id, candidate.id))
-                .returning();
-
-              return claimed ?? null;
-            }),
-          ),
+            return claimed ?? null;
+          }),
         ),
 
       markJobRunning: (input) =>

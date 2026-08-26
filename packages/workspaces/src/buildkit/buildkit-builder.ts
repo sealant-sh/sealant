@@ -319,7 +319,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
  * development: bake an unreleased local sealantd build (e.g. `sealantd-dev:mount`) into workspace
  * images without touching the released pin.
  */
-const sealantdImageReference =
+export const sealantdImageReference =
   process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.12.0";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
