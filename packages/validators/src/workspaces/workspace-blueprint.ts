@@ -254,6 +254,44 @@ export const workspaceUserEnvSchema = z
     }
   });
 
+/**
+ * A Kubernetes object name (DNS-1123 subdomain). These are OBJECT names, not env names — a
+ * cluster env source points at a whole Secret/ConfigMap; the platform worker resolves its keys
+ * at workspace creation (cluster-env-sources design).
+ */
+const clusterObjectNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .regex(/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/, "must be a DNS-1123 subdomain name");
+
+/**
+ * One cluster env source: a Kubernetes Secret or ConfigMap in the platform's workspaces
+ * namespace, opted in for workspace use with the `sealant.sh/workspace-env: "true"` label.
+ * Ordered list, last wins across kinds. Resolved by the WORKER at workspace creation (never
+ * kubelet `envFrom`): ConfigMap keys join the plain env list ahead of caller env, Secret keys
+ * ride the transient secret channel as its lowest-precedence layer — so explicit env and
+ * platform/channel names always win, and secret values seed the output redactor. Kubernetes
+ * runtimes only: every other runtime refuses at create time (`runtime-env-references-unsupported`).
+ */
+export const workspaceEnvFromSourceSchema = z.strictObject({
+  kind: z.enum(["secret", "configmap"]),
+  name: clusterObjectNameSchema,
+});
+
+export const workspaceSpecKubernetesSchema = z
+  .strictObject({
+    /**
+     * ServiceAccount the workspace Pod runs under — an explicit TRUST GRANT (IRSA/Workload
+     * Identity hands the session agent that role for the whole session). Honored only against
+     * the install's allowlist (`SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS`); names outside
+     * it fail the launch readable. `automountServiceAccountToken` stays false regardless.
+     */
+    serviceAccountName: clusterObjectNameSchema.optional(),
+  })
+  .prefault({});
+
 export const workspaceSpecRuntimeSchema = z
   .strictObject({
     env: z.record(z.string(), z.string()).default({}),
@@ -265,8 +303,12 @@ export const workspaceSpecRuntimeSchema = z
     persistence: workspacePersistenceSchema.default("ephemeral"),
     ociRuntime: workspaceOciRuntimeSchema.default("runc"),
     network: workspaceSpecNetworkSchema.prefault({}),
+    envFrom: z.array(workspaceEnvFromSourceSchema).max(16).default([]),
+    kubernetes: workspaceSpecKubernetesSchema,
   })
   .prefault({});
+
+export type WorkspaceEnvFromSource = z.infer<typeof workspaceEnvFromSourceSchema>;
 
 export const workspaceTargetOsSchema = z
   .strictObject({

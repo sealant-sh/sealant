@@ -1362,3 +1362,25 @@ describe("DockerRuntimeAdapter", () => {
     );
   });
 });
+
+describe("cluster env references belt", () => {
+  it("docker refuses runtime.envFrom / kubernetes.serviceAccountName", () => {
+    const adapter = new DockerRuntimeAdapter({});
+    const blueprint = createBlueprint({
+      runtime: { kubernetes: { serviceAccountName: "dev-sa" } },
+    });
+    expect(adapter.supports(parseRuntimeAdapterSupportInput({ blueprint }))).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+    });
+    const withEnvFrom = createBlueprint({
+      runtime: { envFrom: [{ kind: "secret", name: "app-env" }] },
+    });
+    expect(
+      adapter.supports(parseRuntimeAdapterSupportInput({ blueprint: withEnvFrom })),
+    ).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+    });
+  });
+});

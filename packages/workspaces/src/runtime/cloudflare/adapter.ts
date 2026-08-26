@@ -88,6 +88,17 @@ export const supportForCloudflare = (input: RuntimeAdapterSupportInput): Runtime
         "A mount workspace source names a host path no Cloudflare sandbox can see; use a git source (the co-located store model does not extend to this runtime).",
     };
   }
+  if (
+    input.blueprint.runtime.envFrom.length > 0 ||
+    input.blueprint.runtime.kubernetes.serviceAccountName !== undefined
+  ) {
+    return {
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message:
+        "Cluster env references (runtime.envFrom, kubernetes.serviceAccountName) resolve only on Kubernetes runtimes.",
+    };
+  }
   if (input.blueprint.sources.mounts.length > 0) {
     return {
       supported: false,

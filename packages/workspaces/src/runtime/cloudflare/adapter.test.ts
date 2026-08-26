@@ -82,6 +82,20 @@ describe("supportForCloudflare", () => {
       reason: "unsupported-runtime-requirement",
     });
   });
+
+  it("rejects cluster env references (Kubernetes-only)", () => {
+    expect(
+      supportForCloudflare({
+        blueprint: {
+          ...cases.gitSource.blueprint,
+          runtime: {
+            ...cases.gitSource.blueprint.runtime,
+            envFrom: [{ kind: "secret", name: "app-env" }],
+          },
+        },
+      }),
+    ).toMatchObject({ supported: false, reason: "unsupported-runtime-requirement" });
+  });
 });
 
 describe("CloudflareRuntimeAdapter.launch", () => {

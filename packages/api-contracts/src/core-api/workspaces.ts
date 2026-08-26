@@ -321,6 +321,23 @@ export class WorkspaceBadRequestError extends Schema.TaggedErrorClass<WorkspaceB
   { httpApiStatus: 400 },
 ) {}
 
+/**
+ * Kubernetes-only create-time inputs (cluster env sources `runtime.envFrom`, a workspace
+ * `kubernetes.serviceAccountName`) on a deployment whose workspaces do not run on Kubernetes.
+ * Refused synchronously at POST /v1/workspaces — no workspace row, no build job, no failure
+ * minutes later. The stable `code` doubles as the SDK consumer's capability probe: mapping this
+ * code is how a caller learns the install cannot resolve cluster bindings, instead of trusting a
+ * config flag that can lie.
+ */
+export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.TaggedErrorClass<WorkspaceRuntimeEnvReferencesUnsupportedError>()(
+  "WorkspaceRuntimeEnvReferencesUnsupportedError",
+  {
+    message: Schema.String,
+    code: Schema.Literals(["runtime-env-references-unsupported"]),
+  },
+  { httpApiStatus: 422 },
+) {}
+
 export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<WorkspaceUnauthorizedError>()(
   "WorkspaceUnauthorizedError",
   {
@@ -387,6 +404,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       success: createWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
       error: [
         WorkspaceBadRequestError,
+        WorkspaceRuntimeEnvReferencesUnsupportedError,
         WorkspaceForbiddenError,
         WorkspaceNotFoundError,
         // Selected connected account exists but is not usable (status "invalid").

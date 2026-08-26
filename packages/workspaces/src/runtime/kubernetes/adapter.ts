@@ -190,6 +190,17 @@ export const supportForKubernetes = (
         "Workspace-scoped Docker (tooling.services.docker) is not available on Kubernetes yet; it ships as a separate DinD sidecar capability.",
     };
   }
+  if (
+    input.blueprint.runtime.envFrom.length > 0 ||
+    input.blueprint.runtime.kubernetes.serviceAccountName !== undefined
+  ) {
+    return {
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+      message:
+        "Cluster env references are not resolved by this platform build yet; the worker-side resolution ships in the next release.",
+    };
+  }
   if (input.blueprint.runtime.ociRuntime === "runsc" && config.gvisorRuntimeClass === undefined) {
     return {
       supported: false,

@@ -264,13 +264,24 @@ const addControlClientTlsIssue = (input: ControlClientTlsEnv, ctx: z.RefinementC
   }
 };
 
+/**
+ * The install's default runtime family, shared by API and worker. The API needs it for the
+ * create-time refusal of Kubernetes-only requests (cluster env sources, workspace service
+ * accounts) on installs whose workspaces run elsewhere; the worker needs it for adapter
+ * selection. Deployments set the SAME value on both processes.
+ */
+export const defaultRuntimeAdapterEnvSchema = z.object({
+  DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(appCoreEnvSchema)
   .merge(credentialsEnvSchema)
   .merge(servicePrincipalsEnvSchema)
   .merge(workspaceLifecycleEnvSchema)
-  .merge(controlClientTlsEnvSchema);
+  .merge(controlClientTlsEnvSchema)
+  .merge(defaultRuntimeAdapterEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
@@ -322,7 +333,6 @@ export const parseAppEnv = (input: NodeJS.ProcessEnv): AppEnv => {
   return resolveAppGitHubPrivateKey(appEnvSchema.parse(runtimeEnv));
 };
 
-const runtimeAdapterIdEnvSchema = runtimeAdapterIdSchema;
 const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
@@ -333,7 +343,6 @@ export const workerRuntimeEnvSchema = z.object({
   // NO Docker access. Leave unset to keep the universal docker-exec reach. Must be a host path shared
   // (same path) into both the worker (rw) and the ssh-gateway (ro).
   WORKSPACE_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
-  DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
   // Whether this worker registers the Docker adapter at all. Disable on deployments whose
   // workers have no Docker daemon (Kubernetes Pods, hosted runtimes) so "docker" cannot be
   // reached through prefer-fallback and the worker never assumes a socket exists.
@@ -418,6 +427,7 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(githubAppEnvSchema)
   .merge(credentialsEnvSchema)
   .merge(workerRuntimeEnvSchema)
+  .merge(defaultRuntimeAdapterEnvSchema)
   .merge(controlClientTlsEnvSchema)
   .merge(kubernetesRuntimeEnvSchema)
   .merge(cloudflareRuntimeEnvSchema);

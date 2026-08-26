@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
-import { KubernetesRuntimeAdapter, type ControlChannel } from "./adapter.js";
+import { KubernetesRuntimeAdapter, supportForKubernetes, type ControlChannel } from "./adapter.js";
 import type { CreateOutcome, DeleteOutcome, KubernetesApi } from "./api.js";
 import { kubernetesRuntimeConfigSchema, type KubernetesRuntimeConfig } from "./config.js";
 import type { CertificateObject } from "./manifests.js";
@@ -338,5 +338,32 @@ describe("KubernetesRuntimeAdapter", () => {
   it("needs a run id for deterministic names", async () => {
     const adapter = adapterFor(fakeCluster(), controlChannel());
     await expect(adapter.launch({ ...launchInput, runId: undefined })).rejects.toThrow(/run id/);
+  });
+});
+
+describe("cluster env references belt (until worker-side resolution ships)", () => {
+  it("refuses runtime.envFrom and kubernetes.serviceAccountName with an honest message", () => {
+    const withEnvFrom = {
+      ...cases.gitSource.blueprint,
+      runtime: {
+        ...cases.gitSource.blueprint.runtime,
+        envFrom: [{ kind: "secret" as const, name: "app-env" }],
+      },
+    };
+    expect(supportForKubernetes("k8s", config, { blueprint: withEnvFrom })).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+    });
+    const withServiceAccount = {
+      ...cases.gitSource.blueprint,
+      runtime: {
+        ...cases.gitSource.blueprint.runtime,
+        kubernetes: { serviceAccountName: "dev-sa" },
+      },
+    };
+    expect(supportForKubernetes("k8s", config, { blueprint: withServiceAccount })).toMatchObject({
+      supported: false,
+      reason: "unsupported-runtime-requirement",
+    });
   });
 });

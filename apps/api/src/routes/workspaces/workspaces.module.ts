@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import {
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
+  WorkspaceRuntimeEnvReferencesUnsupportedError,
   WorkspaceConflictError,
   WorkspaceForbiddenError,
   WorkspaceInternalServerError,
@@ -1169,6 +1170,40 @@ const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string) => {
   });
 };
 
+/**
+ * Pure create-time gate for Kubernetes-only requests (cluster-env-sources design): cluster env
+ * sources and a workspace service account only resolve where workspaces run as Pods. The refusal
+ * happens HERE, synchronously — no workspace row, no build job, no failure minutes later — and
+ * the adapters keep their own refusal as belt. Returns the refusal message naming every
+ * unresolvable input, or null when the request is fine.
+ */
+export const runtimeEnvReferencesRefusal = (
+  spec: {
+    readonly runtime: {
+      readonly envFrom: readonly { readonly kind: string; readonly name: string }[];
+      readonly kubernetes: { readonly serviceAccountName?: string | undefined };
+    };
+    readonly target: { readonly runtime: { readonly family: string } };
+  },
+  defaultAdapterFamily: string,
+): string | null => {
+  const bindings = spec.runtime.envFrom;
+  const serviceAccount = spec.runtime.kubernetes.serviceAccountName;
+  if (bindings.length === 0 && serviceAccount === undefined) {
+    return null;
+  }
+  const family =
+    spec.target.runtime.family === "auto" ? defaultAdapterFamily : spec.target.runtime.family;
+  if (family === "k8s" || family === "k3s") {
+    return null;
+  }
+  const names = [
+    ...bindings.map((binding) => `${binding.kind}/${binding.name}`),
+    ...(serviceAccount === undefined ? [] : [`serviceAccount ${serviceAccount}`]),
+  ].join(", ");
+  return `This deployment runs workspaces on the '${family}' runtime, which cannot resolve cluster env references: ${names}. Remove them, or run against a Kubernetes deployment.`;
+};
+
 export const createWorkspace = (input: {
   readonly payload: CreateWorkspaceRequest;
   readonly headers: CreateWorkspaceHeaders;
@@ -1191,6 +1226,17 @@ export const createWorkspace = (input: {
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+
+    const envReferencesRefusal = runtimeEnvReferencesRefusal(
+      parsedSpec,
+      env.DEFAULT_RUNTIME_ADAPTER,
+    );
+    if (envReferencesRefusal !== null) {
+      return yield* new WorkspaceRuntimeEnvReferencesUnsupportedError({
+        message: envReferencesRefusal,
+        code: "runtime-env-references-unsupported",
+      });
+    }
 
     // Validate BEFORE the selection resolvers so what we check is exactly what the caller sent;
     // the refs the resolvers mint afterwards are server-owned.

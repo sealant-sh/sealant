@@ -259,6 +259,8 @@ const createWorkspaceBuildSpec = (
       workspaceRoot: "/workspace",
       workingDirectory: "/workspace/repo",
       persistence: "ephemeral",
+      envFrom: [],
+      kubernetes: {},
       ociRuntime: "runc",
       network: {
         outbound: true,
