@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { newWorkspaceSchema } from "../workspaces/payloads.js";
+import { runtimeAdapterIdSchema } from "../workspaces/runtime-adapter-ids.js";
 
 export const workspaceAttemptTriggerTypeValues = ["manual", "schedule", "api", "retry"] as const;
 
@@ -65,7 +66,7 @@ export const restartWorkspaceResponseSchema = z.object({
 });
 
 export const workspaceRuntimeSchema = z.object({
-  adapter: z.enum(["docker", "k8s", "k3s"]),
+  adapter: runtimeAdapterIdSchema,
   resourceId: z.string(),
   reference: z.string(),
   status: z.enum(["pending", "running", "ready", "failed", "stopped"]),
@@ -76,7 +77,7 @@ export const workspaceSshTargetSchema = z.object({
   workspaceId: z.string(),
   attemptId: z.string(),
   runtime: z.object({
-    adapter: z.enum(["docker", "k8s", "k3s"]),
+    adapter: runtimeAdapterIdSchema,
     resourceId: z.string(),
     reference: z.string(),
     status: z.enum(["pending", "running", "ready", "failed", "stopped"]),

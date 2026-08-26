@@ -1,3 +1,4 @@
+import type { RuntimeAdapterId } from "@sealant/validators";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
@@ -14,7 +15,7 @@ import {
 export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly runId: string;
   readonly status: WorkspaceRuntimeInstanceStatus;
-  readonly adapter?: "docker" | "k8s" | "k3s";
+  readonly adapter?: RuntimeAdapterId;
   readonly resourceId?: string;
   readonly reference?: string;
   readonly endpoint?: string;

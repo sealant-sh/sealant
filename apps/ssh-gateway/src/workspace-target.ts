@@ -1,3 +1,4 @@
+import { runtimeAdapterIdSchema } from "@sealant/validators";
 import {
   describeUnaddressableRuntimeInstance,
   sealantTargetForRuntimeInstance,
@@ -25,7 +26,7 @@ const workspaceSshTargetSchema = z.object({
   workspaceId: z.string().trim().min(1),
   attemptId: z.string().trim().min(1),
   runtime: z.object({
-    adapter: z.enum(["docker", "k8s", "k3s"]),
+    adapter: runtimeAdapterIdSchema,
     resourceId: z.string().trim().min(1),
     reference: z.string().trim().min(1),
     status: z.enum(["pending", "running", "ready", "failed", "stopped"]),

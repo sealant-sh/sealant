@@ -16,7 +16,7 @@ export const workspaceStatusSchema = Schema.Literals([
 export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
 export const workspaceRuntimeSchema = Schema.Struct({
-  adapter: Schema.Literals(["docker", "k8s", "k3s"]),
+  adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare"]),
   resourceId: NonEmptyString,
   reference: NonEmptyString,
   status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
@@ -28,7 +28,7 @@ export const workspaceSshTargetSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   attemptId: NonEmptyString,
   runtime: Schema.Struct({
-    adapter: Schema.Literals(["docker", "k8s", "k3s"]),
+    adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare"]),
     resourceId: NonEmptyString,
     reference: NonEmptyString,
     status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),

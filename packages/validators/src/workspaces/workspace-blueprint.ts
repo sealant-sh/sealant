@@ -4,6 +4,8 @@ import {
 } from "@sealant/api-contracts/workspace-environment";
 import { z } from "zod";
 
+import { runtimeAdapterIds } from "./runtime-adapter-ids.js";
+
 export const workspaceBlueprintVersion = "1" as const;
 
 export const workspaceSourceProviderSchema = z.enum(["github", "gitlab", "generic"]);
@@ -33,7 +35,7 @@ export const workspaceTargetOsFamilySchema = z.enum([
   "custom",
 ]);
 export const workspaceTargetOsModeSchema = z.enum(["prefer", "require"]);
-export const workspaceTargetRuntimeFamilySchema = z.enum(["auto", "docker", "k8s", "k3s"]);
+export const workspaceTargetRuntimeFamilySchema = z.enum(["auto", ...runtimeAdapterIds]);
 export const workspaceTargetRuntimeModeSchema = z.enum(["prefer", "require"]);
 
 const nonEmptyStringSchema = z.string().trim().min(1);

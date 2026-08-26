@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 import { osBuilderCompileResultSchema, type OsBuilderCompileResult } from "./builder.js";
+import { runtimeAdapterIdSchema } from "./runtime-adapter-ids.js";
 import { workspaceBlueprintSchema, type WorkspaceBlueprint } from "./workspace-blueprint.js";
 
 const runtimeAdapterLaunchResultSchema = z.strictObject({
-  adapter: z.enum(["docker", "k8s", "k3s"]),
+  adapter: runtimeAdapterIdSchema,
   resourceId: z.string().trim().min(1),
   reference: z.string().trim().min(1),
   status: z.enum(["pending", "running"]),

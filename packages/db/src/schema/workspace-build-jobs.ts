@@ -1,4 +1,4 @@
-import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
+import { runtimeAdapterIds, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
 import {
   index,
   integer,
@@ -110,7 +110,7 @@ export const workspaceRuntimeInstances = pgTable(
       .primaryKey()
       .references(() => workspaceAttempts.id, { onDelete: "cascade" }),
     status: text({ enum: workspaceRuntimeInstanceStatusValues }).notNull().default("pending"),
-    adapter: text({ enum: ["docker", "k8s", "k3s"] }),
+    adapter: text({ enum: runtimeAdapterIds }),
     resourceId: text("resource_id"),
     // Null on rows written before this column existed (or before launch succeeded): sync-backs
     // treat null as "no credential was file-injected here".

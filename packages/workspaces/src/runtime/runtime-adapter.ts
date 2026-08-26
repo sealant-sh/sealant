@@ -1,9 +1,11 @@
-import { newWorkspaceSchema } from "@sealant/validators";
+import { newWorkspaceSchema, runtimeAdapterIdSchema } from "@sealant/validators";
 import { z } from "zod";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
 
-export const runtimeAdapterIdSchema = z.enum(["docker", "k8s", "k3s"]);
+// The id list lives in @sealant/validators (the one home); re-exported here so runtime code
+// keeps importing it from the adapter seam.
+export { runtimeAdapterIdSchema, runtimeAdapterIds } from "@sealant/validators";
 
 export const runtimeAdapterSupportFailureReasonSchema = z.enum([
   "unsupported-runtime",

@@ -117,22 +117,28 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           registryClient,
         });
 
-  const runtimeAdapters = [
-    new DockerRuntimeAdapter({
-      dockerSocketPath: env.DOCKER_SOCKET_PATH,
-      sshBindHost: env.DEFAULT_SSH_BIND_HOST,
-      sshEndpointExposureStrategy: env.DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY,
-      // §2.2: when set, workspaces expose their control socket on the host so the gateway reaches them
-      // directly (unix://) and needs no Docker socket.
-      ...(env.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
-        ? {}
-        : { controlSocketHostDir: env.WORKSPACE_CONTROL_SOCKET_HOST_DIR }),
-      ...(env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS === undefined
-        ? {}
-        : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
-    }),
-    ...kubernetesAdapters,
-  ];
+  // The Docker adapter exists only where a Docker daemon does; on daemon-less deployments
+  // (Kubernetes, hosted) DOCKER_RUNTIME_ENABLED=false keeps "docker" out of the adapter set so
+  // selection answers with a readable "unsupported-runtime" instead of a failed socket call.
+  const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
+    ? []
+    : [
+        new DockerRuntimeAdapter({
+          dockerSocketPath: env.DOCKER_SOCKET_PATH,
+          sshBindHost: env.DEFAULT_SSH_BIND_HOST,
+          sshEndpointExposureStrategy: env.DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY,
+          // §2.2: when set, workspaces expose their control socket on the host so the gateway reaches them
+          // directly (unix://) and needs no Docker socket.
+          ...(env.WORKSPACE_CONTROL_SOCKET_HOST_DIR === undefined
+            ? {}
+            : { controlSocketHostDir: env.WORKSPACE_CONTROL_SOCKET_HOST_DIR }),
+          ...(env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS === undefined
+            ? {}
+            : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
+        }),
+      ];
+
+  const runtimeAdapters = [...dockerAdapters, ...kubernetesAdapters];
 
   const consumer = await consumeWorkspaceBuildJobs({
     connectionUrl: env.RABBITMQ_URL,
