@@ -15,6 +15,7 @@
     "@sealant/runtime-client": "^0.6.0",
     "@sealant/runtime-protocol": "^0.6.0",
     "@sealant/validators": "workspace:*",
+    "@sealant/workspaces": "workspace:*",
     "ssh2": "^1.17.0",
     "ws": "catalog:",
     "zod": "catalog:"

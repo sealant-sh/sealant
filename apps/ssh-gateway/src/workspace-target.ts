@@ -1,6 +1,10 @@
+import {
+  describeUnaddressableRuntimeInstance,
+  sealantTargetForRuntimeInstance,
+  type SealantTarget,
+  type SealantTargetDerivationOptions,
+} from "@sealant/workspaces";
 import { z } from "zod";
-
-import type { ControlTarget, WebSocketClientTls } from "./control-transport.js";
 
 /*
 Routing + per-workspace authorization resolution (gateway-spec §3.4).
@@ -9,6 +13,10 @@ The gateway resolves a *control target* (how to reach a workspace's sealantd con
 API — no longer an `ssh://` endpoint to an inner sshd. The username (`ws-<id>`) is only a routing
 hint; the real per-workspace gate is the API, which authorizes the *principal* (the client key's owner)
 against the workspace before returning a target.
+
+Target derivation and the transport itself live in `@sealant/workspaces` (`sealantd/target.ts`,
+`sealantd/plain-transport.ts`) — one home per concern, shared with the worker and API, so a new
+runtime family is added there once and the gateway follows for free.
 */
 
 // Exact response contract from API route GET /v1/workspaces/{workspaceId}/ssh-target.
@@ -31,87 +39,25 @@ const messageResponseSchema = z.object({
 
 export type WorkspaceSshTarget = z.infer<typeof workspaceSshTargetSchema>;
 
-/** Absolute path of the daemon control socket inside a workspace container. */
-export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
-
-// We route users to workspaces through usernames such as `ws-<workspaceId>`.
-// This parser extracts the workspace id and applies a conservative character policy
-// to avoid passing unexpected strings into downstream routing.
-export const parseWorkspaceIdFromUsername = (
-  username: string,
-  prefix: string,
-): string | undefined => {
-  const normalizedPrefix = prefix.trim();
-  const normalizedUsername = username.trim();
-  const prefixToken = `${normalizedPrefix}-`;
-
-  if (
-    normalizedPrefix.length === 0 ||
-    normalizedUsername.length === 0 ||
-    !normalizedUsername.startsWith(prefixToken)
-  ) {
-    return undefined;
-  }
-
-  const workspaceId = normalizedUsername.slice(prefixToken.length).trim();
-
-  // Tight character allowlist to avoid weird routing edge cases.
-  // Workspace IDs in this system are UUID-like so this is intentionally restrictive.
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(workspaceId)) {
-    return undefined;
-  }
-
-  return workspaceId;
-};
-
-const UNIX_ENDPOINT_PREFIX = "unix://";
-const WSS_ENDPOINT_PREFIX = "wss://";
-
 /** What the gateway process has for reaching each runtime family. */
-export interface ControlTargetOptions {
-  /** Client mTLS material for `wss://` endpoints (Kubernetes); absent on Docker deployments. */
-  readonly websocketTls?: WebSocketClientTls;
-}
+export type ControlTargetOptions = SealantTargetDerivationOptions;
 
 /**
- * Map a resolved API target to a transport `ControlTarget`, driven by the runtime adapter and
- * `endpoint`:
- *  - docker, `unix://<host path>` (§2.2): the adapter bind-mounted the daemon socket to a host path
- *    the gateway can `net.connect` directly — NO Docker access needed. Preferred.
- *  - docker, anything else (`docker-exec://…`, §2.1): bridge in with `docker exec … socat`.
- *  - k8s/k3s, `wss://…`: sealantd's secure WebSocket frontend; needs the gateway's client TLS.
+ * Map a resolved API target to a transport `SealantTarget` via the canonical derivation in
+ * `@sealant/workspaces`. The gateway keeps throw-on-unaddressable semantics: an SSH connection
+ * with no reachable control transport must fail loudly with the operator-actionable reason.
  */
 export const toControlTarget = (
   target: WorkspaceSshTarget,
   options: ControlTargetOptions = {},
-): ControlTarget => {
-  const endpoint = target.runtime.endpoint.trim();
-  switch (target.runtime.adapter) {
-    case "docker": {
-      if (endpoint.startsWith(UNIX_ENDPOINT_PREFIX)) {
-        return { kind: "unix-socket", socketPath: endpoint.slice(UNIX_ENDPOINT_PREFIX.length) };
-      }
-      return {
-        kind: "docker-exec",
-        containerId: target.runtime.resourceId,
-        socketPath: DEFAULT_CONTROL_SOCKET_PATH,
-      };
-    }
-    case "k8s":
-    case "k3s": {
-      if (!endpoint.startsWith(WSS_ENDPOINT_PREFIX)) {
-        throw new Error(
-          `Runtime adapter '${target.runtime.adapter}' recorded a non-wss endpoint; cannot open a control transport.`,
-        );
-      }
-      if (options.websocketTls === undefined) {
-        throw new Error(
-          `Runtime adapter '${target.runtime.adapter}' needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) which this gateway is not configured with.`,
-        );
-      }
-      return { kind: "websocket", url: endpoint, tls: options.websocketTls };
-    }
+): SealantTarget => {
+  const derived = sealantTargetForRuntimeInstance(target.runtime, options);
+  if (derived === undefined) {
+    throw new Error(
+      `Cannot open a control transport: ${describeUnaddressableRuntimeInstance(target.runtime, options)}.`,
+    );
   }
+  return derived;
 };
 
 /**
@@ -151,4 +97,34 @@ export const resolveWorkspaceControlTarget = async (input: {
   }
 
   return workspaceSshTargetSchema.parse(payload);
+};
+
+// We route users to workspaces through usernames such as `ws-<workspaceId>`.
+// This parser extracts the workspace id and applies a conservative character policy
+// to avoid passing unexpected strings into downstream routing.
+export const parseWorkspaceIdFromUsername = (
+  username: string,
+  prefix: string,
+): string | undefined => {
+  const normalizedPrefix = prefix.trim();
+  const normalizedUsername = username.trim();
+  const prefixToken = `${normalizedPrefix}-`;
+
+  if (
+    normalizedPrefix.length === 0 ||
+    normalizedUsername.length === 0 ||
+    !normalizedUsername.startsWith(prefixToken)
+  ) {
+    return undefined;
+  }
+
+  const workspaceId = normalizedUsername.slice(prefixToken.length).trim();
+
+  // Tight character allowlist to avoid weird routing edge cases.
+  // Workspace IDs in this system are UUID-like so this is intentionally restrictive.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(workspaceId)) {
+    return undefined;
+  }
+
+  return workspaceId;
 };

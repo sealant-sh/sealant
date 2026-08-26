@@ -1,7 +1,7 @@
+import { DEFAULT_CONTROL_SOCKET_PATH } from "@sealant/workspaces";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_CONTROL_SOCKET_PATH,
   parseWorkspaceIdFromUsername,
   toControlTarget,
   type WorkspaceSshTarget,
@@ -106,7 +106,7 @@ describe("toControlTarget", () => {
       toControlTarget(k8sTarget("k8s", "docker-exec://ctr/run/sealant/control.sock"), {
         websocketTls,
       }),
-    ).toThrow("non-wss endpoint");
+    ).toThrow("no wss:// endpoint");
   });
 
   it("never lets client TLS material change how a docker target is reached", () => {

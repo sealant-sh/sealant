@@ -9,12 +9,11 @@ import {
   type SftpOpened,
   type ProcessAttached,
 } from "@sealant/runtime-protocol";
-
 import {
   openControlTransport,
-  type ControlTarget,
   type ControlTransport,
-} from "./control-transport.js";
+  type SealantTarget,
+} from "@sealant/workspaces";
 
 /*
 Control client + channel-mux glue (gateway-spec §3.1).
@@ -70,7 +69,7 @@ export class ControlClient {
   }
 
   /** Open the transport for `target` and build a control client over its framed stream. */
-  static open(target: ControlTarget): ControlClient {
+  static open(target: SealantTarget): ControlClient {
     const transport = openControlTransport(target);
     const client = SealantClient.fromStream(transport.stream);
     return new ControlClient(transport, client);

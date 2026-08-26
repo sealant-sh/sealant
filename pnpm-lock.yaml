@@ -523,6 +523,9 @@ importers:
       '@sealant/validators':
         specifier: workspace:*
         version: link:../../packages/validators
+      '@sealant/workspaces':
+        specifier: workspace:*
+        version: link:../../packages/workspaces
       ssh2:
         specifier: ^1.17.0
         version: 1.17.0
