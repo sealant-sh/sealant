@@ -1,0 +1,12 @@
+{
+  "extends": "@sealant/typescript/core.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"],
+    "paths": {
+      "@sealant/workspaces/cloudflare/bridge-contract": [
+        "../../packages/workspaces/src/runtime/cloudflare/bridge-contract.ts"
+      ]
+    }
+  },
+  "include": ["src/**/*.ts", "package.json"]
+}

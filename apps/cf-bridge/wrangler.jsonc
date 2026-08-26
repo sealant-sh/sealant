@@ -1,0 +1,25 @@
+// Cloudflare bridge Worker (docs: deploy alongside the control plane; the worker's
+// SEALANT_CF_BRIDGE_URL points here). Secrets, set with `wrangler secret put`:
+//   BRIDGE_TOKEN  — authenticates the control plane's launch/stop calls (SEALANT_CF_BRIDGE_TOKEN).
+//   CONTROL_TOKEN — authenticates control-channel connections (SEALANT_CONTROL_BEARER_TOKEN).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sealant-cf-bridge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "max_instances": 25,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "Sandbox", "class_name": "Sandbox" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Sandbox"] }],
+  "vars": {
+    // Public hostname of this worker; launch answers advertise wss://<host>/… control endpoints.
+    "BRIDGE_PUBLIC_HOST": "bridge.example.com",
+  },
+}

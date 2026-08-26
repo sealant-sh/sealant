@@ -5,7 +5,8 @@
   "description": "Workspace image lifecycle package: build, publish, deploy, and orchestration",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./cloudflare/bridge-contract": "./src/runtime/cloudflare/bridge-contract.ts"
   },
   "scripts": {
     "lint": "oxlint .",
