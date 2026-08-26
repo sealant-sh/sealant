@@ -171,3 +171,47 @@ describe("sealantTargetForRuntimeInstance", () => {
     expect(sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "" }))).toBeUndefined();
   });
 });
+
+describe("sealantTargetForRuntimeInstance (cloudflare)", () => {
+  const endpoint = "wss://bridge.example.com/workspaces/ws-1/control";
+
+  it("derives a bearer-token websocket target from a wss endpoint plus the configured token", () => {
+    expect(
+      sealantTargetForRuntimeInstance(runtimeInstance({ adapter: "cloudflare", endpoint }), {
+        controlBearerToken: "token-123",
+      }),
+    ).toEqual({ kind: "websocket", url: endpoint, auth: { bearerToken: "token-123" } });
+  });
+
+  it("yields no target without the bearer token, and says which env is missing", () => {
+    expect(
+      sealantTargetForRuntimeInstance(runtimeInstance({ adapter: "cloudflare", endpoint })),
+    ).toBeUndefined();
+    expect(
+      describeUnaddressableRuntimeInstance(runtimeInstance({ adapter: "cloudflare", endpoint })),
+    ).toContain("SEALANT_CONTROL_BEARER_TOKEN");
+  });
+
+  it("yields no target for a non-wss endpoint", () => {
+    expect(
+      sealantTargetForRuntimeInstance(
+        runtimeInstance({ adapter: "cloudflare", endpoint: "https://bridge.example.com" }),
+        { controlBearerToken: "token-123" },
+      ),
+    ).toBeUndefined();
+    expect(
+      describeUnaddressableRuntimeInstance(
+        runtimeInstance({ adapter: "cloudflare", endpoint: null }),
+        { controlBearerToken: "token-123" },
+      ),
+    ).toContain("no wss:// endpoint");
+  });
+
+  it("never lets a bearer token change how a docker instance is reached", () => {
+    expect(
+      sealantTargetForRuntimeInstance(runtimeInstance({ resourceId: "ctr" }), {
+        controlBearerToken: "token-123",
+      }),
+    ).toEqual({ kind: "docker-exec", containerId: "ctr", socketPath: DEFAULT_CONTROL_SOCKET_PATH });
+  });
+});

@@ -51,6 +51,11 @@ export interface SealantTargetDerivationOptions {
    * yields no target — the consumer is not configured to authenticate to the daemon.
    */
   readonly websocketTls?: SealantWebSocketClientTls;
+  /**
+   * Bearer token for `wss://` endpoints fronted by a trusted intermediary (the Cloudflare bridge
+   * Worker). Without it a cloudflare instance yields no target.
+   */
+  readonly controlBearerToken?: string;
 }
 
 const UNIX_ENDPOINT_PREFIX = "unix://";
@@ -114,10 +119,23 @@ export const sealantTargetForRuntimeInstance = (
       }
       return { kind: "websocket", url: endpoint, tls: resolved.websocketTls };
     }
-    // Cloudflare instances are reached through the bridge Worker's authenticated endpoint;
-    // the transport variant for it arrives with the cloudflare adapter. Until then the
-    // instance is honestly unaddressable.
-    case "cloudflare":
+    // Cloudflare instances are reached through the bridge Worker's control endpoint; the
+    // bearer token authenticates this process to the bridge, which terminates auth before
+    // proxying the byte stream to sealantd inside the sandbox.
+    case "cloudflare": {
+      if (
+        endpoint === undefined ||
+        !endpoint.startsWith(WSS_ENDPOINT_PREFIX) ||
+        resolved.controlBearerToken === undefined
+      ) {
+        return undefined;
+      }
+      return {
+        kind: "websocket",
+        url: endpoint,
+        auth: { bearerToken: resolved.controlBearerToken },
+      };
+    }
     case null:
       return undefined;
   }
@@ -133,6 +151,11 @@ export const describeUnaddressableRuntimeInstance = (
   }
   if (instance.adapter === "docker") {
     return "the docker instance has neither a unix:// endpoint nor a container id";
+  }
+  if (instance.adapter === "cloudflare") {
+    return options.controlBearerToken === undefined
+      ? "the cloudflare instance needs a control bearer token (SEALANT_CONTROL_BEARER_TOKEN) which is not configured"
+      : "the cloudflare instance has no wss:// endpoint recorded";
   }
   if (options.websocketTls === undefined) {
     return `the ${instance.adapter} instance needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) which is not configured`;

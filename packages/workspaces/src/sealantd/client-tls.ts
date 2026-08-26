@@ -10,6 +10,7 @@ export interface ControlClientTlsEnvLike {
   readonly SEALANT_CONTROL_CLIENT_CERT_PATH?: string | undefined;
   readonly SEALANT_CONTROL_CLIENT_KEY_PATH?: string | undefined;
   readonly SEALANT_CONTROL_CA_PATH?: string | undefined;
+  readonly SEALANT_CONTROL_BEARER_TOKEN?: string | undefined;
 }
 
 /** Derivation options for this process: websocket TLS when fully configured, nothing otherwise. */
@@ -19,8 +20,11 @@ export const targetDerivationOptionsFromEnv = (
   const certPath = env.SEALANT_CONTROL_CLIENT_CERT_PATH;
   const keyPath = env.SEALANT_CONTROL_CLIENT_KEY_PATH;
   const caPath = env.SEALANT_CONTROL_CA_PATH;
-  if (certPath === undefined || keyPath === undefined || caPath === undefined) {
-    return {};
-  }
-  return { websocketTls: { caPath, certPath, keyPath } };
+  const bearerToken = env.SEALANT_CONTROL_BEARER_TOKEN;
+  return {
+    ...(certPath === undefined || keyPath === undefined || caPath === undefined
+      ? {}
+      : { websocketTls: { caPath, certPath, keyPath } }),
+    ...(bearerToken === undefined ? {} : { controlBearerToken: bearerToken }),
+  };
 };

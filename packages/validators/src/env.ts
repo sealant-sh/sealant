@@ -241,6 +241,9 @@ export const controlClientTlsEnvSchema = z.object({
   SEALANT_CONTROL_CLIENT_CERT_PATH: z.string().trim().min(1).optional(),
   SEALANT_CONTROL_CLIENT_KEY_PATH: z.string().trim().min(1).optional(),
   SEALANT_CONTROL_CA_PATH: z.string().trim().min(1).optional(),
+  // Bearer token presented on websocket control upgrades for endpoints fronted by a trusted
+  // intermediary (the Cloudflare bridge Worker). Independent of the mTLS trio above.
+  SEALANT_CONTROL_BEARER_TOKEN: z.string().trim().min(1).optional(),
 });
 
 export type ControlClientTlsEnv = z.infer<typeof controlClientTlsEnvSchema>;
