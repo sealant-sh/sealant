@@ -1,0 +1,23 @@
+{
+  "name": "@sealant/cf-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare bridge Worker: owns Sandbox lifecycle for the cloudflare runtime adapter and proxies the sealantd control stream",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "lint": "oxlint .",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "0.13.0-next.751.1",
+    "@sealant/workspaces": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260825.1",
+    "@sealant/typescript": "workspace:*",
+    "wrangler": "catalog:"
+  }
+}
