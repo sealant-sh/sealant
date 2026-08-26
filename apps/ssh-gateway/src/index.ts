@@ -1,3 +1,5 @@
+import { targetDerivationOptionsFromEnv } from "@sealant/workspaces";
+
 import { parseAuthorizedKeys } from "./authorized-keys.js";
 import { startSshGatewayServer } from "./gateway-server.js";
 import { createPrincipalResolver } from "./principal-resolver.js";
@@ -43,19 +45,9 @@ const main = async () => {
     workspaceUsernamePrefix: env.SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX,
     coreApiBaseUrl: env.CORE_API_BASE_URL,
     gatewayToken: env.WORKSPACE_SSH_GATEWAY_TOKEN,
-    // Kubernetes runtimes are reachable only with the gateway's client mTLS material.
-    controlTargetOptions:
-      env.SEALANT_CONTROL_CLIENT_CERT_PATH !== undefined &&
-      env.SEALANT_CONTROL_CLIENT_KEY_PATH !== undefined &&
-      env.SEALANT_CONTROL_CA_PATH !== undefined
-        ? {
-            websocketTls: {
-              caPath: env.SEALANT_CONTROL_CA_PATH,
-              certPath: env.SEALANT_CONTROL_CLIENT_CERT_PATH,
-              keyPath: env.SEALANT_CONTROL_CLIENT_KEY_PATH,
-            },
-          }
-        : {},
+    // Kubernetes runtimes need the gateway's client mTLS material; bridge-fronted runtimes its
+    // bearer token. One shared derivation with the worker and API.
+    controlTargetOptions: targetDerivationOptionsFromEnv(env),
     lookupPrincipal,
   });
 

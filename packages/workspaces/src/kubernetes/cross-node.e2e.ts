@@ -87,6 +87,11 @@ const withForwardedTarget = async <T>(
   if (target.kind !== "websocket") {
     return fn(target);
   }
+  if (target.tls === undefined) {
+    throw new Error(
+      "cross-node e2e expects an mTLS websocket target (the k8s adapter always sets tls).",
+    );
+  }
   const url = new URL(target.url);
   const service = url.hostname.split(".")[0] ?? "";
   const child: ChildProcess = spawn(

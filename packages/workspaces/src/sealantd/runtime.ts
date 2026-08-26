@@ -64,13 +64,21 @@ export type SealantTarget =
     }
   | {
       /**
-       * sealantd's native secure WebSocket frontend (Kubernetes). The socket carries the exact
-       * length-prefixed protobuf byte stream as binary messages; mTLS authenticates both sides.
+       * A WebSocket control frontend carrying the exact length-prefixed protobuf byte stream as
+       * binary messages. Two authentication shapes, at least one REQUIRED — an unauthenticated
+       * control connection is never opened:
+       *
+       *  - `tls`: client mTLS against sealantd's native `wss://…/control` frontend (Kubernetes,
+       *    cluster-internal CA).
+       *  - `auth`: a bearer token presented on the upgrade request, for endpoints where a trusted
+       *    intermediary terminates auth before the daemon (the Cloudflare bridge Worker); the
+       *    server certificate verifies against public PKI (or `tls.caPath` when also set).
        */
       readonly kind: "websocket";
-      /** `wss://<service>.<namespace>.svc:<port>/control`. */
+      /** `wss://<service>.<namespace>.svc:<port>/control`, or the bridge's control URL. */
       readonly url: string;
-      readonly tls: SealantWebSocketClientTls;
+      readonly tls?: SealantWebSocketClientTls | undefined;
+      readonly auth?: { readonly bearerToken: string } | undefined;
     };
 
 /** Client-side mTLS material for the `websocket` target: PEM file paths, read at open time. */
@@ -352,11 +360,24 @@ const openWebSocket = (target: Extract<SealantTarget, { readonly kind: "websocke
   Effect.callback<OpenTransport, TransportError>((resume) => {
     let socket: WebSocket;
     try {
+      if (target.tls === undefined && target.auth === undefined) {
+        throw new Error(
+          "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
+        );
+      }
+      const tls = target.tls;
       socket = new WebSocket(target.url, {
-        ca: readFileSync(target.tls.caPath),
-        cert: readFileSync(target.tls.certPath),
-        key: readFileSync(target.tls.keyPath),
-        ...(target.tls.servername === undefined ? {} : { servername: target.tls.servername }),
+        ...(tls === undefined
+          ? {}
+          : {
+              ca: readFileSync(tls.caPath),
+              cert: readFileSync(tls.certPath),
+              key: readFileSync(tls.keyPath),
+              ...(tls.servername === undefined ? {} : { servername: tls.servername }),
+            }),
+        ...(target.auth === undefined
+          ? {}
+          : { headers: { authorization: `Bearer ${target.auth.bearerToken}` } }),
         rejectUnauthorized: true,
         perMessageDeflate: false,
         handshakeTimeout: 15_000,

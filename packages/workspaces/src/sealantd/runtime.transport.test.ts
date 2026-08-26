@@ -87,3 +87,72 @@ describe("ControlTransportLive", () => {
     }
   });
 });
+
+describe("websocket control transport auth", () => {
+  it("presents the bearer token on upgrade and refuses targets with no auth at all", async () => {
+    const { createServer: createHttpServer } = await import("node:http");
+    const { WebSocketServer, createWebSocketStream } = await import("ws");
+
+    const seenAuth: Array<string | undefined> = [];
+    const httpServer = createHttpServer();
+    const wss = new WebSocketServer({ server: httpServer });
+    wss.on("connection", (socket, request) => {
+      seenAuth.push(request.headers.authorization);
+      const stream = createWebSocketStream(socket, { allowHalfOpen: false });
+      stream.on("data", (chunk: Buffer) => stream.write(chunk));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server has no port");
+    }
+    // ws:// (not wss://) is fine here: the scheme is the test server's, and the transport under
+    // test only decides auth material — target derivation is what enforces wss endpoints.
+    const url = `ws://127.0.0.1:${address.port}/control`;
+
+    try {
+      const response = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const transport = yield* SealantTransport;
+            const duplex = yield* transport.open({
+              kind: "websocket",
+              url,
+              auth: { bearerToken: "token-abc" },
+            });
+            return yield* Effect.tryPromise(
+              () =>
+                new Promise<string>((resolve, reject) => {
+                  duplex.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8")));
+                  duplex.once("error", reject);
+                  duplex.write("authed-round-trip");
+                }),
+            );
+          }),
+        ).pipe(Effect.provide(ControlTransportLive)),
+      );
+      expect(response).toBe("authed-round-trip");
+      expect(seenAuth).toEqual(["Bearer token-abc"]);
+
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const transport = yield* SealantTransport;
+            return yield* transport.open({ kind: "websocket", url });
+          }),
+        ).pipe(Effect.provide(ControlTransportLive)),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+        expect(error).toBeInstanceOf(TransportError);
+        if (error instanceof TransportError) {
+          expect(error.message).toContain("unauthenticated");
+        }
+      }
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  });
+});

@@ -97,11 +97,24 @@ const openUnixSocket = (target: { readonly socketPath: string }): ControlTranspo
 const openWebSocket = (
   target: Extract<SealantTarget, { readonly kind: "websocket" }>,
 ): ControlTransport => {
+  if (target.tls === undefined && target.auth === undefined) {
+    throw new Error(
+      "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
+    );
+  }
+  const tls = target.tls;
   const socket = new WebSocket(target.url, {
-    ca: readFileSync(target.tls.caPath),
-    cert: readFileSync(target.tls.certPath),
-    key: readFileSync(target.tls.keyPath),
-    ...(target.tls.servername === undefined ? {} : { servername: target.tls.servername }),
+    ...(tls === undefined
+      ? {}
+      : {
+          ca: readFileSync(tls.caPath),
+          cert: readFileSync(tls.certPath),
+          key: readFileSync(tls.keyPath),
+          ...(tls.servername === undefined ? {} : { servername: tls.servername }),
+        }),
+    ...(target.auth === undefined
+      ? {}
+      : { headers: { authorization: `Bearer ${target.auth.bearerToken}` } }),
     rejectUnauthorized: true,
     perMessageDeflate: false,
     handshakeTimeout: 15_000,
