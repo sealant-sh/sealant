@@ -50,6 +50,11 @@ import {
 import type { KubernetesApi } from "./api.js";
 import { LABEL_RUN_ID, type KubernetesRuntimeConfig } from "./config.js";
 import {
+  EnvSourceResolutionError,
+  resolveEnvSources,
+  type ResolvedEnvSources,
+} from "./env-sources.js";
+import {
   buildCertificate,
   buildEnvSecret,
   buildLaunchSecret,
@@ -157,7 +162,7 @@ void StreamKind;
 /** The support decision, pure. */
 export const supportForKubernetes = (
   id: KubernetesAdapterId,
-  config: Pick<KubernetesRuntimeConfig, "gvisorRuntimeClass">,
+  config: Pick<KubernetesRuntimeConfig, "gvisorRuntimeClass" | "allowedWorkspaceServiceAccounts">,
   input: RuntimeAdapterSupportInput,
 ): RuntimeAdapterSupport => {
   const family = input.blueprint.target.runtime.family;
@@ -190,15 +195,16 @@ export const supportForKubernetes = (
         "Workspace-scoped Docker (tooling.services.docker) is not available on Kubernetes yet; it ships as a separate DinD sidecar capability.",
     };
   }
+  const requestedServiceAccount = input.blueprint.runtime.kubernetes.serviceAccountName;
   if (
-    input.blueprint.runtime.envFrom.length > 0 ||
-    input.blueprint.runtime.kubernetes.serviceAccountName !== undefined
+    requestedServiceAccount !== undefined &&
+    !config.allowedWorkspaceServiceAccounts.includes(requestedServiceAccount)
   ) {
+    // An explicit ServiceAccount is a trust grant the operator must make deliberately.
     return {
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message:
-        "Cluster env references are not resolved by this platform build yet; the worker-side resolution ships in the next release.",
+      message: `ServiceAccount '${requestedServiceAccount}' is not in this deployment's workspace ServiceAccount allowlist (SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS).`,
     };
   }
   if (input.blueprint.runtime.ociRuntime === "runsc" && config.gvisorRuntimeClass === undefined) {
@@ -318,6 +324,42 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
       pool: parsed.pool,
     });
 
+    // Cluster env sources: the worker resolves each bound object NOW, so this launch's snapshot
+    // survives container crash-restarts and rotation reaches only later launches. Failures are
+    // readable and name the binding (env-sources.ts owns the bindability rules).
+    let boundSources: ResolvedEnvSources = { configMapEnv: [], secretEnv: {} };
+    if (parsed.blueprint.runtime.envFrom.length > 0) {
+      try {
+        boundSources = await resolveEnvSources(
+          this.#api,
+          { managedBy: config.managedBy },
+          parsed.blueprint.runtime.envFrom,
+        );
+      } catch (error) {
+        if (error instanceof EnvSourceResolutionError) {
+          throw createAdapterError(error.code, error.message);
+        }
+        throw error;
+      }
+    }
+    // Bound keys are the weakest layer on BOTH lanes: any explicitly delivered name — caller env,
+    // platform controls, credential env, or the secret channel — wins on collision, so a crafted
+    // bound Secret can never displace e.g. a channel token.
+    const explicitNames = new Set([
+      ...Object.keys(parsed.blueprint.runtime.userEnv ?? {}),
+      ...Object.keys(parsed.blueprint.runtime.env),
+      ...Object.keys(parsed.platformEnv ?? {}),
+      ...Object.keys(parsed.credentialEnv ?? {}),
+      ...Object.keys(parsed.secretEnv ?? {}),
+    ]);
+    const boundSecretEnv = Object.fromEntries(
+      Object.entries(boundSources.secretEnv).filter(([key]) => !explicitNames.has(key)),
+    );
+    const secretEnv =
+      Object.keys(boundSecretEnv).length === 0
+        ? parsed.secretEnv
+        : { ...boundSecretEnv, ...parsed.secretEnv };
+
     // Mounts: every intent except launch material lowers from the store claims; a staged
     // dotfiles dir (too large for the Secret) is itself a launch-material intent on the staging
     // claim, which the same mapping table covers.
@@ -349,7 +391,7 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
           }
         : undefined;
     const launchSecret = buildLaunchSecret(names, config.namespace, labels, {
-      secretEnvJson: parsed.secretEnv === undefined ? undefined : JSON.stringify(parsed.secretEnv),
+      secretEnvJson: secretEnv === undefined ? undefined : JSON.stringify(secretEnv),
       dotfiles: dotfilesInSecret,
     });
     if (
@@ -376,10 +418,15 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
         : undefined;
     const secretEntries = secretEnvEntries(parsed, cloneAuthKeyBase64);
     const envSecret = buildEnvSecret(names, config.namespace, labels, secretEntries);
-    const plainEnv = plainEnvEntries(parsed, config, {
-      secretEnvFile: parsed.secretEnv !== undefined,
-      dotfilesArchiveDir,
-    });
+    // Bound ConfigMap keys go FIRST: the Pod env list is last-wins, so every later entry —
+    // caller env included — shadows them (invariant: explicit wins over bound).
+    const plainEnv = [
+      ...boundSources.configMapEnv,
+      ...plainEnvEntries(parsed, config, {
+        secretEnvFile: secretEnv !== undefined,
+        dotfilesArchiveDir,
+      }),
+    ];
 
     const priorityClassName =
       parsed.pool === "hot" ? config.hotPoolPriorityClass : config.workspacePriorityClass;

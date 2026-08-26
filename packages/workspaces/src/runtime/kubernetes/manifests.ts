@@ -435,7 +435,11 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     metadata: { name: names.pod, namespace: config.namespace, labels },
     spec: {
       restartPolicy: "Never",
-      serviceAccountName: config.workspaceServiceAccount,
+      // An explicit blueprint ServiceAccount is an operator trust grant, validated against the
+      // allowlist in `supportForKubernetes`. The token is never mounted either way: IRSA/Workload
+      // Identity inject their own token paths and do not need the kube API token.
+      serviceAccountName:
+        input.blueprint.runtime.kubernetes.serviceAccountName ?? config.workspaceServiceAccount,
       automountServiceAccountToken: false,
       enableServiceLinks: false,
       terminationGracePeriodSeconds: 30,

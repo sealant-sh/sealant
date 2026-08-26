@@ -107,6 +107,14 @@ export const kubernetesRuntimeConfigSchema = z.strictObject({
   namespace: dnsLabelSchema,
   /** ServiceAccount for workspace Pods (token never mounted; see manifests). */
   workspaceServiceAccount: dnsSubdomainSchema.default("sealant-workspace"),
+  /**
+   * ServiceAccount names a blueprint may explicitly request via
+   * `runtime.kubernetes.serviceAccountName` (cluster-env-sources design). Each entry is a trust
+   * grant the operator makes deliberately — typically an IRSA/Workload-Identity SA. Empty (the
+   * default) means explicit requests are refused; `automountServiceAccountToken` stays false
+   * either way.
+   */
+  allowedWorkspaceServiceAccounts: z.array(dnsSubdomainSchema).default([]),
   /** Logical root → RWX claim. Every mount-sourced path must fall under exactly one root. */
   volumeMappings: volumeMappingsSchema,
   /** Port sealantd's WSS frontend listens on inside the Pod and the Service exposes. */
@@ -170,6 +178,7 @@ export const COMPONENT_WORKSPACE = "workspace";
 export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_NAMESPACE?: string | undefined;
   readonly SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT?: string | undefined;
+  readonly SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS?: string | undefined;
   readonly SEALANT_K8S_VOLUME_MAPPINGS?: string | undefined;
   readonly SEALANT_K8S_CONTROL_PORT?: number | undefined;
   readonly SEALANT_K8S_IMAGE_PULL_SECRET?: string | undefined;
@@ -235,6 +244,15 @@ export const kubernetesRuntimeConfigFromEnv = (
     ...(env.SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT === undefined
       ? {}
       : { workspaceServiceAccount: env.SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT }),
+    ...(env.SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS === undefined
+      ? {}
+      : {
+          allowedWorkspaceServiceAccounts: env.SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS.split(
+            ",",
+          )
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+        }),
     volumeMappings: parseMappings(
       env.SEALANT_K8S_VOLUME_MAPPINGS ?? missing("SEALANT_K8S_VOLUME_MAPPINGS"),
     ),

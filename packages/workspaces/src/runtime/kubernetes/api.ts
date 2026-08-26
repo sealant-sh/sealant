@@ -13,6 +13,7 @@ import {
   CoreV1Api,
   CustomObjectsApi,
   KubeConfig,
+  type V1ConfigMap,
   type V1Pod,
   type V1Secret,
   type V1Service,
@@ -48,6 +49,9 @@ export interface KubernetesApi {
   readonly getService: (name: string) => Promise<V1Service | undefined>;
   readonly deleteService: (name: string) => Promise<DeleteOutcome>;
   readonly listServices: (labelSelector: string) => Promise<readonly V1Service[]>;
+
+  /** Read-only: bound `runtime.envFrom` ConfigMaps (env-sources.ts). */
+  readonly getConfigMap: (name: string) => Promise<V1ConfigMap | undefined>;
 
   readonly createSecret: (secret: V1Secret) => Promise<CreateOutcome<V1Secret>>;
   readonly replaceSecret: (secret: V1Secret) => Promise<V1Secret>;
@@ -175,6 +179,9 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
         throw toApiError("list services", error);
       }
     },
+
+    getConfigMap: (name) =>
+      read("read configmap", () => core.readNamespacedConfigMap({ name, namespace })),
 
     createSecret: (secret) =>
       create("create secret", () => core.createNamespacedSecret({ namespace, body: secret })),

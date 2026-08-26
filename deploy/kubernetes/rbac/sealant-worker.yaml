@@ -36,6 +36,7 @@ rules:
     resources: ["certificates"]
     verbs: ["create", "get", "list", "delete"]
   # Image builds (BuildKit Jobs): context ConfigMap, Job, and the log tail on failure.
+  # `get` also serves bound `runtime.envFrom` ConfigMaps (worker-side env-source resolution).
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "delete"]
