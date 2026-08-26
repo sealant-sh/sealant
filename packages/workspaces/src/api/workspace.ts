@@ -1,9 +1,10 @@
 import type { WorkspaceRuntimeInstance, WorkspaceBuildJob } from "@sealant/db";
+import type { RuntimeAdapterId } from "@sealant/validators";
 
 export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
 
 export interface WorkspaceRuntimeDetails {
-  readonly adapter: "docker" | "k8s" | "k3s";
+  readonly adapter: RuntimeAdapterId;
   readonly resourceId: string;
   readonly reference: string;
   readonly status: "pending" | "running" | "ready" | "failed" | "stopped";

@@ -4,6 +4,8 @@ import { homedir, hostname } from "node:os";
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
+import { runtimeAdapterIdSchema } from "./workspaces/runtime-adapter-ids.js";
+
 export const rabbitMqEnvSchema = z.object({
   RABBITMQ_URL: z.string().trim().min(1).default("amqp://sealant:sealant@127.0.0.1:5673"),
   WORKSPACE_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
@@ -317,7 +319,7 @@ export const parseAppEnv = (input: NodeJS.ProcessEnv): AppEnv => {
   return resolveAppGitHubPrivateKey(appEnvSchema.parse(runtimeEnv));
 };
 
-const runtimeAdapterIdEnvSchema = z.enum(["docker", "k8s", "k3s"]);
+const runtimeAdapterIdEnvSchema = runtimeAdapterIdSchema;
 const sshEndpointExposureStrategySchema = z.enum(["host-published", "container-network"]);
 const defaultWorkerId = `worker-${hostname()}-${process.pid}`;
 
@@ -329,6 +331,14 @@ export const workerRuntimeEnvSchema = z.object({
   // (same path) into both the worker (rw) and the ssh-gateway (ro).
   WORKSPACE_CONTROL_SOCKET_HOST_DIR: z.string().trim().min(1).optional(),
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdEnvSchema.default("docker"),
+  // Whether this worker registers the Docker adapter at all. Disable on deployments whose
+  // workers have no Docker daemon (Kubernetes Pods, hosted runtimes) so "docker" cannot be
+  // reached through prefer-fallback and the worker never assumes a socket exists.
+  // Accepts its own output (boolean) because worker env parses pass through the schema twice
+  // (createEnv validation, then the merged-schema parse).
+  DOCKER_RUNTIME_ENABLED: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(true),
   DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
   DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
     sshEndpointExposureStrategySchema.default("host-published"),

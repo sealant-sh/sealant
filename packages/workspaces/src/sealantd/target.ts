@@ -17,6 +17,7 @@
  */
 import { StreamKind } from "@sealant/runtime-client";
 import type { EventEnvelope } from "@sealant/runtime-protocol";
+import type { RuntimeAdapterId } from "@sealant/validators";
 import { Effect, Stream } from "effect";
 
 import {
@@ -36,7 +37,7 @@ export const DEFAULT_CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
  * it (`adapter` and `resourceId` are both nullable on the row).
  */
 export interface RuntimeInstanceTargetSource {
-  readonly adapter: "docker" | "k8s" | "k3s" | null;
+  readonly adapter: RuntimeAdapterId | null;
   readonly resourceId: string | null;
   readonly endpoint: string | null;
 }
@@ -113,6 +114,10 @@ export const sealantTargetForRuntimeInstance = (
       }
       return { kind: "websocket", url: endpoint, tls: resolved.websocketTls };
     }
+    // Cloudflare instances are reached through the bridge Worker's authenticated endpoint;
+    // the transport variant for it arrives with the cloudflare adapter. Until then the
+    // instance is honestly unaddressable.
+    case "cloudflare":
     case null:
       return undefined;
   }

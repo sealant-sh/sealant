@@ -10,6 +10,7 @@ export * from "./api/ssh-keys.js";
 export * from "./api/system.js";
 
 export * from "./workspaces/messages.js";
+export * from "./workspaces/runtime-adapter-ids.js";
 export * from "./workspaces/workspace-blueprint.js";
 export * from "./workspaces/builder.js";
 export * from "./workspaces/buildkit.js";
