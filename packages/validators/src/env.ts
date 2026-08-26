@@ -397,6 +397,19 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_REGISTRY_INSECURE: z.stringbool().or(z.boolean()).optional(),
 });
 
+/**
+ * Cloudflare runtime configuration surface (worker-only). The bridge Worker owns the sandboxes;
+ * the runtime adapter only speaks its authenticated HTTP API. Semantic validation lives in
+ * `@sealant/workspaces`'s `cloudflareRuntimeConfigFromEnv`. All optional: only a deployment that
+ * registers the cloudflare adapter sets these.
+ */
+export const cloudflareRuntimeEnvSchema = z.object({
+  /** Base URL of the bridge Worker (https://…); the adapter appends /v1/… routes. */
+  SEALANT_CF_BRIDGE_URL: z.string().trim().min(1).optional(),
+  /** Bearer token authenticating THIS control plane to the bridge Worker. */
+  SEALANT_CF_BRIDGE_TOKEN: z.string().trim().min(1).optional(),
+});
+
 export const workerServerEnvSchema = databaseEnvSchema
   .merge(rabbitMqEnvSchema)
   .merge(registryConnectionEnvSchema)
@@ -406,7 +419,8 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(credentialsEnvSchema)
   .merge(workerRuntimeEnvSchema)
   .merge(controlClientTlsEnvSchema)
-  .merge(kubernetesRuntimeEnvSchema);
+  .merge(kubernetesRuntimeEnvSchema)
+  .merge(cloudflareRuntimeEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);

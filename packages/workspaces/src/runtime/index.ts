@@ -55,6 +55,30 @@ export {
 
 export { K8sRuntimeAdapter } from "./k8s-runtime-adapter.js";
 
+export {
+  CloudflareRuntimeAdapter,
+  supportForCloudflare,
+  type CloudflareRuntimeAdapterOptions,
+} from "./cloudflare/adapter.js";
+export {
+  cloudflareRuntimeConfigFromEnv,
+  cloudflareRuntimeConfigSchema,
+  type CloudflareRuntimeConfig,
+  type CloudflareRuntimeEnvLike,
+} from "./cloudflare/config.js";
+export {
+  BRIDGE_CONTRACT_VERSION,
+  bridgeDotfilesSchema,
+  bridgeErrorResponseSchema,
+  bridgeGitSourceSchema,
+  bridgeLaunchRequestSchema,
+  bridgeLaunchResponseSchema,
+  bridgeStopResponseSchema,
+  type BridgeLaunchRequest,
+  type BridgeLaunchResponse,
+  type BridgeStopResponse,
+} from "./cloudflare/bridge-contract.js";
+
 export type {
   CredentialFileInjection,
   PublishedImage,

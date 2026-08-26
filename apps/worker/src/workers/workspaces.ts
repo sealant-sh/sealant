@@ -15,6 +15,8 @@ import {
   createLiveKubernetesApi,
   createLiveKubernetesBuildApi,
   createZotRegistryClient,
+  CloudflareRuntimeAdapter,
+  cloudflareRuntimeConfigFromEnv,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
@@ -138,7 +140,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         }),
       ];
 
-  const runtimeAdapters = [...dockerAdapters, ...kubernetesAdapters];
+  // Cloudflare: registered only when the bridge Worker is configured (URL + token pair).
+  const cloudflareConfig = cloudflareRuntimeConfigFromEnv(env);
+  const cloudflareAdapters =
+    cloudflareConfig === undefined
+      ? []
+      : [new CloudflareRuntimeAdapter({ config: cloudflareConfig })];
+
+  const runtimeAdapters = [...dockerAdapters, ...kubernetesAdapters, ...cloudflareAdapters];
 
   const consumer = await consumeWorkspaceBuildJobs({
     connectionUrl: env.RABBITMQ_URL,
