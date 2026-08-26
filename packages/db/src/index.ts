@@ -215,11 +215,13 @@ export {
   RunRepoInvariantError,
   RunRepoLive,
   RunRepoUnexpectedError,
+  type ClaimRunForExecInput,
   type CreateRunInput,
   type ListRunsInput,
   type MarkRunCompletedInput,
   type MarkRunFailedInput,
   type MarkRunRunningInput,
+  type RunExecClaim,
   type RunRepoError,
   type RunRepoService,
 } from "./repositories/runs.js";

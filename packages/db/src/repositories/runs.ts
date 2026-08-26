@@ -38,6 +38,22 @@ export interface MarkRunRunningInput {
   readonly startedAt?: Date;
 }
 
+export interface ClaimRunForExecInput {
+  readonly id: string;
+  readonly startedAt?: Date;
+}
+
+/**
+ * The queued→running transition as a CLAIM: exactly one caller gets `claimed`, every other
+ * delivery of the same run learns what state it actually found. The queue is at-least-once —
+ * without this, a redelivered run-exec job re-runs the harness against the workspace.
+ */
+export type RunExecClaim =
+  | { readonly outcome: "claimed"; readonly run: Run }
+  | { readonly outcome: "already-running"; readonly run: Run }
+  | { readonly outcome: "terminal"; readonly run: Run }
+  | { readonly outcome: "not-found" };
+
 export interface MarkRunCompletedInput {
   readonly id: string;
   readonly exitCode: number;
@@ -67,6 +83,7 @@ const runRepoOperationSchema = Schema.Literals([
   "getRunById",
   "listRuns",
   "markRunRunning",
+  "claimRunForExec",
   "markRunCompleted",
   "markRunFailed",
 ]);
@@ -118,6 +135,9 @@ export interface RunRepoService {
   readonly getRunById: (id: string) => Effect.Effect<Run | undefined, RunRepoError>;
   readonly listRuns: (input?: ListRunsInput) => Effect.Effect<readonly Run[], RunRepoError>;
   readonly markRunRunning: (input: MarkRunRunningInput) => Effect.Effect<Run | null, RunRepoError>;
+  readonly claimRunForExec: (
+    input: ClaimRunForExecInput,
+  ) => Effect.Effect<RunExecClaim, RunRepoError>;
   readonly markRunCompleted: (
     input: MarkRunCompletedInput,
   ) => Effect.Effect<Run | null, RunRepoError>;
@@ -210,6 +230,34 @@ export const RunRepoLive = Layer.effect(
               .where(eq(runs.id, input.id))
               .returning();
             return run ?? null;
+          }),
+        ),
+
+      claimRunForExec: (input) =>
+        withRunRepoError(
+          "claimRunForExec",
+          Effect.gen(function* () {
+            // The status guard in the WHERE is the claim: a redelivery (or a racing consumer)
+            // updates zero rows instead of stomping a run that already started or finished.
+            const [claimed] = yield* db
+              .update(runs)
+              .set({ status: "running", startedAt: input.startedAt ?? new Date() })
+              .where(and(eq(runs.id, input.id), eq(runs.status, "queued")))
+              .returning();
+            if (claimed !== undefined) {
+              return { outcome: "claimed", run: claimed } as const;
+            }
+            const [existing] = yield* db.select().from(runs).where(eq(runs.id, input.id)).limit(1);
+            if (existing === undefined) {
+              return { outcome: "not-found" } as const;
+            }
+            // Anything non-terminal maps to already-running: whatever state lost us the claim,
+            // the fail-safe answer is "someone else owns this run", never a second execution.
+            return existing.status === "completed" ||
+              existing.status === "failed" ||
+              existing.status === "cancelled"
+              ? ({ outcome: "terminal", run: existing } as const)
+              : ({ outcome: "already-running", run: existing } as const);
           }),
         ),
 
