@@ -247,6 +247,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       gitHubSourceIntegration,
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      // The reaper re-drives the same pipeline as the consumer, so it needs the same
+      // deployment-specific injections — omitting them here made every reaped job on
+      // Kubernetes fall back to the docker builder and die on the absent socket.
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+      ...(imageBuilder === undefined ? {} : { imageBuilder }),
     }).catch((error: unknown) => {
       console.error("Workspace build job reaper tick failed", { error });
     });
