@@ -64,7 +64,15 @@ import { env } from "../../runtime-env.js";
 import { servicePrincipals } from "../../services/service-principals.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
+const STREAM_KIND_STDOUT = 2;
 const STREAM_KIND_PTY_OUTPUT = 5;
+// A session records pty output (PTY mode) or plain stdout (pipe mode — protocol harnesses),
+// never both; reading both kinds serves whichever the session actually produced. Scoped by the
+// daemon session id so a run's other sessions (exec helpers, shells) never interleave.
+export const SESSION_OUTPUT_STREAM_KINDS: readonly number[] = [
+  STREAM_KIND_STDOUT,
+  STREAM_KIND_PTY_OUTPUT,
+];
 // Daemon ControlErrorCode.SESSION_NOT_FOUND — the session is already gone daemon-side.
 const DAEMON_SESSION_NOT_FOUND = 8;
 
@@ -613,7 +621,9 @@ export const getSessionOutput = (input: {
 
     const query = yield* TelemetryQuery;
     const chunks = yield* withInternalError(
-      query.scrollbackChunks(session.runId, STREAM_KIND_PTY_OUTPUT, {
+      query.scrollbackChunks(session.runId, SESSION_OUTPUT_STREAM_KINDS, {
+        // Null before the daemon session opened — nothing is recorded yet, unscoped is exact.
+        ...(session.daemonSessionId === null ? {} : { sessionId: session.daemonSessionId }),
         ...(from === undefined ? {} : { fromSequence: from }),
         limit,
       }),

@@ -29,9 +29,13 @@ import { TelemetryQuery } from "@sealant/telemetry";
 import { Effect, Option, Stream } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-import { authorize, reconcileSession, requireSession } from "./sessions.module.js";
+import {
+  authorize,
+  reconcileSession,
+  requireSession,
+  SESSION_OUTPUT_STREAM_KINDS,
+} from "./sessions.module.js";
 
-const STREAM_KIND_PTY_OUTPUT = 5;
 const POLL_INTERVAL_MS = 250;
 const PING_INTERVAL_MS = 15_000;
 const PAGE_LIMIT = 500;
@@ -55,7 +59,10 @@ const delay = (ms: number) => Effect.promise(() => new Promise((r) => setTimeout
 const step = (state: TailState) =>
   Effect.gen(function* () {
     const query = yield* TelemetryQuery;
-    const chunks = yield* query.scrollbackChunks(state.session.runId, STREAM_KIND_PTY_OUTPUT, {
+    const chunks = yield* query.scrollbackChunks(state.session.runId, SESSION_OUTPUT_STREAM_KINDS, {
+      ...(state.session.daemonSessionId === null
+        ? {}
+        : { sessionId: state.session.daemonSessionId }),
       fromSequence: state.from,
       limit: PAGE_LIMIT,
     });

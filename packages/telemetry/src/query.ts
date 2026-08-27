@@ -78,11 +78,14 @@ export interface TelemetryQueryService {
    * Byte-exact recorded output chunks for a run, by SEQUENCE RANGE — the resumable read behind
    * session reattach and the live SSE tail. Ordered by sequence (the durable cursor); each chunk
    * carries its sequence so a reader resumes with `lastSequence + 1n`. `stream` is the numeric
-   * `StreamKind` (stdout 2, stderr 3, ptyOutput 5).
+   * `StreamKind` (stdout 2, stderr 3, ptyOutput 5); an array reads several kinds in one
+   * sequence-ordered pass (a session records pty output OR plain stdout, never both — callers
+   * that serve "the session's output" pass both kinds and the store answers with whichever
+   * exists).
    */
   readonly scrollbackChunks: (
     runId: string,
-    stream: number,
+    stream: number | readonly number[],
     options?: ScrollbackRangeOptions,
   ) => Effect.Effect<readonly ScrollbackChunk[], TelemetryQueryError>;
   /** Highest ingested sequence for a run ("0" when nothing is ingested yet) — the resume cursor. */
@@ -304,7 +307,9 @@ export const makeTelemetryQuery = (
           .where(
             and(
               eq(telemetryScrollback.runId, runId),
-              eq(telemetryScrollback.stream, stream),
+              typeof stream === "number"
+                ? eq(telemetryScrollback.stream, stream)
+                : inArray(telemetryScrollback.stream, [...stream]),
               ...(options?.processId === undefined
                 ? []
                 : [eq(telemetryScrollback.processId, options.processId)]),
