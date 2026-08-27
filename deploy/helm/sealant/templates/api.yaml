@@ -50,6 +50,10 @@ spec:
             {{- include "sealant.secretEnv" . | nindent 12 }}
             {{- include "sealant.controlTlsEnv" . | nindent 12 }}
             - { name: PORT, value: "4000" }
+            # The create-time capability check for cluster env references reads the runtime
+            # adapter here in the API, not only in the worker — without this, every chart
+            # install refuses `envFrom`/`serviceAccountName` claiming the docker runtime.
+            - { name: DEFAULT_RUNTIME_ADAPTER, value: k8s }
             - name: DATABASE_URL
               value: {{ include "sealant.databaseUrl" . | quote }}
             - name: RABBITMQ_URL
