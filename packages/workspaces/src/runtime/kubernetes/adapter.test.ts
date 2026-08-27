@@ -3,7 +3,7 @@
  * dead Pod, readiness through the control channel, credential files over that channel, idempotent
  * stop, and readable failures. No cluster, no network.
  */
-import type { V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
@@ -32,6 +32,7 @@ interface FakeCluster extends KubernetesApi {
   readonly pods: Map<string, V1Pod>;
   readonly services: Map<string, V1Service>;
   readonly secrets: Map<string, V1Secret>;
+  readonly configmaps: Map<string, V1ConfigMap>;
   readonly certificates: Map<string, CertificateObject>;
   /** Make newly created pods reach this phase on the next read. */
   nextPhase: string;
@@ -42,6 +43,7 @@ const fakeCluster = (): FakeCluster => {
   const pods = new Map<string, V1Pod>();
   const services = new Map<string, V1Service>();
   const secrets = new Map<string, V1Secret>();
+  const configmaps = new Map<string, V1ConfigMap>();
   const certificates = new Map<string, CertificateObject>();
   const log: string[] = [];
   const create = <T extends { metadata?: { name?: string | undefined } | undefined }>(
@@ -66,6 +68,7 @@ const fakeCluster = (): FakeCluster => {
     pods,
     services,
     secrets,
+    configmaps,
     certificates,
     nextPhase: "Running",
     log,
@@ -90,6 +93,7 @@ const fakeCluster = (): FakeCluster => {
       return secret;
     },
     getSecret: async (name) => secrets.get(name),
+    getConfigMap: async (name) => configmaps.get(name),
     deleteSecret: async (name) => del(secrets, "secret", name),
     listSecrets: async () => [...secrets.values()],
     createCertificate: async (certificate) => create(certificates, "certificate", certificate),
@@ -341,8 +345,23 @@ describe("KubernetesRuntimeAdapter", () => {
   });
 });
 
-describe("cluster env references belt (until worker-side resolution ships)", () => {
-  it("refuses runtime.envFrom and kubernetes.serviceAccountName with an honest message", () => {
+const b64 = (value: string): string => Buffer.from(value, "utf8").toString("base64");
+
+/** A bindable object: opted in with the workspace-env label, not platform-managed. */
+const optIn = { "sealant.sh/workspace-env": "true" };
+
+const withRuntime = (
+  overrides: Partial<RuntimeAdapterLaunchInput["blueprint"]["runtime"]>,
+): RuntimeAdapterLaunchInput => ({
+  ...launchInput,
+  blueprint: {
+    ...launchInput.blueprint,
+    runtime: { ...launchInput.blueprint.runtime, ...overrides },
+  },
+});
+
+describe("cluster env sources (worker-side resolution)", () => {
+  it("gates an explicit ServiceAccount on the allowlist; envFrom itself is supported", () => {
     const withEnvFrom = {
       ...cases.gitSource.blueprint,
       runtime: {
@@ -350,9 +369,8 @@ describe("cluster env references belt (until worker-side resolution ships)", () 
         envFrom: [{ kind: "secret" as const, name: "app-env" }],
       },
     };
-    expect(supportForKubernetes("k8s", config, { blueprint: withEnvFrom })).toMatchObject({
-      supported: false,
-      reason: "unsupported-runtime-requirement",
+    expect(supportForKubernetes("k8s", config, { blueprint: withEnvFrom })).toEqual({
+      supported: true,
     });
     const withServiceAccount = {
       ...cases.gitSource.blueprint,
@@ -364,6 +382,101 @@ describe("cluster env references belt (until worker-side resolution ships)", () 
     expect(supportForKubernetes("k8s", config, { blueprint: withServiceAccount })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
+      message: expect.stringContaining("SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS"),
     });
+    expect(
+      supportForKubernetes(
+        "k8s",
+        { ...config, allowedWorkspaceServiceAccounts: ["dev-sa"] },
+        { blueprint: withServiceAccount },
+      ),
+    ).toEqual({ supported: true });
+  });
+
+  it("resolves both kinds with bound keys as the weakest layer on both lanes", async () => {
+    const cluster = fakeCluster();
+    cluster.secrets.set("app-env", {
+      metadata: { name: "app-env", labels: optIn },
+      data: { APP_TOKEN: b64("s3cret"), OPENAI_API_KEY: b64("bound-must-lose") },
+    });
+    cluster.configmaps.set("app-config", {
+      metadata: { name: "app-config", labels: optIn },
+      data: { APP_MODE: "staging", APP_REGION: "eu-1" },
+    });
+    const channel = controlChannel();
+    // The launch Secret is deleted once the daemon is ready; capture it at readiness time.
+    let envJson: string | undefined;
+    channel.health.mockImplementation(async () => {
+      const names = workspaceResourceNames("run-golden-2");
+      const data = cluster.secrets.get(names.launchSecret)?.data?.["env.json"];
+      envJson = data === undefined ? undefined : Buffer.from(data, "base64").toString("utf8");
+    });
+    const adapter = adapterFor(cluster, channel);
+
+    await adapter.launch(
+      withRuntime({
+        envFrom: [
+          { kind: "secret", name: "app-env" },
+          { kind: "configmap", name: "app-config" },
+        ],
+        env: { APP_MODE: "prod" },
+      }),
+    );
+
+    // Secret lane: bound keys merge under the caller's secret env — OPENAI_API_KEY stays "sk".
+    expect(envJson).toBeDefined();
+    expect(JSON.parse(envJson ?? "{}")).toEqual({ APP_TOKEN: "s3cret", OPENAI_API_KEY: "sk" });
+    // Plain lane: bound ConfigMap keys are present but shadowed by explicit caller env.
+    const pod = [...cluster.pods.values()][0];
+    const env = pod?.spec?.containers[0]?.env ?? [];
+    expect(env.filter((entry) => entry.name === "APP_MODE")).toEqual([
+      { name: "APP_MODE", value: "prod" },
+    ]);
+    expect(env).toContainEqual({ name: "APP_REGION", value: "eu-1" });
+    // No bound secret value ever lands in the Pod spec.
+    expect(JSON.stringify(pod)).not.toContain("s3cret");
+  });
+
+  it("fails readably, naming the binding, when a bound object is missing or not opted in", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    await expect(
+      adapter.launch(withRuntime({ envFrom: [{ kind: "secret", name: "absent" }] })),
+    ).rejects.toMatchObject({
+      code: "env-source-unresolvable",
+      message: expect.stringContaining("secret/absent"),
+    });
+
+    cluster.secrets.set("unlabeled", { metadata: { name: "unlabeled" }, data: {} });
+    await expect(
+      adapter.launch(withRuntime({ envFrom: [{ kind: "secret", name: "unlabeled" }] })),
+    ).rejects.toThrow(/not opted in/);
+    expect(cluster.pods.size).toBe(0);
+  });
+
+  it("refuses platform-managed objects even when they carry the opt-in label", async () => {
+    const cluster = fakeCluster();
+    cluster.secrets.set("smuggled", {
+      metadata: {
+        name: "smuggled",
+        labels: { ...optIn, "app.kubernetes.io/managed-by": "sealant" },
+      },
+      data: { X: b64("y") },
+    });
+    const adapter = adapterFor(cluster, controlChannel());
+    await expect(
+      adapter.launch(withRuntime({ envFrom: [{ kind: "secret", name: "smuggled" }] })),
+    ).rejects.toThrow(/managed by the platform/);
+  });
+
+  it("runs the Pod under an allowlisted explicit ServiceAccount, token still unmounted", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel(), {
+      allowedWorkspaceServiceAccounts: ["irsa-agents"],
+    });
+    await adapter.launch(withRuntime({ kubernetes: { serviceAccountName: "irsa-agents" } }));
+    const pod = [...cluster.pods.values()][0];
+    expect(pod?.spec?.serviceAccountName).toBe("irsa-agents");
+    expect(pod?.spec?.automountServiceAccountToken).toBe(false);
   });
 });

@@ -58,6 +58,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "get", "list", "update", "delete"]
+  # `get` also serves bound `runtime.envFrom` ConfigMaps (worker-side env-source resolution).
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "get", "delete"]

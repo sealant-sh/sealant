@@ -96,6 +96,11 @@ workspaces:
   podSecurityEnforce: privileged
   serviceAccount: sealant-workspace
   buildServiceAccount: sealant-build
+  # ServiceAccount names a workspace blueprint may explicitly request
+  # (`runtime.kubernetes.serviceAccountName`). Each entry is a deliberate trust grant — typically
+  # an IRSA/Workload-Identity SA you created and bound cloud-side for coding agents. Empty means
+  # explicit requests are refused; the kube API token is never mounted either way.
+  allowedServiceAccounts: []
   controlPort: 7443
   # Logical root → RWX claim. The Mend store is the typical entry. Claims must exist.
   volumeMappings:

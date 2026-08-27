@@ -372,6 +372,8 @@ export const workerRuntimeEnvSchema = z.object({
 export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_NAMESPACE: z.string().trim().min(1).optional(),
   SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT: z.string().trim().min(1).optional(),
+  /** Comma-separated ServiceAccount names blueprints may request (each an operator trust grant). */
+  SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS: z.string().trim().min(1).optional(),
   /** JSON array of `{ "logicalRoot": "/var/lib/mend/store", "claimName": "mend-store" }`. */
   SEALANT_K8S_VOLUME_MAPPINGS: z.string().trim().min(1).optional(),
   SEALANT_K8S_CONTROL_PORT: z.coerce.number().int().min(1).max(65535).optional(),

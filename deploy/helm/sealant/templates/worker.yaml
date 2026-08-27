@@ -33,6 +33,9 @@ spec:
             - { name: DEFAULT_RUNTIME_ADAPTER, value: k8s }
             - { name: SEALANT_K8S_NAMESPACE, value: {{ include "sealant.workspaceNamespace" . | quote }} }
             - { name: SEALANT_K8S_WORKSPACE_SERVICE_ACCOUNT, value: {{ .Values.workspaces.serviceAccount | quote }} }
+            {{- with .Values.workspaces.allowedServiceAccounts }}
+            - { name: SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS, value: {{ join "," . | quote }} }
+            {{- end }}
             - { name: SEALANT_K8S_BUILD_SERVICE_ACCOUNT, value: {{ .Values.workspaces.buildServiceAccount | quote }} }
             - { name: SEALANT_K8S_VOLUME_MAPPINGS, value: {{ include "sealant.volumeMappings" . | quote }} }
             - { name: SEALANT_K8S_CONTROL_PORT, value: {{ .Values.workspaces.controlPort | quote }} }

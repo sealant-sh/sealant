@@ -33,6 +33,13 @@ export {
   type VolumeMapping,
 } from "./config.js";
 export {
+  EnvSourceResolutionError,
+  resolveEnvSources,
+  WORKSPACE_ENV_OPT_IN_LABEL,
+  type EnvSourceReader,
+  type ResolvedEnvSources,
+} from "./env-sources.js";
+export {
   createKubernetesLaunchMaterialStager,
   LaunchMaterialTooLargeError,
 } from "./launch-material.js";
