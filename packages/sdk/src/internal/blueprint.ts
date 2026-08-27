@@ -173,6 +173,12 @@ export const buildCreateWorkspaceRequest = (
           })),
         }),
     ...(userEnv === undefined || Object.keys(userEnv).length === 0 ? {} : { userEnv }),
+    ...(options.envFrom === undefined || options.envFrom.length === 0
+      ? {}
+      : { envFrom: options.envFrom.map(({ kind, name }) => ({ kind, name })) }),
+    ...(options.kubernetes?.serviceAccountName === undefined
+      ? {}
+      : { kubernetes: { serviceAccountName: options.kubernetes.serviceAccountName } }),
   };
   const spec = {
     version: "1",

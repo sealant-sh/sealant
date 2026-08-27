@@ -216,6 +216,13 @@ export interface WorkspaceServicesOptions {
   readonly docker?: boolean;
 }
 
+/** One cluster env source: a Kubernetes object whose keys become workspace environment. */
+export interface WorkspaceEnvFromSource {
+  readonly kind: "secret" | "configmap";
+  /** Kubernetes object name (DNS-1123 subdomain) in the platform's workspaces namespace. */
+  readonly name: string;
+}
+
 export interface CreateOptions {
   /**
    * Source git repository to build the workspace around (e.g. `"github.com/acme/billing-service"`).
@@ -283,6 +290,31 @@ export interface CreateOptions {
    * instead). Docker runtime only.
    */
   readonly secretEnv?: Readonly<Record<string, string>>;
+  /**
+   * Cluster env sources — Kubernetes runtimes only. Each entry names one Kubernetes `Secret` or
+   * `ConfigMap` in the platform's workspaces namespace whose KEYS become workspace environment,
+   * resolved by the platform worker at workspace creation (a launch keeps its snapshot across
+   * container restarts; rotation reaches only later launches). Ordered, last wins across kinds.
+   * Only objects the operator opted in with the `sealant.sh/workspace-env: "true"` label
+   * resolve; platform-managed objects are refused unconditionally. Explicit `env` / `secretEnv`
+   * and platform-owned names always win over bound keys; bound Secret values ride the transient
+   * secret channel and are masked in captured output. On a deployment whose workspaces do not
+   * run on Kubernetes, create is refused synchronously with the stable error code
+   * `runtime-env-references-unsupported` — no workspace is created.
+   */
+  readonly envFrom?: readonly WorkspaceEnvFromSource[];
+  /**
+   * Kubernetes-runtime-only settings. `serviceAccountName` is an explicit TRUST GRANT: the
+   * workspace Pod runs under it, and with IRSA / Workload Identity the session agent holds that
+   * role's full permissions for the whole session — bind a least-privilege role intended for
+   * untrusted code. Honored only against the install's allowlist
+   * (`SEALANT_K8S_ALLOWED_WORKSPACE_SERVICE_ACCOUNTS`); other names fail the launch readable.
+   * The Kubernetes API token is never automounted regardless. Non-Kubernetes deployments refuse
+   * at create time with `runtime-env-references-unsupported`.
+   */
+  readonly kubernetes?: {
+    readonly serviceAccountName?: string;
+  };
   /** Runtime-managed services that need more than installing an OS package. */
   readonly services?: WorkspaceServicesOptions;
   /** When true (default), resolve only once the workspace runtime is live. */
