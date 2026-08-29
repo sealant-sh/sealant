@@ -8,6 +8,7 @@ import type {
   CloseSessionRequest,
   CreateAccessTokenRequest,
   CreateConnectedAccountRequest,
+  CreateSshKeyRequest,
   EnsureUserRequest,
   CreateRunRequest,
   CreateSessionRequest,
@@ -197,3 +198,23 @@ export const archiveConnectedAccountOp = (connectedAccountId: string, ownerUserI
 
 export const inferenceRespondOp = (payload: InferenceRespondRequest) =>
   Effect.flatMap(SealantApiClient, (client) => client.inference.respond({ payload }));
+
+// ---- system ----
+
+export const getSetupStateOp = () =>
+  Effect.flatMap(SealantApiClient, (client) => client.system.getSetupState({}));
+
+// ---- ssh keys ----
+
+export const createSshKeyOp = (payload: CreateSshKeyRequest) =>
+  Effect.flatMap(SealantApiClient, (client) => client.sshKeys.createSshKey({ payload }));
+
+export const listSshKeysOp = (ownerUserId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sshKeys.listSshKeys({ query: { ownerUserId } }),
+  );
+
+export const archiveSshKeyOp = (sshKeyId: string, ownerUserId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.sshKeys.archiveSshKey({ params: { sshKeyId }, query: { ownerUserId } }),
+  );

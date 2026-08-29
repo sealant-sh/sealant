@@ -14,15 +14,19 @@ import type { ConnectedAccountSummary } from "@sealant/api-contracts";
 
 import {
   archiveConnectedAccountOp,
+  archiveSshKeyOp,
   createAccessTokenOp,
   createConnectedAccountOp,
+  createSshKeyOp,
   createWorkspaceOp,
   ensureUserOp,
   getRunOp,
+  getSetupStateOp,
   getUserOp,
   getWorkspaceOp,
   inferenceRespondOp,
   listConnectedAccountsOp,
+  listSshKeysOp,
   listWorkspacesOp,
 } from "./effect/operations.js";
 import { runHarness, startHarness } from "./effect/run-harness.js";
@@ -35,6 +39,7 @@ import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
 import { buildInferenceRespondRequest, mapInferenceResponse } from "./internal/inference.js";
+import { mapSshKey, mapWorkspaceSshInfo } from "./internal/ssh.js";
 import type {
   AccessTokensNamespace,
   ConnectedAccount,
@@ -43,7 +48,9 @@ import type {
   InferenceNamespace,
   ListOptions,
   Run,
+  SshKeysNamespace,
   Workspace,
+  WorkspaceSshNamespace,
   SealantConfig,
   UsersNamespace,
 } from "./types.js";
@@ -213,6 +220,43 @@ export class Sealant {
       );
       return mapConnectedAccount(wire);
     },
+  };
+
+  /**
+   * Where workspace SSH connects for this deployment — how an editor (VS Code Remote-SSH) or
+   * plain `ssh` reaches a workspace. Destination: `<usernamePrefix>-<workspaceId>@<host>:<port>`;
+   * the gateway authorizes each connection from the offered key's owning account.
+   */
+  readonly workspaceSsh: WorkspaceSshNamespace = {
+    info: async () => {
+      const wire = await this.#runtime.run(getSetupStateOp());
+      return mapWorkspaceSshInfo(wire);
+    },
+  };
+
+  /**
+   * The owner's SSH public keys — what the workspace SSH gateway resolves a connection to.
+   * `ensure` is idempotent: re-offering the same key returns the existing row.
+   */
+  readonly sshKeys: SshKeysNamespace = {
+    ensure: async (options) =>
+      mapSshKey(
+        await this.#runtime.run(
+          createSshKeyOp({
+            ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+            publicKey: options.publicKey,
+            ...(options.name === undefined ? {} : { name: options.name }),
+          }),
+        ),
+      ),
+    list: async () => {
+      const wire = await this.#runtime.run(listSshKeysOp(this.#ctx.config.hostLocal.ownerUserId));
+      return wire.items.map(mapSshKey);
+    },
+    remove: async (sshKeyId) =>
+      mapSshKey(
+        await this.#runtime.run(archiveSshKeyOp(sshKeyId, this.#ctx.config.hostLocal.ownerUserId)),
+      ),
   };
 
   readonly accessTokens: AccessTokensNamespace = {
