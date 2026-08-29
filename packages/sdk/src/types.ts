@@ -1109,3 +1109,54 @@ export interface ConnectedAccountsNamespace {
   /** Soft-archives the account; uniform not-found for "does not exist" and "not yours". */
   disconnect(connectedAccountId: string): Promise<ConnectedAccount>;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Workspace SSH (how an editor or plain `ssh` reaches a workspace through the gateway)
+// ---------------------------------------------------------------------------------------------
+
+/** Connect coordinates for the deployment's workspace SSH gateway. */
+export interface WorkspaceSshInfo {
+  readonly host: string;
+  readonly port: number;
+  /** The SSH username is `<usernamePrefix>-<workspaceId>`; the key names the account. */
+  readonly usernamePrefix: string;
+}
+
+/**
+ * Where workspace SSH connects for this deployment. Consumers build the destination
+ * `<usernamePrefix>-<workspaceId>@<host>:<port>` themselves — nothing here is secret; the
+ * gateway authorizes each connection from the offered key's owning account.
+ */
+export interface WorkspaceSshNamespace {
+  /** Gateway connect coordinates, or null when the deployment exposes no workspace SSH gateway. */
+  info(): Promise<WorkspaceSshInfo | null>;
+}
+
+/** A registered SSH public key as every surface sees it — never carries the key material back. */
+export interface SshKey {
+  readonly sshKeyId: string;
+  readonly ownerUserId: string;
+  readonly name: string;
+  readonly algorithm: string;
+  readonly fingerprint: string;
+  readonly createdAt: string;
+}
+
+export interface EnsureSshKeyOptions {
+  /** Raw `<algorithm> <base64> [comment]` line; normalized and fingerprinted server-side. */
+  readonly publicKey: string;
+  /** Display name; defaults to the key comment, else `<algorithm> <fingerprint prefix>`. */
+  readonly name?: string;
+}
+
+/**
+ * The owner's SSH public keys — what the workspace SSH gateway resolves a connection to.
+ * `ensure` is idempotent per owner: re-offering the same key returns the existing row; a key
+ * active on another account is refused (active fingerprints are globally unique).
+ */
+export interface SshKeysNamespace {
+  ensure(options: EnsureSshKeyOptions): Promise<SshKey>;
+  list(): Promise<readonly SshKey[]>;
+  /** Archives the key; the gateway stops resolving it. */
+  remove(sshKeyId: string): Promise<SshKey>;
+}
