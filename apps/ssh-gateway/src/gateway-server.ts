@@ -398,10 +398,34 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         void (async () => {
           try {
             const control = await ensureControl();
+            if (sessionPty === undefined) {
+              // No pty-req before the shell request: the client is a PROGRAM driving a shell
+              // over stdin — `ssh -T` (VS Code Remote-SSH's server bootstrap), `ssh host <
+              // script`. A PTY here echoes the client's own input back and interleaves
+              // prompts and instrumentation into the stream, corrupting any protocol run
+              // over it (Remote-SSH sees its echoed marker strings as protocol messages).
+              // Honor no-pty: a plain stdin-driven login shell over the byte-clean exec
+              // path — no echo, no prompts, no terminal.
+              const exec = await control.execLogin({
+                command: 'exec "${SHELL:-/bin/sh}"',
+                env: sessionEnv,
+                executionId: recordedRunId,
+              });
+              activeExec = exec;
+              bridgeChannel({
+                sshChannel,
+                channel: exec.channel,
+                onClientData: (data) => {
+                  exec.channel.write(data);
+                },
+                relayExit: true,
+              });
+              return;
+            }
             // §3.3 shell + §3.5 login semantics: openSession{login} -> attachSession{Interactive}.
             const shell = await control.openShell({
-              cols: sessionPty?.cols ?? 80,
-              rows: sessionPty?.rows ?? 24,
+              cols: sessionPty.cols,
+              rows: sessionPty.rows,
               term: sessionEnv.TERM,
               env: sessionEnv,
               executionId: recordedRunId,
