@@ -115,10 +115,12 @@ const bridgeChannel = (input: {
   readonly sshChannel: ServerChannel;
   readonly channel: Channel;
   readonly onClientData: (data: Uint8Array) => void;
+  /** Client EOF beyond the channel half-close — exec paths close the process stdin here. */
+  readonly onClientEof?: () => void;
   /** Whether to translate the daemon `End.exit_code`/`signal` into an SSH exit (exec/shell only). */
   readonly relayExit: boolean;
 }): void => {
-  const { sshChannel, channel, onClientData, relayExit } = input;
+  const { sshChannel, channel, onClientData, onClientEof, relayExit } = input;
 
   // Pump inbound daemon bytes -> SSH client, THEN relay the exit/close. The ordering here is
   // load-bearing: the `for await` loop only completes after the channel iterator has yielded every
@@ -161,6 +163,7 @@ const bridgeChannel = (input: {
   });
   // Client EOF: half-close outbound only. Inbound (daemon output + End/exit) keeps flowing.
   sshChannel.on("end", () => {
+    onClientEof?.();
     if (!channel.isOutboundClosed) {
       channel.end();
     }
@@ -415,8 +418,13 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
               bridgeChannel({
                 sshChannel,
                 channel: exec.channel,
+                // Stdin travels as writeStdin control requests: the exec-attach channel is
+                // output-only (the daemon registers no inbound sink — bytes written to it drop).
                 onClientData: (data) => {
-                  exec.channel.write(data);
+                  void control.writeProcessStdin(exec.processId, data).catch(() => {});
+                },
+                onClientEof: () => {
+                  void control.closeProcessStdin(exec.processId);
                 },
                 relayExit: true,
               });
@@ -470,8 +478,13 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
             bridgeChannel({
               sshChannel,
               channel: exec.channel,
+              // Stdin travels as writeStdin control requests: the exec-attach channel is
+              // output-only (the daemon registers no inbound sink — bytes written to it drop).
               onClientData: (data) => {
-                exec.channel.write(data);
+                void control.writeProcessStdin(exec.processId, data).catch(() => {});
+              },
+              onClientEof: () => {
+                void control.closeProcessStdin(exec.processId);
               },
               relayExit: true,
             });
