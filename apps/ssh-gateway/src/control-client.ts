@@ -202,6 +202,24 @@ export class ControlClient {
     ]);
   }
 
+  /**
+   * Write stdin bytes to a non-PTY attached process (§1.A exec-attach input path). The
+   * exec-attach CHANNEL is output-only — the daemon registers no inbound sink for it, so bytes
+   * written to the channel vanish; stdin travels as `writeStdin{processId}` control requests.
+   */
+  async writeProcessStdin(processId: string, data: Uint8Array): Promise<void> {
+    await this.#client.writeStdin({ processId }, data);
+  }
+
+  /** Half-close a non-PTY process's stdin — the client's EOF (`ssh host cmd < file`). */
+  async closeProcessStdin(processId: string): Promise<void> {
+    try {
+      await this.#client.request({ case: "closeStdin", value: { processId } });
+    } catch {
+      // Best-effort EOF: the process may already have exited.
+    }
+  }
+
   /** Write client keystrokes / stdin bytes to a session's PTY (§3.3 shell input path). */
   async writeSessionInput(sessionId: string, data: Uint8Array): Promise<void> {
     // Route to the daemon's PTY input path keyed by session id (`writeStdin{sessionId}`). The bare
