@@ -86,7 +86,10 @@ export const buildCreateWorkspaceRequest = (
       { code: "invalid_create_options" },
     );
   }
-  const sourceName = options.repository ?? options.source?.path ?? "workspace";
+  const sourceName =
+    options.repository ??
+    (options.source?.kind === "standby" ? options.source.rootPath : options.source?.path) ??
+    "workspace";
   const tail =
     sourceName
       .split("/")
@@ -94,7 +97,9 @@ export const buildCreateWorkspaceRequest = (
       .pop() ?? sourceName;
   const credentials = mapWorkspaceCredentials(options.credentials);
   const linkedWorktreeMount =
-    options.source === undefined ? null : discoverLinkedWorktreeMetadataMount(options.source.path);
+    options.source === undefined || options.source.kind === "standby"
+      ? null
+      : discoverLinkedWorktreeMetadataMount(options.source.path);
   const explicitMounts = options.mounts ?? [];
   const existingMetadataMount =
     linkedWorktreeMount === null
@@ -192,7 +197,9 @@ export const buildCreateWorkspaceRequest = (
               // Omitted ref = the repository's default branch, resolved by the clone itself.
               ...(options.ref === undefined ? {} : { ref: options.ref }),
             }
-          : { kind: "mount", hostPath: options.source?.path },
+          : options.source?.kind === "standby"
+            ? { kind: "standby", rootPath: options.source.rootPath }
+            : { kind: "mount", hostPath: options.source?.path },
       ...(dotfilesRepository === undefined
         ? {}
         : {
@@ -216,6 +223,7 @@ export const buildCreateWorkspaceRequest = (
               mountPath: mount.mountPath,
               // Omitted = the blueprint's default (read-only). Only an explicit choice is sent.
               ...(mount.readOnly === undefined ? {} : { readOnly: mount.readOnly }),
+              ...(mount.bindable === undefined ? {} : { bindable: mount.bindable }),
             })),
           }),
     },

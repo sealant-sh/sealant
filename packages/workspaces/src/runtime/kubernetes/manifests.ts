@@ -22,6 +22,7 @@ import type {
 } from "@kubernetes/client-node";
 
 import { getHarnessIntegration } from "../../harness/integrations.js";
+import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
   COMPONENT_WORKSPACE,
@@ -105,7 +106,7 @@ export const runSelector = (
  * credential env) are NOT here — see `secretEnvEntries`.
  */
 export const plainEnvEntries = (
-  input: Pick<RuntimeAdapterLaunchInput, "blueprint">,
+  input: Pick<RuntimeAdapterLaunchInput, "blueprint" | "binds">,
   config: Pick<KubernetesRuntimeConfig, "controlPort" | "volumeMappings">,
   options: { readonly secretEnvFile: boolean; readonly dotfilesArchiveDir: string | undefined },
 ): ReadonlyArray<readonly [string, string]> => {
@@ -115,9 +116,12 @@ export const plainEnvEntries = (
     entries.push([key, value]);
   }
   const source = blueprint.sources.workspace;
-  if (source.kind === "mount") {
-    entries.push(["SEALANT_WORKSPACE_SOURCE", "mount"]);
-    entries.push(["SEALANT_WORKSPACE_MOUNT_HOST_PATH", source.hostPath]);
+  if (source.kind === "mount" || source.kind === "standby") {
+    entries.push(["SEALANT_WORKSPACE_SOURCE", source.kind]);
+    entries.push([
+      "SEALANT_WORKSPACE_MOUNT_HOST_PATH",
+      source.kind === "mount" ? source.hostPath : source.rootPath,
+    ]);
     entries.push([
       "SEALANT_MOUNT_ALLOWED_STORE_ROOTS",
       config.volumeMappings.map((mapping) => mapping.logicalRoot).join(":"),
@@ -128,6 +132,11 @@ export const plainEnvEntries = (
       entries.push(["SEALANT_WORKSPACE_REPO_REF", source.ref]);
     }
   }
+  // Bindable mounts (sealantd ADR-0014) and the binds a relaunch re-applies before the harness.
+  const bindableEnv = bindableMountsEnv(blueprint);
+  if (bindableEnv !== undefined) entries.push(["SEALANT_BINDABLE_MOUNTS", bindableEnv]);
+  const bindsEnvValue = bindsEnv(input.binds);
+  if (bindsEnvValue !== undefined) entries.push(["SEALANT_BINDS", bindsEnvValue]);
   entries.push(["SEALANT_OCI_RUNTIME", blueprint.runtime.ociRuntime]);
   const harness = getHarnessIntegration(blueprint.harness.id);
   if (harness !== undefined) {

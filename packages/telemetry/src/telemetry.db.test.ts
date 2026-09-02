@@ -132,6 +132,7 @@ const stubSession: SealantSession = {
   capabilities: Effect.die("unused in test"),
   exec: () => Effect.die("unused in test"),
   writeStdin: () => Effect.die("unused in test"),
+  bindMount: () => Effect.die("unused in test"),
   closeStdin: () => Effect.die("unused in test"),
   signalProcess: () => Effect.die("unused in test"),
   openSession: () => Effect.die("unused in test"),

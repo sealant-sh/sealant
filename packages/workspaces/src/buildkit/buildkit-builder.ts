@@ -690,7 +690,7 @@ const mapBlueprintToResolvedImagePlan = (
   // Mount sources have nothing to clone: no runtime clone key is baked.
   const workspaceSource = blueprint.sources.workspace;
   const runtimeSecrets =
-    workspaceSource.kind === "mount" || workspaceSource.authRef === undefined
+    workspaceSource.kind !== "git" || workspaceSource.authRef === undefined
       ? []
       : [
           {

@@ -116,6 +116,7 @@ const sealantOperationSchema = Schema.Literals([
   "attachSession",
   "openForward",
   "closeForward",
+  "bindMount",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -603,6 +604,11 @@ export interface SealantSession {
   ) => Effect.Effect<{ readonly channelId: string; readonly channel: Channel }, SealantError>;
   /** Closes a forward explicitly — cheaper than waiting for connection teardown. */
   readonly closeForward: (channelId: string) => Effect.Effect<void, SealantError>;
+  /**
+   * Points a bindable mount's path at a subdirectory of its root (sealantd ADR-0014); an empty
+   * subpath unbinds. The daemon validates the target and records the bind for its own restarts.
+   */
+  readonly bindMount: (mountPath: string, subpath: string) => Effect.Effect<void, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -825,6 +831,11 @@ const makeSession = (client: SealantClient): SealantSession => ({
     withSealantError(
       "closeForward",
       Effect.tryPromise(() => client.closeForward(channelId)),
+    ),
+  bindMount: (mountPath, subpath) =>
+    withSealantError(
+      "bindMount",
+      Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
     ),
 
   shutdown: (graceMillis) =>

@@ -94,6 +94,7 @@ const makeHarness = (input: {
     createWorkspace: () => Effect.die("unused"),
     getWorkspaceByAttemptId: () => Effect.succeed(input.workspace),
     getWorkspaceById: () => Effect.succeed(input.workspace),
+    setWorkspaceBinds: () => Effect.succeed(input.workspace ?? null),
     linkWorkspaceAttempt: () => Effect.die("unused"),
     listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.succeed([]),

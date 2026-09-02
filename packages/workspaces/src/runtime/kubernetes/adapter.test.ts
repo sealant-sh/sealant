@@ -305,7 +305,7 @@ describe("KubernetesRuntimeAdapter", () => {
         ...launchInput.blueprint,
         sources: {
           ...launchInput.blueprint.sources,
-          mounts: [{ hostPath: "/etc", mountPath: "/mnt/etc", readOnly: true }],
+          mounts: [{ hostPath: "/etc", mountPath: "/mnt/etc", readOnly: true, bindable: false }],
         },
       },
     };

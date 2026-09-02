@@ -118,6 +118,27 @@ export const execWorkspaceRequestSchema = Schema.Struct({
 });
 export type ExecWorkspaceRequest = typeof execWorkspaceRequestSchema.Type;
 
+/**
+ * Bind a standby workspace's working directory, or a bindable extra mount, to one subdirectory of
+ * its root (sealantd ADR-0014). `mountPath` defaults to the working directory; an empty `subpath`
+ * unbinds. The reply is the workspace's full set of live bindings, which every relaunch re-applies.
+ */
+export const bindWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+  mountPath: Schema.optional(NonEmptyString),
+  subpath: Schema.String,
+});
+export type BindWorkspaceRequest = typeof bindWorkspaceRequestSchema.Type;
+
+export const workspaceBindSchema = Schema.Struct({
+  mountPath: NonEmptyString,
+  subpath: NonEmptyString,
+});
+export const workspaceBindsSchema = Schema.Struct({
+  binds: Schema.Array(workspaceBindSchema),
+});
+export type WorkspaceBinds = typeof workspaceBindsSchema.Type;
+
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
 });
@@ -411,6 +432,21 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
         WorkspaceServiceUnavailableError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the daemon applies the bind over the control connection before this answers.
+    HttpApiEndpoint.post("bindWorkspace", "/:workspaceId/bind", {
+      params: workspaceIdParams,
+      payload: bindWorkspaceRequestSchema,
+      success: workspaceBindsSchema,
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // No live runtime to bind in (never launched, mid-launch, or the daemon refused).
+        WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
     }),

@@ -1,4 +1,8 @@
-import { newWorkspaceSchema, runtimeAdapterIdSchema } from "@sealant/validators";
+import {
+  workspaceBindSchema,
+  newWorkspaceSchema,
+  runtimeAdapterIdSchema,
+} from "@sealant/validators";
 import { z } from "zod";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
@@ -97,6 +101,11 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   secretEnv: z.record(z.string(), z.string()).optional(),
   /** Labelling only (never a secret): the workspace this run belongs to. */
   workspaceId: z.string().trim().min(1).optional(),
+  /**
+   * The workspace's live bindings (sealantd ADR-0014), re-supplied on every launch so a relaunch
+   * boots with `/workspace/repo` (and any bindable mount) pointing where it did.
+   */
+  binds: z.array(workspaceBindSchema).optional(),
   /** Labelling only: an opaque principal id, when safe to stamp on resources. */
   principalId: z.string().trim().min(1).optional(),
   /** Hot-pool skeletons may get a different PriorityClass. */

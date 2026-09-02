@@ -5,6 +5,7 @@
  * the facade) keeps the wire surface in one place and unit-testable.
  */
 import type {
+  BindWorkspaceRequest,
   CloseSessionRequest,
   CreateAccessTokenRequest,
   CreateConnectedAccountRequest,
@@ -57,6 +58,11 @@ export const listWorkspacesOp = (query: ListWorkspacesQuery) =>
 export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.execWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const bindWorkspaceOp = (workspaceId: string, payload: BindWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.bindWorkspace({ params: { workspaceId }, payload }),
   );
 
 export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>

@@ -31,6 +31,7 @@ describe("blueprint sources.mounts", () => {
         hostPath: "/srv/store/_references/effect",
         mountPath: "/workspace/ref/effect",
         readOnly: true,
+        bindable: false,
       },
     ]);
   });
@@ -69,6 +70,34 @@ describe("blueprint sources.mounts", () => {
     expect(() =>
       parseWorkspaceBlueprint(withMount({ hostPath: "/srv/store/x", mountPath: "/" })),
     ).toThrow(/mount path must not be the filesystem root/);
+  });
+
+  it("parses a standby source and defaults mounts to non-bindable", () => {
+    const blueprint = parseWorkspaceBlueprint({
+      ...baseSpec,
+      sources: {
+        workspace: { kind: "standby", rootPath: "/srv/store/acme/worktrees" },
+        mounts: [
+          {
+            hostPath: "/srv/store/api/worktrees",
+            mountPath: "/workspace/repos/api",
+            bindable: true,
+          },
+          { hostPath: "/srv/store/_references/lib", mountPath: "/workspace/ref/lib" },
+        ],
+      },
+    });
+    expect(blueprint.sources.workspace).toEqual({
+      kind: "standby",
+      rootPath: "/srv/store/acme/worktrees",
+    });
+    expect(blueprint.sources.mounts.map((m) => m.bindable)).toEqual([true, false]);
+    expect(() =>
+      parseWorkspaceBlueprint({
+        ...baseSpec,
+        sources: { workspace: { kind: "standby", rootPath: "relative/worktrees" } },
+      }),
+    ).toThrow();
   });
 
   it("git-sourced workspaces may carry extra mounts", () => {

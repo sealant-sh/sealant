@@ -77,11 +77,24 @@ export const workspaceMountSourceSchema = z.strictObject({
   hostPath: workspaceHostPathSchema,
 });
 
+/**
+ * A STANDBY workspace (sealantd ADR-0014): the caller-owned ROOT directory (a project's worktrees
+ * directory) is mounted at a hidden path, and the working directory does not exist until the
+ * caller binds it to one subdirectory of the root — at first use, after the container is already
+ * running. Neither Docker nor Kubernetes can add a mount to a running container; this is what lets
+ * a pool of ready workspaces serve ANY worktree of a project. Same allowlist as a mount source.
+ */
+export const workspaceStandbySourceSchema = z.strictObject({
+  kind: z.literal("standby"),
+  rootPath: workspaceHostPathSchema,
+});
+
 // Order matters: git first, so legacy payloads that omit `kind` (relying on the default) still
 // resolve as git; a mount payload fails the git shape (no `url`) and falls through to mount.
 export const workspaceSourceSchema = z.union([
   workspaceGitSourceSchema,
   workspaceMountSourceSchema,
+  workspaceStandbySourceSchema,
 ]);
 
 /**
@@ -96,7 +109,27 @@ export const workspaceExtraMountSchema = z.strictObject({
   hostPath: workspaceHostPathSchema,
   mountPath: workspaceMountPathSchema,
   readOnly: z.boolean().default(true),
+  /**
+   * Bindable (sealantd ADR-0014): `hostPath` is a ROOT mounted at a hidden path, and `mountPath`
+   * becomes a symlink the caller points at one of the root's subdirectories after launch. A
+   * sibling repository's worktrees directory, bound to one worktree at first use.
+   */
+  bindable: z.boolean().default(false),
 });
+
+/** One live binding on a standby or bindable mount: `mountPath` points at `<root>/<subpath>`. */
+export const workspaceBindSchema = z.strictObject({
+  mountPath: workspaceMountPathSchema,
+  subpath: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => !value.startsWith("/"), { message: "subpath must be relative" })
+    .refine((value) => value.split("/").every((s) => s !== "" && s !== "." && s !== ".."), {
+      message: "subpath must not contain empty, '.' or '..' segments",
+    }),
+});
+export type WorkspaceBind = z.infer<typeof workspaceBindSchema>;
 
 export const workspaceInputSourceSchema = z.strictObject({
   id: nonEmptyStringSchema,

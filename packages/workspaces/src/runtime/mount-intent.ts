@@ -20,6 +20,10 @@ import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 export type RuntimeMountPurpose =
   /** The blueprint's `sources.workspace` mount source: the worktree at `runtime.workingDirectory`. */
   | "workspace"
+  /** A standby source's ROOT (sealantd ADR-0014), mounted hidden; the working directory is bound later. */
+  | "workspace-root"
+  /** A bindable extra mount's ROOT, mounted hidden; its declared `mountPath` is bound later. */
+  | "extra-mount-root"
   /**
    * A `sources.mounts` entry whose container path equals its source path. The SDK requests this
    * shape for a linked worktree's Git common directory so the absolute `gitdir:` pointer resolves
@@ -43,6 +47,42 @@ export interface RuntimeMountIntent {
 /** In-container paths the Docker adapter already uses for staged launch material. */
 export const DOTFILES_ARCHIVE_MOUNT_PATH = "/run/sealant/dotfiles";
 export const SECRET_ENV_MOUNT_PATH = "/run/sealant/secrets";
+
+/**
+ * Where bindable roots are mounted (sealantd ADR-0014): the standby source's root at
+ * `/workspace/.roots/workspace` (the daemon's own default for a standby working directory), and a
+ * bindable extra mount's root at `/workspace/.roots/<its mount path, slashes doubled-underscored>`.
+ */
+export const BIND_ROOTS_DIR = "/workspace/.roots";
+export const STANDBY_ROOT_MOUNT_PATH = `${BIND_ROOTS_DIR}/workspace`;
+export const bindRootMountPath = (mountPath: string): string =>
+  `${BIND_ROOTS_DIR}/${mountPath.replace(/^\//, "").replace(/\//g, "__")}`;
+
+/**
+ * The daemon's view of the bindable extra mounts (`SEALANT_BINDABLE_MOUNTS`). The standby working
+ * directory is NOT listed: `sealantd boot` synthesizes it from `SEALANT_WORKSPACE_SOURCE=standby`.
+ */
+export const bindableMountsEnv = (
+  blueprint: RuntimeAdapterLaunchInput["blueprint"],
+): string | undefined => {
+  const bindable = blueprint.sources.mounts.filter((mount) => mount.bindable);
+  if (bindable.length === 0) return undefined;
+  return JSON.stringify(
+    bindable.map((mount) => ({
+      mountPath: mount.mountPath,
+      rootMountPath: bindRootMountPath(mount.mountPath),
+      hostRootPath: mount.hostPath,
+    })),
+  );
+};
+
+/** `SEALANT_BINDS`: the binds to apply before the harness starts (a relaunch re-supplies them). */
+export const bindsEnv = (
+  binds: RuntimeAdapterLaunchInput["binds"] | undefined,
+): string | undefined =>
+  binds === undefined || binds.length === 0
+    ? undefined
+    : JSON.stringify(binds.map((bind) => ({ mountPath: bind.mountPath, subpath: bind.subpath })));
 
 /**
  * Derive the full, ordered mount list for a launch. Order matches the Docker adapter's argv order
@@ -72,6 +112,14 @@ export const collectMountIntents = (
   }
 
   const workspace = blueprint.sources.workspace;
+  if (workspace.kind === "standby") {
+    intents.push({
+      sourcePath: workspace.rootPath,
+      mountPath: STANDBY_ROOT_MOUNT_PATH,
+      readOnly: false,
+      purpose: "workspace-root",
+    });
+  }
   if (workspace.kind === "mount") {
     intents.push({
       sourcePath: workspace.hostPath,
@@ -82,12 +130,21 @@ export const collectMountIntents = (
   }
 
   for (const mount of blueprint.sources.mounts) {
-    intents.push({
-      sourcePath: mount.hostPath,
-      mountPath: mount.mountPath,
-      readOnly: mount.readOnly,
-      purpose: mount.mountPath === mount.hostPath ? "git-common" : "extra-mount",
-    });
+    intents.push(
+      mount.bindable
+        ? {
+            sourcePath: mount.hostPath,
+            mountPath: bindRootMountPath(mount.mountPath),
+            readOnly: mount.readOnly,
+            purpose: "extra-mount-root",
+          }
+        : {
+            sourcePath: mount.hostPath,
+            mountPath: mount.mountPath,
+            readOnly: mount.readOnly,
+            purpose: mount.mountPath === mount.hostPath ? "git-common" : "extra-mount",
+          },
+    );
   }
 
   return intents;

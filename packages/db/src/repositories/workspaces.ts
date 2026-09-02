@@ -37,6 +37,11 @@ export interface SetWorkspaceStatusInput {
   readonly status: WorkspaceStatus;
 }
 
+export interface SetWorkspaceBindsInput {
+  readonly id: string;
+  readonly binds: readonly { readonly mountPath: string; readonly subpath: string }[];
+}
+
 export interface SetWorkspaceNameInput {
   readonly id: string;
   readonly name: string;
@@ -73,6 +78,7 @@ const workspaceRepoOperationSchema = Schema.Literals([
   "listWorkspaces",
   "setWorkspaceExpiry",
   "setWorkspaceName",
+  "setWorkspaceBinds",
   "setWorkspaceStatus",
 ]);
 
@@ -166,6 +172,11 @@ export interface WorkspaceRepoService {
   /** Updates workspace name and returns the updated row, or null when not found. */
   readonly setWorkspaceName: (
     input: SetWorkspaceNameInput,
+  ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
+
+  /** Replaces the workspace's live bindings. Returns the updated row, or null when not found. */
+  readonly setWorkspaceBinds: (
+    input: SetWorkspaceBindsInput,
   ) => Effect.Effect<Workspace | null, WorkspaceRepoError>;
 
   /** Sets (or clears, with null) the workspace TTL. Returns the updated row, or null when not found. */
@@ -334,6 +345,20 @@ export const WorkspaceRepoLive = Layer.effect(
             const [workspace] = yield* db
               .update(workspaces)
               .set({ name: input.name })
+              .where(eq(workspaces.id, input.id))
+              .returning();
+
+            return workspace ?? null;
+          }),
+        ),
+
+      setWorkspaceBinds: (input) =>
+        withWorkspaceRepoError(
+          "setWorkspaceBinds",
+          Effect.gen(function* () {
+            const [workspace] = yield* db
+              .update(workspaces)
+              .set({ binds: [...input.binds] })
               .where(eq(workspaces.id, input.id))
               .returning();
 

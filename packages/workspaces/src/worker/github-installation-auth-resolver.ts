@@ -99,8 +99,8 @@ export interface ResolveWorkspaceAuthInput {
 export const resolveWorkspaceCloneAuth = Effect.fn("resolveWorkspaceCloneAuth")(function* (
   input: ResolveWorkspaceAuthInput,
 ) {
-  // Mount-sourced workspaces clone nothing, so there is no clone auth to resolve.
-  if (input.spec.sources.workspace.kind === "mount") {
+  // Mount- and standby-sourced workspaces clone nothing, so there is no clone auth to resolve.
+  if (input.spec.sources.workspace.kind !== "git") {
     return undefined;
   }
   const token = yield* resolveInstallationAccessToken({

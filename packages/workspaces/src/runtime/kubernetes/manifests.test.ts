@@ -84,6 +84,50 @@ describe("Kubernetes manifests", () => {
     ]);
   });
 
+  it("renders a standby source and its binds for the daemon", () => {
+    const plain = plainEnvEntries(
+      {
+        ...input,
+        blueprint: {
+          ...input.blueprint,
+          sources: {
+            ...input.blueprint.sources,
+            workspace: { kind: "standby", rootPath: "/var/lib/mend/store/acme/worktrees" },
+            mounts: [
+              {
+                hostPath: "/var/lib/mend/store/api/worktrees",
+                mountPath: "/workspace/repos/api",
+                readOnly: false,
+                bindable: true,
+              },
+            ],
+          },
+        },
+        binds: [{ mountPath: "/workspace/repo", subpath: "wt-1" }],
+      },
+      config,
+      { secretEnvFile: false, dotfilesArchiveDir: undefined },
+    );
+    expect(plain).toEqual(
+      expect.arrayContaining([
+        ["SEALANT_WORKSPACE_SOURCE", "standby"],
+        ["SEALANT_WORKSPACE_MOUNT_HOST_PATH", "/var/lib/mend/store/acme/worktrees"],
+        [
+          "SEALANT_BINDABLE_MOUNTS",
+          JSON.stringify([
+            {
+              mountPath: "/workspace/repos/api",
+              rootMountPath: "/workspace/.roots/workspace__repos__api",
+              hostRootPath: "/var/lib/mend/store/api/worktrees",
+            },
+          ]),
+        ],
+        ["SEALANT_BINDS", JSON.stringify([{ mountPath: "/workspace/repo", subpath: "wt-1" }])],
+      ]),
+    );
+    expect(plain.some(([key]) => key === "SEALANT_WORKSPACE_REPO_URL")).toBe(false);
+  });
+
   it("routes secret-bearing env through a Secret, credential env last", () => {
     const entries = secretEnvEntries(
       {
