@@ -2,7 +2,9 @@
  * Lowers the fluent `create({ repository, harness })` options into the existing
  * `createWorkspaceRequestSchema` the control plane accepts — entirely client-side, so the slice needs
  * no contract change. The public `repository` is the SOURCE git repo (it becomes
- * `spec.sources.workspace.url`); the contract's `repository`/`tag` are the OCI push coordinates, which
+ * `spec.sources.workspace.url`); the contract's `repository`/`tag` name the create for the build
+ * job's own records — the worker publishes the image under plan-keyed coordinates (one repository
+ * per OS family, one tag per plan hash), so this name never reaches the registry — and
  * we derive. `customization.enableSealantd` is forced on (it bakes + launches the daemon the run path
  * connects to), the runtime target is `auto` (the deployment's default adapter — Docker on self-host, Kubernetes
  * when the worker is configured for a cluster), and the
