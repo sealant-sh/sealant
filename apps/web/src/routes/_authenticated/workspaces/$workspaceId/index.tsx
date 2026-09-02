@@ -1026,10 +1026,10 @@ function resolveWorkspaceSpecDetails(workspace: WorkspaceSummary): WorkspaceSpec
     };
   }
 
-  if (source.kind === "mount") {
+  if (source.kind !== "git") {
     return {
-      repositoryUrl: source.hostPath,
-      branch: "caller-owned mount",
+      repositoryUrl: source.kind === "mount" ? source.hostPath : source.rootPath,
+      branch: source.kind === "mount" ? "caller-owned mount" : "standby root, bound at first use",
       isGitHubSource,
       provider: "mount",
       configRepo,
@@ -1169,7 +1169,7 @@ function suggestWorkspaceNames(workspace: {
 }
 
 function resolveSourceRef(spec: NewWorkspace | undefined): string | undefined {
-  if (spec === undefined || spec.sources.workspace.kind === "mount") {
+  if (spec === undefined || spec.sources.workspace.kind !== "git") {
     return undefined;
   }
 

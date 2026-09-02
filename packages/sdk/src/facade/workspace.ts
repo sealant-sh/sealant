@@ -8,6 +8,7 @@ import type { WorkspaceDetails } from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
+  bindWorkspaceOp,
   createSessionOp,
   expireWorkspaceOp,
   getSessionOp,
@@ -215,6 +216,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     sessions,
 
     exec: (argv, options) => execWorkspace(ctx, init, argv, options),
+
+    bind: async (options) => {
+      const result = await ctx.runtime.run(
+        bindWorkspaceOp(init.id, {
+          ownerUserId: ctx.config.hostLocal.ownerUserId,
+          ...(options.mountPath === undefined ? {} : { mountPath: options.mountPath }),
+          subpath: options.subpath,
+        }),
+      );
+      return result.binds.map((bind) => ({ mountPath: bind.mountPath, subpath: bind.subpath }));
+    },
 
     // Poll-backed lifecycle stream: emit a coarse event on each status transition until the workspace
     // reaches a terminal/ready state. Swaps to SSE over Postgres LISTEN/NOTIFY in Stage 5 (same shape).

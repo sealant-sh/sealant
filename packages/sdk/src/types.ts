@@ -140,6 +140,20 @@ export interface WorkspaceMountSource {
 }
 
 /**
+ * A STANDBY workspace (sealantd ADR-0014): the caller-owned ROOT directory — a project's
+ * worktrees directory — is mounted hidden, and the working directory does not exist until
+ * `workspace.bind({ subpath })` points it at one of the root's subdirectories. This is what lets a
+ * pool of ready workspaces serve ANY worktree of a project, and lets one workspace be re-pointed.
+ * Same allowlist as a mount source. The worktrees' shared git metadata (the bare repository the
+ * `.git` files point at) must ride as an explicit extra mount at its own absolute path.
+ */
+export interface WorkspaceStandbySource {
+  readonly kind: "standby";
+  /** Absolute, normalized host path of the root (no `..` segments). */
+  readonly rootPath: string;
+}
+
+/**
  * An ADDITIONAL caller-owned host directory bind-mounted beside the primary source — sibling
  * repositories, reference clones, scratch material the workspace should see without adopting.
  * Read-only by default: extra mounts widen what the workspace can see, not where its work product
@@ -154,6 +168,25 @@ export interface WorkspaceExtraMount {
   readonly mountPath: string;
   /** Defaults to `true`. Pass `false` deliberately — writes to extra mounts are unrecorded. */
   readonly readOnly?: boolean;
+  /**
+   * Bindable (sealantd ADR-0014): `hostPath` is a ROOT mounted hidden, and `mountPath` becomes a
+   * symlink `workspace.bind({ mountPath, subpath })` points at one of the root's subdirectories.
+   * A sibling repository's worktrees directory, bound to one worktree at first use.
+   */
+  readonly bindable?: boolean;
+}
+
+/** One live binding: `mountPath` points at `<root>/<subpath>`. */
+export interface WorkspaceBind {
+  readonly mountPath: string;
+  readonly subpath: string;
+}
+
+export interface WorkspaceBindOptions {
+  /** The bindable mount to point; defaults to the working directory (a standby source). */
+  readonly mountPath?: string;
+  /** Relative path under the mount's root; an empty string unbinds. */
+  readonly subpath: string;
 }
 
 /** How a dotfiles tree is applied inside the workspace. */
@@ -229,8 +262,8 @@ export interface CreateOptions {
    * Exactly one of `repository` or `source` must be provided.
    */
   readonly repository?: string;
-  /** Alternative to `repository`: source the workspace from a caller-owned mount. */
-  readonly source?: WorkspaceMountSource;
+  /** Alternative to `repository`: source the workspace from a caller-owned mount, or a standby root. */
+  readonly source?: WorkspaceMountSource | WorkspaceStandbySource;
   /** Additional read-only-by-default mounts beside the primary source (see `WorkspaceExtraMount`). */
   readonly mounts?: readonly WorkspaceExtraMount[];
   /** The harness to run inside the workspace. */
@@ -374,6 +407,12 @@ export interface Workspace {
    * run record like any other process. `argv[0]` is the executable, the rest its arguments.
    */
   exec(argv: readonly string[], options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
+  /**
+   * Point a standby working directory, or a bindable extra mount, at one subdirectory of its root
+   * (sealantd ADR-0014). Synchronous: resolves once the daemon applied it. Returns every live
+   * binding, which each relaunch re-applies.
+   */
+  bind(options: WorkspaceBindOptions): Promise<readonly WorkspaceBind[]>;
   /** Interactive PTY sessions: open new ones, reattach to existing ones by id. */
   readonly sessions: WorkspaceSessions;
   /** Lifecycle events as an async stream. */

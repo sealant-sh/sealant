@@ -2,6 +2,7 @@ import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
+  bindWorkspace,
   createWorkspace,
   execWorkspace,
   expireWorkspace,
@@ -28,6 +29,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       )
       .handle("execWorkspace", ({ params, payload }) =>
         execWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("bindWorkspace", ({ params, payload }) =>
+        bindWorkspace({
           workspaceId: params.workspaceId,
           payload,
         }),

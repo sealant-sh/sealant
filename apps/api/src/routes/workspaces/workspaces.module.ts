@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
+  type BindWorkspaceRequest,
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
   WorkspaceRuntimeEnvReferencesUnsupportedError,
@@ -63,8 +64,9 @@ import {
   GitHubSourceIntegrationService,
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
-import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
+import { newWorkspaceSchema, workspaceBindSchema, type NewWorkspace } from "@sealant/validators";
 import {
+  SealantRuntime,
   resolveWorkspaceError,
   resolveWorkspacePublishedImage,
   resolveWorkspaceRuntime,
@@ -82,6 +84,7 @@ import {
   WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
 import { mapRun } from "../runs/runs.module.js";
+import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
 
 interface WorkspaceEventDraft {
@@ -263,7 +266,7 @@ const deriveRepositoryNameToken = (repository: string): string => {
 
 const deriveSourceRef = (spec: NewWorkspace): string | undefined => {
   const source = spec.sources.workspace;
-  if (source.kind === "mount") {
+  if (source.kind !== "git") {
     return undefined;
   }
   const ref = source.ref?.trim() ?? "";
@@ -570,12 +573,13 @@ const validateWorkspaceMounts = (input: {
   return Effect.gen(function* () {
     const source = input.spec.sources.workspace;
     const extraMounts = input.spec.sources.mounts;
-    if (source.kind !== "mount" && extraMounts.length === 0) {
+    if (source.kind === "git" && extraMounts.length === 0) {
       return;
     }
-    if (source.kind === "mount" && input.sourceSelection !== undefined) {
+    if (source.kind !== "git" && input.sourceSelection !== undefined) {
       return yield* new WorkspaceBadRequestError({
-        message: "A mount-sourced workspace cannot also carry a GitHub source selection.",
+        message:
+          "A mount- or standby-sourced workspace cannot also carry a GitHub source selection.",
       });
     }
     const allowedRoots = (env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS ?? "")
@@ -596,8 +600,11 @@ const validateWorkspaceMounts = (input: {
         message: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS contains an invalid root: ${invalidRoot}`,
       });
     }
+    // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
+    // allowlist applies, and the daemon re-checks it at boot.
     const hostPaths = [
       ...(source.kind === "mount" ? [source.hostPath] : []),
+      ...(source.kind === "standby" ? [source.rootPath] : []),
       ...extraMounts.map((mount) => mount.hostPath),
     ];
     for (const hostPath of hostPaths) {
@@ -2053,6 +2060,100 @@ export const execWorkspace = (input: {
     });
 
     return mapRun(run);
+  });
+};
+
+/**
+ * Bind (sealantd ADR-0014): point a standby workspace's working directory, or a bindable extra
+ * mount, at one subdirectory of its root. Synchronous over the daemon's control connection; the
+ * resulting set of live bindings is recorded on the workspace so every relaunch re-applies it.
+ */
+export const bindWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: BindWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    if (workspace.latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no launched runtime to bind in yet; wait for it to become ready.`,
+      });
+    }
+    const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
+    const mountPath = input.payload.mountPath ?? spec.runtime.workingDirectory;
+    const bindable =
+      (spec.sources.workspace.kind === "standby" && mountPath === spec.runtime.workingDirectory) ||
+      spec.sources.mounts.some((mount) => mount.bindable && mount.mountPath === mountPath);
+    if (!bindable) {
+      return yield* new WorkspaceBadRequestError({
+        message: `${mountPath} is not a bindable mount of workspace ${input.workspaceId}: only a standby working directory or a mount declared bindable can be bound.`,
+      });
+    }
+    const subpath = input.payload.subpath.trim();
+    if (subpath !== "") {
+      const parsed = workspaceBindSchema.safeParse({ mountPath, subpath });
+      if (!parsed.success) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Invalid bind: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`,
+        });
+      }
+    }
+    const target = yield* resolveDaemonTarget(workspace.id).pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
+    if (target === undefined) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no ready runtime to bind in.`,
+      });
+    }
+    const runtime = yield* SealantRuntime;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const daemon = yield* runtime.connect(target);
+        yield* daemon.bindMount(mountPath, subpath);
+      }),
+    ).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceConflictError({
+            message: `The workspace runtime refused the bind: ${error.message}`,
+          }),
+      ),
+    );
+    const binds = [
+      ...workspace.binds.filter((bind) => bind.mountPath !== mountPath),
+      ...(subpath === "" ? [] : [{ mountPath, subpath }]),
+    ];
+    const workspaces = yield* WorkspaceRepo;
+    yield* withInternalError(
+      workspaces.setWorkspaceBinds({ id: workspace.id, binds }),
+      "Failed to record the workspace bindings.",
+    );
+    return { binds };
+  });
+};
+
+/** The spec a workspace last launched from: the attempt snapshot, else the build job's request. */
+const loadRecordedSpec = (workspaceId: string, runId: string) => {
+  return Effect.gen(function* () {
+    const workspaceAttempts = yield* WorkspaceAttemptRepo;
+    const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
+    const previousJob = yield* withInternalError(
+      workspaceBuildJobs.getLatestJobByRunId(runId),
+      "Failed to load the latest workspace build job.",
+    );
+    const snapshot = yield* withInternalError(
+      workspaceAttempts.getAttemptSnapshotByRunId(runId),
+      "Failed to load the workspace attempt snapshot.",
+    );
+    const specPayload =
+      snapshot?.resolvedSpecPayload ?? snapshot?.userSpecPayload ?? previousJob?.requestPayload;
+    if (specPayload === undefined) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${workspaceId} has no recorded spec.`,
+      });
+    }
+    return yield* parseWorkspaceSpec(specPayload);
   });
 };
 

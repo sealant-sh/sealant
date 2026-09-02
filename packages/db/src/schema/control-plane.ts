@@ -733,6 +733,12 @@ export const workspaces = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
     archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
+    // Live bindings of a standby / bindable-mount workspace (sealantd ADR-0014): which subdirectory
+    // of each root the declared path points at. Re-supplied to the daemon on every launch.
+    binds: jsonb()
+      .$type<readonly { readonly mountPath: string; readonly subpath: string }[]>()
+      .notNull()
+      .default([]),
   },
   (table) => [
     index("workspaces_owner_user_id_status_created_at_idx").on(

@@ -82,7 +82,8 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
         ...override.sources,
         // A mount override REPLACES the git base outright (the strict union rejects mixed shapes).
         workspace:
-          override.sources?.workspace?.kind === "mount"
+          override.sources?.workspace?.kind === "mount" ||
+          override.sources?.workspace?.kind === "standby"
             ? override.sources.workspace
             : {
                 ...base.sources.workspace,
@@ -412,6 +413,72 @@ describe("DockerRuntimeAdapter", () => {
     expect(joined).not.toContain("/workspace/home/scratch:ro");
     // Extra mounts ride only -v binds; the daemon's mount env contract stays primary-mount-only.
     expect(args).toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH=/srv/store/worktrees/session-1");
+  });
+
+  it("launches a standby workspace with the root hidden, the working directory unbound, and the binds env", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-123\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      mountAllowedStoreRoots: "/srv/store",
+    });
+    await adapter.launch({
+      ...createLaunchInput({
+        sources: {
+          workspace: { kind: "standby", rootPath: "/srv/store/acme/worktrees" },
+          mounts: [
+            {
+              hostPath: "/srv/store/api/worktrees",
+              mountPath: "/workspace/repos/api",
+              readOnly: false,
+              bindable: true,
+            },
+          ],
+        },
+      }),
+      binds: [
+        { mountPath: "/workspace/repo", subpath: "wt-1" },
+        { mountPath: "/workspace/repos/api", subpath: "wt-main" },
+      ],
+    });
+    const args = commandRunner.mock.calls[0]?.[1];
+    expect(args).toBeDefined();
+    const joined = args?.join(" ");
+    expect(joined).toContain("-v /srv/store/acme/worktrees:/workspace/.roots/workspace");
+    expect(joined).toContain("-v /srv/store/api/worktrees:/workspace/.roots/workspace__repos__api");
+    // The declared paths are the daemon's to bind: nothing is mounted there.
+    expect(joined).not.toContain(":/workspace/repo ");
+    expect(joined).not.toContain(":/workspace/repos/api");
+    expect(args).toContain("SEALANT_WORKSPACE_SOURCE=standby");
+    expect(args).toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH=/srv/store/acme/worktrees");
+    expect(args).toContain("SEALANT_MOUNT_ALLOWED_STORE_ROOTS=/srv/store");
+    expect(args).toContain(
+      `SEALANT_BINDABLE_MOUNTS=${JSON.stringify([
+        {
+          mountPath: "/workspace/repos/api",
+          rootMountPath: "/workspace/.roots/workspace__repos__api",
+          hostRootPath: "/srv/store/api/worktrees",
+        },
+      ])}`,
+    );
+    expect(args).toContain(
+      `SEALANT_BINDS=${JSON.stringify([
+        { mountPath: "/workspace/repo", subpath: "wt-1" },
+        { mountPath: "/workspace/repos/api", subpath: "wt-main" },
+      ])}`,
+    );
+    expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_URL="))).toBe(false);
   });
 
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {

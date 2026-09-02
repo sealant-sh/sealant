@@ -122,6 +122,7 @@ const launchPublishedImage = async (input: {
   readonly runId?: string;
   readonly workspaceId?: string;
   readonly principalId?: string;
+  readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.spec,
@@ -147,6 +148,7 @@ const launchPublishedImage = async (input: {
     ...(input.runId === undefined ? {} : { runId: input.runId }),
     ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
     ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
+    ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
   });
 };
 
@@ -521,15 +523,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             Effect.catchCause(() => Effect.succeed(undefined)),
           );
     const workspaceRepo = yield* Effect.serviceOption(WorkspaceRepo);
-    const labelWorkspaceId =
+    const workspaceRow =
       job.runId === null || Option.isNone(workspaceRepo)
         ? undefined
         : yield* Effect.suspend(() =>
             workspaceRepo.value.getWorkspaceByAttemptId(job.runId ?? ""),
-          ).pipe(
-            Effect.map((workspace) => workspace?.id),
-            Effect.catchCause(() => Effect.succeed(undefined)),
-          );
+          ).pipe(Effect.catchCause(() => Effect.succeed(undefined)));
+    const labelWorkspaceId = workspaceRow?.id;
+    // A standby / bindable-mount workspace relaunches with its recorded binds (sealantd ADR-0014):
+    // the daemon re-applies them before the harness starts, so a restart keeps its worktree.
+    const binds = workspaceRow?.binds ?? [];
 
     const workspaceCloneAuth = yield* resolveWorkspaceCloneAuth({
       spec,
@@ -596,6 +599,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
           ...(job.runId === null ? {} : { runId: job.runId }),
           ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
+          ...(binds.length === 0 ? {} : { binds }),
           ...(attemptIdentity?.ownerUserId === undefined
             ? {}
             : { principalId: attemptIdentity.ownerUserId }),

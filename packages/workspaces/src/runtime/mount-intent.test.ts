@@ -7,7 +7,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { cases } from "./docker-runtime-adapter.golden-fixture.js";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
-import { collectMountIntents, dockerBindArgsForIntent } from "./mount-intent.js";
+import {
+  bindRootMountPath,
+  bindableMountsEnv,
+  bindsEnv,
+  collectMountIntents,
+  dockerBindArgsForIntent,
+  STANDBY_ROOT_MOUNT_PATH,
+} from "./mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
 const blueprint = () => cases.mendMount;
@@ -53,6 +60,74 @@ describe("collectMountIntents", () => {
         purpose: "extra-mount",
       },
     ]);
+  });
+
+  it("mounts a standby root hidden and a bindable mount's root at its own hidden path", () => {
+    const base = blueprint();
+    const input: RuntimeAdapterLaunchInput = {
+      ...base,
+      blueprint: {
+        ...base.blueprint,
+        sources: {
+          ...base.blueprint.sources,
+          workspace: { kind: "standby", rootPath: "/var/lib/mend/store/acme/worktrees" },
+          mounts: [
+            {
+              hostPath: "/var/lib/mend/store/api/worktrees",
+              mountPath: "/workspace/repos/api",
+              readOnly: false,
+              bindable: true,
+            },
+            {
+              hostPath: "/var/lib/mend/store/_references/lib",
+              mountPath: "/workspace/ref/lib",
+              readOnly: true,
+              bindable: false,
+            },
+          ],
+        },
+      },
+    };
+    const intents = collectMountIntents(input).filter((i) => i.purpose !== "launch-material");
+    expect(intents).toEqual([
+      {
+        sourcePath: "/var/lib/mend/store/acme/worktrees",
+        mountPath: STANDBY_ROOT_MOUNT_PATH,
+        readOnly: false,
+        purpose: "workspace-root",
+      },
+      {
+        sourcePath: "/var/lib/mend/store/api/worktrees",
+        mountPath: "/workspace/.roots/workspace__repos__api",
+        readOnly: false,
+        purpose: "extra-mount-root",
+      },
+      {
+        sourcePath: "/var/lib/mend/store/_references/lib",
+        mountPath: "/workspace/ref/lib",
+        readOnly: true,
+        purpose: "extra-mount",
+      },
+    ]);
+    // Nothing is mounted at the working directory itself: the daemon binds it later.
+    expect(intents.some((i) => i.mountPath === "/workspace/repo")).toBe(false);
+    expect(bindRootMountPath("/workspace/repos/api")).toBe(
+      "/workspace/.roots/workspace__repos__api",
+    );
+    expect(bindableMountsEnv(input.blueprint)).toBe(
+      JSON.stringify([
+        {
+          mountPath: "/workspace/repos/api",
+          rootMountPath: "/workspace/.roots/workspace__repos__api",
+          hostRootPath: "/var/lib/mend/store/api/worktrees",
+        },
+      ]),
+    );
+    expect(bindableMountsEnv(base.blueprint)).toBeUndefined();
+    expect(bindsEnv([{ mountPath: "/workspace/repo", subpath: "wt-1" }])).toBe(
+      JSON.stringify([{ mountPath: "/workspace/repo", subpath: "wt-1" }]),
+    );
+    expect(bindsEnv([])).toBeUndefined();
   });
 
   it("emits nothing for a git-sourced workspace without extra mounts or launch material", () => {

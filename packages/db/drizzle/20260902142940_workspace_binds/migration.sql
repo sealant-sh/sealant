@@ -1,0 +1,1 @@
+ALTER TABLE "workspaces" ADD COLUMN "binds" jsonb DEFAULT '[]' NOT NULL;

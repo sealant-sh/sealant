@@ -8,6 +8,12 @@ import { promisify } from "node:util";
 import { getHarnessIntegration } from "../harness/integrations.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
+  bindRootMountPath,
+  bindableMountsEnv,
+  bindsEnv,
+  STANDBY_ROOT_MOUNT_PATH,
+} from "./mount-intent.js";
+import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterStopInput,
@@ -301,28 +307,46 @@ const envArgsFromBlueprint = (
         ];
 
   const source = input.blueprint.sources.workspace;
+  // Bindable mounts (sealantd ADR-0014): the roots the daemon may bind, and the binds to apply
+  // before the harness starts. A standby source's own root rides SEALANT_WORKSPACE_MOUNT_HOST_PATH.
+  const bindableEnv = bindableMountsEnv(input.blueprint);
+  const bindsEnvValue = bindsEnv(input.binds);
+  const bindEnvArgs = [
+    ...(bindableEnv === undefined ? [] : ["-e", `SEALANT_BINDABLE_MOUNTS=${bindableEnv}`]),
+    ...(bindsEnvValue === undefined ? [] : ["-e", `SEALANT_BINDS=${bindsEnvValue}`]),
+  ];
   const sourceEnvArgs =
-    source.kind === "mount"
-      ? // Mount-sourced workspace: the working directory is a caller-owned bind-mount. This is
-        // sealantd's boot contract for mount mode — it skips clone/clone-auth, verifies the
-        // mountpoint is established + writable, and re-validates the host path against the same
-        // allowlist. Older daemons fail boot on the unknown source mode, the safe outcome.
-        [
+    source.kind === "standby"
+      ? [
           "-e",
-          "SEALANT_WORKSPACE_SOURCE=mount",
+          "SEALANT_WORKSPACE_SOURCE=standby",
           "-e",
-          `SEALANT_WORKSPACE_MOUNT_HOST_PATH=${source.hostPath}`,
+          `SEALANT_WORKSPACE_MOUNT_HOST_PATH=${source.rootPath}`,
           "-e",
           `SEALANT_MOUNT_ALLOWED_STORE_ROOTS=${mountAllowedStoreRoots ?? ""}`,
         ]
-      : [
-          "-e",
-          `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
-          // No ref env at all when unset: sealantd then clones the remote's default branch.
-          ...(source.ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${source.ref}`]),
-        ];
+      : source.kind === "mount"
+        ? // Mount-sourced workspace: the working directory is a caller-owned bind-mount. This is
+          // sealantd's boot contract for mount mode — it skips clone/clone-auth, verifies the
+          // mountpoint is established + writable, and re-validates the host path against the same
+          // allowlist. Older daemons fail boot on the unknown source mode, the safe outcome.
+          [
+            "-e",
+            "SEALANT_WORKSPACE_SOURCE=mount",
+            "-e",
+            `SEALANT_WORKSPACE_MOUNT_HOST_PATH=${source.hostPath}`,
+            "-e",
+            `SEALANT_MOUNT_ALLOWED_STORE_ROOTS=${mountAllowedStoreRoots ?? ""}`,
+          ]
+        : [
+            "-e",
+            `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
+            // No ref env at all when unset: sealantd then clones the remote's default branch.
+            ...(source.ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${source.ref}`]),
+          ];
   return [
     ...sourceEnvArgs,
+    ...bindEnvArgs,
     "-e",
     `SEALANT_OCI_RUNTIME=${input.blueprint.runtime.ociRuntime}`,
     ...harnessEnvArgs,
@@ -337,6 +361,10 @@ const envArgsFromBlueprint = (
  */
 const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
   const source = input.blueprint.sources.workspace;
+  if (source.kind === "standby") {
+    // The ROOT, hidden; the daemon binds the working directory to one of its subdirectories.
+    return ["-v", `${source.rootPath}:${STANDBY_ROOT_MOUNT_PATH}`];
+  }
   if (source.kind !== "mount") {
     return [];
   }
@@ -353,7 +381,8 @@ const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => 
 const extraMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
   return input.blueprint.sources.mounts.flatMap((mount) => [
     "-v",
-    `${mount.hostPath}:${mount.mountPath}${mount.readOnly ? ":ro" : ""}`,
+    // A bindable mount's root goes to its hidden root path; the daemon owns the declared path.
+    `${mount.hostPath}:${mount.bindable ? bindRootMountPath(mount.mountPath) : mount.mountPath}${mount.readOnly ? ":ro" : ""}`,
   ]);
 };
 
@@ -517,9 +546,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       return input.workspaceCloneAuth;
     }
 
-    // Mount sources have nothing to clone, so clone auth does not apply.
+    // Mount and standby sources have nothing to clone, so clone auth does not apply.
     const source = input.blueprint.sources.workspace;
-    if (source.kind === "mount") {
+    if (source.kind !== "git") {
       return undefined;
     }
     const configuredPath = source.authRef;

@@ -7,6 +7,7 @@ export interface LinkedWorktreeMetadataMount {
   readonly hostPath: string;
   readonly mountPath: string;
   readonly readOnly: false;
+  readonly bindable?: false;
 }
 
 const isMissingPath = (cause: unknown): boolean =>
