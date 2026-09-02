@@ -547,6 +547,121 @@ describe("processWorkspaceBuildJobEffect", () => {
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
+  it.effect("publishes a fresh build under plan-keyed coordinates, not the create's name", () => {
+    const planHash = "d".repeat(64);
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_plan_named",
+        runId: null,
+        registryId: "local-zot",
+        repository: "wt-1ba1c80a-875b-4c0e-9b9c-2fd0d01f2fe0",
+        tag: "sdk-44444444",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "fedora" as const,
+      imagePlan: {} as never,
+      containerfile: "FROM fedora:41",
+      planHash,
+    }));
+    const registryClient = successRegistryClient();
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_plan_named",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+          registryClient,
+        }),
+      );
+
+      // The worktree's name never reaches the registry: the plan does.
+      expect(registryClient.publishOciImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repository: "sealant-workspace-fedora",
+          tag: "plan-dddddddddddd",
+        }),
+      );
+      expect(planWorkspaceSpec).toHaveBeenCalledTimes(1);
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("HEADs the tag a prior job actually published, not the name it was asked for", () => {
+    const priorPlanHash = "e".repeat(64);
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_reuse_plan",
+        runId: null,
+        registryId: "local-zot",
+        repository: "wt-2222",
+        tag: "sdk-22222222",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "fedora" }),
+      }),
+      getLatestSucceededJobByPlanHash: () => ({
+        id: "job_prior_plan",
+        status: "succeeded",
+        registryId: "local-zot",
+        // What the client asked for…
+        repository: "wt-1111",
+        tag: "sdk-11111111",
+        resultPayload: {
+          ...createCompileResult({ id: "fedora" }),
+          metadata: {
+            defaultArtifactName: "sealant-workspace-fedora",
+            notes: [],
+            planHash: priorPlanHash,
+          },
+        },
+        // …and where the worker put it.
+        publishedReference: "127.0.0.1:5000/sealant-workspace-fedora:plan-eeeeeeeeeeee",
+        publishedDigestReference: "127.0.0.1:5000/sealant-workspace-fedora@sha256:prior",
+        publishedDigest: "sha256:prior",
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "fedora" }));
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "fedora" as const,
+      imagePlan: {} as never,
+      containerfile: "FROM fedora:41",
+      planHash: priorPlanHash,
+    }));
+    const headManifest = vi.fn(async () => "sha256:prior");
+    const registryClient = {
+      publishOciImage: vi.fn(async () => {
+        throw new Error("publishOciImage must not run on the reuse path");
+      }),
+      headManifest,
+    } as unknown as RegistryClient;
+
+    return Effect.gen(function* () {
+      const published = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_reuse_plan",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+          registryClient,
+        }),
+      );
+
+      expect(headManifest).toHaveBeenCalledWith("sealant-workspace-fedora", "plan-eeeeeeeeeeee");
+      expect(compileWorkspaceSpec).not.toHaveBeenCalled();
+      expect(published).toEqual(
+        expect.objectContaining({
+          repository: "sealant-workspace-fedora",
+          tag: "plan-eeeeeeeeeeee",
+          reference: "127.0.0.1:5000/sealant-workspace-fedora:plan-eeeeeeeeeeee",
+        }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
   it.effect("builds fresh when no prior published plan hash exists", () => {
     const jobs = workspaceBuildJobRepoStub({
       claimJobById: () => ({
