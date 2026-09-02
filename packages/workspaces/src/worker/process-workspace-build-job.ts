@@ -27,7 +27,12 @@ import { Effect, Layer, Option } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
-import { createDockerWorkspaceImageBuilder, type WorkspaceImageBuilder } from "../images/index.js";
+import {
+  createDockerWorkspaceImageBuilder,
+  parsePublishedReference,
+  planImageCoordinates,
+  type WorkspaceImageBuilder,
+} from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
@@ -231,28 +236,23 @@ interface PlanHashReuse {
  * resolves to its recorded digest, the BuildKit walk + publish can be skipped entirely — the
  * already-published image is byte-equivalent to what this build would produce.
  *
- * The lookup is keyed by plan hash, not repository:tag: the SDK stamps every create with a fresh
- * random tag, so consecutive sessions over an unchanged plan share nothing BUT the hash. The
- * reused image keeps living under the prior job's tag; this job records the prior content
- * references while keeping its own repository:tag for naming.
+ * The lookup is keyed by plan hash, not repository:tag: the SDK stamps every create with its own
+ * name, so consecutive sessions over an unchanged plan share nothing BUT the hash. The reused
+ * image keeps living where the prior job published it; this job records those content references.
  *
- * Strictly best-effort: any failure (planning, repo lookup, registry HEAD) resolves to `null` and
- * the job falls through to a full build, which surfaces the real error if one exists.
+ * Strictly best-effort: any failure (repo lookup, registry HEAD) resolves to `null` and the job
+ * falls through to a full build, which surfaces the real error if one exists.
  */
 const attemptPlanHashReuse = (input: {
   readonly job: {
     readonly registryId: string;
-    readonly repository: string;
-    readonly tag: string;
   };
-  readonly spec: NewWorkspace;
-  readonly planSpec: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
+  readonly planned: PlannedWorkspaceImageBuild;
   readonly registryClient: RegistryClient;
 }): Effect.Effect<PlanHashReuse | null, never, WorkspaceBuildJobRepo> =>
   Effect.gen(function* () {
     const jobs = yield* WorkspaceBuildJobRepo;
-
-    const planned = yield* Effect.try(() => input.planSpec(input.spec));
+    const planned = input.planned;
 
     const priorJob = yield* jobs.getLatestSucceededJobByPlanHash({
       registryId: input.job.registryId,
@@ -269,9 +269,14 @@ const attemptPlanHashReuse = (input: {
     }
 
     // The prior publish's tag must still point at the digest we recorded — a registry GC or an
-    // out-of-band push makes the stored publish unusable and forces a fresh build.
+    // out-of-band push makes the stored publish unusable and forces a fresh build. The tag is the
+    // one actually pushed (plan-keyed since plan coordinates; the job's own name before that).
+    const prior = parsePublishedReference(priorJob.publishedReference) ?? {
+      repository: priorJob.repository,
+      tag: priorJob.tag,
+    };
     const registryDigest = yield* Effect.tryPromise(() =>
-      input.registryClient.headManifest(priorJob.repository, priorJob.tag),
+      input.registryClient.headManifest(prior.repository, prior.tag),
     );
 
     if (registryDigest !== priorJob.publishedDigest) {
@@ -279,8 +284,8 @@ const attemptPlanHashReuse = (input: {
     }
 
     const publishedImage: PublishedImage = {
-      repository: input.job.repository,
-      tag: input.job.tag,
+      repository: prior.repository,
+      tag: prior.tag,
       reference: priorJob.publishedReference,
       digestReference: priorJob.publishedDigestReference,
       digest: priorJob.publishedDigest,
@@ -424,15 +429,21 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ? {}
           : { planWorkspaceSpec: options.planWorkspaceSpec }),
       });
-    const planSpec = imageBuilder.plan;
+    // Plan once: the hash both keys the reuse lookup and names the publish. A planner that throws
+    // is treated like no planner — the full build surfaces the real error.
+    const planned =
+      imageBuilder.plan === undefined
+        ? null
+        : yield* Effect.try(() => imageBuilder.plan?.(spec) ?? null).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
 
     const reuse =
-      planSpec === undefined
+      planned === null
         ? null
         : yield* attemptPlanHashReuse({
             job,
-            spec,
-            planSpec,
+            planned,
             registryClient: options.registryClient,
           });
 
@@ -455,12 +466,20 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       return { publishedImage: reuse.publishedImage, spec };
     }
 
+    // Publish under plan-keyed coordinates — one repository per OS family, one tag per plan hash —
+    // so the next job with this plan finds the image by name as well as by hash, and a registry
+    // holds one image per distinct plan instead of one per workspace. Without a planner the
+    // client's requested name is all there is.
+    const coordinates =
+      planned === null
+        ? { repository: job.repository, tag: job.tag }
+        : planImageCoordinates(planned);
     const { publishedImage, build: compileResult } = yield* Effect.tryPromise({
       try: () =>
         imageBuilder.buildAndPublish({
           spec,
-          repository: job.repository,
-          tag: job.tag,
+          repository: coordinates.repository,
+          tag: coordinates.tag,
           buildId: job.id,
         }),
       catch: toWorkspaceBuildJobProcessingError,

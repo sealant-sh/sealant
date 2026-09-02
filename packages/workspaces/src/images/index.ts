@@ -30,3 +30,10 @@ export {
   type KubernetesBuildConfig,
   type KubernetesBuildEnvLike,
 } from "./kubernetes/config.js";
+export {
+  PLAN_REPOSITORY_PREFIX,
+  PLAN_TAG_PREFIX,
+  parsePublishedReference,
+  planImageCoordinates,
+  type ImageCoordinates,
+} from "./plan-coordinates.js";
