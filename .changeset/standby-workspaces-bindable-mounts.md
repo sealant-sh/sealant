@@ -1,11 +1,6 @@
 ---
 "@sealant/api-contracts": minor
 "@sealant/sdk": minor
-"@sealant/workspaces": minor
-"@sealant/validators": minor
-"@sealant/db": minor
-"@sealant/api": patch
-"@sealant/worker": patch
 ---
 
 Standby workspaces and bindable mounts (sealantd ADR-0014, Mend ADR-0001). A workspace can now be
