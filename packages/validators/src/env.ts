@@ -272,6 +272,14 @@ const addControlClientTlsIssue = (input: ControlClientTlsEnv, ctx: z.RefinementC
  */
 export const defaultRuntimeAdapterEnvSchema = z.object({
   DEFAULT_RUNTIME_ADAPTER: runtimeAdapterIdSchema.default("docker"),
+  /**
+   * Whether a Kubernetes install serves `tooling.services.docker` (a rootless dind sidecar in a
+   * user-namespaced Pod — an operator decision). The worker reads it to build the Pod; the API
+   * reads it for the create-time refusal (`workspace-docker-unsupported`), so a Docker-enabled
+   * blueprint on an install that cannot serve it fails at POST /v1/workspaces, not minutes later
+   * in the worker. Set the SAME value on both processes; the chart does.
+   */
+  SEALANT_K8S_DOCKER_ENABLED: z.stringbool().or(z.boolean()).default(false),
 });
 
 export const appServerEnvSchema = databaseEnvSchema
@@ -406,9 +414,8 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_BUILD_TIMEOUT_MS: z.coerce.number().int().min(60_000).optional(),
   SEALANT_K8S_BUILD_TTL_SECONDS: z.coerce.number().int().min(0).optional(),
   SEALANT_K8S_REGISTRY_INSECURE: z.stringbool().or(z.boolean()).optional(),
-  // Workspace-scoped Docker: a rootless dind sidecar in a user-namespaced Pod. Operator opt-in —
-  // without it `tooling.services.docker` is refused on Kubernetes.
-  SEALANT_K8S_DOCKER_ENABLED: z.stringbool().or(z.boolean()).optional(),
+  // Workspace-scoped Docker: a rootless dind sidecar in a user-namespaced Pod. The opt-in itself
+  // (`SEALANT_K8S_DOCKER_ENABLED`) lives in `defaultRuntimeAdapterEnvSchema`, shared with the API.
   SEALANT_K8S_DOCKER_IMAGE: z.string().trim().min(1).optional(),
   SEALANT_K8S_DOCKER_GRAPH_SIZE: z.string().trim().min(1).optional(),
   SEALANT_K8S_DOCKER_CPU_REQUEST: z.string().trim().min(1).optional(),

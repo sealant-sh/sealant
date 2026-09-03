@@ -122,7 +122,11 @@ const workspace = await sealant.workspaces.create({
 
 `services.docker` installs the Docker client in the image and starts a disposable, workspace-scoped
 rootless daemon at launch. The workspace receives `DOCKER_HOST`; Sealant never mounts the host
-Docker socket. GitHub credentials provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
+Docker socket. On Kubernetes the daemon is a sidecar of a user-namespaced workspace Pod and the
+operator has to enable it (`workspaces.docker.enabled`); an install that cannot serve it refuses
+`create` with the stable code `workspace-docker-unsupported` (HTTP 422) — map that code to explain
+the gap beside your Docker switch instead of surfacing a launch failure later. GitHub credentials
+provide both `GH_TOKEN` and `GITHUB_TOKEN` to the workspace.
 
 ## Workspace environment variables
 

@@ -359,6 +359,23 @@ export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.Tagged
   { httpApiStatus: 422 },
 ) {}
 
+/**
+ * `services.docker` requested on an install whose workspace runtime cannot serve it — today, a
+ * Kubernetes deployment whose operator has not enabled the rootless dind sidecar
+ * (`SEALANT_K8S_DOCKER_ENABLED` / chart `workspaces.docker.enabled`). Refused synchronously at
+ * POST /v1/workspaces for the same reason as cluster env references: the stable `code` is the
+ * consumer's capability probe, so a workbench can explain the gap beside its Docker switch instead
+ * of surfacing a launch failure minutes later.
+ */
+export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedErrorClass<WorkspaceDockerServiceUnsupportedError>()(
+  "WorkspaceDockerServiceUnsupportedError",
+  {
+    message: Schema.String,
+    code: Schema.Literals(["workspace-docker-unsupported"]),
+  },
+  { httpApiStatus: 422 },
+) {}
+
 export class WorkspaceUnauthorizedError extends Schema.TaggedErrorClass<WorkspaceUnauthorizedError>()(
   "WorkspaceUnauthorizedError",
   {
@@ -426,6 +443,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       error: [
         WorkspaceBadRequestError,
         WorkspaceRuntimeEnvReferencesUnsupportedError,
+        WorkspaceDockerServiceUnsupportedError,
         WorkspaceForbiddenError,
         WorkspaceNotFoundError,
         // Selected connected account exists but is not usable (status "invalid").

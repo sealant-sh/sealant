@@ -4,6 +4,7 @@ import {
   type BindWorkspaceRequest,
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
+  WorkspaceDockerServiceUnsupportedError,
   WorkspaceRuntimeEnvReferencesUnsupportedError,
   WorkspaceConflictError,
   WorkspaceForbiddenError,
@@ -1211,6 +1212,45 @@ export const runtimeEnvReferencesRefusal = (
   return `This deployment runs workspaces on the '${family}' runtime, which cannot resolve cluster env references: ${names}. Remove them, or run against a Kubernetes deployment.`;
 };
 
+/**
+ * Pure create-time gate for `tooling.services.docker`. The Docker runtime always serves it; a
+ * Kubernetes runtime serves it only when the operator enabled the rootless dind sidecar
+ * (`SEALANT_K8S_DOCKER_ENABLED`); no other family serves it. Same contract as
+ * `runtimeEnvReferencesRefusal`: refuse HERE, synchronously, and let the adapter's own refusal
+ * stay as belt. Returns the refusal message, or null when the request is fine.
+ */
+export const dockerServiceRefusal = (
+  spec: {
+    readonly tooling: {
+      readonly services?:
+        | { readonly docker?: { readonly enabled: boolean } | undefined }
+        | undefined;
+    };
+    readonly target: { readonly runtime: { readonly family: string } };
+  },
+  install: {
+    readonly defaultAdapterFamily: string;
+    readonly kubernetesDockerEnabled: boolean;
+  },
+): string | null => {
+  if (spec.tooling.services?.docker?.enabled !== true) {
+    return null;
+  }
+  const family =
+    spec.target.runtime.family === "auto"
+      ? install.defaultAdapterFamily
+      : spec.target.runtime.family;
+  if (family === "docker") {
+    return null;
+  }
+  if (family === "k8s" || family === "k3s") {
+    return install.kubernetesDockerEnabled
+      ? null
+      : "This deployment runs workspaces on Kubernetes without workspace-scoped Docker enabled (SEALANT_K8S_DOCKER_ENABLED / chart value workspaces.docker.enabled). Turn Docker off for this workspace, or ask the operator to enable it.";
+  }
+  return `This deployment runs workspaces on the '${family}' runtime, which has no workspace-scoped Docker. Turn Docker off for this workspace.`;
+};
+
 export const createWorkspace = (input: {
   readonly payload: CreateWorkspaceRequest;
   readonly headers: CreateWorkspaceHeaders;
@@ -1242,6 +1282,17 @@ export const createWorkspace = (input: {
       return yield* new WorkspaceRuntimeEnvReferencesUnsupportedError({
         message: envReferencesRefusal,
         code: "runtime-env-references-unsupported",
+      });
+    }
+
+    const dockerRefusal = dockerServiceRefusal(parsedSpec, {
+      defaultAdapterFamily: env.DEFAULT_RUNTIME_ADAPTER,
+      kubernetesDockerEnabled: env.SEALANT_K8S_DOCKER_ENABLED,
+    });
+    if (dockerRefusal !== null) {
+      return yield* new WorkspaceDockerServiceUnsupportedError({
+        message: dockerRefusal,
+        code: "workspace-docker-unsupported",
       });
     }
 
