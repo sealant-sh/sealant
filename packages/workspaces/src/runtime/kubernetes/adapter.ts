@@ -4,8 +4,9 @@
  * only pick the id and a distribution profile.
  *
  * Launch, for one workspace attempt (run id):
- *   1. `supports`: family, ephemeral persistence, outbound network, no DinD (later PR), gVisor
- *      only with a configured RuntimeClass.
+ *   1. `supports`: family, ephemeral persistence, outbound network, the Docker service only when
+ *      the operator enabled it (`SEALANT_K8S_DOCKER_ENABLED`), gVisor only with a configured
+ *      RuntimeClass.
  *   2. Lower mounts (PVC + subPath) and build every manifest from the launch input.
  *   3. Create-or-adopt: Certificate, env Secret, launch Secret, Service, Pod. A 409 on create means
  *      a redelivered launch; the existing object is read and must carry this run's labels.
@@ -162,7 +163,10 @@ void StreamKind;
 /** The support decision, pure. */
 export const supportForKubernetes = (
   id: KubernetesAdapterId,
-  config: Pick<KubernetesRuntimeConfig, "gvisorRuntimeClass" | "allowedWorkspaceServiceAccounts">,
+  config: Pick<
+    KubernetesRuntimeConfig,
+    "gvisorRuntimeClass" | "allowedWorkspaceServiceAccounts" | "docker"
+  >,
   input: RuntimeAdapterSupportInput,
 ): RuntimeAdapterSupport => {
   const family = input.blueprint.target.runtime.family;
@@ -187,12 +191,14 @@ export const supportForKubernetes = (
       message: "The Kubernetes adapter requires outbound network access.",
     };
   }
-  if (input.blueprint.tooling.services?.docker?.enabled === true) {
+  if (input.blueprint.tooling.services?.docker?.enabled === true && !config.docker.enabled) {
+    // Enabling it is an operator decision: every Docker-enabled workspace becomes a
+    // user-namespaced Pod with a privileged (inside that namespace) rootless-dind sidecar.
     return {
       supported: false,
       reason: "unsupported-runtime-requirement",
       message:
-        "Workspace-scoped Docker (tooling.services.docker) is not available on Kubernetes yet; it ships as a separate DinD sidecar capability.",
+        "Workspace-scoped Docker (tooling.services.docker) is not enabled on this Kubernetes deployment; the operator turns it on with SEALANT_K8S_DOCKER_ENABLED=true (chart value workspaces.docker.enabled).",
     };
   }
   const requestedServiceAccount = input.blueprint.runtime.kubernetes.serviceAccountName;
@@ -228,15 +234,20 @@ export const supportForKubernetes = (
 const podPhase = (pod: V1Pod | undefined): string | undefined => pod?.status?.phase;
 
 const describePodProblem = (pod: V1Pod): string => {
-  const statuses = pod.status?.containerStatuses ?? [];
+  // Sidecars (the Docker daemon) are init containers; a Pod with one stays Pending until its
+  // startup probe passes, so their state is the first place a stuck launch shows.
+  const statuses = [
+    ...(pod.status?.initContainerStatuses ?? []),
+    ...(pod.status?.containerStatuses ?? []),
+  ];
   for (const status of statuses) {
     const waiting = status.state?.waiting;
-    if (waiting?.reason !== undefined) {
-      return `${waiting.reason}${waiting.message === undefined ? "" : `: ${waiting.message}`}`;
+    if (waiting?.reason !== undefined && waiting.reason !== "PodInitializing") {
+      return `container '${status.name}' ${waiting.reason}${waiting.message === undefined ? "" : `: ${waiting.message}`}`;
     }
     const terminated = status.state?.terminated;
     if (terminated !== undefined) {
-      return `container exited with ${String(terminated.exitCode)}${terminated.reason === undefined ? "" : ` (${terminated.reason})`}`;
+      return `container '${status.name}' exited with ${String(terminated.exitCode)}${terminated.reason === undefined ? "" : ` (${terminated.reason})`}`;
     }
   }
   const condition = pod.status?.conditions?.find(

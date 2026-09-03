@@ -325,5 +325,104 @@ describe("Kubernetes manifests", () => {
     expect(pod.spec?.topologySpreadConstraints).toBeUndefined();
     expect(pod.spec?.priorityClassName).toBeUndefined();
     expect(pod.spec?.volumes?.map((v) => v.name)).toEqual(["run-sealant", "tls"]);
+    // No Docker service requested: no user namespace, no sidecar, no alias, no DOCKER_HOST.
+    expect(pod.spec?.hostUsers).toBeUndefined();
+    expect(pod.spec?.hostAliases).toBeUndefined();
+    expect(pod.spec?.initContainers).toBeUndefined();
+    expect(JSON.stringify(pod)).not.toContain("DOCKER_HOST");
+  });
+
+  it("runs the Docker service as a rootless sidecar inside a user-namespaced Pod", () => {
+    const dockerConfig: KubernetesRuntimeConfig = {
+      ...config,
+      docker: { ...config.docker, enabled: true },
+    };
+    // A legacy `runtime.env` DOCKER_HOST must lose to the adapter-owned socket (last wins).
+    const dockerInput = {
+      ...cases.dind,
+      blueprint: {
+        ...cases.dind.blueprint,
+        runtime: { ...cases.dind.blueprint.runtime, env: { DOCKER_HOST: "tcp://elsewhere:2375" } },
+      },
+    };
+    const plain = plainEnvEntries(dockerInput, dockerConfig, {
+      secretEnvFile: false,
+      dotfilesArchiveDir: undefined,
+    });
+    expect(plain.filter(([key]) => key === "DOCKER_HOST").at(-1)).toEqual([
+      "DOCKER_HOST",
+      "unix:///run/docker/docker.sock",
+    ]);
+    expect(plain).toContainEqual(["DOCKER_TLS_CERTDIR", ""]);
+
+    const pod = buildPod({
+      names,
+      config: dockerConfig,
+      labels,
+      input: dockerInput,
+      lowered: { volumes: [], volumeMounts: [] },
+      plainEnv: plain,
+      secretEnvKeys: [],
+      launchSecret: undefined,
+      priorityClassName: undefined,
+    });
+    expect(pod.spec?.hostUsers).toBe(false);
+    expect(pod.spec?.hostAliases).toEqual([{ ip: "127.0.0.1", hostnames: ["docker"] }]);
+    // Pod-level seccomp stays; only the sidecar is privileged (and only inside the namespace).
+    expect(pod.spec?.securityContext).toEqual({ seccompProfile: { type: "RuntimeDefault" } });
+
+    const sidecar = pod.spec?.initContainers?.[0];
+    expect(pod.spec?.initContainers).toHaveLength(1);
+    expect(sidecar).toMatchObject({
+      name: "docker",
+      image: "docker:28.5.2-dind-rootless",
+      restartPolicy: "Always",
+      env: [{ name: "DOCKER_TLS_CERTDIR", value: "" }],
+      securityContext: { privileged: true, runAsUser: 0 },
+      startupProbe: {
+        exec: { command: ["docker", "-H", "unix:///run/docker/docker.sock", "info"] },
+      },
+      resources: {
+        requests: { cpu: "100m", memory: "256Mi" },
+        limits: { cpu: "2", memory: "2Gi" },
+      },
+      volumeMounts: [
+        { name: "docker-run", mountPath: "/run/docker" },
+        { name: "docker-graph", mountPath: "/home/rootless/.local/share/docker" },
+      ],
+    });
+    const script = sidecar?.command?.[2] ?? "";
+    expect(sidecar?.command?.slice(0, 2)).toEqual(["/bin/sh", "-ec"]);
+    expect(script).toContain("echo 'rootless:1001:64533' > /etc/subuid");
+    expect(script).toContain(
+      "exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker/docker.sock --data-root=/home/rootless/.local/share/docker",
+    );
+    expect(script).not.toContain("tcp://");
+
+    expect(pod.spec?.volumes).toEqual([
+      { name: "run-sealant", emptyDir: {} },
+      { name: "tls", secret: { secretName: names.tlsSecret, defaultMode: 0o400 } },
+      { name: "docker-run", emptyDir: {} },
+      { name: "docker-graph", emptyDir: { sizeLimit: "20Gi" } },
+    ]);
+
+    const workspace = pod.spec?.containers[0];
+    expect(workspace?.securityContext).toEqual({
+      privileged: false,
+      allowPrivilegeEscalation: false,
+      readOnlyRootFilesystem: false,
+      capabilities: {
+        drop: ["ALL"],
+        add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "KILL"],
+      },
+    });
+    expect(workspace?.volumeMounts).toContainEqual({
+      name: "docker-run",
+      mountPath: "/run/docker",
+    });
+    expect(workspace?.volumeMounts?.some((mount) => mount.name === "docker-graph")).toBe(false);
+    expect(workspace?.env?.filter((entry) => entry.name === "DOCKER_HOST")).toEqual([
+      { name: "DOCKER_HOST", value: "unix:///run/docker/docker.sock" },
+    ]);
   });
 });

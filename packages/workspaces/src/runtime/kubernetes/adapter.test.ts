@@ -141,6 +141,7 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(adapter.supports({ blueprint: cases.dind.blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
+      message: expect.stringContaining("SEALANT_K8S_DOCKER_ENABLED"),
     });
     expect(adapter.supports({ blueprint: cases.mendMount.blueprint })).toMatchObject({
       supported: false,
@@ -158,6 +159,38 @@ describe("KubernetesRuntimeAdapter", () => {
       }),
     ).toMatchObject({ supported: false, reason: "unsupported-runtime" });
     expect(adapter.supports({ blueprint: cases.gitSource.blueprint })).toEqual({ supported: true });
+  });
+
+  it("serves the Docker service as a sidecar in a user-namespaced Pod once the operator enables it", async () => {
+    const dockerLaunch: RuntimeAdapterLaunchInput = {
+      ...cases.dind,
+      dotfilesArchiveDir: undefined,
+      secretEnvDir: undefined,
+      workspaceId: "ws_dind",
+    };
+    // Default deployment: refused at launch, nothing created.
+    const refused = fakeCluster();
+    await expect(adapterFor(refused, controlChannel()).launch(dockerLaunch)).rejects.toMatchObject({
+      code: "unsupported-runtime-requirement",
+    });
+    expect(refused.pods.size).toBe(0);
+
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel(), {
+      docker: { ...config.docker, enabled: true },
+    });
+    expect(adapter.supports({ blueprint: cases.dind.blueprint })).toEqual({ supported: true });
+    const result = await adapter.launch(dockerLaunch);
+    expect(result.status).toBe("ready");
+    const pod = cluster.pods.get(result.resourceId);
+    expect(pod?.spec?.hostUsers).toBe(false);
+    expect(pod?.spec?.initContainers?.map((c) => c.name)).toEqual(["docker"]);
+    expect(pod?.spec?.initContainers?.[0]?.securityContext?.privileged).toBe(true);
+    expect(pod?.spec?.containers[0]?.securityContext?.privileged).toBe(false);
+    expect(pod?.spec?.containers[0]?.env).toContainEqual({
+      name: "DOCKER_HOST",
+      value: "unix:///run/docker/docker.sock",
+    });
   });
 
   it("creates every object, waits for Running + health, writes credential files, reports ready", async () => {

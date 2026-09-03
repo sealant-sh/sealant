@@ -20,24 +20,14 @@
  * workspace Service with SNI set to the Service DNS name — the same mTLS handshake a worker Pod
  * performs, just routed.
  */
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { parseWorkspaceBlueprint } from "@sealant/validators";
 import { Effect, Option, Stream } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createLiveKubernetesBuildApi } from "../images/kubernetes/api.js";
-import { KubernetesWorkspaceImageBuilder } from "../images/kubernetes/builder.js";
-import { kubernetesBuildConfigSchema } from "../images/kubernetes/config.js";
-import { createZotRegistryClient } from "../registry/client.js";
-import {
-  KubernetesRuntimeAdapter,
-  liveControlChannel,
-  type ControlChannel,
-} from "../runtime/kubernetes/adapter.js";
+import { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
 import { createLiveKubernetesApi } from "../runtime/kubernetes/api.js";
 import { kubernetesRuntimeConfigSchema } from "../runtime/kubernetes/config.js";
 import type { PublishedImage, RuntimeAdapterLaunchInput } from "../runtime/runtime-adapter.js";
@@ -46,12 +36,22 @@ import {
   SealantRuntimeControlLive,
   type SealantTarget,
 } from "../sealantd/runtime.js";
-import { execInWorkspace } from "../sealantd/target.js";
+import {
+  buildWorkspaceImage,
+  clientTls,
+  E2E_ENABLED,
+  forwardedControlChannel,
+  kubectl,
+  NAMESPACE,
+  nodeOf,
+  runIn,
+  startRegistryForward,
+  withForwardedTarget,
+  type RegistryForward,
+} from "./e2e-support.js";
 
-const enabled = process.env["SEALANT_K8S_E2E"] === "1";
 const execFileAsync = promisify(execFile);
 
-const NAMESPACE = "sealant";
 const STORE_ROOT = "/var/lib/mend/store";
 const PROJECT = "acme";
 const SESSION = "session-e2e-1";
@@ -59,99 +59,9 @@ const WORKTREE = `${STORE_ROOT}/${PROJECT}/worktrees/${SESSION}`;
 const COMMON_DIR = `${STORE_ROOT}/${PROJECT}/repo.git`;
 const RUN_ID = `run-e2e-${Date.now().toString(36)}`;
 
-// Resolve relative to the repo root, not the suite's cwd (pnpm --filter runs in the package).
-const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../../../..");
-const tlsDir = path.resolve(repoRoot, process.env["E2E_TLS_DIR"] ?? "deploy/e2e/kind/.tls");
-const clientTls = {
-  caPath: `${tlsDir}/ca.crt`,
-  certPath: `${tlsDir}/tls.crt`,
-  keyPath: `${tlsDir}/tls.key`,
-};
-
-const kubectl = async (...args: string[]): Promise<string> =>
-  (await execFileAsync("kubectl", ["-n", NAMESPACE, ...args], { maxBuffer: 16 * 1024 * 1024 }))
-    .stdout;
-
 /** Run a shell snippet in the store Pod (the Mend stand-in on node A). */
 const inStore = (script: string): Promise<string> =>
   kubectl("exec", "store", "--", "sh", "-ec", script);
-
-/**
- * Port-forward the workspace Service and rewrite the target so the host process reaches it:
- * 127.0.0.1:<local port> on the wire, SNI + certificate verification against the Service name.
- */
-const withForwardedTarget = async <T>(
-  target: SealantTarget,
-  fn: (forwarded: SealantTarget) => Promise<T>,
-): Promise<T> => {
-  if (target.kind !== "websocket") {
-    return fn(target);
-  }
-  if (target.tls === undefined) {
-    throw new Error(
-      "cross-node e2e expects an mTLS websocket target (the k8s adapter always sets tls).",
-    );
-  }
-  const url = new URL(target.url);
-  const service = url.hostname.split(".")[0] ?? "";
-  const child: ChildProcess = spawn(
-    "kubectl",
-    ["-n", NAMESPACE, "port-forward", `svc/${service}`, `:${url.port}`],
-    {
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  const localPort = await new Promise<number>((resolve, reject) => {
-    let out = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      out += chunk.toString();
-      const match = /Forwarding from 127\.0\.0\.1:(\d+)/.exec(out);
-      if (match?.[1] !== undefined) {
-        resolve(Number(match[1]));
-      }
-    });
-    child.on("exit", (code) =>
-      reject(new Error(`port-forward exited with ${String(code)}: ${out}`)),
-    );
-    child.on("error", reject);
-  });
-  try {
-    return await fn({
-      kind: "websocket",
-      url: `wss://127.0.0.1:${localPort}${url.pathname}`,
-      tls: { ...target.tls, servername: url.hostname },
-    });
-  } finally {
-    child.kill("SIGTERM");
-  }
-};
-
-/** The adapter's readiness + credential-file channel, routed through the port-forward. */
-const forwardedControlChannel: ControlChannel = {
-  health: (target) =>
-    withForwardedTarget(target, (forwarded) => liveControlChannel.health(forwarded)),
-  writeCredentialFiles: (target, files) =>
-    withForwardedTarget(target, (forwarded) =>
-      liveControlChannel.writeCredentialFiles(forwarded, files),
-    ),
-};
-
-const runIn = (
-  target: SealantTarget,
-  command: string,
-): Promise<{ stdout: string; exitCode: number }> =>
-  withForwardedTarget(target, (forwarded) =>
-    Effect.runPromise(
-      execInWorkspace(forwarded, {
-        executable: "sh",
-        args: ["-c", command],
-        cwd: "/workspace/repo",
-      }).pipe(Effect.provide(SealantRuntimeControlLive)),
-    ),
-  );
-
-const nodeOf = async (pod: string): Promise<string> =>
-  (await kubectl("get", "pod", pod, "-o", "jsonpath={.spec.nodeName}")).trim();
 
 const blueprint = parseWorkspaceBlueprint({
   version: "1",
@@ -190,65 +100,26 @@ const blueprint = parseWorkspaceBlueprint({
   },
 });
 
-describe.skipIf(!enabled)("Kubernetes cross-node workspace", () => {
+describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
   let adapter: KubernetesRuntimeAdapter;
   let publishedImage: PublishedImage;
   let storeNode = "";
   let workspaceNode = "";
   let target: SealantTarget | undefined;
   let podName = "";
-  let registryForward: ChildProcess | undefined;
+  let registryForward: RegistryForward | undefined;
 
   beforeAll(async () => {
     const kubeconfigPath = process.env["KUBECONFIG"];
-    // The registry client (digest resolution) reaches the in-cluster zot through a
-    // suite-lifetime port-forward; in-cluster consumers use the Service DNS name.
-    registryForward = spawn(
-      "kubectl",
-      ["-n", NAMESPACE, "port-forward", "svc/sealant-registry", ":5000"],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    const registryPort = await new Promise<number>((resolve, reject) => {
-      let out = "";
-      registryForward?.stdout?.on("data", (chunk: Buffer) => {
-        out += chunk.toString();
-        const match = /Forwarding from 127\.0\.0\.1:(\d+)/.exec(out);
-        if (match?.[1] !== undefined) {
-          resolve(Number(match[1]));
-        }
-      });
-      registryForward?.on("exit", (code) =>
-        reject(new Error(`registry port-forward exited with ${String(code)}: ${out}`)),
-      );
-      registryForward?.on("error", reject);
-    });
-    const registryClient = createZotRegistryClient({
-      baseUrl: `http://127.0.0.1:${registryPort}`,
-      pushRegistry: "sealant-registry.sealant.svc:5000",
-    });
+    registryForward = await startRegistryForward();
 
     // 0. Build + push the workspace image with a rootless BuildKit Job (no Docker socket anywhere).
-    const buildConfig = kubernetesBuildConfigSchema.parse({
-      namespace: NAMESPACE,
-      pushRegistry: "sealant-registry.sealant.svc:5000",
-      registryInsecure: true,
-      resources: { requests: { cpu: "500m", memory: "1Gi" }, limits: { cpu: "4", memory: "6Gi" } },
-      timeoutMs: 25 * 60_000,
-      ...(kubeconfigPath === undefined ? {} : { kubeconfigPath }),
+    publishedImage = await buildWorkspaceImage({
+      blueprint,
+      registryPort: registryForward.port,
+      tag: "fedora",
+      kubeconfigPath,
     });
-    const builder = new KubernetesWorkspaceImageBuilder({
-      config: buildConfig,
-      api: createLiveKubernetesBuildApi({ namespace: NAMESPACE, kubeconfigPath }),
-      registryClient,
-    });
-    publishedImage = (
-      await builder.buildAndPublish({
-        spec: blueprint,
-        repository: "sealant/workspaces/e2e",
-        tag: "fedora",
-        buildId: "e2e",
-      })
-    ).publishedImage;
     expect(publishedImage.digest).toMatch(/^sha256:/);
 
     // 1. The store Pod (node A) creates the bare repo + linked worktree on the claim.
@@ -292,7 +163,7 @@ describe.skipIf(!enabled)("Kubernetes cross-node workspace", () => {
     if (adapter !== undefined && podName !== "") {
       await adapter.stop({ resourceId: podName }).catch(() => undefined);
     }
-    registryForward?.kill("SIGTERM");
+    registryForward?.child.kill("SIGTERM");
   });
 
   const launchInput = (): RuntimeAdapterLaunchInput => ({

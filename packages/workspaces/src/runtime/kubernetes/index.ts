@@ -16,6 +16,8 @@ export {
 } from "./api.js";
 export {
   COMPONENT_WORKSPACE,
+  DEFAULT_DOCKER_SERVICE_IMAGE,
+  dockerServiceConfigSchema,
   KubernetesRuntimeConfigError,
   LABEL_ADAPTER,
   LABEL_COMPONENT,
@@ -28,6 +30,7 @@ export {
   kubernetesRuntimeConfigSchema,
   volumeMappingSchema,
   volumeMappingsSchema,
+  type DockerServiceConfig,
   type KubernetesRuntimeConfig,
   type KubernetesRuntimeEnvLike,
   type VolumeMapping,

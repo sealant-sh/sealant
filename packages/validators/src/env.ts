@@ -406,6 +406,15 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_BUILD_TIMEOUT_MS: z.coerce.number().int().min(60_000).optional(),
   SEALANT_K8S_BUILD_TTL_SECONDS: z.coerce.number().int().min(0).optional(),
   SEALANT_K8S_REGISTRY_INSECURE: z.stringbool().or(z.boolean()).optional(),
+  // Workspace-scoped Docker: a rootless dind sidecar in a user-namespaced Pod. Operator opt-in —
+  // without it `tooling.services.docker` is refused on Kubernetes.
+  SEALANT_K8S_DOCKER_ENABLED: z.stringbool().or(z.boolean()).optional(),
+  SEALANT_K8S_DOCKER_IMAGE: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DOCKER_GRAPH_SIZE: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DOCKER_CPU_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DOCKER_MEMORY_REQUEST: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DOCKER_CPU_LIMIT: z.string().trim().min(1).optional(),
+  SEALANT_K8S_DOCKER_MEMORY_LIMIT: z.string().trim().min(1).optional(),
 });
 
 /**

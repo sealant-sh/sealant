@@ -122,6 +122,23 @@ workspaces:
   topologySpread: true
   nodeSelector: {} # e.g. { sealant.sh/pool: workspaces }
   readinessTimeoutMs: 300000
+  # Workspace-scoped Docker (`services.docker`): a rootless `docker:*-dind-rootless` daemon runs
+  # as a sidecar of the workspace Pod, and that Pod is USER-NAMESPACED (`hostUsers: false`) so the
+  # sidecar's `privileged` flag is privileged over the Pod's namespace only — root inside maps to
+  # an unprivileged node uid. Off by default: enabling it is your consent to that shape. Needs
+  # Kubernetes ≥ 1.33 (user namespaces on by default), containerd ≥ 2.0 or CRI-O ≥ 1.25, kernel
+  # ≥ 6.3, an idmap-capable filesystem behind every claim in `volumeMappings` (ext4, xfs, btrfs,
+  # CephFS on kernel ≥ 6.7 — NOT NFS), and `privileged` Pod Security on the workspace namespace.
+  # Refused per launch, with a message naming this value, while disabled.
+  docker:
+    enabled: false
+    image: docker:28.5.2-dind-rootless
+    # emptyDir budget for the daemon's image graph (local node disk, never the store claim); the
+    # kubelet evicts the Pod past it, which Mend reports as the workspace ending.
+    graphSize: 20Gi
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "2", memory: 2Gi }
   build:
     buildkitImage: moby/buildkit:v0.20.2-rootless
     resources:

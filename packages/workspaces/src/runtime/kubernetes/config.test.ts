@@ -98,4 +98,36 @@ describe("kubernetesRuntimeConfigFromEnv", () => {
       mountPath: "/mnt/staging",
     });
   });
+
+  it("keeps the Docker service off unless the operator enables it, with a pinned image", () => {
+    expect(kubernetesRuntimeConfigFromEnv(base)?.docker).toEqual({
+      enabled: false,
+      image: "docker:28.5.2-dind-rootless",
+      graphSize: "20Gi",
+      resources: {
+        requests: { cpu: "100m", memory: "256Mi" },
+        limits: { cpu: "2", memory: "2Gi" },
+      },
+    });
+    expect(
+      kubernetesRuntimeConfigFromEnv({
+        ...base,
+        SEALANT_K8S_DOCKER_ENABLED: true,
+        SEALANT_K8S_DOCKER_IMAGE: "docker:29.7.2-dind-rootless",
+        SEALANT_K8S_DOCKER_GRAPH_SIZE: "10Gi",
+        SEALANT_K8S_DOCKER_MEMORY_LIMIT: "4Gi",
+      })?.docker,
+    ).toEqual({
+      enabled: true,
+      image: "docker:29.7.2-dind-rootless",
+      graphSize: "10Gi",
+      resources: {
+        requests: { cpu: "100m", memory: "256Mi" },
+        limits: { cpu: "2", memory: "4Gi" },
+      },
+    });
+    expect(() =>
+      kubernetesRuntimeConfigFromEnv({ ...base, SEALANT_K8S_DOCKER_GRAPH_SIZE: "big" }),
+    ).toThrow(/quantity/);
+  });
 });

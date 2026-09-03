@@ -56,6 +56,13 @@ spec:
             {{- with .Values.workspaces.gvisorRuntimeClass }}
             - { name: SEALANT_K8S_GVISOR_RUNTIME_CLASS, value: {{ . | quote }} }
             {{- end }}
+            - { name: SEALANT_K8S_DOCKER_ENABLED, value: {{ .Values.workspaces.docker.enabled | quote }} }
+            - { name: SEALANT_K8S_DOCKER_IMAGE, value: {{ .Values.workspaces.docker.image | quote }} }
+            - { name: SEALANT_K8S_DOCKER_GRAPH_SIZE, value: {{ .Values.workspaces.docker.graphSize | quote }} }
+            - { name: SEALANT_K8S_DOCKER_CPU_REQUEST, value: {{ .Values.workspaces.docker.resources.requests.cpu | quote }} }
+            - { name: SEALANT_K8S_DOCKER_MEMORY_REQUEST, value: {{ .Values.workspaces.docker.resources.requests.memory | quote }} }
+            - { name: SEALANT_K8S_DOCKER_CPU_LIMIT, value: {{ .Values.workspaces.docker.resources.limits.cpu | quote }} }
+            - { name: SEALANT_K8S_DOCKER_MEMORY_LIMIT, value: {{ .Values.workspaces.docker.resources.limits.memory | quote }} }
             {{- if .Values.workspaces.nodeSelector }}
             - { name: SEALANT_K8S_WORKSPACE_NODE_SELECTOR, value: {{ toJson .Values.workspaces.nodeSelector | quote }} }
             {{- end }}

@@ -102,6 +102,33 @@ export const resourceRequirementsSchema = z.strictObject({
   limits: z.strictObject({ cpu: quantitySchema, memory: quantitySchema }),
 });
 
+/**
+ * The daemon image for `tooling.services.docker` on Kubernetes. The Docker adapter pins its own
+ * copy (`docker-runtime-adapter.ts`); the two are separate constants on purpose — the Docker
+ * argv is golden-tested and must not move when this one is bumped.
+ */
+export const DEFAULT_DOCKER_SERVICE_IMAGE = "docker:28.5.2-dind-rootless";
+
+/**
+ * Workspace-scoped Docker on Kubernetes (docs/kubernetes-support-design.md §D5, DinD). Off by
+ * default: enabling it makes every Docker-enabled workspace Pod user-namespaced with a
+ * `privileged` rootless-dind sidecar, which the operator must consent to — the same framing as
+ * `allowedWorkspaceServiceAccounts`.
+ */
+export const dockerServiceConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  image: z.string().trim().min(1).default(DEFAULT_DOCKER_SERVICE_IMAGE),
+  /** `sizeLimit` of the emptyDir holding the daemon's image graph; the kubelet evicts past it. */
+  graphSize: quantitySchema.default("20Gi"),
+  /** Applied to the sidecar container; the workspace container keeps `resources`. */
+  resources: resourceRequirementsSchema.default({
+    requests: { cpu: "100m", memory: "256Mi" },
+    limits: { cpu: "2", memory: "2Gi" },
+  }),
+});
+
+export type DockerServiceConfig = z.infer<typeof dockerServiceConfigSchema>;
+
 export const kubernetesRuntimeConfigSchema = z.strictObject({
   /** Where workspace Pods live. The worker's RBAC is scoped to this namespace. */
   namespace: dnsLabelSchema,
@@ -129,6 +156,8 @@ export const kubernetesRuntimeConfigSchema = z.strictObject({
   certManagerIssuer: certManagerIssuerSchema,
   /** Only set `runtimeClassName` when the operator enabled a gVisor RuntimeClass. */
   gvisorRuntimeClass: dnsSubdomainSchema.optional(),
+  /** Workspace-scoped Docker (rootless dind sidecar); refused unless `enabled`. */
+  docker: dockerServiceConfigSchema.prefault({}),
   /**
    * Optional RWX claim for launch material too large for a Secret (dotfiles archives). The
    * worker must have the claim mounted at `stagingMountPath`; its logical root must appear in
@@ -197,6 +226,13 @@ export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_TOPOLOGY_SPREAD?: boolean | undefined;
   readonly SEALANT_K8S_WORKSPACE_NODE_SELECTOR?: string | undefined;
   readonly SEALANT_K8S_KUBECONFIG?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_ENABLED?: boolean | undefined;
+  readonly SEALANT_K8S_DOCKER_IMAGE?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_GRAPH_SIZE?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_CPU_REQUEST?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_MEMORY_REQUEST?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_CPU_LIMIT?: string | undefined;
+  readonly SEALANT_K8S_DOCKER_MEMORY_LIMIT?: string | undefined;
 }
 
 export class KubernetesRuntimeConfigError extends Error {
@@ -312,6 +348,34 @@ export const kubernetesRuntimeConfigFromEnv = (
     ...(env.SEALANT_K8S_KUBECONFIG === undefined
       ? {}
       : { kubeconfigPath: env.SEALANT_K8S_KUBECONFIG }),
+    docker: {
+      ...(env.SEALANT_K8S_DOCKER_ENABLED === undefined
+        ? {}
+        : { enabled: env.SEALANT_K8S_DOCKER_ENABLED }),
+      ...(env.SEALANT_K8S_DOCKER_IMAGE === undefined
+        ? {}
+        : { image: env.SEALANT_K8S_DOCKER_IMAGE }),
+      ...(env.SEALANT_K8S_DOCKER_GRAPH_SIZE === undefined
+        ? {}
+        : { graphSize: env.SEALANT_K8S_DOCKER_GRAPH_SIZE }),
+      ...(env.SEALANT_K8S_DOCKER_CPU_REQUEST === undefined &&
+      env.SEALANT_K8S_DOCKER_MEMORY_REQUEST === undefined &&
+      env.SEALANT_K8S_DOCKER_CPU_LIMIT === undefined &&
+      env.SEALANT_K8S_DOCKER_MEMORY_LIMIT === undefined
+        ? {}
+        : {
+            resources: {
+              requests: {
+                cpu: env.SEALANT_K8S_DOCKER_CPU_REQUEST ?? "100m",
+                memory: env.SEALANT_K8S_DOCKER_MEMORY_REQUEST ?? "256Mi",
+              },
+              limits: {
+                cpu: env.SEALANT_K8S_DOCKER_CPU_LIMIT ?? "2",
+                memory: env.SEALANT_K8S_DOCKER_MEMORY_LIMIT ?? "2Gi",
+              },
+            },
+          }),
+    },
   };
   const parsed = kubernetesRuntimeConfigSchema.safeParse(candidate);
   if (!parsed.success) {
