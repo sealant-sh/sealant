@@ -128,8 +128,10 @@ workspaces:
   # an unprivileged node uid. Off by default: enabling it is your consent to that shape. Needs
   # Kubernetes ≥ 1.33 (user namespaces on by default), containerd ≥ 2.0 or CRI-O ≥ 1.25, kernel
   # ≥ 6.3, an idmap-capable filesystem behind every claim in `volumeMappings` (ext4, xfs, btrfs,
-  # CephFS on kernel ≥ 6.7 — NOT NFS), and `privileged` Pod Security on the workspace namespace.
-  # Refused per launch, with a message naming this value, while disabled.
+  # CephFS on kernel ≥ 6.7 — NOT NFS), `privileged` Pod Security on the workspace namespace, and
+  # on Ubuntu 23.10+ nodes `kernel.apparmor_restrict_unprivileged_userns=0` (the rootless daemon
+  # creates a nested user namespace). Refused per launch, with a message naming this value,
+  # while disabled.
   docker:
     enabled: false
     image: docker:28.5.2-dind-rootless

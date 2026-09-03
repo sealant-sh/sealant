@@ -13,7 +13,14 @@
  * idmap-mounted into a user-namespaced Pod. That constraint is documented in the Kubernetes guide;
  * this suite proves the daemon, not the store.
  *
- * Gated on SEALANT_K8S_E2E=1 with a cluster from `deploy/e2e/kind/up.sh`.
+ * Gated on SEALANT_K8S_E2E=1 with a cluster from `deploy/e2e/kind/up.sh`, AND on the cluster
+ * being able to run a user-namespaced Pod at all — probed with a bare `hostUsers: false` Pod
+ * before anything else. kind on GitHub-hosted runners cannot (measured 2026-09-03: the 1.32 node
+ * image silently ignores `hostUsers`, and on 1.37 the sandbox itself fails with
+ * `mounting "sysfs" … operation not permitted` inside the runner's nested containerd), so there
+ * the suite skips with a loud note instead of failing on a limitation of the harness. It runs for
+ * real against a cluster whose nodes support user namespaces (Talos 1.13 / containerd 2.2 is the
+ * reference), which is where the feature is accepted.
  */
 import { parseWorkspaceBlueprint } from "@sealant/validators";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -36,6 +43,78 @@ import {
 } from "./e2e-support.js";
 
 const RUN_ID = `run-e2e-docker-${Date.now().toString(36)}`;
+const PROBE_POD = `userns-probe-${Date.now().toString(36)}`;
+
+/**
+ * Can this cluster run a user-namespaced Pod? A bare `hostUsers: false` Pod that only sleeps:
+ * Ready within the budget means yes; anything else (sandbox creation failing, the field ignored
+ * and the uid map left as the host's) means the daemon suite has nothing to prove here.
+ */
+const probeUserNamespaces = async (): Promise<{ supported: boolean; reason: string }> => {
+  const manifest = JSON.stringify({
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: {
+      name: PROBE_POD,
+      namespace: NAMESPACE,
+      labels: { "sealant.sh/e2e-probe": "userns" },
+    },
+    spec: {
+      hostUsers: false,
+      restartPolicy: "Never",
+      nodeSelector: { "sealant.sh/e2e-role": "workspace" },
+      containers: [{ name: "probe", image: "alpine:3.20", command: ["sleep", "120"] }],
+    },
+  });
+  try {
+    // `kubectl apply -f -` needs stdin; go through a temp file instead.
+    const { writeFile, rm } = await import("node:fs/promises");
+    const path = `/tmp/${PROBE_POD}.json`;
+    await writeFile(path, manifest);
+    try {
+      await kubectl("apply", "-f", path);
+    } finally {
+      await rm(path, { force: true });
+    }
+    const ready = await kubectl(
+      "wait",
+      "--for=condition=Ready",
+      `pod/${PROBE_POD}`,
+      "--timeout=90s",
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (!ready) {
+      const events = await kubectl(
+        "get",
+        "events",
+        "--field-selector",
+        `involvedObject.name=${PROBE_POD}`,
+        "-o",
+        "jsonpath={range .items[*]}{.reason}: {.message}{'\\n'}{end}",
+      ).catch(() => "");
+      return {
+        supported: false,
+        reason: `a bare hostUsers:false Pod did not become Ready in 90s${events.trim() === "" ? "" : `:\n${events.trim().slice(0, 600)}`}`,
+      };
+    }
+    const uidMap = (
+      await kubectl("exec", PROBE_POD, "--", "cat", "/proc/self/uid_map").catch(() => "")
+    ).trim();
+    if (/^\s*0\s+0\s+4294967295\s*$/.test(uidMap)) {
+      return {
+        supported: false,
+        reason: "hostUsers:false was ignored — the Pod's uid map is the host's (0 0 4294967295)",
+      };
+    }
+    return { supported: true, reason: `uid map: ${uidMap.replace(/\s+/g, " ")}` };
+  } finally {
+    await kubectl("delete", "pod", PROBE_POD, "--ignore-not-found", "--wait=false").catch(
+      () => undefined,
+    );
+  }
+};
 
 const blueprint = parseWorkspaceBlueprint({
   version: "1",
@@ -84,9 +163,27 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
   let target: SealantTarget | undefined;
   let podName = "";
   let registryForward: RegistryForward | undefined;
+  let userNamespaces: { supported: boolean; reason: string } = {
+    supported: false,
+    reason: "not probed",
+  };
+  /** Every test skips, loudly, when the cluster cannot run user-namespaced Pods. */
+  const requireUserNamespaces = (ctx: { skip: (note?: string) => void }): void => {
+    if (!userNamespaces.supported) {
+      ctx.skip(`cluster cannot run user-namespaced Pods: ${userNamespaces.reason}`);
+    }
+  };
 
   beforeAll(async () => {
     const kubeconfigPath = process.env["KUBECONFIG"];
+    userNamespaces = await probeUserNamespaces();
+    if (!userNamespaces.supported) {
+      console.warn(
+        `[docker-service e2e] SKIPPING: this cluster cannot run user-namespaced Pods (${userNamespaces.reason}). ` +
+          "The workspace-scoped Docker suite needs nodes with user-namespace support (containerd ≥ 2.0, kernel ≥ 6.3, idmap-capable kubelet dir); kind on GitHub-hosted runners does not qualify.",
+      );
+      return;
+    }
     registryForward = await startRegistryForward();
     publishedImage = await buildWorkspaceImage({
       blueprint,
@@ -126,7 +223,8 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
 
   it(
     "becomes ready as a user-namespaced Pod with the rootless daemon as a sidecar",
-    async () => {
+    async (ctx) => {
+      requireUserNamespaces(ctx);
       const result = await adapter.launch({
         blueprint,
         publishedImage,
@@ -160,7 +258,8 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
     15 * 60_000,
   );
 
-  it("runs a nested container through the workspace-scoped daemon", async () => {
+  it("runs a nested container through the workspace-scoped daemon", async (ctx) => {
+    requireUserNamespaces(ctx);
     const nested = await runIn(target!, "docker run --rm alpine:3.20 echo nested-ok");
     expect(nested.exitCode).toBe(0);
     expect(nested.stdout.trim()).toBe("nested-ok");
@@ -168,7 +267,8 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
     expect(info.stdout).toContain("name=rootless");
   }, 300_000);
 
-  it("publishes a nested container's port on the Pod loopback and on the `docker` name", async () => {
+  it("publishes a nested container's port on the Pod loopback and on the `docker` name", async (ctx) => {
+    requireUserNamespaces(ctx);
     const started = await runIn(
       target!,
       "docker run -d --rm --name e2e-web -p 18080:80 nginx:alpine >/dev/null && sleep 3 && echo started",
@@ -192,7 +292,8 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes workspace-scoped Docker", () => {
     }
   }, 300_000);
 
-  it("stops idempotently and leaves nothing labelled for the run", async () => {
+  it("stops idempotently and leaves nothing labelled for the run", async (ctx) => {
+    requireUserNamespaces(ctx);
     const first = await adapter.stop({ resourceId: podName });
     expect(first.outcome).toBe("stopped");
     const second = await adapter.stop({ resourceId: podName });
