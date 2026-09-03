@@ -233,7 +233,13 @@ export const supportForKubernetes = (
 
 const podPhase = (pod: V1Pod | undefined): string | undefined => pod?.status?.phase;
 
-const describePodProblem = (pod: V1Pod): string => {
+interface PodProblem {
+  readonly message: string;
+  /** The container the problem points at, when one does — its log tail is worth quoting. */
+  readonly container?: string | undefined;
+}
+
+const describePodProblem = (pod: V1Pod): PodProblem => {
   // Sidecars (the Docker daemon) are init containers; a Pod with one stays Pending until its
   // startup probe passes, so their state is the first place a stuck launch shows.
   const statuses = [
@@ -243,21 +249,32 @@ const describePodProblem = (pod: V1Pod): string => {
   for (const status of statuses) {
     const waiting = status.state?.waiting;
     if (waiting?.reason !== undefined && waiting.reason !== "PodInitializing") {
-      return `container '${status.name}' ${waiting.reason}${waiting.message === undefined ? "" : `: ${waiting.message}`}`;
+      return {
+        message: `container '${status.name}' ${waiting.reason}${waiting.message === undefined ? "" : `: ${waiting.message}`}`,
+        container: status.name,
+      };
     }
-    const terminated = status.state?.terminated;
+    // A restarting container is `waiting`; what it printed before dying is in `lastState`.
+    const terminated = status.state?.terminated ?? status.lastState?.terminated;
     if (terminated !== undefined) {
-      return `container '${status.name}' exited with ${String(terminated.exitCode)}${terminated.reason === undefined ? "" : ` (${terminated.reason})`}`;
+      return {
+        message: `container '${status.name}' exited with ${String(terminated.exitCode)}${terminated.reason === undefined ? "" : ` (${terminated.reason})`}`,
+        container: status.name,
+      };
     }
   }
   const condition = pod.status?.conditions?.find(
     (c) => c.status !== "True" && c.message !== undefined,
   );
   if (condition?.message !== undefined) {
-    return `${condition.type}: ${condition.message}`;
+    return { message: `${condition.type}: ${condition.message}` };
   }
-  return pod.status?.message ?? pod.status?.reason ?? `phase ${podPhase(pod) ?? "unknown"}`;
+  return {
+    message: pod.status?.message ?? pod.status?.reason ?? `phase ${podPhase(pod) ?? "unknown"}`,
+  };
 };
+
+const PROBLEM_LOG_TAIL_LINES = 20;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -661,17 +678,36 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
       if (phase === "Failed" || phase === "Succeeded") {
         throw createAdapterError(
           "adapter-unavailable",
-          `Pod ${name} for run ${runId} ended before it became ready: ${describePodProblem(last)}.`,
+          `Pod ${name} for run ${runId} ended before it became ready: ${await this.#problemWithLog(last)}.`,
         );
       }
       if (this.#now() > deadline) {
         throw createAdapterError(
           "adapter-unavailable",
-          `Pod ${name} for run ${runId} was not Running within ${String(this.#config.readinessTimeoutMs)} ms: ${describePodProblem(last)}.`,
+          `Pod ${name} for run ${runId} was not Running within ${String(this.#config.readinessTimeoutMs)} ms: ${await this.#problemWithLog(last)}.`,
         );
       }
       await sleep(this.#pollIntervalMs);
     }
+  }
+
+  /**
+   * The Pod's problem, and — when it points at a container — that container's last log lines,
+   * so "container 'docker' exited with 1" arrives with the reason instead of a `kubectl logs`
+   * round trip on a Pod the failure path is about to delete.
+   */
+  async #problemWithLog(pod: V1Pod): Promise<string> {
+    const problem = describePodProblem(pod);
+    const podName = pod.metadata?.name;
+    if (problem.container === undefined || podName === undefined) {
+      return problem.message;
+    }
+    const tail = (
+      await this.#api.readPodLogTail(podName, problem.container, PROBLEM_LOG_TAIL_LINES)
+    ).trim();
+    return tail === ""
+      ? problem.message
+      : `${problem.message}\n--- ${problem.container} log tail ---\n${tail}`;
   }
 
   async #awaitHealthy(target: SealantTarget, podName: string): Promise<void> {
@@ -689,7 +725,7 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
         if (pod !== undefined && (phase === "Failed" || phase === "Succeeded")) {
           throw createAdapterError(
             "adapter-unavailable",
-            `Pod ${podName} ended before its control channel answered: ${describePodProblem(pod)}.`,
+            `Pod ${podName} ended before its control channel answered: ${await this.#problemWithLog(pod)}.`,
           );
         }
         await sleep(this.#pollIntervalMs);

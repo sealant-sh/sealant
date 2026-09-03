@@ -44,6 +44,15 @@ export interface KubernetesApi {
   readonly getPod: (name: string) => Promise<V1Pod | undefined>;
   readonly deletePod: (name: string) => Promise<DeleteOutcome>;
   readonly listPods: (labelSelector: string) => Promise<readonly V1Pod[]>;
+  /**
+   * Tail of one container's log, for launch failures that name a container (the Docker sidecar
+   * that would not start, a workspace that died at boot). Empty when unavailable; never throws.
+   */
+  readonly readPodLogTail: (
+    podName: string,
+    container: string,
+    tailLines: number,
+  ) => Promise<string>;
 
   readonly createService: (service: V1Service) => Promise<CreateOutcome<V1Service>>;
   readonly getService: (name: string) => Promise<V1Service | undefined>;
@@ -161,6 +170,13 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
         return (await core.listNamespacedPod({ namespace, labelSelector })).items;
       } catch (error) {
         throw toApiError("list pods", error);
+      }
+    },
+    readPodLogTail: async (podName, container, tailLines) => {
+      try {
+        return await core.readNamespacedPodLog({ name: podName, namespace, container, tailLines });
+      } catch {
+        return "";
       }
     },
 
