@@ -9,7 +9,11 @@
  *   - it still runs as root (the images do), so this is baseline, not restricted, Pod Security;
  *   - no ServiceAccount token is mounted; no secret value ever appears in the Pod spec — secret
  *     env arrives through `valueFrom.secretKeyRef`, the boot secret file through a projected
- *     Secret volume.
+ *     Secret volume;
+ *   - with the Docker service (operator-enabled), the Pod is user-namespaced (`hostUsers: false`)
+ *     and carries one privileged sidecar — privileged inside that namespace, which maps root to
+ *     an unprivileged node uid. That Pod needs `privileged` Pod Security, which the chart's
+ *     workspace namespace already is for rootless BuildKit.
  */
 import type {
   V1Container,
@@ -55,6 +59,95 @@ export const WORKSPACE_CAPABILITIES = [
   "SETGID",
   "KILL",
 ] as const;
+
+// ---------------------------------------------------------------------------------------------
+// Workspace-scoped Docker (tooling.services.docker): the rootless dind sidecar
+// ---------------------------------------------------------------------------------------------
+//
+// The same daemon the Docker adapter runs (`docker:*-dind-rootless`, privileged, TLS off), placed
+// where a Pod can hold it: a native sidecar (init container with `restartPolicy: Always`) inside
+// a USER-NAMESPACED Pod. `privileged` is what lets rootlesskit set up its network and mounts
+// without a device plugin; `hostUsers: false` is what keeps that flag from meaning node root —
+// uid 0 in the Pod is an unprivileged uid on the node, every capability is confined to the Pod's
+// namespace, and the node's block devices are present but unopenable. Verified on Talos 1.13 /
+// containerd 2.2 / runc 1.3: build, run, nested `-p` publishing into the Pod netns; the plain
+// `docker:dind` image does NOT start in that shape (its cgroup is not delegated), and the
+// unprivileged rootless shape needs `/dev/net/tun` the node does not hand out.
+//
+// Transport is a unix socket on an emptyDir shared with the workspace container: no network hop,
+// no TCP listener on the Pod IP. The `docker` name Mend dials for compose-published ports resolves
+// to loopback through `hostAliases` — rootlesskit's port driver publishes into the Pod netns.
+
+/** Sidecar container name; `describePodProblem` names it when it fails to come up. */
+export const DOCKER_SIDECAR_NAME = "docker";
+/** emptyDir shared with the workspace container; the daemon socket and rootlesskit state live here. */
+export const DOCKER_RUN_PATH = "/run/docker";
+export const DOCKER_SOCKET_PATH = `${DOCKER_RUN_PATH}/docker.sock`;
+/** The workspace's `DOCKER_HOST` (reserved env: callers cannot set it, see api-contracts). */
+export const DOCKER_HOST_VALUE = `unix://${DOCKER_SOCKET_PATH}`;
+/** Where the rootless daemon keeps its image graph; a size-limited emptyDir, never the store claim. */
+export const DOCKER_GRAPH_PATH = "/home/rootless/.local/share/docker";
+/** Network alias the Docker adapter gives the sidecar; here it is the Pod's own loopback. */
+export const DOCKER_HOST_ALIAS = "docker";
+/** The rootless image's daemon user. */
+const DOCKER_ROOTLESS_USER = "rootless";
+const DOCKER_ROOTLESS_UID = 1000;
+/**
+ * The image ships `rootless:100000:65536`, which lies OUTSIDE the 65536 ids a user-namespaced
+ * Pod is given (kubelet default). Rewrite it to fit: 1001..65533, leaving 65534 (the kernel's
+ * overflow id for unmapped owners) unclaimed. Fewer than 65536 subordinate ids means an image
+ * whose files are owned by a uid above ~64500 fails to extract — rare, documented.
+ */
+const DOCKER_ROOTLESS_SUBID_RANGE = "1001:64533";
+const DOCKER_SIDECAR_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/**
+ * What the sidecar runs. Passing `dockerd` explicitly as the entrypoint's first argument skips its
+ * defaults (`--host=tcp://0.0.0.0:2375` plus a rootlesskit port publish), so the daemon listens on
+ * the unix socket only.
+ */
+export const dockerSidecarScript = [
+  `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subuid`,
+  `echo '${DOCKER_ROOTLESS_USER}:${DOCKER_ROOTLESS_SUBID_RANGE}' > /etc/subgid`,
+  `mkdir -p ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
+  `chown ${String(DOCKER_ROOTLESS_UID)}:${String(DOCKER_ROOTLESS_UID)} ${DOCKER_RUN_PATH} ${DOCKER_GRAPH_PATH}`,
+  `exec su ${DOCKER_ROOTLESS_USER} -s /bin/sh -c '` +
+    `export XDG_RUNTIME_DIR=${DOCKER_RUN_PATH} HOME=/home/${DOCKER_ROOTLESS_USER} PATH=${DOCKER_SIDECAR_PATH} DOCKER_TLS_CERTDIR=; ` +
+    `exec dockerd-entrypoint.sh dockerd --host=${DOCKER_HOST_VALUE} --data-root=${DOCKER_GRAPH_PATH}'`,
+].join("\n");
+
+/** The sidecar container; `config.docker.enabled` must be true for `buildPod` to emit it. */
+export const buildDockerSidecar = (
+  config: Pick<KubernetesRuntimeConfig, "docker">,
+): V1Container => ({
+  name: DOCKER_SIDECAR_NAME,
+  image: config.docker.image,
+  imagePullPolicy: "IfNotPresent",
+  // Native sidecar: starts before the workspace container, is held until the startup probe
+  // passes, and is killed with the Pod. No second object for stop to delete.
+  restartPolicy: "Always",
+  command: ["/bin/sh", "-ec", dockerSidecarScript],
+  env: [{ name: "DOCKER_TLS_CERTDIR", value: "" }],
+  securityContext: { privileged: true, runAsUser: 0 },
+  startupProbe: {
+    exec: { command: ["docker", "-H", DOCKER_HOST_VALUE, "info"] },
+    periodSeconds: 1,
+    timeoutSeconds: 5,
+    failureThreshold: 120,
+  },
+  resources: {
+    requests: { ...config.docker.resources.requests },
+    limits: { ...config.docker.resources.limits },
+  },
+  volumeMounts: [
+    { name: "docker-run", mountPath: DOCKER_RUN_PATH },
+    { name: "docker-graph", mountPath: DOCKER_GRAPH_PATH },
+  ],
+});
+
+/** Whether the blueprint asks for the Docker service (the adapter refuses it unless configured). */
+export const wantsDockerService = (blueprint: RuntimeAdapterLaunchInput["blueprint"]): boolean =>
+  blueprint.tooling.services?.docker?.enabled === true;
 
 export interface WorkspaceLabelsInput {
   readonly runId: string;
@@ -145,6 +238,13 @@ export const plainEnvEntries = (
   }
   for (const [key, value] of Object.entries(blueprint.runtime.env)) {
     entries.push([key, value]);
+  }
+  // The Docker service socket, adapter-owned like the Docker adapter's `DOCKER_HOST=tcp://docker`.
+  // Both names are reserved (`runtime-network`), so no caller layer can shadow them; placing them
+  // after every caller-influenced entry keeps that true even for legacy `runtime.env`.
+  if (wantsDockerService(blueprint)) {
+    entries.push(["DOCKER_HOST", DOCKER_HOST_VALUE]);
+    entries.push(["DOCKER_TLS_CERTDIR", ""]);
   }
   // The opt-in WSS frontend (sealantd ADR-0013): on, for the Service port, with the per-workspace
   // server certificate and the issuer CA as the client CA.
@@ -414,6 +514,12 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
     });
     volumeMounts.push({ name: "launch", mountPath: LAUNCH_MOUNT_PATH, readOnly: true });
   }
+  const dockerService = wantsDockerService(input.blueprint);
+  if (dockerService) {
+    volumes.push({ name: "docker-run", emptyDir: {} });
+    volumes.push({ name: "docker-graph", emptyDir: { sizeLimit: config.docker.graphSize } });
+    volumeMounts.push({ name: "docker-run", mountPath: DOCKER_RUN_PATH });
+  }
 
   const container: V1Container = {
     name: "workspace",
@@ -452,6 +558,16 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
       automountServiceAccountToken: false,
       enableServiceLinks: false,
       terminationGracePeriodSeconds: 30,
+      // Docker service: the whole Pod (workspace container included) runs in a user namespace so
+      // the privileged sidecar is privileged over nothing the node cares about; the `docker`
+      // name Mend dials for compose-published ports is this Pod's loopback.
+      ...(dockerService
+        ? {
+            hostUsers: false,
+            hostAliases: [{ ip: "127.0.0.1", hostnames: [DOCKER_HOST_ALIAS] }],
+            initContainers: [buildDockerSidecar(config)],
+          }
+        : {}),
       ...(build.priorityClassName === undefined
         ? {}
         : { priorityClassName: build.priorityClassName }),

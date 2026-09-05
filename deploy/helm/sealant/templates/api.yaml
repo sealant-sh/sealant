@@ -54,6 +54,9 @@ spec:
             # adapter here in the API, not only in the worker — without this, every chart
             # install refuses `envFrom`/`serviceAccountName` claiming the docker runtime.
             - { name: DEFAULT_RUNTIME_ADAPTER, value: k8s }
+            # Same reason: the create-time refusal of `services.docker` reads the operator's
+            # decision here, so it matches what the worker will actually do.
+            - { name: SEALANT_K8S_DOCKER_ENABLED, value: {{ .Values.workspaces.docker.enabled | quote }} }
             - name: DATABASE_URL
               value: {{ include "sealant.databaseUrl" . | quote }}
             - name: RABBITMQ_URL

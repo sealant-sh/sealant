@@ -178,8 +178,24 @@ Pod security: main container `privileged: false`, `allowPrivilegeEscalation: fal
 add back only `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, `KILL` (the images run as root
 and `sealantd boot` applies dotfiles/chowns), `seccompProfile: RuntimeDefault`. This is **not**
 restricted-PSS compliant (root user); the workspace namespace needs
-`pod-security.kubernetes.io/enforce: baseline` (or privileged when DinD is enabled). DinD is a later
-PR and the only privileged container.
+`pod-security.kubernetes.io/enforce: baseline` (or privileged when Docker is enabled).
+
+Workspace-scoped Docker (`tooling.services.docker`, operator-gated by `SEALANT_K8S_DOCKER_ENABLED`):
+the same rootless `docker:*-dind-rootless` daemon the Docker adapter runs, as a native sidecar (init
+container, `restartPolicy: Always`, held by a `docker info` startup probe) inside a
+**user-namespaced Pod** (`hostUsers: false`). The sidecar is `privileged` — rootlesskit needs that
+for its network and mount setup without a device plugin — and the user namespace is what confines
+it: uid 0 in the Pod is an unprivileged node uid, capabilities exist only inside the namespace, node
+block devices are present but unopenable. The daemon listens on a unix socket in an emptyDir shared
+with the workspace container (`DOCKER_HOST=unix:///run/docker/docker.sock`); its image graph is a
+size-limited emptyDir, never the store claim; `hostAliases` maps `docker` to loopback so the
+`forward({ host: "docker" })` contract holds — rootlesskit publishes nested ports into the Pod
+netns. The image's `rootless:100000:65536` subordinate range is rewritten to `1001:64533` to fit the
+65536 ids a user-namespaced Pod gets. Measured on Talos 1.13 / containerd 2.2 / runc 1.3: this shape
+builds, runs and publishes; plain `docker:dind` cannot start under `hostUsers: false` (the Pod's
+cgroup is not delegated into the namespace), and the unprivileged rootless shape fails for lack of
+`/dev/net/tun`. Consequences: nested cgroup limits are ignored (cgroup driver `none`), and every
+claim in `volumeMappings` must sit on an idmap-capable filesystem (NFS is not).
 
 ### D6. Launch material abstraction
 
@@ -259,7 +275,7 @@ Stacked PRs per repository (each passes typecheck/lint/tests and is deployable o
 
 ## 4. Out of scope for the first cut
 
-- Workspace-local DinD sidecar on Kubernetes (`tooling.services.docker.enabled` returns
-  `unsupported-runtime-requirement` until its own PR).
+- Unprivileged Docker sidecar (drop `privileged` for in-namespace `NET_ADMIN`/`SYS_ADMIN` plus a
+  `/dev/net/tun` device plugin) and cgroup delegation into the Pod's user namespace.
 - Active-active Mend workers.
 - Read-only git common dir with a per-session overlay (tracked in `mend/docs/GIT-ACCESS.md`).

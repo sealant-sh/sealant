@@ -3,7 +3,7 @@
  * dead Pod, readiness through the control channel, credential files over that channel, idempotent
  * stop, and readable failures. No cluster, no network.
  */
-import type { V1ConfigMap, V1Pod, V1Secret, V1Service } from "@kubernetes/client-node";
+import type { V1ConfigMap, V1Pod, V1PodStatus, V1Secret, V1Service } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
@@ -36,6 +36,10 @@ interface FakeCluster extends KubernetesApi {
   readonly certificates: Map<string, CertificateObject>;
   /** Make newly created pods reach this phase on the next read. */
   nextPhase: string;
+  /** When set, newly created pods report this full status instead of `{ phase: nextPhase }`. */
+  nextStatus: V1PodStatus | undefined;
+  /** `<pod>/<container>` → log tail the fake serves. */
+  readonly logTails: Map<string, string>;
   readonly log: string[];
 }
 
@@ -71,6 +75,8 @@ const fakeCluster = (): FakeCluster => {
     configmaps,
     certificates,
     nextPhase: "Running",
+    nextStatus: undefined,
+    logTails: new Map<string, string>(),
     log,
     createPod: async (pod) => create(pods, "pod", pod),
     getPod: async (name) => {
@@ -78,7 +84,7 @@ const fakeCluster = (): FakeCluster => {
       if (pod === undefined) {
         return undefined;
       }
-      return { ...pod, status: pod.status ?? { phase: cluster.nextPhase } };
+      return { ...pod, status: pod.status ?? cluster.nextStatus ?? { phase: cluster.nextPhase } };
     },
     deletePod: async (name) => del(pods, "pod", name),
     listPods: async () => [...pods.values()],
@@ -93,6 +99,7 @@ const fakeCluster = (): FakeCluster => {
       return secret;
     },
     getSecret: async (name) => secrets.get(name),
+    readPodLogTail: async (name, container) => cluster.logTails.get(`${name}/${container}`) ?? "",
     getConfigMap: async (name) => configmaps.get(name),
     deleteSecret: async (name) => del(secrets, "secret", name),
     listSecrets: async () => [...secrets.values()],
@@ -141,6 +148,7 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(adapter.supports({ blueprint: cases.dind.blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
+      message: expect.stringContaining("SEALANT_K8S_DOCKER_ENABLED"),
     });
     expect(adapter.supports({ blueprint: cases.mendMount.blueprint })).toMatchObject({
       supported: false,
@@ -158,6 +166,38 @@ describe("KubernetesRuntimeAdapter", () => {
       }),
     ).toMatchObject({ supported: false, reason: "unsupported-runtime" });
     expect(adapter.supports({ blueprint: cases.gitSource.blueprint })).toEqual({ supported: true });
+  });
+
+  it("serves the Docker service as a sidecar in a user-namespaced Pod once the operator enables it", async () => {
+    const dockerLaunch: RuntimeAdapterLaunchInput = {
+      ...cases.dind,
+      dotfilesArchiveDir: undefined,
+      secretEnvDir: undefined,
+      workspaceId: "ws_dind",
+    };
+    // Default deployment: refused at launch, nothing created.
+    const refused = fakeCluster();
+    await expect(adapterFor(refused, controlChannel()).launch(dockerLaunch)).rejects.toMatchObject({
+      code: "unsupported-runtime-requirement",
+    });
+    expect(refused.pods.size).toBe(0);
+
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel(), {
+      docker: { ...config.docker, enabled: true },
+    });
+    expect(adapter.supports({ blueprint: cases.dind.blueprint })).toEqual({ supported: true });
+    const result = await adapter.launch(dockerLaunch);
+    expect(result.status).toBe("ready");
+    const pod = cluster.pods.get(result.resourceId);
+    expect(pod?.spec?.hostUsers).toBe(false);
+    expect(pod?.spec?.initContainers?.map((c) => c.name)).toEqual(["docker"]);
+    expect(pod?.spec?.initContainers?.[0]?.securityContext?.privileged).toBe(true);
+    expect(pod?.spec?.containers[0]?.securityContext?.privileged).toBe(false);
+    expect(pod?.spec?.containers[0]?.env).toContainEqual({
+      name: "DOCKER_HOST",
+      value: "unix:///run/docker/docker.sock",
+    });
   });
 
   it("creates every object, waits for Running + health, writes credential files, reports ready", async () => {
@@ -242,6 +282,38 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(cluster.pods.size).toBe(0);
     expect(cluster.services.size).toBe(0);
     expect(cluster.certificates.size).toBe(0);
+  });
+
+  it("names the container that will not start and quotes its log tail", async () => {
+    const cluster = fakeCluster();
+    // A crash-looping Docker sidecar: the Pod stays Pending, the container is `waiting` with its
+    // last exit in `lastState`, and the kubelet still serves what it printed.
+    cluster.nextStatus = {
+      phase: "Pending",
+      initContainerStatuses: [
+        {
+          name: "docker",
+          image: "docker:28.5.2-dind-rootless",
+          imageID: "",
+          ready: false,
+          restartCount: 3,
+          state: { waiting: { reason: "CrashLoopBackOff" } },
+          lastState: { terminated: { exitCode: 1, reason: "Error" } },
+        },
+      ],
+    };
+    const names = workspaceResourceNames("run-golden-3");
+    cluster.logTails.set(`${names.pod}/docker`, "sh: can't create /etc/subuid: Permission denied");
+    const adapter = adapterFor(cluster, controlChannel(), {
+      docker: { ...config.docker, enabled: true },
+      readinessTimeoutMs: 1000,
+    });
+    await expect(
+      adapter.launch({ ...cases.dind, dotfilesArchiveDir: undefined, secretEnvDir: undefined }),
+    ).rejects.toThrow(
+      /container 'docker' CrashLoopBackOff[\s\S]*--- docker log tail ---[\s\S]*Permission denied/,
+    );
+    expect(cluster.pods.size).toBe(0);
   });
 
   it("fails readably when the control channel never answers", async () => {

@@ -76,6 +76,10 @@ jobs:
           deploy/e2e/kind/up.sh
           echo "KUBECONFIG=${KUBECONFIG:-$HOME/.kube/config}" >> "$GITHUB_ENV"
 
+      # `src/kubernetes` also holds docker-service.e2e.ts (workspace-scoped Docker). That suite
+      # probes for a user-namespaced Pod first and SKIPS here: kind on a GitHub-hosted runner cannot
+      # create one (the sandbox's sysfs mount is refused inside the nested containerd). It runs for
+      # real against a cluster with user-namespace support — see the suite header.
       - name: Run the Kubernetes e2e suite
         env:
           SEALANT_K8S_E2E: "1"
