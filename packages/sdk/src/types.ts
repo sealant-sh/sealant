@@ -124,18 +124,19 @@ export interface WorkspaceCredentialsOptions {
 
 /**
  * A workspace sourced from a CALLER-OWNED host directory instead of a fresh clone. The platform
- * bind-mounts `path` as the workspace working directory and treats it as caller-owned: writes
- * persist across workspace stop/restart/expiry, and the path is never reprovisioned or deleted.
- * When `path` is a linked Git worktree, the SDK also binds its shared Git metadata at the absolute
- * path named by the worktree's `.git` pointer. The metadata remains caller-owned and host-backed;
- * no repository data is copied into container-owned storage.
+ * mounts `path` as the workspace working directory and treats it as caller-owned: writes persist
+ * across workspace stop/restart/expiry, and the path is never reprovisioned or deleted. In strict
+ * Docker volume mode this is the canonical absolute path visible inside the application and worker
+ * containers, not Docker's private host volume directory. When `path` is a linked Git worktree, the
+ * SDK also mounts its shared Git metadata at the absolute path named by the worktree's `.git`
+ * pointer. No repository data is copied into workspace-container-owned storage.
  * The install must allowlist the path's root (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`); paths
  * outside the allowlist are rejected at create. Credentials and dotfiles options compose
  * unchanged. Clone-based workspaces remain the right shape for independent verification.
  */
 export interface WorkspaceMountSource {
   readonly kind: "mount";
-  /** Absolute, normalized host path (no `..` segments). */
+  /** Absolute, normalized deployment path (no `..` segments); container-visible in volume mode. */
   readonly path: string;
 }
 
@@ -149,7 +150,7 @@ export interface WorkspaceMountSource {
  */
 export interface WorkspaceStandbySource {
   readonly kind: "standby";
-  /** Absolute, normalized host path of the root (no `..` segments). */
+  /** Absolute, normalized deployment root (no `..` segments); container-visible in volume mode. */
   readonly rootPath: string;
 }
 
@@ -162,7 +163,7 @@ export interface WorkspaceStandbySource {
  * never reprovisioned, never cleaned.
  */
 export interface WorkspaceExtraMount {
-  /** Absolute, normalized host path (no `..` segments). */
+  /** Absolute, normalized deployment path (no `..` segments); container-visible in volume mode. */
   readonly hostPath: string;
   /** Absolute container path to mount at, outside the working directory (e.g. `/workspace/ref/x`). */
   readonly mountPath: string;

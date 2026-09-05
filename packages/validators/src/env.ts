@@ -370,6 +370,9 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_EXPIRY_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
   // Mount-source allowlist (same operator knob as the API + daemon; see workspaceLifecycleEnvSchema).
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
+  // Optional strict Docker named-volume lowering. Semantic parsing and coherence checks live in
+  // @sealant/workspaces so Kubernetes and legacy Docker configuration remain unchanged.
+  SEALANT_DOCKER_VOLUME_MAPPINGS: z.string().trim().min(1).optional(),
 });
 
 /**

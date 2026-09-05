@@ -1,17 +1,30 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
+import { createConnection } from "node:net";
 import { join as joinPath } from "node:path";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
+  assertDockerVolumeConfiguration,
+  assertDockerVolumeSourceDirectories,
+  dockerVolumeMountArgs,
+  prepareDockerControlDirectory,
+  resolveDockerVolumeMount,
+  resolveDockerVolumeMounts,
+  type DockerVolumeMapping,
+  type ResolvedDockerVolumeMount,
+} from "./docker-volume-mounts.js";
+import {
   bindRootMountPath,
   bindableMountsEnv,
   bindsEnv,
+  collectMountIntents,
+  dockerBindArgsForIntent,
   STANDBY_ROOT_MOUNT_PATH,
+  type RuntimeMountIntent,
 } from "./mount-intent.js";
 import {
   parseRuntimeAdapterLaunchInput,
@@ -44,6 +57,7 @@ const CONTROL_SOCKET_CONTAINER_PATH = "/run/sealant/control.sock";
 const READINESS_POLL_INTERVAL_MS = 250;
 const DEFAULT_READINESS_TIMEOUT_MS = 120_000;
 const DEFAULT_DOCKER_SERVICE_IMAGE = "docker:27.5.1-dind-rootless";
+const MINIMUM_VOLUME_API_VERSION = { major: 1, minor: 45 } as const;
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -74,6 +88,23 @@ export interface DockerRuntimeCatalog {
 export type DockerSshEndpointExposureStrategy = "host-published" | "container-network";
 
 export type DockerRuntimeCatalogLoader = () => Promise<DockerRuntimeCatalog>;
+
+interface DockerContainerAcquisition {
+  readonly containerId: string;
+  readonly adopted: boolean;
+}
+
+interface DockerVolumeLaunchMountPlan {
+  readonly mountArgsForIntent: (intent: RuntimeMountIntent) => readonly string[];
+  readonly controlSocketMountArgs: readonly string[];
+}
+
+interface DockerServiceProvision {
+  readonly networkName: string;
+  readonly serviceName: string;
+  readonly createdNetworkId: string | undefined;
+  readonly acquisition: DockerContainerAcquisition;
+}
 
 export interface DockerRuntimeAdapterOptions {
   readonly commandRunner?: DockerCommandRunner;
@@ -117,6 +148,11 @@ export interface DockerRuntimeAdapterOptions {
    * mount-sourced blueprint fails (the API rejects such creates first; this is defense in depth).
    */
   readonly mountAllowedStoreRoots?: string;
+  /**
+   * Existing Docker named volumes backing canonical deployment paths. When present, every source
+   * mount uses `volume-subpath`; there is no bind-mount fallback.
+   */
+  readonly volumeMappings?: readonly DockerVolumeMapping[];
 }
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
@@ -359,16 +395,33 @@ const envArgsFromBlueprint = (
  * working directory. No `:ro` and no cleanup anywhere in stop/reap — the path is caller-owned and
  * must survive every lifecycle transition (stop, restart, expire, reap).
  */
-const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
+const workspaceMountArgs = (
+  input: RuntimeAdapterLaunchInput,
+  mountArgsForIntent: (intent: RuntimeMountIntent) => readonly string[] = dockerBindArgsForIntent,
+): Array<string> => {
   const source = input.blueprint.sources.workspace;
   if (source.kind === "standby") {
     // The ROOT, hidden; the daemon binds the working directory to one of its subdirectories.
-    return ["-v", `${source.rootPath}:${STANDBY_ROOT_MOUNT_PATH}`];
+    return [
+      ...mountArgsForIntent({
+        sourcePath: source.rootPath,
+        mountPath: STANDBY_ROOT_MOUNT_PATH,
+        readOnly: false,
+        purpose: "workspace-root",
+      }),
+    ];
   }
   if (source.kind !== "mount") {
     return [];
   }
-  return ["-v", `${source.hostPath}:${input.blueprint.runtime.workingDirectory}`];
+  return [
+    ...mountArgsForIntent({
+      sourcePath: source.hostPath,
+      mountPath: input.blueprint.runtime.workingDirectory,
+      readOnly: false,
+      purpose: "workspace",
+    }),
+  ];
 };
 
 /**
@@ -378,12 +431,27 @@ const workspaceMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => 
  * stop/reap. The control plane has already enforced the allowlist and rejected container paths
  * overlapping the working directory.
  */
-const extraMountArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
-  return input.blueprint.sources.mounts.flatMap((mount) => [
-    "-v",
-    // A bindable mount's root goes to its hidden root path; the daemon owns the declared path.
-    `${mount.hostPath}:${mount.bindable ? bindRootMountPath(mount.mountPath) : mount.mountPath}${mount.readOnly ? ":ro" : ""}`,
-  ]);
+const extraMountArgs = (
+  input: RuntimeAdapterLaunchInput,
+  mountArgsForIntent: (intent: RuntimeMountIntent) => readonly string[] = dockerBindArgsForIntent,
+): Array<string> => {
+  return input.blueprint.sources.mounts.flatMap((mount) => {
+    let purpose: RuntimeMountIntent["purpose"] = "extra-mount";
+    if (mount.bindable) {
+      purpose = "extra-mount-root";
+    } else if (mount.mountPath === mount.hostPath) {
+      purpose = "git-common";
+    }
+    return [
+      ...mountArgsForIntent({
+        sourcePath: mount.hostPath,
+        // A bindable mount's root goes to its hidden root path; the daemon owns the declared path.
+        mountPath: mount.bindable ? bindRootMountPath(mount.mountPath) : mount.mountPath,
+        readOnly: mount.readOnly,
+        purpose,
+      }),
+    ];
+  });
 };
 
 /**
@@ -457,6 +525,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly mountAllowedStoreRoots: string | undefined;
 
+  private readonly volumeMappings: readonly DockerVolumeMapping[] | undefined;
+
+  private readonly allowedStoreRoots: readonly string[];
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
@@ -470,12 +542,18 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
+    this.volumeMappings = options.volumeMappings;
+    this.allowedStoreRoots =
+      options.volumeMappings === undefined
+        ? []
+        : assertDockerVolumeConfiguration({
+            mappings: options.volumeMappings,
+            mountAllowedStoreRoots: options.mountAllowedStoreRoots,
+            controlSocketHostDir: options.controlSocketHostDir,
+          });
   }
 
-  /**
-   * Build the `-v` args for the §2.2 control-socket bind-mount, creating the per-container host dir
-   * 0700 first. Returns no args (and creates nothing) when the fast path is not enabled.
-   */
+  /** Build the legacy control-socket bind mount with its original recursive mkdir behavior. */
   private async buildControlSocketMountArgs(containerName: string): Promise<string[]> {
     if (this.controlSocketHostDir === undefined) {
       return [];
@@ -485,9 +563,129 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return ["-v", `${hostDir}:/run/sealant`];
   }
 
+  private async isContainerNameAbsent(containerName: string): Promise<boolean> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        containerName,
+      ]);
+      if (result.stdout.trim().length > 0) return false;
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return true;
+    }
+
+    // An empty or failed inspect is inconclusive. A successful exact-name listing provides a second,
+    // structural absence check without treating daemon failures as "not found".
+    try {
+      const result = await this.commandRunner("docker", [
+        "container",
+        "ls",
+        "--all",
+        "--filter",
+        `name=^/${containerName}$`,
+        "--format",
+        "{{.ID}}",
+      ]);
+      return result.stdout.trim().length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async assertDockerVolumeSupport(): Promise<void> {
+    const result = await this.commandRunner("docker", [
+      "version",
+      "--format",
+      "{{.Client.APIVersion}}|{{.Server.APIVersion}}",
+    ]);
+    const [clientVersion, serverVersion] = result.stdout.trim().split("|");
+    const supportsMinimum = (version: string | undefined): boolean => {
+      if (version === undefined) return false;
+      const match = /^(\d+)\.(\d+)$/.exec(version);
+      if (match === null) return false;
+      const major = Number(match[1]);
+      const minor = Number(match[2]);
+      return (
+        major > MINIMUM_VOLUME_API_VERSION.major ||
+        (major === MINIMUM_VOLUME_API_VERSION.major && minor >= MINIMUM_VOLUME_API_VERSION.minor)
+      );
+    };
+    if (!supportsMinimum(clientVersion) || !supportsMinimum(serverVersion)) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Strict Docker volume mounts require Docker client and server API >= 1.45 (reported client ${clientVersion ?? "unknown"}, server ${serverVersion ?? "unknown"}).`,
+      );
+    }
+  }
+
+  private async assertDockerVolumesExist(
+    mounts: readonly ResolvedDockerVolumeMount[],
+  ): Promise<void> {
+    const volumeNames = new Set(mounts.map((mount) => mount.mapping.volumeName));
+    for (const volumeName of volumeNames) {
+      try {
+        await this.commandRunner("docker", ["volume", "inspect", volumeName]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Required Docker volume '${volumeName}' is unavailable; deployment must create and mount it before worker startup: ${message}`,
+        );
+      }
+    }
+  }
+
+  private async prepareVolumeLaunchMounts(
+    input: RuntimeAdapterLaunchInput,
+    containerName: string,
+  ): Promise<DockerVolumeLaunchMountPlan | undefined> {
+    const mappings = this.volumeMappings;
+    if (mappings === undefined) return undefined;
+    const controlSocketHostDir = this.controlSocketHostDir;
+    if (controlSocketHostDir === undefined) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        "Strict Docker volume mode has no configured control socket directory.",
+      );
+    }
+    const mountArgsForIntent = (intent: RuntimeMountIntent): readonly string[] =>
+      dockerVolumeMountArgs(resolveDockerVolumeMount(intent, mappings));
+    const nonControlMounts = resolveDockerVolumeMounts({
+      intents: collectMountIntents(input),
+      mappings,
+      allowedStoreRoots: this.allowedStoreRoots,
+    });
+    const controlSocketIntent: RuntimeMountIntent = {
+      sourcePath: joinPath(controlSocketHostDir, containerName),
+      mountPath: "/run/sealant",
+      readOnly: false,
+      purpose: "launch-material",
+    };
+    const controlSocketMount = resolveDockerVolumeMount(controlSocketIntent, mappings);
+    const controlSocketMountArgs = dockerVolumeMountArgs(controlSocketMount);
+
+    // Resolve every mapping first, then validate caller-owned sources and Docker capabilities.
+    // Creating the one adapter-owned directory is the final acquisition step.
+    await assertDockerVolumeSourceDirectories(nonControlMounts);
+    await this.assertDockerVolumeSupport();
+    await this.assertDockerVolumesExist([...nonControlMounts, controlSocketMount]);
+    // Retain deterministic control directories, including after partial preparation failures.
+    // A retry can reuse the directory at any time; no Docker inspect can make online deletion safe.
+    await prepareDockerControlDirectory({
+      controlRoot: controlSocketHostDir,
+      directoryName: containerName,
+      containerNamePrefix: this.containerNamePrefix,
+    });
+    return { mountArgsForIntent, controlSocketMountArgs };
+  }
+
   private async assertRuntimeConfigured(runtime: "runc" | "runsc"): Promise<void> {
     const catalog = await this.runtimeCatalogLoader();
-    const availableRuntimes = [...catalog.runtimes].toSorted();
+    const availableRuntimes = [...catalog.runtimes].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
 
     if (catalog.runtimes.has(runtime)) {
       return;
@@ -666,11 +864,77 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     await this.commandRunner("docker", ["rm", "-f", containerId]).catch(() => undefined);
   }
 
-  private async provisionDockerService(containerName: string): Promise<string> {
+  private async removeContainerDefinitively(containerId: string): Promise<boolean> {
+    try {
+      await this.commandRunner("docker", ["rm", "-f", containerId]);
+      return true;
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return true;
+      try {
+        await this.inspectContainerState(containerId);
+        return false;
+      } catch (inspectError) {
+        return isNoSuchContainerError(inspectError);
+      }
+    }
+  }
+
+  private async removeOwnedDockerService(provision: DockerServiceProvision): Promise<void> {
+    if (provision.acquisition.adopted) return;
+    const serviceGone = await this.removeContainerDefinitively(provision.acquisition.containerId);
+    if (!serviceGone || !(await this.isContainerNameAbsent(provision.serviceName))) return;
+    if (provision.createdNetworkId !== undefined) {
+      // Docker refuses removal while endpoints remain attached. Never resolve a reusable name here.
+      await this.commandRunner("docker", ["network", "rm", provision.createdNetworkId]);
+    }
+  }
+
+  private async removeOwnedDockerServiceBestEffort(
+    provision: DockerServiceProvision,
+  ): Promise<void> {
+    try {
+      await this.removeOwnedDockerService(provision);
+    } catch {
+      return;
+    }
+  }
+
+  private async cleanupFailedLaunch(
+    containerName: string,
+    acquisition: DockerContainerAcquisition | undefined,
+    dockerService: DockerServiceProvision | undefined,
+  ): Promise<void> {
+    if (
+      acquisition?.adopted === true ||
+      (acquisition === undefined && dockerService === undefined)
+    ) {
+      return;
+    }
+
+    try {
+      const removedOwnedContainer =
+        acquisition === undefined
+          ? true
+          : await this.removeContainerDefinitively(acquisition.containerId);
+      if (!removedOwnedContainer || !(await this.isContainerNameAbsent(containerName))) return;
+    } catch {
+      return;
+    }
+
+    // Keep the launch error and retain shared or unknown resources. Control directories are never
+    // deleted online, even after confirmed container removal: a retry can already be using them.
+    if (dockerService !== undefined) {
+      await this.removeOwnedDockerServiceBestEffort(dockerService);
+    }
+  }
+
+  private async provisionDockerService(containerName: string): Promise<DockerServiceProvision> {
     const networkName = `${containerName}-network`;
     const serviceName = `${containerName}-docker`;
+    let createdNetworkId: string | undefined;
     try {
-      await this.commandRunner("docker", ["network", "create", networkName]);
+      const result = await this.commandRunner("docker", ["network", "create", networkName]);
+      createdNetworkId = result.stdout.trim() || undefined;
     } catch (error) {
       try {
         await this.commandRunner("docker", ["network", "inspect", networkName]);
@@ -700,26 +964,23 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       args.splice(2, 0, "--rm");
     }
 
+    let acquisition: DockerContainerAcquisition | undefined;
     try {
-      const serviceId = await this.runOrAdoptContainer(args, serviceName);
+      acquisition = await this.runOrAdoptContainer(args, serviceName);
       const deadline = Date.now() + this.readinessTimeoutMs;
       for (;;) {
         try {
           await this.commandRunner("docker", [
             "exec",
-            serviceId,
+            acquisition.containerId,
             "docker",
             "-H",
             "tcp://127.0.0.1:2375",
             "info",
           ]);
-          return networkName;
+          return { networkName, serviceName, createdNetworkId, acquisition };
         } catch (error) {
           if (Date.now() > deadline) {
-            await this.forceRemoveContainer(serviceId);
-            await this.commandRunner("docker", ["network", "rm", networkName]).catch(
-              () => undefined,
-            );
             const message = error instanceof Error ? error.message : "Docker daemon unavailable.";
             throw createAdapterError(
               "adapter-unavailable",
@@ -730,18 +991,37 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         }
       }
     } catch (error) {
-      await this.commandRunner("docker", ["network", "rm", networkName]).catch(() => undefined);
+      try {
+        if (acquisition === undefined) {
+          if (createdNetworkId !== undefined && (await this.isContainerNameAbsent(serviceName))) {
+            await this.commandRunner("docker", ["network", "rm", createdNetworkId]);
+          }
+        } else {
+          await this.removeOwnedDockerService({
+            networkName,
+            serviceName,
+            createdNetworkId,
+            acquisition,
+          });
+        }
+      } catch {
+        // Cleanup is best effort. Keep the launch error and leak resources when Docker cannot prove
+        // safe removal; replacing the original error would hide the failed acquisition.
+      }
       throw error;
     }
   }
 
-  private async removeDockerService(containerName: string): Promise<void> {
-    await this.commandRunner("docker", ["rm", "-f", `${containerName}-docker`]).catch(
-      () => undefined,
-    );
-    await this.commandRunner("docker", ["network", "rm", `${containerName}-network`]).catch(
-      () => undefined,
-    );
+  private async removeDockerService(resources: {
+    readonly containerId: string;
+    readonly networkId: string | undefined;
+  }): Promise<void> {
+    if (!(await this.removeContainerDefinitively(resources.containerId))) return;
+    if (resources.networkId !== undefined) {
+      await this.commandRunner("docker", ["network", "rm", resources.networkId]).catch(
+        () => undefined,
+      );
+    }
   }
 
   private async inspectContainerByName(
@@ -755,7 +1035,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         containerName,
       ]);
       const [id, running] = result.stdout.trim().split("\t");
-      if (id === undefined || id.length === 0) {
+      if (id === undefined || id.length === 0 || (running !== "true" && running !== "false")) {
         return undefined;
       }
       return { id, running: running === "true" };
@@ -771,17 +1051,20 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * row — we adopt the live container, or clear a dead one and retry the run exactly once. This makes
    * launch idempotent per run (#4) and is the safety net that lets Stage 2's reaper republish freely.
    */
-  private async runOrAdoptContainer(args: Array<string>, containerName: string): Promise<string> {
-    const runOnce = async (): Promise<string> => {
+  private async runOrAdoptContainer(
+    args: Array<string>,
+    containerName: string,
+  ): Promise<DockerContainerAcquisition> {
+    const runOnce = async (): Promise<DockerContainerAcquisition> => {
       const result = await this.commandRunner("docker", args);
-      const id = result.stdout.trim();
-      if (id.length === 0) {
+      const containerId = result.stdout.trim();
+      if (containerId.length === 0) {
         throw createAdapterError(
           "adapter-unavailable",
           "Docker run did not return a container id.",
         );
       }
-      return id;
+      return { containerId, adopted: false };
     };
     try {
       return await runOnce();
@@ -793,7 +1076,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         throw error;
       }
       if (existing.running) {
-        return existing.id;
+        return { containerId: existing.id, adopted: true };
       }
       await this.forceRemoveContainer(existing.id);
       return runOnce();
@@ -803,9 +1086,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   /**
    * Write connected-account credential files into the running container (design doc §6). Content
    * is piped over stdin to `base64 -d` inside the container, so the secret bytes never appear in
-   * argv, image layers, or `docker inspect`; `umask 077` + `chmod` keep them owner-only. On any
-   * failure the container is force-removed (matching the readiness-failure cleanup paths) so a
-   * recorded "failed" launch has no dangling container running without its credentials.
+   * argv, image layers, or `docker inspect`; `umask 077` + `chmod` keep them owner-only. The launch
+   * owner removes a container created by this attempt after failure, but preserves an adopted
+   * container because another successful launch may already own it.
    */
   private async writeCredentialFiles(
     containerId: string,
@@ -819,7 +1102,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           input: file.contentBase64,
         });
       } catch (error) {
-        await this.forceRemoveContainer(containerId);
         const message = error instanceof Error ? error.message : "Unknown credential write error.";
         throw createAdapterError(
           "credential-file-injection-failed",
@@ -829,19 +1111,37 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
+  private async canConnectToControlSocket(socketPath: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = createConnection(socketPath);
+      let settled = false;
+      const finish = (accepting: boolean): void => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve(accepting);
+      };
+      socket.once("connect", () => finish(true));
+      socket.once("error", () => finish(false));
+      socket.setTimeout(READINESS_POLL_INTERVAL_MS, () => finish(false));
+    });
+  }
+
   /**
-   * True once the daemon control socket is ACCEPTING. The default reach probes inside the container
-   * (`docker exec test -S`); the §2.2 bind-mount fast path stats the socket on the host instead.
+   * True once the daemon control socket is accepting. Strict volume mode proves a connection, so a
+   * stale socket inode cannot report readiness; legacy bind mode retains its historical stat probe.
    */
   private async isControlSocketAccepting(
     containerId: string,
     containerName: string,
   ): Promise<boolean> {
     if (this.controlSocketHostDir !== undefined) {
+      const socketPath = joinPath(this.controlSocketHostDir, containerName, "control.sock");
+      if (this.volumeMappings !== undefined) {
+        return this.canConnectToControlSocket(socketPath);
+      }
       try {
-        const stats = await stat(
-          joinPath(this.controlSocketHostDir, containerName, "control.sock"),
-        );
+        const stats = await stat(socketPath);
         return stats.isSocket();
       } catch {
         return false;
@@ -865,8 +1165,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
    * Block until the workspace's control socket is accepting — the HONEST readiness signal. `sealantd`
    * binds the socket only after `rm -rf` + `git clone` + runtime-health, so "container running"
    * precedes "socket accepting" by (mostly) the clone duration. Polls within a bounded budget; fails
-   * fast if the container exits during boot (e.g. clone failure -> daemon exit 1). On any failure the
-   * orphan container is force-removed so a recorded "failed" runtime instance has no dangling container.
+   * fast if the container exits during boot (e.g. clone failure -> daemon exit 1). The launch owner
+   * removes only a container it created; an adopted live container is left intact for retry safety.
    */
   private async awaitControlSocketReady(containerId: string, containerName: string): Promise<void> {
     const deadline = Date.now() + this.readinessTimeoutMs;
@@ -878,7 +1178,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       const state = await this.inspectContainerState(containerId).catch(() => undefined);
       if (state !== undefined && !state.running) {
         const logs = await this.readContainerLogs(containerId);
-        await this.forceRemoveContainer(containerId);
         throw createAdapterError(
           "adapter-unavailable",
           `Workspace container '${containerName}' exited during boot before its control socket was ready (status: ${state.status}, exitCode: ${state.exitCode}).${
@@ -889,7 +1188,6 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
       if (Date.now() > deadline) {
         const logs = await this.readContainerLogs(containerId);
-        await this.forceRemoveContainer(containerId);
         throw createAdapterError(
           "adapter-unavailable",
           `Workspace container '${containerName}' control socket did not become ready within ${this.readinessTimeoutMs}ms.${
@@ -919,6 +1217,25 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     const parsed = parseRuntimeAdapterStopInput(input);
     let outcome: "stopped" | "not-found" = "stopped";
 
+    // Snapshot sidecar identities before removing the workspace frees its deterministic name.
+    // Failed or empty inspections preserve resources rather than falling back to deletion by name.
+    const service =
+      parsed.reference === undefined
+        ? undefined
+        : await this.inspectContainerByName(`${parsed.reference}-docker`);
+    const networkId =
+      service === undefined
+        ? undefined
+        : await this.commandRunner("docker", [
+            "network",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            `${parsed.reference}-network`,
+          ])
+            .then((result) => result.stdout.trim() || undefined)
+            .catch(() => undefined);
+
     try {
       await this.commandRunner("docker", ["rm", "-f", parsed.resourceId]);
     } catch (error) {
@@ -944,9 +1261,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       outcome = "not-found";
     }
 
-    if (parsed.reference !== undefined) {
-      await this.removeDockerService(parsed.reference);
+    if (service !== undefined) {
+      await this.removeDockerService({ containerId: service.id, networkId });
     }
+    // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
     return parseRuntimeAdapterStopResult({
       adapter: this.id,
@@ -968,113 +1286,129 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     await this.assertRuntimeConfigured(parsed.blueprint.runtime.ociRuntime);
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
-    const dockerServiceEnabled = parsed.blueprint.tooling.services?.docker?.enabled === true;
-    const dockerNetworkName = dockerServiceEnabled
-      ? await this.provisionDockerService(containerName)
-      : undefined;
-    const imageReference = parsed.publishedImage.digestReference;
-    // SSH "access" now means the gateway should be able to reach a shell over the daemon control
-    // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
-    // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`
-    // env is plumbed here.
-    const workspaceCloneAuth = this.resolveWorkspaceCloneAuth(parsed);
-    const workspaceAuthKeyBase64 =
-      workspaceCloneAuth?.type === "file-ref"
-        ? await this.resolveWorkspaceAuthKeyBase64(workspaceCloneAuth)
-        : undefined;
-    const workspaceAuthEnvArgs =
-      workspaceAuthKeyBase64 === undefined
-        ? []
-        : ["-e", `SEALANT_WORKSPACE_AUTH_KEY_BASE64=${workspaceAuthKeyBase64}`];
-    const workspaceHttpAuthEnvArgs =
-      workspaceCloneAuth?.type !== "http-token"
-        ? []
-        : [
-            "-e",
-            `SEALANT_WORKSPACE_HTTP_USERNAME=${workspaceCloneAuth.username}`,
-            "-e",
-            `SEALANT_WORKSPACE_HTTP_TOKEN=${workspaceCloneAuth.token}`,
-          ];
-    // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN) join the `-e`
-    // args with the same exposure profile as the clone tokens above (plaintext-argv hardening is a
-    // tracked pre-existing item, design doc §6).
-    const credentialEnvArgs = Object.entries(parsed.credentialEnv ?? {}).flatMap(([key, value]) => [
-      "-e",
-      `${key}=${value}`,
-    ]);
-    // §2.2 opt-in fast path: bind-mount the daemon's socket *parent dir* to a per-container host dir
-    // so the gateway can connect directly. We mount the parent (the daemon creates control.sock
-    // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
-    const controlSocketMountArgs = await this.buildControlSocketMountArgs(containerName);
-    // Worker-staged dotfiles archives ride a read-only bind; boot consumes them synchronously
-    // before the control socket binds, so the mount must exist at `docker run` time.
-    const dotfilesArchiveArgs =
-      parsed.dotfilesArchiveDir === undefined
-        ? []
-        : [
-            "-v",
-            `${parsed.dotfilesArchiveDir}:/run/sealant/dotfiles:ro`,
-            "-e",
-            "SEALANT_DOTFILES_ARCHIVE_DIR=/run/sealant/dotfiles",
-          ];
-    // Worker-resolved platform launch env (dotfiles clone auth). After every blueprint env so a
-    // stored-spec entry cannot shadow a resolved token; before credentialEnv, which stays last.
-    const platformEnvArgs = Object.entries(parsed.platformEnv ?? {}).flatMap(([key, value]) => [
-      "-e",
-      `${key}=${value}`,
-    ]);
-    // The transient secret channel: a read-only bind of the worker-staged file plus the boot input
-    // naming it. The values never appear in this argv, in container env, or in `docker inspect`.
-    const secretEnvArgs =
-      parsed.secretEnvDir === undefined
-        ? []
-        : [
-            "-v",
-            `${parsed.secretEnvDir}:/run/sealant/secrets:ro`,
-            "-e",
-            "SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json",
-          ];
-    const args = [
-      "run",
-      "-d",
-      "--runtime",
-      parsed.blueprint.runtime.ociRuntime,
-      "--name",
-      containerName,
-      // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
-      ...userEnvArgs(parsed),
-      ...(dockerNetworkName === undefined
-        ? []
-        : [
-            "--network",
-            dockerNetworkName,
-            "-e",
-            "DOCKER_HOST=tcp://docker:2375",
-            "-e",
-            "DOCKER_TLS_CERTDIR=",
-          ]),
-      "-w",
-      parsed.blueprint.runtime.workingDirectory,
-      ...workspaceAuthEnvArgs,
-      ...workspaceHttpAuthEnvArgs,
-      ...controlSocketMountArgs,
-      ...dotfilesArchiveArgs,
-      ...secretEnvArgs,
-      ...workspaceMountArgs(parsed),
-      ...extraMountArgs(parsed),
-      ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
-      ...platformEnvArgs,
-      // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
-      // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
-      // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).
-      ...credentialEnvArgs,
-      imageReference,
-    ];
-    if (this.autoRemove) {
-      args.splice(2, 0, "--rm");
-    }
+    let acquisition: DockerContainerAcquisition | undefined;
+    let dockerService: DockerServiceProvision | undefined;
     try {
-      const containerId = await this.runOrAdoptContainer(args, containerName);
+      const volumeMountPlan = await this.prepareVolumeLaunchMounts(parsed, containerName);
+      const mountArgsForIntent = volumeMountPlan?.mountArgsForIntent ?? dockerBindArgsForIntent;
+
+      const dockerServiceEnabled = parsed.blueprint.tooling.services?.docker?.enabled === true;
+      dockerService = dockerServiceEnabled
+        ? await this.provisionDockerService(containerName)
+        : undefined;
+      const dockerNetworkName = dockerService?.networkName;
+      const imageReference = parsed.publishedImage.digestReference;
+      // SSH "access" now means the gateway should be able to reach a shell over the daemon control
+      // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
+      // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`
+      // env is plumbed here.
+      const workspaceCloneAuth = this.resolveWorkspaceCloneAuth(parsed);
+      const workspaceAuthKeyBase64 =
+        workspaceCloneAuth?.type === "file-ref"
+          ? await this.resolveWorkspaceAuthKeyBase64(workspaceCloneAuth)
+          : undefined;
+      const workspaceAuthEnvArgs =
+        workspaceAuthKeyBase64 === undefined
+          ? []
+          : ["-e", `SEALANT_WORKSPACE_AUTH_KEY_BASE64=${workspaceAuthKeyBase64}`];
+      const workspaceHttpAuthEnvArgs =
+        workspaceCloneAuth?.type === "http-token"
+          ? [
+              "-e",
+              `SEALANT_WORKSPACE_HTTP_USERNAME=${workspaceCloneAuth.username}`,
+              "-e",
+              `SEALANT_WORKSPACE_HTTP_TOKEN=${workspaceCloneAuth.token}`,
+            ]
+          : [];
+      // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN) join the `-e`
+      // args with the same exposure profile as the clone tokens above (plaintext-argv hardening is a
+      // tracked pre-existing item, design doc §6).
+      const credentialEnvArgs = Object.entries(parsed.credentialEnv ?? {}).flatMap(
+        ([key, value]) => ["-e", `${key}=${value}`],
+      );
+      // §2.2 opt-in fast path: bind-mount the daemon's socket *parent dir* to a per-container host dir
+      // so the gateway can connect directly. We mount the parent (the daemon creates control.sock
+      // inside it) and create the host dir 0700 to the gateway/worker uid before `docker run`.
+      const controlSocketMountArgs =
+        volumeMountPlan?.controlSocketMountArgs ??
+        (await this.buildControlSocketMountArgs(containerName));
+      // Worker-staged dotfiles archives ride a read-only bind; boot consumes them synchronously
+      // before the control socket binds, so the mount must exist at `docker run` time.
+      const dotfilesArchiveArgs =
+        parsed.dotfilesArchiveDir === undefined
+          ? []
+          : [
+              ...mountArgsForIntent({
+                sourcePath: parsed.dotfilesArchiveDir,
+                mountPath: "/run/sealant/dotfiles",
+                readOnly: true,
+                purpose: "launch-material",
+              }),
+              "-e",
+              "SEALANT_DOTFILES_ARCHIVE_DIR=/run/sealant/dotfiles",
+            ];
+      // Worker-resolved platform launch env (dotfiles clone auth). After every blueprint env so a
+      // stored-spec entry cannot shadow a resolved token; before credentialEnv, which stays last.
+      const platformEnvArgs = Object.entries(parsed.platformEnv ?? {}).flatMap(([key, value]) => [
+        "-e",
+        `${key}=${value}`,
+      ]);
+      // The transient secret channel: a read-only bind of the worker-staged file plus the boot input
+      // naming it. The values never appear in this argv, in container env, or in `docker inspect`.
+      const secretEnvArgs =
+        parsed.secretEnvDir === undefined
+          ? []
+          : [
+              ...mountArgsForIntent({
+                sourcePath: parsed.secretEnvDir,
+                mountPath: "/run/sealant/secrets",
+                readOnly: true,
+                purpose: "launch-material",
+              }),
+              "-e",
+              "SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json",
+            ];
+      const args = [
+        "run",
+        "-d",
+        "--runtime",
+        parsed.blueprint.runtime.ociRuntime,
+        "--name",
+        containerName,
+        // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
+        ...userEnvArgs(parsed),
+        ...(dockerNetworkName === undefined
+          ? []
+          : [
+              "--network",
+              dockerNetworkName,
+              "-e",
+              "DOCKER_HOST=tcp://docker:2375",
+              "-e",
+              "DOCKER_TLS_CERTDIR=",
+            ]),
+        "-w",
+        parsed.blueprint.runtime.workingDirectory,
+        ...workspaceAuthEnvArgs,
+        ...workspaceHttpAuthEnvArgs,
+        ...controlSocketMountArgs,
+        ...dotfilesArchiveArgs,
+        ...secretEnvArgs,
+        ...workspaceMountArgs(parsed, mountArgsForIntent),
+        ...extraMountArgs(parsed, mountArgsForIntent),
+        ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
+        ...platformEnvArgs,
+        // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
+        // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
+        // (e.g. a user-set GITHUB_TOKEN overriding the injected connected-account identity).
+        ...credentialEnvArgs,
+        imageReference,
+      ];
+      if (this.autoRemove) {
+        args.splice(2, 0, "--rm");
+      }
+      acquisition = await this.runOrAdoptContainer(args, containerName);
+      const { containerId } = acquisition;
 
       if (this.verifyRunning) {
         await this.assertContainerRunning(containerId, containerName);
@@ -1105,9 +1439,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         endpoint,
       });
     } catch (error) {
-      if (dockerServiceEnabled) {
-        await this.removeDockerService(containerName);
-      }
+      await this.cleanupFailedLaunch(containerName, acquisition, dockerService);
       throw error;
     }
   }

@@ -53,6 +53,16 @@ The client takes `{ baseUrl }` (and an optional `apiKey`, which the API does not
 [auth](/docs/reference/http-api)). Point `baseUrl` at your install's API, normally
 `http://localhost:4000`.
 
+### Mount paths
+
+Mount-sourced workspaces and additional mounts keep the same path-based SDK shape in every runtime.
+In legacy Docker mode, `source.path`, `source.rootPath`, and `mounts[].hostPath` are host bind
+paths. In strict Docker named-volume mode, they are canonical absolute paths visible to the
+application and worker containers. They are not Docker's private volume data directories. The
+operator maps those logical paths to actual Engine volume names; callers neither know nor inspect
+that mapping. See
+[Environment Variables](/docs/reference/environment-variables#docker-named-volume-mode).
+
 ### Harnesses
 
 Harness factories describe how to invoke a harness one-shot: `opencode()`, `codex()`,

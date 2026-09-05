@@ -58,16 +58,17 @@ install command.
 The default `compose.selfhost.yaml` reads these variables when present, but `install.sh` does not
 write them for you.
 
-| Variable                            | Default                                | Meaning                                                                                                                                  |
-| ----------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEALANT_IMAGE_NS`                  | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.          |
-| `SEALANT_SSH_HOST`                  | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                            |
-| `SEALANT_WEB_URL`                   | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                               |
-| `SEALANT_WEB_TRUSTED_ORIGINS`       | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                       |
-| `SEALANT_CORS_ALLOWED_ORIGINS`      | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                           |
-| `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                              |
-| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute host roots allowed as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset. |
-| `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                   |
+| Variable                            | Default                                | Meaning                                                                                                                                                                  |
+| ----------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SEALANT_IMAGE_NS`                  | `ghcr.io/sealant-sh`                   | Image namespace or mirror used by the installer and compose. Add it to `.env` if manual compose runs should use the mirror too.                                          |
+| `SEALANT_SSH_HOST`                  | `localhost`                            | Public SSH host the API and UI render in connection commands.                                                                                                            |
+| `SEALANT_WEB_URL`                   | `http://localhost:${SEALANT_WEB_PORT}` | Better Auth canonical URL.                                                                                                                                               |
+| `SEALANT_WEB_TRUSTED_ORIGINS`       | localhost + 127.0.0.1 web origins      | Better Auth trusted origins (CSV).                                                                                                                                       |
+| `SEALANT_CORS_ALLOWED_ORIGINS`      | `*`                                    | API CORS origins, passed to the API as `CORS_ALLOWED_ORIGINS`.                                                                                                           |
+| `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                              |
+| `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                        |
+| `SEALANT_DOCKER_VOLUME_MAPPINGS`    | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback. |
+| `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                   |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
 absolute path to `~/.config/sealant/.env` and reconcile the stack:
@@ -76,6 +77,83 @@ absolute path to `~/.config/sealant/.env` and reconcile the stack:
 printf '\nSEALANT_MOUNT_ALLOWED_STORE_ROOTS=%s/.mend/store\n' "$HOME" >>~/.config/sealant/.env
 docker compose --project-directory ~/.config/sealant up -d
 ```
+
+### Docker named-volume mode
+
+Linux deployments where the application, worker, gateway, and sibling workspace containers share
+named volumes can opt into strict volume mode. The environment value is JSON, not a Compose list:
+
+```env
+SEALANT_MOUNT_ALLOWED_STORE_ROOTS=/var/lib/mend/store
+WORKSPACE_CONTROL_SOCKET_HOST_DIR=/run/sealant/sockets
+SEALANT_DOCKER_VOLUME_MAPPINGS=[{"logicalRoot":"/var/lib/mend/store","volumeName":"mend-store"},{"logicalRoot":"/run/sealant/sockets","volumeName":"sealant-sockets"}]
+```
+
+`logicalRoot` is the canonical path visible inside the application and worker containers. It is also
+the path SDK callers send as `source.path`, `rootPath`, or `hostPath`. Do not discover or send
+Docker's private `/var/lib/docker/volumes/.../_data` paths.
+
+The deployment must create both named volumes and mount them at those exact logical roots. The
+worker needs the store and socket volumes read-write; the application that owns the worktrees needs
+the store read-write; the API and SSH gateway need the socket volume at `/run/sealant/sockets`
+(read-only is sufficient for connecting). Use explicit Compose volume names so project-name prefixes
+do not change the Engine names referenced in the mappings. For example, an override for the default
+self-host Compose file can replace the socket binds with:
+
+```yaml
+volumes:
+  mend-store:
+    name: mend-store
+  sealant-sockets:
+    name: sealant-sockets
+services:
+  worker:
+    volumes:
+      - type: volume
+        source: mend-store
+        target: /var/lib/mend/store
+      - type: volume
+        source: sealant-sockets
+        target: /run/sealant/sockets
+  api:
+    volumes:
+      - type: volume
+        source: sealant-sockets
+        target: /run/sealant/sockets
+        read_only: true
+  ssh-gateway:
+    volumes:
+      - type: volume
+        source: sealant-sockets
+        target: /run/sealant/sockets
+        read_only: true
+```
+
+The application that owns the worktrees must also mount `mend-store` at `/var/lib/mend/store`. This
+override does not migrate existing bind-mounted data into the new volumes. Stop active work and copy
+or restore that data deliberately before switching an existing installation.
+
+The runtime checks each required volume with `docker volume inspect` and never relies on
+`docker run` to create one implicitly. Every selected source directory must already exist inside the
+application/worker view; only the worker-owned per-workspace socket directory is created by the
+adapter.
+
+Each authorized store root needs an exact mapping, and the socket root needs a separate mapping.
+Mappings do not authorize paths: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` remains the independent policy
+gate. Sources must be proper descendants of a mapping, producing a non-empty `volume-subpath`.
+Duplicate or nested roots, reused volume names, malformed JSON, unknown fields, and Docker mount
+option delimiters are rejected at startup or before launch. Source paths containing a symlink in any
+component below the mapped root are rejected; operators must also prevent concurrent replacement of
+those paths during launch. The runtime never deletes store data. It also retains per-workspace
+control directories after stop or failed launch: a concurrent retry can reuse the same directory, so
+deleting it based on a container-absence check could sever a live socket. Relaunch reuses the
+directory and the daemon replaces its stale socket. Reclaim retained control directories only while
+all launchers and workspace containers are stopped.
+
+This mode requires Docker Engine API 1.45 or newer and a Docker CLI with matching volume-subpath
+support. Sealant's worker image includes a pinned Docker 27 CLI, but the host Engine is still the
+operator's responsibility. Leaving `SEALANT_DOCKER_VOLUME_MAPPINGS` unset preserves legacy bind mode
+and its existing Docker arguments.
 
 ## GitHub App variables
 

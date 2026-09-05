@@ -20,6 +20,7 @@ import {
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
+  parseDockerVolumeMappings,
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
@@ -122,6 +123,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // The Docker adapter exists only where a Docker daemon does; on daemon-less deployments
   // (Kubernetes, hosted) DOCKER_RUNTIME_ENABLED=false keeps "docker" out of the adapter set so
   // selection answers with a readable "unsupported-runtime" instead of a failed socket call.
+  const dockerVolumeMappings =
+    env.SEALANT_DOCKER_VOLUME_MAPPINGS === undefined
+      ? undefined
+      : parseDockerVolumeMappings(env.SEALANT_DOCKER_VOLUME_MAPPINGS);
   const dockerAdapters = !env.DOCKER_RUNTIME_ENABLED
     ? []
     : [
@@ -137,6 +142,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS === undefined
             ? {}
             : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
+          ...(dockerVolumeMappings === undefined ? {} : { volumeMappings: dockerVolumeMappings }),
         }),
       ];
 

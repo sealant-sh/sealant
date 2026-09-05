@@ -20,11 +20,19 @@ RUN pnpm --filter @sealant/worker build
 # version the bundle expects — mirrors apps/api/Dockerfile.
 RUN node tooling/scripts/stage-agent-cli.mjs apps/worker /staged
 
+# Docker 27 carries CLI/API support for named-volume subpaths (API >= 1.45). Copy the official,
+# version-pinned CLI instead of relying on Debian's older docker.io package.
+FROM docker:27.5.1-cli AS docker-cli
+
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates docker.io git \
+  && apt-get install -y --no-install-recommends ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+# Workspace image builds force DOCKER_BUILDKIT=1, which requires the matching buildx plugin.
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+RUN docker buildx version
 WORKDIR /app
 COPY --from=builder /app/apps/worker/dist ./dist
 # The Agent SDK's platform package (the keep-fresh sweeper spawns its `claude` binary) — see the

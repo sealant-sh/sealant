@@ -28,6 +28,19 @@ export {
 
 export { K3sRuntimeAdapter } from "./k3s-runtime-adapter.js";
 
+export {
+  DockerVolumeMountError,
+  assertDockerVolumeConfiguration,
+  assertDockerVolumeSourceDirectories,
+  dockerVolumeMountArgs,
+  parseDockerVolumeMappings,
+  prepareDockerControlDirectory,
+  resolveDockerVolumeMount,
+  resolveDockerVolumeMounts,
+  type DockerVolumeMapping,
+  type ResolvedDockerVolumeMount,
+} from "./docker-volume-mounts.js";
+
 export * from "./kubernetes/index.js";
 export { buildCredentialFileWriteScript } from "./credential-files.js";
 
