@@ -23,7 +23,7 @@ import {
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Exit, Layer, Option } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
@@ -640,15 +640,18 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
 
   yield* launchAndRecord.pipe(
     Effect.tapError((error) => failureCleanup(error, false)),
-    // Whatever happened, a settled launch phase leaves no sealed secret behind on the job row and
-    // no staged file behind on the host (a failed launch may not have reached readiness).
-    Effect.ensuring(
+    // A successful boot has consumed only the secret file; stop owns the remaining dotfiles cleanup.
+    // A failed/interrupted launch removes every staged artifact exactly once so retries restage from
+    // the durable request instead of inheriting a partial directory.
+    Effect.onExit((exit) =>
       Effect.all(
         [
           job.secretEnvSealed === null || job.secretEnvSealed === undefined
             ? Effect.void
             : jobs.clearSecretEnv(job.id).pipe(swallowingFailure("clear-secret-env update")),
-          Effect.promise(() => stager.removeSecretEnv(job.runId)),
+          Effect.promise(() =>
+            Exit.isSuccess(exit) ? stager.removeSecretEnv(job.runId) : stager.removeAll(job.runId),
+          ),
         ],
         { discard: true },
       ),

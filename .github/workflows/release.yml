@@ -154,6 +154,10 @@ jobs:
           SEALANT_E2E_REQUIRE_IMAGE: "1"
         run: pnpm --filter @sealant/workspaces test:e2e src/sealantd
 
+      - name: Containerized launcher and real workspace volume test
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
+
   npm:
     name: Publish npm packages
     needs: workspace-e2e

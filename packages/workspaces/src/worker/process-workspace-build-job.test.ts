@@ -1272,6 +1272,58 @@ describe("processWorkspaceBuildJobEffect", () => {
     }
   });
 
+  it.effect("removes all staged launch material exactly once when launch fails", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_launch_cleanup",
+        runId: "run_launch_cleanup",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: vi.fn(async () => {
+        throw new Error("launch failed");
+      }),
+    });
+    const cleanupEvents: string[] = [];
+
+    return Effect.gen(function* () {
+      yield* Effect.result(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_launch_cleanup",
+            runtimeAdapters: [runtimeAdapter],
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            launchMaterialStager: {
+              stage: async () => ({
+                dotfilesArchiveDir: "/staging/dotfiles",
+                secretEnvDir: "/staging/secrets",
+              }),
+              removeSecretEnv: async () => {
+                cleanupEvents.push("secret");
+              },
+              removeAll: async () => {
+                cleanupEvents.push("all");
+              },
+            },
+          }),
+        ),
+      );
+
+      expect(cleanupEvents).toEqual(["all"]);
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
   it.effect("stages nothing when the dotfiles apply is disabled", () => {
     const archiveData = Buffer.from("unused").toString("base64");
     const jobs = workspaceBuildJobRepoStub({

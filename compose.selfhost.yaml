@@ -193,6 +193,9 @@ services:
       WORKSPACE_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
       # The worker passes the same allowlist into every workspace daemon for defense in depth.
       SEALANT_MOUNT_ALLOWED_STORE_ROOTS: ${SEALANT_MOUNT_ALLOWED_STORE_ROOTS:-}
+      # Optional strict named-volume lowering. A deployment override must also mount every named
+      # volume into this worker at its mapped logical root.
+      SEALANT_DOCKER_VOLUME_MAPPINGS: ${SEALANT_DOCKER_VOLUME_MAPPINGS:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

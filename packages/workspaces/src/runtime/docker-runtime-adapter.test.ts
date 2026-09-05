@@ -195,11 +195,17 @@ describe("DockerRuntimeAdapter", () => {
     expect(workspaceArgs.join(" ")).not.toContain("/var/run/docker.sock");
   });
 
-  it("removes the Docker service when the workspace container fails to launch", async () => {
+  it("removes the acquired Docker service when the workspace container fails to launch", async () => {
     let runCount = 0;
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
     >(async (_command, args) => {
+      if (args[0] === "network" && args[1] === "create") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      if (args[0] === "inspect") {
+        throw new Error("No such container");
+      }
       if (args[0] === "run") {
         runCount += 1;
         if (runCount === 2) {
@@ -232,8 +238,8 @@ describe("DockerRuntimeAdapter", () => {
     );
     expect(removeCalls).toEqual(
       expect.arrayContaining([
-        ["docker", ["rm", "-f", expect.stringMatching(/-docker$/)]],
-        ["docker", ["network", "rm", expect.stringMatching(/-network$/)]],
+        ["docker", ["rm", "-f", "docker-service-id"]],
+        ["docker", ["network", "rm", "network-id"]],
       ]),
     );
   });
@@ -1345,10 +1351,18 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.endpoint).toBe("docker-exec://container-id-no-ssh/run/sealant/control.sock");
   });
 
-  it("stops a workspace container with docker rm -f", async () => {
+  it("stops a workspace and its snapshotted service by immutable IDs", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
-    >(async () => ({ stdout: "container-id-123\n", stderr: "" }));
+    >(async (_command, args) => {
+      if (args[0] === "inspect") {
+        return { stdout: "docker-service-id\ttrue\n", stderr: "" };
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
     const adapter = new DockerRuntimeAdapter({
       commandRunner,
       runtimeCatalogLoader: createRuntimeCatalogLoader(),
@@ -1359,13 +1373,13 @@ describe("DockerRuntimeAdapter", () => {
       reference: "sealant-run-abc",
     });
 
-    expect(commandRunner).toHaveBeenCalledTimes(3);
-    expect(commandRunner).toHaveBeenCalledWith("docker", ["rm", "-f", "container-id-123"]);
-    expect(commandRunner).toHaveBeenCalledWith("docker", ["rm", "-f", "sealant-run-abc-docker"]);
-    expect(commandRunner).toHaveBeenCalledWith("docker", [
-      "network",
-      "rm",
-      "sealant-run-abc-network",
+    const removals = commandRunner.mock.calls.filter(
+      ([, args]) => args[0] === "rm" || (args[0] === "network" && args[1] === "rm"),
+    );
+    expect(removals).toEqual([
+      ["docker", ["rm", "-f", "container-id-123"]],
+      ["docker", ["rm", "-f", "docker-service-id"]],
+      ["docker", ["network", "rm", "network-id"]],
     ]);
     expect(result).toEqual({
       adapter: "docker",

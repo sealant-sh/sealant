@@ -19,6 +19,8 @@ Sealant is a `pnpm` + `turbo` monorepo for building isolated, reproducible codin
 
 ## Agent Defaults
 
+- Submit pull requests as ready for review, never as drafts. With `gh stack`, use
+  `gh stack submit --auto --open`.
 - After code changes, always run `pnpm format:fix`.
 - For type-checking, always use `tsgo` (`pnpm typecheck`) and do not use `tsc`.
 - Never touch `pnpm-lock.yaml` (no manual edits and no workflow steps that update it).

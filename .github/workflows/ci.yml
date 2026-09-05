@@ -50,3 +50,30 @@ jobs:
 
       - name: Run typecheck
         run: pnpm typecheck
+
+  docker-volume-mounts:
+    name: Docker volume mounts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --lockfile=false
+
+      - name: Unit and integration tests
+        run: pnpm exec turbo test --force
+
+      - name: Containerized launcher and real workspace volume test
+        run: >-
+          pnpm --filter @sealant/workspaces test:e2e src/runtime/docker-volume-mounts.e2e.ts
