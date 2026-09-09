@@ -20,13 +20,6 @@ postgresql://sealant:$(SEALANT_DB_PASSWORD)@{{ .Release.Name }}-postgres:5432/se
 {{ required "postgres.externalUrl is required when postgres.enabled=false" .Values.postgres.externalUrl }}
 {{- end -}}
 {{- end -}}
-{{- define "sealant.amqpUrl" -}}
-{{- if .Values.rabbitmq.enabled -}}
-amqp://sealant:$(SEALANT_RABBITMQ_PASSWORD)@{{ .Release.Name }}-rabbitmq:5672
-{{- else -}}
-{{ required "rabbitmq.externalUrl is required when rabbitmq.enabled=false" .Values.rabbitmq.externalUrl }}
-{{- end -}}
-{{- end -}}
 {{- define "sealant.registryBaseUrl" -}}
 {{- if .Values.registry.enabled -}}http://{{ .Release.Name }}-registry:5000{{- else -}}{{ required "registry.external.baseUrl" .Values.registry.external.baseUrl }}{{- end -}}
 {{- end -}}
@@ -50,8 +43,6 @@ amqp://sealant:$(SEALANT_RABBITMQ_PASSWORD)@{{ .Release.Name }}-rabbitmq:5672
 {{- define "sealant.secretEnv" -}}
 - name: SEALANT_DB_PASSWORD
   valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: SEALANT_DB_PASSWORD, optional: true } }
-- name: SEALANT_RABBITMQ_PASSWORD
-  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: SEALANT_RABBITMQ_PASSWORD, optional: true } }
 - name: SEALANT_CREDENTIALS_KEY
   valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: SEALANT_CREDENTIALS_KEY, optional: true } }
 - name: GITHUB_APP_PRIVATE_KEY

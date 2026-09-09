@@ -269,7 +269,7 @@ const produceExecRun = (
 /**
  * Pure dispatch on the claim outcome. The queue is at-least-once: a redelivered job must never
  * re-run the harness. `already-running` means a previous delivery died mid-run (worker crash,
- * AMQP drop) or is still executing elsewhere — either way this delivery cannot safely execute,
+ * queue redelivery) or is still executing elsewhere — either way this delivery cannot safely execute,
  * so the honest move is to fail the run with a message rather than run it twice or strand it.
  */
 export const runExecClaimAction = (

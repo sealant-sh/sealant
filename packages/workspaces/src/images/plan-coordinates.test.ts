@@ -46,6 +46,6 @@ describe("parsePublishedReference", () => {
     expect(parsePublishedReference("127.0.0.1:5000/repo@sha256:abc")).toBeNull();
     expect(parsePublishedReference("127.0.0.1:5000/repo")).toBeNull();
     expect(parsePublishedReference("127.0.0.1:5000/repo:")).toBeNull();
-    expect(parsePublishedReference("repo:tag")).toBeNull();
+    expect(parsePublishedReference("repo")).toBeNull();
   });
 });

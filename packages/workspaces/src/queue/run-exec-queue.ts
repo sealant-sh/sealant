@@ -4,16 +4,9 @@
  * it, docker-execs the harness in the workspace, ingests telemetry, and marks the run terminal. This is
  * what lets the SDK be a thin HTTP client (it no longer docker-execs or writes telemetry itself).
  */
-import {
-  assertRabbitMqTopology,
-  createRabbitMqService,
-  type RabbitMqConsumerMessage,
-  type RabbitMqTopology,
-} from "@sealant/rabbitmq";
-import type { Channel } from "amqplib";
+import { createJobQueueService, defineJobQueue, type JobQueueConsumerMessage } from "@sealant/jobs";
 
 export const runExecQueueName = "workspace-run-exec";
-export const runExecDeadLetterExchangeName = "workspace-run-exec.dlx";
 export const runExecDeadLetterQueueName = "workspace-run-exec.dlq";
 
 export const runExecRequestedMessageKind = "workspace.run-exec.requested";
@@ -40,37 +33,13 @@ export interface RunExecRequestedMessage {
   readonly commands?: readonly RunExecCommand[];
 }
 
-export const runExecQueueTopology: RabbitMqTopology = {
-  exchanges: [{ name: runExecDeadLetterExchangeName, type: "direct", options: { durable: true } }],
-  queues: [
-    {
-      name: runExecDeadLetterQueueName,
-      options: { durable: true, arguments: { "x-queue-type": "quorum" } },
-    },
-    {
-      name: runExecQueueName,
-      options: {
-        durable: true,
-        arguments: {
-          "x-dead-letter-exchange": runExecDeadLetterExchangeName,
-          "x-dead-letter-routing-key": runExecDeadLetterQueueName,
-          "x-queue-type": "quorum",
-        },
-      },
-    },
-  ],
-  bindings: [
-    {
-      queueName: runExecDeadLetterQueueName,
-      exchangeName: runExecDeadLetterExchangeName,
-      routingKey: runExecDeadLetterQueueName,
-    },
-  ],
-};
-
-export const assertRunExecQueueTopology = async (channel: Channel): Promise<void> => {
-  await assertRabbitMqTopology(channel, runExecQueueTopology);
-};
+/**
+ * A harness run is one long-lived exec (an agent session can run for hours), so the active window
+ * is a day; the run row itself is what a lost delivery is reconciled against.
+ */
+export const runExecQueue = defineJobQueue(runExecQueueName, {
+  activeTimeoutSeconds: 24 * 60 * 60,
+});
 
 const parseCommand = (input: unknown, label: string): RunExecCommand => {
   const command = input as Record<string, unknown> | undefined;
@@ -119,9 +88,9 @@ export const parseRunExecRequestedMessage = (input: unknown): RunExecRequestedMe
   };
 };
 
-/** Publishes a run-exec request to RabbitMQ (called by the API: createRun with a command, or execWorkspace). */
+/** Publishes a run-exec request (called by the API: createRun with a command, or execWorkspace). */
 export const publishRunExecRequested = async (
-  connectionUrl: string,
+  databaseUrl: string,
   input: {
     readonly runId: string;
     readonly command?: RunExecCommand;
@@ -137,29 +106,24 @@ export const publishRunExecRequested = async (
     ...(input.command === undefined ? {} : { command: input.command }),
     ...(input.commands === undefined ? {} : { commands: input.commands }),
   };
-  const rabbitMq = createRabbitMqService(connectionUrl);
-  await rabbitMq.assertTopology(runExecQueueTopology);
-  await rabbitMq.publishJsonMessage({
-    queueName: runExecQueueName,
-    message,
-    properties: { messageId: message.runId, type: runExecRequestedMessageKind },
-  });
+  const jobs = createJobQueueService(databaseUrl);
+  await jobs.publishJson({ queue: runExecQueue, message });
 };
 
-export type RunExecConsumerMessage = RabbitMqConsumerMessage<RunExecRequestedMessage>;
+export type RunExecConsumerMessage = JobQueueConsumerMessage<RunExecRequestedMessage>;
 
 export interface ConsumeRunExecJobsOptions {
-  readonly connectionUrl: string;
-  readonly prefetch?: number;
+  readonly databaseUrl: string;
+  readonly concurrency?: number;
+  /** Throwing fails the delivery (dead-lettered, never retried). */
   readonly onMessage: (message: RunExecConsumerMessage) => Promise<void>;
 }
 
 export const consumeRunExecJobs = async (options: ConsumeRunExecJobsOptions) => {
-  const rabbitMq = createRabbitMqService(options.connectionUrl);
-  await rabbitMq.assertTopology(runExecQueueTopology);
-  return rabbitMq.consumeJsonMessages({
-    queueName: runExecQueueName,
-    ...(options.prefetch === undefined ? {} : { prefetch: options.prefetch }),
+  const jobs = createJobQueueService(options.databaseUrl);
+  return jobs.consumeJson({
+    queue: runExecQueue,
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     parseMessage: parseRunExecRequestedMessage,
     onMessage: options.onMessage,
   });

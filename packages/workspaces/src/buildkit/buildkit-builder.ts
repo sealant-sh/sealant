@@ -67,6 +67,13 @@ export type BuildkitCommandRunner = (
 export interface BuildkitCompilerOptions {
   readonly commandRunner?: BuildkitCommandRunner;
   readonly autoOsFamilyOrder?: readonly BuildkitDistroOsFamily[];
+  /**
+   * Whether to `docker save` the built image to a tarball artifact (`loader: "docker-load"`).
+   * False leaves the image only in the Engine that built it (`loader: "docker-engine"`) — the
+   * single-host store launches from that same Engine, so the tarball would be pure overhead.
+   * Defaults to true.
+   */
+  readonly emitTarball?: boolean;
 }
 
 /** Maps a logical package request id to concrete distro packages to install. */
@@ -1328,7 +1335,7 @@ const writeBuildContext = async (plan: ResolvedImagePlan, containerfile: string)
  */
 const buildImageTarball = async (
   spec: BuildkitBuildSpec,
-  imageTarPath: string,
+  imageTarPath: string | undefined,
   commandRunner: BuildkitCommandRunner,
   plan: ResolvedImagePlan,
 ) => {
@@ -1365,6 +1372,10 @@ const buildImageTarball = async (
       );
     }
     throw error;
+  }
+
+  if (imageTarPath === undefined) {
+    return;
   }
 
   await commandRunner("docker", ["save", "--output", imageTarPath, spec.imageReference], {
@@ -1421,8 +1432,14 @@ export const compileWorkspaceBuildSpec = async (input: {
   const { osFamily, imagePlan } = planned;
   const buildContext = await writeBuildContext(imagePlan, planned.containerfile);
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
+  const emitTarball = input.options?.emitTarball ?? true;
 
-  await buildImageTarball(buildContext.spec, buildContext.imageTarPath, commandRunner, imagePlan);
+  await buildImageTarball(
+    buildContext.spec,
+    emitTarball ? buildContext.imageTarPath : undefined,
+    commandRunner,
+    imagePlan,
+  );
 
   return parseBuildkitOsBuilderCompileResult({
     builder: {
@@ -1430,13 +1447,20 @@ export const compileWorkspaceBuildSpec = async (input: {
       osFamily,
     },
     artifacts: [
-      {
-        kind: "oci-image",
-        name: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
-        path: buildContext.imageTarPath,
-        reference: buildContext.spec.imageReference,
-        loader: "docker-load",
-      },
+      emitTarball
+        ? {
+            kind: "oci-image",
+            name: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
+            path: buildContext.imageTarPath,
+            reference: buildContext.spec.imageReference,
+            loader: "docker-load",
+          }
+        : {
+            kind: "oci-image",
+            name: defaultImageNameForBlueprint(imagePlan.blueprint, osFamily),
+            reference: buildContext.spec.imageReference,
+            loader: "docker-engine",
+          },
       {
         kind: "metadata",
         name: `${defaultImageNameForBlueprint(imagePlan.blueprint, osFamily)}-image-plan`,

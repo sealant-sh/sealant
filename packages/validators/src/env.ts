@@ -6,15 +6,18 @@ import { z } from "zod";
 
 import { runtimeAdapterIdSchema } from "./workspaces/runtime-adapter-ids.js";
 
-export const rabbitMqEnvSchema = z.object({
-  RABBITMQ_URL: z.string().trim().min(1).default("amqp://sealant:sealant@127.0.0.1:5673"),
+/**
+ * The job queue (pg-boss) lives in the control-plane database — `DATABASE_URL` is its connection
+ * too, so the only queue-specific knob is how many deliveries one worker process handles at once.
+ */
+export const jobQueueEnvSchema = z.object({
   WORKSPACE_BUILD_QUEUE_PREFETCH: z.coerce.number().int().positive().default(1),
 });
 
-export type RabbitMqEnv = z.infer<typeof rabbitMqEnvSchema>;
+export type JobQueueEnv = z.infer<typeof jobQueueEnvSchema>;
 
-export const parseRabbitMqEnv = (input: Record<string, string | undefined>): RabbitMqEnv => {
-  return rabbitMqEnvSchema.parse(input);
+export const parseJobQueueEnv = (input: Record<string, string | undefined>): JobQueueEnv => {
+  return jobQueueEnvSchema.parse(input);
 };
 
 export const databaseEnvSchema = z.object({
@@ -51,9 +54,16 @@ export const registryCredentialsEnvSchema = z.object({
   REGISTRY_PASSWORD: z.string().min(1).optional(),
 });
 
+/**
+ * Where workspace images live. Both unset (the default) selects the local Docker Engine store:
+ * images are built, tagged, and launched on one daemon and never pushed. Set both to publish to an
+ * OCI registry instead — required on Kubernetes, where the builder and the kubelet are different
+ * machines. `REGISTRY_BASE_URL` is the registry's HTTP API (`http://host:5000`);
+ * `REGISTRY_PUSH_REGISTRY` is the `host[:port]` prefix the Docker CLI / BuildKit push to.
+ */
 export const registryConnectionEnvSchema = z.object({
-  REGISTRY_BASE_URL: z.string().url().default("http://127.0.0.1:5000"),
-  REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).default("127.0.0.1:5000"),
+  REGISTRY_BASE_URL: z.string().url().optional(),
+  REGISTRY_PUSH_REGISTRY: z.string().trim().min(1).optional(),
 });
 
 export const registryEnvSchema = registryConnectionEnvSchema
@@ -144,6 +154,21 @@ export const workspaceSshGatewayEnvSchema = z.object({
   WORKSPACE_SSH_GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   WORKSPACE_SSH_GATEWAY_USERNAME_PREFIX: z.string().trim().min(1).optional(),
 });
+
+const addRegistryConnectionIssue = (
+  registryBaseUrl: string | undefined,
+  registryPushRegistry: string | undefined,
+  ctx: z.RefinementCtx,
+) => {
+  if ((registryBaseUrl === undefined) !== (registryPushRegistry === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["REGISTRY_PUSH_REGISTRY"],
+      message:
+        "REGISTRY_BASE_URL and REGISTRY_PUSH_REGISTRY must be provided together (leave both unset to use the local Docker Engine).",
+    });
+  }
+};
 
 const addRegistryCredentialsIssue = (
   registryUsername: string | undefined,
@@ -283,7 +308,7 @@ export const defaultRuntimeAdapterEnvSchema = z.object({
 });
 
 export const appServerEnvSchema = databaseEnvSchema
-  .merge(rabbitMqEnvSchema)
+  .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
   .merge(credentialsEnvSchema)
   .merge(servicePrincipalsEnvSchema)
@@ -294,6 +319,7 @@ export const appServerEnvSchema = databaseEnvSchema
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
+  addRegistryConnectionIssue(input.REGISTRY_BASE_URL, input.REGISTRY_PUSH_REGISTRY, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(
     input.GITHUB_APP_ID,
@@ -441,7 +467,7 @@ export const cloudflareRuntimeEnvSchema = z.object({
 });
 
 export const workerServerEnvSchema = databaseEnvSchema
-  .merge(rabbitMqEnvSchema)
+  .merge(jobQueueEnvSchema)
   .merge(registryConnectionEnvSchema)
   .merge(registryCredentialsEnvSchema)
   .merge(githubApiEnvSchema)
@@ -477,6 +503,7 @@ export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) =>
     });
   }
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
+  addRegistryConnectionIssue(input.REGISTRY_BASE_URL, input.REGISTRY_PUSH_REGISTRY, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
   addGitHubAppCredentialsIssue(
     input.GITHUB_APP_ID,

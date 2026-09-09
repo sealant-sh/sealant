@@ -6,8 +6,7 @@ const databaseUrl = new URL(env.DATABASE_URL);
 
 console.log("Sealant worker starting", {
   workerId: env.WORKER_ID,
-  rabbitMqUrl: env.RABBITMQ_URL,
-  registryBaseUrl: env.REGISTRY_BASE_URL,
+  imageStore: env.REGISTRY_BASE_URL ?? "docker-engine",
   database: `${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`,
   defaultRuntimeAdapter: env.DEFAULT_RUNTIME_ADAPTER,
   defaultSshBindHost: env.DEFAULT_SSH_BIND_HOST,

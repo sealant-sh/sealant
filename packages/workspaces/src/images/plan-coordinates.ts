@@ -37,15 +37,15 @@ export const planImageCoordinates = (planned: {
 });
 
 /**
- * The repository and tag a published reference (`<registry>/<repository>:<tag>`) was pushed as.
- * Null for a digest reference or anything without a tag — the caller then falls back to whatever
- * name the job recorded, which is what every publish before plan-keyed coordinates used.
+ * The repository and tag a published reference was pushed as: `<registry>/<repository>:<tag>` for
+ * a registry publish, bare `<repository>:<tag>` for a local Docker Engine publish. Null for a
+ * digest reference or anything without a tag — the caller then falls back to whatever name the job
+ * recorded, which is what every publish before plan-keyed coordinates used.
  */
 export const parsePublishedReference = (reference: string): ImageCoordinates | null => {
   if (reference.includes("@")) return null;
   const firstSlash = reference.indexOf("/");
-  if (firstSlash === -1) return null;
-  const path = reference.slice(firstSlash + 1);
+  const path = firstSlash === -1 ? reference : reference.slice(firstSlash + 1);
   const lastColon = path.lastIndexOf(":");
   if (lastColon <= 0 || lastColon === path.length - 1) return null;
   const repository = path.slice(0, lastColon);

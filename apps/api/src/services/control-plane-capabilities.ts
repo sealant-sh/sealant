@@ -80,13 +80,13 @@ export const WorkspaceBuildJobPublisherServiceLive = Layer.succeed(
 );
 
 export const RunExecPublisherServiceLive = Layer.succeed(RunExecPublisherService, {
-  publishRequested: (input) => publishRunExecRequested(env.RABBITMQ_URL, input),
+  publishRequested: (input) => publishRunExecRequested(env.DATABASE_URL, input),
 });
 
 export const WorkspaceLifecyclePublisherServiceLive = Layer.succeed(
   WorkspaceLifecyclePublisherService,
   {
-    publishStopRequested: (input) => publishWorkspaceStopRequested(env.RABBITMQ_URL, input),
+    publishStopRequested: (input) => publishWorkspaceStopRequested(env.DATABASE_URL, input),
   },
 );
 

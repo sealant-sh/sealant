@@ -19,12 +19,11 @@
     "@sealant/api-contracts": "workspace:*",
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
-    "@sealant/rabbitmq": "workspace:*",
+    "@sealant/jobs": "workspace:*",
     "@sealant/runtime-client": "^0.13.0",
     "@sealant/runtime-protocol": "^0.13.0",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
-    "amqplib": "catalog:",
     "effect": "catalog:",
     "ws": "catalog:",
     "zod": "catalog:"
@@ -32,7 +31,6 @@
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@sealant/typescript": "workspace:*",
-    "@types/amqplib": "catalog:",
     "@types/ws": "catalog:"
   }
 }

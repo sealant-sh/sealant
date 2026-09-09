@@ -1,29 +1,20 @@
-import { createRabbitMqService } from "@sealant/rabbitmq";
+import { createJobQueueService } from "@sealant/jobs";
 
 import {
   parseWorkspaceBuildJobRequestedMessage,
-  workspaceBuildJobRequestedMessageKind,
   type WorkspaceBuildJobRequestedMessage,
 } from "./messages.js";
-import { workspaceBuildQueueName, workspaceBuildQueueTopology } from "./topology.js";
+import { workspaceBuildQueue } from "./topology.js";
 
 /**
- * Publishes a validated workspace build request message to RabbitMQ.
+ * Publishes a validated workspace build request message to the job queue.
  */
 export const publishWorkspaceBuildJobRequested = async (
-  connectionUrl: string,
+  databaseUrl: string,
   input: WorkspaceBuildJobRequestedMessage,
 ) => {
   const message = parseWorkspaceBuildJobRequestedMessage(input);
-  const rabbitMq = createRabbitMqService(connectionUrl);
+  const jobs = createJobQueueService(databaseUrl);
 
-  await rabbitMq.assertTopology(workspaceBuildQueueTopology);
-  await rabbitMq.publishJsonMessage({
-    queueName: workspaceBuildQueueName,
-    message,
-    properties: {
-      messageId: message.jobId,
-      type: workspaceBuildJobRequestedMessageKind,
-    },
-  });
+  await jobs.publishJson({ queue: workspaceBuildQueue, message });
 };

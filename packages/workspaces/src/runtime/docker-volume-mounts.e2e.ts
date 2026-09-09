@@ -125,7 +125,7 @@ const dockerSocketSource = async (): Promise<string> => {
   const source =
     process.env["SEALANT_E2E_DOCKER_SOCKET_SOURCE"] ??
     (process.platform === "darwin" ? "/var/run/docker.sock" : endpoint.slice("unix://".length));
-  if (!source.startsWith("/") || /[,\r\n\0]/.test(source)) {
+  if (!source.startsWith("/") || /[,\r\n]/.test(source) || source.includes("\0")) {
     throw new Error("SEALANT_E2E_DOCKER_SOCKET_SOURCE must be an absolute Docker bind source.");
   }
   return source;

@@ -3,7 +3,7 @@
  * `@sealant/runtime-client` SDK (P5 of the sealantd -> sealant-core integration).
  *
  * Layering mirrors the established package idiom (see `packages/db/src/repositories/workspaces.ts`,
- * `packages/rabbitmq/src/service.ts`, `packages/source-integrations/src/github/{service,layer}.ts`):
+ * `packages/jobs/src/service.ts`, `packages/source-integrations/src/github/{service,layer}.ts`):
  *   - service contracts are plain `interface`s whose methods return `Effect.Effect<A, Error>`;
  *   - the public handle is a `Context.Tag` class; the implementation is wired with `Layer.effect`;
  *   - failures are `Schema.TaggedError`s funnelled through a `map*Error`/`with*Error` helper so no
@@ -873,7 +873,7 @@ const makeSealantRuntime = (transport: SealantTransportService): SealantRuntimeS
 /**
  * Live `SealantRuntime` layer. Requires a `SealantTransport` in context (e.g.
  * `ControlTransportLive`); the transport is resolved once here, mirroring the
- * `Layer.effect` + `yield* DepTag` idiom in `packages/rabbitmq/src/service.ts`.
+ * `Layer.effect` + `yield* DepTag` idiom in `packages/jobs/src/service.ts`.
  */
 export const SealantRuntimeLive = Layer.effect(
   SealantRuntime,

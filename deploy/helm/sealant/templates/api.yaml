@@ -59,8 +59,6 @@ spec:
             - { name: SEALANT_K8S_DOCKER_ENABLED, value: {{ .Values.workspaces.docker.enabled | quote }} }
             - name: DATABASE_URL
               value: {{ include "sealant.databaseUrl" . | quote }}
-            - name: RABBITMQ_URL
-              value: {{ include "sealant.amqpUrl" . | quote }}
             - { name: REGISTRY_BASE_URL, value: {{ include "sealant.registryBaseUrl" . | quote }} }
             - { name: REGISTRY_PUSH_REGISTRY, value: {{ include "sealant.pushRegistry" . | quote }} }
             - { name: CORS_ALLOWED_ORIGINS, value: {{ .Values.api.corsAllowedOrigins | quote }} }
