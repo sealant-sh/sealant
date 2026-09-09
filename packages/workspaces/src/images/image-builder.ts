@@ -61,14 +61,34 @@ const isPublishableOciImageArtifact = (
 } =>
   artifact.kind === "oci-image" && artifact.path !== undefined && artifact.loader === "docker-load";
 
-/** The Docker/self-host builder: compile to a tarball, then `docker load/tag/push`. Unchanged. */
+const isEngineOciImageArtifact = (
+  artifact: WorkspaceBuild["artifacts"][number],
+): artifact is WorkspaceBuild["artifacts"][number] & {
+  kind: "oci-image";
+  reference: string;
+  loader: "docker-engine";
+} =>
+  artifact.kind === "oci-image" &&
+  artifact.reference !== undefined &&
+  artifact.loader === "docker-engine";
+
+/**
+ * The Docker/self-host builder. With a registry store: compile to a tarball, then
+ * `docker load/tag/push` (unchanged). With the local Engine store (`imageTransport: "engine"`):
+ * `docker build` already left the image in the Engine workspaces launch from, so the compiler skips
+ * `docker save` and the store only tags it — no tarball is written or read.
+ */
 export const createDockerWorkspaceImageBuilder = (
   options: DockerWorkspaceImageBuilderOptions,
 ): WorkspaceImageBuilder => {
+  const engineTransport = options.registryClient.imageTransport === "engine";
   const compile =
     options.compileWorkspaceSpec ??
     ((spec: NewWorkspace): Promise<WorkspaceBuild> =>
-      compileWorkspaceBuildSpec({ blueprint: spec }));
+      compileWorkspaceBuildSpec({
+        blueprint: spec,
+        ...(engineTransport ? { options: { emitTarball: false } } : {}),
+      }));
   // A custom compiler without a matching planner disables the short-circuit: the planner's hash
   // would not describe what the custom compiler builds.
   const plan =
@@ -82,6 +102,17 @@ export const createDockerWorkspaceImageBuilder = (
     plan,
     buildAndPublish: async (input) => {
       const build = await compile(input.spec);
+      const engineArtifact = engineTransport
+        ? build.artifacts.find(isEngineOciImageArtifact)
+        : undefined;
+      if (engineArtifact !== undefined) {
+        const publishedImage = await options.registryClient.publishOciImage({
+          repository: input.repository,
+          tag: input.tag,
+          sourceReference: engineArtifact.reference,
+        });
+        return { publishedImage, build };
+      }
       const artifact = build.artifacts.find(isPublishableOciImageArtifact);
       if (artifact === undefined) {
         throw new Error("The compiler did not return a publishable OCI image artifact.");

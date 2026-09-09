@@ -5,9 +5,16 @@ export {
   ZotRegistryClient,
 } from "./client.js";
 
+export {
+  createLocalDockerImageStore,
+  LocalDockerImageStore,
+  type LocalDockerImageStoreConfig,
+} from "./local-docker.js";
+
 export type {
   CommandResult,
   CommandRunner,
+  ImageTransport,
   PublishOciImageInput,
   PublishOciImageResult,
   RegistryClient,

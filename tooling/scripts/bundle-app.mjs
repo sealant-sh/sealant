@@ -50,6 +50,16 @@ await build({
   // Entries land in dist/ by basename (outbase is the entries' common ancestor, src/).
   outdir: "dist",
   sourcemap: true,
+  // Escape non-ASCII characters: V8 keeps a script's source resident for its whole lifetime and
+  // stores it two bytes per character as soon as one character is outside Latin-1. A pure-ASCII
+  // bundle costs 1 byte/char (12 MiB instead of 24 MiB for the API).
+  charset: "ascii",
+  // Comments are the only place non-ASCII survives `charset: "ascii"` (dependency prose is full of
+  // curly quotes and dashes), and one such character makes V8 store the whole script two-byte.
+  // Whitespace minification drops them; `lineLimit` keeps line numbers meaningful in stack traces.
+  minifyWhitespace: true,
+  lineLimit: 160,
+  legalComments: "none",
   external,
   plugins: [tsJsResolvePlugin],
   // ESM output that some CJS deps (and code expecting require/__dirname) still need.

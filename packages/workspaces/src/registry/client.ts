@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { selectLoadedImageIdentifier } from "./docker-load-output.js";
+
 const execFileAsync = promisify(execFile);
 
 const contentDigestHeader = "docker-content-digest";
@@ -57,49 +59,6 @@ const joinRegistryUrl = (baseUrl: URL, path: string): URL => {
   return new URL(path.replace(/^\//, ""), `${baseUrl.toString().replace(/\/?$/, "/")}`);
 };
 
-const parseDockerLoadOutput = (
-  output: string,
-): {
-  references: Array<string>;
-  imageIds: Array<string>;
-} => {
-  const references = [...output.matchAll(/^Loaded image: (.+)$/gm)].map(
-    (match) => match[1]?.trim() ?? "",
-  );
-  const imageIds = [...output.matchAll(/^Loaded image ID: (.+)$/gm)].map(
-    (match) => match[1]?.trim() ?? "",
-  );
-
-  return {
-    references: references.filter((value) => value.length > 0),
-    imageIds: imageIds.filter((value) => value.length > 0),
-  };
-};
-
-const selectLoadedImageIdentifier = (output: string, preferredIdentifier?: string): string => {
-  if (preferredIdentifier !== undefined) {
-    return preferredIdentifier;
-  }
-
-  const parsed = parseDockerLoadOutput(output);
-
-  if (parsed.references.length === 1) {
-    return parsed.references[0] as string;
-  }
-
-  if (parsed.references.length > 1) {
-    throw new Error(
-      `Docker load returned multiple tagged images (${parsed.references.join(", ")}). Provide sourceReference explicitly.`,
-    );
-  }
-
-  if (parsed.imageIds.length === 1) {
-    return parsed.imageIds[0] as string;
-  }
-
-  throw new Error("Could not determine a source image identifier from docker load output.");
-};
-
 const buildBasicAuthHeader = (username: string, password: string): string => {
   return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 };
@@ -133,8 +92,18 @@ export interface RegistryManifest {
   readonly body: unknown;
 }
 
+/**
+ * How a store expects to receive a built image:
+ *
+ * - `tarball` — an OCI tarball on disk (`docker save` output) that the store `docker load`s first;
+ * - `engine` — the image is already present in the Docker Engine the store talks to, named by
+ *   `sourceReference`; no tarball is written or read.
+ */
+export type ImageTransport = "tarball" | "engine";
+
 export interface PublishOciImageInput {
-  readonly artifactPath: string;
+  /** Required for `tarball` transport; ignored when `sourceReference` is already in the Engine. */
+  readonly artifactPath?: string;
   readonly repository: string;
   readonly tag: string;
   readonly sourceReference?: string;
@@ -164,7 +133,15 @@ export interface ZotRegistryClientConfig {
   readonly commandRunner?: CommandRunner;
 }
 
+/**
+ * Where workspace images are published to and launched from. Two implementations: an OCI
+ * registry (`ZotRegistryClient`, required on Kubernetes where builder and kubelet are different
+ * machines) and the local Docker Engine (`LocalDockerImageStore`, the single-host default — the
+ * Engine that built the image is the Engine that runs it, so nothing needs to be pushed anywhere).
+ */
 export interface RegistryClient {
+  /** Defaults to `tarball` when absent. */
+  readonly imageTransport?: ImageTransport;
   ping(): Promise<void>;
   repositoryExists(repository: string): Promise<boolean>;
   listTags(repository: string): Promise<Array<string>>;
@@ -326,11 +303,7 @@ export class ZotRegistryClient implements RegistryClient {
     const tag = normalizeTag(input.tag);
     const destinationReference = `${this.pushRegistry}/${repository}:${tag}`;
 
-    const loadResult = await this.commandRunner("docker", ["load", "-i", input.artifactPath]);
-    const sourceIdentifier = selectLoadedImageIdentifier(
-      `${loadResult.stdout}\n${loadResult.stderr}`,
-      input.sourceReference,
-    );
+    const sourceIdentifier = await this.resolveSourceIdentifier(input);
 
     await this.commandRunner("docker", ["tag", sourceIdentifier, destinationReference]);
     await this.commandRunner("docker", ["push", destinationReference]);
@@ -350,6 +323,20 @@ export class ZotRegistryClient implements RegistryClient {
       digestReference: `${this.pushRegistry}/${repository}@${digest}`,
       digest,
     };
+  }
+
+  private async resolveSourceIdentifier(input: PublishOciImageInput): Promise<string> {
+    if (input.artifactPath === undefined) {
+      if (input.sourceReference === undefined) {
+        throw new Error("Publishing an image needs an artifact tarball or a source reference.");
+      }
+      return input.sourceReference;
+    }
+    const loadResult = await this.commandRunner("docker", ["load", "-i", input.artifactPath]);
+    return selectLoadedImageIdentifier(
+      `${loadResult.stdout}\n${loadResult.stderr}`,
+      input.sourceReference,
+    );
   }
 
   private async request(

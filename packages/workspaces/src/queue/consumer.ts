@@ -1,37 +1,36 @@
-import { createRabbitMqService, type RabbitMqConsumerMessage } from "@sealant/rabbitmq";
+import { createJobQueueService, type JobQueueConsumerMessage } from "@sealant/jobs";
 
 import {
   parseWorkspaceBuildJobRequestedMessage,
   type WorkspaceBuildJobRequestedMessage,
 } from "./messages.js";
-import { workspaceBuildQueueName, workspaceBuildQueueTopology } from "./topology.js";
+import { workspaceBuildQueue } from "./topology.js";
 
 /**
  * Typed message shape delivered to workspace build queue consumers.
  */
 export type WorkspaceBuildJobConsumerMessage =
-  RabbitMqConsumerMessage<WorkspaceBuildJobRequestedMessage>;
+  JobQueueConsumerMessage<WorkspaceBuildJobRequestedMessage>;
 
 /**
  * Runtime options for workspace build queue consumption.
  */
 export interface ConsumeWorkspaceBuildJobsOptions {
-  readonly connectionUrl: string;
-  readonly prefetch?: number;
+  readonly databaseUrl: string;
+  readonly concurrency?: number;
+  /** Throwing fails the delivery (dead-lettered, never retried). */
   readonly onMessage: (message: WorkspaceBuildJobConsumerMessage) => Promise<void>;
 }
 
 /**
- * Starts consuming workspace build job messages with topology checks.
+ * Starts consuming workspace build job messages.
  */
 export const consumeWorkspaceBuildJobs = async (options: ConsumeWorkspaceBuildJobsOptions) => {
-  const rabbitMq = createRabbitMqService(options.connectionUrl);
+  const jobs = createJobQueueService(options.databaseUrl);
 
-  await rabbitMq.assertTopology(workspaceBuildQueueTopology);
-
-  return rabbitMq.consumeJsonMessages({
-    queueName: workspaceBuildQueueName,
-    ...(options.prefetch === undefined ? {} : { prefetch: options.prefetch }),
+  return jobs.consumeJson({
+    queue: workspaceBuildQueue,
+    ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
     parseMessage: parseWorkspaceBuildJobRequestedMessage,
     onMessage: options.onMessage,
   });

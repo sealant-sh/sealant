@@ -9,10 +9,10 @@ Self-hosted Sealant reads deployment variables from `~/.config/sealant/.env` (mo
 `docker compose`. This page is the operator's reference for what belongs there.
 
 The [installer](/docs/reference/installer-and-compose) writes only a small subset: generated
-infrastructure secrets, the pinned version, the API/web/SSH/registry ports, and the bind host. You
-edit this file directly for GitHub App credentials, connected-account encryption, public web/SSH
-URLs, CORS origins, or image mirrors. After editing, apply it by re-running the installer or
-restarting the stack:
+infrastructure secrets, the pinned version, the API/web/SSH ports, and the bind host. You edit this
+file directly for GitHub App credentials, connected-account encryption, public web/SSH URLs, CORS
+origins, or image mirrors. After editing, apply it by re-running the installer or restarting the
+stack:
 
 ```sh
 docker compose --project-directory ~/.config/sealant up -d
@@ -27,7 +27,6 @@ overwrites an existing value. Do not regenerate them on a live install — rotat
 | Variable                      | Meaning                                                                                                                                                     |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SEALANT_DB_PASSWORD`         | Postgres password used to build the compose database URL.                                                                                                   |
-| `SEALANT_RABBITMQ_PASSWORD`   | RabbitMQ password used to build the compose AMQP URL.                                                                                                       |
 | `WORKSPACE_SSH_GATEWAY_TOKEN` | Shared secret between the API and the SSH gateway. Gates the internal `POST /v1/ssh-keys/resolve-principal` and `GET /v1/workspaces/:id/ssh-target` routes. |
 | `BETTER_AUTH_SECRET`          | Better Auth signing secret (min 32 chars). Required for web sign-in.                                                                                        |
 
@@ -41,14 +40,13 @@ These are the only non-secret knobs the installer persists and passes through co
 then re-run the installer (or `docker compose up -d`) to apply it. By default everything binds to
 loopback; see [Beyond localhost](/docs/guides/beyond-localhost) before exposing anything.
 
-| Variable                | Default               | Meaning                                                                                     |
-| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `SEALANT_VERSION`       | resolved by installer | Image tag pulled for every service.                                                         |
-| `SEALANT_BIND_HOST`     | `127.0.0.1`           | Host interface for web, API, and SSH. Set `0.0.0.0` to expose beyond the machine.           |
-| `SEALANT_WEB_PORT`      | `3000`                | Host port for the web app.                                                                  |
-| `SEALANT_API_PORT`      | `4000`                | Host port for the control-plane API.                                                        |
-| `SEALANT_SSH_PORT`      | `2222`                | Host port for the SSH gateway.                                                              |
-| `SEALANT_REGISTRY_PORT` | `5000`                | Host port for the zot registry. Always bound to loopback regardless of `SEALANT_BIND_HOST`. |
+| Variable            | Default               | Meaning                                                                           |
+| ------------------- | --------------------- | --------------------------------------------------------------------------------- |
+| `SEALANT_VERSION`   | resolved by installer | Image tag pulled for every service.                                               |
+| `SEALANT_BIND_HOST` | `127.0.0.1`           | Host interface for web, API, and SSH. Set `0.0.0.0` to expose beyond the machine. |
+| `SEALANT_WEB_PORT`  | `3000`                | Host port for the web app.                                                        |
+| `SEALANT_API_PORT`  | `4000`                | Host port for the control-plane API.                                              |
+| `SEALANT_SSH_PORT`  | `2222`                | Host port for the SSH gateway.                                                    |
 
 `SEALANT_INSTALL_DIR` and `SEALANT_COMPOSE_URL` are never stored in `.env` — pass them inline to the
 install command.
@@ -232,21 +230,20 @@ You should not need to set these for a standard self-host — compose already su
 values, and most are internal to the container network. They are documented here so you can
 recognize them in logs and override them deliberately if you must.
 
-| Variable                                | Default                                                                                   | Meaning                                                                                                                                    |
-| --------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DOCKER_SOCKET_PATH`                    | `/var/run/docker.sock`                                                                    | Host Docker socket mounted into the worker to build and run workspaces.                                                                    |
-| `DATABASE_URL`                          | compose-built from `SEALANT_DB_PASSWORD`                                                  | Control-plane Postgres connection string.                                                                                                  |
-| `RABBITMQ_URL`                          | compose-built from `SEALANT_RABBITMQ_PASSWORD`                                            | Workspace-build queue transport.                                                                                                           |
-| `REGISTRY_BASE_URL`                     | `http://zot:5000` in self-host compose (code default `http://127.0.0.1:5000`)             | Internal registry base URL the API and worker use inside the compose network.                                                              |
-| `REGISTRY_PUSH_REGISTRY`                | `127.0.0.1:${SEALANT_REGISTRY_PORT}` in self-host compose (code default `127.0.0.1:5000`) | Host registry address embedded in image refs for Docker push/pull.                                                                         |
-| `REGISTRY_NAME`                         | `default`                                                                                 | Registry id; must match the SDK's `SEALANT_REGISTRY_ID` (also `default`).                                                                  |
-| `DEFAULT_RUNTIME_ADAPTER`               | `docker`                                                                                  | Workspace runtime backend.                                                                                                                 |
-| `WORKSPACE_BUILD_QUEUE_PREFETCH`        | `1`                                                                                       | Concurrent workspace builds a worker leases.                                                                                               |
-| `WORKSPACE_BUILD_JOB_LEASE_DURATION_MS` | `900000`                                                                                  | Build-job lease before a stuck job is reaped.                                                                                              |
-| `SSH_GATEWAY_BANNER`                    | Sealant welcome text                                                                      | Banner shown on SSH connect.                                                                                                               |
-| `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` | `ws`                                                                                      | Username prefix for `ssh ws-<workspace-id>@…`.                                                                                             |
-| `SEALANT_OWNER_USER_ID`                 | `usr_local`                                                                               | Owner principal the SDK attributes work to when `SealantConfig.ownerUserId` is not set.                                                    |
-| `SEALANT_SERVICE_KEYS`                  | unset                                                                                     | API only. Comma-separated service-principal bearer secrets; set = every `/v1` request must authenticate, unset = open loopback-only model. |
+| Variable                                | Default                                  | Meaning                                                                                                                                                                                  |
+| --------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOCKER_SOCKET_PATH`                    | `/var/run/docker.sock`                   | Host Docker socket mounted into the worker to build and run workspaces.                                                                                                                  |
+| `DATABASE_URL`                          | compose-built from `SEALANT_DB_PASSWORD` | Control-plane Postgres connection string. The job queue (pg-boss, `pgboss` schema) lives in this database, so it needs no URL of its own.                                                |
+| `REGISTRY_BASE_URL`                     | unset                                    | Optional. HTTP base URL of an OCI registry to publish workspace images to. Set it together with `REGISTRY_PUSH_REGISTRY`, or leave both unset to keep images in the local Docker Engine. |
+| `REGISTRY_PUSH_REGISTRY`                | unset                                    | Optional. The `host[:port]` prefix pushed image references carry. Set together with `REGISTRY_BASE_URL`; required for Kubernetes builds, where BuildKit pushes and the kubelet pulls.    |
+| `REGISTRY_NAME`                         | `default`                                | Registry id; must match the SDK's `SEALANT_REGISTRY_ID` (also `default`).                                                                                                                |
+| `DEFAULT_RUNTIME_ADAPTER`               | `docker`                                 | Workspace runtime backend.                                                                                                                                                               |
+| `WORKSPACE_BUILD_QUEUE_PREFETCH`        | `1`                                      | Queue deliveries one worker process handles at once.                                                                                                                                     |
+| `WORKSPACE_BUILD_JOB_LEASE_DURATION_MS` | `900000`                                 | Build-job lease before a stuck job is reaped.                                                                                                                                            |
+| `SSH_GATEWAY_BANNER`                    | Sealant welcome text                     | Banner shown on SSH connect.                                                                                                                                                             |
+| `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX` | `ws`                                     | Username prefix for `ssh ws-<workspace-id>@…`.                                                                                                                                           |
+| `SEALANT_OWNER_USER_ID`                 | `usr_local`                              | Owner principal the SDK attributes work to when `SealantConfig.ownerUserId` is not set.                                                                                                  |
+| `SEALANT_SERVICE_KEYS`                  | unset                                    | API only. Comma-separated service-principal bearer secrets; set = every `/v1` request must authenticate, unset = open loopback-only model.                                               |
 
 With `SEALANT_SERVICE_KEYS` unset the identity model passes an `ownerUserId` in payloads and queries
 rather than authenticating requests. See the [HTTP API auth section](/docs/reference/http-api) and

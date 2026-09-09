@@ -27,12 +27,16 @@ Stateful infra + the **worker** + the **ssh-gateway** run in Docker; the **API**
 the host (hot reload). `.env` is the single source of truth — every app reads it
 (`dotenv -e ../../.env`), and compose passes it to the gateway via `env_file`.
 
-| Service                   | Where                                         | Port               |
-| ------------------------- | --------------------------------------------- | ------------------ |
-| postgres / rabbitmq / zot | `docker compose up -d`                        | 5433 / 5673 / 5000 |
-| api                       | `pnpm --filter @sealant/api dev`              | 4000               |
-| web                       | `pnpm --filter @sealant/web dev`              | 3000               |
-| worker + ssh-gateway      | `docker compose --profile apps up -d --build` | gateway 2222       |
+| Service              | Where                                         | Port         |
+| -------------------- | --------------------------------------------- | ------------ |
+| postgres             | `docker compose up -d`                        | 5433         |
+| api                  | `pnpm --filter @sealant/api dev`              | 4000         |
+| web                  | `pnpm --filter @sealant/web dev`              | 3000         |
+| worker + ssh-gateway | `docker compose --profile apps up -d --build` | gateway 2222 |
+
+Postgres is the only always-on container. The job queue is pg-boss inside that database (`pgboss`
+schema, created on first start) and built workspace images stay in your local Docker Engine, so
+there is no broker and no registry.
 
 ## Run it
 
@@ -47,8 +51,8 @@ docker compose --profile apps up -d --build           # worker + ssh-gateway
 
 Open **http://localhost:3000**. With an empty database the web app routes you to the first-run
 **`/setup` wizard**: create your account, paste your SSH public key, and copy the `Host ws-*` block
-into `~/.ssh/config`. Then start a workspace — the worker builds the image (pushed to zot) and
-launches the container; wait until it's running/ready.
+into `~/.ssh/config`. Then start a workspace — the worker builds the image into your local Docker
+Engine and launches the container from it; wait until it's running/ready.
 
 ## SSH into a workspace
 
@@ -100,7 +104,7 @@ The pieces:
 - **Local dry-run**: build the images with the same Dockerfiles
   (`docker build -f apps/<app>/Dockerfile -t ghcr.io/sealant-sh/sealant-<name>:0.0.0-dev .`), then
   `SEALANT_VERSION=0.0.0-dev SEALANT_COMPOSE_URL=$PWD/compose.selfhost.yaml sh install.sh`. Offset
-  ports (`SEALANT_{WEB,API,SSH,REGISTRY}_PORT`) let it coexist with the dev stack.
+  ports (`SEALANT_{WEB,API,SSH}_PORT`) let it coexist with the dev stack.
 - **Migrations in the packaged path** run from the api image (`node dist/migrate.js`, programmatic
   drizzle migrator + seed) — same journal table as dev `pnpm db:migrate`, so the histories are
   interchangeable.

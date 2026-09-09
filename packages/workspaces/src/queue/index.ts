@@ -1,4 +1,4 @@
-export { rabbitMqEnvSchema, parseRabbitMqEnv, type RabbitMqEnv } from "@sealant/rabbitmq";
+export { jobQueueEnvSchema, parseJobQueueEnv, type JobQueueEnv } from "@sealant/validators/env";
 
 export {
   parseWorkspaceBuildJobRequestedMessage,
@@ -16,16 +16,15 @@ export {
 export { publishWorkspaceBuildJobRequested } from "./publisher.js";
 
 export {
-  closeRabbitMqSingleton,
-  getRabbitMqSingleton,
-  type RabbitMqSingleton,
-} from "@sealant/rabbitmq";
+  closeJobQueueSingleton,
+  getJobQueueSingleton,
+  type JobQueueSingleton,
+} from "@sealant/jobs";
 
 export {
-  assertWorkspaceBuildQueueTopology,
   ensureWorkspaceBuildQueueTopology,
-  workspaceBuildDeadLetterExchangeName,
   workspaceBuildDeadLetterQueueName,
+  workspaceBuildQueue,
   workspaceBuildQueueName,
 } from "./topology.js";
 
@@ -33,8 +32,8 @@ export {
   consumeRunExecJobs,
   parseRunExecRequestedMessage,
   publishRunExecRequested,
+  runExecQueue,
   runExecQueueName,
-  runExecQueueTopology,
   runExecRequestedMessageKind,
   type ConsumeRunExecJobsOptions,
   type RunExecCommand,
@@ -43,12 +42,11 @@ export {
 } from "./run-exec-queue.js";
 
 export {
-  assertWorkspaceLifecycleQueueTopology,
   consumeWorkspaceLifecycleJobs,
   parseWorkspaceStopRequestedMessage,
   publishWorkspaceStopRequested,
+  workspaceLifecycleQueue,
   workspaceLifecycleQueueName,
-  workspaceLifecycleQueueTopology,
   workspaceStopRequestedMessageKind,
   type ConsumeWorkspaceLifecycleJobsOptions,
   type WorkspaceLifecycleConsumerMessage,

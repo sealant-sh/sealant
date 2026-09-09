@@ -13,14 +13,12 @@ to run on `localhost`, and you are responsible for anything beyond that until au
 
 The installer binds every published port to `127.0.0.1`:
 
-| Service        | Default bind     |
-| -------------- | ---------------- |
-| Web app        | `127.0.0.1:3000` |
-| API            | `127.0.0.1:4000` |
-| SSH gateway    | `127.0.0.1:2222` |
-| Registry (Zot) | `127.0.0.1:5000` |
-| Postgres       | internal only    |
-| RabbitMQ       | internal only    |
+| Service     | Default bind     |
+| ----------- | ---------------- |
+| Web app     | `127.0.0.1:3000` |
+| API         | `127.0.0.1:4000` |
+| SSH gateway | `127.0.0.1:2222` |
+| Postgres    | internal only    |
 
 Nothing is reachable from another machine unless you deliberately change `SEALANT_BIND_HOST` (see
 [Environment variables](/docs/reference/environment-variables)). This loopback default is the single

@@ -39,7 +39,10 @@ Docker socket. Design and decision log: `docs/kubernetes-support-design.md` in t
   `userns` in the container runtime's AppArmor profile. Talos and most non-Ubuntu distributions need
   nothing here.
 - Nodes that trust the in-cluster registry as an insecure (plain-HTTP) registry, or an external TLS
-  registry configured through `registry.external`.
+  registry configured through `registry.external`. Kubernetes always needs a registry — BuildKit
+  Jobs push to it and kubelets pull from it — so the worker refuses to start a build when
+  `REGISTRY_PUSH_REGISTRY` is unset. (The registry-free local Docker Engine store only serves
+  single-host installs, where one daemon both builds and runs.)
 
 ## Install
 
@@ -47,7 +50,6 @@ Docker socket. Design and decision log: `docs/kubernetes-support-design.md` in t
 kubectl create namespace sealant
 kubectl -n sealant create secret generic sealant-secrets \
   --from-literal=SEALANT_DB_PASSWORD="$(openssl rand -hex 32)" \
-  --from-literal=SEALANT_RABBITMQ_PASSWORD="$(openssl rand -hex 32)" \
   --from-literal=WORKSPACE_SSH_GATEWAY_TOKEN="$(openssl rand -hex 32)" \
   --from-literal=BETTER_AUTH_SECRET="$(openssl rand -hex 32)" \
   --from-literal=SEALANT_CREDENTIALS_KEY="$(openssl rand -base64 32)"
@@ -58,7 +60,7 @@ helm install sealant deploy/helm/sealant -n sealant \
   --set workspaces.volumeMappings[0].claimName=mend-store
 ```
 
-The chart creates: Postgres and RabbitMQ (or points at yours), the zot registry, a migration Job
+The chart creates: Postgres (or points at yours), the zot registry, a migration Job
 (pre-install/pre-upgrade hook), the API, one worker, the SSH gateway, the web app, the workspace
 ServiceAccounts and the narrow worker Role, a self-signed → internal CA issuer chain with a
 `clientAuth`-only certificate for the control plane, NetworkPolicies and PodDisruptionBudgets. **No
@@ -77,7 +79,7 @@ Every `SEALANT_K8S_*` knob the worker reads is in the
 | Control channel  | Unix socket (+ docker-exec bridge)                                       | `wss://<pod-service>.<ns>.svc:7443/control`, mTLS, internal CA                                                                        |
 | Launch material  | host dirs bind-mounted                                                   | projected Secret (`env.json`, small dotfiles) or staging claim subPath                                                                |
 | Credential files | `docker exec` stdin                                                      | control-channel `exec` stdin after health                                                                                             |
-| Image build      | `docker build/save` + `load/tag/push`                                    | rootless BuildKit Job pushing to the registry                                                                                         |
+| Image build      | `docker build` on the host Engine, tagged in place                       | rootless BuildKit Job pushing to the registry                                                                                         |
 | Pod security     | —                                                                        | non-privileged, caps dropped, RuntimeDefault seccomp, root user                                                                       |
 | Docker service   | rootless dind on a per-workspace bridge, `DOCKER_HOST=tcp://docker:2375` | rootless dind sidecar in a user-namespaced Pod, `DOCKER_HOST=unix:///run/docker/docker.sock`; `docker` resolves to the Pod's loopback |
 

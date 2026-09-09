@@ -1,9 +1,4 @@
-import {
-  assertRabbitMqTopology,
-  createRabbitMqService,
-  type RabbitMqTopology,
-} from "@sealant/rabbitmq";
-import type { Channel } from "amqplib";
+import { createJobQueueService, defineJobQueue } from "@sealant/jobs";
 
 /**
  * Primary queue used for workspace build job orchestration.
@@ -11,71 +6,24 @@ import type { Channel } from "amqplib";
 export const workspaceBuildQueueName = "workspace-image-builds";
 
 /**
- * Dead-letter exchange for workspace build job failures.
- */
-export const workspaceBuildDeadLetterExchangeName = "workspace-image-builds.dlx";
-
-/**
- * Dead-letter queue bound to the workspace build DLX.
+ * Dead-letter queue for workspace build job failures.
  */
 export const workspaceBuildDeadLetterQueueName = "workspace-image-builds.dlq";
 
 /**
- * Canonical RabbitMQ topology used by all workspace build queue producers/consumers.
+ * Canonical queue definition used by all workspace build queue producers/consumers. An image build
+ * (clone + docker build + launch) can legitimately take a long time on a cold cache, so the active
+ * window is generous; the build-job lease + reaper own the "worker died mid-build" recovery.
  */
-export const workspaceBuildQueueTopology: RabbitMqTopology = {
-  exchanges: [
-    {
-      name: workspaceBuildDeadLetterExchangeName,
-      type: "direct",
-      options: {
-        durable: true,
-      },
-    },
-  ],
-  queues: [
-    {
-      name: workspaceBuildDeadLetterQueueName,
-      options: {
-        durable: true,
-        arguments: {
-          "x-queue-type": "quorum",
-        },
-      },
-    },
-    {
-      name: workspaceBuildQueueName,
-      options: {
-        durable: true,
-        arguments: {
-          "x-dead-letter-exchange": workspaceBuildDeadLetterExchangeName,
-          "x-dead-letter-routing-key": workspaceBuildDeadLetterQueueName,
-          "x-queue-type": "quorum",
-        },
-      },
-    },
-  ],
-  bindings: [
-    {
-      queueName: workspaceBuildDeadLetterQueueName,
-      exchangeName: workspaceBuildDeadLetterExchangeName,
-      routingKey: workspaceBuildDeadLetterQueueName,
-    },
-  ],
-};
+export const workspaceBuildQueue = defineJobQueue(workspaceBuildQueueName, {
+  activeTimeoutSeconds: 2 * 60 * 60,
+});
 
 /**
- * Asserts workspace build topology on a provided channel.
+ * Ensures the workspace build queue (and its dead-letter queue) exists.
  */
-export const assertWorkspaceBuildQueueTopology = async (channel: Channel) => {
-  await assertRabbitMqTopology(channel, workspaceBuildQueueTopology);
-};
+export const ensureWorkspaceBuildQueueTopology = async (databaseUrl: string) => {
+  const jobs = createJobQueueService(databaseUrl);
 
-/**
- * Ensures topology exists on both publish and consume channels for a connection.
- */
-export const ensureWorkspaceBuildQueueTopology = async (connectionUrl: string) => {
-  const rabbitMq = createRabbitMqService(connectionUrl);
-
-  await rabbitMq.assertTopology(workspaceBuildQueueTopology);
+  await jobs.ensureQueue(workspaceBuildQueue);
 };

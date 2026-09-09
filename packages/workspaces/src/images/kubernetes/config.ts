@@ -73,7 +73,8 @@ export interface KubernetesBuildEnvLike {
   readonly SEALANT_K8S_REGISTRY_INSECURE?: boolean | undefined;
   readonly SEALANT_K8S_IMAGE_PULL_SECRET?: string | undefined;
   readonly SEALANT_K8S_KUBECONFIG?: string | undefined;
-  readonly REGISTRY_PUSH_REGISTRY: string;
+  /** Required for Kubernetes builds: BuildKit pushes to a registry, never to a local Engine. */
+  readonly REGISTRY_PUSH_REGISTRY?: string | undefined;
   readonly REGISTRY_USERNAME?: string | undefined;
   readonly REGISTRY_PASSWORD?: string | undefined;
 }
@@ -89,6 +90,11 @@ export const kubernetesBuildConfigFromEnv = (
   const namespace = env.SEALANT_K8S_BUILD_NAMESPACE ?? env.SEALANT_K8S_NAMESPACE;
   if (namespace === undefined) {
     return undefined;
+  }
+  if (env.REGISTRY_PUSH_REGISTRY === undefined) {
+    throw new KubernetesBuildConfigError(
+      "Kubernetes builds push to an OCI registry: set REGISTRY_BASE_URL and REGISTRY_PUSH_REGISTRY (the local Docker Engine store only serves single-host installs).",
+    );
   }
   const parsed = kubernetesBuildConfigSchema.safeParse({
     namespace,

@@ -1,23 +1,23 @@
 {
-  "name": "@sealant/rabbitmq",
+  "name": "@sealant/jobs",
   "version": "0.0.0",
   "private": true,
-  "description": "Business-agnostic RabbitMQ transport utilities",
+  "description": "Business-agnostic Postgres-backed job queue (pg-boss) shared by the API and worker",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
     "lint": "oxlint .",
+    "test": "vitest run",
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@sealant/validators": "workspace:*",
-    "amqplib": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "pg-boss": "catalog:"
   },
   "devDependencies": {
     "@sealant/typescript": "workspace:*",
-    "@types/amqplib": "catalog:"
+    "vitest": "catalog:"
   }
 }

@@ -4,7 +4,7 @@ import {
   type CredentialCipherService,
 } from "@sealant/credentials";
 import { createSealantDB, type DB } from "@sealant/db";
-import { createRabbitMqService } from "@sealant/rabbitmq";
+import { createJobQueueService } from "@sealant/jobs";
 import { createGitHubSourceIntegration } from "@sealant/source-integrations";
 import type { WorkerEnv } from "@sealant/validators/env";
 import {
@@ -14,6 +14,7 @@ import {
   createKubernetesLaunchMaterialStager,
   createLiveKubernetesApi,
   createLiveKubernetesBuildApi,
+  createLocalDockerImageStore,
   createZotRegistryClient,
   CloudflareRuntimeAdapter,
   cloudflareRuntimeConfigFromEnv,
@@ -30,6 +31,7 @@ import {
   KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
   targetDerivationOptionsFromEnv,
+  type RegistryClient,
 } from "@sealant/workspaces";
 import { Effect } from "effect";
 
@@ -66,14 +68,24 @@ const createCredentialCipherFromEnv = (env: WorkerEnv): CredentialCipherService 
  */
 export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const db = await createDatabaseFromEnv(env);
-  const rabbitMq = createRabbitMqService(env.RABBITMQ_URL);
+  // The job queue lives in the same Postgres database as the control plane (pg-boss); one
+  // shared handle per process, closed on shutdown.
+  const jobs = createJobQueueService(env.DATABASE_URL);
   const credentialCipher = createCredentialCipherFromEnv(env);
-  const registryClient = createZotRegistryClient({
-    baseUrl: env.REGISTRY_BASE_URL,
-    pushRegistry: env.REGISTRY_PUSH_REGISTRY,
-    ...(env.REGISTRY_USERNAME === undefined ? {} : { username: env.REGISTRY_USERNAME }),
-    ...(env.REGISTRY_PASSWORD === undefined ? {} : { password: env.REGISTRY_PASSWORD }),
-  });
+  // Image store: the local Docker Engine unless a registry is configured. Single-host installs
+  // build, tag, and launch on one daemon; Kubernetes installs must push to a registry (BuildKit
+  // and kubelet are different machines), which `kubernetesBuildConfigFromEnv` enforces below.
+  const registryClient: RegistryClient =
+    env.REGISTRY_BASE_URL === undefined
+      ? createLocalDockerImageStore()
+      : createZotRegistryClient({
+          baseUrl: env.REGISTRY_BASE_URL,
+          ...(env.REGISTRY_PUSH_REGISTRY === undefined
+            ? {}
+            : { pushRegistry: env.REGISTRY_PUSH_REGISTRY }),
+          ...(env.REGISTRY_USERNAME === undefined ? {} : { username: env.REGISTRY_USERNAME }),
+          ...(env.REGISTRY_PASSWORD === undefined ? {} : { password: env.REGISTRY_PASSWORD }),
+        });
   const gitHubSourceIntegration = createGitHubSourceIntegration({
     apiBaseUrl: env.GITHUB_API_BASE_URL,
     ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
@@ -155,10 +167,13 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
 
   const runtimeAdapters = [...dockerAdapters, ...kubernetesAdapters, ...cloudflareAdapters];
 
+  // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
+  // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
+  // failed delivery visible in the queue's DLQ.
   const consumer = await consumeWorkspaceBuildJobs({
-    connectionUrl: env.RABBITMQ_URL,
-    prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
-    onMessage: async ({ message, ack, nack }) => {
+    databaseUrl: env.DATABASE_URL,
+    concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    onMessage: async ({ message }) => {
       try {
         await processWorkspaceBuildJob({
           jobId: message.jobId,
@@ -173,13 +188,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
           ...(imageBuilder === undefined ? {} : { imageBuilder }),
         });
-        ack();
       } catch (error) {
         console.error("Workspace build job failed", {
           error,
           jobId: message.jobId,
         });
-        nack(false);
+        throw error;
       }
     },
   });
@@ -188,9 +202,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // telemetry ingest), so the SDK can be a thin HTTP client. The API enqueues here when a run is
   // created with a `command` (harness framing) or via execWorkspace (`commands`, exec framing).
   const runExecConsumer = await consumeRunExecJobs({
-    connectionUrl: env.RABBITMQ_URL,
-    prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
-    onMessage: async ({ message, ack, nack }) => {
+    databaseUrl: env.DATABASE_URL,
+    concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    onMessage: async ({ message }) => {
       try {
         await processRunExecJob({
           runId: message.runId,
@@ -200,10 +214,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           targetOptions,
         });
-        ack();
       } catch (error) {
         console.error("Run exec job failed", { error, runId: message.runId });
-        nack(false);
+        throw error;
       }
     },
   });
@@ -212,9 +225,9 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // the container via the runtime adapter and record the terminal "stopped" state. Runtime mutations
   // stay in the worker so the API never needs a Docker socket.
   const lifecycleConsumer = await consumeWorkspaceLifecycleJobs({
-    connectionUrl: env.RABBITMQ_URL,
-    prefetch: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
-    onMessage: async ({ message, ack, nack }) => {
+    databaseUrl: env.DATABASE_URL,
+    concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
+    onMessage: async ({ message }) => {
       try {
         await processWorkspaceStop({
           workspaceId: message.workspaceId,
@@ -227,22 +240,21 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           targetOptions,
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
         });
-        ack();
       } catch (error) {
         console.error("Workspace stop failed", {
           error,
           workspaceId: message.workspaceId,
           runId: message.runId,
         });
-        nack(false);
+        throw error;
       }
     },
   });
 
   // Reaper (#5): periodically re-drive build jobs stranded by a dead lease holder. The normal path is
-  // RabbitMQ delivery; this is the recovery net for deliveries that were acked-and-discarded when a
-  // worker died mid-build. Safe to repeat (idempotent build + container adopt, Stage 1). Retired once
-  // pg-boss (Stage 4) provides native per-job lease expiry + single-owner recovery.
+  // queue delivery; this is the recovery net for a worker that died mid-build (pg-boss fails and
+  // dead-letters the expired delivery, it does not redeliver it). Safe to repeat (idempotent build +
+  // container adopt, Stage 1).
   const runReaperTick = (): void => {
     reapStaleWorkspaceBuildJobs({
       db,
@@ -318,7 +330,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       await lifecycleConsumer.cancel();
       await runExecConsumer.cancel();
       await consumer.cancel();
-      await rabbitMq.close();
+      await jobs.close();
     },
   };
 };

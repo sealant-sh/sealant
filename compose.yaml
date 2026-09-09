@@ -16,31 +16,6 @@ services:
       timeout: 5s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:4.2-management
-    ports:
-      - "127.0.0.1:5673:5672"
-      - "127.0.0.1:15673:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: sealant
-      RABBITMQ_DEFAULT_PASS: sealant
-    restart: unless-stopped
-    healthcheck:
-      test: rabbitmq-diagnostics -q ping
-      interval: 30s
-      timeout: 30s
-      retries: 3
-
-  zot:
-    image: ghcr.io/project-zot/zot-minimal:v2.1.15
-    command: ["serve", "/etc/zot/config.json"]
-    ports:
-      - "127.0.0.1:5000:5000"
-    restart: unless-stopped
-    volumes:
-      - ./packages/workspaces/dev/zot/config.json:/etc/zot/config.json:ro
-      - zot-data:/var/lib/registry
-
   worker:
     build:
       context: .
@@ -50,19 +25,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      zot:
-        condition: service_started
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # §2.2: shared host dir where each workspace's control socket is exposed, so the gateway reaches
       # the daemon directly (and needs no Docker socket). Same path is mounted read-only into the gateway.
       - /run/sealant/sockets:/run/sealant/sockets
     environment:
-      RABBITMQ_URL: amqp://sealant:sealant@rabbitmq:5672
-      REGISTRY_BASE_URL: http://zot:5000
-      REGISTRY_PUSH_REGISTRY: 127.0.0.1:5000
       DATABASE_URL: postgresql://sealant:sealant@postgres:5432/sealant_control_plane
       DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY: container-network
       WORKSPACE_CONTROL_SOCKET_HOST_DIR: /run/sealant/sockets
@@ -108,5 +76,4 @@ services:
 
 volumes:
   postgres-data:
-  zot-data:
   gateway-keys:

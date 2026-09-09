@@ -10,8 +10,7 @@ image:
 # Secrets are referenced, never rendered from values. Create them before installing:
 #   kubectl -n <ns> create secret generic sealant-secrets \
 #     --from-literal=WORKSPACE_SSH_GATEWAY_TOKEN=... --from-literal=BETTER_AUTH_SECRET=... \
-#     --from-literal=SEALANT_CREDENTIALS_KEY=... --from-literal=SEALANT_DB_PASSWORD=... \
-#     --from-literal=SEALANT_RABBITMQ_PASSWORD=...
+#     --from-literal=SEALANT_CREDENTIALS_KEY=... --from-literal=SEALANT_DB_PASSWORD=...
 secrets:
   existingSecret: sealant-secrets
 
@@ -22,10 +21,8 @@ postgres:
   storageClassName: ""
   externalUrl: "" # postgresql://user:pass@host:5432/sealant_control_plane
 
-rabbitmq:
-  enabled: true
-  image: rabbitmq:4.2-management
-  externalUrl: "" # amqp://user:pass@host:5672
+# The job queue lives in Postgres (pg-boss, `pgboss` schema of the control-plane database); there
+# is no broker to configure.
 
 registry:
   # The in-cluster zot registry workspace images are pushed to (by BuildKit Jobs) and pulled

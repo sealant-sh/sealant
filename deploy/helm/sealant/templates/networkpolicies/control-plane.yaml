@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicies.enabled }}
-# Control plane: components talk to each other, Postgres, RabbitMQ, the registry, workspaces
+# Control plane: components talk to each other, Postgres, the registry, workspaces
 # (WSS) and the internet (GitHub, npm, image pulls for BuildKit). Ingress only from in-cluster
 # peers by default — no public exposure without an operator-added Ingress/LoadBalancer.
 apiVersion: networking.k8s.io/v1

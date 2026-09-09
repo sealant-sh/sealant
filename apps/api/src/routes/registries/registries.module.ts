@@ -51,10 +51,11 @@ export const getRegistry = (registryId: string) => {
   return Effect.gen(function* () {
     yield* ensureRegistry(registryId);
 
+    // No registry configured = the local Docker Engine store: images are tagged, not pushed.
     return {
       name: env.REGISTRY_NAME,
-      baseUrl: env.REGISTRY_BASE_URL,
-      pushRegistry: env.REGISTRY_PUSH_REGISTRY,
+      baseUrl: env.REGISTRY_BASE_URL ?? "",
+      pushRegistry: env.REGISTRY_PUSH_REGISTRY ?? "docker-engine",
       hasBasicAuth: env.REGISTRY_USERNAME !== undefined,
     } satisfies RegistrySummary;
   });

@@ -28,8 +28,8 @@ and test config used across every workspace.
 | `@sealant/auth`                | Shared Better Auth setup: server bootstrap, client factory, session helpers, backed by `@sealant/db`.                                                       | `packages/auth/src/server.ts`, `packages/auth/src/session.ts`                                        |
 | `@sealant/credentials`         | Connected-account credential payload parsing, AES-256-GCM sealing, and launch injection planning for Claude, Codex, and GitHub credentials.                 | `packages/credentials/src/index.ts`, `packages/credentials/src/cipher.ts`                            |
 | `@sealant/db`                  | Shared PostgreSQL + Drizzle persistence for the control plane — workspace lifecycle, telemetry/execution records, auth, and source-integration tables.      | `packages/db/src/client.ts`, `packages/db/src/repositories/*`                                        |
-| `@sealant/rabbitmq`            | Business-agnostic AMQP transport: publish/consume JSON messages, topology assertions, connection singletons.                                                | `packages/rabbitmq/src/index.ts`                                                                     |
-| `@sealant/workspaces`          | Workspace domain orchestration end to end: BuildKit compile, registry publish, runtime adapters, build-queue messages, worker job processing.               | `packages/workspaces/src/worker/process-workspace-build-job.ts`, `packages/workspaces/src/runtime/*` |
+| `@sealant/jobs`                | Business-agnostic Postgres-backed job queue (pg-boss) shared by the API and worker: queue definitions, JSON publish/consume, one handle per process.        | `packages/jobs/src/index.ts`                                                                         |
+| `@sealant/workspaces`          | Workspace domain orchestration end to end: BuildKit compile, image publish, runtime adapters, build-queue messages, worker job processing.                  | `packages/workspaces/src/worker/process-workspace-build-job.ts`, `packages/workspaces/src/runtime/*` |
 | `@sealant/sdk`                 | The fluent public SDK (`Sealant`, `opencode()` harness), published on npm as `@sealant/sdk` `0.4.0` — create a workspace, run a harness, replay the record. | `packages/sdk/src/client.ts`, `packages/sdk/src/facade/*`                                            |
 | `@sealant/source-integrations` | Repository/provider integrations — GitHub App auth, installation lookup, webhook verification.                                                              | `packages/source-integrations/src/github/`                                                           |
 | `@sealant/telemetry`           | Ingests the `sealantd` event firehose and persists it as the append-only, replayable execution record, keyed on `(runId, sequence)`.                        | `packages/telemetry/src/ingester.ts`, `packages/telemetry/src/projector.ts`                          |
@@ -42,11 +42,9 @@ Contracts and domain packages don't depend on apps; apps compose them:
 
 - `@sealant/api-contracts` and `@sealant/validators` have no internal dependencies — they're the
   bottom of the graph.
-- `@sealant/db`, `@sealant/rabbitmq`, `@sealant/auth`, and `@sealant/credentials` sit near the
-  bottom of the app graph; `auth` depends on `db`, and `credentials` is intentionally independent of
-  app code.
-- `@sealant/workspaces` and `@sealant/telemetry` sit above `db`, `rabbitmq`, and
-  `source-integrations`.
+- `@sealant/db`, `@sealant/jobs`, `@sealant/auth`, and `@sealant/credentials` sit near the bottom of
+  the app graph; `auth` depends on `db`, and `credentials` is intentionally independent of app code.
+- `@sealant/workspaces` and `@sealant/telemetry` sit above `db`, `jobs`, and `source-integrations`.
 - `apps/api` and `apps/worker` depend on the domain packages above and wire them together;
   `apps/web` depends on `auth`, `db`, `ui`, and `validators`.
 

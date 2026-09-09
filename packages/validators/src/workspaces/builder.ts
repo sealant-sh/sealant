@@ -21,7 +21,7 @@ export const ociImageBuildArtifactSchema = z.strictObject({
   name: z.string().trim().min(1),
   path: z.string().trim().min(1).optional(),
   reference: z.string().trim().min(1).optional(),
-  loader: z.enum(["docker-load", "registry"]).optional(),
+  loader: z.enum(["docker-load", "docker-engine", "registry"]).optional(),
 });
 
 export const filesystemClosureBuildArtifactSchema = z.strictObject({

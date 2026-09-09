@@ -32,8 +32,9 @@ The published ports are unchanged unless you override them:
 | API         | `SEALANT_API_PORT` | `4000`            |
 | SSH gateway | `SEALANT_SSH_PORT` | `2222`            |
 
-The Zot registry (`SEALANT_REGISTRY_PORT`, default `5000`), Postgres, and RabbitMQ stay on loopback
-regardless of `SEALANT_BIND_HOST`.
+Postgres is never published to the host, regardless of `SEALANT_BIND_HOST`. There is no registry or
+message broker to expose: workspace images stay in the host Docker daemon and the job queue lives in
+the control-plane database.
 
 ## SSH host
 

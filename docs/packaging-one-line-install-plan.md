@@ -4,6 +4,12 @@
 (fable-5 plan agent, gpt-5.5 codex review). Code claims below were verified in source by the plan
 agent.
 
+**Superseded in part (September 2026):** every RabbitMQ and zot decision below is no longer what
+ships. The job queue is pg-boss inside the control-plane Postgres database, workspace images stay in
+the host Docker Engine, and neither the compose stack nor `install.sh` runs a broker, a registry,
+`SEALANT_RABBITMQ_PASSWORD`, or `SEALANT_REGISTRY_PORT`. Current behavior:
+`apps/docs/contents/reference/installer-and-compose.md`.
+
 ## Context
 
 Goal: a user with **only Docker** (daemon + compose v2) installs the full Sealant Core stack with

@@ -54,6 +54,73 @@ describe("createDockerWorkspaceImageBuilder", () => {
     expect(result.publishedImage.digest).toBe("sha256:1");
   });
 
+  it("skips the tarball and publishes the Engine image when the store speaks the engine transport", async () => {
+    const publishOciImage = vi.fn(async () => ({
+      repository: "sealant-workspace-fedora",
+      tag: "plan-1",
+      reference: "sealant-workspace-fedora:plan-1",
+      digestReference: "sha256:1",
+      digest: "sha256:1",
+    }));
+    const registryClient = {
+      imageTransport: "engine",
+      publishOciImage,
+    } as unknown as RegistryClient;
+    const engineBuild: WorkspaceBuild = {
+      ...build,
+      artifacts: [
+        {
+          kind: "oci-image",
+          name: "sealant-workspace-fedora",
+          reference: "sealant-workspace-fedora:latest",
+          loader: "docker-engine",
+        },
+      ],
+    };
+    const builder = createDockerWorkspaceImageBuilder({
+      registryClient,
+      compileWorkspaceSpec: async () => engineBuild,
+    });
+
+    const result = await builder.buildAndPublish({
+      spec: cases.gitSource.blueprint,
+      repository: "sealant-workspace-fedora",
+      tag: "plan-1",
+    });
+
+    expect(publishOciImage).toHaveBeenCalledWith({
+      repository: "sealant-workspace-fedora",
+      tag: "plan-1",
+      sourceReference: "sealant-workspace-fedora:latest",
+    });
+    expect(result.publishedImage.digestReference).toBe("sha256:1");
+  });
+
+  it("still accepts a tarball artifact from a custom compiler under the engine transport", async () => {
+    const publishOciImage = vi.fn(async () => ({
+      repository: "r",
+      tag: "t",
+      reference: "r:t",
+      digestReference: "sha256:2",
+      digest: "sha256:2",
+    }));
+    const registryClient = {
+      imageTransport: "engine",
+      publishOciImage,
+    } as unknown as RegistryClient;
+    const builder = createDockerWorkspaceImageBuilder({
+      registryClient,
+      compileWorkspaceSpec: async () => build,
+    });
+    await builder.buildAndPublish({ spec: cases.gitSource.blueprint, repository: "r", tag: "t" });
+    expect(publishOciImage).toHaveBeenCalledWith({
+      artifactPath: "/tmp/ctx/workspace-image.tar",
+      repository: "r",
+      tag: "t",
+      sourceReference: "sealant-workspace-fedora:latest",
+    });
+  });
+
   it("disables the plan-hash short-circuit for a custom compiler without a planner", () => {
     const registryClient = {} as RegistryClient;
     expect(

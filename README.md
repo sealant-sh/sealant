@@ -68,7 +68,7 @@ Two canonical reference docs sit at the repo root:
 │   ├── api-contracts/         # wire contracts — the single source of truth
 │   ├── auth/                  # shared auth
 │   ├── db/                    # Effect + PostgreSQL control-plane state
-│   ├── rabbitmq/              # message transport
+│   ├── jobs/                  # Postgres-backed job queue (pg-boss)
 │   ├── workspaces/            # workspace domain: build, publish, launch, lifecycle
 │   ├── source-integrations/   # repo/provider integrations (GitHub first)
 │   ├── telemetry/             # execution-record ingestion and persistence
@@ -100,8 +100,9 @@ The runtime is built around explicit contracts and a daemon that does the work.
    Code, or Cursor via `apps/ssh-gateway`.
 
 Supporting integrations feed both the workspace and run flows without owning either: source
-integrations resolve repositories and refs, harness integrations describe launch behavior, and
-registry integrations publish and retrieve artifacts.
+integrations resolve repositories and refs, harness integrations describe launch behavior, and the
+image store holds built workspace images — the local Docker Engine on a single host, an OCI registry
+when one is configured.
 
 ## Install (self-host)
 

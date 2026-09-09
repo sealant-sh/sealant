@@ -6,7 +6,7 @@ It currently provides:
 
 - a Node worker entrypoint
 - one worker-kind module per domain workload under `src/workers/`
-- RabbitMQ transport via `@sealant/rabbitmq`
+- job-queue transport via `@sealant/jobs` (pg-boss, in the control-plane database)
 - workspace lifecycle processing through `@sealant/workspaces`
 - durable state updates through `@sealant/db`
 
@@ -36,13 +36,17 @@ pnpm db:migrate
 
 The worker expects:
 
-- the PostgreSQL database from `@sealant/db`
-- RabbitMQ from the root `compose.yaml` (`rabbitmq` service)
-- Zot from the root `compose.yaml` (`zot` service)
+- the PostgreSQL database from `@sealant/db` — it carries the job queue too, in the `pgboss` schema,
+  which the worker creates on first start
 - access to the host Docker socket for BuildKit image builds and Docker runtime launches
 
-By default the worker uses `amqp://sealant:sealant@127.0.0.1:5673` so it does not collide with an
-existing local RabbitMQ instance on `5672`.
+Built images stay in that Docker Engine: the worker tags them
+`sealant-workspace-<osFamily>:plan-<hash>` and launches workspaces by image id, so nothing is pushed
+or pulled. Set `REGISTRY_BASE_URL` and `REGISTRY_PUSH_REGISTRY` together to publish to an OCI
+registry instead; Kubernetes builds require them.
+
+`WORKSPACE_BUILD_QUEUE_PREFETCH` (default `1`) sets how many deliveries one worker process handles
+at once.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

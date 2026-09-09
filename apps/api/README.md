@@ -6,11 +6,12 @@ It currently provides:
 
 - a Node-based Hono server entrypoint
 - OpenAPI generation with `hono-openapi`
-- interactive docs at `/docs` backed by Scalar
+- interactive docs at `/docs` backed by Scalar (the viewer script loads from jsDelivr in the
+  browser)
 - a route layout split into `system`, `workspaces`, `registries`, `packages`, and `github` groups
 - registry endpoints backed by `@sealant/workspaces`
 - workspace-first lifecycle routes backed by `@sealant/db`, `@sealant/workspaces`, and
-  `@sealant/rabbitmq`
+  `@sealant/jobs`
 
 ## Current routes
 
@@ -39,7 +40,9 @@ Run the API locally:
 pnpm --filter @sealant/api dev
 ```
 
-The default registry settings point at the local Zot instance started from the root `compose.yaml`.
+With `REGISTRY_BASE_URL` unset (the default) the registry routes report the local Docker Engine
+image store: built images are tagged there, never pushed. Set `REGISTRY_BASE_URL` and
+`REGISTRY_PUSH_REGISTRY` together to point at an OCI registry instead.
 
 By default, CORS is enabled for:
 
@@ -59,8 +62,9 @@ To expose workspace SSH access through a gateway endpoint instead of direct runt
 When configured, workspace runtime endpoints returned by the API are rewritten to:
 `ssh://<prefix>-<workspaceId>@<gateway-host>:<gateway-port>`.
 
-The workspace build job routes also expect RabbitMQ from the root `compose.yaml` on `127.0.0.1:5673`
-and the shared PostgreSQL database from `@sealant/db`.
+The workspace build job routes expect the shared PostgreSQL database from `@sealant/db`. The job
+queue lives in that same database (pg-boss, `pgboss` schema, created on first start), so there is no
+broker to run.
 
 ## Operations Runbook (Local Image Build Flow)
 
@@ -69,9 +73,9 @@ This API is the control-plane entrypoint for workspace image builds.
 ### What this flow does
 
 1. `POST /v1/workspaces` stores a durable workspace plus internal execution records in PostgreSQL
-   and publishes a queue message to RabbitMQ.
+   and publishes a queue message to the Postgres-backed queue.
 2. `@sealant/worker` consumes the job through `@sealant/workspaces`, compiles via BuildKit, and
-   publishes the OCI image to Zot.
+   leaves the OCI image tagged in the local Docker Engine (or pushes it to a configured registry).
 3. `GET /v1/workspaces/{workspaceId}` exposes the UI-facing workspace lifecycle surface.
 
 ### Prerequisites
@@ -88,13 +92,12 @@ pnpm --filter @sealant/db db:migrate
 ### Start local dependencies
 
 ```bash
-docker compose up -d postgres rabbitmq zot
+docker compose up -d postgres
 ```
 
-- PostgreSQL: `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane`
-- RabbitMQ AMQP: `amqp://sealant:sealant@127.0.0.1:5673`
-- RabbitMQ UI: `http://127.0.0.1:15673`
-- Zot registry: `http://127.0.0.1:5000`
+- PostgreSQL: `postgresql://sealant:sealant@127.0.0.1:5433/sealant_control_plane` — control-plane
+  state and the job queue
+- Workspace images: your local Docker Engine (`docker image ls 'sealant-workspace-*'`)
 
 ### Start services
 
@@ -160,16 +163,20 @@ On success, the response includes:
 - `result.runtime.resourceId`
 - `result.runtime.endpoint` (when exposed by the selected runtime adapter)
 
-### Confirm image exists in registry
+### Confirm the image exists
 
 ```bash
 curl "http://localhost:4000/v1/registries/default/tags?repository=sealant/workspaces/demo"
 ```
 
+With no registry configured this answers from the Docker Engine, so `docker image ls` shows the same
+images.
+
 ### Common failure cases
 
 - `404 Unknown registry`: request `registryId` must match `REGISTRY_NAME` (default: `default`).
-- `502` on create job: queue publish failed (RabbitMQ unavailable or misconfigured).
+- `502` on create job: queue publish failed (the control-plane database is unavailable or
+  misconfigured).
 - Job `failed`: compile/publish error from worker; inspect worker logs and job `error` payload.
 
 ## Architecture

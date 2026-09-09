@@ -25,8 +25,6 @@ spec:
             {{- include "sealant.controlTlsEnv" . | nindent 12 }}
             - name: DATABASE_URL
               value: {{ include "sealant.databaseUrl" . | quote }}
-            - name: RABBITMQ_URL
-              value: {{ include "sealant.amqpUrl" . | quote }}
             - { name: REGISTRY_BASE_URL, value: {{ include "sealant.registryBaseUrl" . | quote }} }
             - { name: REGISTRY_PUSH_REGISTRY, value: {{ include "sealant.pushRegistry" . | quote }} }
             - { name: GITHUB_APP_ID, value: {{ .Values.github.appId | quote }} }

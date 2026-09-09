@@ -1,7 +1,9 @@
 # Sealant self-host — the whole product in one `docker compose up`, from prebuilt images.
 #
-# Brings up Postgres + RabbitMQ + the zot OCI registry + a one-shot DB migration + the API + the build
-# worker + the SSH gateway + the web app. Driven by ./install.sh (the curl one-liner), which downloads
+# Brings up Postgres + a one-shot DB migration + the API + the build worker + the SSH gateway + the
+# web app. The job queue lives in Postgres (pg-boss) and workspace images live in the host Docker
+# Engine that builds and runs them, so there is no broker and no registry process to run. Driven by
+# ./install.sh (the curl one-liner), which downloads
 # this file, generates secrets into a sibling .env, and starts everything. To run it by hand instead,
 # create a .env next to this file with the required secrets:
 #
@@ -11,40 +13,13 @@
 # then: docker compose -f compose.selfhost.yaml up -d
 #
 # Requirements: a running Docker daemon (the worker drives it, via the mounted socket, to build images
-# and launch workspaces) and Docker Compose >= 2.23.1 (inline `configs`). Everything binds to loopback
-# by default: web 3000, API 4000, SSH gateway 2222, registry 5000. Postgres/RabbitMQ stay internal.
-# Set SEALANT_BIND_HOST=0.0.0.0 to expose web/API/SSH beyond the machine (the registry always stays on
-# loopback — the host Docker daemon pushes/pulls workspace images through 127.0.0.1:5000).
+# and launch workspaces) and Docker Compose v2. Everything binds to loopback by default: web 3000,
+# API 4000, SSH gateway 2222. Postgres stays internal. Set SEALANT_BIND_HOST=0.0.0.0 to expose
+# web/API/SSH beyond the machine.
 # Private GitHub repos need GITHUB_APP_* (see README) — public repos (the default demo) need nothing.
 name: sealant
 
 x-db-url: &db-url postgresql://sealant:${SEALANT_DB_PASSWORD:-sealant}@postgres:5432/sealant_control_plane
-x-amqp-url: &amqp-url amqp://sealant:${SEALANT_RABBITMQ_PASSWORD:-sealant}@rabbitmq:5672
-
-configs:
-  # Inlined so this file is fully self-contained (no repo checkout needed). Mirror of
-  # packages/workspaces/dev/zot/config.json — keep the two in sync.
-  zot-config:
-    content: |
-      {
-        "distSpecVersion": "1.1.1",
-        "storage": {
-          "rootDirectory": "/var/lib/registry",
-          "dedupe": true,
-          "gc": true,
-          "gcDelay": "1h",
-          "gcInterval": "24h"
-        },
-        "http": {
-          "address": "0.0.0.0",
-          "port": "5000",
-          "compat": ["docker2s2"]
-        },
-        "log": {
-          "level": "info"
-        }
-      }
-
 services:
   postgres:
     image: postgres:17-alpine
@@ -60,33 +35,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  rabbitmq:
-    image: rabbitmq:4.2-management
-    environment:
-      RABBITMQ_DEFAULT_USER: sealant
-      RABBITMQ_DEFAULT_PASS: ${SEALANT_RABBITMQ_PASSWORD:-sealant}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-
-  # Host-exposed: the worker drives the HOST Docker daemon (via the socket) to push built workspace
-  # images here and pull them when launching, so the registry must be reachable on host loopback.
-  # Always loopback — never bind this one wider.
-  zot:
-    image: ghcr.io/project-zot/zot-minimal:v2.1.15
-    command: ["serve", "/etc/zot/config.json"]
-    ports:
-      - "127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}:5000"
-    configs:
-      - source: zot-config
-        target: /etc/zot/config.json
-    volumes:
-      - zot-data:/var/lib/registry
-    restart: unless-stopped
 
   # One-shot: apply DB migrations + seed the default owner principal before the API/worker/web start,
   # then exit. Runs the prebuilt api image's bundled migrate entrypoint — no source tree needed.
@@ -113,8 +61,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     ports:
@@ -124,9 +70,6 @@ services:
     environment:
       PORT: "4000"
       DATABASE_URL: *db-url
-      RABBITMQ_URL: *amqp-url
-      REGISTRY_BASE_URL: http://zot:5000
-      REGISTRY_PUSH_REGISTRY: 127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}
       CORS_ALLOWED_ORIGINS: ${SEALANT_CORS_ALLOWED_ORIGINS:-*}
       # Shared secret with the SSH gateway (authenticates resolve-principal + connection-target
       # lookups), plus the endpoint the UI renders into `ssh` commands for users.
@@ -167,14 +110,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      zot:
-        condition: service_started
       migrate:
         condition: service_completed_successfully
     volumes:
-      # The worker drives the host Docker daemon to build images + launch workspaces. Rootless Docker
+      # The worker drives the host Docker daemon to build images + launch workspaces. Built images
+      # stay in that daemon (no registry): the worker tags them, workspaces run from them. Rootless Docker
       # hosts can point DOCKER_SOCKET_PATH at their user socket.
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       # Shared host dir where each workspace's control socket is exposed, so the gateway reaches the
@@ -183,9 +123,6 @@ services:
       - /run/sealant/sockets:/run/sealant/sockets
     environment:
       DATABASE_URL: *db-url
-      RABBITMQ_URL: *amqp-url
-      REGISTRY_BASE_URL: http://zot:5000
-      REGISTRY_PUSH_REGISTRY: 127.0.0.1:${SEALANT_REGISTRY_PORT:-5000}
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       SEALANT_CREDENTIALS_KEY: ${SEALANT_CREDENTIALS_KEY:-}
@@ -280,5 +217,4 @@ services:
 
 volumes:
   postgres-data:
-  zot-data:
   gateway-keys:

@@ -6,8 +6,8 @@
 # (get.sealant.dev redirects to this script's release asset; the raw GitHub URL works too.)
 #
 # It checks Docker, downloads the versioned compose file for the latest release, generates secrets,
-# pulls the prebuilt images, and starts the stack (web app, API, build worker, SSH gateway, Postgres,
-# RabbitMQ, registry). The only host requirements are a running Docker daemon and curl — no git, no
+# pulls the prebuilt images, and starts the stack (web app, API, build worker, SSH gateway,
+# Postgres). The only host requirements are a running Docker daemon and curl — no git, no
 # node, no firewall changes. Everything binds to loopback by default.
 #
 #   …| SEALANT_VERSION=0.1.3 sh   install/switch to an exact release
@@ -108,8 +108,8 @@ fi
 if ! docker compose version >/dev/null 2>&1; then
   die "Docker Compose v2 is required (it ships with Docker Desktop / the docker-compose-plugin)."
 fi
-# Inline `configs:` in the compose file needs >= 2.23.1. Skip the gate where sort -V is missing
-# (rare) — compose itself will then fail with its own message if it's truly too old.
+# 2.23.1 is the oldest Compose this file is tested against. Skip the gate where sort -V is
+# missing (rare) — compose itself will then fail with its own message if it's truly too old.
 compose_min="2.23.1"
 compose_version="$(docker compose version --short 2>/dev/null | sed 's/^v//')"
 if sort -V </dev/null >/dev/null 2>&1; then
@@ -198,14 +198,12 @@ ok "Compose file ready in $INSTALL_DIR"
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ensure_env_var SEALANT_DB_PASSWORD "$(generate_secret)"
-ensure_env_var SEALANT_RABBITMQ_PASSWORD "$(generate_secret)"
 ensure_env_var WORKSPACE_SSH_GATEWAY_TOKEN "$(generate_secret)"
 ensure_env_var BETTER_AUTH_SECRET "$(generate_secret)"
 set_env_var SEALANT_VERSION "$VERSION"
 API_PORT="$(setting SEALANT_API_PORT 4000 "${SEALANT_API_PORT:-}")"
 WEB_PORT="$(setting SEALANT_WEB_PORT 3000 "${SEALANT_WEB_PORT:-}")"
 SSH_PORT="$(setting SEALANT_SSH_PORT 2222 "${SEALANT_SSH_PORT:-}")"
-setting SEALANT_REGISTRY_PORT 5000 "${SEALANT_REGISTRY_PORT:-}" >/dev/null
 setting SEALANT_BIND_HOST 127.0.0.1 "${SEALANT_BIND_HOST:-}" >/dev/null
 ok "Secrets ready ($ENV_FILE)"
 

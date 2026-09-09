@@ -36,17 +36,16 @@ the installer either, but both the installer and compose **do** read it from
 `~/.config/sealant/.env` — if you pull from a mirror, add `SEALANT_IMAGE_NS=…` to `.env` by hand, or
 every later manual `docker compose … up -d` silently falls back to `ghcr.io/sealant-sh`.
 
-| Variable                | Default                                                 | Effect                                                                                              |
-| ----------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `SEALANT_VERSION`       | resolved (see below)                                    | Version to install. `latest` re-resolves the newest release; an exact version like `0.4.0` pins it. |
-| `SEALANT_INSTALL_DIR`   | `$XDG_CONFIG_HOME/sealant` (or `$HOME/.config/sealant`) | Where install metadata and `.env` live.                                                             |
-| `SEALANT_COMPOSE_URL`   | unset                                                   | Override the compose source — a URL or a local file path.                                           |
-| `SEALANT_IMAGE_NS`      | `ghcr.io/sealant-sh`                                    | Image namespace or mirror to pull from.                                                             |
-| `SEALANT_BIND_HOST`     | `127.0.0.1`                                             | Host interface for web, API, SSH.                                                                   |
-| `SEALANT_WEB_PORT`      | `3000`                                                  | Host web port.                                                                                      |
-| `SEALANT_API_PORT`      | `4000`                                                  | Host API port.                                                                                      |
-| `SEALANT_SSH_PORT`      | `2222`                                                  | Host SSH gateway port.                                                                              |
-| `SEALANT_REGISTRY_PORT` | `5000`                                                  | Host registry port (always loopback).                                                               |
+| Variable              | Default                                                 | Effect                                                                                              |
+| --------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `SEALANT_VERSION`     | resolved (see below)                                    | Version to install. `latest` re-resolves the newest release; an exact version like `0.4.0` pins it. |
+| `SEALANT_INSTALL_DIR` | `$XDG_CONFIG_HOME/sealant` (or `$HOME/.config/sealant`) | Where install metadata and `.env` live.                                                             |
+| `SEALANT_COMPOSE_URL` | unset                                                   | Override the compose source — a URL or a local file path.                                           |
+| `SEALANT_IMAGE_NS`    | `ghcr.io/sealant-sh`                                    | Image namespace or mirror to pull from.                                                             |
+| `SEALANT_BIND_HOST`   | `127.0.0.1`                                             | Host interface for web, API, SSH.                                                                   |
+| `SEALANT_WEB_PORT`    | `3000`                                                  | Host web port.                                                                                      |
+| `SEALANT_API_PORT`    | `4000`                                                  | Host API port.                                                                                      |
+| `SEALANT_SSH_PORT`    | `2222`                                                  | Host SSH gateway port.                                                                              |
 
 Example — pin a version, expose beyond loopback, move the web port:
 
@@ -93,21 +92,23 @@ source.
 
 ## Compose services
 
-The self-host compose project (`sealant`) runs eight services:
+The self-host compose project (`sealant`) runs six services:
 
-| Service       | Role                                                          |
-| ------------- | ------------------------------------------------------------- |
-| `postgres`    | Control-plane database (internal only).                       |
-| `rabbitmq`    | Workspace-build job queue (internal only).                    |
-| `zot`         | OCI registry for built workspace images, on `127.0.0.1:5000`. |
-| `migrate`     | One-shot database migration and seed; exits after running.    |
-| `api`         | The control-plane API on `:4000`.                             |
-| `worker`      | Builds and runs workspaces on the host Docker daemon.         |
-| `ssh-gateway` | SSH access into live workspaces on `:2222`.                   |
-| `web`         | The product web app on `:3000`.                               |
+| Service       | Role                                                       |
+| ------------- | ---------------------------------------------------------- |
+| `postgres`    | Control-plane database (internal only).                    |
+| `migrate`     | One-shot database migration and seed; exits after running. |
+| `api`         | The control-plane API on `:4000`.                          |
+| `worker`      | Builds and runs workspaces on the host Docker daemon.      |
+| `ssh-gateway` | SSH access into live workspaces on `:2222`.                |
+| `web`         | The product web app on `:3000`.                            |
 
-Persistent state lives in three named volumes (`sealant_postgres-data`, `sealant_zot-data`,
-`sealant_gateway-keys`) — see [Ports and data](/docs/reference/ports-and-data).
+There is no broker service and no registry service. The workspace-build job queue is a set of tables
+in the control-plane database (pg-boss, `pgboss` schema, created on first start), and built
+workspace images stay in the host Docker daemon that builds and runs them.
+
+Persistent state lives in two named volumes (`sealant_postgres-data`, `sealant_gateway-keys`) — see
+[Ports and data](/docs/reference/ports-and-data).
 
 ## Operating the stack
 

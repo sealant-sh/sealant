@@ -41,7 +41,7 @@ When enabled you also set:
 
 ## Execution Environment
 
-The harness, the base OS, and where the built image is published.
+The harness, the base OS, and how the built image is named.
 
 - **Harness Type** — the agent that will run inside the workspace: `OpenCode (Standard)`, `Codex`,
   or `Claude Code`. See [Harnesses](/docs/concepts/harnesses).
@@ -49,10 +49,11 @@ The harness, the base OS, and where the built image is published.
 - **Default Shell** — the login shell for the workspace.
 - **OCI Runtime** — `runc` (standard) or `runsc` (gVisor, stronger isolation). See
   [Security model](/docs/concepts/security-model).
-- **Registry ID** — the registry the built image is pushed to (defaults to the configured registry,
-  normally `default`).
-- **Image Repository** — the repository path for the published image.
-- **Image Tag** — the tag applied to the published image.
+- **Registry ID** — the image store the build is recorded against (defaults to the configured one,
+  normally `default`). On a single-host install that store is the host Docker daemon, so the image
+  is tagged there rather than pushed anywhere.
+- **Image Repository** — the repository path recorded for the built image.
+- **Image Tag** — the tag recorded for the built image.
 
 ## Build Dependencies
 
