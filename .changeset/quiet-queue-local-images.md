@@ -12,3 +12,7 @@ chart keeps its in-cluster registry). `GET /v1/registries/default` reports
 `pushRegistry: "docker-engine"` on installs without a registry. Existing self-host installs: re-run
 the installer (or `docker compose up -d --remove-orphans`) and restart any workspace that was
 mid-build during the upgrade.
+
+The API's `/docs` page now loads the Scalar viewer from jsDelivr instead of embedding it, and the
+server bundles are emitted as ASCII with comments stripped; together that trims roughly 20 MiB of
+resident memory per Sealant API process and 10 MiB per worker and gateway.

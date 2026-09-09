@@ -6,7 +6,8 @@ It currently provides:
 
 - a Node-based Hono server entrypoint
 - OpenAPI generation with `hono-openapi`
-- interactive docs at `/docs` backed by Scalar
+- interactive docs at `/docs` backed by Scalar (the viewer script loads from jsDelivr in the
+  browser)
 - a route layout split into `system`, `workspaces`, `registries`, `packages`, and `github` groups
 - registry endpoints backed by `@sealant/workspaces`
 - workspace-first lifecycle routes backed by `@sealant/db`, `@sealant/workspaces`, and

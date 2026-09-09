@@ -2,15 +2,13 @@ import { createServer } from "node:http";
 
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import * as PgClient from "@effect/sql-pg/PgClient";
-import { ControlPlaneAPI } from "@sealant/api-contracts";
 import { credentialCipherLayer } from "@sealant/credentials";
 import { ControlPlaneDataAccessLive, SealantDBLive } from "@sealant/db";
 import { gitHubSourceIntegrationLayer } from "@sealant/source-integrations";
 import { InlineByteaArtifactStoreLive, TelemetryQueryLive } from "@sealant/telemetry";
 import { SealantRuntimeControlLive } from "@sealant/workspaces";
-import { Layer, Redacted } from "effect";
-import { HttpMiddleware, HttpRouter } from "effect/unstable/http";
-import { HttpApiScalar } from "effect/unstable/httpapi";
+import { Effect, Layer, Redacted } from "effect";
+import { HttpMiddleware, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import { makeControlPlaneHttpApiLayer } from "./routes/control-plane.http-api.js";
 import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
@@ -161,17 +159,43 @@ const apiLayer = makeControlPlaneHttpApiLayer().pipe(
 /**
  * Human docs layer.
  *
- * Adds Scalar docs at `/docs`, again generated from the same contract.
+ * Serves a Scalar API reference at `/docs` for the same `/openapi.json` the contract already
+ * publishes. Deliberately not `HttpApiScalar.layer`: that module carries the 6 MiB Scalar
+ * browser bundle as a string constant, and because it is reached through the
+ * `effect/unstable/httpapi` namespace it survives tree-shaking even when only the CDN variant is
+ * used, so every API process would keep it resident for a page almost nobody opens. The viewer
+ * loads from jsDelivr instead.
  */
-const docsLayer = HttpApiScalar.layer(ControlPlaneAPI, {
-  path: "/docs",
-  scalar: {
-    theme: "saturn",
-    layout: "classic",
-    darkMode: true,
-    defaultOpenAllTags: false,
-  },
-});
+const scalarVersion = "1.43.5";
+const scalarConfig = JSON.stringify({
+  _integration: "html",
+  url: "/openapi.json",
+  theme: "saturn",
+  layout: "classic",
+  darkMode: true,
+  defaultOpenAllTags: false,
+}).replaceAll("<", "\\u003c");
+const docsHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sealant Control Plane API</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <div id="api-reference-container"></div>
+    <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@${scalarVersion}/dist/browser/standalone.min.js" crossorigin></script>
+    <script>
+      window.Scalar.createApiReference(document.getElementById("api-reference-container"), ${scalarConfig});
+    </script>
+  </body>
+</html>
+`;
+const docsLayer = HttpRouter.use(
+  Effect.fnUntraced(function* (router) {
+    yield* router.add("GET", "/docs", Effect.succeed(HttpServerResponse.html(docsHtml)));
+  }),
+);
 
 /**
  * CORS transport middleware.
