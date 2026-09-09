@@ -18,7 +18,6 @@ never overwritten on re-runs, so repairs and upgrades keep them stable.
 | Variable                      | What it's for                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `SEALANT_DB_PASSWORD`         | Postgres password used in the control-plane database URL.                                           |
-| `SEALANT_RABBITMQ_PASSWORD`   | RabbitMQ password used in the AMQP URL between services.                                            |
 | `WORKSPACE_SSH_GATEWAY_TOKEN` | Shared secret the SSH gateway uses to call the API's principal-resolution and SSH-target endpoints. |
 | `BETTER_AUTH_SECRET`          | Better Auth signing secret for web sessions (minimum 32 chars).                                     |
 

@@ -43,6 +43,38 @@ instead.
 The resolved version is written back to `~/.config/sealant/.env` and pinned there, so subsequent
 plain re-runs stay on that version until you upgrade again.
 
+### Upgrading past the RabbitMQ and zot removal
+
+Installs from before this change ran two extra containers: `rabbitmq` (the job queue) and `zot` (an
+OCI registry for workspace images). Between them they cost several hundred MB of RSS at idle, for a
+queue carrying a handful of messages a minute and a registry that only ever talked to the same
+Docker daemon. The queue now lives in the control-plane Postgres database and built images stay in
+the host Docker daemon, so both containers are gone.
+
+The installer removes them for you. If you upgrade by hand, pass `--remove-orphans` so compose
+deletes the containers that are no longer in the file:
+
+```sh
+docker compose --project-directory ~/.config/sealant up -d --remove-orphans
+```
+
+Then reclaim the registry's storage:
+
+```sh
+docker volume rm sealant_zot-data
+```
+
+Two things to know:
+
+- Workspace images already in the Docker Engine keep working. The first workspace of each build plan
+  after the upgrade rebuilds once, because earlier publishes recorded references of the form
+  `127.0.0.1:5000/...`.
+- Anything still queued in RabbitMQ at the moment of the upgrade is lost, since the queue moved. If
+  a workspace was mid-build (or mid-stop) during the upgrade, restart it.
+
+`SEALANT_RABBITMQ_PASSWORD` and `SEALANT_REGISTRY_PORT` lines left in `~/.config/sealant/.env` are
+harmless; nothing reads them any more, and you can delete them.
+
 ## Pin an exact version
 
 To install or switch to a specific version — for a reproducible deployment, or to roll back — name
@@ -56,7 +88,7 @@ The installer requires a running Docker daemon and Docker Compose `>= 2.23.1`.
 
 ## Stop without deleting data
 
-To stop the stack but keep your database, registry, and secrets:
+To stop the stack but keep your database and secrets:
 
 ```sh
 docker compose --project-directory ~/.config/sealant down
@@ -74,13 +106,12 @@ docker compose --project-directory ~/.config/sealant logs -f
 docker compose --project-directory ~/.config/sealant logs -f api
 ```
 
-Service names are `api`, `worker`, `web`, `ssh-gateway`, `postgres`, `rabbitmq`, and `zot` (the
-registry).
+Service names are `api`, `worker`, `web`, `ssh-gateway`, and `postgres`.
 
 ## Uninstall
 
-`down -v` stops the stack **and deletes the compose volumes** — your Postgres data, registry data,
-and the SSH gateway host key. This is destructive and irreversible.
+`down -v` stops the stack **and deletes the compose volumes** — your Postgres data and the SSH
+gateway host key. This is destructive and irreversible.
 
 ```sh
 docker compose --project-directory ~/.config/sealant down -v && rm -rf ~/.config/sealant
@@ -108,7 +139,6 @@ you want a fully clean host.
 | --------------------------- | ------------------------------ | :-------------: | :------------------: |
 | Secrets and knobs           | `~/.config/sealant/.env`       |       yes       | yes (until `rm -rf`) |
 | Postgres data               | volume `sealant_postgres-data` |       yes       |          no          |
-| Registry data               | volume `sealant_zot-data`      |       yes       |          no          |
 | SSH gateway host key        | volume `sealant_gateway-keys`  |       yes       |          no          |
 | Workspace containers/images | host Docker daemon             |       yes       | yes (manual cleanup) |
 

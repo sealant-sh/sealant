@@ -28,7 +28,8 @@ build one in the web app at `/workspaces/new`, or submit one through the
   runtime (`runc` or the gVisor-based `runsc`).
 - **Packages** — extra packages to install, resolved and validated as you add them.
 - **Commands** — setup steps that run during the build, and an optional entrypoint.
-- **Image target** — the registry, image repository, and tag the baked image is published under.
+- **Image target** — the registry id, image repository, and tag recorded for the baked image. On a
+  single-host install the image stays in the host Docker daemon and is not pushed anywhere.
 - **SSH** — whether to expose the workspace over the [SSH gateway](/docs/guides/ssh-access).
 
 The builder shows the live JSON spec as you edit it, so what you submit is exactly what you see.
@@ -38,11 +39,12 @@ The builder shows the live JSON spec as you edit it, so what you submit is exact
 A workspace moves through four phases. Once you submit a spec, the rest is automatic.
 
 1. **Spec** — your normalized spec is persisted and a build job is enqueued.
-2. **Build** — a background worker claims the job, compiles the spec into an OCI image with BuildKit
-   (installing packages, baking in the harness, running your setup commands), and **publishes that
-   image to the registry**. This is the reproducible artifact: the same spec bakes the same image.
-3. **Launch** — a runtime adapter (Docker by default) pulls the published image and starts a
-   container from it.
+2. **Build** — a background worker claims the job and compiles the spec into an OCI image with
+   BuildKit (installing packages, baking in the harness, running your setup commands). The image is
+   the reproducible artifact: the same spec bakes the same image, and it is tagged by build plan so
+   two workspaces with the same plan share one image.
+3. **Launch** — a runtime adapter (Docker by default) starts a container from that image, pinned by
+   image id.
 4. **Ready** — the container is up and the workspace is reachable — over
    [SSH, VS Code, or Cursor](/docs/guides/ssh-access), and for
    [runs](/docs/concepts/execution-records).
@@ -72,8 +74,9 @@ stored spec and metadata. Throw the old one away; the spec is the thing you keep
 
 Workspaces are **containers on your host's Docker daemon**. The Sealant worker drives the host
 Docker socket directly to build and launch them — so a running workspace is an ordinary container
-you can see with `docker ps`, and its image lives in the bundled registry (Zot, on
-`127.0.0.1:5000`).
+you can see with `docker ps`, and its image is an ordinary image you can see with `docker image ls`,
+tagged `sealant-workspace-<os-family>:plan-<hash>`. Nothing is pushed to a registry: the daemon that
+builds the image is the daemon that runs it.
 
 This has two practical consequences:
 

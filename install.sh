@@ -108,8 +108,8 @@ fi
 if ! docker compose version >/dev/null 2>&1; then
   die "Docker Compose v2 is required (it ships with Docker Desktop / the docker-compose-plugin)."
 fi
-# Inline `configs:` in the compose file needs >= 2.23.1. Skip the gate where sort -V is missing
-# (rare) — compose itself will then fail with its own message if it's truly too old.
+# 2.23.1 is the oldest Compose this file is tested against. Skip the gate where sort -V is
+# missing (rare) — compose itself will then fail with its own message if it's truly too old.
 compose_min="2.23.1"
 compose_version="$(docker compose version --short 2>/dev/null | sed 's/^v//')"
 if sort -V </dev/null >/dev/null 2>&1; then

@@ -24,6 +24,11 @@ propose a solution — that's the next task. Every claim is anchored to `file:li
 > remain open; SSH into `usr_local` sandboxes is documented in DEVELOPMENT.md ("SSH into SDK-created
 > sandboxes").
 
+> **Addendum 3 (queue and registry removal, September 2026):** §7's topology is superseded. The
+> `rabbitmq` and `zot` containers are gone from both compose files: the job queue is pg-boss inside
+> the control-plane Postgres database, and workspace images stay in the Docker Engine that builds
+> them. Dev compose is `postgres` always-on plus `worker` and `ssh-gateway` under `--profile apps`.
+
 ---
 
 ## 0. TL;DR — why this feels like a mess

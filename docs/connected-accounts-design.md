@@ -185,7 +185,7 @@ launch):
 - Self-host bootstrap: `install.sh` / compose generate `SEALANT_CREDENTIALS_KEY` once (follow-up in
   the packaging repo path; documented in the env schema description now).
 
-Credential material **never** transits RabbitMQ job payloads and never appears in blueprints —
+Credential material **never** transits job-queue payloads and never appears in blueprints —
 blueprints carry opaque refs (`connected-account:<id>`), the worker resolves and decrypts just
 before launch. This mirrors the existing `github-installation-repository:<id>` authRef pattern.
 

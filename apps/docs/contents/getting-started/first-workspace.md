@@ -42,9 +42,9 @@ start the build. For a tour of the advanced options, see
 ## 4. Watch the build
 
 You land on the workspace detail page. It shows the current **status**, build history, recent
-**events**, and — once the image is published — the output image reference and digest. The build
-clones your repository, installs the harness and packages, and publishes an image to the local
-registry before the workspace goes **running**.
+**events**, and — once the image is built — the output image reference and digest. The build clones
+your repository, installs the harness and packages, and leaves a tagged image in your Docker daemon
+before the workspace goes **running**.
 
 ## 5. Connect
 

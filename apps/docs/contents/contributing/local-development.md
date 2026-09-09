@@ -22,12 +22,16 @@ Stateful infra plus the **worker** and **ssh-gateway** run in Docker; the **API*
 run on the host with hot reload. A single `.env` at the repo root is the source of truth — every app
 reads it, and compose passes it to the gateway via `env_file`.
 
-| Service                   | Where                                         | Port               |
-| ------------------------- | --------------------------------------------- | ------------------ |
-| postgres / rabbitmq / zot | `docker compose up -d`                        | 5433 / 5673 / 5000 |
-| api                       | `pnpm --filter @sealant/api dev`              | 4000               |
-| web                       | `pnpm --filter @sealant/web dev`              | 3000               |
-| worker + ssh-gateway      | `docker compose --profile apps up -d --build` | gateway 2222       |
+| Service              | Where                                         | Port         |
+| -------------------- | --------------------------------------------- | ------------ |
+| postgres             | `docker compose up -d`                        | 5433         |
+| api                  | `pnpm --filter @sealant/api dev`              | 4000         |
+| web                  | `pnpm --filter @sealant/web dev`              | 3000         |
+| worker + ssh-gateway | `docker compose --profile apps up -d --build` | gateway 2222 |
+
+Postgres is the only always-on container: the job queue lives in that database (pg-boss, `pgboss`
+schema, created on first start) and workspace images stay in your local Docker Engine, so there is
+no broker and no registry to run.
 
 ## One-time setup
 
@@ -52,7 +56,7 @@ docker compose --profile apps up -d --build   # worker + ssh-gateway
 ```
 
 Open [http://localhost:3000](http://localhost:3000), sign up, and create a workspace. The worker
-builds the image (pushed to the local zot registry) and launches the container — wait until it's
+builds the image into your local Docker Engine and launches the container from it — wait until it's
 running/ready, then:
 
 ```bash

@@ -54,6 +54,12 @@ The execution record is read through the run endpoints: `/timeline` is the order
 `/scrollback` returns byte-exact process I/O, `/changes` is the file diff, and `/loss` reports any
 gaps. See [Execution records](/docs/concepts/execution-records) for what these mean.
 
+The registry group describes wherever workspace images live. With no registry configured (the
+single-host default) it reports the local Docker Engine store: `baseUrl` is `""`, `pushRegistry` is
+`docker-engine`, and ping, tags, and manifest answer from the Docker Engine (`docker image ls`,
+`docker image inspect`). With `REGISTRY_BASE_URL` and `REGISTRY_PUSH_REGISTRY` set it talks to that
+OCI registry instead.
+
 Not yet part of the API: a repositories resource, artifact-bundle endpoints, outbound webhook
 subscriptions, and API-token management. Do not build against them — they are not shipped. See
 [What ships today](/docs/introduction/what-ships-today).
