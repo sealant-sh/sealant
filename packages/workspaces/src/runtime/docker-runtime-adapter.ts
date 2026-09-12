@@ -6,6 +6,7 @@ import { join as joinPath } from "node:path";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
+import { captureSourceEnv } from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
   assertDockerVolumeConfiguration,
@@ -319,6 +320,14 @@ const userEnvArgs = (input: RuntimeAdapterLaunchInput): Array<string> => {
   ]);
 };
 
+/** The capture source's boot env as `-e` args (see `captureSourceEnv` for the contract). */
+const captureSourceEnvArgs = (
+  source: Extract<
+    RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
+    { kind: "capture" }
+  >,
+): Array<string> => captureSourceEnv(source).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
   mountAllowedStoreRoots: string | undefined,
@@ -374,12 +383,20 @@ const envArgsFromBlueprint = (
             "-e",
             `SEALANT_MOUNT_ALLOWED_STORE_ROOTS=${mountAllowedStoreRoots ?? ""}`,
           ]
-        : [
-            "-e",
-            `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
-            // No ref env at all when unset: sealantd then clones the remote's default branch.
-            ...(source.ref === undefined ? [] : ["-e", `SEALANT_WORKSPACE_REPO_REF=${source.ref}`]),
-          ];
+        : source.kind === "capture"
+          ? // Capture-sourced workspace (sealantd ADR-0015): nothing mounted, nothing cloned by
+            // the platform. The daemon materialises the worktree from the session channel onto the
+            // container's own disk; its credential (`SEALANT_CAPTURE_TOKEN`) rides the secret env
+            // file, never argv.
+            captureSourceEnvArgs(source)
+          : [
+              "-e",
+              `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
+              // No ref env at all when unset: sealantd then clones the remote's default branch.
+              ...(source.ref === undefined
+                ? []
+                : ["-e", `SEALANT_WORKSPACE_REPO_REF=${source.ref}`]),
+            ];
   return [
     ...sourceEnvArgs,
     ...bindEnvArgs,

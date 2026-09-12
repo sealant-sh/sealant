@@ -45,6 +45,13 @@ export * from "./kubernetes/index.js";
 export { buildCredentialFileWriteScript } from "./credential-files.js";
 
 export {
+  CAPTURE_ENDPOINT_ENV,
+  CAPTURE_WORKTREE_ID_ENV,
+  captureSourceEnv,
+  type CaptureWorkspaceSource,
+} from "./capture-source.js";
+
+export {
   DOTFILES_ARCHIVE_MOUNT_PATH,
   SECRET_ENV_MOUNT_PATH,
   collectMountIntents,
@@ -81,14 +88,19 @@ export {
 } from "./cloudflare/config.js";
 export {
   BRIDGE_CONTRACT_VERSION,
+  bridgeCaptureSourceSchema,
   bridgeDotfilesSchema,
   bridgeErrorResponseSchema,
   bridgeGitSourceSchema,
   bridgeLaunchRequestSchema,
   bridgeLaunchResponseSchema,
+  bridgeSourceSchema,
+  bridgeStopModeSchema,
   bridgeStopResponseSchema,
   type BridgeLaunchRequest,
+  type BridgeLaunchRequestInput,
   type BridgeLaunchResponse,
+  type BridgeStopMode,
   type BridgeStopResponse,
 } from "./cloudflare/bridge-contract.js";
 

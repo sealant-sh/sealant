@@ -155,6 +155,27 @@ export interface WorkspaceStandbySource {
 }
 
 /**
+ * A CAPTURE workspace (sealantd ADR-0015): the platform mounts nothing and clones nothing. The
+ * workspace daemon registers with the session channel at `endpoint` using `token`, fetches the
+ * worktree's head plan, materialises it onto the executor's own disk, claims the lease and ships
+ * captures back over the channel — so the same session can run on a host that has no path to
+ * offer (Cloudflare, a MicroVM) and outlive any one executor. `token` is delivered once, through
+ * the secret env channel (`SEALANT_CAPTURE_TOKEN`), never into the blueprint or any read; a
+ * capture workspace therefore cannot be restarted in place — create a replacement with a fresh
+ * token. `platform` is a hint recorded for placement bookkeeping. No allowlist applies.
+ */
+export interface WorkspaceCaptureSource {
+  readonly kind: "capture";
+  /** The session channel URL the daemon registers with. */
+  readonly endpoint: string;
+  /** The worktree whose captures this workspace materialises and extends. */
+  readonly worktreeId: string;
+  /** The session-scoped channel credential. Secret: sealed for the launch, then discarded. */
+  readonly token: string;
+  readonly platform?: string;
+}
+
+/**
  * An ADDITIONAL caller-owned host directory bind-mounted beside the primary source — sibling
  * repositories, reference clones, scratch material the workspace should see without adopting.
  * Read-only by default: extra mounts widen what the workspace can see, not where its work product
@@ -263,8 +284,11 @@ export interface CreateOptions {
    * Exactly one of `repository` or `source` must be provided.
    */
   readonly repository?: string;
-  /** Alternative to `repository`: source the workspace from a caller-owned mount, or a standby root. */
-  readonly source?: WorkspaceMountSource | WorkspaceStandbySource;
+  /**
+   * Alternative to `repository`: source the workspace from a caller-owned mount, a standby root,
+   * or a capture channel (see each source type).
+   */
+  readonly source?: WorkspaceMountSource | WorkspaceStandbySource | WorkspaceCaptureSource;
   /** Additional read-only-by-default mounts beside the primary source (see `WorkspaceExtraMount`). */
   readonly mounts?: readonly WorkspaceExtraMount[];
   /** The harness to run inside the workspace. */

@@ -82,6 +82,11 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   // the build job until launch, delivered to the workspace daemon as a boot file, and NEVER part
   // of the blueprint/spec, the attempt snapshot, or any read response. See the SDK README.
   secretEnv: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  // The capture source's session credential (sealantd ADR-0015): required with a `capture`
+  // workspace source and refused with any other. Sealed and delivered exactly like `secretEnv`,
+  // reaching the daemon's boot secret file as `SEALANT_CAPTURE_TOKEN`; never the spec, the attempt
+  // snapshot, or any read response. Not retained: a capture workspace cannot be restarted in place.
+  captureToken: Schema.optional(NonEmptyString),
   // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
   // applies. The reaper stops the workspace once the TTL elapses.
   ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),

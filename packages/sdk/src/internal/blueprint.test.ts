@@ -22,6 +22,9 @@ interface SpecShape {
       readonly url?: string;
       readonly ref?: string;
       readonly hostPath?: string;
+      readonly endpoint?: string;
+      readonly worktreeId?: string;
+      readonly platform?: string;
     };
     readonly mounts?: ReadonlyArray<{
       readonly hostPath: string;
@@ -99,6 +102,64 @@ describe("buildCreateWorkspaceRequest", () => {
       kind: "mount",
       hostPath: "/srv/store/worktrees/session-1",
     });
+  });
+
+  it("lowers a capture source onto the blueprint and lifts its token to the request top level", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        source: {
+          kind: "capture",
+          endpoint: "https://mend.example.com/session/s1",
+          worktreeId: "wt_1",
+          token: "mst_secret",
+          platform: "cloudflare",
+        },
+        harness: opencode(),
+        secretEnv: { MEND_SESSION_TOKEN: "mst_secret" },
+      },
+      config,
+    );
+    expect(payload.repository).toBe("wt_1");
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.sources.workspace).toEqual({
+      kind: "capture",
+      endpoint: "https://mend.example.com/session/s1",
+      worktreeId: "wt_1",
+      platform: "cloudflare",
+    });
+    expect(spec.sources.mounts).toBeUndefined();
+    expect(payload.captureToken).toBe("mst_secret");
+    expect(payload.secretEnv).toEqual({ MEND_SESSION_TOKEN: "mst_secret" });
+    // The spec is the durable, API-visible blueprint — the credential is never in it.
+    expect(JSON.stringify(payload.spec)).not.toContain("mst_secret");
+    expect(JSON.stringify(payload.spec)).not.toContain("token");
+  });
+
+  it("omits captureToken and the platform hint when the source is not a capture", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      { source: { kind: "mount", path: "/srv/store/worktrees/session-1" }, harness: opencode() },
+      config,
+    );
+    expect(payload.captureToken).toBeUndefined();
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          source: { kind: "capture", endpoint: "https://m/s", worktreeId: "wt_1", token: " " },
+          harness: opencode(),
+        },
+        config,
+      ),
+    ).toThrow(/token/);
+    expect(() =>
+      buildCreateWorkspaceRequest(
+        {
+          source: { kind: "capture", endpoint: "https://m/s", worktreeId: "wt_1", token: "t" },
+          harness: opencode(),
+          ref: "main",
+        },
+        config,
+      ),
+    ).toThrow(/ref/);
   });
 
   it("automatically carries a linked worktree's shared Git directory as a writable bind", () => {

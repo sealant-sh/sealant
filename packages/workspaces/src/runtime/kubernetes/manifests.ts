@@ -26,6 +26,7 @@ import type {
 } from "@kubernetes/client-node";
 
 import { getHarnessIntegration } from "../../harness/integrations.js";
+import { captureSourceEnv } from "../capture-source.js";
 import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
@@ -219,6 +220,10 @@ export const plainEnvEntries = (
       "SEALANT_MOUNT_ALLOWED_STORE_ROOTS",
       config.volumeMappings.map((mapping) => mapping.logicalRoot).join(":"),
     ]);
+  } else if (source.kind === "capture") {
+    // Nothing to mount and nothing to clone (sealantd ADR-0015); the credential is in the boot
+    // secret file, never in the Pod spec.
+    entries.push(...captureSourceEnv(source));
   } else {
     entries.push(["SEALANT_WORKSPACE_REPO_URL", source.url]);
     if (source.ref !== undefined) {
@@ -479,11 +484,19 @@ const envList = (
   return [...ordered.values()];
 };
 
+/** The capture workspace root volume: node-local scratch the daemon materialises the worktree into. */
+export const CAPTURE_WORKSPACE_VOLUME = "workspace";
+
 export const buildPod = (build: BuildPodInput): V1Pod => {
   const { names, config, labels, input, lowered } = build;
+  // A capture source (sealantd ADR-0015) gets its workspace root from an emptyDir on the node —
+  // no store claim, no subPath: the work product lives in the captures the daemon ships, and the
+  // Pod's disk is disposable by design.
+  const captureSource = input.blueprint.sources.workspace.kind === "capture";
   const volumes: V1Volume[] = [
     { name: "run-sealant", emptyDir: {} },
     { name: "tls", secret: { secretName: names.tlsSecret, defaultMode: 0o400 } },
+    ...(captureSource ? [{ name: CAPTURE_WORKSPACE_VOLUME, emptyDir: {} }] : []),
     ...lowered.volumes.map((volume) => ({
       name: volume.name,
       persistentVolumeClaim: { ...volume.persistentVolumeClaim },
@@ -492,6 +505,9 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
   const volumeMounts: V1VolumeMount[] = [
     { name: "run-sealant", mountPath: RUN_SEALANT_PATH },
     { name: "tls", mountPath: TLS_MOUNT_PATH, readOnly: true },
+    ...(captureSource
+      ? [{ name: CAPTURE_WORKSPACE_VOLUME, mountPath: input.blueprint.runtime.workspaceRoot }]
+      : []),
     ...lowered.volumeMounts.map((mount) => ({ ...mount })),
   ];
   if (build.launchSecret !== undefined) {

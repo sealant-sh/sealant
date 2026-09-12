@@ -41,6 +41,7 @@ import {
   type WorkspaceSummary,
 } from "@sealant/api-contracts";
 import {
+  CAPTURE_TOKEN_SECRET_ENV_NAME,
   formatWorkspaceEnvIssue,
   parseWorkspaceSecretEnv,
 } from "@sealant/api-contracts/workspace-environment";
@@ -187,23 +188,61 @@ const parseWorkspaceSpec = (spec: unknown) => {
 };
 
 /**
- * Validate and seal the create-request `secretEnv` (the transient secret channel). Rejections carry
- * the policy's value-free wording; an empty/absent map seals nothing. Sealing uses the same
- * credential cipher as connected accounts, so the row is unreadable without the install's key.
+ * The capture source's session credential (sealantd ADR-0015) is the one secret the create request
+ * carries outside `secretEnv`: required exactly when the workspace source is `capture`, and sealed
+ * into the same channel under its platform-owned name. Pairing is enforced here so a token can
+ * never be sealed for a source that would not consume it, and a capture source never launches
+ * without one (the daemon would fail boot with no channel credential, late and unreadable).
  */
-const sealSecretEnv = (secretEnv: Readonly<Record<string, string>> | undefined) =>
+const resolveCaptureSecretEnv = (input: {
+  readonly spec: NewWorkspace;
+  readonly captureToken: string | undefined;
+}) =>
   Effect.gen(function* () {
-    if (secretEnv === undefined || Object.keys(secretEnv).length === 0) {
-      return undefined;
-    }
-    const parsed = parseWorkspaceSecretEnv(secretEnv);
-    if (!parsed.ok) {
+    const isCapture = input.spec.sources.workspace.kind === "capture";
+    if (isCapture && input.captureToken === undefined) {
       return yield* new WorkspaceBadRequestError({
-        message: `secretEnv was rejected: ${parsed.issues.map(formatWorkspaceEnvIssue).join("; ")}`,
+        message:
+          "A capture-sourced workspace needs `captureToken`: the session credential the daemon registers with.",
       });
     }
+    if (!isCapture && input.captureToken !== undefined) {
+      return yield* new WorkspaceBadRequestError({
+        message: "`captureToken` applies only to a capture workspace source.",
+      });
+    }
+    return input.captureToken === undefined
+      ? {}
+      : { [CAPTURE_TOKEN_SECRET_ENV_NAME]: input.captureToken };
+  });
+
+/**
+ * Validate and seal the create-request `secretEnv` (the transient secret channel) together with
+ * the platform-owned entries the control plane adds beside it. Rejections carry the policy's
+ * value-free wording; nothing to seal yields undefined. Sealing uses the same credential cipher
+ * as connected accounts, so the row is unreadable without the install's key.
+ */
+const sealSecretEnv = (
+  secretEnv: Readonly<Record<string, string>> | undefined,
+  platformSecretEnv: Readonly<Record<string, string>>,
+) =>
+  Effect.gen(function* () {
+    let callerEnv: Readonly<Record<string, string>> = {};
+    if (secretEnv !== undefined && Object.keys(secretEnv).length > 0) {
+      const parsed = parseWorkspaceSecretEnv(secretEnv);
+      if (!parsed.ok) {
+        return yield* new WorkspaceBadRequestError({
+          message: `secretEnv was rejected: ${parsed.issues.map(formatWorkspaceEnvIssue).join("; ")}`,
+        });
+      }
+      callerEnv = parsed.env;
+    }
+    const merged = { ...callerEnv, ...platformSecretEnv };
+    if (Object.keys(merged).length === 0) {
+      return undefined;
+    }
     const cipher = yield* CredentialCipher;
-    const sealed = yield* cipher.encrypt(JSON.stringify(parsed.env)).pipe(
+    const sealed = yield* cipher.encrypt(JSON.stringify(merged)).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceInternalServerError({
@@ -574,14 +613,22 @@ const validateWorkspaceMounts = (input: {
   return Effect.gen(function* () {
     const source = input.spec.sources.workspace;
     const extraMounts = input.spec.sources.mounts;
-    if (source.kind === "git" && extraMounts.length === 0) {
-      return;
-    }
     if (source.kind !== "git" && input.sourceSelection !== undefined) {
       return yield* new WorkspaceBadRequestError({
         message:
-          "A mount- or standby-sourced workspace cannot also carry a GitHub source selection.",
+          "A mount-, standby- or capture-sourced workspace cannot also carry a GitHub source selection.",
       });
+    }
+    // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
+    // allowlist applies, and the daemon re-checks it at boot. Git and capture sources name no host
+    // path at all, so with no extra mounts there is nothing for the allowlist to gate.
+    const hostPaths = [
+      ...(source.kind === "mount" ? [source.hostPath] : []),
+      ...(source.kind === "standby" ? [source.rootPath] : []),
+      ...extraMounts.map((mount) => mount.hostPath),
+    ];
+    if (hostPaths.length === 0) {
+      return;
     }
     const allowedRoots = (env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS ?? "")
       .split(":")
@@ -601,13 +648,6 @@ const validateWorkspaceMounts = (input: {
         message: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS contains an invalid root: ${invalidRoot}`,
       });
     }
-    // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
-    // allowlist applies, and the daemon re-checks it at boot.
-    const hostPaths = [
-      ...(source.kind === "mount" ? [source.hostPath] : []),
-      ...(source.kind === "standby" ? [source.rootPath] : []),
-      ...extraMounts.map((mount) => mount.hostPath),
-    ];
     for (const hostPath of hostPaths) {
       if (!allowedRoots.some((root) => isProperDescendant(hostPath, root.replace(/\/+$/, "")))) {
         return yield* new WorkspaceForbiddenError({
@@ -1353,7 +1393,11 @@ export const createWorkspace = (input: {
     // showed client-side), then SEALED for the job row only: never the spec, never the attempt
     // snapshot, never a read response. The worker decrypts just before launch and the row is
     // cleared once the launch phase settles.
-    const secretEnvSealed = yield* sealSecretEnv(body.secretEnv);
+    const captureSecretEnv = yield* resolveCaptureSecretEnv({
+      spec: resolvedSpec,
+      captureToken: body.captureToken,
+    });
+    const secretEnvSealed = yield* sealSecretEnv(body.secretEnv, captureSecretEnv);
     // The create-payload `credentials` key is now fully lowered into `runtime.credentialRefs` —
     // strip it before the spec is persisted for the build job: the worker's blueprint schema is
     // strict, and a spec that keeps the key fails every build at `parseWorkspaceBlueprint`
@@ -2348,6 +2392,13 @@ export const restartWorkspace = (input: {
       });
     }
     const spec = yield* parseWorkspaceSpec(specPayload);
+    if (spec.sources.workspace.kind === "capture") {
+      // The session credential was sealed for the launch and cleared once it settled; a relaunch
+      // would boot with no channel credential. Replacement is a new workspace with a fresh token.
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} is capture-sourced and cannot be restarted in place: its session credential is not retained. Create a replacement workspace with a fresh captureToken.`,
+      });
+    }
 
     // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
     const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;

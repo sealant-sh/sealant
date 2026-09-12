@@ -1026,6 +1026,25 @@ function resolveWorkspaceSpecDetails(workspace: WorkspaceSummary): WorkspaceSpec
     };
   }
 
+  if (source.kind === "capture") {
+    // Nothing mounted, nothing cloned: the daemon materialises the worktree from the session
+    // channel (sealantd ADR-0015). The endpoint stands in for the repository reference.
+    return {
+      repositoryUrl: source.endpoint,
+      branch: `worktree ${source.worktreeId}, materialised from the session channel`,
+      isGitHubSource,
+      provider: "capture",
+      configRepo,
+      harness,
+      runtimeTarget,
+      ociRuntime,
+      osTarget,
+      workingDirectory,
+      ssh,
+      selectedPackages,
+    };
+  }
+
   if (source.kind !== "git") {
     return {
       repositoryUrl: source.kind === "mount" ? source.hostPath : source.rootPath,

@@ -1,7 +1,13 @@
 import { bridgeLaunchRequestSchema } from "@sealant/workspaces/cloudflare/bridge-contract";
 import { describe, expect, it } from "vitest";
 
-import { bearerMatches, bootEnvForLaunch, sandboxNameForRun } from "./plan.js";
+import {
+  bearerMatches,
+  bootEnvForLaunch,
+  sandboxNameForRun,
+  sandboxOptionsForLaunch,
+  stopModeFromUrl,
+} from "./plan.js";
 
 const request = bridgeLaunchRequestSchema.parse({
   version: 1,
@@ -50,13 +56,53 @@ describe("bootEnvForLaunch", () => {
   it("omits auth and secret markers when the request carries none", () => {
     const bare = bridgeLaunchRequestSchema.parse({
       ...request,
-      source: { url: request.source.url },
+      source: { url: "https://github.com/example/repo.git" },
       secretEnv: undefined,
     });
     const env = bootEnvForLaunch(bare);
     expect(env["SEALANT_WORKSPACE_HTTP_TOKEN"]).toBeUndefined();
     expect(env["SEALANT_SECRET_ENV_FILE"]).toBeUndefined();
     expect(env["SEALANT_WORKSPACE_REPO_REF"]).toBeUndefined();
+  });
+});
+
+const captureRequest = bridgeLaunchRequestSchema.parse({
+  ...request,
+  source: { kind: "capture", endpoint: "https://mend.example.com/session/s1", worktreeId: "wt_1" },
+  env: { MEND_SESSION_ID: "1" },
+  secretEnv: { MEND_SESSION_TOKEN: "mst", SEALANT_CAPTURE_TOKEN: "mst" },
+});
+
+describe("bootEnvForLaunch (capture source)", () => {
+  it("names the channel and the worktree, mounts nothing, keeps the token in the secret file", () => {
+    const env = bootEnvForLaunch(captureRequest);
+    expect(env).toMatchObject({
+      SEALANT_WORKSPACE_SOURCE: "capture",
+      SEALANT_CAPTURE_ENDPOINT: "https://mend.example.com/session/s1",
+      SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
+      SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
+      MEND_SESSION_ID: "1",
+    });
+    expect(env["SEALANT_WORKSPACE_REPO_URL"]).toBeUndefined();
+    expect(env["SEALANT_WORKSPACE_HTTP_TOKEN"]).toBeUndefined();
+    expect(env["SEALANT_CAPTURE_TOKEN"]).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain("mst");
+  });
+});
+
+describe("sandboxOptionsForLaunch", () => {
+  it("keeps a capture executor alive and leaves git launches on the SDK default", () => {
+    expect(sandboxOptionsForLaunch(captureRequest)).toEqual({ keepAlive: true });
+    expect(sandboxOptionsForLaunch(request)).toEqual({});
+  });
+});
+
+describe("stopModeFromUrl", () => {
+  it("defaults to a planned stop, names fence explicitly, and refuses anything else", () => {
+    expect(stopModeFromUrl(new URL("https://b/v1/workspaces/x"))).toBe("planned");
+    expect(stopModeFromUrl(new URL("https://b/v1/workspaces/x?mode=planned"))).toBe("planned");
+    expect(stopModeFromUrl(new URL("https://b/v1/workspaces/x?mode=fence"))).toBe("fence");
+    expect(stopModeFromUrl(new URL("https://b/v1/workspaces/x?mode=kill"))).toBeUndefined();
   });
 });
 

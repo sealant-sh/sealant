@@ -1,8 +1,8 @@
 /**
- * Launch inputs shared by the Docker golden test and the mount-intent cross-check. Three shapes
+ * Launch inputs shared by the Docker golden test and the mount-intent cross-check. Four shapes
  * cover the adapter's argv surface: a git-sourced launch with every env channel populated, a
  * Mend-style mount-sourced launch with launch material + extra mounts + the control-socket fast
- * path, and a launch with the DinD sidecar enabled.
+ * path, a launch with the DinD sidecar enabled, and a capture-sourced launch that mounts nothing.
  */
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
@@ -108,5 +108,34 @@ export const cases = {
     }),
     publishedImage,
     runId: "run-golden-3",
+  }),
+  // A capture-sourced launch (sealantd ADR-0015): no workspace mount, the channel facts as env,
+  // the credential only in the staged secret env file.
+  capture: parseRuntimeAdapterLaunchInput({
+    blueprint: baseBlueprint({
+      sources: {
+        workspace: {
+          kind: "capture",
+          endpoint: "https://mend.example.com/session/s1",
+          worktreeId: "wt_1",
+          platform: "kubernetes",
+        },
+        inputs: [],
+        mounts: [],
+      },
+      runtime: {
+        env: { MEND_SESSION_ID: "1" },
+        workspaceRoot: "/workspace",
+        workingDirectory: "/workspace/repo",
+        persistence: "ephemeral",
+        ociRuntime: "runc",
+        network: { outbound: true },
+      },
+      harness: { id: "claude-code" },
+    }),
+    publishedImage,
+    runId: "run-golden-4",
+    secretEnvDir: "/run/sealant/sockets/_dotfiles/sealant-secret-env-run-golden-4",
+    secretEnv: { MEND_SESSION_TOKEN: "mst_secret", SEALANT_CAPTURE_TOKEN: "mst_secret" },
   }),
 };

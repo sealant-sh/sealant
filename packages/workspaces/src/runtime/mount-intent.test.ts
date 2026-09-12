@@ -130,6 +130,17 @@ describe("collectMountIntents", () => {
     expect(bindsEnv([])).toBeUndefined();
   });
 
+  it("emits only launch material for a capture-sourced workspace", () => {
+    expect(collectMountIntents(cases.capture)).toEqual([
+      {
+        sourcePath: "/run/sealant/sockets/_dotfiles/sealant-secret-env-run-golden-4",
+        mountPath: "/run/sealant/secrets",
+        readOnly: true,
+        purpose: "launch-material",
+      },
+    ]);
+  });
+
   it("emits nothing for a git-sourced workspace without extra mounts or launch material", () => {
     const input: RuntimeAdapterLaunchInput = cases.gitSource;
     expect(collectMountIntents(input)).toEqual([]);

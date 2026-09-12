@@ -1197,6 +1197,97 @@ describe("processWorkspaceBuildJobEffect", () => {
     );
   });
 
+  it.effect("passes the platform-owned capture token through the sealed channel", () => {
+    // The control plane seals SEALANT_CAPTURE_TOKEN beside the caller's map (sealantd ADR-0015);
+    // the caller policy still governs the caller's entries, and the token reaches the boot file.
+    const sealed = { MEND_SESSION_TOKEN: "mst_1", SEALANT_CAPTURE_TOKEN: "mst_1" };
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_capture_token",
+        runId: "run_capture_token",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        secretEnvSealed: `sealed:${JSON.stringify(sealed)}`,
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    let stagedContents: string | undefined;
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: vi.fn(async (input) => {
+        if (input.secretEnvDir !== undefined) {
+          stagedContents = await readFile(join(input.secretEnvDir, "env.json"), "utf8");
+        }
+        return {
+          adapter: "docker" as const,
+          resourceId: "resource_capture",
+          reference: "sealant-capture",
+          status: "ready" as const,
+        };
+      }),
+    });
+
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_capture_token",
+          runtimeAdapters: [runtimeAdapter],
+          credentialCipher: fakeCredentialCipher,
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      );
+      expect(stagedContents).toBeDefined();
+      expect(JSON.parse(stagedContents ?? "{}")).toEqual(sealed);
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
+  it.effect("still refuses other platform-prefixed names in the sealed channel", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_capture_token_bad",
+        runId: "run_capture_token_bad",
+        repository: "sealant/workspaces/demo",
+        tag: "opencode",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        secretEnvSealed: `sealed:${JSON.stringify({ SEALANT_WORKSPACE_SOURCE: "mount" })}`,
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const installations = githubInstallationRepoStub();
+    const installationRepositories = githubInstallationRepositoryCacheStub();
+    const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_capture_token_bad",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        ),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(String(result.failure)).toContain("SEALANT_WORKSPACE_SOURCE");
+      }
+      expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+    );
+  });
+
   it.effect("stages dotfiles archives and hands the adapter the staging dir", () => {
     const archiveData = Buffer.from("not-a-real-tarball").toString("base64");
     const jobs = workspaceBuildJobRepoStub({

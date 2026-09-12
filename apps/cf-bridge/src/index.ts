@@ -4,7 +4,9 @@
  * so this Worker owns them and exposes exactly three things to the outside:
  *
  *   POST   /v1/workspaces                — launch (adopt on redelivery); auth: BRIDGE_TOKEN
- *   DELETE /v1/workspaces/:id            — destroy, idempotent;          auth: BRIDGE_TOKEN
+ *   DELETE /v1/workspaces/:id            — planned stop (SIGTERM, the daemon's flush window),
+ *                                          idempotent; `?mode=fence` destroys outright (SIGKILL)
+ *                                          for confirmed-termination fencing; auth: BRIDGE_TOKEN
  *   GET    /v1/workspaces/:id/control    — WebSocket carrying the sealantd control byte stream;
  *                                          auth: CONTROL_TOKEN (the deployment's
  *                                          SEALANT_CONTROL_BEARER_TOKEN)
@@ -29,7 +31,9 @@ import {
   CONTROL_SOCKET_PATH,
   DOTFILES_ARCHIVE_DIR,
   sandboxNameForRun,
+  sandboxOptionsForLaunch,
   SECRET_ENV_FILE_PATH,
+  stopModeFromUrl,
 } from "./plan.js";
 
 export { Sandbox };
@@ -157,7 +161,7 @@ const handleLaunch = async (env: Env, request: Request): Promise<Response> => {
   }
   const body = parsed.data;
   const name = sandboxNameForRun(body.runId);
-  const sandbox = getSandbox(env.Sandbox, name);
+  const sandbox = getSandbox(env.Sandbox, name, sandboxOptionsForLaunch(body));
 
   // One launcher per sandbox: mkdir is atomic, so a redelivered launch loses the claim and just
   // waits for readiness instead of double-booting sealantd against the same workspace.
@@ -181,10 +185,21 @@ const handleLaunch = async (env: Env, request: Request): Promise<Response> => {
   return json(200, response);
 };
 
-const handleStop = async (env: Env, resourceId: string): Promise<Response> => {
-  // The bridge keeps no registry: destroy is idempotent on the sandbox id, so an unknown or
-  // already-destroyed workspace reports the same terminal outcome as a live one.
-  await getSandbox(env.Sandbox, resourceId).destroy();
+const handleStop = async (env: Env, resourceId: string, url: URL): Promise<Response> => {
+  const mode = stopModeFromUrl(url);
+  if (mode === undefined) {
+    return message(400, "unknown stop mode; use `planned` (default) or `fence`");
+  }
+  // The bridge keeps no registry: both verbs are idempotent on the sandbox id, so an unknown or
+  // already-stopped workspace reports the same terminal outcome as a live one. A planned stop
+  // sends SIGTERM and lets sealantd flush its captures inside its grace window (ADR-0015);
+  // destroy (SIGKILL) is reserved for fencing a confirmed-dead executor before a replacement.
+  const sandbox = getSandbox(env.Sandbox, resourceId);
+  if (mode === "fence") {
+    await sandbox.destroy();
+  } else {
+    await sandbox.stop();
+  }
   const response: BridgeStopResponse = { outcome: "stopped" };
   return json(200, response);
 };
@@ -222,7 +237,7 @@ export default {
         if (!bearerMatches(authorization, env.BRIDGE_TOKEN)) {
           return message(401, "bridge: missing or invalid bridge token");
         }
-        return await handleStop(env, match[1]);
+        return await handleStop(env, match[1], url);
       }
 
       return message(404, "unknown bridge route");
