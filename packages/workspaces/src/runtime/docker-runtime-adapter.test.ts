@@ -1562,3 +1562,156 @@ describe("cluster env references belt", () => {
     });
   });
 });
+
+const RUNNING_STATE_JSON = '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n';
+
+/** One `docker events --format '{{json .}}'` line for a container `die`. */
+const dieEvent = (id: string, name: string, exitCode: string): string =>
+  JSON.stringify({
+    status: "die",
+    id,
+    from: "image",
+    Type: "container",
+    Action: "die",
+    Actor: { ID: id, Attributes: { exitCode, image: "image", name } },
+    scope: "local",
+    time: 1,
+  });
+
+describe("DockerRuntimeAdapter runtime observation", () => {
+  it("inspects containers: running, exited with the exit code and a log tail, missing", async () => {
+    const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
+      const id = args.at(-1);
+      if (args[0] === "inspect") {
+        if (id === "c-running") return { stdout: RUNNING_STATE_JSON, stderr: "" };
+        if (id === "c-paused") {
+          return {
+            stdout: '{"Status":"paused","Running":false,"ExitCode":0,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        if (id === "c-exited") {
+          return {
+            stdout: '{"Status":"exited","Running":false,"ExitCode":137,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        throw new Error(`Error response from daemon: No such container: ${id}`);
+      }
+      if (args[0] === "logs") return { stdout: "last words\n", stderr: "" };
+      throw new Error(`unexpected docker ${args.join(" ")}`);
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await expect(adapter.inspect({ resourceId: "c-running" })).resolves.toEqual({
+      state: "running",
+      platformState: "running",
+    });
+    await expect(adapter.inspect({ resourceId: "c-paused" })).resolves.toEqual({
+      state: "running",
+      platformState: "paused",
+    });
+    await expect(adapter.inspect({ resourceId: "c-exited" })).resolves.toEqual({
+      state: "exited",
+      exitCode: 137,
+      detail: "status: exited, exitCode: 137\nLogs:\nlast words",
+    });
+    await expect(adapter.inspect({ resourceId: "c-gone" })).resolves.toEqual({ state: "missing" });
+    // Logs are read for the exited container only: the post-mortem before removal.
+    expect(commandRunner.mock.calls.filter(([, args]) => args[0] === "logs")).toEqual([
+      ["docker", ["logs", "--tail", "200", "c-exited"]],
+    ]);
+  });
+
+  it("surfaces a daemon failure from inspect instead of guessing a state", async () => {
+    const commandRunner = vi.fn(async () => {
+      throw new Error("Cannot connect to the Docker daemon at unix:///var/run/docker.sock");
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await expect(adapter.inspect({ resourceId: "c-1" })).rejects.toThrow(/Cannot connect/);
+  });
+
+  it("reports die events for its own containers and reconnects when the stream drops", async () => {
+    vi.useFakeTimers();
+    try {
+      interface FakeStream {
+        readonly args: readonly string[];
+        readonly onLine: (line: string) => void;
+        readonly onEnd: (error: unknown) => void;
+        killed: boolean;
+      }
+      const streams: FakeStream[] = [];
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner: vi.fn(async () => ({ stdout: "", stderr: "" })),
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+        eventStreamOpener: ({ args, onLine, onEnd }) => {
+          const stream: FakeStream = { args, onLine, onEnd, killed: false };
+          streams.push(stream);
+          return {
+            kill: () => {
+              stream.killed = true;
+            },
+          };
+        },
+      });
+      const onExit = vi.fn();
+      const onError = vi.fn();
+
+      const watch = adapter.watchExits({ onExit, onError });
+
+      expect(streams).toHaveLength(1);
+      expect(streams[0]?.args).toEqual([
+        "events",
+        "--filter",
+        "type=container",
+        "--filter",
+        "event=die",
+        "--format",
+        "{{json .}}",
+      ]);
+
+      streams[0]?.onLine(dieEvent("aaa", "sealant-run-1", "137"));
+      // Not ours (another prefix), not an exit, not JSON: ignored, never thrown.
+      streams[0]?.onLine(dieEvent("bbb", "other-run-1", "1"));
+      streams[0]?.onLine(
+        JSON.stringify({
+          Type: "container",
+          Action: "start",
+          Actor: { ID: "ccc", Attributes: { name: "sealant-run-2" } },
+        }),
+      );
+      streams[0]?.onLine("not json");
+      expect(onExit.mock.calls).toEqual([
+        [{ resourceId: "aaa", result: { state: "exited", exitCode: 137 } }],
+      ]);
+
+      // The stream drops with an error: reported, then reopened after the backoff.
+      streams[0]?.onEnd(new Error("daemon went away"));
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(streams).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(streams).toHaveLength(2);
+      streams[1]?.onLine(dieEvent("ddd", "sealant-run-3", "0"));
+      expect(onExit).toHaveBeenLastCalledWith({
+        resourceId: "ddd",
+        result: { state: "exited", exitCode: 0 },
+      });
+
+      // Closing kills the stream and stops the reconnect loop for good.
+      watch.close();
+      expect(streams[1]?.killed).toBe(true);
+      streams[1]?.onEnd(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(streams).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

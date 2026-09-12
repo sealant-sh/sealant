@@ -251,11 +251,20 @@ export type RuntimeAdapterInspectResult = z.infer<typeof runtimeAdapterInspectRe
 export type RuntimeAdapterExitEvent = z.infer<typeof runtimeAdapterExitEventSchema>;
 
 export interface RuntimeAdapterExitWatchInput {
-  readonly resourceIds: readonly string[];
+  /**
+   * Restrict the watch to these resources. Absent = every resource this adapter launched (the
+   * worker's exit reconciler opens one watch per adapter for the life of the process, so the set
+   * cannot be fixed up front). A runtime with no event stream and no cheap enumeration (MicroVM)
+   * needs the list and reports nothing without one; the reconciler's poll still covers it.
+   */
+  readonly resourceIds?: readonly string[];
   /** Called at most once per resource, the first time it is seen `exited` or `missing`. */
   readonly onExit: (event: RuntimeAdapterExitEvent) => void;
-  /** Called when a poll fails; the watch keeps going. */
-  readonly onError?: (resourceId: string, error: unknown) => void;
+  /**
+   * A poll for one resource failed (`resourceId` names it) or the runtime's event stream dropped
+   * (no resource; the adapter is already reconnecting). The watch keeps going either way.
+   */
+  readonly onError?: (error: unknown, resourceId?: string) => void;
 }
 
 /** A running exit watch; `close` stops it and releases its timer. Idempotent. */
@@ -276,8 +285,10 @@ export interface RuntimeAdapter {
    */
   inspect?(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult>;
   /**
-   * Optional: report when any of the given executors ends. Runtimes with no event stream poll
-   * `inspect` on their own cadence; the watch owns that timer until `close`.
+   * Optional: report when an executor ends, as the runtime announces it (`docker events`, a Pod
+   * watch). Runtimes with no event stream poll `inspect` on their own cadence; the watch owns
+   * that timer or connection until `close`, reconnecting on its own when the stream drops. Exits
+   * announced while a stream is down are not replayed — the caller's poll is the convergence net.
    */
   watchExits?(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch;
 }
