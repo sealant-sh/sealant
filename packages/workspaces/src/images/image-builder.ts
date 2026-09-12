@@ -14,8 +14,10 @@
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
 
 import {
+  buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
   planWorkspaceImageBuild,
+  removeBuildContext,
   type PlannedWorkspaceImageBuild,
 } from "../buildkit/index.js";
 import type { RegistryClient } from "../registry/index.js";
@@ -98,32 +100,44 @@ export const createDockerWorkspaceImageBuilder = (
           planWorkspaceImageBuild({ blueprint: spec })
       : undefined);
 
+  const publish = async (input: BuildAndPublishInput, build: WorkspaceBuild) => {
+    const engineArtifact = engineTransport
+      ? build.artifacts.find(isEngineOciImageArtifact)
+      : undefined;
+    if (engineArtifact !== undefined) {
+      return options.registryClient.publishOciImage({
+        repository: input.repository,
+        tag: input.tag,
+        sourceReference: engineArtifact.reference,
+      });
+    }
+    const artifact = build.artifacts.find(isPublishableOciImageArtifact);
+    if (artifact === undefined) {
+      throw new Error("The compiler did not return a publishable OCI image artifact.");
+    }
+    return options.registryClient.publishOciImage({
+      artifactPath: artifact.path,
+      repository: input.repository,
+      tag: input.tag,
+      ...(artifact.reference === undefined ? {} : { sourceReference: artifact.reference }),
+    });
+  };
+
   return {
     plan,
     buildAndPublish: async (input) => {
       const build = await compile(input.spec);
-      const engineArtifact = engineTransport
-        ? build.artifacts.find(isEngineOciImageArtifact)
-        : undefined;
-      if (engineArtifact !== undefined) {
-        const publishedImage = await options.registryClient.publishOciImage({
-          repository: input.repository,
-          tag: input.tag,
-          sourceReference: engineArtifact.reference,
-        });
+      // The scratch directory (Containerfile, plan/spec JSON, and with the tarball transport the
+      // `docker save` output) is only needed until the publish has read it. Published or not, it
+      // goes: the job row keeps the metadata that matters, and a leaked tarball per build is how
+      // a single-host install fills its disk.
+      try {
+        const publishedImage = await publish(input, build);
         return { publishedImage, build };
+      } finally {
+        const contextDirectory = buildContextDirectoryOf(build);
+        if (contextDirectory !== undefined) await removeBuildContext(contextDirectory);
       }
-      const artifact = build.artifacts.find(isPublishableOciImageArtifact);
-      if (artifact === undefined) {
-        throw new Error("The compiler did not return a publishable OCI image artifact.");
-      }
-      const publishedImage = await options.registryClient.publishOciImage({
-        artifactPath: artifact.path,
-        repository: input.repository,
-        tag: input.tag,
-        ...(artifact.reference === undefined ? {} : { sourceReference: artifact.reference }),
-      });
-      return { publishedImage, build };
     },
   };
 };

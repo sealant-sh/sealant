@@ -861,12 +861,12 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   }
 
   private async forceRemoveContainer(containerId: string): Promise<void> {
-    await this.commandRunner("docker", ["rm", "-f", containerId]).catch(() => undefined);
+    await this.commandRunner("docker", ["rm", "-f", "-v", containerId]).catch(() => undefined);
   }
 
   private async removeContainerDefinitively(containerId: string): Promise<boolean> {
     try {
-      await this.commandRunner("docker", ["rm", "-f", containerId]);
+      await this.commandRunner("docker", ["rm", "-f", "-v", containerId]);
       return true;
     } catch (error) {
       if (isNoSuchContainerError(error)) return true;
@@ -1237,7 +1237,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             .catch(() => undefined);
 
     try {
-      await this.commandRunner("docker", ["rm", "-f", parsed.resourceId]);
+      // `-v` takes the container's anonymous volumes with it: the dind sidecar declares one for
+      // its image store, and without this every workspace left an orphan volume behind.
+      await this.commandRunner("docker", ["rm", "-f", "-v", parsed.resourceId]);
     } catch (error) {
       let gone = isNoSuchContainerError(error);
       if (!gone) {

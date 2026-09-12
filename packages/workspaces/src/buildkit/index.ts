@@ -1,5 +1,8 @@
 export {
+  buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
+  removeBuildContext,
+  sweepStaleBuildContexts,
   mapBlueprintToBuildkitImagePlan,
   planWorkspaceImageBuild,
   selectBuildkitOsFamily,

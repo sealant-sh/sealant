@@ -1,14 +1,20 @@
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { NewWorkspace } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildContextDirectoryOf,
   compileWorkspaceBuildSpec,
   mapBlueprintToBuildkitImagePlan,
   planWorkspaceImageBuild,
+  removeBuildContext,
   sealantdImageReference,
   selectBuildkitOsFamily,
+  sweepStaleBuildContexts,
 } from "./buildkit-builder.js";
 
 const createWorkspaceBuildSpec = (overrides: Partial<NewWorkspace> = {}): NewWorkspace => {
@@ -1393,5 +1399,90 @@ describe("planWorkspaceImageBuild", () => {
     await expect(readFile(result.buildkit.spec.containerfilePath, "utf8")).resolves.toBe(
       planned.containerfile,
     );
+  });
+});
+
+describe("build context cleanup", () => {
+  it("removes the scratch directory when the build itself fails", async () => {
+    let contextDirectory: string | undefined;
+    const commandRunner = vi.fn<
+      (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "build") {
+        contextDirectory = args.at(-1);
+        throw new Error("build exploded");
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      compileWorkspaceBuildSpec({
+        blueprint: createWorkspaceBuildSpec(),
+        options: { commandRunner },
+      }),
+    ).rejects.toThrow("build exploded");
+
+    expect(contextDirectory).toBeDefined();
+    expect(existsSync(contextDirectory ?? "")).toBe(false);
+  });
+
+  it("recovers the scratch directory from a compile result's artifact paths", async () => {
+    const commandRunner = vi.fn(async () => ({ stdout: "", stderr: "" }));
+    const result = await compileWorkspaceBuildSpec({
+      blueprint: createWorkspaceBuildSpec(),
+      options: { commandRunner },
+    });
+
+    expect(buildContextDirectoryOf(result)).toBe(result.buildkit.spec.contextDirectory);
+    expect(await removeBuildContext(result.buildkit.spec.contextDirectory)).toBe(true);
+    expect(existsSync(result.buildkit.spec.contextDirectory)).toBe(false);
+    // A custom compiler's artifacts live wherever it put them: nothing to recover, nothing removed.
+    expect(
+      buildContextDirectoryOf({ artifacts: [{ path: "/var/lib/other/workspace-image.tar" }] }),
+    ).toBeUndefined();
+  });
+
+  it("refuses to remove anything that is not a build context directly under the temp directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sealant-context-guard-"));
+    const nested = join(root, "sealant-buildkit-arch-abc");
+    await mkdir(nested);
+    try {
+      expect(await removeBuildContext(root)).toBe(false);
+      expect(await removeBuildContext(nested)).toBe(false);
+      expect(await removeBuildContext(join(tmpdir(), "unrelated-dir"))).toBe(false);
+      expect(existsSync(nested)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("sweeps only build contexts older than the threshold and reports the bytes reclaimed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sealant-context-sweep-"));
+    try {
+      const stale = join(root, "sealant-buildkit-arch-stale1");
+      const fresh = join(root, "sealant-buildkit-arch-fresh1");
+      const other = join(root, "somebody-elses-dir");
+      await mkdir(stale);
+      await mkdir(fresh);
+      await mkdir(other);
+      await writeFile(join(stale, "workspace-image.tar"), Buffer.alloc(4096));
+      await writeFile(join(stale, "Containerfile"), "FROM scratch\n");
+      await writeFile(join(other, "keep"), "x");
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+      await utimes(stale, twoDaysAgo, twoDaysAgo);
+      await utimes(other, twoDaysAgo, twoDaysAgo);
+
+      const sweep = await sweepStaleBuildContexts({
+        olderThanMs: 6 * 60 * 60 * 1000,
+        tmpDirectory: root,
+      });
+
+      expect(sweep).toEqual({ removed: 1, reclaimedBytes: 4096 + "FROM scratch\n".length });
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(other)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

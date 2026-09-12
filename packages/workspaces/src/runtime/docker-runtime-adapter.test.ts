@@ -238,7 +238,7 @@ describe("DockerRuntimeAdapter", () => {
     );
     expect(removeCalls).toEqual(
       expect.arrayContaining([
-        ["docker", ["rm", "-f", "docker-service-id"]],
+        ["docker", ["rm", "-f", "-v", "docker-service-id"]],
         ["docker", ["network", "rm", "network-id"]],
       ]),
     );
@@ -1377,8 +1377,8 @@ describe("DockerRuntimeAdapter", () => {
       ([, args]) => args[0] === "rm" || (args[0] === "network" && args[1] === "rm"),
     );
     expect(removals).toEqual([
-      ["docker", ["rm", "-f", "container-id-123"]],
-      ["docker", ["rm", "-f", "docker-service-id"]],
+      ["docker", ["rm", "-f", "-v", "container-id-123"]],
+      ["docker", ["rm", "-f", "-v", "docker-service-id"]],
       ["docker", ["network", "rm", "network-id"]],
     ]);
     expect(result).toEqual({
