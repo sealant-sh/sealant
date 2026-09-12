@@ -147,4 +147,36 @@ describe("LocalDockerImageStore", () => {
   it("has no registry extensions", async () => {
     await expect(createLocalDockerImageStore().discoverExtensions()).resolves.toEqual([]);
   });
+
+  it("deletes by image id and reports a referenced image as in use", async () => {
+    const { calls, commandRunner } = runner((_, args) => {
+      if (args[0] !== "image" || args[1] !== "rm") return "";
+      if (args[3] === "sha256:gone") return new Error("Error: No such image: sha256:gone");
+      if (args[3] === "sha256:busy") {
+        return new Error(
+          "Error response from daemon: conflict: unable to delete sha256:busy (cannot be forced) - image is being used by running container 0123",
+        );
+      }
+      return "Untagged: sealant-workspace-debian:plan-0123456789ab\nDeleted: sha256:free\n";
+    });
+    const store = createLocalDockerImageStore({ commandRunner });
+
+    await expect(
+      store.deleteImage({ repository: "sealant-workspace-debian", digest: "sha256:free" }),
+    ).resolves.toBe("deleted");
+    await expect(
+      store.deleteImage({ repository: "sealant-workspace-debian", digest: "sha256:gone" }),
+    ).resolves.toBe("missing");
+    await expect(
+      store.deleteImage({ repository: "sealant-workspace-debian", digest: "sha256:busy" }),
+    ).resolves.toBe("in-use");
+    await expect(
+      store.deleteImage({ repository: "sealant-workspace-debian", digest: "plan-0123456789ab" }),
+    ).rejects.toThrow(/image id/);
+    expect(calls).toEqual([
+      ["docker", "image", "rm", "-f", "sha256:free"],
+      ["docker", "image", "rm", "-f", "sha256:gone"],
+      ["docker", "image", "rm", "-f", "sha256:busy"],
+    ]);
+  });
 });

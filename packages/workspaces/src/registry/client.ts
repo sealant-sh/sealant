@@ -139,6 +139,19 @@ export interface ZotRegistryClientConfig {
  * machines) and the local Docker Engine (`LocalDockerImageStore`, the single-host default — the
  * Engine that built the image is the Engine that runs it, so nothing needs to be pushed anywhere).
  */
+export interface DeleteImageInput {
+  readonly repository: string;
+  /** The digest recorded at publish: a registry manifest digest, or an Engine image id. */
+  readonly digest: string;
+}
+
+/**
+ * What became of a delete: `deleted`, `missing` (already gone — a no-op, not a failure), or
+ * `in-use` (the Engine store refuses to remove an image a container still references; the
+ * retention sweep leaves it for a later pass).
+ */
+export type DeleteImageOutcome = "deleted" | "missing" | "in-use";
+
 export interface RegistryClient {
   /** Defaults to `tarball` when absent. */
   readonly imageTransport?: ImageTransport;
@@ -149,6 +162,8 @@ export interface RegistryClient {
   headManifest(repository: string, reference: string): Promise<string | null>;
   discoverExtensions(): Promise<Array<RegistryExtension>>;
   publishOciImage(input: PublishOciImageInput): Promise<PublishOciImageResult>;
+  /** Removes one published image. Best-effort by contract: callers treat a throw as "left in place". */
+  deleteImage(input: DeleteImageInput): Promise<DeleteImageOutcome>;
 }
 
 const defaultCommandRunner: CommandRunner = async (command, args) => {
@@ -266,6 +281,30 @@ export class ZotRegistryClient implements RegistryClient {
     }
 
     return response.headers.get(contentDigestHeader);
+  }
+
+  /**
+   * OCI distribution `DELETE /v2/<repository>/manifests/<digest>`: the tag pointing at the manifest
+   * goes with it, and the registry's own garbage collection reclaims the blobs. A 404 means the
+   * manifest was already gone; a 405 (deletes disabled) surfaces as an error the sweep logs.
+   */
+  public async deleteImage(input: DeleteImageInput): Promise<DeleteImageOutcome> {
+    const repository = normalizeRepository(input.repository);
+    const digest = input.digest.trim();
+    const response = await this.request(`/v2/${repository}/manifests/${digest}`, {
+      method: "DELETE",
+      allowStatusCodes: [404],
+    });
+    // A Docker worker that pushes also keeps the loaded image in its own Engine (the push records
+    // the digest on it). Drop that copy too, best-effort: a Kubernetes worker has no Engine and a
+    // pull-only host never had the image, and neither outcome changes what the registry holds.
+    await this.commandRunner("docker", [
+      "image",
+      "rm",
+      "-f",
+      `${this.pushRegistry}/${repository}@${digest}`,
+    ]).catch(() => undefined);
+    return response.status === 404 ? "missing" : "deleted";
   }
 
   public async discoverExtensions(): Promise<Array<RegistryExtension>> {

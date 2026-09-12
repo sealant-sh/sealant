@@ -14,6 +14,8 @@ export {
 export type {
   CommandResult,
   CommandRunner,
+  DeleteImageInput,
+  DeleteImageOutcome,
   ImageTransport,
   PublishOciImageInput,
   PublishOciImageResult,

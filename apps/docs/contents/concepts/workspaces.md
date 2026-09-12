@@ -83,6 +83,16 @@ This has two practical consequences:
 - Workspace containers and images are created **outside** the Sealant Compose project. Uninstalling
   Sealant does not automatically remove workspace containers or images the worker created — clean
   those up through Docker directly.
+- The worker keeps the image store bounded. An image stays while a live workspace was launched from
+  it, while it is the newest image of one of the last ten distinct build plans (so an unchanged plan
+  is reused instead of rebuilt), or while it was published in the last week; everything else the
+  build history published is deleted on an hourly sweep (`WORKSPACE_IMAGE_GC_*` in the
+  [environment reference](/docs/reference/environment-variables)). A stopped workspace does not pin
+  its image: a restart re-runs the build, which the unchanged plan turns into a reuse. The same
+  sweep removes build scratch left under the worker's temp directory by an interrupted build.
+- Stopping a workspace removes its containers together with their anonymous volumes. Installs that
+  ran versions before this left one anonymous volume per workspace behind (the Docker sidecar's
+  image store); `docker volume prune` removes anonymous volumes no container references.
 - Because the worker holds the host Docker socket, it is effectively root on the host. Read the
   [security model](/docs/concepts/security-model) before exposing Sealant beyond loopback.
 

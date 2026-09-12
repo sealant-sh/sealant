@@ -433,7 +433,7 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
     expect(
       recording.calls.filter((args) => args[0] === "run" && !args.includes("--privileged")),
     ).toHaveLength(0);
-    expect(recording.calls).toContainEqual(["rm", "-f", "docker-service-id"]);
+    expect(recording.calls).toContainEqual(["rm", "-f", "-v", "docker-service-id"]);
     expect(recording.calls).toContainEqual(["network", "rm", "created-network-id"]);
     await expect(stat(join(socketRoot, "sealant-volume-1"))).resolves.toBeDefined();
   });
@@ -512,7 +512,7 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
       ),
     ).rejects.toBe(originalError);
 
-    expect(recording.calls).toContainEqual(["rm", "-f", "docker-service-id"]);
+    expect(recording.calls).toContainEqual(["rm", "-f", "-v", "docker-service-id"]);
     expect(recording.calls).toContainEqual(["network", "rm", "created-network-id"]);
     await expect(stat(join(socketRoot, "sealant-volume-1"))).resolves.toBeDefined();
   });
@@ -681,14 +681,14 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
         if (args[0] === "network" && args[1] === "inspect") {
           return { stdout: `${networks.get(networkName)}\n`, stderr: "" };
         }
-        if (args[0] === "rm" && args[2] === "old-workspace-id") {
+        if (args[0] === "rm" && args.at(-1) === "old-workspace-id") {
           // Removing the main container releases the run name. A retry immediately reuses all names.
           containers.set(serviceName, "replacement-service-id");
           networks.set(networkName, "replacement-network-id");
           await startControlSocket(socketPath);
           if (outcome === "not-found") throw new Error("No such container");
         } else if (args[0] === "rm") {
-          if (args[2] === serviceName || args[2] === containers.get(serviceName)) {
+          if (args.at(-1) === serviceName || args.at(-1) === containers.get(serviceName)) {
             containers.delete(serviceName);
           } else {
             throw new Error("No such container");
@@ -715,7 +715,7 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
 
       expect(containers.get(serviceName)).toBe("replacement-service-id");
       expect(networks.get(networkName)).toBe("replacement-network-id");
-      expect(calls).toContainEqual(["rm", "-f", "old-service-id"]);
+      expect(calls).toContainEqual(["rm", "-f", "-v", "old-service-id"]);
       expect(calls).toContainEqual(["network", "rm", "old-network-id"]);
       await expectSocketAccepting(socketPath);
     },
@@ -733,11 +733,11 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
     });
     const removals: string[] = [];
     const runner: DockerCommandRunner = async (command, args, options) => {
-      if (args[0] === "rm" && args[2] === "workspace-container-id") {
+      if (args[0] === "rm" && args.at(-1) === "workspace-container-id") {
         containers.set(serviceName, "replacement-service-id");
         await startControlSocket(socketPath);
       } else if (args[0] === "rm") {
-        const target = args[2] ?? "";
+        const target = args.at(-1) ?? "";
         removals.push(target);
         if (target === serviceName || target === containers.get(serviceName)) {
           containers.delete(serviceName);
@@ -844,7 +844,9 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
         adapter.stop({ resourceId: "workspace-id", reference: "sealant-volume-1" }),
       ).resolves.toMatchObject({ outcome: "stopped" });
 
-      expect(calls.filter((args) => args[0] === "rm")).toEqual([["rm", "-f", "workspace-id"]]);
+      expect(calls.filter((args) => args[0] === "rm")).toEqual([
+        ["rm", "-f", "-v", "workspace-id"],
+      ]);
       expect(calls.some((args) => args[0] === "network" && args[1] === "rm")).toBe(false);
     },
   );
@@ -876,7 +878,7 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
         ),
       ).rejects.toBe(originalError);
 
-      expect(recording.calls).toContainEqual(["rm", "-f", "docker-service-id"]);
+      expect(recording.calls).toContainEqual(["rm", "-f", "-v", "docker-service-id"]);
       expect(recording.calls.some((args) => args[0] === "network" && args[1] === "rm")).toBe(false);
     },
   );
@@ -948,6 +950,6 @@ describe("DockerRuntimeAdapter strict named-volume mode", () => {
 
     await expect(stat(controlDirectory)).resolves.toBeDefined();
     await expect(stat(userData)).resolves.toBeDefined();
-    expect(recording.calls).toContainEqual(["rm", "-f", "container-volume-1"]);
+    expect(recording.calls).toContainEqual(["rm", "-f", "-v", "container-volume-1"]);
   });
 });

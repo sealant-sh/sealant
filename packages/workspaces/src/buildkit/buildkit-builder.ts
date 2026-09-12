@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
   parseWorkspaceBlueprint,
@@ -1327,6 +1327,86 @@ const writeBuildContext = async (plan: ResolvedImagePlan, containerfile: string)
   };
 };
 
+/** Prefix of every compile's scratch directory, directly under the OS temp directory. */
+export const BUILD_CONTEXT_PREFIX = "sealant-buildkit-";
+
+const isBuildContextDirectory = (directory: string, tmpDirectory: string): boolean =>
+  dirname(directory) === tmpDirectory && basename(directory).startsWith(BUILD_CONTEXT_PREFIX);
+
+/**
+ * Deletes one compile's scratch directory: the Containerfile, the plan/spec JSON, and (with the
+ * tarball transport) the `docker save` output — ~800 MB per build, which is why a leak here fills a
+ * disk in weeks. Refuses anything that is not a `sealant-buildkit-*` directory directly under the
+ * OS temp directory, so a corrupted path can never turn into `rm -rf` of something else. Missing
+ * directories count as removed. Returns false only when the path was refused.
+ */
+export const removeBuildContext = async (
+  contextDirectory: string,
+  tmpDirectory: string = tmpdir(),
+): Promise<boolean> => {
+  if (!isBuildContextDirectory(contextDirectory, tmpDirectory)) return false;
+  await rm(contextDirectory, { recursive: true, force: true });
+  return true;
+};
+
+/**
+ * The scratch directory a compile result was produced in, recovered from its artifact paths (the
+ * result schema carries no context path of its own). Undefined for results that did not come from
+ * this compiler — a custom compiler's artifacts live wherever it put them.
+ */
+export const buildContextDirectoryOf = (
+  build: { readonly artifacts: ReadonlyArray<{ readonly path?: string | undefined }> },
+  tmpDirectory: string = tmpdir(),
+): string | undefined => {
+  for (const artifact of build.artifacts) {
+    if (artifact.path === undefined) continue;
+    const directory = dirname(artifact.path);
+    if (isBuildContextDirectory(directory, tmpDirectory)) return directory;
+  }
+  return undefined;
+};
+
+export interface StaleBuildContextSweep {
+  readonly removed: number;
+  readonly reclaimedBytes: number;
+}
+
+/**
+ * Removes every `sealant-buildkit-*` directory under the OS temp directory whose last modification
+ * is older than `olderThanMs`. Contexts are deleted as soon as their build is published (or fails),
+ * so anything old enough to match here is a leftover: a worker that died mid-build, or a build
+ * from before contexts were cleaned up at all. A build in flight is safe under any threshold longer
+ * than a build takes — its directory was written when the build started.
+ */
+export const sweepStaleBuildContexts = async (input: {
+  readonly olderThanMs: number;
+  readonly now?: number;
+  readonly tmpDirectory?: string;
+}): Promise<StaleBuildContextSweep> => {
+  const tmpDirectory = input.tmpDirectory ?? tmpdir();
+  const cutoff = (input.now ?? Date.now()) - input.olderThanMs;
+  let removed = 0;
+  let reclaimedBytes = 0;
+  const entries = await readdir(tmpDirectory, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(BUILD_CONTEXT_PREFIX)) continue;
+    const directory = join(tmpDirectory, entry.name);
+    const directoryStat = await stat(directory).catch(() => undefined);
+    if (directoryStat === undefined || directoryStat.mtimeMs > cutoff) continue;
+    const files = await readdir(directory).catch(() => []);
+    let bytes = 0;
+    for (const file of files) {
+      const fileStat = await stat(join(directory, file)).catch(() => undefined);
+      if (fileStat?.isFile()) bytes += fileStat.size;
+    }
+    if (await removeBuildContext(directory, tmpDirectory)) {
+      removed += 1;
+      reclaimedBytes += bytes;
+    }
+  }
+  return { removed, reclaimedBytes };
+};
+
 /**
  * Executes Docker build + save for the compiled BuildKit spec.
  *
@@ -1434,12 +1514,18 @@ export const compileWorkspaceBuildSpec = async (input: {
   const commandRunner = input.options?.commandRunner ?? defaultCommandRunner;
   const emitTarball = input.options?.emitTarball ?? true;
 
-  await buildImageTarball(
-    buildContext.spec,
-    emitTarball ? buildContext.imageTarPath : undefined,
-    commandRunner,
-    imagePlan,
-  );
+  try {
+    await buildImageTarball(
+      buildContext.spec,
+      emitTarball ? buildContext.imageTarPath : undefined,
+      commandRunner,
+      imagePlan,
+    );
+  } catch (error) {
+    // A failed build leaves nothing worth keeping; the caller never sees the context path.
+    await removeBuildContext(buildContext.contextDirectory);
+    throw error;
+  }
 
   return parseBuildkitOsBuilderCompileResult({
     builder: {

@@ -3,6 +3,11 @@
  * tarball artifact, then `publishOciImage` with that artifact. Pinned here so the refactor
  * behind `WorkspaceImageBuilder` cannot alter what a Docker worker does.
  */
+import { existsSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { WorkspaceBuild } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
@@ -119,6 +124,66 @@ describe("createDockerWorkspaceImageBuilder", () => {
       tag: "t",
       sourceReference: "sealant-workspace-fedora:latest",
     });
+  });
+
+  const scratchBuild = async (): Promise<{ contextDirectory: string; build: WorkspaceBuild }> => {
+    const contextDirectory = await mkdtemp(join(tmpdir(), "sealant-buildkit-fedora-"));
+    const tarPath = join(contextDirectory, "workspace-image.tar");
+    await writeFile(tarPath, "not really a tarball");
+    return {
+      contextDirectory,
+      build: {
+        ...build,
+        artifacts: [
+          {
+            kind: "oci-image",
+            name: "sealant-workspace-fedora",
+            path: tarPath,
+            reference: "sealant-workspace-fedora:latest",
+            loader: "docker-load",
+          },
+        ],
+      },
+    };
+  };
+
+  it("removes the compile's scratch directory once the image is published", async () => {
+    const { contextDirectory, build: scratch } = await scratchBuild();
+    const registryClient = {
+      publishOciImage: vi.fn(async () => ({
+        repository: "r",
+        tag: "t",
+        reference: "r:t",
+        digestReference: "sha256:3",
+        digest: "sha256:3",
+      })),
+    } as unknown as RegistryClient;
+    const builder = createDockerWorkspaceImageBuilder({
+      registryClient,
+      compileWorkspaceSpec: async () => scratch,
+    });
+
+    await builder.buildAndPublish({ spec: cases.gitSource.blueprint, repository: "r", tag: "t" });
+
+    expect(existsSync(contextDirectory)).toBe(false);
+  });
+
+  it("removes the scratch directory even when the publish fails", async () => {
+    const { contextDirectory, build: scratch } = await scratchBuild();
+    const registryClient = {
+      publishOciImage: vi.fn(async () => {
+        throw new Error("registry down");
+      }),
+    } as unknown as RegistryClient;
+    const builder = createDockerWorkspaceImageBuilder({
+      registryClient,
+      compileWorkspaceSpec: async () => scratch,
+    });
+
+    await expect(
+      builder.buildAndPublish({ spec: cases.gitSource.blueprint, repository: "r", tag: "t" }),
+    ).rejects.toThrow("registry down");
+    expect(existsSync(contextDirectory)).toBe(false);
   });
 
   it("disables the plan-hash short-circuit for a custom compiler without a planner", () => {

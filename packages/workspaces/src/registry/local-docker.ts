@@ -13,6 +13,8 @@ import { promisify } from "node:util";
 
 import type {
   CommandRunner,
+  DeleteImageInput,
+  DeleteImageOutcome,
   PublishOciImageInput,
   PublishOciImageResult,
   RegistryClient,
@@ -46,6 +48,11 @@ const normalizeTag = (tag: string): string => {
 
 const isMissingImageError = (error: unknown): boolean =>
   error instanceof Error && /no such image|no such object/i.test(error.message);
+
+/** `docker image rm` refusing because a container (running or stopped) still references the image. */
+const isImageInUseError = (error: unknown): boolean =>
+  error instanceof Error &&
+  /is being used by|is using its referenced image|conflict/i.test(error.message);
 
 export interface LocalDockerImageStoreConfig {
   readonly commandRunner?: CommandRunner;
@@ -113,6 +120,27 @@ export class LocalDockerImageStore implements RegistryClient {
 
   public async discoverExtensions(): Promise<Array<RegistryExtension>> {
     return [];
+  }
+
+  /**
+   * `docker image rm -f <image id>`: every tag on the id goes (the plan tag, and any legacy
+   * `<name>:sdk-<random>` tag from before plan-keyed coordinates), and the layers no other image
+   * shares are freed. The Engine refuses while a container references the image, which is the
+   * retention sweep's safety net against deleting under a launch it did not see.
+   */
+  public async deleteImage(input: DeleteImageInput): Promise<DeleteImageOutcome> {
+    const digest = input.digest.trim();
+    if (!digest.startsWith("sha256:")) {
+      throw new Error(`Engine image deletes take an image id (sha256:…), got '${digest}'.`);
+    }
+    try {
+      await this.commandRunner("docker", ["image", "rm", "-f", digest]);
+      return "deleted";
+    } catch (error) {
+      if (isMissingImageError(error)) return "missing";
+      if (isImageInUseError(error)) return "in-use";
+      throw error;
+    }
   }
 
   public async publishOciImage(input: PublishOciImageInput): Promise<PublishOciImageResult> {

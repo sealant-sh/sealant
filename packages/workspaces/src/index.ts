@@ -16,3 +16,4 @@ export * from "./worker/process-workspace-stop.js";
 export * from "./worker/reap-expired-workspaces.js";
 export * from "./worker/reap-orphaned-kubernetes-resources.js";
 export * from "./worker/reap-stale-workspace-build-jobs.js";
+export * from "./worker/reap-workspace-images.js";
