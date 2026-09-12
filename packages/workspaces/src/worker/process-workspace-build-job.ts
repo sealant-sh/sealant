@@ -1,6 +1,7 @@
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceSecretEnv,
+  splitPlatformSecretEnv,
 } from "@sealant/api-contracts/workspace-environment";
 import type { CredentialCipherService, CredentialInjection } from "@sealant/credentials";
 import {
@@ -186,7 +187,10 @@ const unsealSecretEnv = (
         new Error("Sealed secretEnv is not a string map."),
       );
     }
-    const policy = parseWorkspaceSecretEnv(record.data);
+    // The control plane seals its own platform-owned entries (the capture token) beside the
+    // caller's map; the caller policy re-applies to the caller's lane only.
+    const { callerEnv, platformEnv } = splitPlatformSecretEnv(record.data);
+    const policy = parseWorkspaceSecretEnv(callerEnv);
     if (!policy.ok) {
       return yield* toWorkspaceBuildJobProcessingError(
         new Error(
@@ -194,7 +198,7 @@ const unsealSecretEnv = (
         ),
       );
     }
-    return policy.env;
+    return { ...policy.env, ...platformEnv };
   });
 
 /** Split the resolver's injection plan into the adapter-launch env record + file list. */

@@ -168,6 +168,53 @@ describe("DockerRuntimeAdapter golden argv", () => {
     ]);
   });
 
+  it("capture source: no workspace mount, channel facts as env, the token only in the secret file", async () => {
+    const { calls, runner } = recordingRunner();
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: runner,
+      runtimeCatalogLoader: catalog,
+    });
+
+    await adapter.launch(cases.capture);
+
+    expect(calls).toEqual([
+      [
+        "run",
+        "-d",
+        "--runtime",
+        "runc",
+        "--name",
+        "sealant-run-golden-4",
+        "-w",
+        "/workspace/repo",
+        "-v",
+        "/run/sealant/sockets/_dotfiles/sealant-secret-env-run-golden-4:/run/sealant/secrets:ro",
+        "-e",
+        "SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json",
+        "-e",
+        "SEALANT_WORKSPACE_SOURCE=capture",
+        "-e",
+        "SEALANT_CAPTURE_ENDPOINT=https://mend.example.com/session/s1",
+        "-e",
+        "SEALANT_CAPTURE_WORKTREE_ID=wt_1",
+        "-e",
+        "SEALANT_OCI_RUNTIME=runc",
+        "-e",
+        "SEALANT_HARNESS_BANNER=Starting claude-code workspace",
+        "-e",
+        "SEALANT_HARNESS_LAUNCH_COMMAND=claude",
+        "-e",
+        "MEND_SESSION_ID=1",
+        "127.0.0.1:5000/sealant/workspaces/demo@sha256:test",
+      ],
+      ["inspect", "--format", "{{json .State}}", "container-id-123"],
+      ["exec", "container-id-123", "test", "-S", "/run/sealant/control.sock"],
+    ]);
+    // The credential never reaches argv under either of its names.
+    expect(JSON.stringify(calls)).not.toContain("mst_secret");
+    expect(JSON.stringify(calls)).not.toContain("SEALANT_CAPTURE_TOKEN");
+  });
+
   it("dind: network + privileged sidecar + workspace joined to it", async () => {
     const { calls, runner } = recordingRunner();
     const adapter = new DockerRuntimeAdapter({

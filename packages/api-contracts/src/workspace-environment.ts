@@ -312,3 +312,41 @@ export const formatWorkspaceEnvIssue = (issue: WorkspaceEnvIssue): string => {
       return `env totals ${issue.totalBytes} bytes across names and values; the maximum is ${WORKSPACE_ENV_MAX_TOTAL_BYTES}`;
   }
 };
+
+/**
+ * Secret names the CONTROL PLANE itself adds to the sealed secret channel beside the caller's map.
+ * They carry the `SEALANT_` prefix — platform-owned, so no caller lane can supply them — and are
+ * consumed by `sealantd boot` rather than handed to workspace processes. Today: the capture
+ * source's session credential (sealantd ADR-0015), which the create request carries as
+ * `captureToken` and the daemon reads from its boot secret file as `SEALANT_CAPTURE_TOKEN`.
+ */
+export const CAPTURE_TOKEN_SECRET_ENV_NAME = "SEALANT_CAPTURE_TOKEN";
+
+export const PLATFORM_SECRET_ENV_NAMES: ReadonlySet<string> = new Set([
+  CAPTURE_TOKEN_SECRET_ENV_NAME,
+]);
+
+export interface SplitSecretEnv {
+  /** The caller's entries: everything `parseWorkspaceSecretEnv` must re-validate. */
+  readonly callerEnv: Readonly<Record<string, string>>;
+  /** The platform-owned entries, matched by exact name; never subject to the caller policy. */
+  readonly platformEnv: Readonly<Record<string, string>>;
+}
+
+/**
+ * Separate the platform-owned entries of a sealed secret map from the caller's so the last-hop
+ * re-validation applies the caller policy to the caller's lane only. Any other `SEALANT_`-prefixed
+ * name stays in the caller lane and is rejected there, as before.
+ */
+export const splitPlatformSecretEnv = (input: Readonly<Record<string, string>>): SplitSecretEnv => {
+  const callerEnv: Record<string, string> = {};
+  const platformEnv: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input)) {
+    if (PLATFORM_SECRET_ENV_NAMES.has(name)) {
+      platformEnv[name] = value;
+    } else {
+      callerEnv[name] = value;
+    }
+  }
+  return { callerEnv, platformEnv };
+};

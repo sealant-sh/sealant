@@ -83,7 +83,8 @@ const createBlueprint = (overrides: Record<string, unknown> = {}) => {
         // A mount override REPLACES the git base outright (the strict union rejects mixed shapes).
         workspace:
           override.sources?.workspace?.kind === "mount" ||
-          override.sources?.workspace?.kind === "standby"
+          override.sources?.workspace?.kind === "standby" ||
+          override.sources?.workspace?.kind === "capture"
             ? override.sources.workspace
             : {
                 ...base.sources.workspace,
@@ -485,6 +486,52 @@ describe("DockerRuntimeAdapter", () => {
       ])}`,
     );
     expect(args?.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_URL="))).toBe(false);
+  });
+
+  it("launches a capture workspace with no workspace bind and the channel facts as env", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-123\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+    await adapter.launch({
+      ...createLaunchInput({
+        sources: {
+          workspace: {
+            kind: "capture",
+            endpoint: "https://mend.example.com/session/s1",
+            worktreeId: "wt_1",
+          },
+        },
+      }),
+      secretEnvDir: "/host/staging/sealant-secret-env-run_capture",
+    });
+    const args = commandRunner.mock.calls[0]?.[1] ?? [];
+    // Only launch material is bound; the working directory is the container's own disk.
+    expect(args.filter((arg, index) => args[index - 1] === "-v" && arg !== undefined)).toEqual([
+      "/host/staging/sealant-secret-env-run_capture:/run/sealant/secrets:ro",
+    ]);
+    expect(args).toContain("SEALANT_WORKSPACE_SOURCE=capture");
+    expect(args).toContain("SEALANT_CAPTURE_ENDPOINT=https://mend.example.com/session/s1");
+    expect(args).toContain("SEALANT_CAPTURE_WORKTREE_ID=wt_1");
+    expect(args).toContain("SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json");
+    expect(args.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_URL="))).toBe(false);
+    expect(args.some((arg) => arg.startsWith("SEALANT_WORKSPACE_MOUNT_HOST_PATH="))).toBe(false);
+    expect(args.some((arg) => arg.startsWith("SEALANT_MOUNT_ALLOWED_STORE_ROOTS="))).toBe(false);
   });
 
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {
