@@ -403,7 +403,9 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_IMAGE_GC_INTERVAL_MS: z.coerce.number().int().positive().default(3600000),
   // How many distinct build plans keep their newest image with no workspace on it, so an unchanged
   // plan is reused by hash instead of rebuilt.
-  WORKSPACE_IMAGE_RETAINED_PLANS: z.coerce.number().int().min(0).default(3),
+  WORKSPACE_IMAGE_RETAINED_PLANS: z.coerce.number().int().min(0).default(10),
+  // Images published within this window are never deleted, whatever the plan count says.
+  WORKSPACE_IMAGE_MIN_AGE_HOURS: z.coerce.number().min(0).default(168),
   // Mount-source allowlist (same operator knob as the API + daemon; see workspaceLifecycleEnvSchema).
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
   // Optional strict Docker named-volume lowering. Semantic parsing and coherence checks live in

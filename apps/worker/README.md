@@ -50,8 +50,9 @@ at once.
 
 Image retention runs in the worker: every hour (`WORKSPACE_IMAGE_GC_INTERVAL_MS`, first pass 30 s
 after boot) it deletes workspace images no live workspace launched from and no retained plan needs
-(`WORKSPACE_IMAGE_RETAINED_PLANS`, default `3`), and removes build scratch older than six hours from
-the OS temp directory. `WORKSPACE_IMAGE_GC_ENABLED=false` turns the sweep off.
+(`WORKSPACE_IMAGE_RETAINED_PLANS`, default `10`), never touches an image published within
+`WORKSPACE_IMAGE_MIN_AGE_HOURS` (default a week), and removes build scratch older than six hours
+from the OS temp directory. `WORKSPACE_IMAGE_GC_ENABLED=false` turns the sweep off.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

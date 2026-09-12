@@ -84,10 +84,19 @@ const store = (
 };
 
 describe("reapWorkspaceImages", () => {
+  // The fixtures are hours old; the default 7-day floor would keep all of them.
+  const now = hoursAgo(0).getTime();
+  const noAgeFloor = { now, minAgeMs: 0 };
+
   it("keeps live-run and retained-plan images and deletes the rest once each", async () => {
     const { deleteImage, registryClient } = store(() => "deleted");
 
-    const summary = await reapWorkspaceImages({ db: {} as never, registryClient });
+    const summary = await reapWorkspaceImages({
+      db: {} as never,
+      registryClient,
+      retainedPlans: 3,
+      ...noAgeFloor,
+    });
 
     expect(deleteImage.mock.calls.map(([input]) => input)).toEqual([
       { repository: "sealant-workspace-arch", digest: "sha256:a1" },
@@ -107,7 +116,12 @@ describe("reapWorkspaceImages", () => {
   it("honours the retained-plan count", async () => {
     const { deleteImage, registryClient } = store(() => "deleted");
 
-    await reapWorkspaceImages({ db: {} as never, registryClient, retainedPlans: 1 });
+    await reapWorkspaceImages({
+      db: {} as never,
+      registryClient,
+      retainedPlans: 1,
+      ...noAgeFloor,
+    });
 
     expect(deleteImage.mock.calls.map(([input]) => input.digest)).toEqual([
       "sha256:b1",
@@ -131,6 +145,7 @@ describe("reapWorkspaceImages", () => {
       registryClient,
       retainedPlans: 0,
       maxDeletesPerTick: 3,
+      ...noAgeFloor,
     });
 
     expect(deleteImage).toHaveBeenCalledTimes(3);
@@ -142,5 +157,29 @@ describe("reapWorkspaceImages", () => {
       failed: 1,
       deferred: 1,
     });
+  });
+
+  it("never deletes an image published within the minimum age, whatever the plan count", async () => {
+    const { deleteImage, registryClient } = store(() => "deleted");
+
+    // Floor at 4.5 h: a1 (4 h) and everything newer survive; d1 (5 h) and e1 (6 h) go.
+    await reapWorkspaceImages({
+      db: {} as never,
+      registryClient,
+      retainedPlans: 0,
+      now,
+      minAgeMs: 4.5 * 60 * 60 * 1000,
+    });
+
+    expect(deleteImage.mock.calls.map(([input]) => input.digest)).toEqual(["sha256:e1"]);
+  });
+
+  it("keeps everything from the last week by default", async () => {
+    const { deleteImage, registryClient } = store(() => "deleted");
+
+    const summary = await reapWorkspaceImages({ db: {} as never, registryClient, now });
+
+    expect(deleteImage).not.toHaveBeenCalled();
+    expect(summary.deleted).toBe(0);
   });
 });

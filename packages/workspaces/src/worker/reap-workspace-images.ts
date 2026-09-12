@@ -19,9 +19,15 @@ export interface ReapWorkspaceImagesOptions {
   readonly registryClient: RegistryClient;
   /**
    * How many distinct build plans keep their newest image even with no workspace on them, so the
-   * plan-hash short-circuit still answers the next create from the store. Defaults to 3.
+   * plan-hash short-circuit still answers the next create from the store. Defaults to 10.
    */
   readonly retainedPlans?: number;
+  /**
+   * Images published more recently than this are never deleted, whatever the plan count says: a
+   * plan someone built this week is a plan they are still using. Defaults to 7 days.
+   */
+  readonly minAgeMs?: number;
+  readonly now?: number;
   /** Upper bound on deletes per tick, so one sweep can't monopolize the daemon. Defaults to 25. */
   readonly maxDeletesPerTick?: number;
 }
@@ -40,7 +46,8 @@ export interface WorkspaceImageReapSummary {
   readonly deferred: number;
 }
 
-const DEFAULT_RETAINED_PLANS = 3;
+const DEFAULT_RETAINED_PLANS = 10;
+const DEFAULT_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_DELETES_PER_TICK = 25;
 
 /** Workspace statuses whose image a launch or a running container may still need. */
@@ -55,7 +62,9 @@ const LIVE_WORKSPACE_STATUSES = ["queued", "running", "ready"] as const;
  *  - a **live workspace** (queued, running, ready) or a **running runtime instance** was launched
  *    from it — its latest build job's digest; or
  *  - it is the **newest publish of one of the last N distinct plans** — the reuse target the next
- *    create with that plan finds by hash.
+ *    create with that plan finds by hash; or
+ *  - it was **published within the minimum age** — recent builds are in use whatever the plan
+ *    count says.
  *
  * Everything else the build-job history says was published is deleted through the store: on the
  * Engine store an `image rm -f` by image id (refused, and kept, while any container references
@@ -67,6 +76,7 @@ export const reapWorkspaceImages = async (
 ): Promise<WorkspaceImageReapSummary> => {
   const retainedPlans = options.retainedPlans ?? DEFAULT_RETAINED_PLANS;
   const maxDeletes = options.maxDeletesPerTick ?? DEFAULT_MAX_DELETES_PER_TICK;
+  const publishedAfter = (options.now ?? Date.now()) - (options.minAgeMs ?? DEFAULT_MIN_AGE_MS);
 
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceRepoLive,
@@ -111,6 +121,11 @@ export const reapWorkspaceImages = async (
       if (retainedPlanHashes.size >= retainedPlans) continue;
       retainedPlanHashes.add(image.planHash);
       keep.add(image.digest);
+    }
+
+    // Anything published within the minimum age, whatever plan it belongs to.
+    for (const image of published) {
+      if (image.publishedAt.getTime() > publishedAfter) keep.add(image.digest);
     }
 
     // Candidates: every other digest, once each, attributed to the repository it was published in.

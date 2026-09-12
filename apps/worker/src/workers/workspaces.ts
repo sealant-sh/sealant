@@ -322,6 +322,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         db,
         registryClient,
         retainedPlans: env.WORKSPACE_IMAGE_RETAINED_PLANS,
+        minAgeMs: env.WORKSPACE_IMAGE_MIN_AGE_HOURS * 60 * 60 * 1000,
       });
       if (contexts.removed > 0 || images.deleted > 0 || images.failed > 0) {
         console.log("Workspace image retention", {
