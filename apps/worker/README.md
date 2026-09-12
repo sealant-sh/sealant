@@ -54,6 +54,12 @@ after boot) it deletes workspace images no live workspace launched from and no r
 `WORKSPACE_IMAGE_MIN_AGE_HOURS` (default a week), and removes build scratch older than six hours
 from the OS temp directory. `WORKSPACE_IMAGE_GC_ENABLED=false` turns the sweep off.
 
+The worker also watches launched runtimes: every `WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS` (default
+5 s) it asks each runtime whether its `ready` workspaces are still up, and Docker additionally
+reports container exits as they happen (`docker events`). A workspace whose container or Pod died on
+its own is recorded `failed` with its exit code and log tail, and its remains are removed — the same
+terminal state a container that dies during boot gets.
+
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 

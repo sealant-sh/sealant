@@ -986,7 +986,7 @@ const mapWorkspaceAttemptSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
   });
   const publishedImage = resolveWorkspacePublishedImage(latestJob);
-  const error = resolveWorkspaceError(latestJob);
+  const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const startedAt = attempt.startedAt ?? latestJob?.startedAt;
   const finishedAt = attempt.finishedAt ?? latestJob?.finishedAt;
 
@@ -1098,7 +1098,7 @@ const mapWorkspaceSummary = (
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
   });
   const publishedImage = resolveWorkspacePublishedImage(latestJob);
-  const error = resolveWorkspaceError(latestJob);
+  const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const updatedAt = latestDate(
     workspace.updatedAt,
     attempt?.updatedAt,

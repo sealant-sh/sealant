@@ -41,6 +41,7 @@ import {
   parseRuntimeAdapterSupportInput,
   type CredentialFileInjection,
   type RuntimeAdapter,
+  type RuntimeAdapterInspection,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterStopInput,
@@ -67,6 +68,7 @@ import {
   plainEnvEntries,
   secretEnvEntries,
   secretPayloadBytes,
+  WORKSPACE_CONTAINER_NAME,
   workspaceLabels,
 } from "./manifests.js";
 import {
@@ -327,6 +329,52 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
   /** Run ids only; see `listManagedWorkspaces`. */
   async listManagedRunIds(): Promise<readonly string[]> {
     return [...new Set((await this.listManagedWorkspaces()).map((entry) => entry.runId))];
+  }
+
+  /**
+   * Liveness of launched Pods, one LIST of the managed selector for the whole batch. A Pod that
+   * reached `Failed`/`Succeeded`, or whose workspace container terminated (restartPolicy is
+   * Never, so it never comes back), is `exited` with that container's exit code and the same
+   * readable problem + log tail launch failures quote; a Pod the cluster no longer lists is
+   * `missing`; a Pod being deleted is `running` — the stop that asked for it settles the row.
+   */
+  async inspect(
+    resourceIds: readonly string[],
+  ): Promise<ReadonlyMap<string, RuntimeAdapterInspection>> {
+    const wanted = new Set(resourceIds);
+    const byName = new Map<string, V1Pod>();
+    for (const pod of await this.#api.listPods(managedSelector(this.#config))) {
+      const name = pod.metadata?.name;
+      if (name !== undefined && wanted.has(name)) {
+        byName.set(name, pod);
+      }
+    }
+    const inspections = new Map<string, RuntimeAdapterInspection>();
+    for (const name of wanted) {
+      const pod = byName.get(name);
+      if (pod === undefined) {
+        inspections.set(name, { state: "missing" });
+        continue;
+      }
+      if (pod.metadata?.deletionTimestamp !== undefined) {
+        inspections.set(name, { state: "running" });
+        continue;
+      }
+      const terminated = pod.status?.containerStatuses?.find(
+        (status) => status.name === WORKSPACE_CONTAINER_NAME,
+      )?.state?.terminated;
+      const phase = podPhase(pod);
+      if (phase === "Failed" || phase === "Succeeded" || terminated !== undefined) {
+        inspections.set(name, {
+          state: "exited",
+          exitCode: terminated?.exitCode,
+          detail: await this.#problemWithLog(pod),
+        });
+        continue;
+      }
+      inspections.set(name, { state: "running" });
+    }
+    return inspections;
   }
 
   async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {

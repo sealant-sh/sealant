@@ -105,6 +105,7 @@ const makeHarness = (input: {
 
   const runtimeInstanceRepoLayer = Layer.succeed(WorkspaceRuntimeInstanceRepo, {
     upsertRuntimeInstance: () => Effect.die("unused"),
+    markExited: () => Effect.die("unused"),
     markStopped,
     getRuntimeInstanceByRunId: () => Effect.succeed(input.instance),
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),

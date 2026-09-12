@@ -594,3 +594,72 @@ describe("cluster env sources (worker-side resolution)", () => {
     expect(pod?.spec?.automountServiceAccountToken).toBe(false);
   });
 });
+
+describe("KubernetesRuntimeAdapter.inspect", () => {
+  it("reports running, exited (with the workspace container's exit code and log tail), stopping and missing Pods", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    cluster.pods.set("pod-live", { metadata: { name: "pod-live" }, status: { phase: "Running" } });
+    cluster.pods.set("pod-dead", {
+      metadata: { name: "pod-dead" },
+      status: {
+        phase: "Failed",
+        containerStatuses: [
+          {
+            name: "workspace",
+            image: "image",
+            imageID: "image-id",
+            ready: false,
+            restartCount: 0,
+            state: { terminated: { exitCode: 137, reason: "OOMKilled" } },
+          },
+        ],
+      },
+    });
+    cluster.logTails.set("pod-dead/workspace", "last words");
+    // The main container died while the Pod still reports Running (a sidecar keeps it up).
+    cluster.pods.set("pod-half-dead", {
+      metadata: { name: "pod-half-dead" },
+      status: {
+        phase: "Running",
+        containerStatuses: [
+          {
+            name: "workspace",
+            image: "image",
+            imageID: "image-id",
+            ready: false,
+            restartCount: 0,
+            state: { terminated: { exitCode: 1 } },
+          },
+        ],
+      },
+    });
+    cluster.pods.set("pod-stopping", {
+      metadata: { name: "pod-stopping", deletionTimestamp: new Date() },
+      status: { phase: "Running" },
+    });
+
+    const inspections = await adapter.inspect([
+      "pod-live",
+      "pod-dead",
+      "pod-half-dead",
+      "pod-stopping",
+      "pod-gone",
+    ]);
+
+    expect(inspections.get("pod-live")).toEqual({ state: "running" });
+    expect(inspections.get("pod-dead")).toEqual({
+      state: "exited",
+      exitCode: 137,
+      detail:
+        "container 'workspace' exited with 137 (OOMKilled)\n--- workspace log tail ---\nlast words",
+    });
+    expect(inspections.get("pod-half-dead")).toEqual({
+      state: "exited",
+      exitCode: 1,
+      detail: "container 'workspace' exited with 1",
+    });
+    expect(inspections.get("pod-stopping")).toEqual({ state: "running" });
+    expect(inspections.get("pod-gone")).toEqual({ state: "missing" });
+  });
+});

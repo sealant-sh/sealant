@@ -31,8 +31,10 @@ import {
   KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
   reapWorkspaceImages,
+  reconcileRuntimeExits,
   sweepStaleBuildContexts,
   targetDerivationOptionsFromEnv,
+  watchRuntimeExits,
   type RegistryClient,
 } from "@sealant/workspaces";
 import { Effect } from "effect";
@@ -311,6 +313,34 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   );
   expiryReaperTimer.unref();
 
+  // Exit reconciler: a runtime that dies on its own (`docker kill`, OOM, node loss) is recorded
+  // `failed` with its exit code instead of staying `ready` until a client probes it. Docker pushes
+  // exits as they happen (`docker events`); the poll is the convergence net behind that stream and
+  // the only feed on Kubernetes. The first sweep runs at boot so a worker restart catches up.
+  const runExitReconcilerTick = (): void => {
+    reconcileRuntimeExits({
+      db,
+      runtimeAdapters,
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+    }).catch((error: unknown) => {
+      console.error("Runtime exit reconciler tick failed", { error });
+    });
+  };
+  runExitReconcilerTick();
+  const exitReconcilerTimer = setInterval(
+    runExitReconcilerTick,
+    env.WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS,
+  );
+  exitReconcilerTimer.unref();
+  const exitWatch = watchRuntimeExits({
+    db,
+    runtimeAdapters,
+    ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+    onError: (error: unknown) => {
+      console.error("Runtime exit watch failed; reconnecting", { error });
+    },
+  });
+
   // Image retention: images no live workspace launched from and no retained plan needs are
   // deleted from the store; build scratch that outlived its build (a worker that died mid-build,
   // or a version that never cleaned up) is swept from the OS temp dir. The first pass runs shortly
@@ -363,6 +393,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     stop: async () => {
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
+      clearInterval(exitReconcilerTimer);
+      exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
       if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);
       if (claudeRefreshTimer !== undefined) {

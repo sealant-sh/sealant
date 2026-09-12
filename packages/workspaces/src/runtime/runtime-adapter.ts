@@ -191,12 +191,58 @@ export type RuntimeAdapterStopInput = z.infer<typeof runtimeAdapterStopInputSche
 
 export type RuntimeAdapterStopResult = z.infer<typeof runtimeAdapterStopResultSchema>;
 
+/**
+ * What the runtime reports about a launched resource when asked (`RuntimeAdapter.inspect`):
+ * still up, exited on its own (the workspace never asked for it — `docker kill`, OOM, a crashed
+ * daemon; the exit code when the runtime kept one), or gone entirely. A resource the runtime is
+ * in the middle of tearing down on our own request counts as `running`: the stop path that asked
+ * for it settles the row.
+ */
+export type RuntimeAdapterInspection =
+  | { readonly state: "running" }
+  | {
+      readonly state: "exited";
+      readonly exitCode: number | undefined;
+      /** Readable post-mortem: the runtime's own state line plus a log tail when one exists. */
+      readonly detail: string;
+    }
+  | { readonly state: "missing" };
+
+/** One runtime exit the adapter observed as it happened (`RuntimeAdapter.watchExits`). */
+export interface RuntimeExitEvent {
+  readonly resourceId: string;
+  readonly exitCode: number | undefined;
+}
+
+export interface RuntimeExitHandlers {
+  readonly onExit: (event: RuntimeExitEvent) => void;
+  /** The runtime's event stream failed; the adapter is already reconnecting. */
+  readonly onError?: (error: unknown) => void;
+}
+
+export interface RuntimeExitWatch {
+  readonly close: () => void;
+}
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
+  /**
+   * Optional liveness read for resources this adapter launched, keyed by `resourceId`. A runtime
+   * that cannot answer for an id leaves it out of the map; a failed read rejects. The worker's
+   * exit reconciler calls this for every `ready` instance so a runtime that died on its own is
+   * recorded within one poll interval; an adapter without it is never reconciled.
+   */
+  inspect?(resourceIds: readonly string[]): Promise<ReadonlyMap<string, RuntimeAdapterInspection>>;
+  /**
+   * Optional push channel for exits: the adapter reports each resource that died as soon as the
+   * runtime announces it, so the reconciler does not wait for its next poll. The watch stays open
+   * until `close()`; the adapter reconnects on its own when the runtime's event stream drops.
+   */
+  watchExits?(handlers: RuntimeExitHandlers): RuntimeExitWatch;
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

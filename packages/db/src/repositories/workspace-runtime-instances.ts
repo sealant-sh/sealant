@@ -41,6 +41,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
   "listRunningInstances",
+  "markExited",
   "markStopped",
   "upsertRuntimeInstance",
 ]);
@@ -105,10 +106,34 @@ export interface MarkWorkspaceRuntimeInstanceStoppedInput {
   readonly finishedAt?: Date;
 }
 
+/** `errorCode` written by `markExited`: the runtime ended without a stop request. */
+export const RUNTIME_EXITED_ERROR_CODE = "runtime-exited";
+
+export interface MarkWorkspaceRuntimeInstanceExitedInput {
+  readonly runId: string;
+  /**
+   * The resource the exit was observed on. The write is fenced on it: a launch that replaced the
+   * resource under the same run (a dead container cleared and re-run) must not be failed by an
+   * observation of its predecessor.
+   */
+  readonly resourceId: string;
+  readonly errorMessage: string;
+  readonly finishedAt?: Date;
+}
+
 export interface WorkspaceRuntimeInstanceRepoService {
   readonly upsertRuntimeInstance: (
     input: UpsertWorkspaceRuntimeInstanceInput,
   ) => Effect.Effect<WorkspaceRuntimeInstance, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Terminal write for a runtime that ended on its own: `ready` becomes `failed` with
+   * `RUNTIME_EXITED_ERROR_CODE` and the observed detail. Fenced: only a `ready` instance on the
+   * observed resource changes, so a stop that already settled the row (`markStopped`) or a
+   * relaunch that replaced the resource wins, and the call returns `undefined`.
+   */
+  readonly markExited: (
+    input: MarkWorkspaceRuntimeInstanceExitedInput,
+  ) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
   /**
    * Terminal stop write. Idempotent: an already-stopped instance is returned unchanged (the first
    * stopReason wins), so a user stop racing the TTL reaper records exactly one outcome.
@@ -206,6 +231,31 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               operation: "upsertRuntimeInstance",
               message: `Failed to upsert runtime instance for run ${input.runId}.`,
             });
+          }),
+        ),
+
+      markExited: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markExited",
+          Effect.gen(function* () {
+            const [updated] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "failed",
+                errorCode: RUNTIME_EXITED_ERROR_CODE,
+                errorMessage: input.errorMessage,
+                finishedAt: input.finishedAt ?? new Date(),
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  eq(workspaceRuntimeInstances.status, "ready"),
+                  eq(workspaceRuntimeInstances.resourceId, input.resourceId),
+                ),
+              )
+              .returning();
+
+            return updated;
           }),
         ),
 

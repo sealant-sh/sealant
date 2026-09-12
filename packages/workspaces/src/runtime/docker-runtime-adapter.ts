@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { join as joinPath } from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
@@ -38,14 +39,22 @@ import {
   type WorkspaceCloneAuth,
   type RuntimeAdapterSupportInput,
   type RuntimeAdapter,
+  type RuntimeAdapterInspection,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
+  type RuntimeExitEvent,
+  type RuntimeExitHandlers,
+  type RuntimeExitWatch,
 } from "./runtime-adapter.js";
 
 const execFileAsync = promisify(execFile);
+
+/** `docker events` reconnect backoff: a dropped stream is retried at once, a dead daemon slowly. */
+const EVENT_STREAM_RECONNECT_MIN_MS = 1_000;
+const EVENT_STREAM_RECONNECT_MAX_MS = 30_000;
 
 /**
  * In-container path of the daemon control socket the workspace entrypoint (`sealantd boot`) listens on.
@@ -89,6 +98,22 @@ export interface DockerRuntimeCatalog {
 export type DockerSshEndpointExposureStrategy = "host-published" | "container-network";
 
 export type DockerRuntimeCatalogLoader = () => Promise<DockerRuntimeCatalog>;
+
+/** One open `docker events` connection. */
+export interface DockerEventStream {
+  readonly kill: () => void;
+}
+
+/**
+ * Opens a `docker events` stream: every line the CLI prints reaches `onLine` as it arrives, and
+ * `onEnd` fires exactly once when the stream ends — with the failure when it did not end cleanly.
+ * The default spawns the CLI against the configured socket; tests feed lines by hand.
+ */
+export type DockerEventStreamOpener = (input: {
+  readonly args: readonly string[];
+  readonly onLine: (line: string) => void;
+  readonly onEnd: (error: unknown) => void;
+}) => DockerEventStream;
 
 interface DockerContainerAcquisition {
   readonly containerId: string;
@@ -154,6 +179,8 @@ export interface DockerRuntimeAdapterOptions {
    * mount uses `volume-subpath`; there is no bind-mount fallback.
    */
   readonly volumeMappings?: readonly DockerVolumeMapping[];
+  /** Test seam for `watchExits`: how a `docker events` stream is opened. */
+  readonly eventStreamOpener?: DockerEventStreamOpener;
 }
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
@@ -188,6 +215,82 @@ const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunn
       stderr: result.stderr,
     };
   };
+};
+
+const createDefaultEventStreamOpener = (dockerSocketPath: string): DockerEventStreamOpener => {
+  return ({ args, onLine, onEnd }) => {
+    const child = spawn("docker", [...args], {
+      env: {
+        ...process.env,
+        DOCKER_HOST: `unix://${dockerSocketPath}`,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let ended = false;
+    const end = (error: unknown): void => {
+      if (ended) return;
+      ended = true;
+      onEnd(error);
+    };
+    let stderr = "";
+    if (child.stdout !== null) {
+      createInterface({ input: child.stdout }).on("line", onLine);
+    }
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-4096);
+    });
+    child.on("error", (error) => end(error));
+    child.on("close", (code) => {
+      end(
+        code === 0 || code === null
+          ? undefined
+          : new Error(`docker events exited with ${code}: ${stderr.trim()}`),
+      );
+    });
+    return {
+      kill: () => {
+        child.kill();
+      },
+    };
+  };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+/**
+ * One `docker events --format '{{json .}}'` line as an exit event, or undefined when the line is
+ * not a container `die` for one of this adapter's containers (the stream is filtered daemon-side,
+ * but a line is still checked structurally before it is trusted). The exit code rides
+ * `Actor.Attributes.exitCode` as a string.
+ */
+const parseDockerDieEvent = (line: string, namePrefix: string): RuntimeExitEvent | undefined => {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.Type !== "container" || parsed.Action !== "die") {
+    return undefined;
+  }
+  const actor = isRecord(parsed.Actor) ? parsed.Actor : undefined;
+  const attributes = actor !== undefined && isRecord(actor.Attributes) ? actor.Attributes : {};
+  const resourceId =
+    typeof actor?.ID === "string" && actor.ID.length > 0
+      ? actor.ID
+      : typeof parsed.id === "string" && parsed.id.length > 0
+        ? parsed.id
+        : undefined;
+  if (resourceId === undefined) return undefined;
+  const name = attributes.name;
+  if (typeof name !== "string" || !name.startsWith(namePrefix)) return undefined;
+  const exitCodeRaw = attributes.exitCode;
+  const exitCode =
+    typeof exitCodeRaw === "string" && /^\d+$/.test(exitCodeRaw) ? Number(exitCodeRaw) : undefined;
+  return { resourceId, exitCode };
 };
 
 const loadRuntimeCatalogFromDockerSocket = async (
@@ -546,10 +649,14 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly allowedStoreRoots: readonly string[];
 
+  private readonly eventStreamOpener: DockerEventStreamOpener;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
     this.commandRunner = options.commandRunner ?? createDefaultCommandRunner(dockerSocketPath);
+    this.eventStreamOpener =
+      options.eventStreamOpener ?? createDefaultEventStreamOpener(dockerSocketPath);
     this.runtimeCatalogLoader =
       options.runtimeCatalogLoader ?? (() => loadRuntimeCatalogFromDockerSocket(dockerSocketPath));
     this.containerNamePrefix = options.containerNamePrefix ?? "sealant";
@@ -1222,6 +1329,99 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     // control socket (gateway-spec §2), and client keys are authorized against the control plane.
     const parsed = parseRuntimeAdapterSupportInput(input);
     return supportForInput(parsed);
+  }
+
+  /**
+   * Liveness of launched containers, one `docker inspect` each. `exited`/`dead` is an exit and
+   * carries the exit code plus a log tail (the container is about to be removed, so this is the
+   * post-mortem); a container the daemon no longer knows — or is removing — is `missing`; every
+   * other state (running, paused, restarting) is `running`.
+   */
+  public async inspect(
+    resourceIds: readonly string[],
+  ): Promise<ReadonlyMap<string, RuntimeAdapterInspection>> {
+    const inspections = new Map<string, RuntimeAdapterInspection>();
+    for (const resourceId of resourceIds) {
+      inspections.set(resourceId, await this.inspectResource(resourceId));
+    }
+    return inspections;
+  }
+
+  private async inspectResource(containerId: string): Promise<RuntimeAdapterInspection> {
+    let state: Awaited<ReturnType<DockerRuntimeAdapter["inspectContainerState"]>>;
+    try {
+      state = await this.inspectContainerState(containerId);
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return { state: "missing" };
+      throw error;
+    }
+    if (state.status === "removing") return { state: "missing" };
+    if (state.status !== "exited" && state.status !== "dead") return { state: "running" };
+    const logs = await this.readContainerLogs(containerId);
+    return {
+      state: "exited",
+      exitCode: state.exitCode,
+      detail: `status: ${state.status}, exitCode: ${state.exitCode}${
+        state.error.length > 0 ? `, error: ${state.error}` : ""
+      }${logs === undefined ? "" : `\nLogs:\n${logs}`}`,
+    };
+  }
+
+  /**
+   * Container exits as the daemon announces them: one long-lived `docker events` stream filtered
+   * to container `die`, restricted to this adapter's name prefix, reconnected with backoff when
+   * it drops (a daemon restart ends it). Exits announced while the stream is down are not
+   * replayed — the reconciler's poll covers them.
+   */
+  public watchExits(handlers: RuntimeExitHandlers): RuntimeExitWatch {
+    const args = [
+      "events",
+      "--filter",
+      "type=container",
+      "--filter",
+      "event=die",
+      "--format",
+      "{{json .}}",
+    ];
+    const namePrefix = `${this.containerNamePrefix}-`;
+    let closed = false;
+    let stream: DockerEventStream | undefined;
+    let reconnectTimer: NodeJS.Timeout | undefined;
+    let backoffMs = EVENT_STREAM_RECONNECT_MIN_MS;
+
+    const open = (): void => {
+      if (closed) return;
+      stream = this.eventStreamOpener({
+        args,
+        onLine: (line) => {
+          // A line proves the stream is healthy; the next drop retries promptly again.
+          backoffMs = EVENT_STREAM_RECONNECT_MIN_MS;
+          const event = parseDockerDieEvent(line, namePrefix);
+          if (event !== undefined) handlers.onExit(event);
+        },
+        onEnd: (error) => {
+          stream = undefined;
+          if (closed) return;
+          if (error !== undefined) handlers.onError?.(error);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = undefined;
+            open();
+          }, backoffMs);
+          reconnectTimer.unref();
+          backoffMs = Math.min(backoffMs * 2, EVENT_STREAM_RECONNECT_MAX_MS);
+        },
+      });
+    };
+    open();
+
+    return {
+      close: () => {
+        closed = true;
+        if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+        stream?.kill();
+        stream = undefined;
+      },
+    };
   }
 
   /**
