@@ -126,6 +126,13 @@ export const runtimeAdapterLaunchResultSchema = z.strictObject({
 export const runtimeAdapterStopInputSchema = z.strictObject({
   resourceId: z.string().trim().min(1),
   reference: z.string().trim().min(1).optional(),
+  /**
+   * Confirmed-termination fencing (sealantd ADR-0015): skip the daemon's graceful window and
+   * kill the runtime outright, so a replacement executor can claim the worktree knowing the old
+   * one cannot write again. Absent = a planned stop, which lets the daemon flush first where the
+   * runtime distinguishes the two (today: Cloudflare `stop()` versus `destroy()`).
+   */
+  fence: z.boolean().optional(),
 });
 
 export const runtimeAdapterStopResultSchema = z.strictObject({

@@ -2,7 +2,12 @@
  * Pure launch planning for the bridge Worker: sandbox naming, the sealantd boot environment, and
  * request authentication. Everything here is unit-testable with no Cloudflare runtime in sight.
  */
-import type { BridgeLaunchRequest } from "@sealant/workspaces/cloudflare/bridge-contract";
+import type { SandboxOptions } from "@cloudflare/sandbox";
+import {
+  bridgeStopModeSchema,
+  type BridgeLaunchRequest,
+  type BridgeStopMode,
+} from "@sealant/workspaces/cloudflare/bridge-contract";
 
 /** In-sandbox loopback port the socat relay binds; `wsConnect` proxies control bytes to it. */
 export const CONTROL_RELAY_PORT = 7078;
@@ -54,19 +59,59 @@ export const bootEnvForLaunch = (request: BridgeLaunchRequest): Record<string, s
   SEALANT_CONTROL_SOCKET: CONTROL_SOCKET_PATH,
   SEALANT_WORKSPACE_ROOT: "/workspace",
   SEALANT_WORKING_DIRECTORY: "/workspace/repo",
-  SEALANT_WORKSPACE_SOURCE: "git",
-  SEALANT_WORKSPACE_REPO_URL: request.source.url,
-  ...(request.source.ref === undefined ? {} : { SEALANT_WORKSPACE_REPO_REF: request.source.ref }),
-  ...(request.source.auth === undefined
-    ? {}
-    : {
-        SEALANT_WORKSPACE_HTTP_USERNAME: request.source.auth.username,
-        SEALANT_WORKSPACE_HTTP_TOKEN: request.source.auth.token,
-      }),
+  ...sourceEnv(request.source),
   ...(request.secretEnv === undefined ? {} : { SEALANT_SECRET_ENV_FILE: SECRET_ENV_FILE_PATH }),
   ...(request.dotfiles === undefined ? {} : { SEALANT_DOTFILES_ARCHIVE_DIR: DOTFILES_ARCHIVE_DIR }),
   ...request.env,
 });
+
+/**
+ * The source's boot facts. A capture source (sealantd ADR-0015) mounts nothing: the daemon
+ * materialises the worktree from the session channel onto the sandbox disk; its credential is in
+ * the secret env file (as `SEALANT_CAPTURE_TOKEN`), never in the process environment.
+ */
+const sourceEnv = (source: BridgeLaunchRequest["source"]): Record<string, string> =>
+  source.kind === "capture"
+    ? {
+        SEALANT_WORKSPACE_SOURCE: "capture",
+        SEALANT_CAPTURE_ENDPOINT: source.endpoint,
+        SEALANT_CAPTURE_WORKTREE_ID: source.worktreeId,
+      }
+    : {
+        SEALANT_WORKSPACE_SOURCE: "git",
+        SEALANT_WORKSPACE_REPO_URL: source.url,
+        ...(source.ref === undefined ? {} : { SEALANT_WORKSPACE_REPO_REF: source.ref }),
+        ...(source.auth === undefined
+          ? {}
+          : {
+              SEALANT_WORKSPACE_HTTP_USERNAME: source.auth.username,
+              SEALANT_WORKSPACE_HTTP_TOKEN: source.auth.token,
+            }),
+      };
+
+/**
+ * Sandbox options for a launch. A capture executor must not be put to sleep by the platform's
+ * idle timer: its liveness is a lease heartbeat the platform cannot see, and a sleeping sandbox
+ * loses the lease. `keepAlive` persists in the Durable Object, so the option-less `getSandbox`
+ * calls of the control and stop routes leave it in place; the ADR's planned stop (`stop()`) and
+ * fence (`destroy()`) are the only ways such a sandbox ends. Git launches keep the SDK default.
+ */
+export const sandboxOptionsForLaunch = (request: BridgeLaunchRequest): SandboxOptions =>
+  request.source.kind === "capture" ? { keepAlive: true } : {};
+
+/**
+ * The stop mode a DELETE names: `?mode=fence` destroys (SIGKILL, confirmed-termination fencing);
+ * anything else is a planned stop (SIGTERM, the daemon's flush window). An unknown value is a
+ * request error rather than a silent default, so a typo can never skip the flush.
+ */
+export const stopModeFromUrl = (url: URL): BridgeStopMode | undefined => {
+  const raw = url.searchParams.get("mode");
+  if (raw === null) {
+    return "planned";
+  }
+  const parsed = bridgeStopModeSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
+};
 
 /**
  * Constant-time-ish bearer comparison (no early exit on the first differing byte). Workers have

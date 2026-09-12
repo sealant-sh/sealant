@@ -83,6 +83,12 @@ describe("supportForCloudflare", () => {
     });
   });
 
+  it("accepts a capture source: nothing to mount, the daemon materialises from the channel", () => {
+    expect(supportForCloudflare({ blueprint: cases.capture.blueprint })).toEqual({
+      supported: true,
+    });
+  });
+
   it("rejects cluster env references (Kubernetes-only)", () => {
     expect(
       supportForCloudflare({
@@ -126,11 +132,14 @@ describe("CloudflareRuntimeAdapter.launch", () => {
     expect(request?.authorization).toBe("Bearer bridge-token");
     const payload = bridgeLaunchRequestSchema.parse(request?.body);
     expect(payload.runId).toBe("run-golden-1");
+    // `kind` is the contract's parse-time default; the wire body carries none (asserted below).
     expect(payload.source).toEqual({
+      kind: "git",
       url: "https://github.com/example/repo.git",
       ref: "main",
       auth: { username: "x-access-token", token: "ghs_secret" },
     });
+    expect(request?.body).toMatchObject({ source: expect.not.objectContaining({ kind: "git" }) });
     expect(payload.image).toEqual(publishedImage);
     // Later wins: blueprint env, then platform env, then credential env.
     expect(payload.env).toEqual({
@@ -139,6 +148,35 @@ describe("CloudflareRuntimeAdapter.launch", () => {
       GITHUB_TOKEN: "gh_secret",
       CLAUDE_CODE_OAUTH_TOKEN: "cc_secret",
     });
+  });
+
+  it("POSTs a capture source with its channel facts and the token only inside secretEnv", async () => {
+    const bridge = fakeBridge(() =>
+      json(200, {
+        resourceId: "do-cap",
+        status: "ready",
+        controlEndpoint: "wss://bridge.example.com/v1/workspaces/do-cap/control",
+      }),
+    );
+    const adapter = new CloudflareRuntimeAdapter({ config, fetchImpl: bridge.fetchImpl });
+
+    await adapter.launch({ ...cases.capture, secretEnvDir: undefined });
+
+    const payload = bridgeLaunchRequestSchema.parse(bridge.requests[0]?.body);
+    expect(payload.source).toEqual({
+      kind: "capture",
+      endpoint: "https://mend.example.com/session/s1",
+      worktreeId: "wt_1",
+    });
+    expect(payload.secretEnv).toEqual({
+      MEND_SESSION_TOKEN: "mst_secret",
+      SEALANT_CAPTURE_TOKEN: "mst_secret",
+    });
+    expect(payload.env).toEqual({ MEND_SESSION_ID: "1" });
+    // The wire payload for a git source is unchanged: no `kind` key, the contract defaults it.
+    await adapter.launch(cases.gitSource);
+    const gitBody = bridge.requests[1]?.body as { source?: Record<string, unknown> };
+    expect(gitBody.source).not.toHaveProperty("kind");
   });
 
   it("surfaces the bridge's message on failure", async () => {
@@ -167,6 +205,17 @@ describe("CloudflareRuntimeAdapter.stop", () => {
     });
     expect(bridge.requests[0]?.url).toBe("https://bridge.example.com/v1/workspaces/do-abc");
     expect(bridge.requests[0]?.method).toBe("DELETE");
+  });
+
+  it("asks the bridge to fence (destroy) only when the stop says so", async () => {
+    const bridge = fakeBridge(() => json(200, { outcome: "stopped" }));
+    const adapter = new CloudflareRuntimeAdapter({ config, fetchImpl: bridge.fetchImpl });
+    await adapter.stop({ resourceId: "do-abc", fence: true });
+    expect(bridge.requests[0]?.url).toBe(
+      "https://bridge.example.com/v1/workspaces/do-abc?mode=fence",
+    );
+    await adapter.stop({ resourceId: "do-abc", fence: false });
+    expect(bridge.requests[1]?.url).toBe("https://bridge.example.com/v1/workspaces/do-abc");
   });
 
   it("treats a 404 as not-found (idempotent stop)", async () => {

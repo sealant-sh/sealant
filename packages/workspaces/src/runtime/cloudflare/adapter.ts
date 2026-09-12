@@ -27,7 +27,8 @@ import {
   bridgeErrorResponseSchema,
   bridgeLaunchResponseSchema,
   bridgeStopResponseSchema,
-  type BridgeLaunchRequest,
+  type BridgeLaunchRequestInput,
+  type BridgeStopMode,
 } from "./bridge-contract.js";
 import type { CloudflareRuntimeConfig } from "./config.js";
 
@@ -132,9 +133,9 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
       );
     }
     const source = parsed.blueprint.sources.workspace;
-    if (source.kind !== "git") {
+    if (source.kind !== "git" && source.kind !== "capture") {
       // supports() already rejected mount sources; this guards direct launch calls.
-      throw new Error("The cloudflare adapter can only launch git workspace sources.");
+      throw new Error("The cloudflare adapter can only launch git or capture workspace sources.");
     }
     if (parsed.workspaceCloneAuth?.type === "file-ref") {
       throw new Error(
@@ -142,23 +143,30 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
       );
     }
 
-    const request: BridgeLaunchRequest = {
+    const request: BridgeLaunchRequestInput = {
       version: BRIDGE_CONTRACT_VERSION,
       runId: parsed.runId,
       ...(parsed.workspaceId === undefined ? {} : { workspaceId: parsed.workspaceId }),
       ...(parsed.principalId === undefined ? {} : { principalId: parsed.principalId }),
-      source: {
-        url: source.url,
-        ...(source.ref === undefined ? {} : { ref: source.ref }),
-        ...(parsed.workspaceCloneAuth?.type === "http-token"
-          ? {
-              auth: {
-                username: parsed.workspaceCloneAuth.username,
-                token: parsed.workspaceCloneAuth.token,
-              },
-            }
-          : {}),
-      },
+      source:
+        source.kind === "capture"
+          ? // The token is already in `secretEnv` (sealed by the control plane as
+            // SEALANT_CAPTURE_TOKEN); only the channel facts travel here.
+            { kind: "capture", endpoint: source.endpoint, worktreeId: source.worktreeId }
+          : // No `kind` on the wire for git: the contract defaults it, and a bridge deployed
+            // before the capture source (a strict v1 parser) keeps accepting this payload.
+            {
+              url: source.url,
+              ...(source.ref === undefined ? {} : { ref: source.ref }),
+              ...(parsed.workspaceCloneAuth?.type === "http-token"
+                ? {
+                    auth: {
+                      username: parsed.workspaceCloneAuth.username,
+                      token: parsed.workspaceCloneAuth.token,
+                    },
+                  }
+                : {}),
+            },
       image: parsed.publishedImage,
       // Later wins, matching the docker adapter's -e ordering: blueprint env, then
       // worker-resolved platform env (must not be shadowed), then credential env.
@@ -189,9 +197,12 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
 
   async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
+    // A planned stop is the route's default (SIGTERM, the daemon's flush window); fencing asks
+    // the bridge to destroy the sandbox outright.
+    const mode: BridgeStopMode = parsed.fence === true ? "fence" : "planned";
     const response = await this.#bridge(
       "DELETE",
-      `/v1/workspaces/${encodeURIComponent(parsed.resourceId)}`,
+      `/v1/workspaces/${encodeURIComponent(parsed.resourceId)}${mode === "fence" ? "?mode=fence" : ""}`,
       undefined,
       // A sandbox the bridge no longer knows is a successful stop, same as a missing container.
       [404],
@@ -236,7 +247,7 @@ const stagedManifestSchema = z.object({
 /** Read the worker-staged dotfiles material and inline it (no shared filesystem to mount). */
 const inlineDotfiles = async (
   dotfilesArchiveDir: string | undefined,
-): Promise<Pick<BridgeLaunchRequest, "dotfiles">> => {
+): Promise<Pick<BridgeLaunchRequestInput, "dotfiles">> => {
   if (dotfilesArchiveDir === undefined) {
     return {};
   }
