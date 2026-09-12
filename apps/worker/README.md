@@ -48,6 +48,11 @@ registry instead; Kubernetes builds require them.
 `WORKSPACE_BUILD_QUEUE_PREFETCH` (default `1`) sets how many deliveries one worker process handles
 at once.
 
+Image retention runs in the worker: every hour (`WORKSPACE_IMAGE_GC_INTERVAL_MS`, first pass 30 s
+after boot) it deletes workspace images no live workspace launched from and no retained plan needs
+(`WORKSPACE_IMAGE_RETAINED_PLANS`, default `3`), and removes build scratch older than six hours from
+the OS temp directory. `WORKSPACE_IMAGE_GC_ENABLED=false` turns the sweep off.
+
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 

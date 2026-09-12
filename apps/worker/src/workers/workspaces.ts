@@ -30,6 +30,8 @@ import {
   kubernetesRuntimeConfigFromEnv,
   KubernetesWorkspaceImageBuilder,
   reapStaleWorkspaceBuildJobs,
+  reapWorkspaceImages,
+  sweepStaleBuildContexts,
   targetDerivationOptionsFromEnv,
   type RegistryClient,
 } from "@sealant/workspaces";
@@ -40,6 +42,10 @@ import {
   CLAUDE_SESSION_REFRESH_INTERVAL_MS,
   refreshClaudeSessionCredentials,
 } from "./refresh-claude-sessions.js";
+
+// Build scratch older than this is a leftover, never a build in flight.
+const STALE_BUILD_CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
+const IMAGE_RETENTION_BOOT_DELAY_MS = 30_000;
 
 const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
   return createSealantDB(env.DATABASE_URL);
@@ -305,6 +311,38 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   );
   expiryReaperTimer.unref();
 
+  // Image retention: images no live workspace launched from and no retained plan needs are
+  // deleted from the store; build scratch that outlived its build (a worker that died mid-build,
+  // or a version that never cleaned up) is swept from the OS temp dir. The first pass runs shortly
+  // after boot so an upgrade reclaims a full disk without waiting an interval.
+  const runImageRetentionTick = (): void => {
+    void (async () => {
+      const contexts = await sweepStaleBuildContexts({ olderThanMs: STALE_BUILD_CONTEXT_AGE_MS });
+      const images = await reapWorkspaceImages({
+        db,
+        registryClient,
+        retainedPlans: env.WORKSPACE_IMAGE_RETAINED_PLANS,
+      });
+      if (contexts.removed > 0 || images.deleted > 0 || images.failed > 0) {
+        console.log("Workspace image retention", {
+          ...images,
+          staleBuildContextsRemoved: contexts.removed,
+          staleBuildContextBytes: contexts.reclaimedBytes,
+        });
+      }
+    })().catch((error: unknown) => {
+      console.error("Workspace image retention tick failed", { error });
+    });
+  };
+  const imageRetentionBootTimer = env.WORKSPACE_IMAGE_GC_ENABLED
+    ? setTimeout(runImageRetentionTick, IMAGE_RETENTION_BOOT_DELAY_MS)
+    : undefined;
+  imageRetentionBootTimer?.unref();
+  const imageRetentionTimer = env.WORKSPACE_IMAGE_GC_ENABLED
+    ? setInterval(runImageRetentionTick, env.WORKSPACE_IMAGE_GC_INTERVAL_MS)
+    : undefined;
+  imageRetentionTimer?.unref();
+
   // Keep-fresh sweeper: claude SESSION credentials (kind "credentials-json") only stay fresh when
   // the official CLI runs against them; when no workspace uses an account for hours, the stored
   // access token expires. Every tick, stale accounts are refreshed with a minimal one-turn
@@ -324,6 +362,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     stop: async () => {
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
+      if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);
+      if (imageRetentionTimer !== undefined) clearInterval(imageRetentionTimer);
       if (claudeRefreshTimer !== undefined) {
         clearInterval(claudeRefreshTimer);
       }

@@ -1,5 +1,5 @@
 import type { NewWorkspace } from "@sealant/validators";
-import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -9,6 +9,20 @@ import {
   type WorkspaceBuildJob,
   type WorkspaceBuildJobStatus,
 } from "../schema.js";
+
+/** One succeeded publish, as the image retention sweep sees it. */
+export interface PublishedWorkspaceImage {
+  readonly jobId: string;
+  readonly runId: string | null;
+  readonly registryId: string;
+  /** The `<repository>:<tag>` (or `<registry>/<repository>:<tag>`) the image was published as. */
+  readonly publishedReference: string;
+  /** The repository the client asked for; the fallback when the reference carries no tag. */
+  readonly repository: string;
+  readonly digest: string;
+  readonly planHash: string | null;
+  readonly publishedAt: Date;
+}
 
 export interface EnqueueWorkspaceBuildJobInput {
   readonly id: string;
@@ -84,6 +98,7 @@ const workspaceBuildJobRepoOperationSchema = Schema.Literals([
   "insertQueuedJob",
   "listJobsByStatus",
   "listLatestJobsByRunIds",
+  "listPublishedImages",
   "markJobFailed",
   "markJobRunning",
   "markJobSucceeded",
@@ -186,6 +201,15 @@ export interface WorkspaceBuildJobRepoService {
   ) => Effect.Effect<WorkspaceBuildJob | null, WorkspaceBuildJobRepoError>;
   /** Drop the sealed secret env once the launch phase has settled; idempotent. */
   readonly clearSecretEnv: (id: string) => Effect.Effect<void, WorkspaceBuildJobRepoError>;
+  /**
+   * Every succeeded job that recorded a published digest, newest publish first. The image
+   * retention sweep's view of what the store may hold: one row per publish, so a digest republished
+   * under several jobs appears once per job.
+   */
+  readonly listPublishedImages: () => Effect.Effect<
+    Array<PublishedWorkspaceImage>,
+    WorkspaceBuildJobRepoError
+  >;
 }
 
 export class WorkspaceBuildJobRepo extends Context.Service<
@@ -337,6 +361,54 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
             .orderBy(asc(workspaceBuildJobs.createdAt))
             .limit(limit)
             .pipe(Effect.map((jobs) => [...jobs])),
+        ),
+
+      listPublishedImages: () =>
+        withWorkspaceBuildJobRepoError(
+          "listPublishedImages",
+          db
+            .select({
+              jobId: workspaceBuildJobs.id,
+              runId: workspaceBuildJobs.runId,
+              registryId: workspaceBuildJobs.registryId,
+              publishedReference: workspaceBuildJobs.publishedReference,
+              repository: workspaceBuildJobs.repository,
+              digest: workspaceBuildJobs.publishedDigest,
+              planHash: sql<
+                string | null
+              >`${workspaceBuildJobs.resultPayload} #>> '{metadata,planHash}'`,
+              finishedAt: workspaceBuildJobs.finishedAt,
+              updatedAt: workspaceBuildJobs.updatedAt,
+            })
+            .from(workspaceBuildJobs)
+            .where(
+              and(
+                eq(workspaceBuildJobs.status, "succeeded"),
+                isNotNull(workspaceBuildJobs.publishedDigest),
+                isNotNull(workspaceBuildJobs.publishedReference),
+              ),
+            )
+            .orderBy(desc(workspaceBuildJobs.finishedAt), desc(workspaceBuildJobs.createdAt))
+            .pipe(
+              Effect.map((rows) =>
+                rows.flatMap((row) =>
+                  row.digest === null || row.publishedReference === null
+                    ? []
+                    : [
+                        {
+                          jobId: row.jobId,
+                          runId: row.runId,
+                          registryId: row.registryId,
+                          publishedReference: row.publishedReference,
+                          repository: row.repository,
+                          digest: row.digest,
+                          planHash: row.planHash,
+                          publishedAt: row.finishedAt ?? row.updatedAt,
+                        },
+                      ],
+                ),
+              ),
+            ),
         ),
 
       claimNextQueuedJob: (input) =>

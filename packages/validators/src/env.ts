@@ -394,6 +394,16 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
   // How often the worker sweeps live runtimes for expired TTLs and stranded containers.
   WORKSPACE_EXPIRY_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+  // Image retention: how often the worker deletes workspace images no live workspace launched from
+  // and no retained plan still needs (plus stale build scratch under the OS temp dir). `false`
+  // leaves the store alone for operators who manage images themselves.
+  WORKSPACE_IMAGE_GC_ENABLED: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(true),
+  WORKSPACE_IMAGE_GC_INTERVAL_MS: z.coerce.number().int().positive().default(3600000),
+  // How many distinct build plans keep their newest image with no workspace on it, so an unchanged
+  // plan is reused by hash instead of rebuilt.
+  WORKSPACE_IMAGE_RETAINED_PLANS: z.coerce.number().int().min(0).default(3),
   // Mount-source allowlist (same operator knob as the API + daemon; see workspaceLifecycleEnvSchema).
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
   // Optional strict Docker named-volume lowering. Semantic parsing and coherence checks live in

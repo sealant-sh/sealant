@@ -22,6 +22,54 @@ describe("ZotRegistryClient", () => {
     });
   });
 
+  it("deletes a manifest by digest and treats an absent one as missing", async () => {
+    const fetchMock = vi.fn(async (url: URL) =>
+      url.toString().endsWith("sha256:gone")
+        ? new Response(null, { status: 404 })
+        : new Response(null, { status: 202 }),
+    );
+    const commandRunner = vi.fn(async (_command: string, _args: Array<string>) => {
+      throw new Error("Error: No such image");
+    });
+    const client = createZotRegistryClient({
+      baseUrl: "http://127.0.0.1:5000",
+      fetch: fetchMock as unknown as typeof fetch,
+      commandRunner,
+    });
+
+    await expect(
+      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:old" }),
+    ).resolves.toBe("deleted");
+    // The worker's own Engine copy goes too, and its absence is not a failure.
+    expect(commandRunner).toHaveBeenCalledWith("docker", [
+      "image",
+      "rm",
+      "-f",
+      "127.0.0.1:5000/sealant-workspace-arch@sha256:old",
+    ]);
+    await expect(
+      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:gone" }),
+    ).resolves.toBe("missing");
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(requestUrl.toString()).toBe(
+      "http://127.0.0.1:5000/v2/sealant-workspace-arch/manifests/sha256:old",
+    );
+    expect(requestInit.method).toBe("DELETE");
+  });
+
+  it("surfaces a registry that refuses deletes", async () => {
+    const client = createZotRegistryClient({
+      baseUrl: "http://127.0.0.1:5000",
+      fetch: vi.fn(async () => new Response("deletes disabled", { status: 405 })) as typeof fetch,
+      commandRunner: vi.fn(async () => ({ stdout: "", stderr: "" })),
+    });
+
+    await expect(
+      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:old" }),
+    ).rejects.toBeInstanceOf(RegistryClientHttpError);
+  });
+
   it("treats a missing repository as absent", async () => {
     const client = createZotRegistryClient({
       baseUrl: "http://127.0.0.1:5000",
