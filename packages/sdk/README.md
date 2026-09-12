@@ -208,6 +208,35 @@ Not covered, and worth saying plainly: a process that _deliberately_ writes a se
 the repository or to a mount is producing ordinary workspace state, and the redactor masks captured
 I/O, not files.
 
+## Capture-sourced workspaces
+
+A `capture` source (sealantd ADR-0015) mounts nothing and clones nothing. The workspace daemon
+registers with a session channel, fetches the worktree's head plan, materialises it onto the
+executor's own disk, claims the lease, and ships captures back over the channel — so a session can
+run where no host path exists (a Cloudflare sandbox, a MicroVM) and outlive any one executor:
+
+```ts
+const workspace = await sealant.workspaces.create({
+  source: {
+    kind: "capture",
+    endpoint: "https://mend.example.com/session/s1",
+    worktreeId: "wt_1",
+    token: sessionToken, // the channel credential; secret
+  },
+  harness: claudeCode(),
+});
+```
+
+- `token` is lifted out of the blueprint and rides the request top level as `captureToken`. The
+  control plane seals it beside `secretEnv` and delivers it through the same boot file, as
+  `SEALANT_CAPTURE_TOKEN`; it is never in the spec, `WorkspaceDetails`, argv, or container env.
+- The channel address and worktree id reach the daemon as `SEALANT_CAPTURE_ENDPOINT` and
+  `SEALANT_CAPTURE_WORKTREE_ID`, with `SEALANT_WORKSPACE_SOURCE=capture`.
+- No mount allowlist applies. On Kubernetes the workspace root is an `emptyDir`; on Cloudflare the
+  sandbox is kept alive while the lease is live and a stop sends SIGTERM so the daemon can flush.
+- **No restart in place**: the credential is discarded once the launch settles, so `restart()` is
+  refused; create a replacement workspace with a fresh token.
+
 ## Dotfiles and shell
 
 Bring your own environment: a login shell and dotfiles applied before the workspace accepts work.
@@ -256,7 +285,7 @@ with readable failures:
   with `baseImage`.
 - **Node.js + npm** at or above the harness CLIs' floor (the CLIs are installed with
   `npm install -g` and run on the base's node).
-- **git**, for clone- and mount-sourced workspaces.
+- **git**, for clone-, mount- and capture-sourced workspaces.
 
 `packages` still works: names pass through **verbatim** (no portable-name resolution) to the base's
 own package manager — `apt`, `apk`, `dnf`, or `pacman`, autodetected — and the build fails with a

@@ -56,9 +56,15 @@ export const buildCreateWorkspaceRequest = (
     );
   }
   if (options.source !== undefined && options.ref !== undefined) {
-    throw new SealantError("`ref` applies only to `repository` sources, not mounts.", {
+    throw new SealantError("`ref` applies only to `repository` sources, not mounts or captures.", {
       code: "invalid_create_options",
     });
+  }
+  if (options.source?.kind === "capture" && options.source.token.trim().length === 0) {
+    throw new SealantError(
+      "A capture source needs a non-empty `token`: the session credential the daemon registers with.",
+      { code: "invalid_create_options" },
+    );
   }
   if (options.os !== undefined && options.baseImage !== undefined) {
     throw new SealantError(
@@ -90,7 +96,11 @@ export const buildCreateWorkspaceRequest = (
   }
   const sourceName =
     options.repository ??
-    (options.source?.kind === "standby" ? options.source.rootPath : options.source?.path) ??
+    (options.source?.kind === "standby"
+      ? options.source.rootPath
+      : options.source?.kind === "capture"
+        ? options.source.worktreeId
+        : options.source?.path) ??
     "workspace";
   const tail =
     sourceName
@@ -99,7 +109,7 @@ export const buildCreateWorkspaceRequest = (
       .pop() ?? sourceName;
   const credentials = mapWorkspaceCredentials(options.credentials);
   const linkedWorktreeMount =
-    options.source === undefined || options.source.kind === "standby"
+    options.source === undefined || options.source.kind !== "mount"
       ? null
       : discoverLinkedWorktreeMetadataMount(options.source.path);
   const explicitMounts = options.mounts ?? [];
@@ -201,7 +211,17 @@ export const buildCreateWorkspaceRequest = (
             }
           : options.source?.kind === "standby"
             ? { kind: "standby", rootPath: options.source.rootPath }
-            : { kind: "mount", hostPath: options.source?.path },
+            : options.source?.kind === "capture"
+              ? // The token is NOT here: it rides the request top level as `captureToken`.
+                {
+                  kind: "capture",
+                  endpoint: options.source.endpoint,
+                  worktreeId: options.source.worktreeId,
+                  ...(options.source.platform === undefined
+                    ? {}
+                    : { platform: options.source.platform }),
+                }
+              : { kind: "mount", hostPath: options.source?.path },
       ...(dotfilesRepository === undefined
         ? {}
         : {
@@ -271,6 +291,9 @@ export const buildCreateWorkspaceRequest = (
       ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
       spec,
       ...(secretEnv === undefined ? {} : { secretEnv }),
+      // The capture credential is the one secret outside `secretEnv`: sealed and delivered the
+      // same way by the control plane, under its platform-owned name.
+      ...(options.source?.kind === "capture" ? { captureToken: options.source.token } : {}),
     },
   };
 };
