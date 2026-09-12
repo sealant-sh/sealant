@@ -574,14 +574,22 @@ const validateWorkspaceMounts = (input: {
   return Effect.gen(function* () {
     const source = input.spec.sources.workspace;
     const extraMounts = input.spec.sources.mounts;
-    if (source.kind === "git" && extraMounts.length === 0) {
-      return;
-    }
     if (source.kind !== "git" && input.sourceSelection !== undefined) {
       return yield* new WorkspaceBadRequestError({
         message:
-          "A mount- or standby-sourced workspace cannot also carry a GitHub source selection.",
+          "A mount-, standby- or capture-sourced workspace cannot also carry a GitHub source selection.",
       });
+    }
+    // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
+    // allowlist applies, and the daemon re-checks it at boot. Git and capture sources name no host
+    // path at all, so with no extra mounts there is nothing for the allowlist to gate.
+    const hostPaths = [
+      ...(source.kind === "mount" ? [source.hostPath] : []),
+      ...(source.kind === "standby" ? [source.rootPath] : []),
+      ...extraMounts.map((mount) => mount.hostPath),
+    ];
+    if (hostPaths.length === 0) {
+      return;
     }
     const allowedRoots = (env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS ?? "")
       .split(":")
@@ -601,13 +609,6 @@ const validateWorkspaceMounts = (input: {
         message: `SEALANT_MOUNT_ALLOWED_STORE_ROOTS contains an invalid root: ${invalidRoot}`,
       });
     }
-    // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
-    // allowlist applies, and the daemon re-checks it at boot.
-    const hostPaths = [
-      ...(source.kind === "mount" ? [source.hostPath] : []),
-      ...(source.kind === "standby" ? [source.rootPath] : []),
-      ...extraMounts.map((mount) => mount.hostPath),
-    ];
     for (const hostPath of hostPaths) {
       if (!allowedRoots.some((root) => isProperDescendant(hostPath, root.replace(/\/+$/, "")))) {
         return yield* new WorkspaceForbiddenError({

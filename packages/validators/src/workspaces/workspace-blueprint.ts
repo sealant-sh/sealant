@@ -89,12 +89,33 @@ export const workspaceStandbySourceSchema = z.strictObject({
   rootPath: workspaceHostPathSchema,
 });
 
+/**
+ * A CAPTURE workspace (sealantd ADR-0015): nothing is mounted and nothing is cloned by the
+ * platform. The daemon boots with `SEALANT_WORKSPACE_SOURCE=capture`, fetches the worktree's head
+ * plan from the session channel at `endpoint`, materialises it onto the executor's own disk and
+ * claims the lease — so the working directory is the container's own storage (an `emptyDir` on
+ * Kubernetes, the sandbox disk on Cloudflare) and the work product lives in captures the daemon
+ * ships back over the channel. The session credential is NOT part of the blueprint: it travels
+ * once, through the secret env channel, as `SEALANT_CAPTURE_TOKEN` (`captureToken` on the create
+ * request). `platform` is a caller hint recorded for placement and pickup bookkeeping; the daemon
+ * never sees it.
+ */
+export const workspaceCaptureSourceSchema = z.strictObject({
+  kind: z.literal("capture"),
+  /** The session channel the daemon registers with (`SEALANT_CAPTURE_ENDPOINT`). */
+  endpoint: z.string().url(),
+  /** The worktree whose captures this workspace materialises and extends. */
+  worktreeId: nonEmptyStringSchema,
+  platform: nonEmptyStringSchema.optional(),
+});
+
 // Order matters: git first, so legacy payloads that omit `kind` (relying on the default) still
 // resolve as git; a mount payload fails the git shape (no `url`) and falls through to mount.
 export const workspaceSourceSchema = z.union([
   workspaceGitSourceSchema,
   workspaceMountSourceSchema,
   workspaceStandbySourceSchema,
+  workspaceCaptureSourceSchema,
 ]);
 
 /**
