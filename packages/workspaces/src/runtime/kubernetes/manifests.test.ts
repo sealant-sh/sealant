@@ -128,6 +128,75 @@ describe("Kubernetes manifests", () => {
     expect(plain.some(([key]) => key === "SEALANT_WORKSPACE_REPO_URL")).toBe(false);
   });
 
+  it("renders a capture source as channel facts only: no mount env, no repo env", () => {
+    const plain = plainEnvEntries({ ...cases.capture, binds: undefined }, config, {
+      secretEnvFile: true,
+      dotfilesArchiveDir: undefined,
+    });
+    expect(plain).toEqual(
+      expect.arrayContaining([
+        ["SEALANT_WORKSPACE_SOURCE", "capture"],
+        ["SEALANT_CAPTURE_ENDPOINT", "https://mend.example.com/session/s1"],
+        ["SEALANT_CAPTURE_WORKTREE_ID", "wt_1"],
+        ["SEALANT_SECRET_ENV_FILE", "/run/sealant/launch/env.json"],
+      ]),
+    );
+    const keys = plain.map(([key]) => key);
+    expect(keys).not.toContain("SEALANT_WORKSPACE_REPO_URL");
+    expect(keys).not.toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH");
+    expect(keys).not.toContain("SEALANT_MOUNT_ALLOWED_STORE_ROOTS");
+    expect(keys).not.toContain("SEALANT_CAPTURE_TOKEN");
+  });
+
+  it("gives a capture Pod its workspace root from an emptyDir and mounts no store claim", () => {
+    const captureNames = workspaceResourceNames("run-golden-4");
+    const lowered = lowerMountIntents(
+      collectMountIntents({
+        blueprint: cases.capture.blueprint,
+        dotfilesArchiveDir: undefined,
+        secretEnvDir: undefined,
+      }),
+      config.volumeMappings,
+    );
+    const launchSecret = buildLaunchSecret(captureNames, config.namespace, labels, {
+      secretEnvJson: JSON.stringify(cases.capture.secretEnv),
+      dotfiles: undefined,
+    });
+    const pod = buildPod({
+      names: captureNames,
+      config,
+      labels,
+      input: { ...cases.capture, secretEnvDir: undefined },
+      lowered,
+      plainEnv: [["SEALANT_WORKSPACE_SOURCE", "capture"]],
+      secretEnvKeys: [],
+      launchSecret,
+      priorityClassName: undefined,
+    });
+    expect(pod.spec?.volumes).toEqual([
+      { name: "run-sealant", emptyDir: {} },
+      { name: "tls", secret: { secretName: captureNames.tlsSecret, defaultMode: 0o400 } },
+      { name: "workspace", emptyDir: {} },
+      {
+        name: "launch",
+        secret: {
+          secretName: captureNames.launchSecret,
+          defaultMode: 0o400,
+          items: [{ key: "env.json", path: "env.json" }],
+        },
+      },
+    ]);
+    expect(pod.spec?.containers[0]?.volumeMounts).toEqual([
+      { name: "run-sealant", mountPath: "/run/sealant" },
+      { name: "tls", mountPath: "/run/sealant/tls", readOnly: true },
+      { name: "workspace", mountPath: "/workspace" },
+      { name: "launch", mountPath: "/run/sealant/launch", readOnly: true },
+    ]);
+    expect(pod.spec?.containers[0]?.workingDir).toBe("/workspace/repo");
+    // The credential lives in the launch Secret only; the Pod spec never carries it.
+    expect(JSON.stringify(pod)).not.toContain("mst_secret");
+  });
+
   it("routes secret-bearing env through a Secret, credential env last", () => {
     const entries = secretEnvEntries(
       {

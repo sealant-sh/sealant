@@ -234,6 +234,48 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(pod?.spec?.runtimeClassName).toBe("gvisor");
   });
 
+  it("launches a capture source on an emptyDir with the token only in the launch Secret", async () => {
+    const cluster = fakeCluster();
+    const channel = controlChannel();
+    const adapter = adapterFor(cluster, channel);
+    expect(adapter.supports({ blueprint: cases.capture.blueprint })).toEqual({ supported: true });
+
+    const result = await adapter.launch({ ...cases.capture, secretEnvDir: undefined });
+
+    const names = workspaceResourceNames("run-golden-4");
+    expect(result.status).toBe("ready");
+    const pod = cluster.pods.get(names.pod);
+    expect(pod?.spec?.volumes?.map((volume) => volume.name)).toEqual([
+      "run-sealant",
+      "tls",
+      "workspace",
+      "launch",
+    ]);
+    expect(pod?.spec?.volumes?.find((volume) => volume.name === "workspace")).toEqual({
+      name: "workspace",
+      emptyDir: {},
+    });
+    expect(pod?.spec?.containers[0]?.volumeMounts).toContainEqual({
+      name: "workspace",
+      mountPath: "/workspace",
+    });
+    expect(pod?.spec?.volumes?.some((volume) => volume.persistentVolumeClaim !== undefined)).toBe(
+      false,
+    );
+    const env = Object.fromEntries(
+      (pod?.spec?.containers[0]?.env ?? []).map((entry) => [entry.name, entry.value]),
+    );
+    expect(env["SEALANT_WORKSPACE_SOURCE"]).toBe("capture");
+    expect(env["SEALANT_CAPTURE_ENDPOINT"]).toBe("https://mend.example.com/session/s1");
+    expect(env["SEALANT_CAPTURE_WORKTREE_ID"]).toBe("wt_1");
+    expect(env["SEALANT_SECRET_ENV_FILE"]).toBe("/run/sealant/launch/env.json");
+    expect(JSON.stringify(pod)).not.toContain("mst_secret");
+    expect(JSON.stringify(pod)).not.toContain("SEALANT_CAPTURE_TOKEN");
+    // The launch Secret carried env.json and was deleted once the daemon answered.
+    expect(cluster.log).toContain(`create secret ${names.launchSecret}`);
+    expect(cluster.log).toContain(`delete secret ${names.launchSecret}`);
+  });
+
   it("adopts existing objects on a redelivered launch instead of duplicating them", async () => {
     const cluster = fakeCluster();
     const adapter = adapterFor(cluster, controlChannel());
