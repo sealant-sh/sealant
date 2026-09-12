@@ -163,6 +163,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             ? {}
             : { mountAllowedStoreRoots: env.SEALANT_MOUNT_ALLOWED_STORE_ROOTS }),
           ...(dockerVolumeMappings === undefined ? {} : { volumeMappings: dockerVolumeMappings }),
+          hostGatewayAlias: env.SEALANT_DOCKER_HOST_GATEWAY_ALIAS,
         }),
       ];
 

@@ -315,13 +315,15 @@ describe("DockerRuntimeAdapter", () => {
     const args = firstCall?.[1];
     expect(command).toBe("docker");
     expect(args).toBeDefined();
-    expect(args?.slice(0, 8)).toEqual([
+    expect(args?.slice(0, 10)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       expect.any(String),
+      "--add-host",
+      "host.docker.internal:host-gateway",
       "-w",
       "/workspace/repo",
     ]);
@@ -1529,6 +1531,22 @@ const dieEvent = (id: string, name: string, exitCode: string): string =>
   });
 
 describe("DockerRuntimeAdapter runtime observation", () => {
+  it("omits the host gateway alias when it is disabled", async () => {
+    const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
+      if (args[0] === "run") return { stdout: "container-id-123\n", stderr: "" };
+      return { stdout: RUNNING_STATE_JSON, stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      hostGatewayAlias: false,
+    });
+
+    await adapter.launch(createLaunchInput());
+
+    expect(commandRunner.mock.calls[0]?.[1]).not.toContain("--add-host");
+  });
+
   it("inspects containers: running, exited with the exit code and a log tail, missing", async () => {
     const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
       const id = args.at(-1);

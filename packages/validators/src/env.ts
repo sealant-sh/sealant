@@ -385,6 +385,15 @@ export const workerRuntimeEnvSchema = z.object({
   DOCKER_RUNTIME_ENABLED: z
     .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
     .default(true),
+  // Whether Docker-runtime workspaces get `--add-host host.docker.internal:host-gateway`, so a
+  // container can name the host (a control plane's session channel, a local relay) on Linux
+  // daemons, where nothing resolves the name otherwise. Left on everywhere: Docker Desktop
+  // resolves the name natively and accepts the entry unchanged, and the daemon's platform — not
+  // the worker's — is what would matter, so there is nothing to detect. Disable for a daemon that
+  // must not expose its host to workspaces.
+  SEALANT_DOCKER_HOST_GATEWAY_ALIAS: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(true),
   DEFAULT_SSH_BIND_HOST: z.string().trim().min(1).default("127.0.0.1"),
   DEFAULT_SSH_ENDPOINT_EXPOSURE_STRATEGY:
     sshEndpointExposureStrategySchema.default("host-published"),

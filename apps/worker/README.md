@@ -63,6 +63,10 @@ terminal state a container that dies during boot gets.
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 
+Docker workspaces can reach the host by name: every container gets
+`--add-host host.docker.internal:host-gateway`, which Linux daemons need and Docker Desktop already
+provides. `SEALANT_DOCKER_HOST_GATEWAY_ALIAS=false` omits it.
+
 Per-workspace Docker runtime selection now comes from `spec.runtime.ociRuntime`. Requests default to
 `runc`; `runsc` launches require the worker host Docker daemon to have `runsc` registered.
 

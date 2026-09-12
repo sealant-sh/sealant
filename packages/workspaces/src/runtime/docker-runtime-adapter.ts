@@ -52,6 +52,13 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * The extra-hosts entry every workspace container gets by default: the host's gateway address
+ * under the name Docker Desktop resolves natively, so a Linux daemon's containers can name the
+ * host too (a control plane's session channel, a local relay).
+ */
+const HOST_GATEWAY_ADD_HOST = "host.docker.internal:host-gateway";
+
 /** `docker events` reconnect backoff: a dropped stream is retried at once, a dead daemon slowly. */
 const EVENT_STREAM_RECONNECT_MIN_MS = 1_000;
 const EVENT_STREAM_RECONNECT_MAX_MS = 30_000;
@@ -179,6 +186,12 @@ export interface DockerRuntimeAdapterOptions {
    * mount uses `volume-subpath`; there is no bind-mount fallback.
    */
   readonly volumeMappings?: readonly DockerVolumeMapping[];
+  /**
+   * Add `host.docker.internal` → the host gateway to every workspace container (`--add-host`).
+   * Defaults to on: Linux daemons resolve the name nowhere else, Docker Desktop already resolves it
+   * and takes the entry unchanged. Off for daemons that must not expose their host.
+   */
+  readonly hostGatewayAlias?: boolean;
   /** Test seam for `watchExits`: how a `docker events` stream is opened. */
   readonly eventStreamOpener?: DockerEventStreamOpener;
 }
@@ -649,12 +662,15 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly allowedStoreRoots: readonly string[];
 
+  private readonly hostGatewayAlias: boolean;
+
   private readonly eventStreamOpener: DockerEventStreamOpener;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
     this.commandRunner = options.commandRunner ?? createDefaultCommandRunner(dockerSocketPath);
+    this.hostGatewayAlias = options.hostGatewayAlias ?? true;
     this.eventStreamOpener =
       options.eventStreamOpener ?? createDefaultEventStreamOpener(dockerSocketPath);
     this.runtimeCatalogLoader =
@@ -1594,6 +1610,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         parsed.blueprint.runtime.ociRuntime,
         "--name",
         containerName,
+        // The host by name (see HOST_GATEWAY_ADD_HOST); before any env so a workspace can rely on it.
+        ...(this.hostGatewayAlias ? ["--add-host", HOST_GATEWAY_ADD_HOST] : []),
         // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
         ...userEnvArgs(parsed),
         ...(dockerNetworkName === undefined
