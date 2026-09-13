@@ -553,6 +553,37 @@ describe("DockerRuntimeAdapter", () => {
     expect(args.some((arg) => arg.startsWith("SEALANT_MOUNT_ALLOWED_STORE_ROOTS="))).toBe(false);
   });
 
+  it("leaves SEALANT_CAPTURE_WORKTREE_ID unset for a standby capture executor", async () => {
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      containerNamePrefix: "sealant-test",
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+    await adapter.launch({
+      ...createLaunchInput({
+        sources: {
+          workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+        },
+      }),
+      secretEnvDir: "/host/staging/sealant-secret-env-run_standby",
+    });
+    const args = commandRunner.mock.calls[0]?.[1] ?? [];
+    expect(args).toContain("SEALANT_WORKSPACE_SOURCE=capture");
+    expect(args).toContain("SEALANT_CAPTURE_ENDPOINT=https://mend.example.com/session/s1");
+    expect(args.some((arg) => arg.startsWith("SEALANT_CAPTURE_WORKTREE_ID"))).toBe(false);
+  });
+
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

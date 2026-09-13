@@ -75,7 +75,10 @@ const sourceEnv = (source: BridgeLaunchRequest["source"]): Record<string, string
     ? {
         SEALANT_WORKSPACE_SOURCE: "capture",
         SEALANT_CAPTURE_ENDPOINT: source.endpoint,
-        SEALANT_CAPTURE_WORKTREE_ID: source.worktreeId,
+        // A standby executor names no worktree yet; the daemon takes it from the plan answer.
+        ...(source.worktreeId === undefined
+          ? {}
+          : { SEALANT_CAPTURE_WORKTREE_ID: source.worktreeId }),
       }
     : {
         SEALANT_WORKSPACE_SOURCE: "git",

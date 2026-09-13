@@ -98,14 +98,19 @@ export const workspaceStandbySourceSchema = z.strictObject({
  * ships back over the channel. The session credential is NOT part of the blueprint: it travels
  * once, through the secret env channel, as `SEALANT_CAPTURE_TOKEN` (`captureToken` on the create
  * request). `platform` is a caller hint recorded for placement and pickup bookkeeping; the daemon
- * never sees it.
+ * never sees it. `worktreeId` is optional: a standby executor is launched before any worktree
+ * exists and is bound to one at claim, so the daemon takes the id from the channel's plan answer
+ * when the source names none.
  */
 export const workspaceCaptureSourceSchema = z.strictObject({
   kind: z.literal("capture"),
   /** The session channel the daemon registers with (`SEALANT_CAPTURE_ENDPOINT`). */
   endpoint: z.string().url(),
-  /** The worktree whose captures this workspace materialises and extends. */
-  worktreeId: nonEmptyStringSchema,
+  /**
+   * The worktree whose captures this workspace materialises and extends. Absent for a standby
+   * executor: the channel's plan answer names the worktree the executor is bound to at claim.
+   */
+  worktreeId: nonEmptyStringSchema.optional(),
   platform: nonEmptyStringSchema.optional(),
 });
 

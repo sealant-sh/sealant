@@ -168,8 +168,12 @@ export interface WorkspaceCaptureSource {
   readonly kind: "capture";
   /** The session channel URL the daemon registers with. */
   readonly endpoint: string;
-  /** The worktree whose captures this workspace materialises and extends. */
-  readonly worktreeId: string;
+  /**
+   * The worktree whose captures this workspace materialises and extends. Omit for a standby
+   * executor launched before its worktree exists: the daemon then takes the worktree from the
+   * channel's plan answer, which names the one it is bound to at claim.
+   */
+  readonly worktreeId?: string;
   /** The session-scoped channel credential. Secret: sealed for the launch, then discarded. */
   readonly token: string;
   readonly platform?: string;
