@@ -1,5 +1,47 @@
 # @sealant/api-contracts
 
+## 0.31.0
+
+### Minor Changes
+
+- 28d3d5b: `worktreeId` is optional on the `capture` workspace source. A standby executor launched before its
+  worktree exists — to materialise the project base and a dependency cache, then be bound to a
+  worktree at claim — omits it; `SEALANT_CAPTURE_WORKTREE_ID` stays unset on every runtime (Docker,
+  Kubernetes, Cloudflare) and the daemon takes the worktree from the channel's plan answer.
+- c677bc9: A `microvm` runtime adapter id: workspaces can now run on AWS Lambda MicroVMs (one Firecracker VM
+  per workspace, driven with the Lambda MicroVMs API and reached through the VM's authenticated
+  inbound endpoint). Workspace reads report `runtime.adapter: "microvm"` for such workspaces, and
+  blueprints may request `target.runtime.family: "microvm"`. Nothing changes for Docker, Kubernetes or
+  Cloudflare deployments; a deployment registers the adapter only when the `SEALANT_MICROVM_*`
+  environment is configured.
+
+  `workspace.capture.flush()` (`POST /v1/workspaces/:id/capture/flush`): a final capture, then
+  everything staged is shipped and registered on the session channel, answered with the daemon's
+  capture status (`pending`, `fenced`, byte and object counts). Synchronous over the control
+  connection, refused on workspaces that are not capture-sourced. Needs sealantd 0.14.0 in the
+  workspace image, which is now the baked default.
+
+- fbf6c8c: `workspace.capture.replan()` (`POST /v1/workspaces/:id/capture/replan`): the daemon asks the session
+  channel for its plan again with no worktree named, delta-materialises the answer over what is on
+  disk, and captures under the answered worktree and epoch from then on (the fence lifts, foreign
+  queue entries drop). The claim hook for a standby executor. Synchronous over the control connection,
+  idempotent (`unchanged: true`), answered with the worktree id, epoch, optional head sequence and
+  capture id, and the files and bytes written, skipped and removed. Refused on workspaces that are not
+  capture-sourced.
+
+  Needs sealantd 0.15.0, which also makes materialise a delta over what is on disk and sends
+  `platform` on `plan.get`; `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.15.0
+  and the baked daemon default for workspace images, the MicroVM image and the Cloudflare bridge image
+  is now `ghcr.io/sealant-sh/sealantd:0.15.0`.
+
+### Patch Changes
+
+- b9e68f7: Docker runtime: `SEALANT_DOCKER_WORKSPACE_NETWORK=<name>` attaches every workspace container to an
+  existing Docker network (`--network <name>`), so a workspace resolves sibling Compose services — a
+  session channel, a bucket — by name without publishing them on the host. With the workspace Docker
+  service on, the container joins the shared network beside its sidecar network at creation (Docker
+  Engine 25+). Every workspace container also gets `--add-host host.docker.internal:host-gateway`.
+
 ## 0.30.0
 
 ### Minor Changes
@@ -478,6 +520,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
