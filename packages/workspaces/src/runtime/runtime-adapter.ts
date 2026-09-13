@@ -141,6 +141,55 @@ export const runtimeAdapterStopResultSchema = z.strictObject({
   outcome: z.enum(["stopped", "not-found"]),
 });
 
+/**
+ * What a runtime knows about a launched executor when asked (optional port method `inspect`).
+ * Runtimes without an event stream (Lambda MicroVMs) answer this by polling their platform API;
+ * the engine above uses it to notice an executor that ended without a stop and to schedule a
+ * replacement before a platform-imposed lifetime cap.
+ *
+ * - `running`: the executor exists and has not ended. `startedAt` / `deadline` are ISO-8601
+ *   instants and `maxDurationSeconds` the platform cap they derive from — all optional, present
+ *   only where the runtime imposes a lifetime (a MicroVM ends at `startedAt + maxDuration`,
+ *   suspended time included). `platformState` is the runtime's own word for the state (for logs
+ *   and evidence; never branch on it — a suspended VM is still `running` here).
+ * - `exited`: the executor ended. `exitCode` where the runtime reports one (a container), `detail`
+ *   the runtime's reason text when it has one.
+ * - `missing`: the runtime no longer knows the resource at all.
+ */
+const runtimeAdapterRunningSchema = z.strictObject({
+  state: z.literal("running"),
+  startedAt: z.string().datetime({ offset: true }).optional(),
+  deadline: z.string().datetime({ offset: true }).optional(),
+  maxDurationSeconds: z.number().int().positive().optional(),
+  platformState: z.string().trim().min(1).optional(),
+});
+
+const runtimeAdapterEndedSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    state: z.literal("exited"),
+    exitCode: z.number().int().optional(),
+    detail: z.string().trim().min(1).optional(),
+  }),
+  z.strictObject({
+    state: z.literal("missing"),
+  }),
+]);
+
+export const runtimeAdapterInspectResultSchema = z.discriminatedUnion("state", [
+  runtimeAdapterRunningSchema,
+  ...runtimeAdapterEndedSchema.options,
+]);
+
+export const runtimeAdapterInspectInputSchema = z.strictObject({
+  resourceId: z.string().trim().min(1),
+});
+
+/** One exit observed by `watchExits`: the resource and what `inspect` last saw for it. */
+export const runtimeAdapterExitEventSchema = z.strictObject({
+  resourceId: z.string().trim().min(1),
+  result: runtimeAdapterEndedSchema,
+});
+
 export const parseRuntimeAdapterSupport = (input: unknown): RuntimeAdapterSupport => {
   return runtimeAdapterSupportSchema.parse(input);
 };
@@ -163,6 +212,10 @@ export const parseRuntimeAdapterStopInput = (input: unknown): RuntimeAdapterStop
 
 export const parseRuntimeAdapterStopResult = (input: unknown): RuntimeAdapterStopResult => {
   return runtimeAdapterStopResultSchema.parse(input);
+};
+
+export const parseRuntimeAdapterInspectResult = (input: unknown): RuntimeAdapterInspectResult => {
+  return runtimeAdapterInspectResultSchema.parse(input);
 };
 
 export type RuntimeAdapterId = z.infer<typeof runtimeAdapterIdSchema>;
@@ -191,12 +244,42 @@ export type RuntimeAdapterStopInput = z.infer<typeof runtimeAdapterStopInputSche
 
 export type RuntimeAdapterStopResult = z.infer<typeof runtimeAdapterStopResultSchema>;
 
+export type RuntimeAdapterInspectInput = z.infer<typeof runtimeAdapterInspectInputSchema>;
+
+export type RuntimeAdapterInspectResult = z.infer<typeof runtimeAdapterInspectResultSchema>;
+
+export type RuntimeAdapterExitEvent = z.infer<typeof runtimeAdapterExitEventSchema>;
+
+export interface RuntimeAdapterExitWatchInput {
+  readonly resourceIds: readonly string[];
+  /** Called at most once per resource, the first time it is seen `exited` or `missing`. */
+  readonly onExit: (event: RuntimeAdapterExitEvent) => void;
+  /** Called when a poll fails; the watch keeps going. */
+  readonly onError?: (resourceId: string, error: unknown) => void;
+}
+
+/** A running exit watch; `close` stops it and releases its timer. Idempotent. */
+export interface RuntimeAdapterExitWatch {
+  readonly close: () => void;
+}
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
+  /**
+   * Optional: what the runtime knows about a launched executor right now. Adapters that cannot
+   * answer cheaply leave it undefined; callers treat an absent method as "no liveness signal
+   * from this runtime" rather than as `missing`.
+   */
+  inspect?(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult>;
+  /**
+   * Optional: report when any of the given executors ends. Runtimes with no event stream poll
+   * `inspect` on their own cadence; the watch owns that timer until `close`.
+   */
+  watchExits?(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch;
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

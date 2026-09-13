@@ -6,6 +6,7 @@ import {
   createWorkspace,
   execWorkspace,
   expireWorkspace,
+  flushWorkspaceCapture,
   getWorkspace,
   getWorkspaceSshTarget,
   listWorkspaceAttempts,
@@ -35,6 +36,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       )
       .handle("bindWorkspace", ({ params, payload }) =>
         bindWorkspace({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("flushWorkspaceCapture", ({ params, payload }) =>
+        flushWorkspaceCapture({
           workspaceId: params.workspaceId,
           payload,
         }),

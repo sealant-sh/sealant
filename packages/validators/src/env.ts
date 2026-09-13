@@ -307,6 +307,37 @@ export const defaultRuntimeAdapterEnvSchema = z.object({
   SEALANT_K8S_DOCKER_ENABLED: z.stringbool().or(z.boolean()).default(false),
 });
 
+/**
+ * AWS Lambda MicroVM runtime configuration surface. Grammar only — semantic validation lives in
+ * `@sealant/workspaces`'s `microvmRuntimeConfigFromEnv`. All optional: only a deployment that
+ * registers the microvm adapter sets these. The worker needs the whole contract; the API and the
+ * SSH gateway read only `SEALANT_MICROVM_REGION` (+ agent port and token knobs) to mint the
+ * endpoint tokens their control connections need, so the schema is merged into all three.
+ */
+export const microvmRuntimeEnvSchema = z.object({
+  /** AWS region of the MicroVMs; setting it lets a process mint endpoint tokens. */
+  SEALANT_MICROVM_REGION: z.string().trim().min(1).optional(),
+  /** MicroVM image ARN (worker); setting it enables the adapter and makes the rest required. */
+  SEALANT_MICROVM_IMAGE_ARN: z.string().trim().min(1).optional(),
+  SEALANT_MICROVM_IMAGE_VERSION: z.string().trim().min(1).optional(),
+  /** Execution role every VM runs under (worker). */
+  SEALANT_MICROVM_EXEC_ROLE_ARN: z.string().trim().min(1).optional(),
+  /** Egress network connector ARN (VPC egress); public internet egress when unset. */
+  SEALANT_MICROVM_EGRESS_CONNECTOR: z.string().trim().min(1).optional(),
+  /** Ingress connector ARN; defaults to the region's managed ALL_INGRESS. */
+  SEALANT_MICROVM_INGRESS_CONNECTOR: z.string().trim().min(1).optional(),
+  SEALANT_MICROVM_MAX_DURATION_SECONDS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_LOG_GROUP: z.string().trim().min(1).optional(),
+  SEALANT_MICROVM_AGENT_PORT: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_READINESS_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_TERMINATE_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_FLUSH_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_WS_AUTH: z.enum(["header", "subprotocol"]).optional(),
+});
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
@@ -314,7 +345,8 @@ export const appServerEnvSchema = databaseEnvSchema
   .merge(servicePrincipalsEnvSchema)
   .merge(workspaceLifecycleEnvSchema)
   .merge(controlClientTlsEnvSchema)
-  .merge(defaultRuntimeAdapterEnvSchema);
+  .merge(defaultRuntimeAdapterEnvSchema)
+  .merge(microvmRuntimeEnvSchema);
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
@@ -493,10 +525,22 @@ export const workerServerEnvSchema = databaseEnvSchema
   .merge(defaultRuntimeAdapterEnvSchema)
   .merge(controlClientTlsEnvSchema)
   .merge(kubernetesRuntimeEnvSchema)
-  .merge(cloudflareRuntimeEnvSchema);
+  .merge(cloudflareRuntimeEnvSchema)
+  .merge(microvmRuntimeEnvSchema);
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
+  if (
+    input.DEFAULT_RUNTIME_ADAPTER === "microvm" &&
+    input.SEALANT_MICROVM_IMAGE_ARN === undefined
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "DEFAULT_RUNTIME_ADAPTER=microvm requires SEALANT_MICROVM_IMAGE_ARN (and the rest of the SEALANT_MICROVM_* contract).",
+      path: ["SEALANT_MICROVM_IMAGE_ARN"],
+    });
+  }
   if (
     (input.DEFAULT_RUNTIME_ADAPTER === "k8s" || input.DEFAULT_RUNTIME_ADAPTER === "k3s") &&
     input.SEALANT_K8S_NAMESPACE === undefined
@@ -592,7 +636,8 @@ export const sshGatewayServerEnvSchema = runtimeEnvSchema
       }),
   )
   .merge(sshGatewayCoreEnvSchema)
-  .merge(controlClientTlsEnvSchema);
+  .merge(controlClientTlsEnvSchema)
+  .merge(microvmRuntimeEnvSchema);
 
 export const sshGatewayEnvSchema = sshGatewayServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);

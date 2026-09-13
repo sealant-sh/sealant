@@ -21,6 +21,10 @@ import {
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
+  MicrovmEndpointTokens,
+  MicrovmRuntimeAdapter,
+  createLiveMicrovmApi,
+  microvmRuntimeConfigFromEnv,
   parseDockerVolumeMappings,
   processWorkspaceBuildJob,
   processWorkspaceStop,
@@ -97,9 +101,38 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
     ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
   });
+  // Lambda MicroVMs: registered only when the image ARN (and the rest of the contract) is set.
+  // The adapter and this worker's control connections share one endpoint-token cache.
+  const microvmConfig = microvmRuntimeConfigFromEnv(env);
+  const microvmApi =
+    microvmConfig === undefined
+      ? undefined
+      : createLiveMicrovmApi({ region: microvmConfig.region });
+  const microvmTokens =
+    microvmConfig === undefined || microvmApi === undefined
+      ? undefined
+      : new MicrovmEndpointTokens({
+          api: microvmApi,
+          port: microvmConfig.agentPort,
+          ttlMinutes: microvmConfig.endpointTokenTtlMinutes,
+          refreshMarginMs: microvmConfig.endpointTokenRefreshMarginMs,
+          webSocketAuth: microvmConfig.endpointWebSocketAuth,
+        });
+  const microvmAdapters =
+    microvmConfig === undefined || microvmApi === undefined || microvmTokens === undefined
+      ? []
+      : [
+          new MicrovmRuntimeAdapter({
+            config: microvmConfig,
+            api: microvmApi,
+            tokens: microvmTokens,
+          }),
+        ];
+
   // How this worker reaches each runtime family: nothing extra for Docker, client mTLS for
-  // Kubernetes (sealantd's secure WebSocket frontend).
-  const targetOptions = targetDerivationOptionsFromEnv(env);
+  // Kubernetes (sealantd's secure WebSocket frontend), a bearer token for Cloudflare, and the
+  // bearer token plus minted endpoint tokens for MicroVMs.
+  const targetOptions = targetDerivationOptionsFromEnv(env, microvmTokens);
 
   // Kubernetes adapters exist only when the worker is configured for a cluster; a Docker worker
   // registers neither, so a blueprint asking for k8s gets a readable "unsupported-runtime".
@@ -174,7 +207,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? []
       : [new CloudflareRuntimeAdapter({ config: cloudflareConfig })];
 
-  const runtimeAdapters = [...dockerAdapters, ...kubernetesAdapters, ...cloudflareAdapters];
+  const runtimeAdapters = [
+    ...dockerAdapters,
+    ...kubernetesAdapters,
+    ...cloudflareAdapters,
+    ...microvmAdapters,
+  ];
 
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
