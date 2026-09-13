@@ -32,6 +32,7 @@ import {
 import {
   SessionMode as WireSessionMode,
   type Capabilities,
+  type CaptureStatusReport,
   type EventEnvelope,
   type ExecAccepted,
   type HealthReport,
@@ -131,6 +132,7 @@ const sealantOperationSchema = Schema.Literals([
   "openForward",
   "closeForward",
   "bindMount",
+  "captureFlush",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -179,6 +181,39 @@ export const sealantErrorSchema = Schema.Union([
   SealantControlError,
   SealantUnexpectedError,
 ]);
+
+/**
+ * The daemon's capture status after a flush (wire `CaptureStatusReport`), with JSON-safe numbers:
+ * `pending` and `fenced` are what a caller gates on before letting an executor go away.
+ */
+export interface CaptureFlushReport {
+  readonly epoch: number;
+  readonly worktreeId: string;
+  readonly headN?: number | undefined;
+  readonly pending: number;
+  readonly stagedBytes: number;
+  readonly uploadedObjects: number;
+  readonly uploadedBytes: number;
+  readonly registered: number;
+  readonly fenced: boolean;
+  readonly paused: boolean;
+  readonly lastSnapUnixMs?: number | undefined;
+}
+
+/** Wire → report: uint64 fields arrive as bigint and become JSON-safe numbers. Exported for tests. */
+export const captureFlushReportFromWire = (report: CaptureStatusReport): CaptureFlushReport => ({
+  epoch: Number(report.epoch),
+  worktreeId: report.worktreeId,
+  ...(report.headN === undefined ? {} : { headN: Number(report.headN) }),
+  pending: Number(report.pending),
+  stagedBytes: Number(report.stagedBytes),
+  uploadedObjects: Number(report.uploadedObjects),
+  uploadedBytes: Number(report.uploadedBytes),
+  registered: Number(report.registered),
+  fenced: report.fenced,
+  paused: report.paused,
+  ...(report.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: Number(report.lastSnapUnixMs) }),
+});
 
 /** Union of everything that can fail on a `SealantRuntime`/`SealantSession` Effect. */
 export type SealantError = typeof sealantErrorSchema.Type;
@@ -659,6 +694,12 @@ export interface SealantSession {
    * subpath unbinds. The daemon validates the target and records the bind for its own restarts.
    */
   readonly bindMount: (mountPath: string, subpath: string) => Effect.Effect<void, SealantError>;
+  /**
+   * Final capture, then ship and register everything staged (sealantd ADR-0015 `capture.flush`,
+   * the suspend/terminate hook). Bounded by the daemon's shutdown grace; only answers on a
+   * capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
+   */
+  readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -886,6 +927,26 @@ const makeSession = (client: SealantClient): SealantSession => ({
     withSealantError(
       "bindMount",
       Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
+    ),
+  captureFlush: () =>
+    withSealantError(
+      "captureFlush",
+      Effect.tryPromise(async () => {
+        // The typed client has no wrapper for this command yet; `request` is its generic seam.
+        const response = await client.request({ case: "captureFlush", value: {} });
+        const outcome = response.outcome?.outcome;
+        if (outcome?.case === "error") {
+          throw new SdkSealantError(outcome.value);
+        }
+        if (outcome?.case !== "ok") {
+          throw new Error("capture.flush response had no outcome");
+        }
+        const result = outcome.value.result;
+        if (result.case !== "captureStatus") {
+          throw new Error(`expected result captureStatus, got ${String(result.case)}`);
+        }
+        return captureFlushReportFromWire(result.value);
+      }),
     ),
 
   shutdown: (graceMillis) =>

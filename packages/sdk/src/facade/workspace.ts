@@ -9,6 +9,7 @@ import type { WorkspaceDetails } from "@sealant/api-contracts";
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
   bindWorkspaceOp,
+  flushWorkspaceCaptureOp,
   createSessionOp,
   expireWorkspaceOp,
   getSessionOp,
@@ -226,6 +227,27 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }),
       );
       return result.binds.map((bind) => ({ mountPath: bind.mountPath, subpath: bind.subpath }));
+    },
+
+    capture: {
+      flush: async () => {
+        const status = await ctx.runtime.run(
+          flushWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+        );
+        return {
+          epoch: status.epoch,
+          worktreeId: status.worktreeId,
+          ...(status.headN === undefined ? {} : { headN: status.headN }),
+          pending: status.pending,
+          stagedBytes: status.stagedBytes,
+          uploadedObjects: status.uploadedObjects,
+          uploadedBytes: status.uploadedBytes,
+          registered: status.registered,
+          fenced: status.fenced,
+          paused: status.paused,
+          ...(status.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: status.lastSnapUnixMs }),
+        };
+      },
     },
 
     // Poll-backed lifecycle stream: emit a coarse event on each status transition until the workspace

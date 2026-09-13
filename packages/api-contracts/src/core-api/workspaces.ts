@@ -144,6 +144,33 @@ export const workspaceBindsSchema = Schema.Struct({
 });
 export type WorkspaceBinds = typeof workspaceBindsSchema.Type;
 
+/**
+ * Flush a capture-sourced workspace's captures (sealantd ADR-0015 `capture.flush`): a final
+ * capture, then everything staged is shipped and registered on the session channel. Synchronous
+ * over the daemon's control connection, bounded by the daemon's grace window. The reply is the
+ * daemon's capture status; `pending === 0 && !fenced` is what a caller gates on before letting
+ * the executor go away.
+ */
+export const flushWorkspaceCaptureRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type FlushWorkspaceCaptureRequest = typeof flushWorkspaceCaptureRequestSchema.Type;
+
+export const workspaceCaptureStatusSchema = Schema.Struct({
+  epoch: Schema.Number,
+  worktreeId: NonEmptyString,
+  headN: Schema.optional(Schema.Number),
+  pending: Schema.Number,
+  stagedBytes: Schema.Number,
+  uploadedObjects: Schema.Number,
+  uploadedBytes: Schema.Number,
+  registered: Schema.Number,
+  fenced: Schema.Boolean,
+  paused: Schema.Boolean,
+  lastSnapUnixMs: Schema.optional(Schema.Number),
+});
+export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
+
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
 });
@@ -469,6 +496,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
         // No live runtime to bind in (never launched, mid-launch, or the daemon refused).
+        WorkspaceConflictError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the daemon flushes over the control connection before this answers.
+    HttpApiEndpoint.post("flushWorkspaceCapture", "/:workspaceId/capture/flush", {
+      params: workspaceIdParams,
+      payload: flushWorkspaceCaptureRequestSchema,
+      success: workspaceCaptureStatusSchema,
+      error: [
+        // Not a capture-sourced workspace.
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // No live runtime to flush (never launched, mid-launch, or the daemon refused).
         WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
