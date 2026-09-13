@@ -28,11 +28,18 @@ const withCipher = <A, E>(
   );
 };
 
-const flipLastCharacter = (value: string): string => {
-  const last = value.at(-1);
-  const replacement = last === "A" ? "B" : "A";
+// Corrupt the ciphertext by one whole byte. The sealed form is `v1.<keyId>.<iv>.<authTag>.<ciphertext>`
+// in base64url; flipping the final *character* was flaky because the last base64url character of a
+// segment carries padding bits that decode to nothing, so about one run in sixteen changed no byte and
+// the decrypt succeeded.
+const tamperCiphertext = (sealed: string): string => {
+  const segments = sealed.split(".");
+  const ciphertext = Buffer.from(segments.at(-1) ?? "", "base64url");
+  const tampered = Buffer.from(ciphertext);
+  tampered[0] = (tampered[0] ?? 0) ^ 0xff;
+  segments[segments.length - 1] = tampered.toString("base64url");
 
-  return `${value.slice(0, -1)}${replacement}`;
+  return segments.join(".");
 };
 
 describe("CredentialCipher", () => {
@@ -75,7 +82,7 @@ describe("CredentialCipher", () => {
       Effect.gen(function* () {
         const sealed = yield* cipher.encrypt("secret payload");
 
-        return yield* cipher.decrypt(flipLastCharacter(sealed.sealed)).pipe(Effect.flip);
+        return yield* cipher.decrypt(tamperCiphertext(sealed.sealed)).pipe(Effect.flip);
       }),
     );
 
