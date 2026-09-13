@@ -32,6 +32,7 @@ import {
 import {
   SessionMode as WireSessionMode,
   type Capabilities,
+  type CaptureReplanned,
   type CaptureStatusReport,
   type EventEnvelope,
   type ExecAccepted,
@@ -133,6 +134,7 @@ const sealantOperationSchema = Schema.Literals([
   "closeForward",
   "bindMount",
   "captureFlush",
+  "captureReplan",
 ]);
 
 export type SealantOperation = typeof sealantOperationSchema.Type;
@@ -213,6 +215,38 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
   fenced: report.fenced,
   paused: report.paused,
   ...(report.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: Number(report.lastSnapUnixMs) }),
+});
+
+/**
+ * The daemon's answer to `capture.replan` (wire `CaptureReplanned`), with JSON-safe numbers: the
+ * worktree and epoch the executor now captures under, and what the delta materialise touched.
+ * `unchanged` is the idempotent case (the plan answered the worktree and epoch already in force).
+ */
+export interface CaptureReplanReport {
+  readonly worktreeId: string;
+  readonly epoch: number;
+  readonly headN?: number | undefined;
+  readonly headCaptureId?: string | undefined;
+  readonly filesWritten: number;
+  readonly bytesWritten: number;
+  readonly filesSkipped: number;
+  readonly bytesSkipped: number;
+  readonly removed: number;
+  readonly unchanged: boolean;
+}
+
+/** Wire → report: uint64 fields arrive as bigint and become JSON-safe numbers. Exported for tests. */
+export const captureReplanReportFromWire = (report: CaptureReplanned): CaptureReplanReport => ({
+  worktreeId: report.worktreeId,
+  epoch: Number(report.epoch),
+  ...(report.headN === undefined ? {} : { headN: Number(report.headN) }),
+  ...(report.headCaptureId === undefined ? {} : { headCaptureId: report.headCaptureId }),
+  filesWritten: Number(report.filesWritten),
+  bytesWritten: Number(report.bytesWritten),
+  filesSkipped: Number(report.filesSkipped),
+  bytesSkipped: Number(report.bytesSkipped),
+  removed: Number(report.removed),
+  unchanged: report.unchanged,
 });
 
 /** Union of everything that can fail on a `SealantRuntime`/`SealantSession` Effect. */
@@ -700,6 +734,14 @@ export interface SealantSession {
    * capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
    */
   readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
+  /**
+   * Re-plan the capture (sealantd 0.15 `capture.replan`, the claim hook): the daemon asks the
+   * session channel for its plan again with no worktree named, delta-materialises the answered
+   * plan over what is on disk, rebases its staging identity onto the answered worktree and epoch,
+   * drops foreign queue entries and lifts the fence. Idempotent (`unchanged: true`). Only answers
+   * on a capture-sourced workspace.
+   */
+  readonly captureReplan: () => Effect.Effect<CaptureReplanReport, SealantError>;
   /** Asks the daemon to shut down gracefully. */
   readonly shutdown: (graceMillis?: number) => Effect.Effect<void, SealantError>;
   /**
@@ -946,6 +988,26 @@ const makeSession = (client: SealantClient): SealantSession => ({
           throw new Error(`expected result captureStatus, got ${String(result.case)}`);
         }
         return captureFlushReportFromWire(result.value);
+      }),
+    ),
+  captureReplan: () =>
+    withSealantError(
+      "captureReplan",
+      Effect.tryPromise(async () => {
+        // Same generic seam as captureFlush: the typed client has no wrapper for this command.
+        const response = await client.request({ case: "captureReplan", value: {} });
+        const outcome = response.outcome?.outcome;
+        if (outcome?.case === "error") {
+          throw new SdkSealantError(outcome.value);
+        }
+        if (outcome?.case !== "ok") {
+          throw new Error("capture.replan response had no outcome");
+        }
+        const result = outcome.value.result;
+        if (result.case !== "captureReplanned") {
+          throw new Error(`expected result captureReplanned, got ${String(result.case)}`);
+        }
+        return captureReplanReportFromWire(result.value);
       }),
     ),
 

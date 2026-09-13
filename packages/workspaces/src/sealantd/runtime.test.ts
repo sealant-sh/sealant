@@ -19,12 +19,18 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
-import { CaptureStatusReportSchema, create, type EventEnvelope } from "@sealant/runtime-protocol";
+import {
+  CaptureReplannedSchema,
+  CaptureStatusReportSchema,
+  create,
+  type EventEnvelope,
+} from "@sealant/runtime-protocol";
 import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   captureFlushReportFromWire,
+  captureReplanReportFromWire,
   SealantControlError,
   SealantRuntime,
   SealantRuntimeLive,
@@ -41,21 +47,25 @@ const SEALANTD_BIN = fileURLToPath(
 const hasBinary = existsSync(SEALANTD_BIN);
 
 /**
- * `capture.flush` exists from sealantd 0.14 (ADR-0015); an older daemon never answers the
- * unknown command, so the flush test only runs against a binary that reports at least that.
+ * The local daemon's reported version, or null when there is no binary or it prints none. Capture
+ * commands are versioned: an older daemon never answers an unknown command, so each round-trip
+ * test below only runs against a binary that reports at least the version that added it.
  */
-const daemonSupportsCapture = (() => {
+const daemonVersion = (() => {
   if (!hasBinary) {
-    return false;
+    return null;
   }
   const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], { encoding: "utf8" });
   const version = /"daemonVersion":\s*"(\d+)\.(\d+)\.(\d+)/.exec(printed.stdout);
-  if (version === null) {
-    return false;
-  }
-  const [major, minor] = [Number(version[1]), Number(version[2])];
-  return major > 0 || minor >= 14;
+  return version === null ? null : { major: Number(version[1]), minor: Number(version[2]) };
 })();
+const daemonAtLeast = (major: number, minor: number): boolean =>
+  daemonVersion !== null &&
+  (daemonVersion.major > major || (daemonVersion.major === major && daemonVersion.minor >= minor));
+/** `capture.flush` exists from sealantd 0.14 (ADR-0015). */
+const daemonSupportsCapture = daemonAtLeast(0, 14);
+/** `capture.replan` exists from sealantd 0.15. */
+const daemonSupportsReplan = daemonAtLeast(0, 15);
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -323,6 +333,31 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
     },
   );
 
+  it.skipIf(!daemonSupportsReplan)(
+    "captureReplan on a daemon without a capture store fails on the typed channel",
+    async () => {
+      // `capture.replan` (sealantd 0.15) re-fetches the plan over the session channel, which a
+      // bare daemon never opened; it refuses with a typed control error naming the missing store.
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(TARGET);
+            return yield* session.captureReplan();
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+        expect(error).toBeInstanceOf(SealantControlError);
+        expect((error as SealantControlError).operation).toBe("captureReplan");
+        expect((error as SealantControlError).message).toMatch(/capture/i);
+      }
+    },
+  );
+
   it("releases the transport Duplex when the scope finalizes (Scope finalizer ran)", async () => {
     // Spy transport: wraps the local-socket transport and records the Duplex it yielded so we can
     // assert, AFTER the scope closes, that it was destroyed. `connect`'s acquireRelease closes the
@@ -404,5 +439,49 @@ describe("captureFlushReportFromWire", () => {
         }),
       ),
     ).toMatchObject({ headN: 7, fenced: true, paused: true, lastSnapUnixMs: 1_757_760_000_000 });
+  });
+});
+
+describe("captureReplanReportFromWire", () => {
+  it("maps the wire report's uint64 fields to numbers and keeps optional fields optional", () => {
+    expect(
+      captureReplanReportFromWire(
+        create(CaptureReplannedSchema, {
+          worktreeId: "wt_1",
+          epoch: 2n,
+          filesWritten: 9n,
+          bytesWritten: 213_000n,
+          filesSkipped: 418n,
+          bytesSkipped: 1_510_000n,
+          removed: 1n,
+          unchanged: false,
+        }),
+      ),
+    ).toEqual({
+      worktreeId: "wt_1",
+      epoch: 2,
+      filesWritten: 9,
+      bytesWritten: 213_000,
+      filesSkipped: 418,
+      bytesSkipped: 1_510_000,
+      removed: 1,
+      unchanged: false,
+    });
+    expect(
+      captureReplanReportFromWire(
+        create(CaptureReplannedSchema, {
+          worktreeId: "wt_1",
+          epoch: 2n,
+          headN: 7n,
+          headCaptureId: "cap_7",
+          filesWritten: 0n,
+          bytesWritten: 0n,
+          filesSkipped: 0n,
+          bytesSkipped: 0n,
+          removed: 0n,
+          unchanged: true,
+        }),
+      ),
+    ).toMatchObject({ headN: 7, headCaptureId: "cap_7", unchanged: true });
   });
 });
