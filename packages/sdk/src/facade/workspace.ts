@@ -15,6 +15,7 @@ import {
   getSessionOp,
   getWorkspaceOp,
   listSessionsOp,
+  replanWorkspaceCaptureOp,
   restartWorkspaceOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
@@ -246,6 +247,23 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           fenced: status.fenced,
           paused: status.paused,
           ...(status.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: status.lastSnapUnixMs }),
+        };
+      },
+      replan: async () => {
+        const result = await ctx.runtime.run(
+          replanWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+        );
+        return {
+          worktreeId: result.worktreeId,
+          epoch: result.epoch,
+          ...(result.headN === undefined ? {} : { headN: result.headN }),
+          ...(result.headCaptureId === undefined ? {} : { headCaptureId: result.headCaptureId }),
+          filesWritten: result.filesWritten,
+          bytesWritten: result.bytesWritten,
+          filesSkipped: result.filesSkipped,
+          bytesSkipped: result.bytesSkipped,
+          removed: result.removed,
+          unchanged: result.unchanged,
         };
       },
     },

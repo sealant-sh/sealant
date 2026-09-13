@@ -171,6 +171,32 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
+/**
+ * Re-plan a capture-sourced workspace (sealantd 0.15 `capture.replan`, the claim hook): the daemon
+ * asks the session channel for its plan again with no worktree named, delta-materialises the
+ * answer over what is on disk, and captures under the answered worktree and epoch from then on.
+ * Synchronous over the daemon's control connection. Idempotent: `unchanged` is true when the
+ * answer named the worktree and epoch already in force.
+ */
+export const replanWorkspaceCaptureRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type ReplanWorkspaceCaptureRequest = typeof replanWorkspaceCaptureRequestSchema.Type;
+
+export const workspaceCaptureReplannedSchema = Schema.Struct({
+  worktreeId: NonEmptyString,
+  epoch: Schema.Number,
+  headN: Schema.optional(Schema.Number),
+  headCaptureId: Schema.optional(NonEmptyString),
+  filesWritten: Schema.Number,
+  bytesWritten: Schema.Number,
+  filesSkipped: Schema.Number,
+  bytesSkipped: Schema.Number,
+  removed: Schema.Number,
+  unchanged: Schema.Boolean,
+});
+export type WorkspaceCaptureReplanned = typeof workspaceCaptureReplannedSchema.Type;
+
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
 });
@@ -512,6 +538,23 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
         // No live runtime to flush (never launched, mid-launch, or the daemon refused).
+        WorkspaceConflictError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: the daemon re-plans and delta-materialises over the control connection before
+    // this answers.
+    HttpApiEndpoint.post("replanWorkspaceCapture", "/:workspaceId/capture/replan", {
+      params: workspaceIdParams,
+      payload: replanWorkspaceCaptureRequestSchema,
+      success: workspaceCaptureReplannedSchema,
+      error: [
+        // Not a capture-sourced workspace.
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // No live runtime to re-plan (never launched, mid-launch, or the daemon refused).
         WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],

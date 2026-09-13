@@ -3,6 +3,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import {
   type BindWorkspaceRequest,
   type FlushWorkspaceCaptureRequest,
+  type ReplanWorkspaceCaptureRequest,
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
   WorkspaceDockerServiceUnsupportedError,
@@ -70,6 +71,8 @@ import {
 import { newWorkspaceSchema, workspaceBindSchema, type NewWorkspace } from "@sealant/validators";
 import {
   SealantRuntime,
+  type SealantError,
+  type SealantSession,
   resolveWorkspaceError,
   resolveWorkspacePublishedImage,
   resolveWorkspaceRuntime,
@@ -2236,18 +2239,46 @@ export const bindWorkspace = (input: {
 export const flushWorkspaceCapture = (input: {
   readonly workspaceId: string;
   readonly payload: FlushWorkspaceCaptureRequest;
-}) => {
+}) =>
+  withCaptureDaemon(
+    { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
+    (daemon) => daemon.captureFlush(),
+  );
+
+/**
+ * Re-plan captures (sealantd 0.15 `capture.replan`, the claim hook): the daemon re-fetches its
+ * plan with no worktree named, delta-materialises it, and captures under the answered worktree
+ * and epoch from then on. Synchronous over the daemon's control connection; idempotent.
+ */
+export const replanWorkspaceCapture = (input: {
+  readonly workspaceId: string;
+  readonly payload: ReplanWorkspaceCaptureRequest;
+}) =>
+  withCaptureDaemon(
+    { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "re-plan" },
+    (daemon) => daemon.captureReplan(),
+  );
+
+/**
+ * The shared gate of the synchronous capture commands: the workspace must be owned, launched,
+ * capture-sourced and have a ready daemon; `use` then runs against that daemon inside one scoped
+ * connection, and any runtime failure surfaces as a conflict naming the verb.
+ */
+const withCaptureDaemon = <A>(
+  input: { readonly workspaceId: string; readonly ownerUserId: string; readonly verb: string },
+  use: (daemon: SealantSession) => Effect.Effect<A, SealantError>,
+) => {
   return Effect.gen(function* () {
-    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.ownerUserId);
     if (workspace.latestRunId === null) {
       return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no launched runtime to flush yet; wait for it to become ready.`,
+        message: `Workspace ${input.workspaceId} has no launched runtime to ${input.verb} yet; wait for it to become ready.`,
       });
     }
     const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
     if (spec.sources.workspace.kind !== "capture") {
       return yield* new WorkspaceBadRequestError({
-        message: `Workspace ${input.workspaceId} is not capture-sourced; only a capture workspace (sealantd ADR-0015) has captures to flush.`,
+        message: `Workspace ${input.workspaceId} is not capture-sourced; only a capture workspace (sealantd ADR-0015) has captures to ${input.verb}.`,
       });
     }
     const target = yield* resolveDaemonTarget(workspace.id).pipe(
@@ -2255,20 +2286,20 @@ export const flushWorkspaceCapture = (input: {
     );
     if (target === undefined) {
       return yield* new WorkspaceConflictError({
-        message: `Workspace ${input.workspaceId} has no ready runtime to flush.`,
+        message: `Workspace ${input.workspaceId} has no ready runtime to ${input.verb}.`,
       });
     }
     const runtime = yield* SealantRuntime;
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const daemon = yield* runtime.connect(target);
-        return yield* daemon.captureFlush();
+        return yield* use(daemon);
       }),
     ).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceConflictError({
-            message: `The workspace runtime refused the flush: ${error.message}`,
+            message: `The workspace runtime refused the ${input.verb}: ${error.message}`,
           }),
       ),
     );

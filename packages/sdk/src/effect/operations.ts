@@ -24,6 +24,7 @@ import type {
   ListRunsQuery,
   ListSessionsQuery,
   ListWorkspacesQuery,
+  ReplanWorkspaceCaptureRequest,
   RestartWorkspaceRequest,
   SessionInputRequest,
   SessionResizeRequest,
@@ -72,6 +73,14 @@ export const flushWorkspaceCaptureOp = (
 ) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.flushWorkspaceCapture({ params: { workspaceId }, payload }),
+  );
+
+export const replanWorkspaceCaptureOp = (
+  workspaceId: string,
+  payload: ReplanWorkspaceCaptureRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.replanWorkspaceCapture({ params: { workspaceId }, payload }),
   );
 
 export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>

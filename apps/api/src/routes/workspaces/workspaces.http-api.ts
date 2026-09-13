@@ -13,6 +13,7 @@ import {
   listWorkspaceEvents,
   listWorkspaces,
   renameWorkspace,
+  replanWorkspaceCapture,
   restartWorkspace,
   stopWorkspace,
 } from "./workspaces.module.js";
@@ -42,6 +43,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       )
       .handle("flushWorkspaceCapture", ({ params, payload }) =>
         flushWorkspaceCapture({
+          workspaceId: params.workspaceId,
+          payload,
+        }),
+      )
+      .handle("replanWorkspaceCapture", ({ params, payload }) =>
+        replanWorkspaceCapture({
           workspaceId: params.workspaceId,
           payload,
         }),

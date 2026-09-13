@@ -235,6 +235,28 @@ export interface WorkspaceCaptureStatus {
   readonly lastSnapUnixMs?: number;
 }
 
+/** The daemon's answer to `workspace.capture.replan()` (sealantd 0.15 `capture.replan`). */
+export interface WorkspaceCaptureReplanned {
+  /** The worktree the session channel's plan answered; the executor captures under it from now on. */
+  readonly worktreeId: string;
+  /** The lease epoch the plan answered. */
+  readonly epoch: number;
+  /** The head sequence the plan carried, once the worktree has one. */
+  readonly headN?: number;
+  /** The head capture the plan carried, once the worktree has one. */
+  readonly headCaptureId?: string;
+  /** What the delta materialise wrote: files whose bytes, mode or links differed from disk. */
+  readonly filesWritten: number;
+  readonly bytesWritten: number;
+  /** What it left alone: files already matching the plan on disk. */
+  readonly filesSkipped: number;
+  readonly bytesSkipped: number;
+  /** Files, symlinks and emptied directories the plan dropped, swept from the tree. */
+  readonly removed: number;
+  /** The plan named the worktree and epoch already in force; nothing moved. */
+  readonly unchanged: boolean;
+}
+
 /** Capture operations of a capture-sourced workspace. */
 export interface WorkspaceCapture {
   /**
@@ -243,6 +265,14 @@ export interface WorkspaceCapture {
    * `pending === 0 && !fenced`. Refused on workspaces that are not capture-sourced.
    */
   flush(): Promise<WorkspaceCaptureStatus>;
+  /**
+   * Re-plan: the daemon asks the session channel for its plan again with no worktree named,
+   * delta-materialises the answer over what is on disk, and captures under the answered worktree
+   * and epoch from then on (the fence lifts, foreign queue entries drop). The claim hook for a
+   * standby executor. Synchronous and idempotent (`unchanged: true`). Refused on workspaces that
+   * are not capture-sourced.
+   */
+  replan(): Promise<WorkspaceCaptureReplanned>;
 }
 
 /** How a dotfiles tree is applied inside the workspace. */
