@@ -17,7 +17,11 @@ export type CaptureWorkspaceSource = Extract<
 
 /** The daemon's name for the session channel address. */
 export const CAPTURE_ENDPOINT_ENV = "SEALANT_CAPTURE_ENDPOINT";
-/** The worktree the daemon materialises and keys its captures under (`captures/<worktree>/…`). */
+/**
+ * The worktree the daemon materialises and keys its captures under (`captures/<worktree>/…`).
+ * Left unset for a standby executor (no worktree yet): the daemon then takes the id from the
+ * channel's plan answer, which names the worktree it is bound to at claim.
+ */
 export const CAPTURE_WORKTREE_ID_ENV = "SEALANT_CAPTURE_WORKTREE_ID";
 
 /**
@@ -29,5 +33,7 @@ export const captureSourceEnv = (
 ): ReadonlyArray<readonly [string, string]> => [
   ["SEALANT_WORKSPACE_SOURCE", "capture"],
   [CAPTURE_ENDPOINT_ENV, source.endpoint],
-  [CAPTURE_WORKTREE_ID_ENV, source.worktreeId],
+  ...(source.worktreeId === undefined
+    ? []
+    : [[CAPTURE_WORKTREE_ID_ENV, source.worktreeId] as const]),
 ];

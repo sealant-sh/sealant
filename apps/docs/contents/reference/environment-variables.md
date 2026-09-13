@@ -66,6 +66,7 @@ write them for you.
 | `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                              |
 | `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                        |
 | `SEALANT_DOCKER_VOLUME_MAPPINGS`    | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback. |
+| `SEALANT_DOCKER_WORKSPACE_NETWORK`  | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.    |
 | `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                   |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
@@ -152,6 +153,26 @@ This mode requires Docker Engine API 1.45 or newer and a Docker CLI with matchin
 support. Sealant's worker image includes a pinned Docker 27 CLI, but the host Engine is still the
 operator's responsibility. Leaving `SEALANT_DOCKER_VOLUME_MAPPINGS` unset preserves legacy bind mode
 and its existing Docker arguments.
+
+### Workspaces on a shared Docker network
+
+By default a workspace container lands on the Docker daemon's default bridge, where other containers
+are reachable only by IP. A deployment that runs services beside the control plane on a Compose
+network — a session channel, an object store, anything a workspace must call by service name — sets
+`SEALANT_DOCKER_WORKSPACE_NETWORK` to that network's name and every workspace `docker run` gets
+`--network <name>`:
+
+```env
+SEALANT_DOCKER_WORKSPACE_NETWORK=mend_default
+```
+
+The network must already exist (Compose creates `<project>_default` on `up`); the worker never
+creates or removes it, and its name must satisfy Docker's own grammar (`[a-zA-Z0-9][a-zA-Z0-9_.-]*`)
+or the worker refuses to start. With the workspace Docker service enabled, the workspace joins the
+shared network beside its per-workspace sidecar network at creation, which needs Docker Engine 25 or
+newer; the sidecar itself stays on its own network. Independently of this setting, every workspace
+container is started with `--add-host host.docker.internal:host-gateway`, so the host is reachable
+by that name on Linux daemons too.
 
 ## GitHub App variables
 

@@ -145,7 +145,11 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
         source.kind === "capture"
           ? // The token is already in `secretEnv` (sealed by the control plane as
             // SEALANT_CAPTURE_TOKEN); only the channel facts travel here.
-            { kind: "capture", endpoint: source.endpoint, worktreeId: source.worktreeId }
+            {
+              kind: "capture",
+              endpoint: source.endpoint,
+              ...(source.worktreeId === undefined ? {} : { worktreeId: source.worktreeId }),
+            }
           : // No `kind` on the wire for git: the contract defaults it, and a bridge deployed
             // before the capture source (a strict v1 parser) keeps accepting this payload.
             {
