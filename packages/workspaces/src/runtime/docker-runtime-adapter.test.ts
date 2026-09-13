@@ -196,6 +196,23 @@ describe("DockerRuntimeAdapter", () => {
     expect(workspaceArgs.join(" ")).not.toContain("/var/run/docker.sock");
   });
 
+  it("refuses a workspace network name Docker would not accept", () => {
+    expect(
+      () =>
+        new DockerRuntimeAdapter({
+          runtimeCatalogLoader: createRuntimeCatalogLoader(),
+          workspaceNetwork: "mend default; rm -rf /",
+        }),
+    ).toThrow(/SEALANT_DOCKER_WORKSPACE_NETWORK/);
+    expect(
+      () =>
+        new DockerRuntimeAdapter({
+          runtimeCatalogLoader: createRuntimeCatalogLoader(),
+          workspaceNetwork: "mend_default",
+        }),
+    ).not.toThrow();
+  });
+
   it("removes the acquired Docker service when the workspace container fails to launch", async () => {
     let runCount = 0;
     const commandRunner = vi.fn<
@@ -315,13 +332,15 @@ describe("DockerRuntimeAdapter", () => {
     const args = firstCall?.[1];
     expect(command).toBe("docker");
     expect(args).toBeDefined();
-    expect(args?.slice(0, 8)).toEqual([
+    expect(args?.slice(0, 10)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       expect.any(String),
+      "--add-host",
+      "host.docker.internal:host-gateway",
       "-w",
       "/workspace/repo",
     ]);

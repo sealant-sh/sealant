@@ -411,6 +411,10 @@ export const workerRuntimeEnvSchema = z.object({
   // Optional strict Docker named-volume lowering. Semantic parsing and coherence checks live in
   // @sealant/workspaces so Kubernetes and legacy Docker configuration remain unchanged.
   SEALANT_DOCKER_VOLUME_MAPPINGS: z.string().trim().min(1).optional(),
+  // Optional existing Docker network every workspace container joins, so a Compose deployment's
+  // sibling services (a session channel, a bucket) resolve by name from inside a workspace. Name
+  // grammar is checked by the Docker adapter; the network is never created here.
+  SEALANT_DOCKER_WORKSPACE_NETWORK: z.string().trim().min(1).optional(),
 });
 
 /**
