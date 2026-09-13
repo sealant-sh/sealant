@@ -79,7 +79,21 @@ export type SealantTarget =
       readonly url: string;
       readonly tls?: SealantWebSocketClientTls | undefined;
       readonly auth?: { readonly bearerToken: string } | undefined;
+      /**
+       * Per-connection material minted at open time, for endpoints fronted by a platform proxy
+       * that authenticates every connection with a short-lived credential of its own (AWS Lambda
+       * MicroVMs: a ≤ 60-minute endpoint token carried as WebSocket subprotocols). Called once per
+       * `open`; a rejection fails the open. Never a substitute for `tls` / `auth` — those
+       * authenticate the control plane to the daemon side, this authenticates it to the proxy.
+       */
+      readonly prepare?: (() => Promise<WebSocketConnectMaterial>) | undefined;
     };
+
+/** What `prepare` adds to one WebSocket upgrade: extra headers and/or subprotocols. */
+export interface WebSocketConnectMaterial {
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+  readonly protocols?: readonly string[] | undefined;
+}
 
 /** Client-side mTLS material for the `websocket` target: PEM file paths, read at open time. */
 export interface SealantWebSocketClientTls {
@@ -357,32 +371,68 @@ const openDockerExec = (target: Extract<SealantTarget, { readonly kind: "docker-
  * untouched and `SealantClient.fromStream` works unchanged. Nothing about the handshake (or its
  * failure) is logged here beyond the error message — TLS material never leaves this closure.
  */
+/**
+ * Build the `ws` client for a websocket target: TLS material and the bearer header from the
+ * target, plus whatever `prepare` minted for this one connection. Shared with the plain
+ * (callback-style) transport so the two openers cannot drift on auth. Throws on an
+ * unauthenticated target.
+ */
+export const createControlWebSocket = (
+  target: Extract<SealantTarget, { readonly kind: "websocket" }>,
+  material: WebSocketConnectMaterial | undefined,
+): WebSocket => {
+  if (target.tls === undefined && target.auth === undefined) {
+    throw new Error(
+      "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
+    );
+  }
+  const tls = target.tls;
+  const headers = {
+    ...material?.headers,
+    ...(target.auth === undefined ? {} : { authorization: `Bearer ${target.auth.bearerToken}` }),
+  };
+  const protocols = material?.protocols === undefined ? [] : [...material.protocols];
+  return new WebSocket(target.url, protocols, {
+    ...(tls === undefined
+      ? {}
+      : {
+          ca: readFileSync(tls.caPath),
+          cert: readFileSync(tls.certPath),
+          key: readFileSync(tls.keyPath),
+          ...(tls.servername === undefined ? {} : { servername: tls.servername }),
+        }),
+    ...(Object.keys(headers).length === 0 ? {} : { headers }),
+    rejectUnauthorized: true,
+    perMessageDeflate: false,
+    handshakeTimeout: 15_000,
+  });
+};
+
 const openWebSocket = (target: Extract<SealantTarget, { readonly kind: "websocket" }>) =>
+  Effect.gen(function* () {
+    const material =
+      target.prepare === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: target.prepare,
+            catch: (cause) =>
+              new TransportError({
+                operation: "open",
+                message: `preparing the websocket connection failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+                cause,
+              }),
+          });
+    return yield* connectWebSocket(target, material);
+  });
+
+const connectWebSocket = (
+  target: Extract<SealantTarget, { readonly kind: "websocket" }>,
+  material: WebSocketConnectMaterial | undefined,
+) =>
   Effect.callback<OpenTransport, TransportError>((resume) => {
     let socket: WebSocket;
     try {
-      if (target.tls === undefined && target.auth === undefined) {
-        throw new Error(
-          "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
-        );
-      }
-      const tls = target.tls;
-      socket = new WebSocket(target.url, {
-        ...(tls === undefined
-          ? {}
-          : {
-              ca: readFileSync(tls.caPath),
-              cert: readFileSync(tls.certPath),
-              key: readFileSync(tls.keyPath),
-              ...(tls.servername === undefined ? {} : { servername: tls.servername }),
-            }),
-        ...(target.auth === undefined
-          ? {}
-          : { headers: { authorization: `Bearer ${target.auth.bearerToken}` } }),
-        rejectUnauthorized: true,
-        perMessageDeflate: false,
-        handshakeTimeout: 15_000,
-      });
+      socket = createControlWebSocket(target, material);
     } catch (cause) {
       resume(
         Effect.fail(
