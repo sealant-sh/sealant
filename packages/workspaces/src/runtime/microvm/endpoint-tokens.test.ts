@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { MicrovmAuthTokenInput } from "./api.js";
-import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
+import { MicrovmEndpointTokens, microvmEndpointTokensFromEnv } from "./endpoint-tokens.js";
 
 const fakeMinter = () => {
   const mints: MicrovmAuthTokenInput[] = [];
@@ -159,5 +159,43 @@ describe("MicrovmEndpointTokens", () => {
           webSocketAuth: "header",
         }),
     ).toThrow(/refresh margin/);
+  });
+});
+
+describe("microvmEndpointTokensFromEnv", () => {
+  it("is undefined without a region, and otherwise applies the documented defaults", async () => {
+    expect(microvmEndpointTokensFromEnv({})).toBeUndefined();
+    const minter = fakeMinter();
+    const tokens = microvmEndpointTokensFromEnv(
+      { SEALANT_MICROVM_REGION: "eu-central-1" },
+      minter.api,
+    );
+    if (tokens === undefined) throw new Error("expected a token source");
+    await expect(tokens.connectMaterial("microvm-1")()).resolves.toEqual({
+      headers: { "X-aws-proxy-auth": "token-1", "X-aws-proxy-port": "8080" },
+    });
+    expect(minter.mints).toEqual([{ microvmId: "microvm-1", expirationInMinutes: 60, port: 8080 }]);
+    const custom = microvmEndpointTokensFromEnv(
+      {
+        SEALANT_MICROVM_REGION: "eu-central-1",
+        SEALANT_MICROVM_AGENT_PORT: 9000,
+        SEALANT_MICROVM_TOKEN_TTL_MINUTES: 30,
+        SEALANT_MICROVM_WS_AUTH: "subprotocol",
+      },
+      minter.api,
+    );
+    if (custom === undefined) throw new Error("expected a token source");
+    await expect(custom.connectMaterial("microvm-2")()).resolves.toEqual({
+      protocols: [
+        "lambda-microvms",
+        "lambda-microvms.authentication.token-2",
+        "lambda-microvms.port.9000",
+      ],
+    });
+    expect(minter.mints[1]).toEqual({
+      microvmId: "microvm-2",
+      expirationInMinutes: 30,
+      port: 9000,
+    });
   });
 });

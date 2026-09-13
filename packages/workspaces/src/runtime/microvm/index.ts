@@ -29,7 +29,11 @@ export {
   type MicrovmRuntimeConfig,
   type MicrovmRuntimeEnvLike,
 } from "./config.js";
-export { MicrovmEndpointTokens, type MicrovmEndpointTokensOptions } from "./endpoint-tokens.js";
+export {
+  MicrovmEndpointTokens,
+  microvmEndpointTokensFromEnv,
+  type MicrovmEndpointTokensOptions,
+} from "./endpoint-tokens.js";
 export {
   AGENT_CONTRACT_VERSION,
   AGENT_CONTROL_ROUTE,

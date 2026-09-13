@@ -27,7 +27,12 @@ import {
   proxyAuthSubprotocol,
   proxyPortSubprotocol,
 } from "./agent-contract.js";
-import type { MicrovmApi } from "./api.js";
+import { createLiveMicrovmApi, type MicrovmApi } from "./api.js";
+import {
+  AGENT_DEFAULT_PORT,
+  MICROVM_ENDPOINT_TOKEN_MAX_MINUTES,
+  type MicrovmRuntimeEnvLike,
+} from "./config.js";
 
 export interface MicrovmEndpointTokensOptions {
   readonly api: Pick<MicrovmApi, "createAuthToken">;
@@ -193,3 +198,33 @@ export class MicrovmEndpointTokens {
     hold.timer.unref();
   }
 }
+
+/**
+ * A token source for any process that opens control connections to MicroVM workspaces (API,
+ * SSH gateway, worker telemetry): needs only the region and the token knobs, never the launch
+ * contract. Undefined when `SEALANT_MICROVM_REGION` is unset. Credentials come from the AWS
+ * default provider chain.
+ */
+export const microvmEndpointTokensFromEnv = (
+  env: Pick<
+    MicrovmRuntimeEnvLike,
+    | "SEALANT_MICROVM_REGION"
+    | "SEALANT_MICROVM_AGENT_PORT"
+    | "SEALANT_MICROVM_TOKEN_TTL_MINUTES"
+    | "SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS"
+    | "SEALANT_MICROVM_WS_AUTH"
+  >,
+  api?: Pick<MicrovmApi, "createAuthToken">,
+): MicrovmEndpointTokens | undefined => {
+  const region = env.SEALANT_MICROVM_REGION;
+  if (region === undefined) {
+    return undefined;
+  }
+  return new MicrovmEndpointTokens({
+    api: api ?? createLiveMicrovmApi({ region }),
+    port: env.SEALANT_MICROVM_AGENT_PORT ?? AGENT_DEFAULT_PORT,
+    ttlMinutes: env.SEALANT_MICROVM_TOKEN_TTL_MINUTES ?? MICROVM_ENDPOINT_TOKEN_MAX_MINUTES,
+    refreshMarginMs: env.SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS ?? 300_000,
+    webSocketAuth: env.SEALANT_MICROVM_WS_AUTH ?? "header",
+  });
+};

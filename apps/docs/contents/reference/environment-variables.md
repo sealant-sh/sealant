@@ -224,6 +224,40 @@ object model: `docs/kubernetes-support-design.md` in the repository.
 | `SEALANT_K8S_BUILD_TIMEOUT_MS` / `SEALANT_K8S_BUILD_TTL_SECONDS`                                   | `1800000` / `3600`                        | Job deadline, and how long finished Jobs stay for log inspection.                                                                                                                                                |
 | `SEALANT_K8S_REGISTRY_INSECURE`                                                                    | `false`                                   | Push over plain HTTP (in-cluster zot without TLS).                                                                                                                                                               |
 
+## Lambda MicroVM runtime (worker)
+
+Set these only when the worker runs workspaces as AWS Lambda MicroVMs
+(`DEFAULT_RUNTIME_ADAPTER=microvm`, or a blueprint that requests that family). One Firecracker VM
+per workspace attempt, driven with the Lambda MicroVMs API and reached through the VM's
+authenticated inbound endpoint; the API and SSH gateway need only `SEALANT_MICROVM_REGION` (plus the
+token knobs) to mint the endpoint tokens their control connections carry. The worker's AWS
+credentials come from the default provider chain (an instance profile, `AWS_PROFILE`, or
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and need `lambda:RunMicrovm`, `lambda:GetMicrovm`,
+`lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken`; the API and gateway need the last
+two. Sizing (vCPU, memory, disk) is a property of the image version, not of a launch: build the
+image with `packages/workspaces/microvm-image/build-image.sh` (4 GiB baseline → 2 vCPU / 16 GiB disk
+by default).
+
+| Variable                                  | Default                            | Purpose                                                                                                                                                   |
+| ----------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_MICROVM_IMAGE_ARN`               | unset                              | The workspace image (`arn:aws:lambda:<region>:<account>:microvm-image:<name>`); setting it enables the adapter and makes region, role and token required. |
+| `SEALANT_MICROVM_REGION`                  | —                                  | AWS region of the MicroVMs. Also set on the API and SSH gateway.                                                                                          |
+| `SEALANT_MICROVM_EXEC_ROLE_ARN`           | —                                  | IAM role every VM runs under (`lambda.amazonaws.com` trust; logs only — agent code in the VM is treated as hostile).                                      |
+| `SEALANT_CONTROL_BEARER_TOKEN`            | —                                  | Authenticates control connections to the in-VM agent (same variable Cloudflare uses). Required with the adapter; set on the API and gateway too.          |
+| `SEALANT_MICROVM_IMAGE_VERSION`           | latest ACTIVE                      | Pin an image version.                                                                                                                                     |
+| `SEALANT_MICROVM_EGRESS_CONNECTOR`        | unset (public internet)            | VPC egress network connector ARN.                                                                                                                         |
+| `SEALANT_MICROVM_INGRESS_CONNECTOR`       | the region's managed `ALL_INGRESS` | Ingress connector ARN; the VM's inbound endpoint (control reach) needs one.                                                                               |
+| `SEALANT_MICROVM_MAX_DURATION_SECONDS`    | `28800`                            | Lifetime cap per VM (platform maximum 8 h, suspended time included). Reported on inspect as the deadline so the engine can replace an executor before it. |
+| `SEALANT_MICROVM_LOG_GROUP`               | unset (disabled)                   | CloudWatch log group for the VM console.                                                                                                                  |
+| `SEALANT_MICROVM_AGENT_PORT`              | `8080`                             | The in-VM agent's port (endpoint target and lifecycle hooks). Must match the image.                                                                       |
+| `SEALANT_MICROVM_READINESS_TIMEOUT_MS`    | `300000`                           | RunMicrovm → RUNNING → launch material accepted → daemon health.                                                                                          |
+| `SEALANT_MICROVM_TERMINATE_TIMEOUT_MS`    | `90000`                            | Fence bound: TerminateMicrovm → TERMINATED, through the image's terminate hook.                                                                           |
+| `SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS`   | `15000`                            | `watchExits` polling cadence (there is no event stream).                                                                                                  |
+| `SEALANT_MICROVM_TOKEN_TTL_MINUTES`       | `60`                               | Endpoint token lifetime (platform maximum 60).                                                                                                            |
+| `SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS` | `300000`                           | A token this close to expiry is re-minted before use, and held tokens are refreshed at this margin.                                                       |
+| `SEALANT_MICROVM_FLUSH_TIMEOUT_MS`        | `50000`                            | Bound on `sealantctl capture flush` inside the suspend/terminate hooks (the platform's hook timeout is at most 60 s).                                     |
+| `SEALANT_MICROVM_WS_AUTH`                 | `header`                           | How the endpoint token rides a WebSocket upgrade: `X-aws-proxy-*` headers, or the documented `lambda-microvms.*` subprotocols.                            |
+
 ## Notable runtime defaults
 
 You should not need to set these for a standard self-host — compose already supplies sensible

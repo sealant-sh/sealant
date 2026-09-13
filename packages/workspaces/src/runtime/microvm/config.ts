@@ -16,6 +16,10 @@
  */
 import { z } from "zod";
 
+import { AGENT_DEFAULT_PORT } from "./agent-contract.js";
+
+export { AGENT_DEFAULT_PORT };
+
 /** The platform's hard lifetime cap, suspended time included (not adjustable). */
 export const MICROVM_MAX_DURATION_CAP_SECONDS = 28_800;
 /** The longest a runtime hook may run before the platform gives up on it. */
@@ -153,7 +157,7 @@ export const microvmRuntimeConfigFromEnv = (
     ...(env.SEALANT_MICROVM_LOG_GROUP === undefined
       ? {}
       : { logGroup: env.SEALANT_MICROVM_LOG_GROUP }),
-    agentPort: env.SEALANT_MICROVM_AGENT_PORT ?? 8080,
+    agentPort: env.SEALANT_MICROVM_AGENT_PORT ?? AGENT_DEFAULT_PORT,
     readinessTimeoutMs: env.SEALANT_MICROVM_READINESS_TIMEOUT_MS ?? 300_000,
     terminateTimeoutMs: env.SEALANT_MICROVM_TERMINATE_TIMEOUT_MS ?? 90_000,
     exitPollIntervalMs: env.SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS ?? 15_000,
