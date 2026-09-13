@@ -145,6 +145,9 @@ catalogs:
       specifier: ^4.1.12
       version: 4.4.3
 
+overrides:
+  '@effect/platform-node-shared': 4.0.0-beta.85
+
 importers:
 
   .:

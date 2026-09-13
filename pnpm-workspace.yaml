@@ -14,6 +14,8 @@ allowBuilds:
 catalog:
   "@anthropic-ai/claude-agent-sdk": ^0.3.201
   "@effect/platform-node": 4.0.0-beta.85
+  # Not a direct dependency: pinned here only so the override below shares this version line.
+  "@effect/platform-node-shared": 4.0.0-beta.85
   "@effect/sql-pg": 4.0.0-beta.85
   "@effect/vitest": 4.0.0-beta.85
   "@cloudflare/vite-plugin": ^1.30.2
@@ -67,3 +69,12 @@ onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
   - msw
+
+# @effect/platform-node depends on @effect/platform-node-shared with a caret range, and the caret
+# on a prerelease (^4.0.0-beta.85) also matches every later 4.0.0-rc.N. Image builds and CI install
+# with --lockfile=false, so they re-resolve that range on every run: rc.114 shipped 2026-09-11 and
+# the sealant-api image build broke with esbuild "Could not resolve effect/ByteSize" against the
+# beta.85 effect the workspace pins. Every other Effect package is either pinned exactly through the
+# catalog above or resolved as a peer of one of those pins; this is the only floating edge.
+overrides:
+  "@effect/platform-node-shared": "catalog:"
