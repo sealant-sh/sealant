@@ -154,7 +154,32 @@ export interface DockerRuntimeAdapterOptions {
    * mount uses `volume-subpath`; there is no bind-mount fallback.
    */
   readonly volumeMappings?: readonly DockerVolumeMapping[];
+  /**
+   * An existing Docker network every workspace container joins (`SEALANT_DOCKER_WORKSPACE_NETWORK`).
+   * A deployment that runs the control plane beside other services on a Compose network — Mend's
+   * bundle with its session channel and bucket — names that network here so a workspace resolves
+   * those services by name instead of needing them published on the host. The adapter never creates
+   * or removes it. With the workspace Docker service on, the container joins this network beside
+   * the per-workspace sidecar network at creation (Docker Engine 25 or newer). Unset: the daemon's
+   * default bridge, as before.
+   */
+  readonly workspaceNetwork?: string;
 }
+
+/**
+ * Docker's own grammar for a network name (`docker network create`): the value lands in argv, so
+ * anything else is refused at construction rather than at the first launch.
+ */
+const DOCKER_NETWORK_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+
+const assertDockerNetworkName = (name: string): string => {
+  if (!DOCKER_NETWORK_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `SEALANT_DOCKER_WORKSPACE_NETWORK is not a valid Docker network name: ${JSON.stringify(name)}.`,
+    );
+  }
+  return name;
+};
 
 const createDefaultCommandRunner = (dockerSocketPath: string): DockerCommandRunner => {
   return async (command, args, options) => {
@@ -544,6 +569,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly volumeMappings: readonly DockerVolumeMapping[] | undefined;
 
+  private readonly workspaceNetwork: string | undefined;
+
   private readonly allowedStoreRoots: readonly string[];
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
@@ -560,6 +587,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
+    this.workspaceNetwork =
+      options.workspaceNetwork === undefined
+        ? undefined
+        : assertDockerNetworkName(options.workspaceNetwork);
     this.allowedStoreRoots =
       options.volumeMappings === undefined
         ? []
@@ -1396,16 +1427,19 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         containerName,
         // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
         ...userEnvArgs(parsed),
+        // Networks: the per-workspace sidecar network first (it carries the `docker` alias the
+        // DOCKER_HOST below resolves), then the deployment's shared network when configured. Two
+        // `--network` flags on one `run` attach both at creation, so the daemon's boot — which may
+        // fetch its plan over the shared network — never races a later `network connect`.
+        ...(dockerNetworkName === undefined ? [] : ["--network", dockerNetworkName]),
+        ...(this.workspaceNetwork === undefined ? [] : ["--network", this.workspaceNetwork]),
+        // The host itself stays reachable by name on every engine: a Linux daemon has no
+        // `host.docker.internal` of its own, and `host-gateway` resolves to the bridge gateway.
+        "--add-host",
+        "host.docker.internal:host-gateway",
         ...(dockerNetworkName === undefined
           ? []
-          : [
-              "--network",
-              dockerNetworkName,
-              "-e",
-              "DOCKER_HOST=tcp://docker:2375",
-              "-e",
-              "DOCKER_TLS_CERTDIR=",
-            ]),
+          : ["-e", "DOCKER_HOST=tcp://docker:2375", "-e", "DOCKER_TLS_CERTDIR="]),
         "-w",
         parsed.blueprint.runtime.workingDirectory,
         ...workspaceAuthEnvArgs,

@@ -65,6 +65,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runc",
         "--name",
         "sealant-run-golden-1",
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "-w",
         "/workspace/repo",
         "-e",
@@ -128,6 +130,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "sealant-run-golden-2",
         "-e",
         "EDITOR=vim",
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "-w",
         "/workspace/repo",
         "-v",
@@ -185,6 +189,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runc",
         "--name",
         "sealant-run-golden-4",
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "-w",
         "/workspace/repo",
         "-v",
@@ -253,6 +259,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "sealant-run-golden-3",
         "--network",
         "sealant-run-golden-3-network",
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "-e",
         "DOCKER_HOST=tcp://docker:2375",
         "-e",
@@ -273,6 +281,71 @@ describe("DockerRuntimeAdapter golden argv", () => {
       ],
       ["inspect", "--format", "{{json .State}}", "container-id-123"],
       ["exec", "container-id-123", "test", "-S", "/run/sealant/control.sock"],
+    ]);
+  });
+
+  it("shared workspace network: --network on the workspace run, nothing created or removed", async () => {
+    const { calls, runner } = recordingRunner();
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: runner,
+      runtimeCatalogLoader: catalog,
+      workspaceNetwork: "mend_default",
+    });
+
+    await adapter.launch(cases.capture);
+
+    const run = calls.find((call) => call[0] === "run");
+    expect(run?.slice(0, 10)).toEqual([
+      "run",
+      "-d",
+      "--runtime",
+      "runc",
+      "--name",
+      "sealant-run-golden-4",
+      "--network",
+      "mend_default",
+      "--add-host",
+      "host.docker.internal:host-gateway",
+    ]);
+    expect(calls.filter((call) => call[0] === "network")).toEqual([]);
+  });
+
+  it("shared workspace network + dind: the workspace joins both at creation, the sidecar only its own", async () => {
+    const { calls, runner } = recordingRunner();
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner: runner,
+      runtimeCatalogLoader: catalog,
+      workspaceNetwork: "mend_default",
+    });
+
+    await adapter.launch(cases.dind);
+
+    const runs = calls.filter((call) => call[0] === "run");
+    expect(runs[0]?.slice(4, 10)).toEqual([
+      "sealant-run-golden-3-docker",
+      "--network",
+      "sealant-run-golden-3-network",
+      "--network-alias",
+      "docker",
+      "-e",
+    ]);
+    expect(runs[1]?.slice(0, 16)).toEqual([
+      "run",
+      "-d",
+      "--runtime",
+      "runc",
+      "--name",
+      "sealant-run-golden-3",
+      "--network",
+      "sealant-run-golden-3-network",
+      "--network",
+      "mend_default",
+      "--add-host",
+      "host.docker.internal:host-gateway",
+      "-e",
+      "DOCKER_HOST=tcp://docker:2375",
+      "-e",
+      "DOCKER_TLS_CERTDIR=",
     ]);
   });
 });

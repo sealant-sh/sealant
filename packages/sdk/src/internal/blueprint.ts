@@ -216,7 +216,9 @@ export const buildCreateWorkspaceRequest = (
                 {
                   kind: "capture",
                   endpoint: options.source.endpoint,
-                  worktreeId: options.source.worktreeId,
+                  ...(options.source.worktreeId === undefined
+                    ? {}
+                    : { worktreeId: options.source.worktreeId }),
                   ...(options.source.platform === undefined
                     ? {}
                     : { platform: options.source.platform }),

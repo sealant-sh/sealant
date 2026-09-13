@@ -1,12 +1,16 @@
 export {
   credentialFileInjectionSchema,
+  parseRuntimeAdapterInspectResult,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   publishedImageSchema,
   runtimeAdapterBlueprintSchema,
+  runtimeAdapterExitEventSchema,
   runtimeAdapterIdSchema,
+  runtimeAdapterInspectInputSchema,
+  runtimeAdapterInspectResultSchema,
   runtimeAdapterLaunchInputSchema,
   runtimeAdapterLaunchResultSchema,
   runtimeAdapterSupportInputSchema,
@@ -104,12 +108,19 @@ export {
   type BridgeStopResponse,
 } from "./cloudflare/bridge-contract.js";
 
+export * from "./microvm/index.js";
+
 export type {
   CredentialFileInjection,
   PublishedImage,
   RuntimeAdapterBlueprint,
   RuntimeAdapter,
+  RuntimeAdapterExitEvent,
+  RuntimeAdapterExitWatch,
+  RuntimeAdapterExitWatchInput,
   RuntimeAdapterId,
+  RuntimeAdapterInspectInput,
+  RuntimeAdapterInspectResult,
   RuntimeAdapterLaunchInput,
   RuntimeAdapterLaunchResult,
   RuntimeAdapterSelection,

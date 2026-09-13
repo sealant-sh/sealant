@@ -15,13 +15,14 @@
     "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-lambda-microvms": "3.1131.0",
     "@kubernetes/client-node": "catalog:",
     "@sealant/api-contracts": "workspace:*",
     "@sealant/credentials": "workspace:*",
     "@sealant/db": "workspace:*",
     "@sealant/jobs": "workspace:*",
-    "@sealant/runtime-client": "^0.13.0",
-    "@sealant/runtime-protocol": "^0.13.0",
+    "@sealant/runtime-client": "^0.14.0",
+    "@sealant/runtime-protocol": "^0.14.0",
     "@sealant/source-integrations": "workspace:*",
     "@sealant/validators": "workspace:*",
     "effect": "catalog:",

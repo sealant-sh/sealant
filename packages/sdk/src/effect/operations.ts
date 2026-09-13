@@ -6,6 +6,7 @@
  */
 import type {
   BindWorkspaceRequest,
+  FlushWorkspaceCaptureRequest,
   CloseSessionRequest,
   CreateAccessTokenRequest,
   CreateConnectedAccountRequest,
@@ -63,6 +64,14 @@ export const execWorkspaceOp = (workspaceId: string, payload: ExecWorkspaceReque
 export const bindWorkspaceOp = (workspaceId: string, payload: BindWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.bindWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const flushWorkspaceCaptureOp = (
+  workspaceId: string,
+  payload: FlushWorkspaceCaptureRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.flushWorkspaceCapture({ params: { workspaceId }, payload }),
   );
 
 export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>

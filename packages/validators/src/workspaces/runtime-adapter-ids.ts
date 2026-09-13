@@ -12,8 +12,10 @@ import { z } from "zod";
  * - `docker`: containers on the worker's Docker daemon (the default deployment).
  * - `k8s` / `k3s`: workspace Pods on a cluster (k3s differs only in scheduling defaults).
  * - `cloudflare`: Cloudflare Sandboxes driven through a bridge Worker (hosted deployments).
+ * - `microvm`: AWS Lambda MicroVMs, one Firecracker VM per workspace, driven with the Lambda
+ *   MicroVMs API and reached through the VM's authenticated inbound endpoint.
  */
-export const runtimeAdapterIds = ["docker", "k8s", "k3s", "cloudflare"] as const;
+export const runtimeAdapterIds = ["docker", "k8s", "k3s", "cloudflare", "microvm"] as const;
 
 export const runtimeAdapterIdSchema = z.enum(runtimeAdapterIds);
 

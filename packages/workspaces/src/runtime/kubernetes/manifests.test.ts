@@ -148,6 +148,31 @@ describe("Kubernetes manifests", () => {
     expect(keys).not.toContain("SEALANT_CAPTURE_TOKEN");
   });
 
+  it("leaves the worktree env out for a standby capture executor", () => {
+    const standby = {
+      ...cases.capture,
+      binds: undefined,
+      blueprint: {
+        ...cases.capture.blueprint,
+        sources: {
+          ...cases.capture.blueprint.sources,
+          workspace: { kind: "capture" as const, endpoint: "https://mend.example.com/session/s1" },
+        },
+      },
+    };
+    const plain = plainEnvEntries(standby, config, {
+      secretEnvFile: true,
+      dotfilesArchiveDir: undefined,
+    });
+    expect(plain).toEqual(
+      expect.arrayContaining([
+        ["SEALANT_WORKSPACE_SOURCE", "capture"],
+        ["SEALANT_CAPTURE_ENDPOINT", "https://mend.example.com/session/s1"],
+      ]),
+    );
+    expect(plain.map(([key]) => key)).not.toContain("SEALANT_CAPTURE_WORKTREE_ID");
+  });
+
   it("gives a capture Pod its workspace root from an emptyDir and mounts no store claim", () => {
     const captureNames = workspaceResourceNames("run-golden-4");
     const lowered = lowerMountIntents(

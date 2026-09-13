@@ -44,7 +44,8 @@ export const bridgeCaptureSourceSchema = z.strictObject({
   kind: z.literal("capture"),
   /** The session channel the daemon registers with (`SEALANT_CAPTURE_ENDPOINT`). */
   endpoint: z.string().trim().min(1),
-  worktreeId: z.string().trim().min(1),
+  /** Absent for a standby executor: the daemon takes the worktree from the channel's plan answer. */
+  worktreeId: z.string().trim().min(1).optional(),
 });
 
 // Git first: a payload without `kind` resolves as git; a capture payload fails the git shape (no

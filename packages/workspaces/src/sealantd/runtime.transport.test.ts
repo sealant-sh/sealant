@@ -156,3 +156,122 @@ describe("websocket control transport auth", () => {
     }
   });
 });
+
+describe("websocket control transport prepare", () => {
+  it("mints per-connection headers and subprotocols on both openers", async () => {
+    const { createServer: createHttpServer } = await import("node:http");
+    const { WebSocketServer, createWebSocketStream } = await import("ws");
+    const { openControlTransport } = await import("./plain-transport.js");
+
+    const seen: Array<{
+      readonly authorization: string | undefined;
+      readonly proxyAuth: string | undefined;
+      readonly protocols: string | undefined;
+    }> = [];
+    const httpServer = createHttpServer();
+    const wss = new WebSocketServer({
+      server: httpServer,
+      // Echo the first offered subprotocol back so the client accepts the upgrade.
+      handleProtocols: (protocols) => [...protocols][0] ?? false,
+    });
+    wss.on("connection", (socket, request) => {
+      seen.push({
+        authorization: request.headers.authorization,
+        proxyAuth: request.headers["x-aws-proxy-auth"]?.toString(),
+        protocols: request.headers["sec-websocket-protocol"],
+      });
+      const stream = createWebSocketStream(socket, { allowHalfOpen: false });
+      stream.on("data", (chunk: Buffer) => stream.write(chunk));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server has no port");
+    }
+    const url = `ws://127.0.0.1:${address.port}/sealant/control`;
+    let minted = 0;
+    const target = {
+      kind: "websocket" as const,
+      url,
+      auth: { bearerToken: "control-token" },
+      prepare: () => {
+        minted += 1;
+        return Promise.resolve({
+          headers: { "X-aws-proxy-auth": `endpoint-token-${minted}` },
+          protocols: ["lambda-microvms", `lambda-microvms.authentication.endpoint-token-${minted}`],
+        });
+      },
+    };
+
+    try {
+      const effectEcho = await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const transport = yield* SealantTransport;
+            const duplex = yield* transport.open(target);
+            return yield* Effect.tryPromise(
+              () =>
+                new Promise<string>((resolve, reject) => {
+                  duplex.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8")));
+                  duplex.once("error", reject);
+                  duplex.write("effect-round-trip");
+                }),
+            );
+          }),
+        ).pipe(Effect.provide(ControlTransportLive)),
+      );
+      expect(effectEcho).toBe("effect-round-trip");
+
+      // The plain opener returns synchronously; the write below queues until the upgrade lands.
+      const plain = openControlTransport(target);
+      const plainEcho = await new Promise<string>((resolve, reject) => {
+        plain.stream.once("data", (chunk: Buffer) => resolve(chunk.toString("utf8")));
+        plain.stream.once("error", reject);
+        plain.stream.write("plain-round-trip");
+      });
+      plain.close();
+      expect(plainEcho).toBe("plain-round-trip");
+
+      expect(minted).toBe(2);
+      expect(seen).toEqual([
+        {
+          authorization: "Bearer control-token",
+          proxyAuth: "endpoint-token-1",
+          protocols: "lambda-microvms,lambda-microvms.authentication.endpoint-token-1",
+        },
+        {
+          authorization: "Bearer control-token",
+          proxyAuth: "endpoint-token-2",
+          protocols: "lambda-microvms,lambda-microvms.authentication.endpoint-token-2",
+        },
+      ]);
+
+      // A failing prepare fails the open on the typed channel (Effect) and the stream (plain).
+      const failing = { ...target, prepare: () => Promise.reject(new Error("mint refused")) };
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const transport = yield* SealantTransport;
+            return yield* transport.open(failing);
+          }),
+        ).pipe(Effect.provide(ControlTransportLive)),
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+        expect(error).toBeInstanceOf(TransportError);
+        if (error instanceof TransportError) {
+          expect(error.message).toContain("mint refused");
+        }
+      }
+      const plainFailing = openControlTransport(failing);
+      const plainError = await new Promise<Error>((resolve) => {
+        plainFailing.stream.once("error", resolve);
+      });
+      expect(plainError.message).toContain("mint refused");
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    }
+  });
+});

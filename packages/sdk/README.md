@@ -232,6 +232,10 @@ const workspace = await sealant.workspaces.create({
   `SEALANT_CAPTURE_TOKEN`; it is never in the spec, `WorkspaceDetails`, argv, or container env.
 - The channel address and worktree id reach the daemon as `SEALANT_CAPTURE_ENDPOINT` and
   `SEALANT_CAPTURE_WORKTREE_ID`, with `SEALANT_WORKSPACE_SOURCE=capture`.
+- `worktreeId` is optional. A standby executor — launched ahead of any worktree so it can
+  materialise the project base and a dependency cache, then be bound to a worktree at claim — omits
+  it; `SEALANT_CAPTURE_WORKTREE_ID` stays unset and the daemon takes the worktree from the channel's
+  plan answer.
 - No mount allowlist applies. On Kubernetes the workspace root is an `emptyDir`; on Cloudflare the
   sandbox is kept alive while the lease is live and a stop sends SIGTERM so the daemon can flush.
 - **No restart in place**: the credential is discarded once the launch settles, so `restart()` is

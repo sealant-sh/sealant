@@ -11,7 +11,7 @@
  * as the same uid that launched it, so the daemon's `SO_PEERCRED` check admits us. If the binary is
  * absent the suite is skipped rather than failed (CI without a prebuilt daemon).
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { connect, createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,11 +19,12 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
-import type { EventEnvelope } from "@sealant/runtime-protocol";
+import { CaptureStatusReportSchema, create, type EventEnvelope } from "@sealant/runtime-protocol";
 import { Cause, Effect, Exit, Layer, Option, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  captureFlushReportFromWire,
   SealantControlError,
   SealantRuntime,
   SealantRuntimeLive,
@@ -38,6 +39,23 @@ const SEALANTD_BIN = fileURLToPath(
 );
 
 const hasBinary = existsSync(SEALANTD_BIN);
+
+/**
+ * `capture.flush` exists from sealantd 0.14 (ADR-0015); an older daemon never answers the
+ * unknown command, so the flush test only runs against a binary that reports at least that.
+ */
+const daemonSupportsCapture = (() => {
+  if (!hasBinary) {
+    return false;
+  }
+  const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], { encoding: "utf8" });
+  const version = /"daemonVersion":\s*"(\d+)\.(\d+)\.(\d+)/.exec(printed.stdout);
+  if (version === null) {
+    return false;
+  }
+  const [major, minor] = [Number(version[1]), Number(version[2])];
+  return major > 0 || minor >= 14;
+})();
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -280,6 +298,31 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
     }
   });
 
+  it.skipIf(!daemonSupportsCapture)(
+    "captureFlush on a daemon without a capture store fails on the typed channel",
+    async () => {
+      // `capture.flush` (sealantd 0.14, ADR-0015) only answers on a capture-sourced boot; a bare
+      // daemon refuses it with a typed control error naming the missing store.
+      const exit = await Effect.runPromiseExit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const runtime = yield* SealantRuntime;
+            const session = yield* runtime.connect(TARGET);
+            return yield* session.captureFlush();
+          }),
+        ).pipe(Effect.provide(TestLayer)),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause));
+        expect(error).toBeInstanceOf(SealantControlError);
+        expect((error as SealantControlError).operation).toBe("captureFlush");
+        expect((error as SealantControlError).message).toMatch(/capture/i);
+      }
+    },
+  );
+
   it("releases the transport Duplex when the scope finalizes (Scope finalizer ran)", async () => {
     // Spy transport: wraps the local-socket transport and records the Duplex it yielded so we can
     // assert, AFTER the scope closes, that it was destroyed. `connect`'s acquireRelease closes the
@@ -314,5 +357,52 @@ describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free
     // Scope has closed: the finalizer chain (client.close() + transport release) destroyed the Duplex.
     expect(openedDuplex).toBeDefined();
     expect(openedDuplex?.destroyed).toBe(true);
+  });
+});
+
+describe("captureFlushReportFromWire", () => {
+  it("maps the wire report's uint64 fields to numbers and keeps optional fields optional", () => {
+    expect(
+      captureFlushReportFromWire(
+        create(CaptureStatusReportSchema, {
+          epoch: 3n,
+          worktreeId: "wt_1",
+          pending: 0n,
+          stagedBytes: 12n,
+          uploadedObjects: 2n,
+          uploadedBytes: 4096n,
+          registered: 2n,
+          fenced: false,
+          paused: false,
+        }),
+      ),
+    ).toEqual({
+      epoch: 3,
+      worktreeId: "wt_1",
+      pending: 0,
+      stagedBytes: 12,
+      uploadedObjects: 2,
+      uploadedBytes: 4096,
+      registered: 2,
+      fenced: false,
+      paused: false,
+    });
+    expect(
+      captureFlushReportFromWire(
+        create(CaptureStatusReportSchema, {
+          epoch: 1n,
+          worktreeId: "wt_1",
+          headN: 7n,
+          pending: 1n,
+          stagedBytes: 0n,
+          uploadedObjects: 0n,
+          uploadedBytes: 0n,
+          registered: 0n,
+          fenced: true,
+          paused: true,
+          lastSnapUnixMs: 1_757_760_000_000n,
+        }),
+      ),
+    ).toMatchObject({ headN: 7, fenced: true, paused: true, lastSnapUnixMs: 1_757_760_000_000 });
   });
 });

@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import net from "node:net";
 import { Duplex } from "node:stream";
 
-import { WebSocket, createWebSocketStream } from "ws";
+import { createWebSocketStream } from "ws";
 
-import type { SealantTarget } from "./runtime.js";
+import { createControlWebSocket, type SealantTarget } from "./runtime.js";
 
 /*
 Plain (non-Effect) control transport over a `SealantTarget`.
@@ -33,7 +32,9 @@ The mechanics per target kind:
 
   (c) secure WebSocket — sealantd's `wss://…/control` frontend carries the identical framed byte
       stream as binary messages; mutual TLS authenticates both sides. Nothing about the TLS
-      material is logged.
+      material is logged. A target with `prepare` (per-connection proxy material, minted
+      asynchronously) gets a deferred Duplex: writes queue until the upgrade completes, so the
+      synchronous `openControlTransport` contract these hosts rely on is unchanged.
 */
 
 /** A live transport: the byte stream plus an idempotent teardown that drops the daemon connection. */
@@ -94,31 +95,11 @@ const openUnixSocket = (target: { readonly socketPath: string }): ControlTranspo
   return { stream: socket, close };
 };
 
-const openWebSocket = (
+const connectWebSocket = (
   target: Extract<SealantTarget, { readonly kind: "websocket" }>,
+  material: Awaited<ReturnType<NonNullable<typeof target.prepare>>> | undefined,
 ): ControlTransport => {
-  if (target.tls === undefined && target.auth === undefined) {
-    throw new Error(
-      "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
-    );
-  }
-  const tls = target.tls;
-  const socket = new WebSocket(target.url, {
-    ...(tls === undefined
-      ? {}
-      : {
-          ca: readFileSync(tls.caPath),
-          cert: readFileSync(tls.certPath),
-          key: readFileSync(tls.keyPath),
-          ...(tls.servername === undefined ? {} : { servername: tls.servername }),
-        }),
-    ...(target.auth === undefined
-      ? {}
-      : { headers: { authorization: `Bearer ${target.auth.bearerToken}` } }),
-    rejectUnauthorized: true,
-    perMessageDeflate: false,
-    handshakeTimeout: 15_000,
-  });
+  const socket = createControlWebSocket(target, material);
   const stream = createWebSocketStream(socket, { allowHalfOpen: false });
   let closed = false;
   const close = () => {
@@ -130,6 +111,91 @@ const openWebSocket = (
     socket.terminate();
   };
   return { stream, close };
+};
+
+/**
+ * A transport whose inner connection arrives later (after `prepare` resolves). Writes queue in
+ * order until then; reads, end, errors and close propagate from the inner stream once it exists.
+ * A close before the inner connection arrives discards it on arrival.
+ */
+const deferredTransport = (pending: Promise<ControlTransport>): ControlTransport => {
+  let inner: ControlTransport | undefined;
+  let closed = false;
+  const queuedWrites: Array<{ chunk: Buffer; callback: (error?: Error | null) => void }> = [];
+  let queuedFinal: ((error?: Error | null) => void) | undefined;
+
+  const stream = new Duplex({
+    read() {
+      inner?.stream.resume();
+    },
+    write(chunk: Buffer, _encoding, callback) {
+      if (inner === undefined) {
+        queuedWrites.push({ chunk, callback });
+        return;
+      }
+      inner.stream.write(chunk, callback);
+    },
+    final(callback) {
+      if (inner === undefined) {
+        queuedFinal = callback;
+        return;
+      }
+      inner.stream.end(callback);
+    },
+    destroy(error, callback) {
+      closed = true;
+      inner?.close();
+      callback(error);
+    },
+  });
+
+  const attach = async (): Promise<void> => {
+    let transport: ControlTransport;
+    try {
+      transport = await pending;
+    } catch (error: unknown) {
+      stream.destroy(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    if (closed) {
+      transport.close();
+      return;
+    }
+    inner = transport;
+    transport.stream.on("data", (chunk: Buffer) => {
+      if (!stream.push(chunk)) {
+        transport.stream.pause();
+      }
+    });
+    transport.stream.on("end", () => stream.push(null));
+    transport.stream.on("error", (error: Error) => stream.destroy(error));
+    transport.stream.on("close", () => stream.destroy());
+    for (const queued of queuedWrites.splice(0)) {
+      transport.stream.write(queued.chunk, queued.callback);
+    }
+    if (queuedFinal !== undefined) {
+      transport.stream.end(queuedFinal);
+    }
+  };
+  void attach();
+
+  return { stream, close: () => stream.destroy() };
+};
+
+const openWebSocket = (
+  target: Extract<SealantTarget, { readonly kind: "websocket" }>,
+): ControlTransport => {
+  const prepare = target.prepare;
+  if (prepare === undefined) {
+    return connectWebSocket(target, undefined);
+  }
+  // Validate auth before the async hop so a misconfigured target still fails synchronously.
+  if (target.tls === undefined && target.auth === undefined) {
+    throw new Error(
+      "Refusing an unauthenticated websocket control connection: the target carries neither client TLS material nor a bearer token.",
+    );
+  }
+  return deferredTransport(prepare().then((material) => connectWebSocket(target, material)));
 };
 
 /** Open the control transport for a resolved target, preferring the bind-mounted fast path. */

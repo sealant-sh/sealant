@@ -133,6 +133,9 @@ services:
       # Optional strict named-volume lowering. A deployment override must also mount every named
       # volume into this worker at its mapped logical root.
       SEALANT_DOCKER_VOLUME_MAPPINGS: ${SEALANT_DOCKER_VOLUME_MAPPINGS:-}
+      # Optional existing Docker network every workspace joins, so sibling Compose services resolve
+      # by name from inside a workspace. The network must already exist; the worker never creates it.
+      SEALANT_DOCKER_WORKSPACE_NETWORK: ${SEALANT_DOCKER_WORKSPACE_NETWORK:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

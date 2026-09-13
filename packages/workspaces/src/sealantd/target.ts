@@ -25,6 +25,7 @@ import {
   type SealantError,
   type SealantTarget,
   type SealantWebSocketClientTls,
+  type WebSocketConnectMaterial,
 } from "./runtime.js";
 
 /** Default control socket path the workspace entrypoint launches sealantd on (matches boot.ts). */
@@ -53,9 +54,17 @@ export interface SealantTargetDerivationOptions {
   readonly websocketTls?: SealantWebSocketClientTls;
   /**
    * Bearer token for `wss://` endpoints fronted by a trusted intermediary (the Cloudflare bridge
-   * Worker). Without it a cloudflare instance yields no target.
+   * Worker, the in-VM agent of a Lambda MicroVM). Without it a cloudflare or microvm instance
+   * yields no target.
    */
   readonly controlBearerToken?: string;
+  /**
+   * Per-connection proxy material for Lambda MicroVM instances: given the instance's
+   * `resourceId` (the MicroVM id), returns the `prepare` hook that mints the VM's endpoint token
+   * for one upgrade (`@sealant/workspaces` `MicrovmEndpointTokens.connectMaterial`). Without it
+   * a microvm instance yields no target — the endpoint refuses connections with no token.
+   */
+  readonly microvmConnectMaterial?: (microvmId: string) => () => Promise<WebSocketConnectMaterial>;
 }
 
 const UNIX_ENDPOINT_PREFIX = "unix://";
@@ -136,6 +145,27 @@ export const sealantTargetForRuntimeInstance = (
         auth: { bearerToken: resolved.controlBearerToken },
       };
     }
+    // MicroVM instances are reached through the VM's inbound endpoint: the bearer token
+    // authenticates this process to the in-VM agent (which relays to the daemon's control
+    // socket), and every upgrade also carries a freshly minted endpoint token for the AWS proxy.
+    case "microvm": {
+      if (
+        endpoint === undefined ||
+        !endpoint.startsWith(WSS_ENDPOINT_PREFIX) ||
+        resolved.controlBearerToken === undefined ||
+        resolved.microvmConnectMaterial === undefined ||
+        instance.resourceId === null ||
+        instance.resourceId.length === 0
+      ) {
+        return undefined;
+      }
+      return {
+        kind: "websocket",
+        url: endpoint,
+        auth: { bearerToken: resolved.controlBearerToken },
+        prepare: resolved.microvmConnectMaterial(instance.resourceId),
+      };
+    }
     case null:
       return undefined;
   }
@@ -156,6 +186,17 @@ export const describeUnaddressableRuntimeInstance = (
     return options.controlBearerToken === undefined
       ? "the cloudflare instance needs a control bearer token (SEALANT_CONTROL_BEARER_TOKEN) which is not configured"
       : "the cloudflare instance has no wss:// endpoint recorded";
+  }
+  if (instance.adapter === "microvm") {
+    if (options.controlBearerToken === undefined) {
+      return "the microvm instance needs a control bearer token (SEALANT_CONTROL_BEARER_TOKEN) which is not configured";
+    }
+    if (options.microvmConnectMaterial === undefined) {
+      return "the microvm instance needs endpoint token minting (SEALANT_MICROVM_REGION and AWS credentials) which is not configured";
+    }
+    return instance.resourceId === null || instance.resourceId.length === 0
+      ? "the microvm instance has no MicroVM id recorded"
+      : "the microvm instance has no wss:// endpoint recorded";
   }
   if (options.websocketTls === undefined) {
     return `the ${instance.adapter} instance needs client TLS material (SEALANT_CONTROL_CLIENT_CERT_PATH / _KEY_PATH / SEALANT_CONTROL_CA_PATH) which is not configured`;

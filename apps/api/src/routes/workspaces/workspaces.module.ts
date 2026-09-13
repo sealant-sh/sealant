@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
   type BindWorkspaceRequest,
+  type FlushWorkspaceCaptureRequest,
   WorkspaceBadGatewayError,
   WorkspaceBadRequestError,
   WorkspaceDockerServiceUnsupportedError,
@@ -2225,6 +2226,52 @@ export const bindWorkspace = (input: {
       "Failed to record the workspace bindings.",
     );
     return { binds };
+  });
+};
+
+/**
+ * Flush captures (sealantd ADR-0015): a final capture, then ship and register everything staged.
+ * Synchronous over the daemon's control connection; the reply is the daemon's capture status.
+ */
+export const flushWorkspaceCapture = (input: {
+  readonly workspaceId: string;
+  readonly payload: FlushWorkspaceCaptureRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    if (workspace.latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no launched runtime to flush yet; wait for it to become ready.`,
+      });
+    }
+    const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
+    if (spec.sources.workspace.kind !== "capture") {
+      return yield* new WorkspaceBadRequestError({
+        message: `Workspace ${input.workspaceId} is not capture-sourced; only a capture workspace (sealantd ADR-0015) has captures to flush.`,
+      });
+    }
+    const target = yield* resolveDaemonTarget(workspace.id).pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
+    if (target === undefined) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has no ready runtime to flush.`,
+      });
+    }
+    const runtime = yield* SealantRuntime;
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const daemon = yield* runtime.connect(target);
+        return yield* daemon.captureFlush();
+      }),
+    ).pipe(
+      Effect.mapError(
+        (error) =>
+          new WorkspaceConflictError({
+            message: `The workspace runtime refused the flush: ${error.message}`,
+          }),
+      ),
+    );
   });
 };
 
