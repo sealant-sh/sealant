@@ -32,15 +32,15 @@
 
 ### Minor Changes
 
-- f5d4625: Sealant no longer runs RabbitMQ or a zot registry on single-host installs. The job queue moved into
-  the control-plane Postgres database (pg-boss, `pgboss` schema; `RABBITMQ_URL` is gone), and
-  workspace images now stay in the Docker Engine that builds and runs them: the worker tags the built
-  image and launches by image id, with no push, pull, or tarball round-trip. Set `REGISTRY_BASE_URL` +
-  `REGISTRY_PUSH_REGISTRY` only to publish to an OCI registry (still required on Kubernetes, where the
-  chart keeps its in-cluster registry). `GET /v1/registries/default` reports
-  `pushRegistry: "docker-engine"` on installs without a registry. Existing self-host installs: re-run
-  the installer (or `docker compose up -d --remove-orphans`) and restart any workspace that was
-  mid-build during the upgrade.
+- f5d4625: Sealant no longer runs RabbitMQ or a zot registry on single-host installs. The job queue
+  moved into the control-plane Postgres database (pg-boss, `pgboss` schema; `RABBITMQ_URL` is gone),
+  and workspace images now stay in the Docker Engine that builds and runs them: the worker tags the
+  built image and launches by image id, with no push, pull, or tarball round-trip. Set
+  `REGISTRY_BASE_URL` + `REGISTRY_PUSH_REGISTRY` only to publish to an OCI registry (still required
+  on Kubernetes, where the chart keeps its in-cluster registry). `GET /v1/registries/default`
+  reports `pushRegistry: "docker-engine"` on installs without a registry. Existing self-host
+  installs: re-run the installer (or `docker compose up -d --remove-orphans`) and restart any
+  workspace that was mid-build during the upgrade.
 
   The API's `/docs` page now loads the Scalar viewer from jsDelivr instead of embedding it, and the
   server bundles are emitted as ASCII with comments stripped; together that trims roughly 20 MiB of
@@ -51,40 +51,40 @@
 ### Minor Changes
 
 - d0696d5: Add opt-in Docker named-volume workspace mounts through `SEALANT_DOCKER_VOLUME_MAPPINGS`.
-  Containerized applications can share selected worktrees, harness state, control sockets, and staged
-  launch files with sibling workspaces without host-directory binds. Existing SDK mount, standby, and
-  additional-mount inputs retain their path-based contract; the deployment maps canonical paths to
-  existing named volumes and subdirectories. Strict mode validates mappings and source directories,
-  requires Docker API 1.45 or newer, and never falls back to host binds. Legacy bind mode is
-  unchanged.
+  Containerized applications can share selected worktrees, harness state, control sockets, and
+  staged launch files with sibling workspaces without host-directory binds. Existing SDK mount,
+  standby, and additional-mount inputs retain their path-based contract; the deployment maps
+  canonical paths to existing named volumes and subdirectories. Strict mode validates mappings and
+  source directories, requires Docker API 1.45 or newer, and never falls back to host binds. Legacy
+  bind mode is unchanged.
 
 ## 0.27.0
 
 ### Minor Changes
 
-- e889127: Workspace-scoped Docker on Kubernetes, and a create-time refusal where it cannot be served.
-  `services.docker` now works on Kubernetes installs whose operator enabled it
-  (`workspaces.docker.enabled`): the rootless daemon runs as a sidecar of a user-namespaced workspace
-  Pod, the workspace receives `DOCKER_HOST=unix:///run/docker/docker.sock`, and
+- e889127: Workspace-scoped Docker on Kubernetes, and a create-time refusal where it cannot be
+  served. `services.docker` now works on Kubernetes installs whose operator enabled it
+  (`workspaces.docker.enabled`): the rootless daemon runs as a sidecar of a user-namespaced
+  workspace Pod, the workspace receives `DOCKER_HOST=unix:///run/docker/docker.sock`, and
   `forward({ host: "docker" })` keeps resolving (to the Pod's loopback, where nested containers
   publish). An install that cannot serve the service refuses `workspaces.create` synchronously with
-  `WorkspaceDockerServiceUnsupportedError` (HTTP 422, stable `code: "workspace-docker-unsupported"`) —
-  the consumer's capability probe, so a workbench can explain the gap beside its Docker switch instead
-  of surfacing a launch failure minutes later.
+  `WorkspaceDockerServiceUnsupportedError` (HTTP 422, stable `code: "workspace-docker-unsupported"`)
+  — the consumer's capability probe, so a workbench can explain the gap beside its Docker switch
+  instead of surfacing a launch failure minutes later.
 
 ## 0.26.0
 
 ### Minor Changes
 
-- 643f809: Standby workspaces and bindable mounts (sealantd ADR-0014, Mend ADR-0001). A workspace can now be
-  created with `source: { kind: "standby", rootPath }`: the caller-owned root (a project's worktrees
-  directory) is mounted hidden and the working directory does not exist until
-  `workspace.bind({ subpath })` points it at one of the root's subdirectories — after the container is
-  already running, which neither Docker nor Kubernetes allow for a mount. An extra mount declared
-  `bindable: true` works the same way for its own path, so a project can mount a sibling repository's
-  worktrees and bind one at `/workspace/repos/<name>`. `POST /v1/workspaces/:id/bind` applies the bind
-  over the daemon's control connection and records the workspace's live bindings, which every relaunch
-  re-supplies. Requires a sealantd with `bindMount` (runtime-client 0.13).
+- 643f809: Standby workspaces and bindable mounts (sealantd ADR-0014, Mend ADR-0001). A workspace
+  can now be created with `source: { kind: "standby", rootPath }`: the caller-owned root (a
+  project's worktrees directory) is mounted hidden and the working directory does not exist until
+  `workspace.bind({ subpath })` points it at one of the root's subdirectories — after the container
+  is already running, which neither Docker nor Kubernetes allow for a mount. An extra mount declared
+  `bindable: true` works the same way for its own path, so a project can mount a sibling
+  repository's worktrees and bind one at `/workspace/repos/<name>`. `POST /v1/workspaces/:id/bind`
+  applies the bind over the daemon's control connection and records the workspace's live bindings,
+  which every relaunch re-supplies. Requires a sealantd with `bindMount` (runtime-client 0.13).
 
 ## 0.25.0
 
@@ -94,11 +94,10 @@
 
 ### Minor Changes
 
-- dd88081: Accept `"cloudflare"` as a workspace runtime adapter id in the core API contracts. The id names the
-  Cloudflare Sandbox runtime family; deployments that do not register that adapter keep answering such
-  requests with the existing `unsupported-runtime` error.
+- dd88081: Accept `"cloudflare"` as a workspace runtime adapter id in the core API contracts. The id
+  names the Cloudflare Sandbox runtime family; deployments that do not register that adapter keep
+  answering such requests with the existing `unsupported-runtime` error.
 - 2ca12be: Cluster env sources at the create boundary (cluster-env-sources design, phase 1 of 2).
-
   - `workspaces.create` accepts `envFrom` — an ordered list of
     `{ kind: "secret" | "configmap", name }` naming Kubernetes objects in the platform's workspaces
     namespace whose keys become workspace environment, resolved by the platform worker at creation —
@@ -479,7 +478,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
