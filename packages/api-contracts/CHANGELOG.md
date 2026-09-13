@@ -1,5 +1,33 @@
 # @sealant/api-contracts
 
+## 0.30.0
+
+### Minor Changes
+
+- af93419: A `capture` workspace source (sealantd ADR-0015):
+  `workspaces.create({ source: { kind: "capture", endpoint, worktreeId, token } })` launches a
+  workspace that mounts nothing and clones nothing — the daemon materialises the worktree from the
+  session channel onto the executor's own disk and ships captures back, so a session can run where no
+  host path exists and outlive any one executor. The create request carries the credential as
+  `captureToken`; the control plane seals it beside `secretEnv` and delivers it through the same boot
+  file as `SEALANT_CAPTURE_TOKEN`, never into the blueprint or a read response. A capture workspace
+  cannot be restarted in place. Runtime support: Docker (no workspace bind), Kubernetes (`emptyDir`
+  workspace root, no store claim) and Cloudflare (kept alive while live; planned stops now send
+  SIGTERM through `stop()` so the daemon can flush, with `destroy()` reserved for fencing).
+
+### Patch Changes
+
+- 4d64b6a: The worker now keeps workspace images and build scratch bounded. Every build's scratch directory
+  (the Containerfile, plan and spec JSON, and the `docker save` tarball on registry installs) is
+  removed once the image is published or the build fails; before this each build left up to ~800 MB
+  under the worker's temp directory for good. An hourly retention sweep (`WORKSPACE_IMAGE_GC_ENABLED`,
+  `WORKSPACE_IMAGE_GC_INTERVAL_MS`, `WORKSPACE_IMAGE_RETAINED_PLANS`, `WORKSPACE_IMAGE_MIN_AGE_HOURS`)
+  deletes images no live workspace launched from, no retained plan still needs, and nothing published
+  in the last week — on the Engine store by image id, on a registry by manifest — and removes build
+  scratch older than six hours, so an upgrade reclaims what earlier versions leaked. Stopping a
+  workspace now removes its containers with their anonymous volumes; the Docker sidecar used to leave
+  one behind per workspace, and `docker volume prune` clears the ones older installs accumulated.
+
 ## 0.29.0
 
 ### Minor Changes
