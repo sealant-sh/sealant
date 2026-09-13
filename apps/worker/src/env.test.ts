@@ -23,6 +23,16 @@ describe("parseWorkerEnv", () => {
     expect(env.SEALANT_DOCKER_VOLUME_MAPPINGS).toBe(mappings);
   });
 
+  it("treats an empty workspace network as unset and keeps a named one", () => {
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_WORKSPACE_NETWORK: "" }).SEALANT_DOCKER_WORKSPACE_NETWORK,
+    ).toBeUndefined();
+    expect(
+      parseWorkerEnv({ SEALANT_DOCKER_WORKSPACE_NETWORK: "mend_default" })
+        .SEALANT_DOCKER_WORKSPACE_NETWORK,
+    ).toBe("mend_default");
+  });
+
   it("loads the GitHub App private key from GITHUB_APP_PRIVATE_KEY_PATH", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "sealant-worker-github-key-"));
     const privateKeyPath = join(tempDirectory, "github-app.private-key.pem");

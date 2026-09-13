@@ -215,3 +215,53 @@ describe("sealantTargetForRuntimeInstance (cloudflare)", () => {
     ).toEqual({ kind: "docker-exec", containerId: "ctr", socketPath: DEFAULT_CONTROL_SOCKET_PATH });
   });
 });
+
+const microvmPrepare = () => Promise.resolve({ protocols: ["lambda-microvms"] });
+
+describe("sealantTargetForRuntimeInstance (microvm)", () => {
+  const endpoint = "wss://abc123.lambda-microvm.eu-central-1.on.aws/sealant/control";
+  const prepare = microvmPrepare;
+  const microvmConnectMaterial = (microvmId: string) => {
+    expect(microvmId).toBe("microvm-1");
+    return prepare;
+  };
+
+  it("derives a bearer websocket target whose prepare hook is bound to the MicroVM id", () => {
+    const target = sealantTargetForRuntimeInstance(
+      runtimeInstance({ adapter: "microvm", resourceId: "microvm-1", endpoint }),
+      { controlBearerToken: "token-123", microvmConnectMaterial },
+    );
+    expect(target).toEqual({
+      kind: "websocket",
+      url: endpoint,
+      auth: { bearerToken: "token-123" },
+      prepare,
+    });
+  });
+
+  it("yields no target without the bearer token, the token minter, an id, or a wss endpoint", () => {
+    const instance = runtimeInstance({ adapter: "microvm", resourceId: "microvm-1", endpoint });
+    expect(sealantTargetForRuntimeInstance(instance, { microvmConnectMaterial })).toBeUndefined();
+    expect(describeUnaddressableRuntimeInstance(instance, { microvmConnectMaterial })).toContain(
+      "SEALANT_CONTROL_BEARER_TOKEN",
+    );
+    expect(
+      sealantTargetForRuntimeInstance(instance, { controlBearerToken: "token-123" }),
+    ).toBeUndefined();
+    expect(describeUnaddressableRuntimeInstance(instance, { controlBearerToken: "t" })).toContain(
+      "SEALANT_MICROVM_REGION",
+    );
+    expect(
+      sealantTargetForRuntimeInstance(
+        { ...instance, resourceId: null },
+        { controlBearerToken: "token-123", microvmConnectMaterial },
+      ),
+    ).toBeUndefined();
+    expect(
+      sealantTargetForRuntimeInstance(
+        { ...instance, endpoint: "https://abc123.lambda-microvm.eu-central-1.on.aws" },
+        { controlBearerToken: "token-123", microvmConnectMaterial },
+      ),
+    ).toBeUndefined();
+  });
+});

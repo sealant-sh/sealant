@@ -6,11 +6,7 @@
  * sealantd inside the sandbox, authenticated per-connection with the deployment's control bearer
  * token (`SEALANT_CONTROL_BEARER_TOKEN`, see `sealantd/target.ts`).
  */
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-
-import { z } from "zod";
-
+import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterStopInput,
@@ -31,9 +27,6 @@ import {
   type BridgeStopMode,
 } from "./bridge-contract.js";
 import type { CloudflareRuntimeConfig } from "./config.js";
-
-/** Inline dotfiles ride the launch request; refuse silliness rather than time out mid-upload. */
-const MAX_INLINE_DOTFILES_BYTES = 8 * 1024 * 1024;
 
 export interface CloudflareRuntimeAdapterOptions {
   readonly config: CloudflareRuntimeConfig;
@@ -152,7 +145,11 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
         source.kind === "capture"
           ? // The token is already in `secretEnv` (sealed by the control plane as
             // SEALANT_CAPTURE_TOKEN); only the channel facts travel here.
-            { kind: "capture", endpoint: source.endpoint, worktreeId: source.worktreeId }
+            {
+              kind: "capture",
+              endpoint: source.endpoint,
+              ...(source.worktreeId === undefined ? {} : { worktreeId: source.worktreeId }),
+            }
           : // No `kind` on the wire for git: the contract defaults it, and a bridge deployed
             // before the capture source (a strict v1 parser) keeps accepting this payload.
             {
@@ -239,36 +236,12 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
   }
 }
 
-/** The slice of `manifest.json` this reader needs (full shape: `launch-material.ts`). */
-const stagedManifestSchema = z.object({
-  archives: z.array(z.object({ file: z.string().trim().min(1) })),
-});
-
 /** Read the worker-staged dotfiles material and inline it (no shared filesystem to mount). */
 const inlineDotfiles = async (
   dotfilesArchiveDir: string | undefined,
 ): Promise<Pick<BridgeLaunchRequestInput, "dotfiles">> => {
-  if (dotfilesArchiveDir === undefined) {
-    return {};
-  }
-  const manifestJson = await readFile(path.join(dotfilesArchiveDir, "manifest.json"), "utf8");
-  const manifest = stagedManifestSchema.parse(JSON.parse(manifestJson));
-  let total = 0;
-  const archives = await Promise.all(
-    manifest.archives.map(async (entry) => {
-      const name = path.basename(entry.file);
-      const content = await readFile(path.join(dotfilesArchiveDir, name));
-      total += content.byteLength;
-      return { name, contentBase64: content.toString("base64") };
-    }),
-  );
-  if (total > MAX_INLINE_DOTFILES_BYTES) {
-    throw new Error(
-      `dotfiles archives total ${total} bytes; the cloudflare bridge takes at most ${MAX_INLINE_DOTFILES_BYTES} inline.`,
-    );
-  }
-  if (archives.length === 0) {
-    return {};
-  }
-  return { dotfiles: { manifestJson, archives } };
+  const dotfiles = await inlineDotfilesFromDir(dotfilesArchiveDir, "the cloudflare bridge");
+  return dotfiles === undefined
+    ? {}
+    : { dotfiles: { manifestJson: dotfiles.manifestJson, archives: [...dotfiles.archives] } };
 };

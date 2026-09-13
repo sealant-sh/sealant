@@ -88,6 +88,16 @@ describe("bootEnvForLaunch (capture source)", () => {
     expect(env["SEALANT_CAPTURE_TOKEN"]).toBeUndefined();
     expect(JSON.stringify(env)).not.toContain("mst");
   });
+
+  it("leaves the worktree env unset for a standby executor that names none", () => {
+    const standby = bridgeLaunchRequestSchema.parse({
+      ...request,
+      source: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+    });
+    const env = bootEnvForLaunch(standby);
+    expect(env["SEALANT_CAPTURE_ENDPOINT"]).toBe("https://mend.example.com/session/s1");
+    expect(env["SEALANT_CAPTURE_WORKTREE_ID"]).toBeUndefined();
+  });
 });
 
 describe("sandboxOptionsForLaunch", () => {

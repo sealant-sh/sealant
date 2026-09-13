@@ -53,9 +53,26 @@ describe("blueprint capture source", () => {
     expect(() =>
       parseWorkspaceBlueprint({
         ...baseSpec,
-        sources: { workspace: { kind: "capture", endpoint: "https://mend.example.com/session" } },
+        sources: {
+          workspace: {
+            kind: "capture",
+            endpoint: "https://mend.example.com/session",
+            worktreeId: "",
+          },
+        },
       }),
     ).toThrow();
+  });
+
+  it("accepts a standby executor that names no worktree yet", () => {
+    const blueprint = parseWorkspaceBlueprint({
+      ...baseSpec,
+      sources: { workspace: { kind: "capture", endpoint: "https://mend.example.com/session" } },
+    });
+    expect(blueprint.sources.workspace).toEqual({
+      kind: "capture",
+      endpoint: "https://mend.example.com/session",
+    });
   });
 
   it("leaves legacy kind-less payloads resolving as git", () => {

@@ -135,6 +135,23 @@ describe("buildCreateWorkspaceRequest", () => {
     expect(JSON.stringify(payload.spec)).not.toContain("token");
   });
 
+  it("lowers a standby capture source with no worktree and derives a generic name", () => {
+    const { payload } = buildCreateWorkspaceRequest(
+      {
+        source: { kind: "capture", endpoint: "https://mend.example.com/session/s1", token: "t" },
+        harness: opencode(),
+      },
+      config,
+    );
+    expect(payload.repository).toBe("workspace");
+    const spec = payload.spec as unknown as SpecShape;
+    expect(spec.sources.workspace).toEqual({
+      kind: "capture",
+      endpoint: "https://mend.example.com/session/s1",
+    });
+    expect(payload.captureToken).toBe("t");
+  });
+
   it("omits captureToken and the platform hint when the source is not a capture", () => {
     const { payload } = buildCreateWorkspaceRequest(
       { source: { kind: "mount", path: "/srv/store/worktrees/session-1" }, harness: opencode() },

@@ -66,6 +66,7 @@ write them for you.
 | `DOCKER_SOCKET_PATH`                | `/var/run/docker.sock`                 | Host Docker socket mounted into the worker.                                                                                                                              |
 | `SEALANT_MOUNT_ALLOWED_STORE_ROOTS` | unset                                  | Colon-delimited absolute deployment roots authorized as workspace mount sources. Passed to both API and worker; mounts stay disabled while unset.                        |
 | `SEALANT_DOCKER_VOLUME_MAPPINGS`    | unset                                  | Strict JSON array of `{ "logicalRoot": "/path", "volumeName": "actual-volume" }`. When set, every Docker source mount uses a named-volume subpath with no bind fallback. |
+| `SEALANT_DOCKER_WORKSPACE_NETWORK`  | unset                                  | Name of an existing Docker network every workspace container joins, so sibling Compose services resolve by name from inside a workspace. Never created by the worker.    |
 | `SEALANT_CREDENTIALS_KEY`           | unset                                  | Base64-encoded 32-byte key shared by API and worker for connected-account credentials.                                                                                   |
 
 For example, to let a local workbench mount worktrees stored below `~/.mend/store`, add the expanded
@@ -153,6 +154,26 @@ support. Sealant's worker image includes a pinned Docker 27 CLI, but the host En
 operator's responsibility. Leaving `SEALANT_DOCKER_VOLUME_MAPPINGS` unset preserves legacy bind mode
 and its existing Docker arguments.
 
+### Workspaces on a shared Docker network
+
+By default a workspace container lands on the Docker daemon's default bridge, where other containers
+are reachable only by IP. A deployment that runs services beside the control plane on a Compose
+network — a session channel, an object store, anything a workspace must call by service name — sets
+`SEALANT_DOCKER_WORKSPACE_NETWORK` to that network's name and every workspace `docker run` gets
+`--network <name>`:
+
+```env
+SEALANT_DOCKER_WORKSPACE_NETWORK=mend_default
+```
+
+The network must already exist (Compose creates `<project>_default` on `up`); the worker never
+creates or removes it, and its name must satisfy Docker's own grammar (`[a-zA-Z0-9][a-zA-Z0-9_.-]*`)
+or the worker refuses to start. With the workspace Docker service enabled, the workspace joins the
+shared network beside its per-workspace sidecar network at creation, which needs Docker Engine 25 or
+newer; the sidecar itself stays on its own network. Independently of this setting, every workspace
+container is started with `--add-host host.docker.internal:host-gateway`, so the host is reachable
+by that name on Linux daemons too.
+
 ## GitHub App variables
 
 Private repositories need a GitHub App. Only the first two variables are wired through the self-host
@@ -223,6 +244,40 @@ object model: `docs/kubernetes-support-design.md` in the repository.
 | `SEALANT_K8S_BUILD_CPU_REQUEST` / `_MEMORY_REQUEST` / `_CPU_LIMIT` / `_MEMORY_LIMIT`               | `1` / `2Gi` / `4` / `8Gi`                 | Build container resources.                                                                                                                                                                                       |
 | `SEALANT_K8S_BUILD_TIMEOUT_MS` / `SEALANT_K8S_BUILD_TTL_SECONDS`                                   | `1800000` / `3600`                        | Job deadline, and how long finished Jobs stay for log inspection.                                                                                                                                                |
 | `SEALANT_K8S_REGISTRY_INSECURE`                                                                    | `false`                                   | Push over plain HTTP (in-cluster zot without TLS).                                                                                                                                                               |
+
+## Lambda MicroVM runtime (worker)
+
+Set these only when the worker runs workspaces as AWS Lambda MicroVMs
+(`DEFAULT_RUNTIME_ADAPTER=microvm`, or a blueprint that requests that family). One Firecracker VM
+per workspace attempt, driven with the Lambda MicroVMs API and reached through the VM's
+authenticated inbound endpoint; the API and SSH gateway need only `SEALANT_MICROVM_REGION` (plus the
+token knobs) to mint the endpoint tokens their control connections carry. The worker's AWS
+credentials come from the default provider chain (an instance profile, `AWS_PROFILE`, or
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and need `lambda:RunMicrovm`, `lambda:GetMicrovm`,
+`lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken`; the API and gateway need the last
+two. Sizing (vCPU, memory, disk) is a property of the image version, not of a launch: build the
+image with `packages/workspaces/microvm-image/build-image.sh` (4 GiB baseline → 2 vCPU / 16 GiB disk
+by default).
+
+| Variable                                  | Default                            | Purpose                                                                                                                                                   |
+| ----------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SEALANT_MICROVM_IMAGE_ARN`               | unset                              | The workspace image (`arn:aws:lambda:<region>:<account>:microvm-image:<name>`); setting it enables the adapter and makes region, role and token required. |
+| `SEALANT_MICROVM_REGION`                  | —                                  | AWS region of the MicroVMs. Also set on the API and SSH gateway.                                                                                          |
+| `SEALANT_MICROVM_EXEC_ROLE_ARN`           | —                                  | IAM role every VM runs under (`lambda.amazonaws.com` trust; logs only — agent code in the VM is treated as hostile).                                      |
+| `SEALANT_CONTROL_BEARER_TOKEN`            | —                                  | Authenticates control connections to the in-VM agent (same variable Cloudflare uses). Required with the adapter; set on the API and gateway too.          |
+| `SEALANT_MICROVM_IMAGE_VERSION`           | latest ACTIVE                      | Pin an image version.                                                                                                                                     |
+| `SEALANT_MICROVM_EGRESS_CONNECTOR`        | unset (public internet)            | VPC egress network connector ARN.                                                                                                                         |
+| `SEALANT_MICROVM_INGRESS_CONNECTOR`       | the region's managed `ALL_INGRESS` | Ingress connector ARN; the VM's inbound endpoint (control reach) needs one.                                                                               |
+| `SEALANT_MICROVM_MAX_DURATION_SECONDS`    | `28800`                            | Lifetime cap per VM (platform maximum 8 h, suspended time included). Reported on inspect as the deadline so the engine can replace an executor before it. |
+| `SEALANT_MICROVM_LOG_GROUP`               | unset (disabled)                   | CloudWatch log group for the VM console.                                                                                                                  |
+| `SEALANT_MICROVM_AGENT_PORT`              | `8080`                             | The in-VM agent's port (endpoint target and lifecycle hooks). Must match the image.                                                                       |
+| `SEALANT_MICROVM_READINESS_TIMEOUT_MS`    | `300000`                           | RunMicrovm → RUNNING → launch material accepted → daemon health.                                                                                          |
+| `SEALANT_MICROVM_TERMINATE_TIMEOUT_MS`    | `90000`                            | Fence bound: TerminateMicrovm → TERMINATED, through the image's terminate hook.                                                                           |
+| `SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS`   | `15000`                            | `watchExits` polling cadence (there is no event stream).                                                                                                  |
+| `SEALANT_MICROVM_TOKEN_TTL_MINUTES`       | `60`                               | Endpoint token lifetime (platform maximum 60).                                                                                                            |
+| `SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS` | `300000`                           | A token this close to expiry is re-minted before use, and held tokens are refreshed at this margin.                                                       |
+| `SEALANT_MICROVM_FLUSH_TIMEOUT_MS`        | `50000`                            | Bound on `sealantctl capture flush` inside the suspend/terminate hooks (the platform's hook timeout is at most 60 s).                                     |
+| `SEALANT_MICROVM_WS_AUTH`                 | `header`                           | How the endpoint token rides a WebSocket upgrade: `X-aws-proxy-*` headers, or the documented `lambda-microvms.*` subprotocols.                            |
 
 ## Notable runtime defaults
 

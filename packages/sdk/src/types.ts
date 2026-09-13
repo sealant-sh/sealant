@@ -168,8 +168,12 @@ export interface WorkspaceCaptureSource {
   readonly kind: "capture";
   /** The session channel URL the daemon registers with. */
   readonly endpoint: string;
-  /** The worktree whose captures this workspace materialises and extends. */
-  readonly worktreeId: string;
+  /**
+   * The worktree whose captures this workspace materialises and extends. Omit for a standby
+   * executor launched before its worktree exists: the daemon then takes the worktree from the
+   * channel's plan answer, which names the one it is bound to at claim.
+   */
+  readonly worktreeId?: string;
   /** The session-scoped channel credential. Secret: sealed for the launch, then discarded. */
   readonly token: string;
   readonly platform?: string;
@@ -209,6 +213,36 @@ export interface WorkspaceBindOptions {
   readonly mountPath?: string;
   /** Relative path under the mount's root; an empty string unbinds. */
   readonly subpath: string;
+}
+
+/** The daemon's capture status after `workspace.capture.flush()` (sealantd ADR-0015). */
+export interface WorkspaceCaptureStatus {
+  /** The lease epoch the captures were shipped under. */
+  readonly epoch: number;
+  readonly worktreeId: string;
+  /** The head sequence registered on the session channel, once anything has been. */
+  readonly headN?: number;
+  /** Captures still staged and not yet shipped; zero after a complete flush. */
+  readonly pending: number;
+  readonly stagedBytes: number;
+  readonly uploadedObjects: number;
+  readonly uploadedBytes: number;
+  readonly registered: number;
+  /** The channel fenced this executor: nothing it captures from now on is accepted. */
+  readonly fenced: boolean;
+  /** The harness is paused (lease lost); see the daemon's lease semantics. */
+  readonly paused: boolean;
+  readonly lastSnapUnixMs?: number;
+}
+
+/** Capture operations of a capture-sourced workspace. */
+export interface WorkspaceCapture {
+  /**
+   * Final capture, then ship and register everything staged. Synchronous: resolves once the
+   * daemon has flushed (bounded by its grace window). Gate an executor's retirement on
+   * `pending === 0 && !fenced`. Refused on workspaces that are not capture-sourced.
+   */
+  flush(): Promise<WorkspaceCaptureStatus>;
 }
 
 /** How a dotfiles tree is applied inside the workspace. */
@@ -438,6 +472,8 @@ export interface Workspace {
    * binding, which each relaunch re-applies.
    */
   bind(options: WorkspaceBindOptions): Promise<readonly WorkspaceBind[]>;
+  /** Capture flush for capture-sourced workspaces (sealantd ADR-0015). */
+  readonly capture: WorkspaceCapture;
   /** Interactive PTY sessions: open new ones, reattach to existing ones by id. */
   readonly sessions: WorkspaceSessions;
   /** Lifecycle events as an async stream. */

@@ -1031,7 +1031,10 @@ function resolveWorkspaceSpecDetails(workspace: WorkspaceSummary): WorkspaceSpec
     // channel (sealantd ADR-0015). The endpoint stands in for the repository reference.
     return {
       repositoryUrl: source.endpoint,
-      branch: `worktree ${source.worktreeId}, materialised from the session channel`,
+      branch:
+        source.worktreeId === undefined
+          ? "standby, worktree assigned at claim from the session channel"
+          : `worktree ${source.worktreeId}, materialised from the session channel`,
       isGitHubSource,
       provider: "capture",
       configRepo,
