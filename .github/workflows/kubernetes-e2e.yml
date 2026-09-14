@@ -87,9 +87,26 @@ jobs:
           SEALANT_SEALANTD_IMAGE: sealant-registry.sealant.svc:5000/sealant/sealantd:e2e
         run: pnpm --filter @sealant/workspaces test:e2e src/kubernetes
 
+      # Dump the whole cluster, not just `sealant`: a bring-up can die in cert-manager or
+      # e2e-storage, long before that namespace exists, and a dump scoped to it prints only
+      # "No resources found" (sealant#241). KUBECONFIG is set explicitly because up.sh only
+      # persists it to $GITHUB_ENV once it has succeeded.
       - name: Dump cluster state on failure
         if: failure()
+        env:
+          KUBECONFIG: ${{ env.KUBECONFIG || '/home/runner/.kube/config' }}
         run: |
-          kubectl -n sealant get pods,svc,secrets,certificates,jobs -o wide || true
-          kubectl -n sealant describe pods || true
-          for p in $(kubectl -n sealant get pods -o name); do echo "== $p"; kubectl -n sealant logs "$p" --all-containers --tail=200 || true; done
+          kubectl get nodes -o wide || true
+          kubectl get pods --all-namespaces -o wide || true
+          kubectl get events --all-namespaces --sort-by=.lastTimestamp | tail -100 || true
+          kubectl -n sealant get svc,secrets,certificates,jobs -o wide || true
+          kubectl get pods --all-namespaces --no-headers 2>/dev/null \
+            | awk '$4 != "Running" && $4 != "Completed" { print $1, $2 }' \
+            | while read -r ns name; do
+                echo "== $ns/$name"
+                kubectl -n "$ns" describe pod "$name" || true
+                kubectl -n "$ns" logs "$name" --all-containers --tail=200 || true
+              done
+          for p in $(kubectl -n sealant get pods -o name 2>/dev/null); do
+            echo "== $p"; kubectl -n sealant logs "$p" --all-containers --tail=200 || true
+          done
