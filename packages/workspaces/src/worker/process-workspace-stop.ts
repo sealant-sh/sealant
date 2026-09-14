@@ -75,6 +75,26 @@ const swallowingFailure = (operation: string) =>
   sharedSwallowingFailure("Workspace stop", operation);
 
 /**
+ * Whether the adapter already knows the runtime ended (exited or gone). Unknown — no `inspect`,
+ * or a failed read — counts as still up, so the sync-back keeps its chance.
+ */
+const runtimeAlreadyEnded = (adapter: RuntimeAdapter, resourceId: string) => {
+  const inspect = adapter.inspect;
+  if (inspect === undefined) {
+    return Effect.succeed(false);
+  }
+  return Effect.tryPromise(() => inspect.call(adapter, { resourceId })).pipe(
+    Effect.map((result) => result.state !== "running"),
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        `Workspace stop: inspecting runtime ${resourceId} before the credential sync-back failed; syncing anyway.`,
+        cause,
+      ).pipe(Effect.as(false)),
+    ),
+  );
+};
+
+/**
  * Stop one workspace runtime: remove the container via the runtime adapter, then record the
  * terminal state (`markStopped` on the instance + workspace stored status "stopped").
  *
@@ -132,9 +152,12 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     // refresh claude/codex session files in-place, and an interactive/PTY workspace may never run
     // another exec job to sync them. Best-effort by construction (the helper never fails), and it
     // must run BEFORE the adapter destroys the runtime. Any adapter whose instance this worker can
-    // address takes part; an unaddressable one (e.g. Kubernetes without client TLS) is skipped.
+    // address takes part; an unaddressable one (e.g. Kubernetes without client TLS) is skipped —
+    // and so is a runtime the adapter already reports ended: there is nothing left to read, and
+    // dialling a dead Pod's Service only burns the connect timeout, several times over.
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
-    if (target !== undefined) {
+    const ended = yield* runtimeAlreadyEnded(adapter, resourceId);
+    if (target !== undefined && !ended) {
       yield* syncBackWorkspaceCredentials({
         attemptId: options.runId,
         target,

@@ -426,6 +426,12 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_BUILD_JOB_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
   // How often the worker sweeps live runtimes for expired TTLs and stranded containers.
   WORKSPACE_EXPIRY_REAPER_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+  // How often the worker asks each runtime whether its `ready` instances are still up, so a
+  // container or Pod that died on its own (`docker kill`, OOM, node loss) is recorded `failed`
+  // with its exit code instead of staying `ready` until someone probes it. Docker (`docker
+  // events`) and Kubernetes (a Pod watch) also report exits as they happen; this poll is the
+  // convergence net behind those streams and the only mechanism for poll-only runtimes.
+  WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   // Image retention: how often the worker deletes workspace images no live workspace launched from
   // and no retained plan still needs (plus stale build scratch under the OS temp dir). `false`
   // leaves the store alone for operators who manage images themselves.

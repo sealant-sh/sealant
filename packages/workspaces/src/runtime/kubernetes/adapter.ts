@@ -17,7 +17,13 @@
  *      the launch Secret: the daemon has consumed `env.json` at boot.
  *
  * Stop deletes Pod, Service, Certificate and both Secrets; each delete tolerates not-found, and
- * the outcome is `not-found` only when the Pod itself was already gone.
+ * the outcome is `not-found` only when the Pod itself was already gone. A Pod that is still there
+ * is waited for until the apiserver no longer lists it — bounded by its grace period plus a
+ * margin, never a fixed wait — so "stopped" means gone, as it does on Docker.
+ *
+ * Observation (`inspect` / `watchExits`): one LIST of the managed selector answers a whole
+ * sweep, and one watch on the same selector reports a Pod that ends or is deleted as the
+ * apiserver announces it; the worker's exit reconciler turns either into a `failed` instance.
  */
 import { readFile } from "node:fs/promises";
 
@@ -41,6 +47,11 @@ import {
   parseRuntimeAdapterSupportInput,
   type CredentialFileInjection,
   type RuntimeAdapter,
+  type RuntimeAdapterExitEvent,
+  type RuntimeAdapterExitWatch,
+  type RuntimeAdapterExitWatchInput,
+  type RuntimeAdapterInspectInput,
+  type RuntimeAdapterInspectResult,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterStopInput,
@@ -48,7 +59,7 @@ import {
   type RuntimeAdapterSupport,
   type RuntimeAdapterSupportInput,
 } from "../runtime-adapter.js";
-import type { KubernetesApi } from "./api.js";
+import type { KubernetesApi, PodWatch, PodWatchEventType } from "./api.js";
 import { LABEL_RUN_ID, type KubernetesRuntimeConfig } from "./config.js";
 import {
   EnvSourceResolutionError,
@@ -67,6 +78,7 @@ import {
   plainEnvEntries,
   secretEnvEntries,
   secretPayloadBytes,
+  WORKSPACE_CONTAINER_NAME,
   workspaceLabels,
 } from "./manifests.js";
 import {
@@ -86,6 +98,14 @@ export interface KubernetesRuntimeAdapterOptions {
   readonly clientTls: SealantWebSocketClientTls;
   /** Test seam: readiness polling cadence. */
   readonly pollIntervalMs?: number;
+  /**
+   * How long a `stop` waits past the Pod's grace period for the apiserver to drop it before
+   * failing readably (a node that stopped answering keeps a Pod Terminating forever). The wait
+   * itself ends the moment the Pod is gone.
+   */
+  readonly stopTerminationMarginMs?: number;
+  /** Test seam: how long one managed-Pod LIST answers concurrent `inspect` calls. */
+  readonly listCoalesceMs?: number;
   /** Test seam: override the control-channel probe (health + credential files). */
   readonly controlChannel?: ControlChannel;
   readonly now?: () => number;
@@ -105,6 +125,21 @@ const createAdapterError = (code: string, message: string): Error & { code: stri
 
 const POLL_INTERVAL_MS = 1000;
 const HEALTH_RETRY = { schedule: Schedule.spaced("1 second"), times: 30 };
+/** Kubernetes' own default when a Pod spec sets none. */
+const DEFAULT_TERMINATION_GRACE_SECONDS = 30;
+/**
+ * A fenced stop's grace: SIGTERM, then SIGKILL one second later. Not zero — a zero-grace delete
+ * drops the API object before the kubelet has killed anything, and the stop's wait for the Pod
+ * to disappear is how termination is confirmed.
+ */
+const FENCE_GRACE_SECONDS = 1;
+const STOP_TERMINATION_MARGIN_MS = 15_000;
+/** Past the grace period, this much lateness is normal kubelet slack; beyond it the Pod is stuck. */
+const TERMINATION_SLACK_MS = 5_000;
+const LIST_COALESCE_MS = 250;
+/** Pod watch reconnect backoff: a closed stream is reopened at once, an unreachable apiserver slowly. */
+const WATCH_RECONNECT_MIN_MS = 1_000;
+const WATCH_RECONNECT_MAX_MS = 30_000;
 
 /** Live control channel: the same Effect runtime + transport every worker path uses. */
 export const liveControlChannel: ControlChannel = {
@@ -276,6 +311,59 @@ const describePodProblem = (pod: V1Pod): PodProblem => {
 
 const PROBLEM_LOG_TAIL_LINES = 20;
 
+interface PodEnd {
+  readonly exitCode: number | undefined;
+  /** One line: what ended, and why when the Pod says. */
+  readonly reason: string;
+  /** Stuck Terminating past its grace: there is no container to quote a log tail from. */
+  readonly stuck: boolean;
+}
+
+const instantOf = (value: Date | string | undefined): number | undefined => {
+  if (value === undefined) {
+    return undefined;
+  }
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isNaN(ms) ? undefined : ms;
+};
+
+/**
+ * Whether a listed Pod has ended, and how. A terminated workspace container ends the workspace
+ * even while a sidecar keeps the Pod `Running`. A Pod being deleted has not ended until its grace
+ * period plus kubelet slack has passed — the stop that asked for it settles the row first — and
+ * one still listed after that is stuck on a node that stopped answering.
+ */
+const podEnd = (pod: V1Pod, nowMs: number): PodEnd | undefined => {
+  const terminated = pod.status?.containerStatuses?.find(
+    (status) => status.name === WORKSPACE_CONTAINER_NAME,
+  )?.state?.terminated;
+  const phase = podPhase(pod);
+  if (terminated !== undefined || phase === "Failed" || phase === "Succeeded") {
+    return {
+      exitCode: terminated?.exitCode,
+      reason: describePodProblem(pod).message,
+      stuck: false,
+    };
+  }
+  const deletionAt = instantOf(pod.metadata?.deletionTimestamp);
+  if (deletionAt === undefined) {
+    return undefined;
+  }
+  const graceSeconds =
+    pod.metadata?.deletionGracePeriodSeconds ??
+    pod.spec?.terminationGracePeriodSeconds ??
+    DEFAULT_TERMINATION_GRACE_SECONDS;
+  const stuckAfter = deletionAt + graceSeconds * 1000 + TERMINATION_SLACK_MS;
+  if (nowMs <= stuckAfter) {
+    return undefined;
+  }
+  return {
+    exitCode: undefined,
+    reason: `Pod has been Terminating since ${new Date(deletionAt).toISOString()}; its ${String(graceSeconds)} s grace period passed without the node confirming, so the workspace is treated as ended.`,
+    stuck: true,
+  };
+};
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class KubernetesRuntimeAdapter implements RuntimeAdapter {
@@ -284,6 +372,8 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
   readonly #api: KubernetesApi;
   readonly #clientTls: SealantWebSocketClientTls;
   readonly #pollIntervalMs: number;
+  readonly #stopTerminationMarginMs: number;
+  readonly #listCoalesceMs: number;
   readonly #control: ControlChannel;
   readonly #now: () => number;
 
@@ -293,6 +383,8 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     this.#api = options.api;
     this.#clientTls = options.clientTls;
     this.#pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+    this.#stopTerminationMarginMs = options.stopTerminationMarginMs ?? STOP_TERMINATION_MARGIN_MS;
+    this.#listCoalesceMs = options.listCoalesceMs ?? LIST_COALESCE_MS;
     this.#control = options.controlChannel ?? liveControlChannel;
     this.#now = options.now ?? Date.now;
   }
@@ -327,6 +419,148 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
   /** Run ids only; see `listManagedWorkspaces`. */
   async listManagedRunIds(): Promise<readonly string[]> {
     return [...new Set((await this.listManagedWorkspaces()).map((entry) => entry.runId))];
+  }
+
+  /**
+   * What the cluster knows about one launched Pod. One LIST of the managed selector answers every
+   * `inspect` that arrives within `listCoalesceMs`, so the worker's sweep of N instances costs one
+   * request, not N GETs.
+   *
+   * - A Pod that reached `Failed`/`Succeeded`, or whose workspace container terminated
+   *   (restartPolicy is Never, so it never comes back), is `exited` with that container's exit
+   *   code and the same readable problem + log tail launch failures quote.
+   * - A Pod the apiserver no longer lists is `missing` (a forced delete removes it at once).
+   * - A Pod being deleted is `running` until its grace period (plus kubelet slack) has passed —
+   *   the stop that asked for it settles the row first; one still listed after that is stuck on a
+   *   node that stopped answering, and is `exited` with that as its detail.
+   * - Anything else (`Pending`, `Running`) is `running`, the phase as `platformState`.
+   */
+  async inspect(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult> {
+    const pods = await this.#listManagedPodsCoalesced();
+    const pod = pods.find((candidate) => candidate.metadata?.name === input.resourceId);
+    if (pod === undefined) {
+      return { state: "missing" };
+    }
+    const end = podEnd(pod, this.#now());
+    if (end === undefined) {
+      const phase = podPhase(pod);
+      return phase === undefined
+        ? { state: "running" }
+        : { state: "running", platformState: phase };
+    }
+    const detail = end.stuck ? end.reason : await this.#problemWithLog(pod);
+    return {
+      state: "exited",
+      ...(end.exitCode === undefined ? {} : { exitCode: end.exitCode }),
+      detail,
+    };
+  }
+
+  #pendingList: { readonly at: number; readonly pods: Promise<readonly V1Pod[]> } | undefined;
+
+  #listManagedPodsCoalesced(): Promise<readonly V1Pod[]> {
+    const now = this.#now();
+    const pending = this.#pendingList;
+    if (pending !== undefined && now - pending.at <= this.#listCoalesceMs) {
+      return pending.pods;
+    }
+    const pods = this.#api.listPods(managedSelector(this.#config));
+    this.#pendingList = { at: now, pods };
+    pods.catch(() => {
+      // A failed LIST must not be handed to the next caller.
+      if (this.#pendingList?.pods === pods) {
+        this.#pendingList = undefined;
+      }
+    });
+    return pods;
+  }
+
+  /**
+   * Pod exits as the apiserver announces them: one watch on the managed selector, reopened with
+   * backoff whenever it ends (the apiserver closes a watch on its own every `timeoutSeconds`; a
+   * clean end is reopened at once, a failure after the backoff). Each reopen replays the current
+   * Pods as `ADDED`, which is also how an exit announced while the watch was down is caught up.
+   * A Pod is reported once: `exited` on a terminal phase or a dead workspace container, `missing`
+   * on `DELETED` — unless its exit was already reported. A Pod being deleted within its grace
+   * period is not an exit here either; the poll (`inspect`) is what notices one that gets stuck.
+   */
+  watchExits(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch {
+    const wanted = input.resourceIds === undefined ? undefined : new Set(input.resourceIds);
+    const reported = new Set<string>();
+    let closed = false;
+    let watch: PodWatch | undefined;
+    let reconnectTimer: NodeJS.Timeout | undefined;
+    let backoffMs = WATCH_RECONNECT_MIN_MS;
+
+    const report = (resourceId: string, result: RuntimeAdapterExitEvent["result"]): void => {
+      if (reported.has(resourceId)) {
+        return;
+      }
+      reported.add(resourceId);
+      input.onExit({ resourceId, result });
+    };
+    const onEvent = (type: PodWatchEventType, pod: V1Pod): void => {
+      // An event proves the stream is healthy; the next drop retries promptly again.
+      backoffMs = WATCH_RECONNECT_MIN_MS;
+      const name = pod.metadata?.name;
+      if (name === undefined || (wanted !== undefined && !wanted.has(name))) {
+        return;
+      }
+      if (type === "DELETED") {
+        report(name, { state: "missing" });
+        // A name can be reused by a relaunch of the same run; its next exit must report again.
+        reported.delete(name);
+        return;
+      }
+      if (type === "BOOKMARK") {
+        return;
+      }
+      const end = podEnd(pod, this.#now());
+      if (end !== undefined) {
+        report(name, {
+          state: "exited",
+          ...(end.exitCode === undefined ? {} : { exitCode: end.exitCode }),
+          detail: end.reason,
+        });
+      }
+    };
+    const open = (): void => {
+      if (closed) {
+        return;
+      }
+      watch = this.#api.watchPods(managedSelector(this.#config), {
+        onEvent,
+        onEnd: (error) => {
+          watch = undefined;
+          if (closed) {
+            return;
+          }
+          const delay = error === undefined ? WATCH_RECONNECT_MIN_MS : backoffMs;
+          if (error !== undefined) {
+            input.onError?.(error);
+            backoffMs = Math.min(backoffMs * 2, WATCH_RECONNECT_MAX_MS);
+          }
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = undefined;
+            open();
+          }, delay);
+          reconnectTimer.unref();
+        },
+      });
+    };
+    open();
+
+    return {
+      close: () => {
+        closed = true;
+        if (reconnectTimer !== undefined) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = undefined;
+        }
+        watch?.close();
+        watch = undefined;
+      },
+    };
   }
 
   async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
@@ -524,29 +758,40 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
 
   async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
-    const names = workspaceResourceNames(parsed.resourceId);
-    // `resourceId` IS the pod name (derived from the run id); derive siblings from it directly.
+    // `resourceId` IS the pod name (derived from the run id); sibling names derive from it.
     const podName = parsed.resourceId;
     const base = podName;
-    // Kubernetes deletion is asynchronous: a Pod stays Terminating for its grace period and a
-    // second delete during that window still "succeeds". Match the Docker adapter's contract —
-    // the stop that INITIATES teardown reports "stopped", any later one "not-found" — by treating
-    // an already-terminating Pod as gone. The deletes below still run for idempotent cleanup.
     const existing = await this.#api.getPod(podName);
-    const alreadyStopping =
-      existing === undefined || existing.metadata?.deletionTimestamp !== undefined;
-    const deleted = await this.#api.deletePod(podName);
-    const outcome = alreadyStopping ? "not-found" : deleted;
+    if (existing !== undefined) {
+      // A fence shortens the grace so the kubelet kills the containers at once; a planned stop
+      // leaves the Pod its own window (sealantd flushes on SIGTERM). Either way the wait below
+      // ends when the apiserver drops the Pod — that, not a timer, is termination confirmed.
+      const graceSeconds =
+        parsed.fence === true
+          ? FENCE_GRACE_SECONDS
+          : (existing.metadata?.deletionGracePeriodSeconds ??
+            existing.spec?.terminationGracePeriodSeconds ??
+            DEFAULT_TERMINATION_GRACE_SECONDS);
+      await this.#api.deletePod(
+        podName,
+        parsed.fence === true ? { gracePeriodSeconds: FENCE_GRACE_SECONDS } : undefined,
+      );
+      await this.#awaitGone(podName, graceSeconds * 1000 + this.#stopTerminationMarginMs);
+    }
+    // The siblings: idempotent cleanup whether or not the Pod was still there.
     await this.#api.deleteService(base);
     await this.#api.deleteCertificate(base);
     await this.#api.deleteSecret(`${base}-launch`);
     await this.#api.deleteSecret(`${base}-env`);
     await this.#api.deleteSecret(`${base}-tls`);
-    void names;
+    // Match the Docker adapter's contract — the stop that INITIATES teardown reports "stopped",
+    // any later one "not-found" — by treating a Pod that was already Terminating as gone.
+    const alreadyStopping =
+      existing === undefined || existing.metadata?.deletionTimestamp !== undefined;
     return {
       adapter: this.id,
       resourceId: parsed.resourceId,
-      outcome: outcome === "deleted" ? "stopped" : "not-found",
+      outcome: alreadyStopping ? "not-found" : "stopped",
     };
   }
 
@@ -637,7 +882,7 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     if (phase === "Failed" || phase === "Succeeded") {
       // A dead Pod from an earlier attempt at this run: replace it (restartPolicy is Never).
       await this.#api.deletePod(name);
-      await this.#awaitGone(name);
+      await this.#awaitGone(name, this.#config.readinessTimeoutMs);
       const recreated = await this.#api.createPod(pod);
       if (recreated.outcome === "conflict") {
         throw createAdapterError(
@@ -650,11 +895,15 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     return "adopted";
   }
 
-  async #awaitGone(name: string): Promise<void> {
-    const deadline = this.#now() + this.#config.readinessTimeoutMs;
+  /** Poll until the apiserver no longer lists the Pod; readable failure once `timeoutMs` passes. */
+  async #awaitGone(name: string, timeoutMs: number): Promise<void> {
+    const deadline = this.#now() + timeoutMs;
     while ((await this.#api.getPod(name)) !== undefined) {
       if (this.#now() > deadline) {
-        throw createAdapterError("adapter-unavailable", `Pod ${name} did not terminate in time.`);
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Pod ${name} was still Terminating ${String(timeoutMs)} ms after its delete; the node may have stopped answering.`,
+        );
       }
       await sleep(this.#pollIntervalMs);
     }

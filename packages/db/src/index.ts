@@ -124,11 +124,13 @@ export {
 } from "./repositories/workspaces.js";
 
 export {
+  RUNTIME_EXITED_ERROR_CODE,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoInvariantError,
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceRuntimeInstanceRepoUnexpectedError,
   createWorkspaceRuntimeInstanceRepository,
+  type MarkWorkspaceRuntimeInstanceExitedInput,
   type WorkspaceRuntimeInstanceRepoError,
   type WorkspaceRuntimeInstanceRepoService,
   type WorkspaceRuntimeInstanceRepository,

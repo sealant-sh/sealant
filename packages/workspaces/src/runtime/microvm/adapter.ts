@@ -473,9 +473,16 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  /** Poll-based: GetMicrovm per watched VM every `exitPollIntervalMs`, no overlapping ticks. */
+  /**
+   * Poll-based: GetMicrovm per watched VM every `exitPollIntervalMs`, no overlapping ticks. There
+   * is no event stream and no cheap enumeration, so the watch needs `resourceIds`; without them
+   * it has nothing to poll and closes at once (the caller's `inspect` sweep covers the runtime).
+   */
   watchExits(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch {
-    const remaining = new Set(input.resourceIds);
+    const remaining = new Set(input.resourceIds ?? []);
+    if (remaining.size === 0) {
+      return { close: () => undefined };
+    }
     let inFlight = false;
     let closed = false;
     const tick = async (): Promise<void> => {
@@ -492,7 +499,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
           try {
             result = await this.inspect({ resourceId });
           } catch (error) {
-            input.onError?.(resourceId, error);
+            input.onError?.(error, resourceId);
             continue;
           }
           if (result.state !== "running") {

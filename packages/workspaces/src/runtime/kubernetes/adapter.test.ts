@@ -9,7 +9,13 @@ import { describe, expect, it, vi } from "vitest";
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import { KubernetesRuntimeAdapter, supportForKubernetes, type ControlChannel } from "./adapter.js";
-import type { CreateOutcome, DeleteOutcome, KubernetesApi } from "./api.js";
+import type {
+  CreateOutcome,
+  DeleteOutcome,
+  DeletePodOptions,
+  KubernetesApi,
+  PodWatchHandlers,
+} from "./api.js";
 import { kubernetesRuntimeConfigSchema, type KubernetesRuntimeConfig } from "./config.js";
 import type { CertificateObject } from "./manifests.js";
 import { workspaceResourceNames } from "./names.js";
@@ -41,6 +47,16 @@ interface FakeCluster extends KubernetesApi {
   /** `<pod>/<container>` → log tail the fake serves. */
   readonly logTails: Map<string, string>;
   readonly log: string[];
+  /** Every Pod watch opened, oldest first; tests feed events and end streams by hand. */
+  readonly watches: FakeWatch[];
+  /** When set, `deletePod` only stamps the Pod Terminating and leaves it listed. */
+  deletesLinger: boolean;
+}
+
+interface FakeWatch {
+  readonly selector: string;
+  readonly handlers: PodWatchHandlers;
+  closed: boolean;
 }
 
 const fakeCluster = (): FakeCluster => {
@@ -78,6 +94,8 @@ const fakeCluster = (): FakeCluster => {
     nextStatus: undefined,
     logTails: new Map<string, string>(),
     log,
+    watches: [],
+    deletesLinger: false,
     createPod: async (pod) => create(pods, "pod", pod),
     getPod: async (name) => {
       const pod = pods.get(name);
@@ -86,8 +104,40 @@ const fakeCluster = (): FakeCluster => {
       }
       return { ...pod, status: pod.status ?? cluster.nextStatus ?? { phase: cluster.nextPhase } };
     },
-    deletePod: async (name) => del(pods, "pod", name),
-    listPods: async () => [...pods.values()],
+    deletePod: async (name, options?: DeletePodOptions) => {
+      const grace = options?.gracePeriodSeconds;
+      log.push(`delete pod ${name}${grace === undefined ? "" : ` grace=${String(grace)}`}`);
+      const pod = pods.get(name);
+      if (pod === undefined) {
+        return "not-found";
+      }
+      if (cluster.deletesLinger) {
+        pods.set(name, {
+          ...pod,
+          metadata: {
+            ...pod.metadata,
+            deletionTimestamp: new Date(),
+            ...(grace === undefined ? {} : { deletionGracePeriodSeconds: grace }),
+          },
+        });
+      } else {
+        pods.delete(name);
+      }
+      return "deleted";
+    },
+    listPods: async () => {
+      log.push("list pods");
+      return [...pods.values()];
+    },
+    watchPods: (selector, handlers) => {
+      const watch: FakeWatch = { selector, handlers, closed: false };
+      cluster.watches.push(watch);
+      return {
+        close: () => {
+          watch.closed = true;
+        },
+      };
+    },
     createService: async (service) => create(services, "service", service),
     getService: async (name) => services.get(name),
     deleteService: async (name) => del(services, "service", name),
@@ -592,5 +642,336 @@ describe("cluster env sources (worker-side resolution)", () => {
     const pod = [...cluster.pods.values()][0];
     expect(pod?.spec?.serviceAccountName).toBe("irsa-agents");
     expect(pod?.spec?.automountServiceAccountToken).toBe(false);
+  });
+});
+
+const podWith = (
+  name: string,
+  status: V1PodStatus,
+  metadata: Partial<NonNullable<V1Pod["metadata"]>> = {},
+): V1Pod => ({ metadata: { name, ...metadata }, status });
+
+const terminatedWorkspace = (exitCode: number, reason?: string) => ({
+  name: "workspace",
+  image: "image",
+  imageID: "image-id",
+  ready: false,
+  restartCount: 0,
+  state: { terminated: { exitCode, ...(reason === undefined ? {} : { reason }) } },
+});
+
+describe("KubernetesRuntimeAdapter.inspect", () => {
+  it("maps each Pod state: running, pending, exited with exit code and log tail, terminating, stuck, missing", async () => {
+    const cluster = fakeCluster();
+    const now = Date.parse("2026-09-14T12:00:00.000Z");
+    const adapter = new KubernetesRuntimeAdapter({
+      id: "k8s",
+      config,
+      api: cluster,
+      clientTls,
+      controlChannel: controlChannel(),
+      pollIntervalMs: 1,
+      now: () => now,
+      listCoalesceMs: 0,
+    });
+    cluster.pods.set("pod-live", podWith("pod-live", { phase: "Running" }));
+    cluster.pods.set("pod-pending", podWith("pod-pending", { phase: "Pending" }));
+    cluster.pods.set(
+      "pod-dead",
+      podWith("pod-dead", {
+        phase: "Failed",
+        containerStatuses: [terminatedWorkspace(137, "OOMKilled")],
+      }),
+    );
+    cluster.logTails.set("pod-dead/workspace", "last words");
+    cluster.pods.set("pod-done", podWith("pod-done", { phase: "Succeeded" }));
+    // The main container died while the Pod still reports Running (a sidecar keeps it up).
+    cluster.pods.set(
+      "pod-half-dead",
+      podWith("pod-half-dead", { phase: "Running", containerStatuses: [terminatedWorkspace(1)] }),
+    );
+    // Deleted 10 s ago with a 30 s grace: the stop that asked for it settles the row.
+    cluster.pods.set(
+      "pod-stopping",
+      podWith(
+        "pod-stopping",
+        { phase: "Running" },
+        { deletionTimestamp: new Date(now - 10_000), deletionGracePeriodSeconds: 30 },
+      ),
+    );
+    // Deleted 60 s ago with a 30 s grace and still listed: the node stopped answering.
+    cluster.pods.set(
+      "pod-stuck",
+      podWith(
+        "pod-stuck",
+        { phase: "Running" },
+        { deletionTimestamp: new Date(now - 60_000), deletionGracePeriodSeconds: 30 },
+      ),
+    );
+
+    await expect(adapter.inspect({ resourceId: "pod-live" })).resolves.toEqual({
+      state: "running",
+      platformState: "Running",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-pending" })).resolves.toEqual({
+      state: "running",
+      platformState: "Pending",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-dead" })).resolves.toEqual({
+      state: "exited",
+      exitCode: 137,
+      detail:
+        "container 'workspace' exited with 137 (OOMKilled)\n--- workspace log tail ---\nlast words",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-done" })).resolves.toEqual({
+      state: "exited",
+      detail: "phase Succeeded",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-half-dead" })).resolves.toEqual({
+      state: "exited",
+      exitCode: 1,
+      detail: "container 'workspace' exited with 1",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-stopping" })).resolves.toEqual({
+      state: "running",
+      platformState: "Running",
+    });
+    await expect(adapter.inspect({ resourceId: "pod-stuck" })).resolves.toEqual({
+      state: "exited",
+      detail: expect.stringMatching(
+        /^Pod has been Terminating since 2026-09-14T11:59:00\.000Z; its 30 s grace period passed/,
+      ),
+    });
+    await expect(adapter.inspect({ resourceId: "pod-gone" })).resolves.toEqual({
+      state: "missing",
+    });
+  });
+
+  it("answers a burst of inspects from one LIST of the managed selector", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    cluster.pods.set("pod-a", podWith("pod-a", { phase: "Running" }));
+    cluster.pods.set("pod-b", podWith("pod-b", { phase: "Failed" }));
+
+    const results = await Promise.all(
+      ["pod-a", "pod-b", "pod-c"].map((resourceId) => adapter.inspect({ resourceId })),
+    );
+
+    expect(results.map((result) => result.state)).toEqual(["running", "exited", "missing"]);
+    expect(cluster.log.filter((line) => line === "list pods")).toHaveLength(1);
+  });
+
+  it("does not hand a failed LIST to the next inspect", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    const listPods = vi
+      .spyOn(cluster, "listPods")
+      .mockRejectedValueOnce(new Error("apiserver unavailable"));
+    cluster.pods.set("pod-a", podWith("pod-a", { phase: "Running" }));
+
+    await expect(adapter.inspect({ resourceId: "pod-a" })).rejects.toThrow(/apiserver unavailable/);
+    await expect(adapter.inspect({ resourceId: "pod-a" })).resolves.toMatchObject({
+      state: "running",
+    });
+    expect(listPods).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("KubernetesRuntimeAdapter.watchExits", () => {
+  it("reports a terminal phase, a dead workspace container and a deletion once each, and honours the id filter", () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    const onExit = vi.fn();
+    const watch = adapter.watchExits({ onExit, resourceIds: ["pod-a", "pod-b", "pod-c"] });
+
+    expect(cluster.watches).toHaveLength(1);
+    const stream = cluster.watches[0];
+    expect(stream?.selector).toBe(
+      "app.kubernetes.io/managed-by=sealant,app.kubernetes.io/component=workspace",
+    );
+
+    // The replayed current state: nothing has ended.
+    stream?.handlers.onEvent("ADDED", podWith("pod-a", { phase: "Running" }));
+    stream?.handlers.onEvent("ADDED", podWith("pod-b", { phase: "Pending" }));
+    stream?.handlers.onEvent("BOOKMARK", podWith("pod-a", {}));
+    expect(onExit).not.toHaveBeenCalled();
+
+    // A Pod being deleted within its grace is not an exit.
+    stream?.handlers.onEvent(
+      "MODIFIED",
+      podWith("pod-a", { phase: "Running" }, { deletionTimestamp: new Date() }),
+    );
+    expect(onExit).not.toHaveBeenCalled();
+
+    stream?.handlers.onEvent(
+      "MODIFIED",
+      podWith("pod-b", { phase: "Failed", containerStatuses: [terminatedWorkspace(137, "Error")] }),
+    );
+    // The same Pod again (a status refresh, then its deletion): reported once.
+    stream?.handlers.onEvent(
+      "MODIFIED",
+      podWith("pod-b", { phase: "Failed", containerStatuses: [terminatedWorkspace(137, "Error")] }),
+    );
+    stream?.handlers.onEvent("DELETED", podWith("pod-b", { phase: "Failed" }));
+    // A forced delete: the Pod vanishes while Running.
+    stream?.handlers.onEvent("DELETED", podWith("pod-a", { phase: "Running" }));
+    // Not watched.
+    stream?.handlers.onEvent("DELETED", podWith("pod-other", { phase: "Running" }));
+    // A relaunch reused pod-b's name and died again: reported again.
+    stream?.handlers.onEvent(
+      "MODIFIED",
+      podWith("pod-b", { phase: "Running", containerStatuses: [terminatedWorkspace(2)] }),
+    );
+
+    expect(onExit.mock.calls).toEqual([
+      [
+        {
+          resourceId: "pod-b",
+          result: {
+            state: "exited",
+            exitCode: 137,
+            detail: "container 'workspace' exited with 137 (Error)",
+          },
+        },
+      ],
+      [{ resourceId: "pod-a", result: { state: "missing" } }],
+      [
+        {
+          resourceId: "pod-b",
+          result: { state: "exited", exitCode: 2, detail: "container 'workspace' exited with 2" },
+        },
+      ],
+    ]);
+
+    watch.close();
+    expect(stream?.closed).toBe(true);
+  });
+
+  it("reopens a watch that ended cleanly at once, a failed one after backoff, and never after close", async () => {
+    vi.useFakeTimers();
+    try {
+      const cluster = fakeCluster();
+      const adapter = adapterFor(cluster, controlChannel());
+      const onExit = vi.fn();
+      const onError = vi.fn();
+      const watch = adapter.watchExits({ onExit, onError });
+
+      // The apiserver's own timeout: a clean end, reopened after the minimum delay, no error.
+      cluster.watches[0]?.handlers.onEnd(undefined);
+      expect(cluster.watches).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cluster.watches).toHaveLength(2);
+      expect(onError).not.toHaveBeenCalled();
+
+      // A failure: reported, reopened after 1 s, then 2 s.
+      cluster.watches[1]?.handlers.onEnd(new Error("connection reset"));
+      expect(onError).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cluster.watches).toHaveLength(3);
+      cluster.watches[2]?.handlers.onEnd(new Error("connection reset"));
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(cluster.watches).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(cluster.watches).toHaveLength(4);
+
+      // An event proves health: the next drop retries promptly again.
+      cluster.watches[3]?.handlers.onEvent("ADDED", podWith("pod-a", { phase: "Running" }));
+      cluster.watches[3]?.handlers.onEnd(new Error("connection reset"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(cluster.watches).toHaveLength(5);
+
+      watch.close();
+      expect(cluster.watches[4]?.closed).toBe(true);
+      cluster.watches[4]?.handlers.onEnd(undefined);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(cluster.watches).toHaveLength(5);
+      expect(onExit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("KubernetesRuntimeAdapter.stop", () => {
+  it("returns at once for a Pod the apiserver no longer has, still clearing its siblings", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    const launched = await adapter.launch(launchInput);
+    cluster.log.length = 0;
+    // A forced delete (`kubectl delete --force --grace-period=0`) removed the Pod already.
+    cluster.pods.delete(launched.resourceId);
+
+    const result = await adapter.stop({ resourceId: launched.resourceId, fence: true });
+
+    expect(result.outcome).toBe("not-found");
+    expect(cluster.log.filter((line) => line.startsWith("delete pod"))).toEqual([]);
+    expect(cluster.services.size + cluster.secrets.size + cluster.certificates.size).toBe(0);
+  });
+
+  it("waits for the Pod to leave the apiserver, no longer than its grace plus the margin", async () => {
+    const cluster = fakeCluster();
+    cluster.deletesLinger = true;
+    let now = 0;
+    const adapter = new KubernetesRuntimeAdapter({
+      id: "k8s",
+      config,
+      api: cluster,
+      clientTls,
+      controlChannel: controlChannel(),
+      pollIntervalMs: 1,
+      stopTerminationMarginMs: 10_000,
+      now: () => now,
+    });
+    const launched = await adapter.launch(launchInput);
+    const polls: number[] = [];
+    const getPod = cluster.getPod;
+    vi.spyOn(cluster, "getPod").mockImplementation(async (name) => {
+      polls.push(now);
+      if (polls.length === 4) {
+        cluster.pods.delete(name);
+      }
+      now += 1_000;
+      return getPod(name);
+    });
+
+    const result = await adapter.stop({ resourceId: launched.resourceId });
+
+    expect(result.outcome).toBe("stopped");
+    // The pre-delete read, then three polls before the Pod was gone.
+    expect(polls).toEqual([0, 1_000, 2_000, 3_000]);
+    expect(cluster.log.filter((line) => line.startsWith("delete pod"))).toEqual([
+      `delete pod ${launched.resourceId}`,
+    ]);
+  });
+
+  it("fences with a one-second grace and fails readably when the Pod never leaves", async () => {
+    const cluster = fakeCluster();
+    cluster.deletesLinger = true;
+    let now = 0;
+    const adapter = new KubernetesRuntimeAdapter({
+      id: "k8s",
+      config,
+      api: cluster,
+      clientTls,
+      controlChannel: controlChannel(),
+      pollIntervalMs: 1,
+      stopTerminationMarginMs: 4_000,
+      now: () => now,
+    });
+    const launched = await adapter.launch(launchInput);
+    const getPod = cluster.getPod;
+    vi.spyOn(cluster, "getPod").mockImplementation(async (name) => {
+      now += 1_000;
+      return getPod(name);
+    });
+
+    await expect(adapter.stop({ resourceId: launched.resourceId, fence: true })).rejects.toThrow(
+      /still Terminating 5000 ms after its delete/,
+    );
+    expect(cluster.log.filter((line) => line.startsWith("delete pod"))).toEqual([
+      `delete pod ${launched.resourceId} grace=1`,
+    ]);
+    // The row is not settled by a stop that could not confirm: the Pod is still listed.
+    expect(cluster.pods.has(launched.resourceId)).toBe(true);
   });
 });

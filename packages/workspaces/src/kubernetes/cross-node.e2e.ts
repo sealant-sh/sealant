@@ -13,7 +13,9 @@
  *      visible on node A, a commit made on node A is immediately visible in the Pod;
  *   4. a harness-style exec streams telemetry over WSS; a PTY session opens and reattaches;
  *   5. stop is idempotent; the Pod is deleted and recreated on the OTHER node with the same
- *      worktree and the earlier write intact.
+ *      worktree and the earlier write intact;
+ *   6. a forced Pod delete (the node-loss stand-in) is observed by the adapter's watch and by
+ *      `inspect` within seconds, and a stop on the gone Pod returns at once.
  *
  * Gated on SEALANT_K8S_E2E=1 with a cluster from `deploy/e2e/kind/up.sh`. The test process runs
  * OUTSIDE the cluster, so every control connection goes through a `kubectl port-forward` to the
@@ -332,4 +334,38 @@ describe.skipIf(!E2E_ENABLED)("Kubernetes cross-node workspace", () => {
     },
     15 * 60_000,
   );
+
+  it("observes a forced Pod delete within seconds and stops the gone Pod at once", async () => {
+    // The relaunch above left a ready Pod; the watch opens on the current state.
+    const exits: Array<{ resourceId: string; state: string }> = [];
+    const observed = new Promise<void>((resolve) => {
+      const watch = adapter.watchExits({
+        resourceIds: [podName],
+        onExit: (event) => {
+          exits.push({ resourceId: event.resourceId, state: event.result.state });
+          watch.close();
+          resolve();
+        },
+      });
+    });
+    // What the cluster proof did by hand: the API object is gone immediately, whatever the
+    // kubelet is still doing.
+    const forcedAt = Date.now();
+    await kubectl("delete", "pod", podName, "--force", "--grace-period=0", "--wait=false");
+
+    await Promise.race([
+      observed,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("the watch never reported the exit")), 10_000),
+      ),
+    ]);
+    expect(exits).toEqual([{ resourceId: podName, state: "missing" }]);
+    expect(Date.now() - forcedAt).toBeLessThan(10_000);
+    await expect(adapter.inspect({ resourceId: podName })).resolves.toEqual({ state: "missing" });
+
+    const stoppedAt = Date.now();
+    const stopped = await adapter.stop({ resourceId: podName, fence: true });
+    expect(stopped.outcome).toBe("not-found");
+    expect(Date.now() - stoppedAt).toBeLessThan(5_000);
+  }, 60_000);
 });

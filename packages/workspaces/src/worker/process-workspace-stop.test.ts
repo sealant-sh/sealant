@@ -59,13 +59,17 @@ const workspaceRow = (overrides: Partial<Workspace> = {}): Workspace =>
     ...overrides,
   }) as Workspace;
 
-const stubAdapter = (stop: RuntimeAdapter["stop"]): RuntimeAdapter => ({
+const stubAdapter = (
+  stop: RuntimeAdapter["stop"],
+  inspect?: NonNullable<RuntimeAdapter["inspect"]>,
+): RuntimeAdapter => ({
   id: "docker",
   supports: () => ({ supported: true }),
   launch: async () => {
     throw new Error("not used in stop tests");
   },
   stop,
+  ...(inspect === undefined ? {} : { inspect }),
 });
 
 interface Harness {
@@ -105,6 +109,7 @@ const makeHarness = (input: {
 
   const runtimeInstanceRepoLayer = Layer.succeed(WorkspaceRuntimeInstanceRepo, {
     upsertRuntimeInstance: () => Effect.die("unused"),
+    markExited: () => Effect.die("unused"),
     markStopped,
     getRuntimeInstanceByRunId: () => Effect.succeed(input.instance),
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),
@@ -270,6 +275,76 @@ describe("processWorkspaceStopEffect", () => {
     );
 
     // Rotated session files can only be read while the container is alive.
+    expect(order).toEqual(["sync-back", "adapter-stop"]);
+  });
+
+  it("skips the sync-back when the adapter reports the runtime already ended, and still tears down", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const order: string[] = [];
+    harness.getAttemptSnapshotByRunId.mockImplementation((_runId: string) => {
+      order.push("sync-back");
+      return Effect.succeed(undefined);
+    });
+    const stop = vi.fn(async () => {
+      order.push("adapter-stop");
+      return {
+        adapter: "docker" as const,
+        resourceId: "container-1",
+        outcome: "not-found" as const,
+      };
+    });
+    const inspect = vi.fn(async () => ({ state: "missing" as const }));
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop, inspect)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(inspect).toHaveBeenCalledWith({ resourceId: "container-1" });
+    // Nothing to read from a runtime that is gone: straight to the (idempotent) teardown.
+    expect(order).toEqual(["adapter-stop"]);
+    expect(harness.markStopped).toHaveBeenCalledTimes(1);
+    expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+  });
+
+  it("keeps the sync-back when the liveness read itself fails", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow({ latestRunId: "run_old" }),
+      instance: runtimeInstance(),
+    });
+    const order: string[] = [];
+    harness.getAttemptSnapshotByRunId.mockImplementation((_runId: string) => {
+      order.push("sync-back");
+      return Effect.succeed(undefined);
+    });
+    const stop = vi.fn(async () => {
+      order.push("adapter-stop");
+      return {
+        adapter: "docker" as const,
+        resourceId: "container-1",
+        outcome: "stopped" as const,
+      };
+    });
+    const inspect = vi.fn(async () => {
+      throw new Error("daemon unreachable");
+    });
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop, inspect)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
     expect(order).toEqual(["sync-back", "adapter-stop"]);
   });
 });

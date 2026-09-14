@@ -50,6 +50,8 @@ export const TLS_MOUNT_PATH = "/run/sealant/tls";
 export const SECRET_ENV_KEY = "env.json";
 export const DOTFILES_SUBDIR = "dotfiles";
 export const CONTROL_PORT_NAME = "control";
+/** The Pod's main container (sealantd + the harness); the sidecar, when present, is `docker`. */
+export const WORKSPACE_CONTAINER_NAME = "workspace";
 
 /** Capabilities the root-running image needs for boot (dotfiles apply, chown, process signalling). */
 export const WORKSPACE_CAPABILITIES = [
@@ -538,7 +540,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
   }
 
   const container: V1Container = {
-    name: "workspace",
+    name: WORKSPACE_CONTAINER_NAME,
     image: input.publishedImage.digestReference,
     imagePullPolicy: "IfNotPresent",
     workingDir: input.blueprint.runtime.workingDirectory,

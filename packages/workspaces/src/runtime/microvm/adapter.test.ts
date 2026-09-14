@@ -621,7 +621,7 @@ describe("MicrovmRuntimeAdapter.watchExits", () => {
       const watch = adapter.watchExits({
         resourceIds: ["microvm-1", "microvm-2", "microvm-3"],
         onExit: (event) => exits.push(event),
-        onError: (resourceId, error) => errors.push([resourceId, error]),
+        onError: (error, resourceId) => errors.push([resourceId, error]),
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -668,7 +668,7 @@ describe("MicrovmRuntimeAdapter.watchExits", () => {
       adapter.watchExits({
         resourceIds: ["microvm-1"],
         onExit: (event) => exits.push(event),
-        onError: (resourceId, error) =>
+        onError: (error, resourceId) =>
           errors.push([resourceId, error instanceof Error ? error.message : error]),
       });
       await vi.advanceTimersByTimeAsync(1_000);

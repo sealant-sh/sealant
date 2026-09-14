@@ -13,6 +13,7 @@ import {
   CoreV1Api,
   CustomObjectsApi,
   KubeConfig,
+  Watch,
   type V1ConfigMap,
   type V1Pod,
   type V1Secret,
@@ -37,13 +38,44 @@ export type CreateOutcome<T> =
   | { readonly outcome: "conflict" };
 export type DeleteOutcome = "deleted" | "not-found";
 
+export interface DeletePodOptions {
+  /**
+   * Override the Pod's own `terminationGracePeriodSeconds` for this delete. A fenced stop passes
+   * a short one so the kubelet kills the containers at once; a repeat delete may shorten the
+   * grace of a Pod already Terminating.
+   */
+  readonly gracePeriodSeconds?: number;
+}
+
+/** One event on a Pod watch: the apiserver's event type and the Pod as it then was. */
+export type PodWatchEventType = "ADDED" | "MODIFIED" | "DELETED" | "BOOKMARK";
+
+export interface PodWatchHandlers {
+  readonly onEvent: (type: PodWatchEventType, pod: V1Pod) => void;
+  /**
+   * Exactly once per opened watch: the stream ended, with the failure when it did not end
+   * cleanly (the apiserver closes a watch after `timeoutSeconds`; that is a clean end).
+   */
+  readonly onEnd: (error: unknown) => void;
+}
+
+export interface PodWatch {
+  readonly close: () => void;
+}
+
 export interface KubernetesApi {
   readonly namespace: string;
 
   readonly createPod: (pod: V1Pod) => Promise<CreateOutcome<V1Pod>>;
   readonly getPod: (name: string) => Promise<V1Pod | undefined>;
-  readonly deletePod: (name: string) => Promise<DeleteOutcome>;
+  readonly deletePod: (name: string, options?: DeletePodOptions) => Promise<DeleteOutcome>;
   readonly listPods: (labelSelector: string) => Promise<readonly V1Pod[]>;
+  /**
+   * One watch on the Pods matching `labelSelector`, from the current state (the apiserver replays
+   * every matching Pod as `ADDED` first). Ends on its own after the server-side timeout or a
+   * dropped connection — the caller reopens it; `close` aborts it and suppresses `onEnd`.
+   */
+  readonly watchPods: (labelSelector: string, handlers: PodWatchHandlers) => PodWatch;
   /**
    * Tail of one container's log, for launch failures that name a container (the Docker sidecar
    * that would not start, a workspace that died at boot). Empty when unavailable; never throws.
@@ -77,6 +109,30 @@ export interface KubernetesApi {
 }
 
 const CERT_MANAGER = { group: "cert-manager.io", version: "v1", plural: "certificates" } as const;
+
+/**
+ * Server-side watch lifetime. The client library aborts any watch request after 30 s of its own
+ * (`Watch.requestTimeoutMs`, not configurable), so asking the apiserver to close first turns every
+ * cycle into a clean end the caller reopens, instead of a TimeoutError.
+ */
+const WATCH_TIMEOUT_SECONDS = 25;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isPodWatchEventType = (type: string): type is PodWatchEventType =>
+  type === "ADDED" || type === "MODIFIED" || type === "DELETED" || type === "BOOKMARK";
+
+/** The raw JSON a watch line carries is a Pod when it has a metadata object. */
+const asPod = (object: unknown): V1Pod | undefined =>
+  isRecord(object) && isRecord(object["metadata"]) ? object : undefined;
+
+const watchErrorMessage = (object: unknown): string => {
+  const message = isRecord(object) ? object["message"] : undefined;
+  return typeof message === "string" && message.length > 0
+    ? message
+    : "the apiserver sent a watch ERROR event";
+};
 
 const statusOf = (error: unknown): number | undefined =>
   error instanceof ApiException ? error.code : undefined;
@@ -161,9 +217,16 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
     createPod: (pod) =>
       create("create pod", () => core.createNamespacedPod({ namespace, body: pod })),
     getPod: (name) => read("read pod", () => core.readNamespacedPod({ name, namespace })),
-    deletePod: (name) =>
+    deletePod: (name, deleteOptions) =>
       remove("delete pod", () =>
-        core.deleteNamespacedPod({ name, namespace, propagationPolicy: background }),
+        core.deleteNamespacedPod({
+          name,
+          namespace,
+          propagationPolicy: background,
+          ...(deleteOptions?.gracePeriodSeconds === undefined
+            ? {}
+            : { gracePeriodSeconds: deleteOptions.gracePeriodSeconds }),
+        }),
       ),
     listPods: async (labelSelector) => {
       try {
@@ -171,6 +234,62 @@ export const createLiveKubernetesApi = (options: LiveKubernetesApiOptions): Kube
       } catch (error) {
         throw toApiError("list pods", error);
       }
+    },
+    watchPods: (labelSelector, handlers) => {
+      let closed = false;
+      let ended = false;
+      let controller: AbortController | undefined;
+      const end = (error: unknown): void => {
+        if (ended) {
+          return;
+        }
+        ended = true;
+        if (!closed) {
+          handlers.onEnd(error);
+        }
+      };
+      const open = async (): Promise<void> => {
+        try {
+          const opened = await new Watch(kubeConfig).watch(
+            `/api/v1/namespaces/${namespace}/pods`,
+            { labelSelector, allowWatchBookmarks: true, timeoutSeconds: WATCH_TIMEOUT_SECONDS },
+            (type: string, object: unknown) => {
+              if (closed || ended) {
+                return;
+              }
+              if (type === "ERROR") {
+                // A Status object (an expired resourceVersion, a lost lease): end this watch so
+                // the caller reopens it from the current state.
+                controller?.abort();
+                end(toApiError("watch pods", new Error(watchErrorMessage(object))));
+                return;
+              }
+              const pod = asPod(object);
+              if (pod !== undefined && isPodWatchEventType(type)) {
+                handlers.onEvent(type, pod);
+              }
+            },
+            (error: unknown) => {
+              end(
+                error === null || error === undefined ? undefined : toApiError("watch pods", error),
+              );
+            },
+          );
+          controller = opened;
+          if (closed) {
+            opened.abort();
+          }
+        } catch (error) {
+          end(toApiError("watch pods", error));
+        }
+      };
+      void open();
+      return {
+        close: () => {
+          closed = true;
+          controller?.abort();
+        },
+      };
     },
     readPodLogTail: async (podName, container, tailLines) => {
       try {

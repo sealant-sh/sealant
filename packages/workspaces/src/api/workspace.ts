@@ -144,15 +144,28 @@ export const resolveWorkspacePublishedImage = (
   };
 };
 
+/**
+ * The error a workspace read carries. The build job's error wins (it explains a launch that never
+ * got a runtime); otherwise a runtime instance that ended `failed` after it was ready — the exit
+ * the worker's reconciler observed — supplies its own, so the exit code reaches the caller.
+ */
 export const resolveWorkspaceError = (
   latestJob: WorkspaceBuildJob | undefined,
+  runtimeInstance?: WorkspaceRuntimeInstance,
 ): WorkspaceErrorDetails | undefined => {
-  if (latestJob?.errorMessage === null || latestJob === undefined) {
-    return undefined;
+  if (latestJob !== undefined && latestJob.errorMessage !== null) {
+    return {
+      message: latestJob.errorMessage,
+      ...(latestJob.errorCode === null ? {} : { code: latestJob.errorCode }),
+    };
   }
 
-  return {
-    message: latestJob.errorMessage,
-    ...(latestJob.errorCode === null ? {} : { code: latestJob.errorCode }),
-  };
+  if (runtimeInstance?.status === "failed" && runtimeInstance.errorMessage !== null) {
+    return {
+      message: runtimeInstance.errorMessage,
+      ...(runtimeInstance.errorCode === null ? {} : { code: runtimeInstance.errorCode }),
+    };
+  }
+
+  return undefined;
 };
