@@ -327,7 +327,7 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
  * images without touching the released pin.
  */
 export const sealantdImageReference =
-  process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.15.1";
+  process.env["SEALANT_SEALANTD_IMAGE"] ?? "ghcr.io/sealant-sh/sealantd:0.15.2";
 const dockerCliImageReference = process.env["SEALANT_DOCKER_CLI_IMAGE"] ?? "docker:27.5.1-cli";
 
 /**
