@@ -28,10 +28,16 @@ const AGENT = fileURLToPath(new URL("../../../microvm-image/agent.mjs", import.m
 
 const FAKE_SEALANTD = `#!/usr/bin/env node
 // Fake sealantd: records its argv + environment, then echoes bytes on the control socket.
+// The record is published by rename, not by a plain write: the environment it serialises is well
+// over a page, and the test reads the file the moment it appears. A plain write would be visible
+// to that reader a page at a time (a prefix, not the file).
 const fs = require("node:fs");
 const net = require("node:net");
 const socketPath = process.env.SEALANT_CONTROL_SOCKET;
-fs.writeFileSync(process.env.FAKE_SEALANTD_RECORD, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));
+const record = process.env.FAKE_SEALANTD_RECORD;
+const temp = record + ".tmp";
+fs.writeFileSync(temp, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));
+fs.renameSync(temp, record);
 const server = net.createServer((socket) => socket.pipe(socket));
 server.listen(socketPath);
 process.on("SIGTERM", () => { server.close(); process.exit(0); });
@@ -217,12 +223,24 @@ describe("microvm agent", () => {
 
     // sealantd boot started with the pushed env, the file paths rewritten to where they were
     // actually written, and the control socket path the relay will use.
-    await waitFor(async () =>
-      stat(agent.recordFile).then(
-        () => true,
-        () => false,
-      ),
-    );
+    // A missing record is normal (the daemon has not run yet); a malformed one is not, so it is
+    // reported rather than retried until the timeout turns it into a bare "condition not met".
+    let lastMalformed: string | null = null;
+    await waitFor(async () => {
+      const raw = await readFile(agent.recordFile, "utf8").catch(() => null);
+      if (raw === null) return false;
+      try {
+        JSON.parse(raw);
+        return true;
+      } catch (error) {
+        lastMalformed = `${(error as Error).message} (${raw.length} bytes)`;
+        return false;
+      }
+    }).catch((error: Error) => {
+      throw new Error(
+        lastMalformed === null ? error.message : `record never parsed: ${lastMalformed}`,
+      );
+    });
     const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
       argv: string[];
       env: Record<string, string>;
@@ -325,6 +343,83 @@ describe("microvm agent", () => {
       });
     } finally {
       await stopAgent(stalled);
+    }
+  });
+
+  it("publishes launch material whole: a concurrent reader never sees a partial file", async () => {
+    // Launch material is written while `sealantd boot` (and anything else in the VM) may already
+    // be opening it. Each file must appear all-at-once. The payload is deliberately many pages:
+    // a plain write is visible to a reader a page at a time, so a prefix would be observable.
+    const padding = "p".repeat(512 * 1024);
+    const archiveBody = Buffer.alloc(192 * 1024, 0x41);
+    const contentBase64 = archiveBody.toString("base64");
+    const archiveNames = Array.from({ length: 6 }, (_, index) => `${index}.tar.gz`);
+    const bigRequest: AgentLaunchRequest = {
+      ...launchRequest,
+      secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_secret", padding }),
+      dotfiles: {
+        manifestJson: JSON.stringify({ archives: archiveNames, padding }),
+        archives: archiveNames.map((name) => ({ name, contentBase64 })),
+      },
+    };
+
+    const racing = await startAgent();
+    try {
+      await hook(racing, "run", {
+        microvmId: "microvm-3",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      const secretFile = path.join(racing.stateDir, "secrets", "env.json");
+      const manifestFile = path.join(racing.stateDir, "dotfiles", "manifest.json");
+      const archiveFiles = archiveNames.map((name) => path.join(racing.stateDir, "dotfiles", name));
+
+      let launched = false;
+      const launch = call(racing, "POST", AGENT_LAUNCH_ROUTE, {
+        body: bigRequest,
+        bearer: launchSecret,
+      }).finally(() => {
+        launched = true;
+      });
+
+      // Bounded and sleepless: every read awaits real I/O, which is the only yield the loop needs.
+      const partial: string[] = [];
+      let seen = 0;
+      for (let iteration = 0; iteration < 200_000; iteration += 1) {
+        if (launched) break;
+        for (const file of [secretFile, manifestFile]) {
+          const raw = await readFile(file, "utf8").catch(() => null);
+          if (raw === null) continue;
+          seen += 1;
+          try {
+            JSON.parse(raw);
+          } catch (error) {
+            partial.push(`${path.basename(file)}: ${(error as Error).message} (${raw.length} B)`);
+          }
+          if (file === secretFile) {
+            const mode = await stat(file).then(
+              (stats) => stats.mode & 0o777,
+              () => 0o600,
+            );
+            // Secret bytes must never be readable by anyone but the owner, not even in passing.
+            if (mode !== 0o600) partial.push(`${path.basename(file)}: mode ${mode.toString(8)}`);
+          }
+        }
+        for (const file of archiveFiles) {
+          const raw = await readFile(file).catch(() => null);
+          if (raw === null) continue;
+          seen += 1;
+          if (!raw.equals(archiveBody)) {
+            partial.push(`${path.basename(file)}: ${raw.length} of ${archiveBody.length} B`);
+          }
+        }
+      }
+      expect(await launch).toMatchObject({ status: 200 });
+      expect(partial.slice(0, 5)).toEqual([]);
+      // The loop has to have actually observed the files, or it proves nothing.
+      expect(seen).toBeGreaterThan(0);
+      expect(await readFile(secretFile, "utf8")).toBe(bigRequest.secretEnvJson);
+    } finally {
+      await stopAgent(racing);
     }
   });
 
