@@ -25,7 +25,7 @@
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, unlink } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -187,10 +187,45 @@ const handleHook = async (hook, req, res) => {
 // Launch material and the daemon
 // --------------------------------------------------------------------------------------------
 
+/**
+ * Write launch material so no reader can ever see it half-written.
+ *
+ * `sealantd boot` (and anything else in the VM) opens these paths as soon as they exist, and a
+ * plain write is visible to a concurrent reader a page at a time: the reader gets a prefix, not
+ * the file. So write a temp file in the same directory, give it its final mode before it holds
+ * any bytes, fsync it, and `rename` it over the target — rename is atomic within a filesystem,
+ * so a reader sees either no file or the whole file. Creating the temp with the mode (rather than
+ * chmod-ing the target afterwards) also means the secret bytes are never briefly world-readable,
+ * which truncating an existing file would allow: `O_CREAT` mode does not apply to a file that is
+ * already there.
+ */
 const writePrivate = async (file, content, mode) => {
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(file, content, { mode });
-  await chmod(file, mode);
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const temp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
+  // "wx" is O_CREAT|O_EXCL: never adopt a leftover temp, and never inherit its mode.
+  const handle = await open(temp, "wx", mode);
+  try {
+    await handle.writeFile(content);
+    // The open mode is masked by umask; fchmod is not, so the final mode is exactly `mode`.
+    await handle.chmod(mode);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temp, file);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+  // Durability of the rename itself: best effort, since not every filesystem allows a directory
+  // fsync. Atomicity does not depend on this.
+  const dirHandle = await open(dir, "r").catch(() => null);
+  if (dirHandle !== null) {
+    await dirHandle.sync().catch(() => {});
+    await dirHandle.close();
+  }
 };
 
 const startDaemon = (bootEnv) => {
