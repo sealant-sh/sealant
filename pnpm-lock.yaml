@@ -996,11 +996,11 @@ importers:
         specifier: workspace:*
         version: link:../jobs
       '@sealant/runtime-client':
-        specifier: ^0.15.0
-        version: 0.15.0
+        specifier: ^0.15.1
+        version: 0.15.1
       '@sealant/runtime-protocol':
-        specifier: ^0.15.0
-        version: 0.15.0
+        specifier: ^0.15.1
+        version: 0.15.1
       '@sealant/source-integrations':
         specifier: workspace:*
         version: link:../source-integrations
@@ -3503,8 +3503,8 @@ packages:
     resolution: {integrity: sha512-fZkelRwcEeAhsn4c0wjYXWrzSzLaEyfxTn/eazXJ4XfCIsgJTQyK0FD8mnOBZJ2vEIbtT2E1mBKnCbDxrJIlxA==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-client@0.15.0':
-    resolution: {integrity: sha512-flM5+iYPP/uCYyA4jwi2khUzHgBHNXDZHW7LD8nA51Hpmj83ddFU+zKYD65mLeVCxal9cgxA2YssdUjWC187bg==}
+  '@sealant/runtime-client@0.15.1':
+    resolution: {integrity: sha512-/iHOHyJ/HyzrcyT5ygzqFg31ZU8/8wGkTUEtc0j7QCfHJIUyBPakxIljt53oPvsRuNEOBsjFKUTfmlE1PUKcSA==}
     engines: {node: '>=20'}
 
   '@sealant/runtime-client@0.4.0':
@@ -3515,8 +3515,8 @@ packages:
     resolution: {integrity: sha512-kZIF3Y7UbattTp60n0LjCjSDSut/1ww7B12/n4af6AEAmpbYgbohkEFTvdVES45fWAtF+EMKv4Vq/1jwRm+h5w==}
     engines: {node: '>=20'}
 
-  '@sealant/runtime-protocol@0.15.0':
-    resolution: {integrity: sha512-lZrnoyWtsr8a8izhE5IpOhUTIn9vpbD6hMmLNCfdWFzRJkbKRG5rFXGXZz7/DCRGxB6j1SphjLNqQ9t9b1oQbw==}
+  '@sealant/runtime-protocol@0.15.1':
+    resolution: {integrity: sha512-n5xmRpnvdIKBAz7fBjTtRmKOozqilIZ+Seo5XvJuX6xYXObdNUnWLFEFhE5FybVy9Yl2mg1SZgtp8Sd0u+S2ug==}
     engines: {node: '>=20'}
 
   '@sealant/runtime-protocol@0.4.0':
@@ -10121,10 +10121,10 @@ snapshots:
       type-fest: 5.7.0
       zod: 4.4.3
 
-  '@sealant/runtime-client@0.15.0':
+  '@sealant/runtime-client@0.15.1':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
-      '@sealant/runtime-protocol': 0.15.0
+      '@sealant/runtime-protocol': 0.15.1
 
   '@sealant/runtime-client@0.4.0':
     dependencies:
@@ -10136,7 +10136,7 @@ snapshots:
       '@bufbuild/protobuf': 2.12.0
       '@sealant/runtime-protocol': 0.6.0
 
-  '@sealant/runtime-protocol@0.15.0':
+  '@sealant/runtime-protocol@0.15.1':
     dependencies:
       '@bufbuild/protobuf': 2.12.0
 

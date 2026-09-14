@@ -12,7 +12,7 @@
 # https://docs.aws.amazon.com/lambda/latest/microvm-api/API_CreateMicrovmImage.html
 #
 # Required env: AWS_REGION, MICROVM_IMAGE_NAME, MICROVM_BUILD_ROLE_ARN, MICROVM_ARTIFACT_BUCKET.
-# Optional: SEALANTD_IMAGE (default ghcr.io/sealant-sh/sealantd:0.15.0), MICROVM_MEMORY_MIB
+# Optional: SEALANTD_IMAGE (default ghcr.io/sealant-sh/sealantd:0.15.1), MICROVM_MEMORY_MIB
 # (4096), MICROVM_LOG_GROUP, MICROVM_BASE_IMAGE_ARN (auto: the managed al2023 image),
 # MICROVM_TAGS (JSON object). Pass --update to update an existing image (the whole configuration
 # is sent again; the API takes no delta).
@@ -22,7 +22,7 @@ set -euo pipefail
 : "${MICROVM_IMAGE_NAME:?set MICROVM_IMAGE_NAME}"
 : "${MICROVM_BUILD_ROLE_ARN:?set MICROVM_BUILD_ROLE_ARN}"
 : "${MICROVM_ARTIFACT_BUCKET:?set MICROVM_ARTIFACT_BUCKET}"
-SEALANTD_IMAGE="${SEALANTD_IMAGE:-ghcr.io/sealant-sh/sealantd:0.15.0}"
+SEALANTD_IMAGE="${SEALANTD_IMAGE:-ghcr.io/sealant-sh/sealantd:0.15.1}"
 MICROVM_MEMORY_MIB="${MICROVM_MEMORY_MIB:-4096}"
 export AWS_REGION AWS_PAGER=""
 
