@@ -1,5 +1,19 @@
 # @sealant/sdk
 
+## 0.32.0
+
+### Minor Changes
+
+- da0e848: Add `source.harnessHome` for capture-sourced workspaces. The optional executor-local directory is
+  validated, persisted in the workspace blueprint, sent to every runtime as
+  `SEALANT_CAPTURE_HARNESS_HOME`, and retained across cold materialization and standby replans. When
+  omitted, capture behavior is unchanged.
+
+### Patch Changes
+
+- Updated dependencies [da0e848]
+  - @sealant/api-contracts@0.32.0
+
 ## 0.31.2
 
 ### Patch Changes
