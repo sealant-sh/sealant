@@ -176,6 +176,11 @@ export interface WorkspaceCaptureSource {
   readonly worktreeId?: string;
   /** The session-scoped channel credential. Secret: sealed for the launch, then discarded. */
   readonly token: string;
+  /**
+   * Absolute executor-local directory whose contents the daemon captures under `harness/` and
+   * restores before the harness starts. Configure the harness to write its state there.
+   */
+  readonly harnessHome?: string;
   readonly platform?: string;
 }
 

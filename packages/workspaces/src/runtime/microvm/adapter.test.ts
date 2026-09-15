@@ -310,6 +310,7 @@ describe("microvmBootEnv", () => {
       SEALANT_WORKSPACE_SOURCE: "capture",
       SEALANT_CAPTURE_ENDPOINT: "https://mend.example.com/session/s1",
       SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
+      SEALANT_CAPTURE_HARNESS_HOME: "/workspace/harness-home",
       SEALANT_WORKSPACE_ROOT: "/workspace",
       SEALANT_WORKING_DIRECTORY: "/workspace/repo",
       SEALANT_CONTROL_SOCKET: "/run/sealant/control.sock",
@@ -320,6 +321,22 @@ describe("microvmBootEnv", () => {
       SEALANT_LIFECYCLE_STARTUP_JSON: "[]",
       MEND_SESSION_ID: "1",
       SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
+    });
+  });
+
+  it("keeps the explicit harness root authoritative over legacy runtime.env", () => {
+    const input = {
+      ...captureLaunch,
+      blueprint: {
+        ...captureLaunch.blueprint,
+        runtime: {
+          ...captureLaunch.blueprint.runtime,
+          env: { SEALANT_CAPTURE_HARNESS_HOME: "/legacy/override" },
+        },
+      },
+    };
+    expect(microvmBootEnv(input, { secretEnvFile: true, dotfiles: false })).toMatchObject({
+      SEALANT_CAPTURE_HARNESS_HOME: "/workspace/harness-home",
     });
   });
 

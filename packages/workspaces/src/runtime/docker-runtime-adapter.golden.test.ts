@@ -204,6 +204,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "-e",
         "SEALANT_CAPTURE_WORKTREE_ID=wt_1",
         "-e",
+        "SEALANT_CAPTURE_HARNESS_HOME=/workspace/harness-home",
+        "-e",
         "SEALANT_OCI_RUNTIME=runc",
         "-e",
         "SEALANT_HARNESS_BANNER=Starting claude-code workspace",

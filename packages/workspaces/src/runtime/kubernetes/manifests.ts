@@ -26,7 +26,7 @@ import type {
 } from "@kubernetes/client-node";
 
 import { getHarnessIntegration } from "../../harness/integrations.js";
-import { captureSourceEnv } from "../capture-source.js";
+import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js";
 import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
@@ -244,6 +244,13 @@ export const plainEnvEntries = (
     entries.push(["SEALANT_HARNESS_LAUNCH_COMMAND", harness.launchCommand]);
   }
   for (const [key, value] of Object.entries(blueprint.runtime.env)) {
+    if (
+      source.kind === "capture" &&
+      source.harnessHome !== undefined &&
+      key === CAPTURE_HARNESS_HOME_ENV
+    ) {
+      continue;
+    }
     entries.push([key, value]);
   }
   // The Docker service socket, adapter-owned like the Docker adapter's `DOCKER_HOST=tcp://docker`.

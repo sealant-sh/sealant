@@ -534,8 +534,10 @@ describe("DockerRuntimeAdapter", () => {
             kind: "capture",
             endpoint: "https://mend.example.com/session/s1",
             worktreeId: "wt_1",
+            harnessHome: "/workspace/harness-home",
           },
         },
+        runtime: { env: { SEALANT_CAPTURE_HARNESS_HOME: "/legacy/override" } },
       }),
       secretEnvDir: "/host/staging/sealant-secret-env-run_capture",
     });
@@ -547,6 +549,9 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("SEALANT_WORKSPACE_SOURCE=capture");
     expect(args).toContain("SEALANT_CAPTURE_ENDPOINT=https://mend.example.com/session/s1");
     expect(args).toContain("SEALANT_CAPTURE_WORKTREE_ID=wt_1");
+    expect(args.filter((arg) => arg.startsWith("SEALANT_CAPTURE_HARNESS_HOME="))).toEqual([
+      "SEALANT_CAPTURE_HARNESS_HOME=/workspace/harness-home",
+    ]);
     expect(args).toContain("SEALANT_SECRET_ENV_FILE=/run/sealant/secrets/env.json");
     expect(args.some((arg) => arg.startsWith("SEALANT_WORKSPACE_REPO_URL="))).toBe(false);
     expect(args.some((arg) => arg.startsWith("SEALANT_WORKSPACE_MOUNT_HOST_PATH="))).toBe(false);
@@ -573,7 +578,11 @@ describe("DockerRuntimeAdapter", () => {
     await adapter.launch({
       ...createLaunchInput({
         sources: {
-          workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+          workspace: {
+            kind: "capture",
+            endpoint: "https://mend.example.com/session/s1",
+            harnessHome: "/workspace/harness-home",
+          },
         },
       }),
       secretEnvDir: "/host/staging/sealant-secret-env-run_standby",
@@ -582,6 +591,7 @@ describe("DockerRuntimeAdapter", () => {
     expect(args).toContain("SEALANT_WORKSPACE_SOURCE=capture");
     expect(args).toContain("SEALANT_CAPTURE_ENDPOINT=https://mend.example.com/session/s1");
     expect(args.some((arg) => arg.startsWith("SEALANT_CAPTURE_WORKTREE_ID"))).toBe(false);
+    expect(args).toContain("SEALANT_CAPTURE_HARNESS_HOME=/workspace/harness-home");
   });
 
   it("omits the repo ref env entirely when the blueprint has no ref (remote default branch)", async () => {

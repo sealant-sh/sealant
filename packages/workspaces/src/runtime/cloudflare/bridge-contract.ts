@@ -18,6 +18,7 @@
  *    worktree from the session channel onto the sandbox disk, and its credential rides
  *    `secretEnv` like every other secret. `kind` defaults to `git` so a v1 payload still parses.
  */
+import { workspaceCaptureHarnessHomeSchema } from "@sealant/validators";
 import { z } from "zod";
 
 import { credentialFileInjectionSchema, publishedImageSchema } from "../runtime-adapter.js";
@@ -46,6 +47,8 @@ export const bridgeCaptureSourceSchema = z.strictObject({
   endpoint: z.string().trim().min(1),
   /** Absent for a standby executor: the daemon takes the worktree from the channel's plan answer. */
   worktreeId: z.string().trim().min(1).optional(),
+  /** Executor-local directory captured and restored under the daemon's `harness/` subtree. */
+  harnessHome: workspaceCaptureHarnessHomeSchema.optional(),
 });
 
 // Git first: a payload without `kind` resolves as git; a capture payload fails the git shape (no

@@ -138,6 +138,7 @@ describe("Kubernetes manifests", () => {
         ["SEALANT_WORKSPACE_SOURCE", "capture"],
         ["SEALANT_CAPTURE_ENDPOINT", "https://mend.example.com/session/s1"],
         ["SEALANT_CAPTURE_WORKTREE_ID", "wt_1"],
+        ["SEALANT_CAPTURE_HARNESS_HOME", "/workspace/harness-home"],
         ["SEALANT_SECRET_ENV_FILE", "/run/sealant/launch/env.json"],
       ]),
     );
@@ -148,6 +149,27 @@ describe("Kubernetes manifests", () => {
     expect(keys).not.toContain("SEALANT_CAPTURE_TOKEN");
   });
 
+  it("keeps the explicit harness root authoritative over legacy runtime.env", () => {
+    const captureWithLegacyEnv = {
+      ...cases.capture,
+      binds: undefined,
+      blueprint: {
+        ...cases.capture.blueprint,
+        runtime: {
+          ...cases.capture.blueprint.runtime,
+          env: { SEALANT_CAPTURE_HARNESS_HOME: "/legacy/override" },
+        },
+      },
+    };
+    const plain = plainEnvEntries(captureWithLegacyEnv, config, {
+      secretEnvFile: true,
+      dotfilesArchiveDir: undefined,
+    });
+    expect(plain.filter(([key]) => key === "SEALANT_CAPTURE_HARNESS_HOME")).toEqual([
+      ["SEALANT_CAPTURE_HARNESS_HOME", "/workspace/harness-home"],
+    ]);
+  });
+
   it("leaves the worktree env out for a standby capture executor", () => {
     const standby = {
       ...cases.capture,
@@ -156,7 +178,11 @@ describe("Kubernetes manifests", () => {
         ...cases.capture.blueprint,
         sources: {
           ...cases.capture.blueprint.sources,
-          workspace: { kind: "capture" as const, endpoint: "https://mend.example.com/session/s1" },
+          workspace: {
+            kind: "capture" as const,
+            endpoint: "https://mend.example.com/session/s1",
+            harnessHome: "/workspace/harness-home",
+          },
         },
       },
     };
@@ -168,6 +194,7 @@ describe("Kubernetes manifests", () => {
       expect.arrayContaining([
         ["SEALANT_WORKSPACE_SOURCE", "capture"],
         ["SEALANT_CAPTURE_ENDPOINT", "https://mend.example.com/session/s1"],
+        ["SEALANT_CAPTURE_HARNESS_HOME", "/workspace/harness-home"],
       ]),
     );
     expect(plain.map(([key]) => key)).not.toContain("SEALANT_CAPTURE_WORKTREE_ID");

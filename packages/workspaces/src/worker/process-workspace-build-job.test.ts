@@ -1207,7 +1207,18 @@ describe("processWorkspaceBuildJobEffect", () => {
         runId: "run_capture_token",
         repository: "sealant/workspaces/demo",
         tag: "opencode",
-        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+        requestPayload: {
+          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+          sources: {
+            workspace: {
+              kind: "capture",
+              endpoint: "https://mend.example.com/session/s1",
+              harnessHome: "/workspace/harness-home",
+            },
+            inputs: [],
+            mounts: [],
+          },
+        },
         secretEnvSealed: `sealed:${JSON.stringify(sealed)}`,
       }),
     });
@@ -1218,6 +1229,11 @@ describe("processWorkspaceBuildJobEffect", () => {
     let stagedContents: string | undefined;
     const runtimeAdapter = createRuntimeAdapterStub("docker", {
       launch: vi.fn(async (input) => {
+        expect(input.blueprint.sources.workspace).toEqual({
+          kind: "capture",
+          endpoint: "https://mend.example.com/session/s1",
+          harnessHome: "/workspace/harness-home",
+        });
         if (input.secretEnvDir !== undefined) {
           stagedContents = await readFile(join(input.secretEnvDir, "env.json"), "utf8");
         }

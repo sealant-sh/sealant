@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
 import { getHarnessIntegration } from "../harness/integrations.js";
-import { captureSourceEnv } from "./capture-source.js";
+import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "./capture-source.js";
 import { buildCredentialFileWriteScript } from "./credential-files.js";
 import {
   assertDockerVolumeConfiguration,
@@ -465,10 +465,14 @@ const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
   mountAllowedStoreRoots: string | undefined,
 ): Array<string> => {
-  const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) => [
-    "-e",
-    `${key}=${value}`,
-  ]);
+  const source = input.blueprint.sources.workspace;
+  const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) =>
+    source.kind === "capture" &&
+    source.harnessHome !== undefined &&
+    key === CAPTURE_HARNESS_HOME_ENV
+      ? []
+      : ["-e", `${key}=${value}`],
+  );
 
   // The image carries every supported harness CLI; WHICH one this workspace
   // fronts is a launch fact, so its boot env is injected here rather than
@@ -484,7 +488,6 @@ const envArgsFromBlueprint = (
           `SEALANT_HARNESS_LAUNCH_COMMAND=${harnessIntegration.launchCommand}`,
         ];
 
-  const source = input.blueprint.sources.workspace;
   // Bindable mounts (sealantd ADR-0014): the roots the daemon may bind, and the binds to apply
   // before the harness starts. A standby source's own root rides SEALANT_WORKSPACE_MOUNT_HOST_PATH.
   const bindableEnv = bindableMountsEnv(input.blueprint);

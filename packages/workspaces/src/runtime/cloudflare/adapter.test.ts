@@ -167,6 +167,7 @@ describe("CloudflareRuntimeAdapter.launch", () => {
       kind: "capture",
       endpoint: "https://mend.example.com/session/s1",
       worktreeId: "wt_1",
+      harnessHome: "/workspace/harness-home",
     });
     expect(payload.secretEnv).toEqual({
       MEND_SESSION_TOKEN: "mst_secret",

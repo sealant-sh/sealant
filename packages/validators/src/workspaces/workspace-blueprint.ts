@@ -67,6 +67,39 @@ export const workspaceHostPathSchema = absoluteNormalizedPathSchema("host path")
 export const workspaceMountPathSchema = absoluteNormalizedPathSchema("mount path");
 
 /**
+ * Executor-local harness state root for capture workspaces. Unlike legacy host-path schemas, this
+ * rejects surrounding whitespace and control characters instead of trimming the caller's value.
+ */
+export const workspaceCaptureHarnessHomeSchema = z
+  .string()
+  .min(1, { message: "capture harness home must not be empty" })
+  .refine((value) => value.trim() === value, {
+    message: "capture harness home must not have leading or trailing whitespace",
+  })
+  .refine(
+    (value) =>
+      Array.from(value).every((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint !== undefined && codePoint > 0x1f && codePoint !== 0x7f;
+      }),
+    {
+      message: "capture harness home must not contain control characters",
+    },
+  )
+  .refine((value) => value.startsWith("/"), {
+    message: "capture harness home must be absolute",
+  })
+  .refine((value) => value.split("/").every((segment) => segment !== "." && segment !== ".."), {
+    message: "capture harness home must not contain '.' or '..' segments",
+  })
+  .refine((value) => !value.includes("//") && (value === "/" ? true : !value.endsWith("/")), {
+    message: "capture harness home must be normalized (no '//', no trailing slash)",
+  })
+  .refine((value) => value !== "/", {
+    message: "capture harness home must not be the filesystem root",
+  });
+
+/**
  * A workspace sourced from a CALLER-OWNED host directory bind-mounted at the runtime working
  * directory instead of a fresh clone. The platform treats the path as caller-owned: writes persist
  * across workspace stop/restart/expiry and the path is never reprovisioned or deleted. The daemon
@@ -111,6 +144,8 @@ export const workspaceCaptureSourceSchema = z.strictObject({
    * executor: the channel's plan answer names the worktree the executor is bound to at claim.
    */
   worktreeId: nonEmptyStringSchema.optional(),
+  /** Executor-local directory captured and restored under the daemon's `harness/` subtree. */
+  harnessHome: workspaceCaptureHarnessHomeSchema.optional(),
   platform: nonEmptyStringSchema.optional(),
 });
 

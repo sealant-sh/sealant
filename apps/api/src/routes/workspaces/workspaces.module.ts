@@ -1,4 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { posix } from "node:path";
 
 import {
   type BindWorkspaceRequest,
@@ -70,6 +71,7 @@ import {
 } from "@sealant/source-integrations";
 import { newWorkspaceSchema, workspaceBindSchema, type NewWorkspace } from "@sealant/validators";
 import {
+  bindRootMountPath,
   SealantRuntime,
   type SealantError,
   type SealantSession,
@@ -607,8 +609,10 @@ const SEALANTD_CONTROL_DIR = "/run/sealant";
  * (`SEALANT_MOUNT_ALLOWED_STORE_ROOTS`, the same knob the in-container daemon re-enforces at boot
  * for the primary mount). No allowlist configured = every mount is rejected. Mirrors the
  * credentialRefs rule: the caller's spec is never trusted on its own. Extra mounts additionally
- * carry a caller-named CONTAINER path, checked here against the resolved working directory —
- * only the parsed spec knows the runtime defaults.
+ * carry a caller-named CONTAINER path, checked here against the resolved working directory.
+ * A capture harness home is executor-local rather than mounted, but it is checked here against the
+ * working directory, daemon control directory, and extra mount targets. Only the parsed spec knows
+ * the runtime defaults needed for those checks.
  */
 const validateWorkspaceMounts = (input: {
   readonly spec: NewWorkspace;
@@ -622,6 +626,33 @@ const validateWorkspaceMounts = (input: {
         message:
           "A mount-, standby- or capture-sourced workspace cannot also carry a GitHub source selection.",
       });
+    }
+    const workingDirectory = input.spec.runtime.workingDirectory;
+    const normalizedWorkingDirectory = posix.normalize(workingDirectory).replace(/\/+$/, "") || "/";
+    if (source.kind === "capture" && source.harnessHome !== undefined) {
+      const harnessHome = source.harnessHome;
+      if (pathsOverlap(harnessHome, normalizedWorkingDirectory)) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Capture harness home overlaps the working directory (${workingDirectory}): ${harnessHome}`,
+        });
+      }
+      if (pathsOverlap(harnessHome, SEALANTD_CONTROL_DIR)) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Capture harness home overlaps the daemon control dir (${SEALANTD_CONTROL_DIR}): ${harnessHome}`,
+        });
+      }
+      const overlappingMountTarget = extraMounts
+        .flatMap((mount) =>
+          mount.bindable
+            ? [mount.mountPath, bindRootMountPath(mount.mountPath)]
+            : [mount.mountPath],
+        )
+        .find((mountPath) => pathsOverlap(harnessHome, mountPath));
+      if (overlappingMountTarget !== undefined) {
+        return yield* new WorkspaceBadRequestError({
+          message: `Capture harness home overlaps an extra mount target (${overlappingMountTarget}): ${harnessHome}`,
+        });
+      }
     }
     // A standby root (sealantd ADR-0014) is a caller-owned host directory like any mount: the same
     // allowlist applies, and the daemon re-checks it at boot. Git and capture sources name no host
@@ -659,10 +690,9 @@ const validateWorkspaceMounts = (input: {
         });
       }
     }
-    const workingDirectory = input.spec.runtime.workingDirectory;
     const seenMountPaths = new Set<string>();
     for (const mount of extraMounts) {
-      if (pathsOverlap(mount.mountPath, workingDirectory)) {
+      if (pathsOverlap(mount.mountPath, normalizedWorkingDirectory)) {
         return yield* new WorkspaceBadRequestError({
           message: `Extra mount path overlaps the working directory (${workingDirectory}): ${mount.mountPath}`,
         });
