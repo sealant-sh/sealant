@@ -34,6 +34,7 @@ describe("blueprint runtime.userEnv", () => {
   it.each([
     [{ GITHUB_TOKEN: "x" }, /reserved/],
     [{ SEALANT_WORKSPACE_ROOT: "/elsewhere" }, /reserved/],
+    [{ SEALANT_CAPTURE_HARNESS_HOME: "/workspace/other-home" }, /reserved/],
     [{ DB_PASSWORD: "x" }, /reserved/],
     [{ http_proxy: "http://127.0.0.1:8080" }, /reserved/],
     [{ "BAD NAME": "x" }, /A-Za-z_/],

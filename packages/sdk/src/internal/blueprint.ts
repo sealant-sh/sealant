@@ -219,6 +219,9 @@ export const buildCreateWorkspaceRequest = (
                   ...(options.source.worktreeId === undefined
                     ? {}
                     : { worktreeId: options.source.worktreeId }),
+                  ...(options.source.harnessHome === undefined
+                    ? {}
+                    : { harnessHome: options.source.harnessHome }),
                   ...(options.source.platform === undefined
                     ? {}
                     : { platform: options.source.platform }),

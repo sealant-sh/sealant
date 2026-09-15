@@ -23,6 +23,8 @@ export const CAPTURE_ENDPOINT_ENV = "SEALANT_CAPTURE_ENDPOINT";
  * channel's plan answer, which names the worktree it is bound to at claim.
  */
 export const CAPTURE_WORKTREE_ID_ENV = "SEALANT_CAPTURE_WORKTREE_ID";
+/** The executor-local directory the daemon captures and restores as harness state. */
+export const CAPTURE_HARNESS_HOME_ENV = "SEALANT_CAPTURE_HARNESS_HOME";
 
 /**
  * The non-secret boot env for a capture source, in emission order. `platform` is a control-plane
@@ -36,4 +38,7 @@ export const captureSourceEnv = (
   ...(source.worktreeId === undefined
     ? []
     : [[CAPTURE_WORKTREE_ID_ENV, source.worktreeId] as const]),
+  ...(source.harnessHome === undefined
+    ? []
+    : [[CAPTURE_HARNESS_HOME_ENV, source.harnessHome] as const]),
 ];

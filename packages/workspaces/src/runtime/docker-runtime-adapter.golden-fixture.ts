@@ -118,6 +118,7 @@ export const cases = {
           kind: "capture",
           endpoint: "https://mend.example.com/session/s1",
           worktreeId: "wt_1",
+          harnessHome: "/workspace/harness-home",
           platform: "kubernetes",
         },
         inputs: [],

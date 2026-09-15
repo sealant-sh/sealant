@@ -50,6 +50,7 @@ export { buildCredentialFileWriteScript } from "./credential-files.js";
 
 export {
   CAPTURE_ENDPOINT_ENV,
+  CAPTURE_HARNESS_HOME_ENV,
   CAPTURE_WORKTREE_ID_ENV,
   captureSourceEnv,
   type CaptureWorkspaceSource,
@@ -58,6 +59,7 @@ export {
 export {
   DOTFILES_ARCHIVE_MOUNT_PATH,
   SECRET_ENV_MOUNT_PATH,
+  bindRootMountPath,
   collectMountIntents,
   dockerBindArgsForIntent,
   type RuntimeMountIntent,

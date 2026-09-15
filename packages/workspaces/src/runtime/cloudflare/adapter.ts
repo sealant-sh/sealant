@@ -149,6 +149,7 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
               kind: "capture",
               endpoint: source.endpoint,
               ...(source.worktreeId === undefined ? {} : { worktreeId: source.worktreeId }),
+              ...(source.harnessHome === undefined ? {} : { harnessHome: source.harnessHome }),
             }
           : // No `kind` on the wire for git: the contract defaults it, and a bridge deployed
             // before the capture source (a strict v1 parser) keeps accepting this payload.

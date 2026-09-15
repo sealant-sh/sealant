@@ -68,8 +68,16 @@ describe("bootEnvForLaunch", () => {
 
 const captureRequest = bridgeLaunchRequestSchema.parse({
   ...request,
-  source: { kind: "capture", endpoint: "https://mend.example.com/session/s1", worktreeId: "wt_1" },
-  env: { MEND_SESSION_ID: "1" },
+  source: {
+    kind: "capture",
+    endpoint: "https://mend.example.com/session/s1",
+    worktreeId: "wt_1",
+    harnessHome: "/workspace/harness-home",
+  },
+  env: {
+    MEND_SESSION_ID: "1",
+    SEALANT_CAPTURE_HARNESS_HOME: "/legacy/override",
+  },
   secretEnv: { MEND_SESSION_TOKEN: "mst", SEALANT_CAPTURE_TOKEN: "mst" },
 });
 
@@ -80,6 +88,7 @@ describe("bootEnvForLaunch (capture source)", () => {
       SEALANT_WORKSPACE_SOURCE: "capture",
       SEALANT_CAPTURE_ENDPOINT: "https://mend.example.com/session/s1",
       SEALANT_CAPTURE_WORKTREE_ID: "wt_1",
+      SEALANT_CAPTURE_HARNESS_HOME: "/workspace/harness-home",
       SEALANT_SECRET_ENV_FILE: "/run/sealant/secrets/env.json",
       MEND_SESSION_ID: "1",
     });
@@ -92,11 +101,25 @@ describe("bootEnvForLaunch (capture source)", () => {
   it("leaves the worktree env unset for a standby executor that names none", () => {
     const standby = bridgeLaunchRequestSchema.parse({
       ...request,
-      source: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+      source: {
+        kind: "capture",
+        endpoint: "https://mend.example.com/session/s1",
+        harnessHome: "/workspace/harness-home",
+      },
     });
     const env = bootEnvForLaunch(standby);
     expect(env["SEALANT_CAPTURE_ENDPOINT"]).toBe("https://mend.example.com/session/s1");
     expect(env["SEALANT_CAPTURE_WORKTREE_ID"]).toBeUndefined();
+    expect(env["SEALANT_CAPTURE_HARNESS_HOME"]).toBe("/workspace/harness-home");
+  });
+
+  it("keeps the legacy environment unchanged when harnessHome is absent", () => {
+    const legacy = bridgeLaunchRequestSchema.parse({
+      ...request,
+      source: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+      env: { SEALANT_CAPTURE_HARNESS_HOME: "/legacy/capture-home" },
+    });
+    expect(bootEnvForLaunch(legacy)["SEALANT_CAPTURE_HARNESS_HOME"]).toBe("/legacy/capture-home");
   });
 });
 

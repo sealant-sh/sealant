@@ -63,6 +63,9 @@ export const bootEnvForLaunch = (request: BridgeLaunchRequest): Record<string, s
   ...(request.secretEnv === undefined ? {} : { SEALANT_SECRET_ENV_FILE: SECRET_ENV_FILE_PATH }),
   ...(request.dotfiles === undefined ? {} : { SEALANT_DOTFILES_ARCHIVE_DIR: DOTFILES_ARCHIVE_DIR }),
   ...request.env,
+  ...(request.source.kind === "capture" && request.source.harnessHome !== undefined
+    ? { SEALANT_CAPTURE_HARNESS_HOME: request.source.harnessHome }
+    : {}),
 });
 
 /**
@@ -79,6 +82,9 @@ const sourceEnv = (source: BridgeLaunchRequest["source"]): Record<string, string
         ...(source.worktreeId === undefined
           ? {}
           : { SEALANT_CAPTURE_WORKTREE_ID: source.worktreeId }),
+        ...(source.harnessHome === undefined
+          ? {}
+          : { SEALANT_CAPTURE_HARNESS_HOME: source.harnessHome }),
       }
     : {
         SEALANT_WORKSPACE_SOURCE: "git",

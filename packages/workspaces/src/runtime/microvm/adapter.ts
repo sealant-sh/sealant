@@ -32,7 +32,7 @@ import path from "node:path";
 
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import type { SealantTarget } from "../../sealantd/runtime.js";
-import { captureSourceEnv } from "../capture-source.js";
+import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js";
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
@@ -270,6 +270,13 @@ export const microvmBootEnv = (
     ]);
   }
   for (const [key, value] of Object.entries(blueprint.runtime.env)) {
+    if (
+      source.kind === "capture" &&
+      source.harnessHome !== undefined &&
+      key === CAPTURE_HARNESS_HOME_ENV
+    ) {
+      continue;
+    }
     entries.push([key, value]);
   }
   if (options.secretEnvFile) {

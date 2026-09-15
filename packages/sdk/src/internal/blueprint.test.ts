@@ -24,6 +24,7 @@ interface SpecShape {
       readonly hostPath?: string;
       readonly endpoint?: string;
       readonly worktreeId?: string;
+      readonly harnessHome?: string;
       readonly platform?: string;
     };
     readonly mounts?: ReadonlyArray<{
@@ -112,6 +113,7 @@ describe("buildCreateWorkspaceRequest", () => {
           endpoint: "https://mend.example.com/session/s1",
           worktreeId: "wt_1",
           token: "mst_secret",
+          harnessHome: "/workspace/harness-home",
           platform: "cloudflare",
         },
         harness: opencode(),
@@ -125,6 +127,7 @@ describe("buildCreateWorkspaceRequest", () => {
       kind: "capture",
       endpoint: "https://mend.example.com/session/s1",
       worktreeId: "wt_1",
+      harnessHome: "/workspace/harness-home",
       platform: "cloudflare",
     });
     expect(spec.sources.mounts).toBeUndefined();
@@ -150,6 +153,7 @@ describe("buildCreateWorkspaceRequest", () => {
       endpoint: "https://mend.example.com/session/s1",
     });
     expect(payload.captureToken).toBe("t");
+    expect(spec.sources.workspace.harnessHome).toBeUndefined();
   });
 
   it("omits captureToken and the platform hint when the source is not a capture", () => {

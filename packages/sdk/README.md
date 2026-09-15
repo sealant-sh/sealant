@@ -222,6 +222,7 @@ const workspace = await sealant.workspaces.create({
     endpoint: "https://mend.example.com/session/s1",
     worktreeId: "wt_1",
     token: sessionToken, // the channel credential; secret
+    harnessHome: "/workspace/harness-home",
   },
   harness: claudeCode(),
 });
@@ -232,12 +233,22 @@ const workspace = await sealant.workspaces.create({
   `SEALANT_CAPTURE_TOKEN`; it is never in the spec, `WorkspaceDetails`, argv, or container env.
 - The channel address and worktree id reach the daemon as `SEALANT_CAPTURE_ENDPOINT` and
   `SEALANT_CAPTURE_WORKTREE_ID`, with `SEALANT_WORKSPACE_SOURCE=capture`.
-- `worktreeId` is optional. A standby executor — launched ahead of any worktree so it can
-  materialise the project base and a dependency cache, then be bound to a worktree at claim — omits
-  it; `SEALANT_CAPTURE_WORKTREE_ID` stays unset and the daemon takes the worktree from the channel's
+- `worktreeId` is optional. A standby executor launched ahead of any worktree omits it;
+  `SEALANT_CAPTURE_WORKTREE_ID` stays unset and the daemon takes the worktree from the channel's
   plan answer.
-- No mount allowlist applies. On Kubernetes the workspace root is an `emptyDir`; on Cloudflare the
-  sandbox is kept alive while the lease is live and a stop sends SIGTERM so the daemon can flush.
+- `harnessHome` is optional. It names an absolute, normalized directory on the executor's own
+  filesystem. When a captured head contains a `harness/` subtree, cold materialization restores it
+  there. The option does not create or relocate `HOME`, choose an agent state directory, or route
+  harness writes. Configure the harness to write there and, for an empty chain, create the directory
+  before the daemon watcher starts. The daemon then captures that existing directory and keeps using
+  the same path after a standby claim or capture replan. Omitting the option keeps the legacy
+  behavior and captures no harness subtree.
+- `harnessHome` is not a host mount. It cannot overlap the workspace working directory, the daemon
+  control directory, or an extra mount target. No mount allowlist applies to the harness root. On
+  Kubernetes the workspace root is an `emptyDir`; on Cloudflare the sandbox is kept alive while the
+  lease is live and a stop sends SIGTERM so the daemon can flush.
+- Harness files receive the existing capture policy. This option does not add automatic credential
+  discovery or change which daemon credentials are excluded from captures.
 - **No restart in place**: the credential is discarded once the launch settles, so `restart()` is
   refused; create a replacement workspace with a fresh token.
 
