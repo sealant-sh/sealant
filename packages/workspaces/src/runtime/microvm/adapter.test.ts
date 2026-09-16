@@ -23,7 +23,9 @@ import {
   supportForMicrovm,
 } from "./adapter.js";
 import {
+  AGENT_HEALTH_ROUTE,
   agentLaunchRequestSchema,
+  DOCKER_AGENT_CONTRACT_VERSION,
   launchSecretForRun,
   runHookPayloadSchema,
 } from "./agent-contract.js";
@@ -53,6 +55,14 @@ const config: MicrovmRuntimeConfig = (() => {
   if (parsed === undefined) throw new Error("config");
   return parsed;
 })();
+
+const dockerConfig: MicrovmRuntimeConfig = {
+  ...config,
+  dockerImage: {
+    arn: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace-docker",
+    version: "7",
+  },
+};
 
 const ENDPOINT = "abc123.lambda-microvm.eu-central-1.on.aws";
 
@@ -163,25 +173,35 @@ interface RecordedRequest {
 const json = (status: number, body: unknown): Response =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** An endpoint that answers from a script (one entry per request; the last repeats). */
-const fakeEndpoint = (script: ReadonlyArray<Response | Error>) => {
+/** An endpoint with independent launch and health scripts. */
+const fakeEndpoint = (
+  script: ReadonlyArray<Response | Error>,
+  healthScript: ReadonlyArray<Response | Error> = [
+    json(200, { booted: true, controlSocket: true }),
+  ],
+) => {
   const requests: RecordedRequest[] = [];
+  const healthRequests: RecordedRequest[] = [];
   const fetchImpl: typeof fetch = (input, init) => {
     const headers: Record<string, string> = {};
     new Headers(init?.headers).forEach((value, key) => {
       headers[key] = value;
     });
-    requests.push({
+    const request: RecordedRequest = {
       url: String(input),
       method: init?.method,
       headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-    });
-    const answer = script[Math.min(requests.length - 1, script.length - 1)];
+    };
+    const isHealth = request.url.endsWith(AGENT_HEALTH_ROUTE);
+    const recorded = isHealth ? healthRequests : requests;
+    recorded.push(request);
+    const answers = isHealth ? healthScript : script;
+    const answer = answers[Math.min(recorded.length - 1, answers.length - 1)];
     if (answer === undefined) throw new Error("empty script");
     return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer.clone());
   };
-  return { requests, fetchImpl };
+  return { requests, healthRequests, fetchImpl };
 };
 
 /** A control channel that answers health after `failures` attempts and records file writes. */
@@ -210,9 +230,10 @@ const build = (
   api: FakeMicrovmApi,
   endpoint: ReturnType<typeof fakeEndpoint>,
   control: ReturnType<typeof fakeControl>,
+  runtimeConfig: MicrovmRuntimeConfig = config,
 ) =>
   new MicrovmRuntimeAdapter({
-    config,
+    config: runtimeConfig,
     api,
     fetchImpl: endpoint.fetchImpl,
     controlChannel: control.channel,
@@ -232,15 +253,17 @@ const launchSecret = launchSecretForRun("control-token", "run-golden-4");
 
 describe("supportForMicrovm", () => {
   it("accepts git and capture sources on ephemeral, outbound blueprints", () => {
-    expect(supportForMicrovm({ blueprint: cases.gitSource.blueprint })).toEqual({
+    expect(supportForMicrovm(config, { blueprint: cases.gitSource.blueprint })).toEqual({
       supported: true,
     });
-    expect(supportForMicrovm({ blueprint: captureLaunch.blueprint })).toEqual({ supported: true });
+    expect(supportForMicrovm(config, { blueprint: captureLaunch.blueprint })).toEqual({
+      supported: true,
+    });
   });
 
   it("rejects other explicit families, host mounts, DinD and gVisor", () => {
     expect(
-      supportForMicrovm({
+      supportForMicrovm(config, {
         blueprint: {
           ...cases.gitSource.blueprint,
           target: {
@@ -250,17 +273,21 @@ describe("supportForMicrovm", () => {
         },
       }),
     ).toMatchObject({ supported: false, reason: "unsupported-runtime" });
-    expect(supportForMicrovm({ blueprint: mountLaunch.blueprint })).toMatchObject({
+    expect(supportForMicrovm(config, { blueprint: mountLaunch.blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
       message: expect.stringContaining("capture source"),
     });
-    expect(supportForMicrovm({ blueprint: cases.dind.blueprint })).toMatchObject({
+    expect(supportForMicrovm(config, { blueprint: cases.dind.blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
+      message: expect.stringContaining("SEALANT_MICROVM_DOCKER_IMAGE_ARN"),
+    });
+    expect(supportForMicrovm(dockerConfig, { blueprint: cases.dind.blueprint })).toEqual({
+      supported: true,
     });
     expect(
-      supportForMicrovm({
+      supportForMicrovm(config, {
         blueprint: {
           ...cases.gitSource.blueprint,
           runtime: { ...cases.gitSource.blueprint.runtime, ociRuntime: "runsc" },
@@ -272,7 +299,9 @@ describe("supportForMicrovm", () => {
 
 describe("buildRunInput", () => {
   it("pins the RunMicrovm request: image, role, connectors, an idle policy that cannot fire, the cap, the payload", () => {
-    const input = buildRunInput(config, "run-golden-4", launchSecret);
+    const input = buildRunInput(config, "run-golden-4", launchSecret, {
+      dockerService: "disabled",
+    });
     expect(input).toEqual({
       imageIdentifier: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace",
       executionRoleArn: "arn:aws:iam::123456789012:role/sealant-microvm-exec",
@@ -301,6 +330,29 @@ describe("buildRunInput", () => {
     expect(input.clientToken).toMatch(/^[0-9a-f]{64}$/);
     // The payload carries the bootstrap secret only: never env, never the secret file.
     expect(input.runHookPayload).not.toContain("mst_secret");
+  });
+
+  it("selects the pinned elevated image and v2 service requirement only for Docker", () => {
+    const input = buildRunInput(dockerConfig, "run-golden-4", launchSecret, {
+      dockerService: "required",
+    });
+    expect(input.imageIdentifier).toBe(dockerConfig.dockerImage?.arn);
+    expect(input.imageVersion).toBe("7");
+    expect(runHookPayloadSchema.parse(JSON.parse(input.runHookPayload))).toEqual({
+      version: DOCKER_AGENT_CONTRACT_VERSION,
+      runId: "run-golden-4",
+      launchSecret,
+      services: { docker: "required" },
+    });
+    expect(Buffer.byteLength(input.runHookPayload, "utf8")).toBeLessThanOrEqual(4096);
+  });
+
+  it("rejects a run-hook payload over the 4096-byte platform limit", () => {
+    expect(() =>
+      buildRunInput(config, `run-${"😀".repeat(1_024)}`, launchSecret, {
+        dockerService: "disabled",
+      }),
+    ).toThrow(/4096-byte platform limit/);
   });
 });
 
@@ -343,7 +395,7 @@ describe("microvmBootEnv", () => {
   it("puts git facts, clone auth, platform env and credential env in the process env, later wins", () => {
     const env = microvmBootEnv(cases.gitSource, { secretEnvFile: false, dotfiles: true });
     expect(env).toMatchObject({
-      SEALANT_WORKSPACE_SOURCE: "git",
+      SEALANT_WORKSPACE_SOURCE: "clone",
       SEALANT_WORKSPACE_REPO_URL: "https://github.com/example/repo.git",
       SEALANT_WORKSPACE_REPO_REF: "main",
       NODE_ENV: "development",
@@ -355,6 +407,42 @@ describe("microvmBootEnv", () => {
     expect(env).not.toHaveProperty("SEALANT_SECRET_ENV_FILE");
     const keys = Object.keys(env);
     expect(keys.indexOf("NODE_ENV")).toBeLessThan(keys.indexOf("GITHUB_TOKEN"));
+  });
+
+  it("keeps all service-owned Docker client selection env authoritative", () => {
+    const input = {
+      ...cases.dind,
+      platformEnv: {
+        DOCKER_CONTEXT: "platform-remote",
+        DOCKER_TLS_VERIFY: "1",
+      },
+      credentialEnv: {
+        DOCKER_HOST: "tcp://credential-env.invalid:2375",
+        DOCKER_CERT_PATH: "/credential-certs",
+        DOCKER_CONFIG: "/workspace/.docker",
+      },
+      blueprint: {
+        ...cases.dind.blueprint,
+        runtime: {
+          ...cases.dind.blueprint.runtime,
+          env: {
+            DOCKER_HOST: "tcp://attacker:2375",
+            DOCKER_CONTEXT: "remote",
+            DOCKER_TLS_CERTDIR: "/tmp/tls",
+            DOCKER_TLS_VERIFY: "1",
+            DOCKER_CERT_PATH: "/tmp/certs",
+          },
+        },
+      },
+    };
+    expect(microvmBootEnv(input, { secretEnvFile: true, dotfiles: false })).toMatchObject({
+      DOCKER_HOST: "unix:///run/docker/docker.sock",
+      DOCKER_CONTEXT: "",
+      DOCKER_TLS_CERTDIR: "",
+      DOCKER_TLS_VERIFY: "",
+      DOCKER_CERT_PATH: "",
+      DOCKER_CONFIG: "/workspace/.docker",
+    });
   });
 });
 
@@ -393,7 +481,9 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       status: "ready",
       endpoint: `wss://${ENDPOINT}/sealant/control`,
     });
-    expect(api.runs).toEqual([buildRunInput(config, "run-golden-4", launchSecret)]);
+    expect(api.runs).toEqual([
+      buildRunInput(config, "run-golden-4", launchSecret, { dockerService: "disabled" }),
+    ]);
     expect(api.terminates).toEqual([]);
 
     // Launch material: one authenticated push (retried past the 502), never through AWS.
@@ -435,6 +525,195 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     // One mint served the push and every control connection (the launch holds the token).
     expect(api.mints).toEqual([{ microvmId: "microvm-1", expirationInMinutes: 60, port: 8080 }]);
     expect(control.written).toEqual([{ target, files }]);
+  });
+
+  it("selects the Docker image and sends the v2 requirement with reserved socket env", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(200, {
+          version: 2,
+          booted: true,
+          controlSocket: true,
+          services: {
+            docker: { status: "ready", socket: "/run/docker/docker.sock" },
+          },
+        }),
+      ],
+    );
+    const adapter = build(api, endpoint, fakeControl(), dockerConfig);
+
+    await adapter.launch({
+      ...cases.dind,
+      secretEnv: { DOCKER_CONFIG: "/workspace/.docker" },
+    });
+
+    expect(api.runs[0]?.imageIdentifier).toBe(dockerConfig.dockerImage?.arn);
+    expect(api.runs[0]?.imageVersion).toBe("7");
+    const request = agentLaunchRequestSchema.parse(endpoint.requests[0]?.body);
+    expect(request).toMatchObject({
+      version: 2,
+      services: { docker: "required" },
+      bootEnv: {
+        DOCKER_HOST: "unix:///run/docker/docker.sock",
+        DOCKER_CONTEXT: "",
+        DOCKER_TLS_CERTDIR: "",
+        DOCKER_TLS_VERIFY: "",
+        DOCKER_CERT_PATH: "",
+      },
+      secretEnvJson: JSON.stringify({ DOCKER_CONFIG: "/workspace/.docker" }),
+    });
+  });
+
+  it.each([
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_TLS_CERTDIR",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+  ])("refuses reserved Docker variable %s in secretEnv before running a VM", async (name) => {
+    const api = new FakeMicrovmApi();
+    const adapter = build(
+      api,
+      fakeEndpoint([json(200, { outcome: "booting" })]),
+      fakeControl(),
+      dockerConfig,
+    );
+    await expect(
+      adapter.launch({
+        ...cases.dind,
+        secretEnv: { [name]: "attacker-controlled", DOCKER_CONFIG: "/workspace/.docker" },
+      }),
+    ).rejects.toThrow(`reserved variable ${name}`);
+    expect(api.runs).toEqual([]);
+  });
+
+  it("fails immediately on the agent's structured daemon exit and terminates the VM", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(503, {
+          booted: true,
+          controlSocket: false,
+          daemonExit: { code: 1, signal: null },
+        }),
+      ],
+    );
+    const control = fakeControl();
+    const adapter = build(api, endpoint, control);
+
+    await expect(adapter.launch(captureLaunch)).rejects.toMatchObject({
+      code: "microvm-guest-failed",
+      phase: "sealantd",
+      message: expect.stringContaining("code 1"),
+    });
+    expect(endpoint.healthRequests).toHaveLength(1);
+    expect(control.healthTargets).toEqual([]);
+    expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
+  it("retries a transient health transport failure", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [new Error("temporary reset"), json(200, { booted: true, controlSocket: true })],
+    );
+
+    await expect(build(api, endpoint, fakeControl()).launch(captureLaunch)).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(endpoint.healthRequests).toHaveLength(2);
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("retries an endpoint 502 before valid agent health", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        new Response("Bad Gateway", { status: 502 }),
+        json(200, { booted: true, controlSocket: true }),
+      ],
+    );
+
+    await expect(build(api, endpoint, fakeControl()).launch(captureLaunch)).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(endpoint.healthRequests).toHaveLength(2);
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("retries malformed proxy 503/504 responses without exposing their content", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(503, { message: "raw-log control-token mst_secret" }),
+        new Response("raw-log control-token mst_secret", { status: 504 }),
+        json(200, { booted: true, controlSocket: true }),
+      ],
+    );
+
+    await expect(build(api, endpoint, fakeControl()).launch(captureLaunch)).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(endpoint.healthRequests).toHaveLength(3);
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("fails immediately on valid v2 Docker failure health and cleans up", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(503, {
+          version: 2,
+          booted: false,
+          controlSocket: false,
+          services: {
+            docker: {
+              status: "failed",
+              reason: "exited",
+              code: 2,
+              signal: null,
+            },
+          },
+        }),
+      ],
+    );
+
+    await expect(
+      build(api, endpoint, fakeControl(), dockerConfig).launch(cases.dind),
+    ).rejects.toMatchObject({
+      code: "microvm-guest-failed",
+      phase: "docker",
+      failureReason: "exited",
+      guestExitCode: 2,
+      guestSignal: null,
+      message: expect.stringContaining("Guest-local Docker failed"),
+    });
+    expect(endpoint.healthRequests).toHaveLength(1);
+    expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
+  it("fails a v2 launch immediately on a valid legacy health contract", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [json(503, { booted: true, controlSocket: true })],
+    );
+
+    await expect(
+      build(api, endpoint, fakeControl(), dockerConfig).launch(cases.dind),
+    ).rejects.toMatchObject({
+      code: "microvm-guest-failed",
+      phase: "protocol",
+      message: expect.stringContaining("legacy agent health contract"),
+    });
+    expect(endpoint.healthRequests).toHaveLength(1);
+    expect(api.terminates).toEqual(["microvm-1"]);
   });
 
   it("reads the host-staged boot file when the stager did not pass the secret env through", async () => {
@@ -489,11 +768,15 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(endpoint.requests).toEqual([]);
   });
 
-  it("fails readably when the agent refuses the launch material", async () => {
+  it("fails readably without exposing the agent body when launch material is refused", async () => {
     const api = new FakeMicrovmApi();
-    const endpoint = fakeEndpoint([json(401, { message: "bad launch secret" })]);
+    const endpoint = fakeEndpoint([
+      json(401, { message: "bad launch secret raw-log control-token" }),
+    ]);
     const adapter = build(api, endpoint, fakeControl());
-    await expect(adapter.launch(captureLaunch)).rejects.toThrow(/bad launch secret/);
+    const launch = adapter.launch(captureLaunch);
+    await expect(launch).rejects.toThrow(/failed with HTTP 401/);
+    await expect(launch).rejects.not.toThrow(/raw-log|control-token/);
     expect(api.terminates).toEqual(["microvm-1"]);
   });
 
@@ -501,7 +784,7 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint([json(200, { outcome: "booting" })]);
     const adapter = build(api, endpoint, fakeControl(Number.POSITIVE_INFINITY));
-    await expect(adapter.launch(captureLaunch)).rejects.toThrow(/did not answer over wss:/);
+    await expect(adapter.launch(captureLaunch)).rejects.toThrow(/did not become ready within/);
     expect(api.terminates).toEqual(["microvm-1"]);
   });
 
@@ -603,6 +886,61 @@ describe("MicrovmRuntimeAdapter.inspect", () => {
     await expect(adapter.inspect({ resourceId: "microvm-1" })).resolves.toEqual({
       state: "missing",
     });
+  });
+
+  it("reports a Docker service lost after readiness as an exited runtime", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(200, {
+          version: 2,
+          booted: true,
+          controlSocket: true,
+          services: {
+            docker: { status: "ready", socket: "/run/docker/docker.sock" },
+          },
+        }),
+        json(503, {
+          version: 2,
+          booted: true,
+          controlSocket: true,
+          services: {
+            docker: {
+              status: "failed",
+              reason: "exited",
+              code: 2,
+              signal: null,
+            },
+          },
+        }),
+      ],
+    );
+    const adapter = build(api, endpoint, fakeControl(), dockerConfig);
+    const launched = await adapter.launch(cases.dind);
+
+    await expect(adapter.inspect({ resourceId: launched.resourceId })).resolves.toEqual({
+      state: "exited",
+      exitCode: 2,
+      detail: "Guest-local Docker failed in the MicroVM (exited; code 2, signal null).",
+    });
+  });
+
+  it("propagates transient endpoint health as an inspect error instead of inferring exit", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(200, { booted: true, controlSocket: true }),
+        json(503, { message: "proxy-not-agent raw-log control-token" }),
+      ],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+    const launched = await adapter.launch(captureLaunch);
+
+    const inspection = adapter.inspect({ resourceId: launched.resourceId });
+    await expect(inspection).rejects.toThrow(/HTTP 503 without a valid health body/);
+    await expect(inspection).rejects.not.toThrow(/raw-log|control-token/);
   });
 
   it("treats a suspended VM as running, naming the platform state", async () => {

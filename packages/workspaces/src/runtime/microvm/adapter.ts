@@ -54,13 +54,17 @@ import {
 import {
   AGENT_CONTRACT_VERSION,
   AGENT_CONTROL_ROUTE,
+  AGENT_HEALTH_ROUTE,
   AGENT_LAUNCH_ROUTE,
-  agentErrorResponseSchema,
+  agentHealthResponseSchema,
   agentLaunchResponseSchema,
   CONTROL_SOCKET_PATH,
+  DOCKER_AGENT_CONTRACT_VERSION,
+  DOCKER_SOCKET_PATH,
   DOTFILES_ARCHIVE_DIR,
   launchSecretForRun,
   SECRET_ENV_FILE_PATH,
+  type AgentHealthResponse,
   type AgentLaunchRequest,
   type RunHookPayload,
 } from "./agent-contract.js";
@@ -83,14 +87,98 @@ export interface MicrovmRuntimeAdapterOptions {
 }
 
 const POLL_INTERVAL_MS = 1000;
+const RUN_HOOK_PAYLOAD_MAX_BYTES = 4_096;
 
 const createAdapterError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
 
+/** Docker client selection belongs to the guest service; launch material cannot redirect it. */
+const MICROVM_DOCKER_RESERVED_ENV_NAMES = [
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_TLS_CERTDIR",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+] as const;
+
+type MicrovmDockerFailureReason =
+  | "spawn-failed"
+  | "directory-preparation-failed"
+  | "readiness-timeout"
+  | "exited"
+  | "probe-failed";
+
+interface MicrovmGuestFailureDetails {
+  readonly failureReason?: MicrovmDockerFailureReason | undefined;
+  readonly guestExitCode?: number | null | undefined;
+  readonly guestSignal?: string | null | undefined;
+}
+
+const SAFE_GUEST_SIGNALS: ReadonlySet<string> = new Set([
+  "SIGABRT",
+  "SIGALRM",
+  "SIGBUS",
+  "SIGCHLD",
+  "SIGCONT",
+  "SIGFPE",
+  "SIGHUP",
+  "SIGILL",
+  "SIGINT",
+  "SIGIO",
+  "SIGKILL",
+  "SIGPIPE",
+  "SIGPROF",
+  "SIGPWR",
+  "SIGQUIT",
+  "SIGSEGV",
+  "SIGSTOP",
+  "SIGSYS",
+  "SIGTERM",
+  "SIGTRAP",
+  "SIGTSTP",
+  "SIGTTIN",
+  "SIGTTOU",
+  "SIGURG",
+  "SIGUSR1",
+  "SIGUSR2",
+  "SIGVTALRM",
+  "SIGWINCH",
+  "SIGXCPU",
+  "SIGXFSZ",
+]);
+
+const safeGuestSignal = (signal: string | null): string | null | undefined =>
+  signal === null ? null : SAFE_GUEST_SIGNALS.has(signal) ? signal : undefined;
+
+class MicrovmGuestFailure extends Error {
+  override readonly name = "MicrovmGuestFailure";
+  readonly code = "microvm-guest-failed" as const;
+  readonly failureReason: MicrovmDockerFailureReason | undefined;
+  readonly guestExitCode: number | null | undefined;
+  readonly guestSignal: string | null | undefined;
+
+  constructor(
+    readonly phase: "protocol" | "sealantd" | "docker",
+    message: string,
+    details: MicrovmGuestFailureDetails = {},
+  ) {
+    super(message);
+    this.failureReason = details.failureReason;
+    this.guestExitCode = details.guestExitCode;
+    this.guestSignal = details.guestSignal;
+  }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const wantsDockerService = (input: RuntimeAdapterSupportInput): boolean =>
+  input.blueprint.tooling.services?.docker?.enabled === true;
+
 /** The support decision, pure. */
-export const supportForMicrovm = (input: RuntimeAdapterSupportInput): RuntimeAdapterSupport => {
+export const supportForMicrovm = (
+  config: Pick<MicrovmRuntimeConfig, "dockerImage">,
+  input: RuntimeAdapterSupportInput,
+): RuntimeAdapterSupport => {
   const family = input.blueprint.target.runtime.family;
   if (family !== "auto" && family !== "microvm") {
     return {
@@ -114,12 +202,12 @@ export const supportForMicrovm = (input: RuntimeAdapterSupportInput): RuntimeAda
         "The microvm adapter cannot disable outbound network access; egress is a property of the VM's network connector.",
     };
   }
-  if (input.blueprint.tooling.services?.docker?.enabled === true) {
+  if (wantsDockerService(input) && config.dockerImage === undefined) {
     return {
       supported: false,
       reason: "unsupported-runtime-requirement",
       message:
-        "Workspace-scoped Docker (tooling.services.docker) is not available in Lambda MicroVMs.",
+        "Workspace-scoped Docker needs a separate Docker-capable Lambda MicroVM image (SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION).",
     };
   }
   if (input.blueprint.runtime.ociRuntime === "runsc") {
@@ -173,11 +261,36 @@ export const buildRunInput = (
   config: MicrovmRuntimeConfig,
   runId: string,
   launchSecret: string,
+  options: { readonly dockerService: "disabled" | "required" },
 ): MicrovmRunInput => {
-  const payload: RunHookPayload = { version: AGENT_CONTRACT_VERSION, runId, launchSecret };
+  const dockerImage = options.dockerService === "required" ? config.dockerImage : undefined;
+  if (options.dockerService === "required" && dockerImage === undefined) {
+    throw createAdapterError(
+      "unsupported-runtime-requirement",
+      "A Docker-enabled MicroVM launch needs SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION.",
+    );
+  }
+  const payload: RunHookPayload =
+    options.dockerService === "required"
+      ? {
+          version: DOCKER_AGENT_CONTRACT_VERSION,
+          runId,
+          launchSecret,
+          services: { docker: "required" },
+        }
+      : { version: AGENT_CONTRACT_VERSION, runId, launchSecret };
+  const runHookPayload = JSON.stringify(payload);
+  if (Buffer.byteLength(runHookPayload, "utf8") > RUN_HOOK_PAYLOAD_MAX_BYTES) {
+    throw createAdapterError(
+      "unsupported-runtime-requirement",
+      `The Lambda MicroVM run-hook payload exceeds the ${String(RUN_HOOK_PAYLOAD_MAX_BYTES)}-byte platform limit.`,
+    );
+  }
   return {
-    imageIdentifier: config.imageArn,
-    ...(config.imageVersion === undefined ? {} : { imageVersion: config.imageVersion }),
+    imageIdentifier: dockerImage?.arn ?? config.imageArn,
+    ...((dockerImage?.version ?? config.imageVersion) === undefined
+      ? {}
+      : { imageVersion: dockerImage?.version ?? config.imageVersion }),
     executionRoleArn: config.executionRoleArn,
     ingressNetworkConnectors: [config.ingressNetworkConnector],
     ...(config.egressNetworkConnector === undefined
@@ -197,7 +310,7 @@ export const buildRunInput = (
     ...(config.logGroup === undefined
       ? {}
       : { logging: { cloudWatch: { logGroup: config.logGroup } } }),
-    runHookPayload: JSON.stringify(payload),
+    runHookPayload,
     clientToken: clientTokenForRun(runId),
   };
 };
@@ -239,7 +352,8 @@ export const microvmBootEnv = (
   if (source.kind === "capture") {
     entries.push(...captureSourceEnv(source));
   } else if (source.kind === "git") {
-    entries.push(["SEALANT_WORKSPACE_SOURCE", "git"]);
+    // `git` is Core's blueprint term; pinned sealantd v0.15.2 names this wire mode `clone`.
+    entries.push(["SEALANT_WORKSPACE_SOURCE", "clone"]);
     entries.push(["SEALANT_WORKSPACE_REPO_URL", source.url]);
     if (source.ref !== undefined) {
       entries.push(["SEALANT_WORKSPACE_REPO_REF", source.ref]);
@@ -297,6 +411,15 @@ export const microvmBootEnv = (
   }
   for (const [key, value] of Object.entries(input.credentialEnv ?? {})) {
     entries.push([key, value]);
+  }
+  // Service-owned and last-wins over every plaintext lane. The v2 agent pins the same five values
+  // before boot, and both Core and the agent reject them in secretEnvJson.
+  if (blueprint.tooling.services?.docker?.enabled === true) {
+    entries.push(["DOCKER_HOST", `unix://${DOCKER_SOCKET_PATH}`]);
+    entries.push(["DOCKER_CONTEXT", ""]);
+    entries.push(["DOCKER_TLS_CERTDIR", ""]);
+    entries.push(["DOCKER_TLS_VERIFY", ""]);
+    entries.push(["DOCKER_CERT_PATH", ""]);
   }
   const env: Record<string, string> = {};
   for (const [key, value] of entries) {
@@ -360,7 +483,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   }
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport {
-    return supportForMicrovm(parseRuntimeAdapterSupportInput(input));
+    return supportForMicrovm(this.#config, parseRuntimeAdapterSupportInput(input));
   }
 
   async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
@@ -390,8 +513,19 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     const secretEnv = parsed.secretEnv ?? (await readStagedSecretEnv(parsed.secretEnvDir));
     const dotfiles = await inlineDotfilesFromDir(parsed.dotfilesArchiveDir, "the microvm agent");
     const launchSecret = launchSecretForRun(config.controlBearerToken, runId);
-    const request: AgentLaunchRequest = {
-      version: AGENT_CONTRACT_VERSION,
+    const dockerService = parsed.blueprint.tooling.services?.docker?.enabled === true;
+    if (dockerService && secretEnv !== undefined) {
+      const reservedDockerName = MICROVM_DOCKER_RESERVED_ENV_NAMES.find((name) =>
+        Object.hasOwn(secretEnv, name),
+      );
+      if (reservedDockerName !== undefined) {
+        throw createAdapterError(
+          "unsupported-runtime-requirement",
+          `The Docker-enabled MicroVM launch secret environment cannot set reserved variable ${reservedDockerName}.`,
+        );
+      }
+    }
+    const requestFields = {
       runId,
       controlToken: config.controlBearerToken,
       flushTimeoutMs: config.flushTimeoutMs,
@@ -404,8 +538,19 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         ? {}
         : { dotfiles: { manifestJson: dotfiles.manifestJson, archives: [...dotfiles.archives] } }),
     };
+    const request: AgentLaunchRequest = dockerService
+      ? {
+          version: DOCKER_AGENT_CONTRACT_VERSION,
+          ...requestFields,
+          services: { docker: "required" },
+        }
+      : { version: AGENT_CONTRACT_VERSION, ...requestFields };
 
-    const vm = await this.#api.runMicrovm(buildRunInput(config, runId, launchSecret));
+    const vm = await this.#api.runMicrovm(
+      buildRunInput(config, runId, launchSecret, {
+        dockerService: dockerService ? "required" : "disabled",
+      }),
+    );
     const microvmId = vm.microvmId;
     const release = this.#tokens.hold(microvmId);
     try {
@@ -421,7 +566,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       const host = endpointHost(endpoint);
       await this.#pushLaunchMaterial(host, microvmId, runId, launchSecret, request, deadline);
       const target = this.#controlTarget(host, microvmId);
-      await this.#awaitHealthy(target, microvmId, runId, deadline);
+      await this.#awaitHealthy(target, host, microvmId, runId, dockerService, deadline);
       if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
         await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
       }
@@ -466,6 +611,17 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     if (isEnded(vm.state)) {
       // The platform reports no exit code for a VM; the state reason is what it knows.
       return { state: "exited", detail: describeEnded(vm) };
+    }
+    if (vm.state === "RUNNING" && vm.endpoint !== undefined && vm.endpoint.trim().length > 0) {
+      const health = await this.#readAgentHealth(endpointHost(vm.endpoint), input.resourceId);
+      const failure = this.#guestFailure(health, false);
+      if (failure !== undefined) {
+        return {
+          state: "exited",
+          ...(failure.exitCode === undefined ? {} : { exitCode: failure.exitCode }),
+          detail: failure.message,
+        };
+      }
     }
     const startedAt = vm.startedAt;
     const maxDurationSeconds = vm.maximumDurationInSeconds;
@@ -601,8 +757,8 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
           },
           body,
         });
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
+      } catch {
+        lastError = "the endpoint request failed";
       }
       if (response !== undefined) {
         if (response.ok) {
@@ -614,13 +770,9 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
           return; // an earlier delivery of this launch already booted the daemon: adopt.
         }
         if (![502, 503, 504].includes(response.status)) {
-          const message = await response
-            .json()
-            .then((payload) => agentErrorResponseSchema.parse(payload).message)
-            .catch(() => `the endpoint answered ${response.status} with no readable message`);
           throw createAdapterError(
             "adapter-unavailable",
-            `Delivering launch material to MicroVM ${microvmId} for run ${runId} failed: ${message}.`,
+            `Delivering launch material to MicroVM ${microvmId} for run ${runId} failed with HTTP ${String(response.status)}.`,
           );
         }
         lastError = `the endpoint answered ${response.status}`;
@@ -642,32 +794,137 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
+  async #readAgentHealth(host: string, microvmId: string): Promise<AgentHealthResponse> {
+    let response: Response;
+    try {
+      response = await this.#fetch(`https://${host}${AGENT_HEALTH_ROUTE}`, {
+        method: "GET",
+        headers: {
+          ...(await this.#tokens.headers(microvmId)),
+          authorization: `Bearer ${this.#config.controlBearerToken}`,
+        },
+      });
+    } catch {
+      throw new Error(`MicroVM ${microvmId} agent health request failed.`);
+    }
+    if ([200, 503].includes(response.status)) {
+      const payload: unknown = await response.json().catch(() => undefined);
+      const parsed = agentHealthResponseSchema.safeParse(payload);
+      if (parsed.success) {
+        return parsed.data;
+      }
+      // A proxy 503 may carry HTML or its own JSON. Without a valid agent body there is no
+      // authenticated guest state to fail on. Keep the error sanitized and let readiness retry;
+      // inspect propagates it as an observation error rather than inventing an exit.
+      throw new Error(
+        response.status === 503
+          ? `MicroVM ${microvmId} agent health is not reachable through the endpoint yet (HTTP 503 without a valid health body).`
+          : `MicroVM ${microvmId} agent health returned an invalid contract body.`,
+      );
+    }
+    if (response.status === 502 || response.status === 504) {
+      throw new Error(
+        `MicroVM ${microvmId} agent health is not reachable through the endpoint yet (HTTP ${String(response.status)}).`,
+      );
+    }
+    throw new Error(
+      `MicroVM ${microvmId} agent health failed with HTTP ${String(response.status)} and no valid health body.`,
+    );
+  }
+
+  #guestFailure(
+    health: AgentHealthResponse,
+    dockerRequired: boolean,
+  ):
+    | {
+        readonly phase: "protocol" | "sealantd" | "docker";
+        readonly message: string;
+        readonly exitCode?: number;
+        readonly failureReason?: MicrovmDockerFailureReason;
+        readonly guestExitCode?: number | null;
+        readonly guestSignal?: string | null;
+      }
+    | undefined {
+    if (health.daemonExit !== undefined) {
+      const signal = safeGuestSignal(health.daemonExit.signal);
+      const signalText = signal === undefined ? "unrecognized" : String(signal);
+      return {
+        phase: "sealantd",
+        message: `sealantd in the MicroVM exited before the workspace stopped (code ${String(health.daemonExit.code)}, signal ${signalText}).`,
+        ...(health.daemonExit.code === null ? {} : { exitCode: health.daemonExit.code }),
+        guestExitCode: health.daemonExit.code,
+        ...(signal === undefined ? {} : { guestSignal: signal }),
+      };
+    }
+    if ("version" in health && health.services.docker.status === "failed") {
+      const docker = health.services.docker;
+      const signal = safeGuestSignal(docker.signal);
+      const signalText = signal === undefined ? "unrecognized" : String(signal);
+      return {
+        phase: "docker",
+        message: `Guest-local Docker failed in the MicroVM (${docker.reason}; code ${String(docker.code)}, signal ${signalText}).`,
+        ...(docker.code === null ? {} : { exitCode: docker.code }),
+        failureReason: docker.reason,
+        guestExitCode: docker.code,
+        ...(signal === undefined ? {} : { guestSignal: signal }),
+      };
+    }
+    if (dockerRequired && !("version" in health)) {
+      return {
+        phase: "protocol",
+        message:
+          "The Docker-enabled MicroVM answered with the legacy agent health contract; the configured image is not Docker-capable.",
+      };
+    }
+    return undefined;
+  }
+
   async #awaitHealthy(
     target: SealantTarget,
+    host: string,
     microvmId: string,
     runId: string,
+    dockerRequired: boolean,
     deadline: number,
   ): Promise<void> {
-    let lastError: unknown;
     while (this.#now() <= deadline) {
       try {
-        await this.#control.health(target);
-        return;
-      } catch (error) {
-        lastError = error;
-        const vm = await this.#api.getMicrovm(microvmId);
-        if (vm === undefined || isEnded(vm.state)) {
-          throw createAdapterError(
-            "adapter-unavailable",
-            `MicroVM ${microvmId} for run ${runId} ended before its control channel answered: ${vm === undefined ? "gone" : describeEnded(vm)}.`,
+        const health = await this.#readAgentHealth(host, microvmId);
+        const failure = this.#guestFailure(health, dockerRequired);
+        if (failure !== undefined) {
+          throw new MicrovmGuestFailure(
+            failure.phase,
+            `MicroVM ${microvmId} for run ${runId} failed guest readiness: ${failure.message}`,
+            {
+              failureReason: failure.failureReason,
+              guestExitCode: failure.guestExitCode,
+              guestSignal: failure.guestSignal,
+            },
           );
         }
-        await sleep(this.#pollIntervalMs);
+        const dockerReady =
+          !dockerRequired || ("version" in health && health.services.docker.status === "ready");
+        if (health.booted && health.controlSocket && dockerReady) {
+          await this.#control.health(target);
+          return;
+        }
+      } catch (error) {
+        if (error instanceof MicrovmGuestFailure) {
+          throw error;
+        }
       }
+      const vm = await this.#api.getMicrovm(microvmId);
+      if (vm === undefined || isEnded(vm.state)) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `MicroVM ${microvmId} for run ${runId} ended before its control channel answered: ${vm === undefined ? "gone" : describeEnded(vm)}.`,
+        );
+      }
+      await sleep(this.#pollIntervalMs);
     }
     throw createAdapterError(
       "adapter-unavailable",
-      `sealantd in MicroVM ${microvmId} did not answer over ${target.kind === "websocket" ? target.url : "the control channel"} within ${String(this.#config.readinessTimeoutMs)} ms: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+      `sealantd in MicroVM ${microvmId} did not become ready within ${String(this.#config.readinessTimeoutMs)} ms.`,
     );
   }
 
@@ -697,7 +954,13 @@ const readStagedSecretEnv = async (
   if (secretEnvDir === undefined) {
     return undefined;
   }
-  const parsed: unknown = JSON.parse(await readFile(path.join(secretEnvDir, "env.json"), "utf8"));
+  const raw = await readFile(path.join(secretEnvDir, "env.json"), "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${secretEnvDir}/env.json is not valid JSON.`);
+  }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${secretEnvDir}/env.json is not a JSON object.`);
   }

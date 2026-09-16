@@ -60,6 +60,14 @@ export const microvmRuntimeConfigSchema = z
     imageArn: imageArnSchema,
     /** Defaults to the image's latest ACTIVE version. */
     imageVersion: z.string().trim().min(1).optional(),
+    /** Separate elevated image selected only for workspaces that require guest-local Docker. */
+    dockerImage: z
+      .strictObject({
+        arn: imageArnSchema,
+        /** Required so the elevated image cannot drift to a newly activated version. */
+        version: z.string().trim().min(1),
+      })
+      .optional(),
     executionRoleArn: roleArnSchema,
     egressNetworkConnector: connectorArnSchema.optional(),
     ingressNetworkConnector: connectorArnSchema,
@@ -99,6 +107,13 @@ export const microvmRuntimeConfigSchema = z
       message: "the endpoint token refresh margin must be shorter than the token TTL",
       path: ["endpointTokenRefreshMarginMs"],
     },
+  )
+  .refine(
+    (config) => config.dockerImage === undefined || config.dockerImage.arn !== config.imageArn,
+    {
+      message: "the Docker-capable image ARN must differ from the default image ARN",
+      path: ["dockerImage", "arn"],
+    },
   );
 
 export type MicrovmRuntimeConfig = z.infer<typeof microvmRuntimeConfigSchema>;
@@ -107,6 +122,8 @@ export interface MicrovmRuntimeEnvLike {
   readonly SEALANT_MICROVM_REGION?: string | undefined;
   readonly SEALANT_MICROVM_IMAGE_ARN?: string | undefined;
   readonly SEALANT_MICROVM_IMAGE_VERSION?: string | undefined;
+  readonly SEALANT_MICROVM_DOCKER_IMAGE_ARN?: string | undefined;
+  readonly SEALANT_MICROVM_DOCKER_IMAGE_VERSION?: string | undefined;
   readonly SEALANT_MICROVM_EXEC_ROLE_ARN?: string | undefined;
   readonly SEALANT_MICROVM_EGRESS_CONNECTOR?: string | undefined;
   readonly SEALANT_MICROVM_INGRESS_CONNECTOR?: string | undefined;
@@ -132,6 +149,14 @@ export const microvmRuntimeConfigFromEnv = (
   env: MicrovmRuntimeEnvLike,
 ): MicrovmRuntimeConfig | undefined => {
   if (env.SEALANT_MICROVM_IMAGE_ARN === undefined) {
+    if (
+      env.SEALANT_MICROVM_DOCKER_IMAGE_ARN !== undefined ||
+      env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION !== undefined
+    ) {
+      throw new MicrovmRuntimeConfigError(
+        "SEALANT_MICROVM_IMAGE_ARN must be set when either Docker-capable MicroVM image variable is configured.",
+      );
+    }
     return undefined;
   }
   const missing = (key: string): never => {
@@ -140,12 +165,30 @@ export const microvmRuntimeConfigFromEnv = (
     );
   };
   const region = env.SEALANT_MICROVM_REGION ?? missing("SEALANT_MICROVM_REGION");
+  if (
+    env.SEALANT_MICROVM_DOCKER_IMAGE_ARN === undefined &&
+    env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION !== undefined
+  ) {
+    throw new MicrovmRuntimeConfigError(
+      "SEALANT_MICROVM_DOCKER_IMAGE_ARN must be set when SEALANT_MICROVM_DOCKER_IMAGE_VERSION is configured.",
+    );
+  }
   const candidate = {
     region,
     imageArn: env.SEALANT_MICROVM_IMAGE_ARN,
     ...(env.SEALANT_MICROVM_IMAGE_VERSION === undefined
       ? {}
       : { imageVersion: env.SEALANT_MICROVM_IMAGE_VERSION }),
+    ...(env.SEALANT_MICROVM_DOCKER_IMAGE_ARN === undefined
+      ? {}
+      : {
+          dockerImage: {
+            arn: env.SEALANT_MICROVM_DOCKER_IMAGE_ARN,
+            version:
+              env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION ??
+              missing("SEALANT_MICROVM_DOCKER_IMAGE_VERSION"),
+          },
+        }),
     executionRoleArn: env.SEALANT_MICROVM_EXEC_ROLE_ARN ?? missing("SEALANT_MICROVM_EXEC_ROLE_ARN"),
     ...(env.SEALANT_MICROVM_EGRESS_CONNECTOR === undefined
       ? {}

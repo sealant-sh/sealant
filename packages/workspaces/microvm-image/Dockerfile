@@ -29,7 +29,7 @@ RUN dnf install -y --setopt=install_weak_deps=0 \
 COPY --chmod=755 sealantd /usr/local/bin/sealantd
 COPY --chmod=755 sealantctl /usr/local/bin/sealantctl
 COPY --chmod=755 socat /usr/local/bin/socat
-COPY agent.mjs /opt/sealant/agent.mjs
+COPY agent.mjs docker-service.mjs /opt/sealant/
 
 # Build-static `sealantd boot` facts (crates/sealantd/src/boot/config.rs). The launch push
 # carries everything else (source, lifecycle, harness, env). `custom` keeps boot's POSIX-shell

@@ -418,12 +418,10 @@ export class WorkspaceRuntimeEnvReferencesUnsupportedError extends Schema.Tagged
 ) {}
 
 /**
- * `services.docker` requested on an install whose workspace runtime cannot serve it — today, a
- * Kubernetes deployment whose operator has not enabled the rootless dind sidecar
- * (`SEALANT_K8S_DOCKER_ENABLED` / chart `workspaces.docker.enabled`). Refused synchronously at
- * POST /v1/workspaces for the same reason as cluster env references: the stable `code` is the
- * consumer's capability probe, so a workbench can explain the gap beside its Docker switch instead
- * of surfacing a launch failure minutes later.
+ * `services.docker` requested on an install whose workspace runtime cannot serve it. Kubernetes
+ * needs its operator-enabled rootless sidecar. Lambda MicroVMs need a separate Docker-capable
+ * image, leaving the default image at its restricted Linux capability set. Refused synchronously
+ * at POST /v1/workspaces; the stable `code` is the consumer's capability probe.
  */
 export class WorkspaceDockerServiceUnsupportedError extends Schema.TaggedErrorClass<WorkspaceDockerServiceUnsupportedError>()(
   "WorkspaceDockerServiceUnsupportedError",

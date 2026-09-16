@@ -33,6 +33,16 @@ describe("parseWorkerEnv", () => {
     ).toBe("mend_default");
   });
 
+  it("rejects Docker-capable MicroVM coordinates without the base image", () => {
+    expect(() =>
+      parseWorkerEnv({
+        SEALANT_MICROVM_DOCKER_IMAGE_ARN:
+          "arn:aws:lambda:eu-central-1:123456789012:microvm-image:docker-capable",
+        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+      }),
+    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN/);
+  });
+
   it("loads the GitHub App private key from GITHUB_APP_PRIVATE_KEY_PATH", () => {
     const tempDirectory = mkdtempSync(join(tmpdir(), "sealant-worker-github-key-"));
     const privateKeyPath = join(tempDirectory, "github-app.private-key.pem");

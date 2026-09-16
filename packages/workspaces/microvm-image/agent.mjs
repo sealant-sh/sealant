@@ -30,7 +30,13 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 
+import {
+  createDockerService,
+  stopGuestProcessGroup as stopProcessGroup,
+} from "./docker-service.mjs";
+
 const CONTRACT_VERSION = 1;
+const DOCKER_CONTRACT_VERSION = 2;
 const HOOK_PREFIX = "/aws/lambda-microvms/runtime/v1";
 const LAUNCH_ROUTE = "/sealant/launch";
 const HEALTH_ROUTE = "/sealant/health";
@@ -44,20 +50,58 @@ const SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "env.json");
 const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
+const DOCKER_CAPABLE = process.env.SEALANT_MICROVM_DOCKER_CAPABLE === "1";
+const DOCKERD = process.env.SEALANT_MICROVM_DOCKERD ?? "/usr/local/bin/dockerd";
+const DOCKER = process.env.SEALANT_MICROVM_DOCKER ?? "/usr/local/bin/docker";
+const DOCKER_SOCKET = process.env.SEALANT_MICROVM_DOCKER_SOCKET ?? "/run/docker/docker.sock";
+const DOCKER_DATA_ROOT = process.env.SEALANT_MICROVM_DOCKER_DATA_ROOT ?? "/var/lib/sealant/docker";
+const DOCKER_EXEC_ROOT = process.env.SEALANT_MICROVM_DOCKER_EXEC_ROOT ?? "/run/sealant/docker-exec";
+const DOCKER_PID_FILE = process.env.SEALANT_MICROVM_DOCKER_PID_FILE ?? "/run/sealant/docker.pid";
+const DOCKER_READY_TIMEOUT_MS = process.env.SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS;
+const DOCKER_PROBE_INTERVAL_MS = process.env.SEALANT_MICROVM_DOCKER_PROBE_INTERVAL_MS;
+const DOCKER_PROBE_TIMEOUT_MS = process.env.SEALANT_MICROVM_DOCKER_PROBE_TIMEOUT_MS;
+const DOCKER_SHUTDOWN_TIMEOUT_MS = process.env.SEALANT_MICROVM_DOCKER_SHUTDOWN_TIMEOUT_MS;
+// Root-readable guest diagnostics only. Health and control responses never include this file.
+const DOCKER_LOG = process.env.SEALANT_MICROVM_DOCKER_LOG ?? "/run/sealant/dockerd.stderr.log";
+const DOCKER_LOG_MAX_BYTES = process.env.SEALANT_MICROVM_DOCKER_LOG_MAX_BYTES;
+const DOCKER_SERVICE_OPTIONS = {
+  dockerdPath: DOCKERD,
+  dockerPath: DOCKER,
+  socketPath: DOCKER_SOCKET,
+  dataRoot: DOCKER_DATA_ROOT,
+  execRoot: DOCKER_EXEC_ROOT,
+  pidFile: DOCKER_PID_FILE,
+  readinessTimeoutMs: DOCKER_READY_TIMEOUT_MS,
+  probeIntervalMs: DOCKER_PROBE_INTERVAL_MS,
+  probeTimeoutMs: DOCKER_PROBE_TIMEOUT_MS,
+  shutdownTimeoutMs: DOCKER_SHUTDOWN_TIMEOUT_MS,
+  logPath: DOCKER_LOG,
+  logMaxBytes: DOCKER_LOG_MAX_BYTES,
+};
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+const imageValidation = {
+  phase: "idle",
+  dockerService: null,
+};
 
 const state = {
   microvmId: null,
   runId: null,
-  /** Authorises exactly one launch push; cleared once the daemon is started. */
+  /** Authorises exactly one launch push; cleared once the launch is accepted. */
   launchSecret: null,
   /** Authorises health and control connections; arrives inside the launch push. */
   controlToken: null,
+  contractVersion: null,
+  launchInProgress: false,
+  launchAccepted: false,
   flushTimeoutMs: 50_000,
   booted: false,
   daemon: null,
   daemonExit: null,
+  dockerService: null,
+  hookChildren: new Set(),
 };
 
 const log = (line) => {
@@ -97,6 +141,199 @@ const bearerMatches = (header, expected) => {
 
 const isEnvName = (name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
+const hasOnlyKeys = (value, allowed) => Object.keys(value).every((key) => allowed.has(key));
+
+const isRequiredDockerServices = (services) =>
+  typeof services === "object" &&
+  services !== null &&
+  !Array.isArray(services) &&
+  Object.keys(services).length === 1 &&
+  services.docker === "required";
+
+const waitForExit = async (child) => {
+  if (child === null || child.exitCode !== null || child.signalCode !== null) return;
+  let timer;
+  await Promise.race([
+    new Promise((resolve) => child.once("exit", resolve)),
+    new Promise((resolve) => {
+      timer = setTimeout(() => {
+        stopProcessGroup(child, "SIGKILL");
+        resolve();
+      }, 2_000);
+      timer.unref();
+    }),
+  ]);
+  clearTimeout(timer);
+};
+
+const VALIDATION_HEALTH_REASONS = new Set([
+  "spawn-failed",
+  "directory-preparation-failed",
+  "readiness-timeout",
+  "exited",
+  "probe-failed",
+  "shutdown-timeout",
+  "cleanup-failed",
+]);
+const VALIDATION_PROBE_REASONS = new Set(["spawn-failed", "timeout", "exited"]);
+const VALIDATION_PROBE_ERROR_CODES = new Set([
+  "EACCES",
+  "EMFILE",
+  "ENFILE",
+  "ENOENT",
+  "ENOEXEC",
+  "ENOMEM",
+  "ETXTBSY",
+]);
+const VALIDATION_PATH_TYPES = new Set(["missing", "directory", "other", "inaccessible"]);
+
+const validationFailureHealth = (health) => ({
+  status: "failed",
+  reason: VALIDATION_HEALTH_REASONS.has(health.reason) ? health.reason : "unknown",
+  code: Number.isInteger(health.code) ? health.code : null,
+  signal:
+    typeof health.signal === "string" && /^[A-Z0-9]{1,16}$/.test(health.signal)
+      ? health.signal
+      : null,
+});
+
+const validationProbe = (probe) => {
+  if (probe === null) return null;
+  return {
+    reason: VALIDATION_PROBE_REASONS.has(probe.reason) ? probe.reason : "unknown",
+    code:
+      Number.isInteger(probe.code) || VALIDATION_PROBE_ERROR_CODES.has(probe.code)
+        ? probe.code
+        : null,
+    signal:
+      typeof probe.signal === "string" && /^[A-Z0-9]{1,16}$/.test(probe.signal)
+        ? probe.signal
+        : null,
+  };
+};
+
+const validationCapabilitySet = (capabilities) => ({
+  sysAdmin: typeof capabilities?.sysAdmin === "boolean" ? capabilities.sysAdmin : null,
+  netAdmin: typeof capabilities?.netAdmin === "boolean" ? capabilities.netAdmin : null,
+  setuid: typeof capabilities?.setuid === "boolean" ? capabilities.setuid : null,
+  setgid: typeof capabilities?.setgid === "boolean" ? capabilities.setgid : null,
+});
+
+const validationPathType = (value) => (VALIDATION_PATH_TYPES.has(value) ? value : "inaccessible");
+
+const logValidationFailure = (health, cleanup) => {
+  const diagnostics = imageValidation.dockerService?.diagnostics();
+  if (diagnostics === undefined) return;
+  const signatures = {
+    cgroupReadonly: diagnostics.signatures.cgroupReadonly === true,
+    overlayDenied: diagnostics.signatures.overlayDenied === true,
+    graphDriverInit: diagnostics.signatures.graphDriverInit === true,
+    bridgeNetworkInit: diagnostics.signatures.bridgeNetworkInit === true,
+    iptablesNetworkInit: diagnostics.signatures.iptablesNetworkInit === true,
+    missingBinary: diagnostics.signatures.missingBinary === true,
+    containerdTimeout: diagnostics.signatures.containerdTimeout === true,
+    rootPrivilegesRequired: diagnostics.signatures.rootPrivilegesRequired === true,
+    dockerSocketParentMissing: diagnostics.signatures.dockerSocketParentMissing === true,
+  };
+  const facts = {
+    uid: Number.isInteger(diagnostics.facts.uid) ? diagnostics.facts.uid : null,
+    gid: Number.isInteger(diagnostics.facts.gid) ? diagnostics.facts.gid : null,
+    capabilities: {
+      effective: validationCapabilitySet(diagnostics.facts.capabilities?.effective),
+      available: validationCapabilitySet(diagnostics.facts.capabilities?.available),
+    },
+    dockerdBinaryExists: diagnostics.facts.dockerdBinaryExists === true,
+    dockerCliExists: diagnostics.facts.dockerCliExists === true,
+    cgroupPathExists: diagnostics.facts.cgroupPathExists === true,
+    overlayModuleExists: diagnostics.facts.overlayModuleExists === true,
+    dockerSocketParentType: validationPathType(diagnostics.facts.dockerSocketParentType),
+    dockerDataRootType: validationPathType(diagnostics.facts.dockerDataRootType),
+    dockerExecRootParentType: validationPathType(diagnostics.facts.dockerExecRootParentType),
+    cgroupMountReadOnly:
+      typeof diagnostics.facts.cgroupMountReadOnly === "boolean"
+        ? diagnostics.facts.cgroupMountReadOnly
+        : null,
+    dockerDataRootMountReadOnly:
+      typeof diagnostics.facts.dockerDataRootMountReadOnly === "boolean"
+        ? diagnostics.facts.dockerDataRootMountReadOnly
+        : null,
+  };
+  log(
+    JSON.stringify({
+      event: "docker-image-validation-failed",
+      health: validationFailureHealth(health),
+      probe: validationProbe(diagnostics.probe),
+      signatures,
+      identifiedSignature: Object.values(signatures).some(Boolean),
+      facts,
+      cleanup: {
+        ok: cleanup.ok === true,
+        forced: cleanup.forced === true,
+        killed: cleanup.killed === true,
+      },
+    }),
+  );
+};
+
+const completeDockerImageValidation = async (health) => {
+  if (imageValidation.phase !== "pending" || imageValidation.dockerService === null) return;
+  imageValidation.phase = "cleaning";
+  let cleanup;
+  try {
+    cleanup = await imageValidation.dockerService.stop();
+  } catch {
+    cleanup = { ok: false, forced: false, killed: false };
+  }
+  if (health.status === "ready" && cleanup.ok === true) {
+    imageValidation.phase = "passed";
+    return;
+  }
+  const failure =
+    health.status === "failed"
+      ? health
+      : {
+          status: "failed",
+          reason: cleanup.reason === "shutdown-timeout" ? "shutdown-timeout" : "cleanup-failed",
+          code: cleanup.code ?? null,
+          signal: cleanup.signal ?? null,
+        };
+  imageValidation.phase = "failed";
+  logValidationFailure(failure, cleanup);
+};
+
+const startDockerImageValidation = () => {
+  imageValidation.phase = "pending";
+  imageValidation.dockerService = createDockerService({
+    ...DOCKER_SERVICE_OPTIONS,
+    onReady: () => {},
+    onStateChange: (health) => {
+      if (health.status === "ready" || health.status === "failed") {
+        void completeDockerImageValidation(health);
+      }
+    },
+  });
+  imageValidation.dockerService.start();
+};
+
+const handleImageValidation = (res) => {
+  if (!DOCKER_CAPABLE) return json(res, 200, { status: "ok", hook: "validate" });
+  if (
+    state.contractVersion !== null ||
+    state.launchInProgress ||
+    state.launchAccepted ||
+    state.dockerService !== null
+  ) {
+    return json(res, 503, { status: "unavailable", hook: "validate" });
+  }
+  if (imageValidation.phase === "idle") startDockerImageValidation();
+  const passed = imageValidation.phase === "passed";
+  const failed = imageValidation.phase === "failed";
+  return json(res, passed ? 200 : failed ? 500 : 503, {
+    status: passed ? "ok" : failed ? "failed" : "pending",
+    hook: "validate",
+  });
+};
+
 // --------------------------------------------------------------------------------------------
 // Lifecycle hooks
 // --------------------------------------------------------------------------------------------
@@ -105,8 +342,10 @@ const isEnvName = (name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 const flushCaptures = async () => {
   const startedAt = Date.now();
   const child = spawn(SEALANTCTL, ["--socket", CONTROL_SOCKET, "capture", "flush"], {
+    detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  state.hookChildren.add(child);
   let output = "";
   const collect = (chunk) => {
     output = (output + chunk.toString("utf8")).slice(-4096);
@@ -116,7 +355,7 @@ const flushCaptures = async () => {
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    child.kill("SIGKILL");
+    stopProcessGroup(child, "SIGKILL");
   }, state.flushTimeoutMs);
   try {
     const { code, signal } = await new Promise((resolve, reject) => {
@@ -135,38 +374,64 @@ const flushCaptures = async () => {
     return { ok: false, exitCode: null, timedOut: false, error: error.message, output };
   } finally {
     clearTimeout(timer);
+    state.hookChildren.delete(child);
   }
 };
 
 const handleHook = async (hook, req, res) => {
   switch (hook) {
     case "ready":
-    case "validate":
-      // Image build time: nothing session-specific exists yet. Safe to snapshot.
+      // Nothing starts before this response. The snapshot contains no Docker process or data.
       return json(res, 200, { status: "ok", hook });
+    case "validate":
+      return handleImageValidation(res);
     case "run": {
+      if (imageValidation.phase !== "idle") {
+        throw new Error("run hook cannot enter an image-validation VM");
+      }
       const raw = await readBody(req);
       const envelope = raw === "" ? {} : JSON.parse(raw);
       const payload =
         typeof envelope.runHookPayload === "string" ? JSON.parse(envelope.runHookPayload) : null;
-      if (
-        payload === null ||
-        payload.version !== CONTRACT_VERSION ||
-        typeof payload.runId !== "string" ||
-        !/^[0-9a-f]{64}$/.test(String(payload.launchSecret))
-      ) {
-        // A 500 here fails the VM start, which is right: the payload is the control plane's
-        // and a malformed one means this VM would never receive its launch material.
-        throw new Error("run hook payload does not match the sealant agent contract v1");
+      const commonValid =
+        payload !== null &&
+        typeof payload.runId === "string" &&
+        payload.runId.length > 0 &&
+        /^[0-9a-f]{64}$/.test(String(payload.launchSecret));
+      const v1 =
+        commonValid && payload.version === CONTRACT_VERSION && payload.services === undefined;
+      const v2 =
+        commonValid &&
+        payload.version === DOCKER_CONTRACT_VERSION &&
+        hasOnlyKeys(payload, new Set(["version", "runId", "launchSecret", "services"])) &&
+        isRequiredDockerServices(payload.services);
+      if (!v1 && !v2) {
+        // A 500 here fails the VM start. A malformed control-plane payload cannot become a launch.
+        throw new Error("run hook payload does not match a supported sealant agent contract");
+      }
+      if (v2 && !DOCKER_CAPABLE) {
+        throw new Error("run hook requires a Docker-capable sealant agent image");
       }
       state.microvmId = typeof envelope.microvmId === "string" ? envelope.microvmId : null;
       state.runId = payload.runId;
       state.launchSecret = payload.launchSecret;
+      state.contractVersion = payload.version;
       log(`run: microvm ${state.microvmId} run ${state.runId}`);
       return json(res, 200, { status: "ok", hook });
     }
-    case "resume":
-      return json(res, 200, { status: "ok", hook, booted: state.booted });
+    case "resume": {
+      if (state.contractVersion !== DOCKER_CONTRACT_VERSION) {
+        return json(res, 200, { status: "ok", hook, booted: state.booted });
+      }
+      const dockerReady = (await state.dockerService?.verify()) === true;
+      const ready =
+        dockerReady && state.booted && state.daemonExit === null && controlSocketReady();
+      return json(res, ready ? 200 : 503, {
+        status: ready ? "ok" : "unavailable",
+        hook,
+        booted: state.booted,
+      });
+    }
     case "suspend":
     case "terminate": {
       if (!state.booted) {
@@ -228,22 +493,119 @@ const writePrivate = async (file, content, mode) => {
   }
 };
 
+const dockerEnvironment = {
+  DOCKER_HOST: `unix://${DOCKER_SOCKET}`,
+  DOCKER_CONTEXT: "",
+  DOCKER_TLS_CERTDIR: "",
+  DOCKER_TLS_VERIFY: "",
+  DOCKER_CERT_PATH: "",
+};
+
 const startDaemon = (bootEnv) => {
   const env = { ...process.env, ...bootEnv, SEALANT_CONTROL_SOCKET: CONTROL_SOCKET };
-  const child = spawn(SEALANTD, ["boot"], { env, stdio: ["ignore", "inherit", "inherit"] });
+  if (state.contractVersion === DOCKER_CONTRACT_VERSION) Object.assign(env, dockerEnvironment);
+  const child = spawn(SEALANTD, ["boot"], {
+    detached: true,
+    env,
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  state.booted = true;
   state.daemon = child;
   child.on("exit", (code, signal) => {
     state.daemonExit = { code, signal };
     log(`sealantd boot exited (code ${code}, signal ${signal})`);
   });
-  child.on("error", (error) => {
-    state.daemonExit = { code: null, signal: null, error: error.message };
-    log(`sealantd boot could not start: ${error.message}`);
+  child.on("error", () => {
+    state.daemonExit = { code: null, signal: null };
+    log("sealantd boot could not start");
   });
+  log(`launch: sealantd boot started for run ${state.runId}`);
+};
+
+const V2_LAUNCH_KEYS = new Set([
+  "version",
+  "runId",
+  "controlToken",
+  "flushTimeoutMs",
+  "bootEnv",
+  "secretEnvJson",
+  "dotfiles",
+  "services",
+]);
+const DOTFILES_KEYS = new Set(["manifestJson", "archives"]);
+const ARCHIVE_KEYS = new Set(["name", "contentBase64"]);
+
+const launchBodyMatchesContract = (body) => {
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    Array.isArray(body) ||
+    body.version !== state.contractVersion ||
+    typeof body.runId !== "string" ||
+    body.runId !== state.runId ||
+    typeof body.controlToken !== "string" ||
+    body.controlToken.length === 0 ||
+    !Number.isInteger(body.flushTimeoutMs) ||
+    body.flushTimeoutMs <= 0 ||
+    typeof body.bootEnv !== "object" ||
+    body.bootEnv === null ||
+    Array.isArray(body.bootEnv) ||
+    !Object.entries(body.bootEnv).every(
+      ([key, value]) => isEnvName(key) && typeof value === "string",
+    ) ||
+    (body.secretEnvJson !== undefined &&
+      (typeof body.secretEnvJson !== "string" || body.secretEnvJson.length === 0))
+  ) {
+    return false;
+  }
+  const servicesMatch =
+    body.version === CONTRACT_VERSION
+      ? body.services === undefined
+      : body.version === DOCKER_CONTRACT_VERSION &&
+        hasOnlyKeys(body, V2_LAUNCH_KEYS) &&
+        isRequiredDockerServices(body.services);
+  if (!servicesMatch) return false;
+  if (body.dotfiles === undefined) return true;
+  if (
+    typeof body.dotfiles !== "object" ||
+    body.dotfiles === null ||
+    Array.isArray(body.dotfiles) ||
+    typeof body.dotfiles.manifestJson !== "string" ||
+    body.dotfiles.manifestJson.length === 0 ||
+    !Array.isArray(body.dotfiles.archives) ||
+    (body.version === DOCKER_CONTRACT_VERSION && !hasOnlyKeys(body.dotfiles, DOTFILES_KEYS))
+  ) {
+    return false;
+  }
+  return body.dotfiles.archives.every(
+    (archive) =>
+      typeof archive === "object" &&
+      archive !== null &&
+      !Array.isArray(archive) &&
+      typeof archive.name === "string" &&
+      /^[A-Za-z0-9._-]+$/.test(archive.name) &&
+      typeof archive.contentBase64 === "string" &&
+      archive.contentBase64.length > 0 &&
+      (body.version !== DOCKER_CONTRACT_VERSION || hasOnlyKeys(archive, ARCHIVE_KEYS)),
+  );
+};
+
+const DOCKER_SERVICE_ENV = new Set([
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_TLS_CERTDIR",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+]);
+
+const v2SecretEnvIsSafe = (raw) => {
+  const parsed = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false;
+  return !Object.keys(parsed).some((key) => DOCKER_SERVICE_ENV.has(key));
 };
 
 const handleLaunch = async (req, res) => {
-  if (state.booted) {
+  if (state.launchInProgress || state.launchAccepted) {
     return json(res, 409, { message: "already booted" });
   }
   if (state.launchSecret === null) {
@@ -253,58 +615,84 @@ const handleLaunch = async (req, res) => {
     return message(res, 401, "launch secret does not match this VM's run");
   }
   const body = JSON.parse((await readBody(req)) || "{}");
-  if (
-    body.version !== CONTRACT_VERSION ||
-    typeof body.runId !== "string" ||
-    body.runId !== state.runId ||
-    typeof body.controlToken !== "string" ||
-    body.controlToken.length === 0 ||
-    !Number.isInteger(body.flushTimeoutMs) ||
-    body.flushTimeoutMs <= 0 ||
-    typeof body.bootEnv !== "object" ||
-    body.bootEnv === null ||
-    !Object.entries(body.bootEnv).every(([k, v]) => isEnvName(k) && typeof v === "string")
-  ) {
-    return message(res, 400, "launch request does not match the sealant agent contract v1");
+  if (!launchBodyMatchesContract(body)) {
+    return message(res, 400, "launch request does not match the sealant agent contract");
   }
-  const bootEnv = { ...body.bootEnv };
-  if (typeof body.secretEnvJson === "string" && body.secretEnvJson.length > 0) {
-    await writePrivate(SECRET_ENV_FILE, body.secretEnvJson, 0o600);
-    bootEnv.SEALANT_SECRET_ENV_FILE = SECRET_ENV_FILE;
-  } else {
-    delete bootEnv.SEALANT_SECRET_ENV_FILE;
-  }
-  if (body.dotfiles !== undefined && body.dotfiles !== null) {
-    const { manifestJson, archives } = body.dotfiles;
-    if (typeof manifestJson !== "string" || !Array.isArray(archives)) {
-      return message(res, 400, "launch request dotfiles do not match the contract");
+
+  const secretEnvJson = body.secretEnvJson;
+  if (body.version === DOCKER_CONTRACT_VERSION && typeof secretEnvJson === "string") {
+    let safe = false;
+    try {
+      safe = v2SecretEnvIsSafe(secretEnvJson);
+    } catch {
+      // The response deliberately does not include JSON parser output or launch material.
     }
-    await writePrivate(path.join(DOTFILES_DIR, "manifest.json"), manifestJson, 0o644);
-    for (const archive of archives) {
-      if (
-        typeof archive.name !== "string" ||
-        !/^[A-Za-z0-9._-]+$/.test(archive.name) ||
-        typeof archive.contentBase64 !== "string"
-      ) {
-        return message(res, 400, "launch request dotfiles archive does not match the contract");
-      }
-      await writePrivate(
-        path.join(DOTFILES_DIR, archive.name),
-        Buffer.from(archive.contentBase64, "base64"),
-        0o644,
+    if (!safe) {
+      return message(
+        res,
+        400,
+        "launch request secret environment contains a Docker service-owned key",
       );
     }
-    bootEnv.SEALANT_DOTFILES_ARCHIVE_DIR = DOTFILES_DIR;
-  } else {
-    delete bootEnv.SEALANT_DOTFILES_ARCHIVE_DIR;
   }
-  // From here on only the control token authorises anything; the launch secret is spent.
+
+  // Reading and validating the body yields to concurrent requests. Claim the launch only after
+  // that work, then re-check atomically before the first filesystem write.
+  if (state.launchInProgress || state.launchAccepted) {
+    return json(res, 409, { message: "already booted" });
+  }
+  if (!bearerMatches(req.headers.authorization, state.launchSecret)) {
+    return message(res, 401, "launch secret does not match this VM's run");
+  }
+  state.launchInProgress = true;
+  const bootEnv = { ...body.bootEnv };
+  try {
+    if (typeof secretEnvJson === "string") {
+      await writePrivate(SECRET_ENV_FILE, secretEnvJson, 0o600);
+      bootEnv.SEALANT_SECRET_ENV_FILE = SECRET_ENV_FILE;
+    } else {
+      delete bootEnv.SEALANT_SECRET_ENV_FILE;
+    }
+    if (body.dotfiles === undefined) {
+      delete bootEnv.SEALANT_DOTFILES_ARCHIVE_DIR;
+    } else {
+      await writePrivate(
+        path.join(DOTFILES_DIR, "manifest.json"),
+        body.dotfiles.manifestJson,
+        0o644,
+      );
+      for (const archive of body.dotfiles.archives) {
+        await writePrivate(
+          path.join(DOTFILES_DIR, archive.name),
+          Buffer.from(archive.contentBase64, "base64"),
+          0o644,
+        );
+      }
+      bootEnv.SEALANT_DOTFILES_ARCHIVE_DIR = DOTFILES_DIR;
+    }
+  } catch (error) {
+    state.launchInProgress = false;
+    throw error;
+  }
+
+  // Material is durable and the launch is now claimed. Retries cannot start a second child.
   state.controlToken = body.controlToken;
   state.flushTimeoutMs = body.flushTimeoutMs;
   state.launchSecret = null;
-  state.booted = true;
-  startDaemon(bootEnv);
-  log(`launch: sealantd boot started for run ${state.runId}`);
+  state.launchAccepted = true;
+  state.launchInProgress = false;
+
+  if (body.version === DOCKER_CONTRACT_VERSION) {
+    const dockerBootEnv = { ...bootEnv, ...dockerEnvironment };
+    state.dockerService = createDockerService({
+      ...DOCKER_SERVICE_OPTIONS,
+      onReady: () => startDaemon(dockerBootEnv),
+      onStateChange: (dockerHealth) => log(`docker: ${dockerHealth.status}`),
+    });
+    state.dockerService.start();
+  } else {
+    startDaemon(bootEnv);
+  }
   return json(res, 200, { outcome: "booting" });
 };
 
@@ -314,14 +702,21 @@ const handleHealth = (req, res) => {
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
     return message(res, 401, "control token does not match");
   }
-  const body = {
+  const common = {
     booted: state.booted,
     controlSocket: controlSocketReady(),
     ...(state.daemonExit === null
       ? {}
       : { daemonExit: { code: state.daemonExit.code, signal: state.daemonExit.signal } }),
   };
-  const healthy = state.booted && body.controlSocket && state.daemonExit === null;
+  if (state.contractVersion !== DOCKER_CONTRACT_VERSION) {
+    const healthy = state.booted && common.controlSocket && state.daemonExit === null;
+    return json(res, healthy ? 200 : 503, common);
+  }
+  const docker = state.dockerService?.health() ?? { status: "starting" };
+  const body = { version: DOCKER_CONTRACT_VERSION, ...common, services: { docker } };
+  const healthy =
+    docker.status === "ready" && state.booted && common.controlSocket && state.daemonExit === null;
   return json(res, healthy ? 200 : 503, body);
 };
 
@@ -402,8 +797,12 @@ const handleControlUpgrade = (req, socket, head) => {
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
     return refuse(401, "control token does not match");
   }
-  if (!state.booted || !controlSocketReady()) {
-    return refuse(503, "sealantd control socket is not ready");
+  if (
+    !state.booted ||
+    !controlSocketReady() ||
+    (state.contractVersion === DOCKER_CONTRACT_VERSION && !state.dockerService?.isReady())
+  ) {
+    return refuse(503, "workspace control is not ready");
   }
   const key = req.headers["sec-websocket-key"];
   if (typeof key !== "string" || req.headers.upgrade?.toLowerCase() !== "websocket") {
@@ -513,10 +912,10 @@ const server = http.createServer((req, res) => {
   };
   respond().catch((error) => {
     log(`${req.method} ${url}: ${error.message}`);
-    if (!res.headersSent) {
-      message(res, 500, error.message);
-    } else {
+    if (res.headersSent) {
       res.end();
+    } else {
+      message(res, 500, "request failed");
     }
   });
 });
@@ -530,14 +929,25 @@ server.on("upgrade", (req, socket, head) => {
   handleControlUpgrade(req, socket, head);
 });
 
-const shutdown = (signal) => {
+let shuttingDown = false;
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log(`${signal}: stopping`);
-  state.daemon?.kill("SIGTERM");
   server.close();
-  setTimeout(() => process.exit(0), 5_000).unref();
+  server.closeAllConnections?.();
+  for (const child of state.hookChildren) stopProcessGroup(child);
+  stopProcessGroup(state.daemon);
+  await Promise.all([
+    imageValidation.dockerService?.stop(),
+    state.dockerService?.stop(),
+    waitForExit(state.daemon),
+    ...[...state.hookChildren].map(waitForExit),
+  ]);
+  process.exit(0);
 };
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 server.listen(PORT, "0.0.0.0", () => {
   const address = server.address();

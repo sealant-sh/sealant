@@ -27,7 +27,10 @@ import { createHmac } from "node:crypto";
 
 import { z } from "zod";
 
+/** Legacy non-Docker guest protocol version, retained for existing MicroVM images. */
 export const AGENT_CONTRACT_VERSION = 1;
+/** Guest protocol version that makes the Docker service a required launch capability. */
+export const DOCKER_AGENT_CONTRACT_VERSION = 2;
 
 /**
  * The one port the agent listens on: the endpoint's default target port, and the port the
@@ -44,6 +47,8 @@ export const AGENT_CONTROL_ROUTE = "/sealant/control";
 
 /** In-VM paths; the same ones every other runtime family uses. */
 export const CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
+/** Guest-local Docker socket. The Docker-capable image never opens a TCP listener. */
+export const DOCKER_SOCKET_PATH = "/run/docker/docker.sock";
 export const SECRET_ENV_FILE_PATH = "/run/sealant/secrets/env.json";
 export const DOTFILES_ARCHIVE_DIR = "/run/sealant/dotfiles";
 
@@ -63,11 +68,29 @@ export const proxyPortSubprotocol = (port: number): string => `${PROXY_SUBPROTOC
  * and nothing sensitive beyond a one-launch bootstrap credential passes through an AWS API
  * field (whether CloudTrail records request parameters for RunMicrovm is unconfirmed).
  */
-export const runHookPayloadSchema = z.strictObject({
-  version: z.literal(AGENT_CONTRACT_VERSION),
+const runHookPayloadFields = {
   runId: z.string().trim().min(1),
   launchSecret: z.string().regex(/^[0-9a-f]{64}$/),
+};
+
+/** Existing run-hook payload for a launch with no required guest service. */
+export const runHookPayloadV1Schema = z.strictObject({
+  version: z.literal(AGENT_CONTRACT_VERSION),
+  ...runHookPayloadFields,
 });
+
+/** Run-hook payload that requires the Docker-capable guest image. */
+export const runHookPayloadV2Schema = z.strictObject({
+  version: z.literal(DOCKER_AGENT_CONTRACT_VERSION),
+  ...runHookPayloadFields,
+  services: z.strictObject({ docker: z.literal("required") }),
+});
+
+/** Run-hook payload accepted by current and legacy-compatible guest images. */
+export const runHookPayloadSchema = z.discriminatedUnion("version", [
+  runHookPayloadV1Schema,
+  runHookPayloadV2Schema,
+]);
 
 export type RunHookPayload = z.infer<typeof runHookPayloadSchema>;
 
@@ -90,9 +113,7 @@ const dotfilesArchiveSchema = z.strictObject({
   contentBase64: z.string().min(1),
 });
 
-/** Body of `POST /sealant/launch`; `authorization: Bearer <launchSecret>` authenticates it. */
-export const agentLaunchRequestSchema = z.strictObject({
-  version: z.literal(AGENT_CONTRACT_VERSION),
+const agentLaunchRequestFields = {
   runId: z.string().trim().min(1),
   /** Authenticates every later `/sealant/control` and `/sealant/health` request. */
   controlToken: z.string().trim().min(1),
@@ -108,7 +129,26 @@ export const agentLaunchRequestSchema = z.strictObject({
       archives: z.array(dotfilesArchiveSchema),
     })
     .optional(),
+};
+
+/** Existing launch request for a workspace with no required guest service. */
+export const agentLaunchRequestV1Schema = z.strictObject({
+  version: z.literal(AGENT_CONTRACT_VERSION),
+  ...agentLaunchRequestFields,
 });
+
+/** Launch request that requires guest-local Docker before `sealantd boot` starts. */
+export const agentLaunchRequestV2Schema = z.strictObject({
+  version: z.literal(DOCKER_AGENT_CONTRACT_VERSION),
+  ...agentLaunchRequestFields,
+  services: z.strictObject({ docker: z.literal("required") }),
+});
+
+/** Body of `POST /sealant/launch`; the launch secret authenticates it. */
+export const agentLaunchRequestSchema = z.discriminatedUnion("version", [
+  agentLaunchRequestV1Schema,
+  agentLaunchRequestV2Schema,
+]);
 
 export type AgentLaunchRequest = z.infer<typeof agentLaunchRequestSchema>;
 
@@ -118,22 +158,68 @@ export const agentLaunchResponseSchema = z.strictObject({
 
 export type AgentLaunchResponse = z.infer<typeof agentLaunchResponseSchema>;
 
-/** `GET /sealant/health` (control token): what the agent knows about the daemon. */
-export const agentHealthResponseSchema = z.strictObject({
-  booted: z.boolean(),
-  /** The daemon's control socket exists (its readiness signal). */
-  controlSocket: z.boolean(),
-  /** Set once `sealantd boot` has exited; the VM keeps running so the failure stays readable. */
-  daemonExit: z
-    .strictObject({
-      code: z.number().int().nullable(),
-      signal: z.string().nullable(),
-    })
-    .optional(),
+const processExitSchema = z.strictObject({
+  code: z.number().int().nullable(),
+  signal: z.string().nullable(),
 });
+
+const dockerProbeFailureSchema = z.strictObject({
+  reason: z.enum(["spawn-failed", "timeout", "exited"]),
+  code: z.union([
+    z.number().int(),
+    z.enum(["EACCES", "EMFILE", "ENFILE", "ENOENT", "ENOEXEC", "ENOMEM", "ETXTBSY"]),
+    z.null(),
+  ]),
+  signal: z
+    .string()
+    .regex(/^[A-Z0-9]{1,16}$/)
+    .nullable(),
+});
+
+/** Docker service lifecycle reported by a v2 guest. */
+export const dockerServiceHealthSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("starting") }),
+  z.strictObject({ status: z.literal("ready"), socket: z.literal(DOCKER_SOCKET_PATH) }),
+  z.strictObject({
+    status: z.literal("failed"),
+    reason: z.enum([
+      "spawn-failed",
+      "directory-preparation-failed",
+      "readiness-timeout",
+      "exited",
+      "probe-failed",
+    ]),
+    code: z.number().int().nullable(),
+    signal: z.string().nullable(),
+    probe: dockerProbeFailureSchema.optional(),
+  }),
+]);
+
+/** Legacy health body returned by a v1 image. */
+export const agentHealthResponseV1Schema = z.strictObject({
+  booted: z.boolean(),
+  controlSocket: z.boolean(),
+  daemonExit: processExitSchema.optional(),
+});
+
+/** Docker-aware health body returned by a v2 image. */
+export const agentHealthResponseV2Schema = z.strictObject({
+  version: z.literal(DOCKER_AGENT_CONTRACT_VERSION),
+  booted: z.boolean(),
+  controlSocket: z.boolean(),
+  daemonExit: processExitSchema.optional(),
+  services: z.strictObject({ docker: dockerServiceHealthSchema }),
+});
+
+/** `GET /sealant/health` body for either supported guest protocol version. */
+export const agentHealthResponseSchema = z.union([
+  agentHealthResponseV2Schema,
+  agentHealthResponseV1Schema,
+]);
 
 export type AgentHealthResponse = z.infer<typeof agentHealthResponseSchema>;
 
+/** Error body returned by an authenticated agent route. */
 export const agentErrorResponseSchema = z.strictObject({
   message: z.string().min(1),
 });
