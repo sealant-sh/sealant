@@ -250,14 +250,16 @@ object model: `docs/kubernetes-support-design.md` in the repository.
 Set these only when the worker runs workspaces as AWS Lambda MicroVMs
 (`DEFAULT_RUNTIME_ADAPTER=microvm`, or a blueprint that requests that family). One Firecracker VM
 per workspace attempt, driven with the Lambda MicroVMs API and reached through the VM's
-authenticated inbound endpoint; the API and SSH gateway need only `SEALANT_MICROVM_REGION` (plus the
-token knobs) to mint the endpoint tokens their control connections carry. The worker's AWS
-credentials come from the default provider chain (an instance profile, `AWS_PROFILE`, or
-`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and need `lambda:RunMicrovm`, `lambda:GetMicrovm`,
-`lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken`; the API and gateway need the last
-two. Sizing (vCPU, memory, disk) is a property of the image version, not of a launch: build the
-image with `packages/workspaces/microvm-image/build-image.sh` (4 GiB baseline → 2 vCPU / 16 GiB disk
-by default).
+authenticated inbound endpoint; the API and SSH gateway need `SEALANT_MICROVM_REGION` (plus the
+token knobs) to mint the endpoint tokens their control connections carry. When guest-local Docker is
+enabled, set the same base image ARN and pinned Docker image ARN/version on both the API and worker:
+the API gates workspace creation from them, while the worker registers and launches the capable
+adapter. The worker's AWS credentials come from the default provider chain (an instance profile,
+`AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and need `lambda:RunMicrovm`,
+`lambda:GetMicrovm`, `lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken`; the API and
+gateway need the last two. Sizing (vCPU, memory, disk) is a property of the image version, not of a
+launch: build the image with `packages/workspaces/microvm-image/build-image.sh` (4 GiB baseline → 2
+vCPU / 16 GiB disk by default).
 
 | Variable                                  | Default                            | Purpose                                                                                                                                                   |
 | ----------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -266,6 +268,8 @@ by default).
 | `SEALANT_MICROVM_EXEC_ROLE_ARN`           | —                                  | IAM role every VM runs under (`lambda.amazonaws.com` trust; logs only — agent code in the VM is treated as hostile).                                      |
 | `SEALANT_CONTROL_BEARER_TOKEN`            | —                                  | Authenticates control connections to the in-VM agent (same variable Cloudflare uses). Required with the adapter; set on the API and gateway too.          |
 | `SEALANT_MICROVM_IMAGE_VERSION`           | latest ACTIVE                      | Pin an image version.                                                                                                                                     |
+| `SEALANT_MICROVM_DOCKER_IMAGE_ARN`        | unset                              | Separate image used only for `tooling.services.docker`; requires the base image ARN, must differ from it, and must be set identically on API and worker.  |
+| `SEALANT_MICROVM_DOCKER_IMAGE_VERSION`    | required with Docker image ARN     | Pinned Docker-capable image version. Set the same value on API and worker; partial or API-only/worker-only capability configuration is invalid.           |
 | `SEALANT_MICROVM_EGRESS_CONNECTOR`        | unset (public internet)            | VPC egress network connector ARN.                                                                                                                         |
 | `SEALANT_MICROVM_INGRESS_CONNECTOR`       | the region's managed `ALL_INGRESS` | Ingress connector ARN; the VM's inbound endpoint (control reach) needs one.                                                                               |
 | `SEALANT_MICROVM_MAX_DURATION_SECONDS`    | `28800`                            | Lifetime cap per VM (platform maximum 8 h, suspended time included). Reported on inspect as the deadline so the engine can replace an executor before it. |

@@ -320,6 +320,10 @@ export const microvmRuntimeEnvSchema = z.object({
   /** MicroVM image ARN (worker); setting it enables the adapter and makes the rest required. */
   SEALANT_MICROVM_IMAGE_ARN: z.string().trim().min(1).optional(),
   SEALANT_MICROVM_IMAGE_VERSION: z.string().trim().min(1).optional(),
+  /** Separate VM-contained Docker image; API and worker require it with base ARN + pinned version. */
+  SEALANT_MICROVM_DOCKER_IMAGE_ARN: z.string().trim().min(1).optional(),
+  /** Required with the elevated Docker image ARN, identically on API and worker. */
+  SEALANT_MICROVM_DOCKER_IMAGE_VERSION: z.string().trim().min(1).optional(),
   /** Execution role every VM runs under (worker). */
   SEALANT_MICROVM_EXEC_ROLE_ARN: z.string().trim().min(1).optional(),
   /** Egress network connector ARN (VPC egress); public internet egress when unset. */
@@ -338,6 +342,46 @@ export const microvmRuntimeEnvSchema = z.object({
   SEALANT_MICROVM_WS_AUTH: z.enum(["header", "subprotocol"]).optional(),
 });
 
+const addMicrovmDockerImageIssues = (
+  input: {
+    readonly SEALANT_MICROVM_IMAGE_ARN?: string | undefined;
+    readonly SEALANT_MICROVM_DOCKER_IMAGE_ARN?: string | undefined;
+    readonly SEALANT_MICROVM_DOCKER_IMAGE_VERSION?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void => {
+  const baseArn = input.SEALANT_MICROVM_IMAGE_ARN;
+  const dockerArn = input.SEALANT_MICROVM_DOCKER_IMAGE_ARN;
+  const dockerVersion = input.SEALANT_MICROVM_DOCKER_IMAGE_VERSION;
+  if ((dockerArn !== undefined || dockerVersion !== undefined) && baseArn === undefined) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "SEALANT_MICROVM_IMAGE_ARN is required when a Docker-capable MicroVM image is configured.",
+      path: ["SEALANT_MICROVM_IMAGE_ARN"],
+    });
+  }
+  if ((dockerArn === undefined) !== (dockerVersion === undefined)) {
+    ctx.addIssue({
+      code: "custom",
+      message:
+        "SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION must be provided together.",
+      path: [
+        dockerArn === undefined
+          ? "SEALANT_MICROVM_DOCKER_IMAGE_ARN"
+          : "SEALANT_MICROVM_DOCKER_IMAGE_VERSION",
+      ],
+    });
+  }
+  if (baseArn !== undefined && dockerArn === baseArn) {
+    ctx.addIssue({
+      code: "custom",
+      message: "SEALANT_MICROVM_DOCKER_IMAGE_ARN must differ from SEALANT_MICROVM_IMAGE_ARN.",
+      path: ["SEALANT_MICROVM_DOCKER_IMAGE_ARN"],
+    });
+  }
+};
+
 export const appServerEnvSchema = databaseEnvSchema
   .merge(jobQueueEnvSchema)
   .merge(appCoreEnvSchema)
@@ -350,6 +394,7 @@ export const appServerEnvSchema = databaseEnvSchema
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
+  addMicrovmDockerImageIssues(input, ctx);
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
   addRegistryConnectionIssue(input.REGISTRY_BASE_URL, input.REGISTRY_PUSH_REGISTRY, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
@@ -536,6 +581,7 @@ export const workerServerEnvSchema = databaseEnvSchema
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
+  addMicrovmDockerImageIssues(input, ctx);
   if (
     input.DEFAULT_RUNTIME_ADAPTER === "microvm" &&
     input.SEALANT_MICROVM_IMAGE_ARN === undefined

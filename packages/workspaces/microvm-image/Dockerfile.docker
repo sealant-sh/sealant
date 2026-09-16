@@ -1,0 +1,47 @@
+# Opt-in Docker-capable Sealant workspace image for AWS Lambda MicroVMs.
+#
+# build-image.sh selects this recipe only when MICROVM_DOCKER_ENABLED=true and submits it under
+# the separately required MICROVM_DOCKER_IMAGE_NAME. The default Dockerfile remains free of the
+# Docker runtime and the image-level ALL OS capability.
+ARG BASE_IMAGE=public.ecr.aws/lambda/microvms:al2023-minimal
+FROM ${BASE_IMAGE}
+
+RUN dnf install -y --setopt=install_weak_deps=0 \
+      bash tar gzip zip unzip git util-linux procps-ng findutils which \
+      curl-minimal openssh-server \
+      nodejs npm \
+      iproute iptables-nft kmod \
+    && node --version && git --version \
+    && npm install -g pnpm@10 \
+    && dnf clean all
+
+# download-docker.sh pins and verifies the official ARM64 static engine, buildx and Compose.
+# Its version checks prove the client, daemon and plugins without starting dockerd in the snapshot.
+COPY --chmod=755 download-docker.sh /opt/sealant/download-docker.sh
+RUN /opt/sealant/download-docker.sh && rm /opt/sealant/download-docker.sh
+
+# The daemon (PID-1 supervisor of the workspace) and its CLI come from the released sealantd
+# image. docker-service.mjs owns the guest-root dockerd child and always passes an explicit Unix
+# socket and per-VM data root. No host socket, TCP listener or SSH ingress is configured here.
+COPY --chmod=755 sealantd /usr/local/bin/sealantd
+COPY --chmod=755 sealantctl /usr/local/bin/sealantctl
+COPY --chmod=755 socat /usr/local/bin/socat
+COPY agent.mjs docker-service.mjs /opt/sealant/
+
+ENV PATH=/usr/local/bin:$PATH \
+    SEALANT_OS_FAMILY=custom \
+    SEALANT_WORKSPACE_ROOT=/workspace \
+    SEALANT_WORKING_DIRECTORY=/workspace/repo \
+    SEALANT_LOGIN_SHELL_PATH=/bin/bash \
+    SEALANT_BASH_SHELL_PATH=/bin/bash \
+    SEALANT_SSHD_PATH=/usr/sbin/sshd \
+    SEALANT_CONTROL_SOCKET=/run/sealant/control.sock \
+    SEALANT_MICROVM_AGENT_PORT=8080 \
+    SEALANT_MICROVM_DOCKER_CAPABLE=1
+
+RUN mkdir -p /workspace /run/sealant /run/docker /var/lib/sealant/docker \
+    && chmod 0700 /run/docker /var/lib/sealant/docker \
+    && git config --system safe.directory "*"
+
+WORKDIR /workspace
+ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]

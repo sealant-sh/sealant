@@ -81,7 +81,7 @@ import {
   resolveWorkspaceStatus,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
-import { Context, Effect, Result } from "effect";
+import { type Context, Effect, Result } from "effect";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
@@ -953,7 +953,18 @@ const resolveWorkspaceCredentialRefs = (input: {
       const explicit = credentials[provider];
       let account: ConnectedAccount | undefined;
 
-      if (explicit !== undefined) {
+      if (explicit === undefined) {
+        const bound = profileBound.get(provider);
+
+        // A binding pointing at an unusable account (archived, or invalidated by a 401) is
+        // effectively disconnected — skip it rather than fail every launch that uses this profile
+        // (surfaces show it as "needs reconnect"). Only an explicitly-named account hard-fails.
+        if (bound === undefined || bound.archivedAt !== null || bound.status !== "active") {
+          continue;
+        }
+
+        account = bound;
+      } else {
         account = explicit.startsWith("cacc_")
           ? yield* withInternalError(
               connectedAccountRepo.getById(explicit),
@@ -988,17 +999,6 @@ const resolveWorkspaceCredentialRefs = (input: {
             message: `Connected ${provider} account "${account.name}" is invalid — reconnect it.`,
           });
         }
-      } else {
-        const bound = profileBound.get(provider);
-
-        // A binding pointing at an unusable account (archived, or invalidated by a 401) is
-        // effectively disconnected — skip it rather than fail every launch that uses this profile
-        // (surfaces show it as "needs reconnect"). Only an explicitly-named account hard-fails.
-        if (bound === undefined || bound.archivedAt !== null || bound.status !== "active") {
-          continue;
-        }
-
-        account = bound;
       }
 
       refs.push({ provider, ref: createConnectedAccountRef(account.id) });
@@ -1286,12 +1286,21 @@ export const runtimeEnvReferencesRefusal = (
   return `This deployment runs workspaces on the '${family}' runtime, which cannot resolve cluster env references: ${names}. Remove them, or run against a Kubernetes deployment.`;
 };
 
+export const microvmDockerCapabilityEnabled = (input: {
+  readonly baseImageArn?: string | undefined;
+  readonly dockerImageArn?: string | undefined;
+  readonly dockerImageVersion?: string | undefined;
+}): boolean =>
+  input.baseImageArn !== undefined &&
+  input.dockerImageArn !== undefined &&
+  input.dockerImageVersion !== undefined &&
+  input.dockerImageArn !== input.baseImageArn;
+
 /**
- * Pure create-time gate for `tooling.services.docker`. The Docker runtime always serves it; a
- * Kubernetes runtime serves it only when the operator enabled the rootless dind sidecar
- * (`SEALANT_K8S_DOCKER_ENABLED`); no other family serves it. Same contract as
- * `runtimeEnvReferencesRefusal`: refuse HERE, synchronously, and let the adapter's own refusal
- * stay as belt. Returns the refusal message, or null when the request is fine.
+ * Pure create-time gate for `tooling.services.docker`. Docker always serves it. Kubernetes needs
+ * its rootless sidecar enabled. MicroVM needs a separately configured Docker-capable image so the
+ * default image keeps its restricted Linux capabilities. Refuse here synchronously and keep the
+ * adapter's own refusal as a second check.
  */
 export const dockerServiceRefusal = (
   spec: {
@@ -1305,6 +1314,7 @@ export const dockerServiceRefusal = (
   install: {
     readonly defaultAdapterFamily: string;
     readonly kubernetesDockerEnabled: boolean;
+    readonly microvmDockerEnabled: boolean;
   },
 ): string | null => {
   if (spec.tooling.services?.docker?.enabled !== true) {
@@ -1321,6 +1331,11 @@ export const dockerServiceRefusal = (
     return install.kubernetesDockerEnabled
       ? null
       : "This deployment runs workspaces on Kubernetes without workspace-scoped Docker enabled (SEALANT_K8S_DOCKER_ENABLED / chart value workspaces.docker.enabled). Turn Docker off for this workspace, or ask the operator to enable it.";
+  }
+  if (family === "microvm") {
+    return install.microvmDockerEnabled
+      ? null
+      : "This deployment has no complete Lambda MicroVM image configuration for Docker (SEALANT_MICROVM_IMAGE_ARN plus the separate SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION). Turn Docker off for this workspace, or ask the operator to configure both images.";
   }
   return `This deployment runs workspaces on the '${family}' runtime, which has no workspace-scoped Docker. Turn Docker off for this workspace.`;
 };
@@ -1362,6 +1377,11 @@ export const createWorkspace = (input: {
     const dockerRefusal = dockerServiceRefusal(parsedSpec, {
       defaultAdapterFamily: env.DEFAULT_RUNTIME_ADAPTER,
       kubernetesDockerEnabled: env.SEALANT_K8S_DOCKER_ENABLED,
+      microvmDockerEnabled: microvmDockerCapabilityEnabled({
+        baseImageArn: env.SEALANT_MICROVM_IMAGE_ARN,
+        dockerImageArn: env.SEALANT_MICROVM_DOCKER_IMAGE_ARN,
+        dockerImageVersion: env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION,
+      }),
     });
     if (dockerRefusal !== null) {
       return yield* new WorkspaceDockerServiceUnsupportedError({

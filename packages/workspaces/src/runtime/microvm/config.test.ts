@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { microvmRuntimeConfigFromEnv, MicrovmRuntimeConfigError } from "./config.js";
 
 const imageArn = "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace";
+const dockerImageArn =
+  "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace-docker";
 const roleArn = "arn:aws:iam::123456789012:role/sealant-microvm-exec";
 
 const full = {
@@ -13,9 +15,21 @@ const full = {
 };
 
 describe("microvmRuntimeConfigFromEnv", () => {
-  it("is undefined when the image ARN is unset (a non-MicroVM deployment)", () => {
+  it("is undefined only when neither the base nor Docker image contract is configured", () => {
     expect(microvmRuntimeConfigFromEnv({})).toBeUndefined();
     expect(microvmRuntimeConfigFromEnv({ SEALANT_MICROVM_REGION: "eu-central-1" })).toBeUndefined();
+    expect(() =>
+      microvmRuntimeConfigFromEnv({
+        SEALANT_MICROVM_DOCKER_IMAGE_ARN: dockerImageArn,
+        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+      }),
+    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN/);
+    expect(() =>
+      microvmRuntimeConfigFromEnv({ SEALANT_MICROVM_DOCKER_IMAGE_ARN: dockerImageArn }),
+    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN/);
+    expect(() =>
+      microvmRuntimeConfigFromEnv({ SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7" }),
+    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN/);
   });
 
   it("applies the POC defaults: the lifetime cap, the managed ALL_INGRESS connector, port 8080", () => {
@@ -71,6 +85,35 @@ describe("microvmRuntimeConfigFromEnv", () => {
     expect(() =>
       microvmRuntimeConfigFromEnv({ ...full, SEALANT_MICROVM_EGRESS_CONNECTOR: "vpc-egress" }),
     ).toThrow(/egressNetworkConnector/);
+  });
+
+  it("requires a pinned, separate Docker-capable image when that capability is configured", () => {
+    expect(() =>
+      microvmRuntimeConfigFromEnv({
+        ...full,
+        SEALANT_MICROVM_DOCKER_IMAGE_ARN: dockerImageArn,
+      }),
+    ).toThrow(/SEALANT_MICROVM_DOCKER_IMAGE_VERSION/);
+    expect(() =>
+      microvmRuntimeConfigFromEnv({
+        ...full,
+        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+      }),
+    ).toThrow(/SEALANT_MICROVM_DOCKER_IMAGE_ARN/);
+    expect(() =>
+      microvmRuntimeConfigFromEnv({
+        ...full,
+        SEALANT_MICROVM_DOCKER_IMAGE_ARN: imageArn,
+        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+      }),
+    ).toThrow(/must differ/);
+    expect(
+      microvmRuntimeConfigFromEnv({
+        ...full,
+        SEALANT_MICROVM_DOCKER_IMAGE_ARN: dockerImageArn,
+        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+      })?.dockerImage,
+    ).toEqual({ arn: dockerImageArn, version: "7" });
   });
 
   it("threads every optional knob through", () => {
