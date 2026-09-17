@@ -352,7 +352,7 @@ export const microvmBootEnv = (
   if (source.kind === "capture") {
     entries.push(...captureSourceEnv(source));
   } else if (source.kind === "git") {
-    // `git` is Core's blueprint term; pinned sealantd v0.15.2 names this wire mode `clone`.
+    // `git` is Core's blueprint term; pinned sealantd v0.16.0 names this wire mode `clone`.
     entries.push(["SEALANT_WORKSPACE_SOURCE", "clone"]);
     entries.push(["SEALANT_WORKSPACE_REPO_URL", source.url]);
     if (source.ref !== undefined) {

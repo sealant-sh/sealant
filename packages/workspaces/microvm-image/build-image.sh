@@ -13,7 +13,7 @@
 #
 # Required env: AWS_REGION, MICROVM_IMAGE_NAME, MICROVM_BUILD_ROLE_ARN, MICROVM_ARTIFACT_BUCKET.
 # Docker variant: MICROVM_DOCKER_ENABLED=true and MICROVM_DOCKER_IMAGE_NAME=<different name>.
-# Optional: SEALANTD_IMAGE (default ghcr.io/sealant-sh/sealantd:0.15.2), MICROVM_MEMORY_MIB
+# Optional: SEALANTD_IMAGE (default ghcr.io/sealant-sh/sealantd:0.16.0), MICROVM_MEMORY_MIB
 # (4096), MICROVM_LOG_GROUP, MICROVM_BASE_IMAGE_ARN (auto: the managed al2023 image),
 # MICROVM_TAGS (JSON object). Pass --update to update the selected image; the whole configuration
 # is sent again because the API takes no delta.
@@ -40,7 +40,7 @@ esac
 : "${MICROVM_IMAGE_NAME:?set MICROVM_IMAGE_NAME}"
 : "${MICROVM_BUILD_ROLE_ARN:?set MICROVM_BUILD_ROLE_ARN}"
 : "${MICROVM_ARTIFACT_BUCKET:?set MICROVM_ARTIFACT_BUCKET}"
-SEALANTD_IMAGE="${SEALANTD_IMAGE:-ghcr.io/sealant-sh/sealantd:0.15.2}"
+SEALANTD_IMAGE="${SEALANTD_IMAGE:-ghcr.io/sealant-sh/sealantd:0.16.0}"
 MICROVM_MEMORY_MIB="${MICROVM_MEMORY_MIB:-4096}"
 MICROVM_DOCKER_ENABLED="${MICROVM_DOCKER_ENABLED-false}"
 export AWS_REGION AWS_PAGER=""
