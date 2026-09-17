@@ -17,7 +17,7 @@
  */
 import { timingSafeEqual } from "node:crypto";
 
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import {
   HttpMiddleware,
   HttpServerRequest,
@@ -95,6 +95,30 @@ export const resolveAuthPosture = (input: {
   return { kind: "open" };
 };
 
+/**
+ * Who the transport gate admitted (CORE-03). Handlers read it to narrow what a credential may do;
+ * none of them widens on it.
+ *
+ * - `service`: a service key. A trusted product, acting for the owner it names on every call.
+ * - `gateway`: the SSH gateway's shared secret. A separate, narrower authority than a service key:
+ *   it resolves keys and targets, and records the interactive runs of the sessions it carries.
+ *   It can not create workspaces, read records or touch another harness's runs.
+ * - `bearer`: some bearer on the session surface; the session handlers validate it themselves.
+ * - `open`: the development exception, no credential.
+ * - `none`: the default outside a request (unit tests of module functions).
+ */
+export type RequestPrincipal =
+  | { readonly kind: "service" }
+  | { readonly kind: "gateway" }
+  | { readonly kind: "bearer" }
+  | { readonly kind: "open" }
+  | { readonly kind: "none" };
+
+export const CurrentPrincipal = Context.Reference<RequestPrincipal>(
+  "@sealant/api/CurrentPrincipal",
+  { defaultValue: () => ({ kind: "none" }) },
+);
+
 /** The bearer secret a request presents: the `Authorization` header, or `?token=` for WebSockets. */
 export const bearerSecretOf = (input: {
   readonly authorization: string | undefined;
@@ -130,11 +154,22 @@ const isSignedWebhook = (method: string, pathname: string): boolean =>
 const isSessionSurface = (pathname: string): boolean =>
   pathname.startsWith("/v1/sessions") || /^\/v1\/workspaces\/[^/]+\/forward$/.test(pathname);
 
-/** The gateway routes carry their own shared secret; the handlers validate it. */
-const isGatewayRoute = (pathname: string, request: HttpServerRequest.HttpServerRequest): boolean =>
-  (pathname === "/v1/ssh-keys/resolve-principal" ||
-    /^\/v1\/workspaces\/[^/]+\/ssh-target$/.test(pathname)) &&
-  typeof request.headers["x-sealant-gateway-token"] === "string";
+/**
+ * What the SSH gateway's shared secret reaches: key and target resolution (whose handlers check
+ * the secret again), and the run recorder, `POST /v1/runs` and `PATCH /v1/runs/:runId`, where the
+ * handlers hold a gateway principal to interactive SSH runs.
+ */
+export const isGatewayRoute = (method: string, pathname: string): boolean =>
+  (method === "POST" && pathname === "/v1/ssh-keys/resolve-principal") ||
+  (method === "GET" && /^\/v1\/workspaces\/[^/]+\/ssh-target$/.test(pathname)) ||
+  (method === "POST" && (pathname === "/v1/runs" || pathname === "/v1/runs/")) ||
+  (method === "PATCH" && /^\/v1\/runs\/[^/]+$/.test(pathname));
+
+const secretMatches = (provided: string, expected: string): boolean => {
+  const a = Buffer.from(provided, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+};
 
 /**
  * Transport-level gate. Lets a request through when the deployment is open (development only), the path is public, a
@@ -142,10 +177,16 @@ const isGatewayRoute = (pathname: string, request: HttpServerRequest.HttpServerR
  * carries SOME bearer (the session handlers then validate it as a user access token — and reject
  * it if it is neither a user token nor a service key). Everything else is 401.
  */
-export const servicePrincipalMiddleware = (principals: ServicePrincipals) =>
+export const servicePrincipalMiddleware = (
+  principals: ServicePrincipals,
+  /** `WORKSPACE_SSH_GATEWAY_TOKEN`; without one no request is a gateway's. */
+  gatewayToken?: string,
+) =>
   HttpMiddleware.make((app) =>
     Effect.gen(function* () {
-      if (!principals.enabled) return yield* app;
+      const as = (principal: RequestPrincipal) =>
+        app.pipe(Effect.provideService(CurrentPrincipal, principal));
+      if (!principals.enabled) return yield* as({ kind: "open" });
       const request = yield* HttpServerRequest.HttpServerRequest;
       // CORS preflight carries no credential by design; the cors middleware answers it.
       if (request.method === "OPTIONS") return yield* app;
@@ -153,7 +194,6 @@ export const servicePrincipalMiddleware = (principals: ServicePrincipals) =>
       const pathname = url.pathname;
       if (isPublicPath(pathname)) return yield* app;
       if (isSignedWebhook(request.method, pathname)) return yield* app;
-      if (isGatewayRoute(pathname, request)) return yield* app;
       const secret = bearerSecretOf({
         authorization: request.headers["authorization"],
         // A query string ends up in proxy and access logs. It is read only where a client cannot
@@ -161,9 +201,20 @@ export const servicePrincipalMiddleware = (principals: ServicePrincipals) =>
         // key is never accepted from a URL anywhere else.
         queryToken: isSessionSurface(pathname) ? url.searchParams.get("token") : null,
       });
-      if (secret !== undefined && (principals.matches(secret) || isSessionSurface(pathname))) {
-        return yield* app;
+      if (secret !== undefined && principals.matches(secret)) return yield* as({ kind: "service" });
+      // The gateway's secret is verified here, not merely noticed: its presence used to be enough
+      // to pass the gate, which was sound only while every gateway route re-checked it.
+      const presented = request.headers["x-sealant-gateway-token"];
+      if (
+        typeof presented === "string" &&
+        gatewayToken !== undefined &&
+        gatewayToken.length > 0 &&
+        secretMatches(presented, gatewayToken) &&
+        isGatewayRoute(request.method, pathname)
+      ) {
+        return yield* as({ kind: "gateway" });
       }
+      if (secret !== undefined && isSessionSurface(pathname)) return yield* as({ kind: "bearer" });
       const response: HttpServerResponseType.HttpServerResponse = HttpServerResponse.jsonUnsafe(
         {
           _tag: "UnauthorizedError",

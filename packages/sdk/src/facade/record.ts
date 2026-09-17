@@ -257,10 +257,10 @@ export const makeRunRecord = (ctx: SdkContext, runId: string): RunRecord => {
       const run = ctx.runtime;
       async function* iterate(): AsyncGenerator<TimelineEntry> {
         const wire = await run.run(
-          getRunTimelineOp(
-            runId,
-            options?.from === undefined ? {} : { fromSequence: options.from.toString() },
-          ),
+          getRunTimelineOp(runId, {
+            ownerUserId: ctx.config.hostLocal.ownerUserId,
+            ...(options?.from === undefined ? {} : { fromSequence: options.from.toString() }),
+          }),
         );
         for (const entry of wire) {
           yield toTimelineEntry(entry);

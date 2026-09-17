@@ -116,6 +116,11 @@ export const servicePrincipalsEnvSchema = z.object({
   SEALANT_ALLOW_OPEN_API: z
     .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
     .default(false),
+  // Every owned operation must name its owner (CORE-03). `false` restores unscoped reads and
+  // ID-only updates for one rollout, while an SDK caller that predates the rule is upgraded.
+  SEALANT_REQUIRE_OWNER_SCOPE: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(true),
 });
 
 export const credentialsEnvSchema = z.object({

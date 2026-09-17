@@ -48,8 +48,13 @@ const findCommandProcessId = (
   return (match ?? entries[0])?.processId;
 };
 
-const readScrollback = (runId: string, processId: string, stream: "stdout" | "stderr") =>
-  Effect.map(getRunScrollbackOp(runId, { processId, stream }), (response) =>
+const readScrollback = (
+  runId: string,
+  ownerUserId: string,
+  processId: string,
+  stream: "stdout" | "stderr",
+) =>
+  Effect.map(getRunScrollbackOp(runId, { ownerUserId, processId, stream }), (response) =>
     Buffer.from(response.contentBase64, "base64").toString("utf8"),
   );
 
@@ -101,10 +106,14 @@ const execWorkspaceEffect = (
       );
     }
 
-    const started = yield* getRunTimelineOp(runId, { kinds: "processStarted" });
+    // Every record read names the owner: the control plane finds nothing for a read that does not.
+    const ownerUserId = ctx.config.hostLocal.ownerUserId;
+    const started = yield* getRunTimelineOp(runId, { ownerUserId, kinds: "processStarted" });
     const processId = findCommandProcessId(started, executable);
-    const stdout = processId === undefined ? "" : yield* readScrollback(runId, processId, "stdout");
-    const stderr = processId === undefined ? "" : yield* readScrollback(runId, processId, "stderr");
+    const stdout =
+      processId === undefined ? "" : yield* readScrollback(runId, ownerUserId, processId, "stdout");
+    const stderr =
+      processId === undefined ? "" : yield* readScrollback(runId, ownerUserId, processId, "stderr");
 
     const changes = toRunChangesData(
       yield* getRunChangesOp(runId, ctx.config.hostLocal.ownerUserId),

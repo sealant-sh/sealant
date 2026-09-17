@@ -82,6 +82,12 @@ interface CoreApiRequestOptions<TOutput> {
 }
 
 export interface CreateCoreApiClientOptions {
+  /**
+   * The owner every request is made for. The control plane serves an owned resource only to a call
+   * that names its owner, so a client scoped to the signed-in user cannot read or rename someone
+   * else's workspace or run by id, whatever a route forgets to check.
+   */
+  readonly ownerUserId?: string;
   readonly baseUrl?: string;
   readonly fetchImplementation?: typeof fetch;
 }
@@ -125,6 +131,8 @@ const parseWithSchema = <TOutput>(schema: JsonSchema<TOutput>, input: unknown): 
 };
 
 export interface CoreApiClient {
+  /** The same client, with every request made for `ownerUserId`. */
+  forOwner(ownerUserId: string): CoreApiClient;
   readonly github: {
     importInstallation(
       input: InferSchema<typeof importGitHubInstallationRequestSchema>,
@@ -252,6 +260,8 @@ export interface CoreApiClient {
 class CoreApiClientImpl implements CoreApiClient {
   private readonly baseUrl: string;
   private readonly fetchImplementation: typeof fetch;
+  private readonly ownerUserId: string | undefined;
+  private readonly options: CreateCoreApiClientOptions;
 
   public readonly workspaces: CoreApiClient["workspaces"];
   public readonly packages: CoreApiClient["packages"];
@@ -274,6 +284,8 @@ class CoreApiClientImpl implements CoreApiClient {
         "CORE_API_SERVICE_KEY is unset: the web server cannot call the control plane. Set it to one of the API's SEALANT_SERVICE_KEYS.",
       );
     }
+    this.options = options;
+    this.ownerUserId = options.ownerUserId;
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.workspaces = {
@@ -659,7 +671,24 @@ class CoreApiClientImpl implements CoreApiClient {
     return url;
   }
 
-  private async requestJson<TOutput>(options: CoreApiRequestOptions<TOutput>): Promise<TOutput> {
+  public forOwner(ownerUserId: string): CoreApiClient {
+    return new CoreApiClientImpl({ ...this.options, ownerUserId });
+  }
+
+  /** The request made for this client's owner. It wins over an owner the caller named. */
+  private scoped<TOutput>(options: CoreApiRequestOptions<TOutput>): CoreApiRequestOptions<TOutput> {
+    const ownerUserId = this.ownerUserId;
+    if (ownerUserId === undefined) return options;
+    if (options.method === "GET" || options.method === "DELETE") {
+      return { ...options, query: { ...options.query, ownerUserId } };
+    }
+    const body = options.body;
+    const isPlainObject = typeof body === "object" && body !== null && !Array.isArray(body);
+    return isPlainObject ? { ...options, body: { ...body, ownerUserId } } : options;
+  }
+
+  private async requestJson<TOutput>(request: CoreApiRequestOptions<TOutput>): Promise<TOutput> {
+    const options = this.scoped(request);
     const url = this.buildUrl(options.path, options.query);
     const headers = new Headers(options.headers);
     const serviceKey = getCoreApiServiceKey();

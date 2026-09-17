@@ -94,6 +94,7 @@ import {
   WorkspaceBuildJobPublisherService,
   WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
@@ -1672,6 +1673,8 @@ export const renameWorkspace = (input: {
   readonly payload: RenameWorkspaceRequest;
 }) => {
   return Effect.gen(function* () {
+    // Rename was addressed by id alone: any caller could rename any owner's workspace.
+    yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const workspaces = yield* WorkspaceRepo;
     const workspace = yield* withInternalError(
       workspaces.setWorkspaceName({
@@ -1777,23 +1780,35 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
   });
 };
 
-export const getWorkspace = (workspaceId: string, ownerUserId?: string) => {
+/**
+ * The workspace, when it belongs to the owner the caller named (CORE-03). A call that names no
+ * owner finds nothing, before any lookup; a mismatch answers the same 404, so an id never reveals
+ * that it exists for someone else.
+ */
+const requireScopedWorkspace = (workspaceId: string, ownerUserId: string | undefined) => {
   return Effect.gen(function* () {
-    const workspaceRepo = yield* WorkspaceRepo;
+    const scope = resolveOwnerScope(ownerUserId);
+    if (scope.kind === "missing") {
+      return yield* new WorkspaceNotFoundError({
+        message: `Workspace not found: ${workspaceId} (${OWNER_REQUIRED_HINT})`,
+      });
+    }
     const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(workspaceId),
+      (yield* WorkspaceRepo).getWorkspaceById(workspaceId),
       "Failed to load workspace.",
     );
-
-    // Owner-scoped reads answer a uniform 404 — never reveal that the id exists for someone else.
-    if (
-      workspace === undefined ||
-      (ownerUserId !== undefined && workspace.ownerUserId !== ownerUserId)
-    ) {
+    if (workspace === undefined || !scopeAdmits(scope, workspace.ownerUserId)) {
       return yield* new WorkspaceNotFoundError({
         message: `Workspace not found: ${workspaceId}`,
       });
     }
+    return workspace;
+  });
+};
+
+export const getWorkspace = (workspaceId: string, ownerUserId: string | undefined) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireScopedWorkspace(workspaceId, ownerUserId);
 
     const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
 
@@ -1938,17 +1953,8 @@ export const listWorkspaceAttempts = (input: {
       name: "limit",
     });
 
+    const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspaceRepo = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-
-    if (workspace === undefined) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
 
     const links = yield* withInternalError(
       workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),
@@ -2026,17 +2032,8 @@ export const listWorkspaceEvents = (input: {
       name: "limit",
     });
 
+    const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspaceRepo = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-
-    if (workspace === undefined) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
 
     const links = yield* withInternalError(
       workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),

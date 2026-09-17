@@ -64,6 +64,10 @@ export const protectedProcedure = publicProcedure.use(async ({ ctx, next }) => {
     ctx: {
       ...ctx,
       session,
+      // Every control-plane call a signed-in procedure makes is made for that user. The control
+      // plane answers 404 for a resource that is not theirs, so an id from another account reads
+      // like one that does not exist.
+      coreApi: ctx.coreApi.forOwner(session.user.id),
     },
   });
 });

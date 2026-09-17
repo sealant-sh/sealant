@@ -275,7 +275,10 @@ if (authPosture.kind === "refused") {
   process.exit(78);
 }
 
-const authGate = servicePrincipalMiddleware(servicePrincipals);
+const authGate = servicePrincipalMiddleware(
+  servicePrincipals,
+  env.WORKSPACE_SSH_GATEWAY_TOKEN?.trim(),
+);
 
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
@@ -293,6 +296,12 @@ console.log(
     ? "[api] authentication: service keys required on /v1"
     : "[api] authentication: OPEN (SEALANT_ALLOW_OPEN_API, development only) — every /v1 route is served without a credential; keep this API on loopback",
 );
+
+if (!env.SEALANT_REQUIRE_OWNER_SCOPE) {
+  console.warn(
+    "[api] owner scope: NOT REQUIRED (SEALANT_REQUIRE_OWNER_SCOPE=false) — reads and updates that name no owner are served unscoped; for one rollout only",
+  );
+}
 
 /**
  * Boot the server runtime.

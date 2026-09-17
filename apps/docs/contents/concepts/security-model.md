@@ -85,6 +85,35 @@ says so. `install.sh` generates the web app's key, and the chart requires the se
 The practical rule still holds: **do not expose the API (port 4000) beyond a trusted network.**
 Service keys authenticate a caller; they do not make the API safe to offer to untrusted users.
 
+## Every operation is made for a named owner
+
+A service key may assert any owner, but it may not act without one. Every read, listing and change
+of a workspace or a run names its `ownerUserId`, and the control plane serves the resource only when
+it belongs to that owner. A call that names none, or names someone else, answers the same 404 as an
+id that does not exist. A run is created only in a workspace that belongs to the owner it is created
+for.
+
+Three authorities reach the control plane, and they are not interchangeable:
+
+- a **service key**: a trusted product acting for the owner it names;
+- a **scoped user access token**: one owner, the session surface only, with its scopes enforced;
+- the **SSH gateway's shared secret**: key and target resolution, and the interactive `ssh` runs of
+  the sessions it carries. It can not create a workspace, read a record, or touch another harness's
+  run.
+
+Not owned, and so not owner-scoped: the registry routes (repository tags and manifests are shared
+across owners, since images are keyed by plan, not by person) and `GET /v1/users/:id`. A service
+principal reads both for any id. An inference continuation is owned: it is served only to the owner
+who opened the exchange.
+
+The worker holds none of these. It never calls the API: it consumes jobs from Postgres with the
+database credentials and the credentials key, so it is as trusted as the database itself. Give it
+its own database role if you need it to hold less; nothing in this release does that for you.
+
+`SEALANT_REQUIRE_OWNER_SCOPE=false` restores unscoped reads and ID-only updates. It exists so a
+control plane can be upgraded ahead of an SDK caller older than 0.34, is logged at start, and should
+be removed once every caller is upgraded.
+
 ## Credentials go where they were issued for
 
 Two credentials leave the control plane for a destination the caller names, and both destinations

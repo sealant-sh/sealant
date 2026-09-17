@@ -326,7 +326,35 @@ const respondWithCodex = (input: {
     return mapEngineTurn(engineTurn);
   });
 
+/**
+ * Which owner opened each parked exchange (CORE-03). A continuation is addressed by session id, and
+ * the session holds the opening owner's credentials, so it is served only to that owner. The
+ * engines keep their sessions in this process's memory, so this map lives beside them; it is
+ * bounded, oldest first, and an entry ends with its exchange.
+ */
+const SESSION_OWNERS_MAX = 10_000;
+const sessionOwners = new Map<string, string>();
+
+const rememberSessionOwner = (response: InferenceRespondResponse, ownerUserId: string): void => {
+  if (response.turn.type !== "toolCalls") {
+    sessionOwners.delete(response.sessionId);
+    return;
+  }
+  if (!sessionOwners.has(response.sessionId) && sessionOwners.size >= SESSION_OWNERS_MAX) {
+    const oldest = sessionOwners.keys().next();
+    if (oldest.done !== true) sessionOwners.delete(oldest.value);
+  }
+  sessionOwners.set(response.sessionId, ownerUserId);
+};
+
 export const respond = (payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
+    const response = yield* respondAs(payload);
+    rememberSessionOwner(response, payload.ownerUserId);
+    return response;
+  });
+
+const respondAs = (payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
     const isNew = payload.prompt !== undefined;
     const isContinuation = payload.sessionId !== undefined || payload.toolResults !== undefined;
@@ -343,6 +371,13 @@ export const respond = (payload: InferenceRespondRequest) =>
       if (payload.sessionId === undefined || payload.toolResults === undefined) {
         return yield* new InferenceBadRequestError({
           message: "A continuation requires both sessionId and toolResults.",
+        });
+      }
+      // Another owner's session answers exactly like one that does not exist.
+      const openedBy = sessionOwners.get(payload.sessionId);
+      if (openedBy !== undefined && openedBy !== payload.ownerUserId) {
+        return yield* new InferenceNotFoundError({
+          message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
         });
       }
       const engineTurn = yield* engine

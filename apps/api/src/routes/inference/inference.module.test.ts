@@ -163,6 +163,12 @@ const newExchange = (overrides: Partial<InferenceRespondRequest>): InferenceResp
     ...overrides,
   }) as InferenceRespondRequest;
 
+const continuation = (ownerUserId: string): InferenceRespondRequest => ({
+  ownerUserId,
+  sessionId: "inf_parked",
+  toolResults: [{ toolCallId: "call_1", content: "ok" }],
+});
+
 describe("inference.module provider routing", () => {
   it("routes a codex account to the codex engine with model passthrough", async () => {
     const accounts = accountsStub();
@@ -313,5 +319,37 @@ describe("inference.module provider routing", () => {
         metadata: expect.objectContaining({ lastRefresh: "2026-07-02T00:00:00.000Z" }),
       }),
     );
+  });
+
+  it("serves a parked exchange only to the owner who opened it", async () => {
+    const accounts = accountsStub();
+    const parked: InferenceEngineTurn = {
+      sessionId: "inf_parked",
+      turn: { type: "toolCalls", calls: [{ toolCallId: "call_1", name: "search", input: {} }] },
+    };
+    const continued = vi.fn(() => Effect.succeed(doneTurn("finished")));
+    const { layer } = makeLayers({ accounts });
+    const withParkedSession = Layer.mergeAll(
+      layer,
+      Layer.succeed(InferenceEngine, {
+        start: vi.fn(() => Effect.succeed(parked)),
+        continueSession: continued,
+      }),
+    );
+    await run(
+      respond(newExchange({ credentials: { claude: "cacc_claude" } })).pipe(
+        Effect.provide(withParkedSession),
+      ),
+    );
+
+    const foreign = await runFlipped(
+      respond(continuation("usr_other")).pipe(Effect.provide(withParkedSession)),
+    );
+    expect(foreign).toBeInstanceOf(InferenceNotFoundError);
+    // The engine was never asked: the refusal has no effect on the parked session.
+    expect(continued).not.toHaveBeenCalled();
+
+    await run(respond(continuation("usr_1")).pipe(Effect.provide(withParkedSession)));
+    expect(continued).toHaveBeenCalledTimes(1);
   });
 });

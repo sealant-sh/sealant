@@ -189,6 +189,7 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
   // The interactive run recording this connection (one SSH connection = one run). Undefined until
   // the first channel opens, and stays undefined when recording is unavailable (best-effort).
   let recordedRunId: string | undefined;
+  let recordedRunOwner: string | undefined;
 
   const ensureControl = async (): Promise<ControlClient> => {
     if (workspaceId === undefined || principalId === undefined) {
@@ -211,10 +212,11 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
         // the execution id on every session/exec — that threading is what attributes the session's
         // telemetry to this run. Undefined (recording unavailable) never blocks access.
         recordedRunId = await startInteractiveRun({
-          config: { apiBaseUrl: config.coreApiBaseUrl },
+          config: { apiBaseUrl: config.coreApiBaseUrl, gatewayToken: config.gatewayToken },
           workspaceId: resolvedWorkspaceId,
           ownerUserId: resolvedPrincipalId,
         });
+        recordedRunOwner = resolvedPrincipalId;
         const client = ControlClient.open(
           toControlTarget(target, config.controlTargetOptions ?? {}),
         );
@@ -582,10 +584,11 @@ const bindClientConnection = (incomingConnection: Connection, config: SshGateway
     // close it — closing tears down every daemon channel it owns (§0.3).
     void controlPromise
       .then(async (control) => {
-        if (recordedRunId !== undefined) {
+        if (recordedRunId !== undefined && recordedRunOwner !== undefined) {
           await finalizeInteractiveRun({
-            config: { apiBaseUrl: config.coreApiBaseUrl },
+            config: { apiBaseUrl: config.coreApiBaseUrl, gatewayToken: config.gatewayToken },
             runId: recordedRunId,
+            ownerUserId: recordedRunOwner,
             captureOutput: async (command, cwd) => {
               const result = await control.execCapture({ command, cwd });
               return result.output;
