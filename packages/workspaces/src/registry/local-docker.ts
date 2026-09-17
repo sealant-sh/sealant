@@ -21,6 +21,7 @@ import type {
   RegistryExtension,
   RegistryManifest,
 } from "./client.js";
+import { normalizeDigest, normalizeRepository, normalizeTag } from "./client.js";
 import { selectLoadedImageIdentifier } from "./docker-load-output.js";
 
 const execFileAsync = promisify(execFile);
@@ -28,22 +29,6 @@ const execFileAsync = promisify(execFile);
 const defaultCommandRunner: CommandRunner = async (command, args) => {
   const result = await execFileAsync(command, args, { maxBuffer: 1024 * 1024 * 10 });
   return { stdout: result.stdout, stderr: result.stderr };
-};
-
-const normalizeRepository = (repository: string): string => {
-  const trimmed = repository.trim().replace(/^\/+/, "").replace(/\/+$/, "");
-  if (trimmed.length === 0) {
-    throw new Error("Repository names must not be empty.");
-  }
-  return trimmed;
-};
-
-const normalizeTag = (tag: string): string => {
-  const trimmed = tag.trim();
-  if (trimmed.length === 0) {
-    throw new Error("Image tags must not be empty.");
-  }
-  return trimmed;
 };
 
 const isMissingImageError = (error: unknown): boolean =>
@@ -171,9 +156,13 @@ export class LocalDockerImageStore implements RegistryClient {
   }
 
   private imageReference(repository: string, reference: string): string {
+    // The same grammar as the registry client: these become `docker` arguments, and a name such
+    // as `--foo` would otherwise be read as an option.
     const normalized = normalizeRepository(repository);
     const trimmed = reference.trim();
-    return trimmed.startsWith("sha256:") ? trimmed : `${normalized}:${normalizeTag(trimmed)}`;
+    return trimmed.startsWith("sha256:")
+      ? normalizeDigest(trimmed)
+      : `${normalized}:${normalizeTag(trimmed)}`;
   }
 
   private async inspectImageId(imageReference: string): Promise<string | null> {

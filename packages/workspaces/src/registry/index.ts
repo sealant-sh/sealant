@@ -2,6 +2,8 @@ export {
   buildRegistryImageReference,
   createZotRegistryClient,
   RegistryClientHttpError,
+  RegistryNameError,
+  RegistryResponseTooLargeError,
   ZotRegistryClient,
 } from "./client.js";
 

@@ -1,4 +1,21 @@
+import {
+  isOciReference,
+  isOciRepository,
+  OCI_REFERENCE_MESSAGE,
+  OCI_REPOSITORY_MESSAGE,
+} from "@sealant/api-contracts";
 import { z } from "zod";
+
+const ociRepositorySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isOciRepository, { message: `repository ${OCI_REPOSITORY_MESSAGE}` });
+const ociReferenceSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isOciReference, { message: `reference ${OCI_REFERENCE_MESSAGE}` });
 
 export const registrySummarySchema = z.object({
   name: z.string(),
@@ -24,7 +41,7 @@ export const registryExtensionsSchema = z.object({
 });
 
 export const tagsQuerySchema = z.object({
-  repository: z.string().trim().min(1),
+  repository: ociRepositorySchema,
 });
 
 export const tagsResponseSchema = z.object({
@@ -33,8 +50,8 @@ export const tagsResponseSchema = z.object({
 });
 
 export const manifestQuerySchema = z.object({
-  repository: z.string().trim().min(1),
-  reference: z.string().trim().min(1),
+  repository: ociRepositorySchema,
+  reference: ociReferenceSchema,
 });
 
 export const manifestResponseSchema = z.object({

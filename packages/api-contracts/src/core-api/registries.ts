@@ -1,7 +1,26 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 
+import {
+  isOciReference,
+  isOciRepository,
+  OCI_REFERENCE_MESSAGE,
+  OCI_REPOSITORY_MESSAGE,
+} from "./oci-names.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
+
+/** Refused, never repaired: these become registry URL path segments (CORE-08). */
+const OciRepository = NonEmptyString.check(
+  Schema.makeFilter((value: string) =>
+    isOciRepository(value) ? undefined : `repository ${OCI_REPOSITORY_MESSAGE}`,
+  ),
+);
+const OciReference = NonEmptyString.check(
+  Schema.makeFilter((value: string) =>
+    isOciReference(value) ? undefined : `reference ${OCI_REFERENCE_MESSAGE}`,
+  ),
+);
 
 export const registryIdParamsSchema = Schema.Struct({
   registryId: NonEmptyString,
@@ -35,7 +54,7 @@ export const registryExtensionsResponseSchema = Schema.Struct({
 export type RegistryExtensionsResponse = typeof registryExtensionsResponseSchema.Type;
 
 export const registryTagsQuerySchema = Schema.Struct({
-  repository: NonEmptyString,
+  repository: OciRepository,
 });
 export type RegistryTagsQuery = typeof registryTagsQuerySchema.Type;
 
@@ -46,8 +65,8 @@ export const registryTagsResponseSchema = Schema.Struct({
 export type RegistryTagsResponse = typeof registryTagsResponseSchema.Type;
 
 export const registryManifestQuerySchema = Schema.Struct({
-  repository: NonEmptyString,
-  reference: NonEmptyString,
+  repository: OciRepository,
+  reference: OciReference,
 });
 export type RegistryManifestQuery = typeof registryManifestQuerySchema.Type;
 

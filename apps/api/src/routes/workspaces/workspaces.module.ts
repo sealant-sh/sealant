@@ -6,6 +6,9 @@ import {
   type FlushWorkspaceCaptureRequest,
   type ReplanWorkspaceCaptureRequest,
   WorkspaceBadGatewayError,
+  isOciRepository,
+  isOciTag,
+  OCI_REPOSITORY_MESSAGE,
   WorkspaceBadRequestError,
   WorkspaceDockerServiceUnsupportedError,
   WorkspaceRuntimeEnvReferencesUnsupportedError,
@@ -1359,6 +1362,14 @@ export const createWorkspace = (input: {
       if (existing !== undefined) {
         return existing;
       }
+    }
+
+    // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
+    // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
+    if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
+      return yield* new WorkspaceBadRequestError({
+        message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
+      });
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);

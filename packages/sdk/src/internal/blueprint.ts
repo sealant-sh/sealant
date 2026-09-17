@@ -15,7 +15,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import type { CreateWorkspaceRequest } from "@sealant/api-contracts";
+import { toOciRepositoryComponent, type CreateWorkspaceRequest } from "@sealant/api-contracts";
 import {
   formatWorkspaceEnvIssue,
   parseWorkspaceEnv,
@@ -29,14 +29,8 @@ import { mapWorkspaceCredentials } from "./credentials.js";
 import { parseTtlSeconds } from "./duration.js";
 import { discoverLinkedWorktreeMetadataMount } from "./linked-worktree.js";
 
-const sanitizeRepoSlug = (value: string): string => {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug.length > 0 ? slug : "repo";
-};
+/** The image repository is an OCI name: the control plane refuses one outside the grammar. */
+const sanitizeRepoSlug = (value: string): string => toOciRepositoryComponent(value, "repo");
 
 const toGitUrl = (repository: string): string => {
   if (/^(https?:\/\/|git@|ssh:\/\/)/.test(repository)) {
