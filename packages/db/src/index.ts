@@ -254,6 +254,13 @@ export {
 } from "./repositories/access-tokens.js";
 
 export {
+  InferenceUsageRepo,
+  InferenceUsageRepoError,
+  InferenceUsageRepoLive,
+  type InferenceUsageRepoService,
+} from "./repositories/inference-usage.js";
+
+export {
   connectedAccountProviderValues,
   connectedAccounts,
   connectedAccountStatusValues,

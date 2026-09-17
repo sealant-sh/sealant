@@ -16,7 +16,7 @@ import {
   type SealantRuntimeService,
   type SealantTarget,
 } from "@sealant/workspaces";
-import { Context, Effect, Layer, Ref, Schedule, Stream } from "effect";
+import { Config, Context, Effect, Layer, Ref, Schedule, Stream } from "effect";
 import type * as Scope from "effect/Scope";
 
 import {
@@ -27,6 +27,7 @@ import {
 } from "./attribution.js";
 import { type TelemetryIngesterError, withTelemetryIngesterError } from "./errors.js";
 import { detectGap, normalizeEnvelope } from "./normalize.js";
+import { applyOutputBudget, makeOutputBudgetState } from "./output-budget.js";
 import { TelemetrySink, type TelemetrySinkService } from "./sink.js";
 import type { GapDetectionState } from "./types.js";
 
@@ -46,10 +47,15 @@ export class TelemetryIngester extends Context.Service<
   TelemetryIngesterService
 >()("@sealant/telemetry/TelemetryIngester") {}
 
+/** One GiB of stored output per run connection unless the operator says otherwise. */
+export const DEFAULT_RUN_OUTPUT_BUDGET_BYTES = 1024 * 1024 * 1024;
+
 export const makeTelemetryIngester = (
   runtime: SealantRuntimeService,
   sink: TelemetrySinkService,
   resolver: ExecutionRunResolverService,
+  /** `SEALANT_BUDGET_RUN_OUTPUT_BYTES`; 0 stores every byte. */
+  runOutputBudgetBytes: number = DEFAULT_RUN_OUTPUT_BUDGET_BYTES,
 ): TelemetryIngesterService => ({
   run: (runId, target) =>
     withTelemetryIngesterError(
@@ -96,6 +102,7 @@ export const makeTelemetryIngester = (
         // daemon numbers events from 1, so a first-seen sequence > 1 on a fresh runtime means the
         // head of the stream predates this connection (live-tail protocol, no replay yet) and is
         // recorded as a sequence-gap loss span instead of silently starting mid-stream.
+        const outputBudget = makeOutputBudgetState();
         const gapState: GapDetectionState = {
           lastSequenceByRuntime: new Map([[runtimeId, resume ?? 0n]]),
         };
@@ -118,7 +125,15 @@ export const makeTelemetryIngester = (
           Stream.groupedWithin(BATCH_SIZE, BATCH_WINDOW),
           Stream.mapEffect((batch) =>
             Effect.gen(function* () {
-              const normalized = [...batch].map(normalizeEnvelope);
+              const budgeted = applyOutputBudget(
+                outputBudget,
+                [...batch].map(normalizeEnvelope),
+                runOutputBudgetBytes,
+              );
+              if (budgeted.lossSpan !== undefined) {
+                yield* sink.insertLossSpan({ runId, runtimeId, span: budgeted.lossSpan });
+              }
+              const normalized = budgeted.batch;
               const resolutions = yield* resolveAttributions(collectExecutionIds(normalized));
               return yield* sink
                 .appendBatch({ runId, runtimeId, batch: attributeBatch(normalized, resolutions) })
@@ -157,6 +172,10 @@ export const TelemetryIngesterLive = Layer.effect(
     const runtime = yield* SealantRuntime;
     const sink = yield* TelemetrySink;
     const resolver = yield* ExecutionRunResolver;
-    return makeTelemetryIngester(runtime, sink, resolver);
+    const runOutputBudgetBytes = yield* Config.int("SEALANT_BUDGET_RUN_OUTPUT_BYTES").pipe(
+      Config.withDefault(DEFAULT_RUN_OUTPUT_BUDGET_BYTES),
+      Effect.orDie,
+    );
+    return makeTelemetryIngester(runtime, sink, resolver, runOutputBudgetBytes);
   }),
 );

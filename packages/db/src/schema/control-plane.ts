@@ -1,6 +1,7 @@
 import type { NewWorkspace as NewWorkspaceSpec } from "@sealant/validators";
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -924,6 +925,29 @@ export const accessTokens = pgTable(
       .$defaultFn(() => new Date()),
   },
   (table) => [index("access_tokens_owner_user_id_idx").on(table.ownerUserId)],
+);
+
+/**
+ * Inference spend per owner per UTC day (CORE-04): what the daily token budget is read from. One
+ * row per owner and day, added to when an exchange reports its usage. Counts only; no prompt, no
+ * model output, no account.
+ */
+export const inferenceUsage = pgTable(
+  "inference_usage",
+  {
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** UTC calendar day, `YYYY-MM-DD`. */
+    day: text().notNull(),
+    exchanges: integer().notNull().default(0),
+    inputTokens: bigint("input_tokens", { mode: "number" }).notNull().default(0),
+    outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
+    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [primaryKey({ columns: [table.ownerUserId, table.day] })],
 );
 
 export const workspaceAttemptSnapshots = pgTable("workspace_attempt_snapshots", {

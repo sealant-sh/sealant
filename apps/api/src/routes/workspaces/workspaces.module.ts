@@ -94,6 +94,7 @@ import {
   WorkspaceBuildJobPublisherService,
   WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
@@ -1486,6 +1487,13 @@ export const createWorkspace = (input: {
       });
     }
 
+    // Budgets last among the refusals (CORE-04): a request that was never going to launch spends
+    // nothing, and nothing has been created yet, so a refusal leaves no effect behind. Two creates
+    // that race past the ceiling together both pass it: the ceiling can be overshot by the
+    // number in flight, never by more.
+    yield* requireLiveWorkspaceRoom(body.ownerUserId);
+    yield* spendOwnerLaunch(body.ownerUserId);
+
     const resolvedSpec = packageStandardization.spec;
 
     // Connected-account selection -> opaque blueprint credentialRefs. The contract-level
@@ -2594,6 +2602,16 @@ export const restartWorkspace = (input: {
         message: `Workspace ${input.workspaceId} is capture-sourced and cannot be restarted in place: its session credential is not retained. Create a replacement workspace with a fresh captureToken.`,
       });
     }
+
+    // Budgets last among the refusals, as in create. A restart brings a settled workspace back to life: it needs room and spends a launch.
+    if (
+      workspace.status !== "queued" &&
+      workspace.status !== "running" &&
+      workspace.status !== "ready"
+    ) {
+      yield* requireLiveWorkspaceRoom(input.payload.ownerUserId);
+    }
+    yield* spendOwnerLaunch(input.payload.ownerUserId);
 
     // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
     const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;

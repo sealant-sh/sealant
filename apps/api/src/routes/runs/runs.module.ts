@@ -38,6 +38,7 @@ import { getHarnessIntegration } from "@sealant/workspaces";
 import { Context, Effect, Stream } from "effect";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
+import { requireActiveRunRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
 import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
 import { CurrentPrincipal } from "../../services/service-principals.js";
 
@@ -206,6 +207,10 @@ export const createRun = (payload: CreateRunRequest) =>
         message: `Workspace not found: ${payload.workspaceId}`,
       });
     }
+
+    // Budgets last among the refusals (CORE-04), before the run row exists.
+    yield* requireActiveRunRoom(payload.ownerUserId);
+    yield* spendOwnerLaunch(payload.ownerUserId);
 
     // Resolve the invocation: an explicit command wins (custom harnesses); otherwise, for a
     // one-shot run with a prompt on a built-in harness, the control plane constructs it — the

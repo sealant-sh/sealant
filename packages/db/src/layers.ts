@@ -5,6 +5,7 @@ import { ConnectedAccountRepoLive } from "./repositories/connected-accounts.js";
 import { GitHubInstallationRepositoryCacheRepoLive } from "./repositories/github-installation-repositories.js";
 import { GitHubInstallationRepoLive } from "./repositories/github-installations.js";
 import { GitHubWebhookDeliveryRepoLive } from "./repositories/github-webhook-deliveries.js";
+import { InferenceUsageRepoLive } from "./repositories/inference-usage.js";
 import { PackageResolutionCacheRepoLive } from "./repositories/package-resolution-cache.js";
 import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
@@ -50,6 +51,7 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   RunRepoLive,
   WorkspaceSessionRepoLive,
   AccessTokenRepoLive,
+  InferenceUsageRepoLive,
   ProfileRepoLive,
   SshKeyRepoLive,
   UserRepoLive,

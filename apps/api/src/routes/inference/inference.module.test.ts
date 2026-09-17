@@ -16,6 +16,7 @@ import {
 import { CredentialCipher, type CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  InferenceUsageRepo,
   ProfileRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
@@ -120,6 +121,11 @@ const makeLayers = (input: {
   readonly accounts: ReturnType<typeof accountsStub>;
   readonly codexStart?: (start: CodexInferenceStartInput) => Promise<InferenceEngineTurn>;
 }) => {
+  const recorded: Array<{
+    readonly ownerUserId: string;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+  }> = [];
   const claudeStart = vi.fn(() => Effect.succeed(doneTurn("claude answer")));
   const codexStart = vi.fn((startInput: CodexInferenceStartInput) =>
     input.codexStart === undefined
@@ -144,10 +150,17 @@ const makeLayers = (input: {
       ),
     }),
     Layer.succeed(CodexInferenceEngine, { start: codexStart }),
+    Layer.succeed(InferenceUsageRepo, {
+      tokensOn: () => Effect.succeed(0),
+      record: (usage) =>
+        Effect.sync(() => {
+          recorded.push(usage);
+        }),
+    }),
   );
 
   const engines: EngineStubs = { claudeStart, codexStart };
-  return { layer, engines };
+  return { layer, engines, recorded };
 };
 
 const run = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(effect);
@@ -351,5 +364,13 @@ describe("inference.module provider routing", () => {
 
     await run(respond(continuation("usr_1")).pipe(Effect.provide(withParkedSession)));
     expect(continued).toHaveBeenCalledTimes(1);
+  });
+
+  it("records what an exchange spent against its owner", async () => {
+    const { layer, recorded } = makeLayers({ accounts: accountsStub() });
+    await run(respond(newExchange({})).pipe(Effect.provide(layer)));
+    expect(recorded).toEqual([
+      expect.objectContaining({ ownerUserId: "usr_1", inputTokens: 1, outputTokens: 1 }),
+    ]);
   });
 });

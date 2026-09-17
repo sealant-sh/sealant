@@ -1,7 +1,9 @@
-import { Effect } from "effect";
+import { BudgetExceededError } from "@sealant/api-contracts";
+import { Effect, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
+import { makeRateWindow } from "./budgets.js";
 import {
   CurrentPrincipal,
   makeServicePrincipals,
@@ -147,5 +149,38 @@ describe("service principal middleware", () => {
         headers: { ...gateway, authorization: "Bearer k" },
       }),
     ).toBe("service");
+  });
+
+  it("refuses a credential over its request budget with the contract's 429 shape", async () => {
+    const gate = servicePrincipalMiddleware(makeServicePrincipals("k"), "gateway-secret", {
+      window: makeRateWindow(),
+      requestsPerMinute: 2,
+      now: () => 1_000,
+    });
+    const send = () =>
+      Effect.runPromise(
+        gate(ok).pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://localhost/v1/runs?ownerUserId=u", {
+                headers: { authorization: "Bearer k" },
+              }),
+            ),
+          ),
+          Effect.map((response) => HttpServerResponse.toWeb(response)),
+        ),
+      );
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+    const refused = await send();
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("60");
+    const body: unknown = await refused.json();
+    expect(Schema.decodeUnknownSync(BudgetExceededError)(body)).toMatchObject({
+      budget: "principalRequestsPerMinute",
+      limit: 2,
+      retryAfterSeconds: 60,
+    });
   });
 });

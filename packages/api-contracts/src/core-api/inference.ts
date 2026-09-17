@@ -22,6 +22,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { BudgetExceededError } from "./budgets.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 /**
@@ -172,6 +174,7 @@ export const InferenceGroup = HttpApiGroup.make("inference")
       payload: inferenceRespondRequestSchema,
       success: inferenceRespondResponseSchema.pipe(HttpApiSchema.status(200)),
       error: [
+        BudgetExceededError,
         InferenceBadRequestError,
         InferenceNotFoundError,
         InferenceConflictError,

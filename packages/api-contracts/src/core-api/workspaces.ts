@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { BudgetExceededError } from "./budgets.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
@@ -504,6 +505,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: createWorkspaceRequestSchema,
       success: createWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
       error: [
+        BudgetExceededError,
         WorkspaceBadRequestError,
         WorkspaceRuntimeEnvReferencesUnsupportedError,
         WorkspaceDockerServiceUnsupportedError,
@@ -606,6 +608,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: restartWorkspaceRequestSchema,
       success: restartWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
       error: [
+        BudgetExceededError,
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
         // The workspace has never launched (no spec to relaunch from) or is mid-launch.

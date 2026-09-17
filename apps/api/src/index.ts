@@ -18,6 +18,8 @@ import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { parseAllowedCaptureOrigins } from "./routes/workspaces/credential-destinations.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
+import { budgetLimits } from "./services/budget-limits.js";
+import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
 import {
   authPosture,
@@ -278,6 +280,10 @@ if (authPosture.kind === "refused") {
 const authGate = servicePrincipalMiddleware(
   servicePrincipals,
   env.WORKSPACE_SSH_GATEWAY_TOKEN?.trim(),
+  {
+    window: makeRateWindow(),
+    requestsPerMinute: budgetLimits.principalRequestsPerMinute,
+  },
 );
 
 const serverLayer = HttpRouter.serve(appLayer, {
@@ -295,6 +301,13 @@ console.log(
   authPosture.kind === "closed"
     ? "[api] authentication: service keys required on /v1"
     : "[api] authentication: OPEN (SEALANT_ALLOW_OPEN_API, development only) — every /v1 route is served without a credential; keep this API on loopback",
+);
+
+const budgetsTurnedOff = budgetsOff(budgetLimits);
+console.log(
+  budgetsTurnedOff.length === 0
+    ? "[api] budgets: all set"
+    : `[api] budgets: off for ${budgetsTurnedOff.join(", ")} (0 = no limit)`,
 );
 
 if (!env.SEALANT_REQUIRE_OWNER_SCOPE) {

@@ -114,6 +114,24 @@ its own database role if you need it to hold less; nothing in this release does 
 control plane can be upgraded ahead of an SDK caller older than 0.34, is logged at start, and should
 be removed once every caller is upgraded.
 
+## Budgets
+
+Per-container CPU and memory limits bound one workspace. Budgets bound a caller and an owner: a
+request rate per credential, a launch rate per owner, ceilings on an owner's live workspaces and
+active runs, an optional daily inference-token ceiling per owner, and a cap on the output stored for
+one run. Reaching one answers `429` with a message naming the budget and `retryAfterSeconds` in the
+body; the request-rate refusal, which the transport gate answers, also sets `Retry-After`. It
+refuses new work and never stops work that is running. A run past its output cap keeps running and
+keeps its event rows; the record carries a loss span where stored content ends.
+
+What they are not: request windows are held in each API process, so N replicas admit up to N times
+the rate; one service key is one credential however many people the product behind it serves, so its
+request budget is sized for the whole product; a ceiling is checked before the work is created, so
+creates that race can overshoot it by the number in flight; the output cap counts per ingest
+connection; and the inference ceiling counts tokens the engines report, which is not money. Each is
+set by a `SEALANT_BUDGET_*` variable ([reference](/docs/reference/environment-variables)), `0` turns
+one off, and the API logs at start which are off.
+
 ## Credentials go where they were issued for
 
 Two credentials leave the control plane for a destination the caller names, and both destinations

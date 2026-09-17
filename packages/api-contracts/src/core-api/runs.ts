@@ -12,6 +12,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { BudgetExceededError } from "./budgets.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const runStatusSchema = Schema.Literals([
@@ -285,7 +287,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
     HttpApiEndpoint.post("createRun", "/", {
       payload: createRunRequestSchema,
       success: runSchema.pipe(HttpApiSchema.status(201)),
-      error: [RunBadRequestError, RunNotFoundError, RunInternalServerError],
+      error: [BudgetExceededError, RunBadRequestError, RunNotFoundError, RunInternalServerError],
     }),
   )
   .add(

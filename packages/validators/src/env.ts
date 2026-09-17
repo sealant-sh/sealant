@@ -116,6 +116,17 @@ export const servicePrincipalsEnvSchema = z.object({
   SEALANT_ALLOW_OPEN_API: z
     .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
     .default(false),
+  // Budgets (CORE-04). Each refuses new work with 429 and a Retry-After and never stops running
+  // work; 0 turns one off. Request windows are per API process; the rest are read from Postgres.
+  // One service key is one credential however many people the product behind it serves, so this
+  // one is sized for a whole product: 200 requests a second.
+  SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(12000),
+  SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE: z.coerce.number().int().min(0).default(120),
+  SEALANT_BUDGET_OWNER_LIVE_WORKSPACES: z.coerce.number().int().min(0).default(100),
+  SEALANT_BUDGET_OWNER_ACTIVE_RUNS: z.coerce.number().int().min(0).default(100),
+  // Inference tokens (input + output) per owner per UTC day. Off by default: a sensible ceiling
+  // depends on the subscription behind each connected account, which only the operator knows.
+  SEALANT_BUDGET_OWNER_INFERENCE_TOKENS_PER_DAY: z.coerce.number().int().min(0).default(0),
   // Every owned operation must name its owner (CORE-03). `false` restores unscoped reads and
   // ID-only updates for one rollout, while an SDK caller that predates the rule is upgraded.
   SEALANT_REQUIRE_OWNER_SCOPE: z

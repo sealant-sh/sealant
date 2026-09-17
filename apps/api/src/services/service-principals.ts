@@ -26,12 +26,15 @@ import {
 } from "effect/unstable/http";
 
 import { env } from "../runtime-env.js";
+import { bearerSubject, budgetMessage, rateDecision, type RateWindow } from "./budgets.js";
 
 export interface ServicePrincipals {
   /** True when the deployment requires authentication on the control plane. */
   readonly enabled: boolean;
   /** Whether the presented bearer secret is one of the configured service keys. */
   readonly matches: (secret: string) => boolean;
+  /** Which key matched, as its position in the list: a stable subject that is never the secret. */
+  readonly indexOf: (secret: string) => number | undefined;
 }
 
 export const parseServiceKeys = (raw: string | undefined): ReadonlyArray<string> =>
@@ -44,19 +47,21 @@ export const parseServiceKeys = (raw: string | undefined): ReadonlyArray<string>
 
 export const makeServicePrincipals = (raw: string | undefined): ServicePrincipals => {
   const keys = parseServiceKeys(raw).map((key) => Buffer.from(key, "utf8"));
+  const indexOf = (secret: string): number | undefined => {
+    const candidate = Buffer.from(secret, "utf8");
+    // Compare against EVERY key so the time taken does not reveal which one (if any) matched.
+    let matched: number | undefined;
+    keys.forEach((key, index) => {
+      if (key.length === candidate.length && timingSafeEqual(key, candidate)) {
+        matched ??= index;
+      }
+    });
+    return matched;
+  };
   return {
     enabled: keys.length > 0,
-    matches: (secret) => {
-      const candidate = Buffer.from(secret, "utf8");
-      // Compare against EVERY key so the time taken does not reveal which one (if any) matched.
-      let matched = false;
-      for (const key of keys) {
-        if (key.length === candidate.length && timingSafeEqual(key, candidate)) {
-          matched = true;
-        }
-      }
-      return matched;
-    },
+    matches: (secret) => indexOf(secret) !== undefined,
+    indexOf,
   };
 };
 
@@ -177,16 +182,48 @@ const secretMatches = (provided: string, expected: string): boolean => {
  * carries SOME bearer (the session handlers then validate it as a user access token — and reject
  * it if it is neither a user token nor a service key). Everything else is 401.
  */
+/** The per-credential request budget (CORE-04); omitted, no request is counted. */
+export interface PrincipalRateLimit {
+  readonly window: RateWindow;
+  readonly requestsPerMinute: number;
+  readonly now?: () => number;
+}
+
 export const servicePrincipalMiddleware = (
   principals: ServicePrincipals,
   /** `WORKSPACE_SSH_GATEWAY_TOKEN`; without one no request is a gateway's. */
   gatewayToken?: string,
+  rateLimit?: PrincipalRateLimit,
 ) =>
   HttpMiddleware.make((app) =>
     Effect.gen(function* () {
-      const as = (principal: RequestPrincipal) =>
-        app.pipe(Effect.provideService(CurrentPrincipal, principal));
-      if (!principals.enabled) return yield* as({ kind: "open" });
+      const as = (principal: RequestPrincipal, subject: string) => {
+        if (rateLimit !== undefined) {
+          const decision = rateDecision(
+            rateLimit.window,
+            "principalRequestsPerMinute",
+            subject,
+            rateLimit.requestsPerMinute,
+            (rateLimit.now ?? Date.now)(),
+          );
+          if (!decision.allowed) {
+            const limited: HttpServerResponseType.HttpServerResponse =
+              HttpServerResponse.jsonUnsafe(
+                {
+                  _tag: "BudgetExceededError",
+                  message: budgetMessage(decision),
+                  budget: decision.budget,
+                  limit: decision.limit,
+                  retryAfterSeconds: decision.retryAfterSeconds,
+                },
+                { status: 429, headers: { "retry-after": String(decision.retryAfterSeconds) } },
+              );
+            return Effect.succeed(limited);
+          }
+        }
+        return app.pipe(Effect.provideService(CurrentPrincipal, principal));
+      };
+      if (!principals.enabled) return yield* as({ kind: "open" }, "open");
       const request = yield* HttpServerRequest.HttpServerRequest;
       // CORS preflight carries no credential by design; the cors middleware answers it.
       if (request.method === "OPTIONS") return yield* app;
@@ -201,7 +238,8 @@ export const servicePrincipalMiddleware = (
         // key is never accepted from a URL anywhere else.
         queryToken: isSessionSurface(pathname) ? url.searchParams.get("token") : null,
       });
-      if (secret !== undefined && principals.matches(secret)) return yield* as({ kind: "service" });
+      const keyIndex = secret === undefined ? undefined : principals.indexOf(secret);
+      if (keyIndex !== undefined) return yield* as({ kind: "service" }, `service:${keyIndex}`);
       // The gateway's secret is verified here, not merely noticed: its presence used to be enough
       // to pass the gate, which was sound only while every gateway route re-checked it.
       const presented = request.headers["x-sealant-gateway-token"];
@@ -212,9 +250,11 @@ export const servicePrincipalMiddleware = (
         secretMatches(presented, gatewayToken) &&
         isGatewayRoute(request.method, pathname)
       ) {
-        return yield* as({ kind: "gateway" });
+        return yield* as({ kind: "gateway" }, "gateway");
       }
-      if (secret !== undefined && isSessionSurface(pathname)) return yield* as({ kind: "bearer" });
+      if (secret !== undefined && isSessionSurface(pathname)) {
+        return yield* as({ kind: "bearer" }, bearerSubject(secret));
+      }
       const response: HttpServerResponseType.HttpServerResponse = HttpServerResponse.jsonUnsafe(
         {
           _tag: "UnauthorizedError",
