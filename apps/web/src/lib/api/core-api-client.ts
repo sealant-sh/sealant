@@ -103,6 +103,15 @@ const getCoreApiBaseUrl = (): string => {
   return DEFAULT_CORE_API_URL;
 };
 
+/**
+ * The service key this server presents to the control plane (`SEALANT_SERVICE_KEYS` on the API).
+ * Server-side only: `process.env`, never `import.meta.env`, so it cannot be baked into a bundle.
+ */
+const getCoreApiServiceKey = (): string | undefined => {
+  const key = typeof process === "undefined" ? undefined : process.env.CORE_API_SERVICE_KEY;
+  return key === undefined || key.trim().length === 0 ? undefined : key.trim();
+};
+
 const readJson = async (response: Response): Promise<unknown> => {
   try {
     return await response.json();
@@ -254,6 +263,17 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly profiles: CoreApiClient["profiles"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
+    // The control plane serves /v1 to service principals only. A production server without its key
+    // would answer every page with a 401 from the API; say so once, at start, where it is fixable.
+    if (
+      typeof process !== "undefined" &&
+      process.env.NODE_ENV === "production" &&
+      getCoreApiServiceKey() === undefined
+    ) {
+      throw new Error(
+        "CORE_API_SERVICE_KEY is unset: the web server cannot call the control plane. Set it to one of the API's SEALANT_SERVICE_KEYS.",
+      );
+    }
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.workspaces = {
@@ -642,6 +662,10 @@ class CoreApiClientImpl implements CoreApiClient {
   private async requestJson<TOutput>(options: CoreApiRequestOptions<TOutput>): Promise<TOutput> {
     const url = this.buildUrl(options.path, options.query);
     const headers = new Headers(options.headers);
+    const serviceKey = getCoreApiServiceKey();
+    if (serviceKey !== undefined && !headers.has("authorization")) {
+      headers.set("authorization", `Bearer ${serviceKey}`);
+    }
 
     if (options.body !== undefined) {
       headers.set("content-type", "application/json");

@@ -14,7 +14,7 @@
  *
  * AUTHORIZATION: three scopes, enforced when a bearer token is presented — `session:read`
  * (status/output), `session:input` (input/resize/signal), `workspace:exec` (create/close).
- * Without a token — or with a SERVICE KEY (services/service-principals.ts) — the owner model
+ * With a SERVICE KEY (services/service-principals.ts) — the owner model
  * applies (ownerUserId in payload/query), matching the rest of the control plane.
  */
 import { createHash, randomUUID } from "node:crypto";
@@ -61,7 +61,7 @@ import {
 import { Effect, Stream } from "effect";
 
 import { env } from "../../runtime-env.js";
-import { servicePrincipals } from "../../services/service-principals.js";
+import { authPosture, servicePrincipals } from "../../services/service-principals.js";
 
 // StreamKind numerics from the runtime protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -111,8 +111,10 @@ export interface SessionPrincipal {
 /**
  * Resolves the caller for a session endpoint. A presented bearer token is authoritative: it must
  * exist, be unexpired/unrevoked, and carry `requiredScope` — its owner (and optional workspace
- * narrowing) become the principal. Without a token, the caller-asserted ownerUserId applies (the
- * platform's pre-auth owner model, unchanged).
+ * narrowing) become the principal. Without a token the request is refused, unless this process
+ * runs the explicit development exception (`SEALANT_ALLOW_OPEN_API`), where the caller-asserted
+ * ownerUserId applies. The transport gate admits the session surface on ANY bearer, header or
+ * `?token=`, so this function must never read "no Authorization header" as "trusted caller".
  */
 export const authorize = (input: {
   readonly headers: SessionAuthorizationHeaders;
@@ -122,6 +124,11 @@ export const authorize = (input: {
   Effect.gen(function* () {
     const header = input.headers.authorization?.trim();
     if (header === undefined || header.length === 0) {
+      if (authPosture.kind !== "open") {
+        return yield* new SessionUnauthorizedError({
+          message: "Present a user access token or a service key as a bearer token.",
+        });
+      }
       if (input.assertedOwnerUserId === undefined) {
         return yield* new SessionBadRequestError({
           message: "ownerUserId is required when no bearer token is presented.",

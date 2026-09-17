@@ -7,7 +7,11 @@
  * endpoint already carries — nothing about the contract shapes changes). The two other
  * credentials keep their narrower meaning: scoped user access tokens authenticate the session
  * surface on their own (a paired phone never holds a service key), and the SSH gateway routes
- * keep their shared secret. Without keys the API stays the open, loopback-only pre-auth model.
+ * keep their shared secret.
+ *
+ * Without keys the process refuses to start ({@link resolveAuthPosture}). The one exception is
+ * explicit and development-only: `SEALANT_ALLOW_OPEN_API=true` outside `NODE_ENV=production`
+ * serves the open pre-auth model, for a control plane on a developer's loopback.
  *
  * Matching is constant-time per key; keys never appear in logs or responses.
  */
@@ -56,6 +60,41 @@ export const makeServicePrincipals = (raw: string | undefined): ServicePrincipal
   };
 };
 
+/** How this process authenticates `/v1`, or why it must not start. */
+export type AuthPosture =
+  | { readonly kind: "closed" }
+  | { readonly kind: "open" }
+  | { readonly kind: "refused"; readonly message: string };
+
+/**
+ * Fail closed (CORE-01). Service keys close the control plane. Without them the only way to start
+ * is the explicit development exception, and a production process never takes it: a missing
+ * secret in a deployment must stop the rollout, not publish every owner's workspaces.
+ */
+export const resolveAuthPosture = (input: {
+  readonly serviceKeys: string | undefined;
+  readonly nodeEnv: "development" | "test" | "production";
+  readonly allowOpenApi: boolean;
+}): AuthPosture => {
+  if (parseServiceKeys(input.serviceKeys).length > 0) return { kind: "closed" };
+  if (input.nodeEnv === "production") {
+    return {
+      kind: "refused",
+      message: input.allowOpenApi
+        ? "SEALANT_SERVICE_KEYS is unset and SEALANT_ALLOW_OPEN_API is not honoured with NODE_ENV=production. Set SEALANT_SERVICE_KEYS to one or more comma-separated secrets and give one to each trusted caller."
+        : "SEALANT_SERVICE_KEYS is unset. Set it to one or more comma-separated secrets and give one to each trusted caller (the web app: CORE_API_SERVICE_KEY; an SDK client: apiKey).",
+    };
+  }
+  if (!input.allowOpenApi) {
+    return {
+      kind: "refused",
+      message:
+        "SEALANT_SERVICE_KEYS is unset. Set it, or for a control plane on your own loopback set SEALANT_ALLOW_OPEN_API=true (development only: every /v1 route is then served without a credential).",
+    };
+  }
+  return { kind: "open" };
+};
+
 /** The bearer secret a request presents: the `Authorization` header, or `?token=` for WebSockets. */
 export const bearerSecretOf = (input: {
   readonly authorization: string | undefined;
@@ -79,6 +118,14 @@ const isPublicPath = (pathname: string): boolean =>
   pathname === "/docs" ||
   pathname.startsWith("/docs/");
 
+/**
+ * GitHub delivers webhooks with no bearer it could be given. The delivery's HMAC signature is the
+ * credential, and the handler verifies it (and answers 503 without a configured secret) before it
+ * reads the payload. Exactly this method and path, nothing under it.
+ */
+const isSignedWebhook = (method: string, pathname: string): boolean =>
+  method === "POST" && pathname === "/v1/github/webhooks";
+
 /** The session surface: a scoped user access token is a complete credential here. */
 const isSessionSurface = (pathname: string): boolean =>
   pathname.startsWith("/v1/sessions") || /^\/v1\/workspaces\/[^/]+\/forward$/.test(pathname);
@@ -90,7 +137,7 @@ const isGatewayRoute = (pathname: string, request: HttpServerRequest.HttpServerR
   typeof request.headers["x-sealant-gateway-token"] === "string";
 
 /**
- * Transport-level gate. Lets a request through when the deployment is open, the path is public, a
+ * Transport-level gate. Lets a request through when the deployment is open (development only), the path is public, a
  * service key is presented, a gateway route carries its shared secret, or the session surface
  * carries SOME bearer (the session handlers then validate it as a user access token — and reject
  * it if it is neither a user token nor a service key). Everything else is 401.
@@ -105,10 +152,14 @@ export const servicePrincipalMiddleware = (principals: ServicePrincipals) =>
       const url = new URL(request.url, "http://localhost");
       const pathname = url.pathname;
       if (isPublicPath(pathname)) return yield* app;
+      if (isSignedWebhook(request.method, pathname)) return yield* app;
       if (isGatewayRoute(pathname, request)) return yield* app;
       const secret = bearerSecretOf({
         authorization: request.headers["authorization"],
-        queryToken: url.searchParams.get("token"),
+        // A query string ends up in proxy and access logs. It is read only where a client cannot
+        // set a header (browser WebSocket and EventSource on the session surface), so a service
+        // key is never accepted from a URL anywhere else.
+        queryToken: isSessionSurface(pathname) ? url.searchParams.get("token") : null,
       });
       if (secret !== undefined && (principals.matches(secret) || isSessionSurface(pathname))) {
         return yield* app;
@@ -129,3 +180,10 @@ export const servicePrincipalMiddleware = (principals: ServicePrincipals) =>
 
 /** The deployment's service principals, resolved once from `SEALANT_SERVICE_KEYS`. */
 export const servicePrincipals: ServicePrincipals = makeServicePrincipals(env.SEALANT_SERVICE_KEYS);
+
+/** How this process authenticates, resolved once; `index.ts` exits on a refusal. */
+export const authPosture: AuthPosture = resolveAuthPosture({
+  serviceKeys: env.SEALANT_SERVICE_KEYS,
+  nodeEnv: env.NODE_ENV,
+  allowOpenApi: env.SEALANT_ALLOW_OPEN_API,
+});

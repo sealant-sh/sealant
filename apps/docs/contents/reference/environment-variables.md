@@ -307,11 +307,15 @@ recognize them in logs and override them deliberately if you must.
 | `SSH_GATEWAY_BANNER`                      | Sealant welcome text                     | Banner shown on SSH connect.                                                                                                                                                                                        |
 | `SSH_GATEWAY_WORKSPACE_USERNAME_PREFIX`   | `ws`                                     | Username prefix for `ssh ws-<workspace-id>@…`.                                                                                                                                                                      |
 | `SEALANT_OWNER_USER_ID`                   | `usr_local`                              | Owner principal the SDK attributes work to when `SealantConfig.ownerUserId` is not set.                                                                                                                             |
-| `SEALANT_SERVICE_KEYS`                    | unset                                    | API only. Comma-separated service-principal bearer secrets; set = every `/v1` request must authenticate, unset = open loopback-only model.                                                                          |
+| `SEALANT_SERVICE_KEYS`                    | unset                                    | API only. Comma-separated service-principal bearer secrets; every `/v1` request must present one (or a user access token on the session surface). The API refuses to start without any.                             |
+| `SEALANT_ALLOW_OPEN_API`                  | `false`                                  | API only, development only. With no service keys, serve `/v1` without a credential. Ignored when `NODE_ENV=production`.                                                                                             |
+| `CORE_API_SERVICE_KEY`                    | unset                                    | Web only. The service key the web server presents to the API; it must be one of `SEALANT_SERVICE_KEYS`. Read from the server environment, never baked into a bundle.                                                |
+| `SEALANT_API_KEY`                         | unset                                    | `sealant` CLI only. The service key the CLI presents as a bearer token; read from the environment, never from the config file.                                                                                      |
+| `SEALANT_WEB_SERVICE_KEY`                 | generated                                | Installer and chart secret. `install.sh` generates it; compose hands it to the web app and prepends it to the API's `SEALANT_SERVICE_KEYS`.                                                                         |
 
-With `SEALANT_SERVICE_KEYS` unset the identity model passes an `ownerUserId` in payloads and queries
-rather than authenticating requests. See the [HTTP API auth section](/docs/reference/http-api) and
-the [security model](/docs/concepts/security-model).
+Identity is an `ownerUserId` asserted by a service principal, never a browser. See the
+[HTTP API auth section](/docs/reference/http-api) and the
+[security model](/docs/concepts/security-model).
 
 Related: [Ports and data](/docs/reference/ports-and-data) ·
 [Installer and compose](/docs/reference/installer-and-compose) ·

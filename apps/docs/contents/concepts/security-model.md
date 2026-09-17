@@ -65,23 +65,25 @@ the worker builds or launches can, in principle, reach the host. Concretely:
 This is a deliberate tradeoff for a self-hosted, single-tenant runtime. It also means Sealant is not
 something to expose to untrusted users.
 
-## The API is open unless you close it
+## The API refuses to start without service keys
 
-**By default the control-plane API does not enforce authentication.** Set `SEALANT_SERVICE_KEYS` to
-close it — then every `/v1` request needs a service key (a trusted product acting for its users) or
-a scoped user access token on the session surface; see the
-[HTTP API auth section](/docs/reference/http-api).
+Every `/v1` request needs a credential: a service key from `SEALANT_SERVICE_KEYS` (a trusted product
+acting for its users) or, on the session surface only, a scoped user access token; see the
+[HTTP API auth section](/docs/reference/http-api). With no key configured the API exits at start and
+says so. `install.sh` generates the web app's key, and the chart requires the secret.
 
-- In the open mode there is no bearer-token verification on the contract endpoints.
-- Identity is asserted: calls take an `ownerUserId` / `userId` directly in the request payload or
-  query string. The [SDK](/docs/reference/sdk) defaults this to a single static principal
-  (`usr_local`). In the closed mode only a service key may assert it.
-- The web app's own sign-in is real, but the API behind it trusts the identity it is handed — and
-  the web app holds no service key, so it is for open-mode deployments.
+- A service key may assert any `ownerUserId`. That makes the key holder a trusted server: Sealant is
+  a control plane behind a product, not an authorization server for that product's users. Never give
+  a key to a browser, a phone or a workspace.
+- The web app's own sign-in is real; it then calls the API as a service principal
+  (`CORE_API_SERVICE_KEY`) and asserts the signed-in user as the owner.
+- The one exception is for development: `SEALANT_ALLOW_OPEN_API=true` serves `/v1` without a
+  credential, with identity asserted in payloads and queries. It is ignored under
+  `NODE_ENV=production`, which every published image sets. `pnpm dev` turns it on for the API it
+  starts on your loopback.
 
-The practical rule: **do not expose the API (port 4000) beyond a trusted network.** Anyone who can
-reach it can act as any owner. Auth hardening — real tokens and enforced identity — is planned, and
-this page will change when it lands.
+The practical rule still holds: **do not expose the API (port 4000) beyond a trusted network.**
+Service keys authenticate a caller; they do not make the API safe to offer to untrusted users.
 
 ## Secrets and connected accounts
 

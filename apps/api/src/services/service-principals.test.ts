@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { bearerSecretOf, makeServicePrincipals, parseServiceKeys } from "./service-principals.js";
+import {
+  bearerSecretOf,
+  makeServicePrincipals,
+  parseServiceKeys,
+  resolveAuthPosture,
+} from "./service-principals.js";
 
 describe("service principals", () => {
   it("is disabled without keys and never matches", () => {
@@ -27,5 +32,44 @@ describe("service principals", () => {
     expect(bearerSecretOf({ authorization: undefined, queryToken: "zzz" })).toBe("zzz");
     expect(bearerSecretOf({ authorization: "Basic abc", queryToken: null })).toBeUndefined();
     expect(bearerSecretOf({ authorization: "", queryToken: " " })).toBeUndefined();
+  });
+});
+
+describe("resolveAuthPosture (CORE-01: fail closed)", () => {
+  it("is closed whenever a service key is configured", () => {
+    for (const nodeEnv of ["development", "test", "production"] as const) {
+      expect(resolveAuthPosture({ serviceKeys: "k", nodeEnv, allowOpenApi: true })).toEqual({
+        kind: "closed",
+      });
+    }
+  });
+
+  it("refuses to start without keys, in every environment", () => {
+    for (const nodeEnv of ["development", "test", "production"] as const) {
+      const posture = resolveAuthPosture({ serviceKeys: undefined, nodeEnv, allowOpenApi: false });
+      expect(posture.kind).toBe("refused");
+    }
+    // Only separators is no key at all.
+    expect(
+      resolveAuthPosture({ serviceKeys: " , ", nodeEnv: "development", allowOpenApi: false }).kind,
+    ).toBe("refused");
+  });
+
+  it("opens only on the explicit exception, and never in production", () => {
+    expect(
+      resolveAuthPosture({ serviceKeys: undefined, nodeEnv: "development", allowOpenApi: true }),
+    ).toEqual({ kind: "open" });
+    expect(
+      resolveAuthPosture({ serviceKeys: undefined, nodeEnv: "test", allowOpenApi: true }),
+    ).toEqual({ kind: "open" });
+    const production = resolveAuthPosture({
+      serviceKeys: undefined,
+      nodeEnv: "production",
+      allowOpenApi: true,
+    });
+    expect(production.kind).toBe("refused");
+    expect(production.kind === "refused" ? production.message : "").toContain(
+      "not honoured with NODE_ENV=production",
+    );
   });
 });

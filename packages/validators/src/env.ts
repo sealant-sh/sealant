@@ -108,8 +108,14 @@ export const servicePrincipalsEnvSchema = z.object({
   // Comma-separated bearer secrets for SERVICE PRINCIPALS — trusted products (Mend) that act on
   // behalf of any owner. When set, every /v1 request must carry one of these as a bearer, except
   // the session surface (scoped user access tokens still authenticate alone) and the gateway
-  // routes (their own shared secret). Unset = the open, loopback-only pre-auth model.
+  // routes (their own shared secret). Unset, the API refuses to start: see SEALANT_ALLOW_OPEN_API.
   SEALANT_SERVICE_KEYS: z.string().trim().min(1).optional(),
+  // The explicit development exception to the rule above: with no service keys the API serves
+  // every /v1 route to anyone who can reach it. Honoured only outside NODE_ENV=production; a
+  // production process with no keys refuses to start whatever this says.
+  SEALANT_ALLOW_OPEN_API: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(false),
 });
 
 export const credentialsEnvSchema = z.object({

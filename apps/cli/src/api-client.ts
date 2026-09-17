@@ -107,12 +107,17 @@ const requestJson = <TOutput>(
         }),
     });
 
+    // The control plane serves /v1 to service principals only. The key comes from the
+    // environment, never from the config file or a flag, so it stays out of disk and `ps`.
+    const apiKey = process.env["SEALANT_API_KEY"]?.trim();
+    const authorization =
+      apiKey === undefined || apiKey.length === 0 ? {} : { authorization: `Bearer ${apiKey}` };
     const requestInit: RequestInit =
       options.body === undefined
-        ? { method: options.method }
+        ? { method: options.method, headers: authorization }
         : {
             method: options.method,
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", ...authorization },
             body: JSON.stringify(options.body),
           };
     const response = yield* Effect.tryPromise({
@@ -132,6 +137,9 @@ const requestJson = <TOutput>(
       return yield* Effect.fail(
         new CliFailure({
           message: `Control plane request failed (${response.status}): ${message}`,
+          ...(response.status === 401
+            ? { hint: "Set SEALANT_API_KEY to one of the API's SEALANT_SERVICE_KEYS." }
+            : {}),
         }),
       );
     }

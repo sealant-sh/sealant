@@ -22,7 +22,8 @@ const statusOf = (
   );
 
 describe("service principal middleware", () => {
-  it("is a no-op while no keys are configured", async () => {
+  it("passes everything through only when built without keys (the development exception)", async () => {
+    // index.ts refuses to start in this state unless resolveAuthPosture answered `open`.
     expect(await statusOf(undefined, "/v1/workspaces?ownerUserId=u")).toBe(200);
   });
 
@@ -47,6 +48,19 @@ describe("service principal middleware", () => {
       200,
     );
     expect(await statusOf("k1", "/v1/sessions/s/attach?token=k1")).toBe(200);
+  });
+
+  it("reads a query token on the session surface only", async () => {
+    expect(await statusOf("k1", "/v1/workspaces?ownerUserId=u&token=k1")).toBe(401);
+    expect(await statusOf("k1", "/v1/runs/run_1?token=k1")).toBe(401);
+    expect(await statusOf("k1", "/v1/workspaces/w/forward?token=k1")).toBe(200);
+  });
+
+  it("admits GitHub's signed webhook delivery, and nothing beside it", async () => {
+    expect(await statusOf("k", "/v1/github/webhooks", { method: "POST" })).toBe(200);
+    expect(await statusOf("k", "/v1/github/webhooks")).toBe(401);
+    expect(await statusOf("k", "/v1/github/webhooks/x", { method: "POST" })).toBe(401);
+    expect(await statusOf("k", "/v1/github/installations", { method: "POST" })).toBe(401);
   });
 
   it("lets the session surface through with any bearer for the handler to validate", async () => {

@@ -44,6 +44,12 @@ spec:
             - { name: BETTER_AUTH_URL, value: {{ .Values.web.url | quote }} }
             - { name: BETTER_AUTH_TRUSTED_ORIGINS, value: {{ .Values.web.trustedOrigins | quote }} }
             - { name: CORE_API_BASE_URL, value: http://{{ .Release.Name }}-api:4000 }
+            # The key this server presents to the API; it must also appear in SEALANT_SERVICE_KEYS.
+            - name: CORE_API_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: SEALANT_WEB_SERVICE_KEY
           readinessProbe:
             httpGet: { path: /, port: http }
             periodSeconds: 10

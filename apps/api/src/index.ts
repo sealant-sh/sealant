@@ -18,7 +18,11 @@ import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
-import { servicePrincipalMiddleware, servicePrincipals } from "./services/service-principals.js";
+import {
+  authPosture,
+  servicePrincipalMiddleware,
+  servicePrincipals,
+} from "./services/service-principals.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -256,8 +260,14 @@ const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsL
  */
 /**
  * Authentication gate (services/service-principals.ts). Runs INSIDE cors so preflights and the
- * 401 itself carry CORS headers; a no-op while `SEALANT_SERVICE_KEYS` is unset.
+ * 401 itself carry CORS headers. Without service keys the process has already refused to start,
+ * unless the development exception made it open (`resolveAuthPosture`).
  */
+if (authPosture.kind === "refused") {
+  console.error(`[api] refusing to start: ${authPosture.message}`);
+  process.exit(78);
+}
+
 const authGate = servicePrincipalMiddleware(servicePrincipals);
 
 const serverLayer = HttpRouter.serve(appLayer, {
@@ -272,9 +282,9 @@ const databaseUrl = new URL(env.DATABASE_URL);
 console.log(`[api] database: ${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`);
 console.log(`[api] repology endpoint: ${env.REPOLOGY_API_BASE_URL}`);
 console.log(
-  servicePrincipals.enabled
+  authPosture.kind === "closed"
     ? "[api] authentication: service keys required on /v1"
-    : "[api] authentication: OPEN (SEALANT_SERVICE_KEYS unset) — keep this API on loopback",
+    : "[api] authentication: OPEN (SEALANT_ALLOW_OPEN_API, development only) — every /v1 route is served without a credential; keep this API on loopback",
 );
 
 /**
