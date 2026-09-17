@@ -130,6 +130,13 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
       // supports() already rejected mount sources; this guards direct launch calls.
       throw new Error("The cloudflare adapter can only launch git or capture workspace sources.");
     }
+    if (source.kind === "capture" && source.transport !== undefined) {
+      // A sandbox reaches the channel across the Internet: there is no private network to state,
+      // and the bridge contract carries no CA bundle.
+      throw new Error(
+        "The cloudflare adapter dials the capture channel over https with the public roots; source.transport is not supported.",
+      );
+    }
     if (parsed.workspaceCloneAuth?.type === "file-ref") {
       throw new Error(
         "file-ref clone auth names a key file on the worker host; the cloudflare bridge only takes http-token auth.",

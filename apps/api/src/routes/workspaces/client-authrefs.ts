@@ -9,6 +9,9 @@ import { parseGitHubInstallationRepositoryAuthRef } from "@sealant/source-integr
 import type { NewWorkspace } from "@sealant/validators";
 import { Effect } from "effect";
 
+import { env } from "../../runtime-env.js";
+import { gitHubWebHostOf, urlIsInstallationRepository } from "./credential-destinations.js";
+
 const toErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message.length > 0) {
     return error.message;
@@ -37,20 +40,37 @@ const withInternalError = <A, E, R>(effect: Effect.Effect<A, E, R>, fallback: st
  * out of the build — a host-file exfiltration primitive. We validate rather than rebuild (the
  * `credentialRefs` mitigation) because reruns legitimately resubmit previously-minted specs
  * without their original selections.
+ *
+ * The ref is also bound to its destination (CORE-05): the worker sends the installation token to
+ * whatever URL the source names, so that URL must be the repository the ref stands for, on the
+ * GitHub host this install talks to. A grant on installation A is not a licence to send A's token
+ * to another host or another repository.
  */
 export const validateClientSuppliedAuthRefs = (input: {
   readonly ownerUserId: string;
   readonly spec: NewWorkspace;
 }) => {
   return Effect.gen(function* () {
-    const refs: Array<{ readonly label: string; readonly authRef: string }> = [];
+    const refs: Array<{
+      readonly label: string;
+      readonly authRef: string;
+      readonly url: string;
+    }> = [];
     const workspaceSource = input.spec.sources.workspace;
     if (workspaceSource.kind === "git" && workspaceSource.authRef !== undefined) {
-      refs.push({ label: "sources.workspace", authRef: workspaceSource.authRef });
+      refs.push({
+        label: "sources.workspace",
+        authRef: workspaceSource.authRef,
+        url: workspaceSource.url,
+      });
     }
     for (const source of input.spec.sources.inputs) {
       if (source.authRef !== undefined) {
-        refs.push({ label: `sources.inputs (${source.id})`, authRef: source.authRef });
+        refs.push({
+          label: `sources.inputs (${source.id})`,
+          authRef: source.authRef,
+          url: source.url,
+        });
       }
     }
     if (refs.length === 0) {
@@ -61,7 +81,8 @@ export const validateClientSuppliedAuthRefs = (input: {
     const gitHubInstallationRepositoryCacheRepository =
       yield* GitHubInstallationRepositoryCacheRepo;
 
-    for (const { label, authRef } of refs) {
+    const webHost = gitHubWebHostOf(env.GITHUB_API_BASE_URL);
+    for (const { label, authRef, url } of refs) {
       const installationRepositoryId = parseGitHubInstallationRepositoryAuthRef(authRef);
       if (installationRepositoryId === undefined) {
         return yield* new WorkspaceBadRequestError({
@@ -82,6 +103,20 @@ export const validateClientSuppliedAuthRefs = (input: {
       ) {
         return yield* new WorkspaceNotFoundError({
           message: `${label}: GitHub installation repository not found: ${installationRepositoryId}`,
+        });
+      }
+
+      if (
+        !urlIsInstallationRepository({
+          url,
+          webHost,
+          owner: installationRepositoryRecord.owner,
+          name: installationRepositoryRecord.name,
+        })
+      ) {
+        // Says nothing about which repository the ref stands for: the caller may not know it.
+        return yield* new WorkspaceForbiddenError({
+          message: `${label}: the source URL is not the repository this authRef was issued for (expected https://${webHost}/<owner>/<name>).`,
         });
       }
 

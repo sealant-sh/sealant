@@ -261,6 +261,16 @@ export const workspaceLifecycleEnvSchema = z.object({
   // descendants of a root (mounting a whole root is a config error). Unset or empty = mount
   // sources are REJECTED — mounting host paths into workspaces is opt-in deployment policy.
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
+  // Capture session channels the control plane will hand a session token to: comma-separated
+  // origins (`https://mend.example`). Unset = any http(s) origin the transport rules admit; set =
+  // only these. The token is the caller's own credential, so this is an operator's pin on where
+  // executors register, not an authorization of the caller.
+  SEALANT_CAPTURE_ALLOWED_ENDPOINTS: z.string().trim().min(1).optional(),
+  // The operator's veto on plain-HTTP capture channels, whatever a launcher states. Set it on an
+  // install whose executors are not on a private network with the channel.
+  SEALANT_CAPTURE_REFUSE_PLAINTEXT: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(false),
 });
 
 /**

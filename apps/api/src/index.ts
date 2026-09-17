@@ -15,6 +15,7 @@ import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
+import { parseAllowedCaptureOrigins } from "./routes/workspaces/credential-destinations.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
@@ -263,6 +264,12 @@ const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsL
  * 401 itself carry CORS headers. Without service keys the process has already refused to start,
  * unless the development exception made it open (`resolveAuthPosture`).
  */
+if (parseAllowedCaptureOrigins(env.SEALANT_CAPTURE_ALLOWED_ENDPOINTS) === null) {
+  console.error(
+    "[api] refusing to start: SEALANT_CAPTURE_ALLOWED_ENDPOINTS must be comma-separated http(s) origins with no path.",
+  );
+  process.exit(78);
+}
 if (authPosture.kind === "refused") {
   console.error(`[api] refusing to start: ${authPosture.message}`);
   process.exit(78);

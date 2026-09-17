@@ -85,6 +85,28 @@ says so. `install.sh` generates the web app's key, and the chart requires the se
 The practical rule still holds: **do not expose the API (port 4000) beyond a trusted network.**
 Service keys authenticate a caller; they do not make the API safe to offer to untrusted users.
 
+## Credentials go where they were issued for
+
+Two credentials leave the control plane for a destination the caller names, and both destinations
+are checked at create, before anything is minted, sealed or queued.
+
+- A GitHub installation token is sent only to `https://<your GitHub host>/<owner>/<name>` for the
+  repository the `authRef` stands for. Another host, plain HTTP, embedded credentials, a port, a
+  query or a different repository is refused.
+- A capture session token is sent only to an `http(s)` channel endpoint, inside
+  `SEALANT_CAPTURE_ALLOWED_ENDPOINTS` when the operator set it. A plain-HTTP endpoint beyond
+  loopback needs the launcher's `transport.plaintext`, and `SEALANT_CAPTURE_REFUSE_PLAINTEXT` vetoes
+  that. The workspace daemon enforces the same transport rules again at boot and verifies
+  certificates against the public roots or the CA bundle the launcher named.
+
+None of this contains code running in a workspace, which can dial whatever its network reaches.
+Egress isolation is the runtime's job: the chart's workspace NetworkPolicy (DNS, the registry, the
+entries in `networkPolicies.workspaceEgressAllow`, and the Internet minus private ranges) on
+Kubernetes, the network connector on MicroVMs. The Docker adapter puts workspaces on a bridge
+network and does not filter their egress; do not treat it as a boundary against a hostile workspace.
+Whether a policy is enforced is a property of the cluster's CNI, so verify it with a deny probe from
+a workspace pod, including during pod start.
+
 ## Secrets and connected accounts
 
 The installer generates the stack's secrets once into `~/.config/sealant/.env` with `0600`

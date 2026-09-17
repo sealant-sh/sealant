@@ -97,6 +97,11 @@ import {
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
+import {
+  captureDestinationRefusal,
+  gitHubWebHostOf,
+  parseAllowedCaptureOrigins,
+} from "./credential-destinations.js";
 
 interface WorkspaceEventDraft {
   readonly workspaceId: string;
@@ -195,6 +200,39 @@ const parseWorkspaceSpec = (spec: unknown) => {
 
   return Effect.succeed(parsed.data);
 };
+
+/**
+ * A capture source's session channel must be a destination this install hands a session token
+ * to: an approved origin when the operator pinned any, and a transport the daemon will dial.
+ */
+const validateCaptureDestination = (spec: NewWorkspace) =>
+  Effect.gen(function* () {
+    const source = spec.sources.workspace;
+    if (source.kind !== "capture") return;
+    const allowedOrigins = parseAllowedCaptureOrigins(env.SEALANT_CAPTURE_ALLOWED_ENDPOINTS);
+    if (allowedOrigins === null) {
+      return yield* new WorkspaceInternalServerError({
+        message:
+          "SEALANT_CAPTURE_ALLOWED_ENDPOINTS must be comma-separated http(s) origins with no path.",
+      });
+    }
+    if (source.transport !== undefined && env.DEFAULT_RUNTIME_ADAPTER === "cloudflare") {
+      // The adapter refuses it at launch, after the token is sealed and an image is built.
+      return yield* new WorkspaceBadRequestError({
+        message:
+          "The cloudflare runtime dials the capture channel over https with the public roots; source.transport is not supported.",
+      });
+    }
+    const refusal = captureDestinationRefusal({
+      endpoint: source.endpoint,
+      plaintext: source.transport?.plaintext === true,
+      allowedOrigins,
+      refusePlaintext: env.SEALANT_CAPTURE_REFUSE_PLAINTEXT,
+    });
+    if (refusal !== null) {
+      return yield* new WorkspaceForbiddenError({ message: refusal });
+    }
+  });
 
 /**
  * The capture source's session credential (sealantd ADR-0015) is the one secret the create request
@@ -539,7 +577,9 @@ const buildGitHubWorkspaceSource = (input: {
   return {
     kind: "git",
     provider: "github",
-    url: `https://github.com/${input.fullName}.git`,
+    // The same host `validateClientSuppliedAuthRefs` binds the ref to, so a rerun that resubmits
+    // this minted spec passes on GitHub Enterprise Server as it does on github.com.
+    url: `https://${gitHubWebHostOf(env.GITHUB_API_BASE_URL)}/${input.fullName}.git`,
     ref: input.ref,
     authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
   };
@@ -555,7 +595,9 @@ const buildGitHubDotfilesInput = (input: {
     kind: "git",
     purpose: "dotfiles",
     provider: "github",
-    url: `https://github.com/${input.fullName}.git`,
+    // The same host `validateClientSuppliedAuthRefs` binds the ref to, so a rerun that resubmits
+    // this minted spec passes on GitHub Enterprise Server as it does on github.com.
+    url: `https://${gitHubWebHostOf(env.GITHUB_API_BASE_URL)}/${input.fullName}.git`,
     ref: input.ref,
     authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
   };
@@ -1412,6 +1454,10 @@ export const createWorkspace = (input: {
       spec: parsedSpec,
       sourceSelection: body.sourceSelection,
     });
+
+    // The capture token goes to the endpoint the caller names (CORE-05): check the destination
+    // before the token is sealed for a launch.
+    yield* validateCaptureDestination(parsedSpec);
 
     const sourceSelectionResult = yield* resolveGitHubSourceSelection({
       ownerUserId: body.ownerUserId,
@@ -2531,6 +2577,19 @@ export const restartWorkspace = (input: {
       });
     }
     const spec = yield* parseWorkspaceSpec(specPayload);
+    // A relaunch mints credentials again from the recorded spec, so the recorded spec is checked
+    // like a submitted one. A spec stored before refs were bound to their URL (CORE-05) may name a
+    // destination the ref was never issued for; it is refused here, not relaunched.
+    yield* validateClientSuppliedAuthRefs({ ownerUserId: input.payload.ownerUserId, spec }).pipe(
+      Effect.catchTags({
+        WorkspaceForbiddenError: (error) =>
+          Effect.fail(
+            new WorkspaceConflictError({
+              message: `Workspace ${input.workspaceId} cannot be restarted from its recorded spec: ${error.message}`,
+            }),
+          ),
+      }),
+    );
     if (spec.sources.workspace.kind === "capture") {
       // The session credential was sealed for the launch and cleared once it settled; a relaunch
       // would boot with no channel credential. Replacement is a new workspace with a fresh token.

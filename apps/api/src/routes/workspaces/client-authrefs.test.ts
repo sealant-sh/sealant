@@ -17,7 +17,7 @@ import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
  * that makes both unreachable for refs the caller made up.
  */
 
-const specWithDotfilesAuthRef = (authRef: string) =>
+const specWithDotfilesAuthRef = (authRef: string, url = "https://github.com/o/dots.git") =>
   newWorkspaceSchema.parse({
     sources: {
       workspace: { kind: "mount", hostPath: "/srv/store/worktrees/session-1" },
@@ -25,7 +25,7 @@ const specWithDotfilesAuthRef = (authRef: string) =>
         {
           id: "dotfiles-test",
           purpose: "dotfiles",
-          url: "https://github.com/o/dots.git",
+          url,
           authRef,
         },
       ],
@@ -37,6 +37,8 @@ const installationRepositoryRecord = {
   id: "ghrepo_1",
   installationId: "ghinst_1",
   repositoryId: "repo_1",
+  owner: "o",
+  name: "dots",
   fullName: "o/dots",
   defaultBranch: "main",
   removedAt: null,
@@ -117,6 +119,39 @@ describe("client-supplied authRefs", () => {
       stubLayers({}),
     );
     expect(Result.isSuccess(result)).toBe(true);
+  });
+
+  it.each([
+    "https://evil.example/o/dots.git",
+    "https://github.com.evil.example/o/dots.git",
+    "https://github.com@evil.example/o/dots.git",
+    "https://token@github.com/o/dots.git",
+    "http://github.com/o/dots.git",
+    "https://github.com:8443/o/dots.git",
+    "https://github.com/o/other.git",
+    "https://github.com/someone-else/dots.git",
+    "https://github.com/o/dots.git/../../x/y",
+    "https://github.com/o/dots/extra",
+    "https://github.com/o/%64ots.git",
+    "https://github.com/o/dots.git?ref=x",
+    "https://github.com/o/dots.git#x",
+  ])("refuses to send the installation token to %s", async (url) => {
+    const result = await run(
+      specWithDotfilesAuthRef("github-installation-repository:ghrepo_1", url),
+      stubLayers({}),
+    );
+    expect(Result.isFailure(result)).toBe(true);
+    expect(String(result)).toMatch(/not the repository this authRef was issued for/);
+  });
+
+  it("reads the repository it was issued for case-insensitively, with or without .git", async () => {
+    for (const url of ["https://github.com/O/Dots", "https://GitHub.com/o/dots.git"]) {
+      const result = await run(
+        specWithDotfilesAuthRef("github-installation-repository:ghrepo_1", url),
+        stubLayers({}),
+      );
+      expect(Result.isSuccess(result)).toBe(true);
+    }
   });
 
   it("accepts a spec with no authRefs without touching the repositories", async () => {

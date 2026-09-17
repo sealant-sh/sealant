@@ -135,6 +135,27 @@ export const workspaceStandbySourceSchema = z.strictObject({
  * exists and is bound to one at claim, so the daemon takes the id from the channel's plan answer
  * when the source names none.
  */
+/** One or more PEM `CERTIFICATE` blocks; bounded so a blueprint stays a small document. */
+const pemBundleSchema = z
+  .string()
+  .max(64 * 1024, { message: "CA bundle must be at most 64 KiB" })
+  .refine((value) => value.includes("-----BEGIN CERTIFICATE-----"), {
+    message: "CA bundle must hold at least one PEM CERTIFICATE block",
+  });
+
+/**
+ * How the executor dials the session channel and its object URLs (sealantd ADR-0015
+ * "Transport"). Absent, the daemon requires HTTPS with a certificate the public roots verify, and
+ * refuses to boot otherwise. `plaintext` is the launcher's statement that the network between the
+ * executor and the channel is private; the two bundles replace the roots for the channel and for
+ * object URLs. Certificates are public material, so they travel in the blueprint.
+ */
+export const workspaceCaptureTransportSchema = z.strictObject({
+  plaintext: z.boolean().optional(),
+  channelCaPem: pemBundleSchema.optional(),
+  objectCaPem: pemBundleSchema.optional(),
+});
+
 export const workspaceCaptureSourceSchema = z.strictObject({
   kind: z.literal("capture"),
   /** The session channel the daemon registers with (`SEALANT_CAPTURE_ENDPOINT`). */
@@ -147,6 +168,7 @@ export const workspaceCaptureSourceSchema = z.strictObject({
   /** Executor-local directory captured and restored under the daemon's `harness/` subtree. */
   harnessHome: workspaceCaptureHarnessHomeSchema.optional(),
   platform: nonEmptyStringSchema.optional(),
+  transport: workspaceCaptureTransportSchema.optional(),
 });
 
 // Order matters: git first, so legacy payloads that omit `kind` (relying on the default) still

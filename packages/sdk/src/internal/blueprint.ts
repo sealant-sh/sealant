@@ -219,6 +219,9 @@ export const buildCreateWorkspaceRequest = (
                   ...(options.source.platform === undefined
                     ? {}
                     : { platform: options.source.platform }),
+                  ...(options.source.transport === undefined
+                    ? {}
+                    : { transport: options.source.transport }),
                 }
               : { kind: "mount", hostPath: options.source?.path },
       ...(dotfilesRepository === undefined
