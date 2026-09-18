@@ -87,12 +87,11 @@ nginx, a load balancer) in front to terminate TLS, and point `SEALANT_WEB_URL` /
 
 Exposing Sealant beyond loopback is a real risk in the current build. Be deliberate:
 
-- **API authentication is off by default.** Set `SEALANT_SERVICE_KEYS` before exposing port 4000:
-  without it the owner user is passed in request payloads and queries (`ownerUserId`) rather than
-  verified, and anyone who can reach the port can act as any owner. With it, every `/v1` request
-  needs a service key or a scoped user access token (see the
-  [HTTP API auth section](/docs/reference/http-api)). Either way keep the API on a trusted network
-  or behind an authenticating proxy.
+- **The API requires service keys, and that is not enough to expose it.** Every `/v1` request needs
+  a service key or a scoped user access token (see the
+  [HTTP API auth section](/docs/reference/http-api)), and the API refuses to start without a key. A
+  key holder may act as any owner, so keep port 4000 on a trusted network or behind an
+  authenticating proxy, and give keys only to server-side callers.
 - **The worker mounts the host Docker socket** (`DOCKER_SOCKET_PATH`, default
   `/var/run/docker.sock`) to build and run workspaces. Access to workspace creation is effectively
   access to the host Docker daemon, which is equivalent to root on the host. Do not expose

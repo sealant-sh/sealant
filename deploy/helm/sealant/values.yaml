@@ -10,7 +10,11 @@ image:
 # Secrets are referenced, never rendered from values. Create them before installing:
 #   kubectl -n <ns> create secret generic sealant-secrets \
 #     --from-literal=WORKSPACE_SSH_GATEWAY_TOKEN=... --from-literal=BETTER_AUTH_SECRET=... \
-#     --from-literal=SEALANT_CREDENTIALS_KEY=... --from-literal=SEALANT_DB_PASSWORD=...
+#     --from-literal=SEALANT_CREDENTIALS_KEY=... --from-literal=SEALANT_DB_PASSWORD=... \
+#     --from-literal=SEALANT_WEB_SERVICE_KEY=<random> \
+#     --from-literal=SEALANT_SERVICE_KEYS=<the web key>[,<one per other trusted caller>]
+# SEALANT_SERVICE_KEYS is required: the API refuses to start without a service key. The web app
+# presents SEALANT_WEB_SERVICE_KEY, which must be one of them (required while web.enabled).
 secrets:
   existingSecret: sealant-secrets
 

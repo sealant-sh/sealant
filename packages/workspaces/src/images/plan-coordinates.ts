@@ -1,3 +1,5 @@
+import { toOciRepositoryComponent } from "@sealant/api-contracts";
+
 /**
  * Where a workspace image lives in the registry: one repository per OS family, one tag per plan
  * hash. The image is a pure function of the rendered Containerfile (the plan hash), and nothing
@@ -21,12 +23,8 @@ export const PLAN_REPOSITORY_PREFIX = "sealant-workspace-";
 /** Enough of a sha256 to never collide across the plans one deployment will ever see. */
 export const PLAN_TAG_HASH_LENGTH = 12;
 
-/** An OCI path component: lowercase alphanumerics with `.`, `_`, `-` separators. */
-const slug = (value: string): string =>
-  value
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[._-]+|[._-]+$/g, "") || "custom";
+/** An OCI path component the registry client will accept. */
+const slug = (value: string): string => toOciRepositoryComponent(value, "custom");
 
 export const planImageCoordinates = (planned: {
   readonly osFamily: string;

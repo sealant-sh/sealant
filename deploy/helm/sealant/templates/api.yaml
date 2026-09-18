@@ -62,14 +62,14 @@ spec:
             - { name: REGISTRY_BASE_URL, value: {{ include "sealant.registryBaseUrl" . | quote }} }
             - { name: REGISTRY_PUSH_REGISTRY, value: {{ include "sealant.pushRegistry" . | quote }} }
             - { name: CORS_ALLOWED_ORIGINS, value: {{ .Values.api.corsAllowedOrigins | quote }} }
-            # Closes the control plane: every /v1 request needs one of these service keys (Mend
-            # holds one). Optional — absent keeps the open loopback-only model.
+            # Every /v1 request needs one of these comma-separated service keys, and the API refuses
+            # to start without any. Required: list the web app's key (SEALANT_WEB_SERVICE_KEY in
+            # the same secret) and one per other trusted caller, such as Mend.
             - name: SEALANT_SERVICE_KEYS
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: SEALANT_SERVICE_KEYS
-                  optional: true
             - name: WORKSPACE_SSH_GATEWAY_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: WORKSPACE_SSH_GATEWAY_TOKEN } }
             - { name: WORKSPACE_SSH_GATEWAY_HOST, value: {{ .Values.api.sshGateway.host | default (printf "%s-ssh-gateway" .Release.Name) | quote }} }

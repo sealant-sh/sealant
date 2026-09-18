@@ -1,6 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createZotRegistryClient, RegistryClientHttpError } from "./client.js";
+import {
+  createZotRegistryClient,
+  RegistryClientHttpError,
+  RegistryNameError,
+  RegistryResponseTooLargeError,
+} from "./client.js";
+
+/** A client under a path prefix whose fetch must stay untouched by a refused name. */
+const neverFetched = () => {
+  const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+  const client = createZotRegistryClient({
+    baseUrl: "http://127.0.0.1:5000/registry",
+    fetch: fetchMock as unknown as typeof fetch,
+  });
+  return { client, fetchMock };
+};
 
 describe("ZotRegistryClient", () => {
   it("pings the OCI API root", async () => {
@@ -16,15 +31,20 @@ describe("ZotRegistryClient", () => {
     const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
 
     expect(requestUrl.toString()).toBe("http://127.0.0.1:5000/v2/");
-    expect(requestInit).toEqual({
+    expect(requestInit).toMatchObject({
       method: "GET",
       headers: new Headers(),
+      // A 3xx is an answer, never a destination; every request carries a deadline.
+      redirect: "manual",
     });
+    expect(requestInit.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("deletes a manifest by digest and treats an absent one as missing", async () => {
     const fetchMock = vi.fn(async (url: URL) =>
-      url.toString().endsWith("sha256:gone")
+      url
+        .toString()
+        .endsWith("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         ? new Response(null, { status: 404 })
         : new Response(null, { status: 202 }),
     );
@@ -38,22 +58,28 @@ describe("ZotRegistryClient", () => {
     });
 
     await expect(
-      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:old" }),
+      client.deleteImage({
+        repository: "sealant-workspace-arch",
+        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
     ).resolves.toBe("deleted");
     // The worker's own Engine copy goes too, and its absence is not a failure.
     expect(commandRunner).toHaveBeenCalledWith("docker", [
       "image",
       "rm",
       "-f",
-      "127.0.0.1:5000/sealant-workspace-arch@sha256:old",
+      "127.0.0.1:5000/sealant-workspace-arch@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ]);
     await expect(
-      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:gone" }),
+      client.deleteImage({
+        repository: "sealant-workspace-arch",
+        digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
     ).resolves.toBe("missing");
 
     const [requestUrl, requestInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
     expect(requestUrl.toString()).toBe(
-      "http://127.0.0.1:5000/v2/sealant-workspace-arch/manifests/sha256:old",
+      "http://127.0.0.1:5000/v2/sealant-workspace-arch/manifests/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
     expect(requestInit.method).toBe("DELETE");
   });
@@ -66,7 +92,10 @@ describe("ZotRegistryClient", () => {
     });
 
     await expect(
-      client.deleteImage({ repository: "sealant-workspace-arch", digest: "sha256:old" }),
+      client.deleteImage({
+        repository: "sealant-workspace-arch",
+        digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
     ).rejects.toBeInstanceOf(RegistryClientHttpError);
   });
 
@@ -211,5 +240,141 @@ describe("ZotRegistryClient", () => {
     });
 
     await expect(client.ping()).rejects.toBeInstanceOf(RegistryClientHttpError);
+  });
+
+  describe("names are refused, never repaired (CORE-08)", () => {
+    it.each([
+      "../_catalog",
+      "a/../../_catalog",
+      "a/./b",
+      "a//b",
+      "a/%2e%2e/b",
+      "a%2fb",
+      "a?x=1",
+      "a#frag",
+      "a\\b",
+      "http://evil.example/x",
+      "Upper/case",
+      "a b",
+      "a/b:tag",
+      `${"a".repeat(256)}`,
+    ])("refuses repository %j without a request", async (repository) => {
+      const { client, fetchMock } = neverFetched();
+      await expect(client.listTags(repository)).rejects.toBeInstanceOf(RegistryNameError);
+      await expect(client.getManifest(repository, "latest")).rejects.toBeInstanceOf(
+        RegistryNameError,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      "../../_catalog",
+      "latest/../../x",
+      "a?b",
+      "a#b",
+      ".hidden",
+      "-dash",
+      "%2e%2e",
+      "sha256:short",
+      `sha256:${"g".repeat(64)}`,
+      "x".repeat(129),
+      "",
+    ])("refuses reference %j without a request", async (reference) => {
+      const { client, fetchMock } = neverFetched();
+      await expect(client.getManifest("sealant/ws", reference)).rejects.toBeInstanceOf(
+        RegistryNameError,
+      );
+      await expect(client.headManifest("sealant/ws", reference)).rejects.toBeInstanceOf(
+        RegistryNameError,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a digest that is not one before deleting or touching docker", async () => {
+      const { client, fetchMock } = neverFetched();
+      await expect(
+        client.deleteImage({ repository: "sealant/ws", digest: "sha256:x/../../y" }),
+      ).rejects.toBeInstanceOf(RegistryNameError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reads surrounding slashes as spelling, so a scheme-relative form stays a repository", async () => {
+      const { client, fetchMock } = neverFetched();
+      await client.listTags("//evil.example/x");
+      const [requestUrl] = fetchMock.mock.calls[0] as unknown as [URL];
+      expect(requestUrl.toString()).toBe(
+        "http://127.0.0.1:5000/registry/v2/evil.example/x/tags/list",
+      );
+    });
+
+    it("keeps valid names under the registry's own /v2/ path", async () => {
+      const { client, fetchMock } = neverFetched();
+      await client.getManifest("/sealant/ws-1.arch__x/", `sha256:${"a".repeat(64)}`);
+      const [requestUrl] = fetchMock.mock.calls[0] as unknown as [URL];
+      expect(requestUrl.toString()).toBe(
+        `http://127.0.0.1:5000/registry/v2/sealant/ws-1.arch__x/manifests/sha256:${"a".repeat(64)}`,
+      );
+    });
+  });
+
+  describe("answers are bounded", () => {
+    it("reports a redirect as a failed status instead of following it", async () => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(null, { status: 307, headers: { location: "http://169.254.169.254/" } }),
+      );
+      const client = createZotRegistryClient({
+        baseUrl: "http://127.0.0.1:5000",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+      await expect(client.listTags("sealant/ws")).rejects.toMatchObject({ status: 307 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a body over the limit by its declared length", async () => {
+      const client = createZotRegistryClient({
+        baseUrl: "http://127.0.0.1:5000",
+        maxResponseBytes: 16,
+        fetch: (async () =>
+          new Response("{}", {
+            status: 200,
+            headers: { "content-length": "1000000" },
+          })) as unknown as typeof fetch,
+      });
+      await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
+        RegistryResponseTooLargeError,
+      );
+    });
+
+    it("stops reading a body that outgrows the limit while streaming", async () => {
+      let pulled = 0;
+      const endless = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(new Uint8Array(8));
+        },
+      });
+      const client = createZotRegistryClient({
+        baseUrl: "http://127.0.0.1:5000",
+        maxResponseBytes: 64,
+        fetch: (async () => new Response(endless, { status: 200 })) as unknown as typeof fetch,
+      });
+      await expect(client.listTags("sealant/ws")).rejects.toBeInstanceOf(
+        RegistryResponseTooLargeError,
+      );
+      expect(pulled).toBeLessThan(32);
+    });
+
+    it("gives up on a registry that never answers", async () => {
+      const client = createZotRegistryClient({
+        baseUrl: "http://127.0.0.1:5000",
+        requestTimeoutMs: 20,
+        fetch: ((_url: URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          })) as unknown as typeof fetch,
+      });
+      await expect(client.ping()).rejects.toMatchObject({ name: "TimeoutError" });
+    });
   });
 });

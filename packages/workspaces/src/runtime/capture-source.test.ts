@@ -3,7 +3,15 @@ import { describe, expect, it } from "vitest";
 import { captureSourceEnv } from "./capture-source.js";
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
-const captureSource = (input: { readonly worktreeId?: string; readonly harnessHome?: string }) => {
+const captureSource = (input: {
+  readonly worktreeId?: string;
+  readonly harnessHome?: string;
+  readonly transport?: {
+    readonly plaintext?: boolean;
+    readonly channelCaPem?: string;
+    readonly objectCaPem?: string;
+  };
+}) => {
   const launch = parseRuntimeAdapterLaunchInput({
     blueprint: {
       sources: {
@@ -58,5 +66,32 @@ describe("captureSourceEnv", () => {
       ["SEALANT_CAPTURE_ENDPOINT", "https://mend.example.com/session/s1"],
       ["SEALANT_CAPTURE_WORKTREE_ID", "wt_1"],
     ]);
+  });
+
+  it("delivers no transport setting unless the launcher stated one", () => {
+    const names = captureSourceEnv(captureSource({ transport: { plaintext: false } })).map(
+      ([name]) => name,
+    );
+    expect(names.filter((name) => name.startsWith("SEALANT_CAPTURE_"))).toEqual([
+      "SEALANT_CAPTURE_ENDPOINT",
+    ]);
+  });
+
+  it("delivers the plaintext statement and the CA bundles the daemon verifies against", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const env = new Map(
+      captureSourceEnv(
+        captureSource({ transport: { plaintext: true, channelCaPem: pem, objectCaPem: pem } }),
+      ),
+    );
+    expect(env.get("SEALANT_CAPTURE_ALLOW_PLAINTEXT")).toBe("true");
+    expect(env.get("SEALANT_CAPTURE_CA_PEM")).toBe(pem);
+    expect(env.get("SEALANT_CAPTURE_OBJECT_CA_PEM")).toBe(pem);
+  });
+
+  it("refuses a CA bundle that holds no certificate", () => {
+    expect(() => captureSource({ transport: { channelCaPem: "not pem" } })).toThrow(
+      /PEM CERTIFICATE block/,
+    );
   });
 });

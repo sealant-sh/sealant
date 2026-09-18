@@ -26,6 +26,8 @@ export const SSH_HARNESS_ID = "ssh";
 
 export interface RunRecorderConfig {
   readonly apiBaseUrl: string;
+  /** `WORKSPACE_SSH_GATEWAY_TOKEN`: what admits the recorder's two calls to the control plane. */
+  readonly gatewayToken: string;
 }
 
 export interface FileChange {
@@ -62,10 +64,13 @@ const postJson = async (
   url: URL,
   method: "POST" | "PATCH",
   body: unknown,
+  gatewayToken: string,
 ): Promise<{ ok: boolean; status: number; payload: unknown }> => {
   const response = await fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    // The gateway's own secret: the control plane admits it to the run recorder and holds it to
+    // interactive ssh runs. Without it a closed control plane answers 401 and nothing is recorded.
+    headers: { "content-type": "application/json", "x-sealant-gateway-token": gatewayToken },
     body: JSON.stringify(body),
   });
   const payload: unknown = await response.json().catch(() => null);
@@ -82,12 +87,17 @@ export const startInteractiveRun = async (input: {
   readonly ownerUserId: string;
 }): Promise<string | undefined> => {
   try {
-    const created = await postJson(new URL("/v1/runs", input.config.apiBaseUrl), "POST", {
-      workspaceId: input.workspaceId,
-      ownerUserId: input.ownerUserId,
-      harnessId: SSH_HARNESS_ID,
-      mode: "interactive",
-    });
+    const created = await postJson(
+      new URL("/v1/runs", input.config.apiBaseUrl),
+      "POST",
+      {
+        workspaceId: input.workspaceId,
+        ownerUserId: input.ownerUserId,
+        harnessId: SSH_HARNESS_ID,
+        mode: "interactive",
+      },
+      input.config.gatewayToken,
+    );
     if (!created.ok) {
       throw new Error(`createRun responded ${created.status}`);
     }
@@ -96,7 +106,8 @@ export const startInteractiveRun = async (input: {
     const running = await postJson(
       new URL(`/v1/runs/${encodeURIComponent(runId)}`, input.config.apiBaseUrl),
       "PATCH",
-      { status: "running" },
+      { ownerUserId: input.ownerUserId, status: "running" },
+      input.config.gatewayToken,
     );
     if (!running.ok) {
       throw new Error(`markRunning responded ${running.status}`);
@@ -119,6 +130,8 @@ export const startInteractiveRun = async (input: {
 export const finalizeInteractiveRun = async (input: {
   readonly config: RunRecorderConfig;
   readonly runId: string;
+  /** The run's owner: an update that names no owner finds no run. */
+  readonly ownerUserId: string;
   readonly captureOutput: ((command: string, cwd: string) => Promise<string>) | undefined;
 }): Promise<void> => {
   let diff = "";
@@ -146,11 +159,13 @@ export const finalizeInteractiveRun = async (input: {
       new URL(`/v1/runs/${encodeURIComponent(input.runId)}`, input.config.apiBaseUrl),
       "PATCH",
       {
+        ownerUserId: input.ownerUserId,
         status: "completed",
         exitCode: 0,
         ...(diff.length === 0 ? {} : { diff }),
         ...(changedFiles.length === 0 ? {} : { changedFiles }),
       },
+      input.config.gatewayToken,
     );
     if (!completed.ok) {
       throw new Error(`markCompleted responded ${completed.status}`);

@@ -95,7 +95,8 @@ const makeRecordingLayer = (state: RecordingState) => {
         relation: input.relation ?? "launch",
         linkedAt: input.linkedAt ?? now,
       }),
-    listWorkspaces: () => Effect.die("unused"),
+    // The live-workspace budget counts the owner's workspaces before anything is created.
+    listWorkspaces: () => Effect.succeed([]),
     listWorkspaceAttemptLinks: () => Effect.die("unused"),
     setWorkspaceName: () => Effect.die("unused"),
     setWorkspaceBinds: () => Effect.die("unused"),

@@ -65,23 +65,94 @@ the worker builds or launches can, in principle, reach the host. Concretely:
 This is a deliberate tradeoff for a self-hosted, single-tenant runtime. It also means Sealant is not
 something to expose to untrusted users.
 
-## The API is open unless you close it
+## The API refuses to start without service keys
 
-**By default the control-plane API does not enforce authentication.** Set `SEALANT_SERVICE_KEYS` to
-close it — then every `/v1` request needs a service key (a trusted product acting for its users) or
-a scoped user access token on the session surface; see the
-[HTTP API auth section](/docs/reference/http-api).
+Every `/v1` request needs a credential: a service key from `SEALANT_SERVICE_KEYS` (a trusted product
+acting for its users) or, on the session surface only, a scoped user access token; see the
+[HTTP API auth section](/docs/reference/http-api). With no key configured the API exits at start and
+says so. `install.sh` generates the web app's key, and the chart requires the secret.
 
-- In the open mode there is no bearer-token verification on the contract endpoints.
-- Identity is asserted: calls take an `ownerUserId` / `userId` directly in the request payload or
-  query string. The [SDK](/docs/reference/sdk) defaults this to a single static principal
-  (`usr_local`). In the closed mode only a service key may assert it.
-- The web app's own sign-in is real, but the API behind it trusts the identity it is handed — and
-  the web app holds no service key, so it is for open-mode deployments.
+- A service key may assert any `ownerUserId`. That makes the key holder a trusted server: Sealant is
+  a control plane behind a product, not an authorization server for that product's users. Never give
+  a key to a browser, a phone or a workspace.
+- The web app's own sign-in is real; it then calls the API as a service principal
+  (`CORE_API_SERVICE_KEY`) and asserts the signed-in user as the owner.
+- The one exception is for development: `SEALANT_ALLOW_OPEN_API=true` serves `/v1` without a
+  credential, with identity asserted in payloads and queries. It is ignored under
+  `NODE_ENV=production`, which every published image sets. `pnpm dev` turns it on for the API it
+  starts on your loopback.
 
-The practical rule: **do not expose the API (port 4000) beyond a trusted network.** Anyone who can
-reach it can act as any owner. Auth hardening — real tokens and enforced identity — is planned, and
-this page will change when it lands.
+The practical rule still holds: **do not expose the API (port 4000) beyond a trusted network.**
+Service keys authenticate a caller; they do not make the API safe to offer to untrusted users.
+
+## Every operation is made for a named owner
+
+A service key may assert any owner, but it may not act without one. Every read, listing and change
+of a workspace or a run names its `ownerUserId`, and the control plane serves the resource only when
+it belongs to that owner. A call that names none, or names someone else, answers the same 404 as an
+id that does not exist. A run is created only in a workspace that belongs to the owner it is created
+for.
+
+Three authorities reach the control plane, and they are not interchangeable:
+
+- a **service key**: a trusted product acting for the owner it names;
+- a **scoped user access token**: one owner, the session surface only, with its scopes enforced;
+- the **SSH gateway's shared secret**: key and target resolution, and the interactive `ssh` runs of
+  the sessions it carries. It can not create a workspace, read a record, or touch another harness's
+  run.
+
+Not owned, and so not owner-scoped: the registry routes (repository tags and manifests are shared
+across owners, since images are keyed by plan, not by person) and `GET /v1/users/:id`. A service
+principal reads both for any id. An inference continuation is owned: it is served only to the owner
+who opened the exchange.
+
+The worker holds none of these. It never calls the API: it consumes jobs from Postgres with the
+database credentials and the credentials key, so it is as trusted as the database itself. Give it
+its own database role if you need it to hold less; nothing in this release does that for you.
+
+`SEALANT_REQUIRE_OWNER_SCOPE=false` restores unscoped reads and ID-only updates. It exists so a
+control plane can be upgraded ahead of an SDK caller older than 0.34, is logged at start, and should
+be removed once every caller is upgraded.
+
+## Budgets
+
+Per-container CPU and memory limits bound one workspace. Budgets bound a caller and an owner: a
+request rate per credential, a launch rate per owner, ceilings on an owner's live workspaces and
+active runs, an optional daily inference-token ceiling per owner, and a cap on the output stored for
+one run. Reaching one answers `429` with a message naming the budget and `retryAfterSeconds` in the
+body; the request-rate refusal, which the transport gate answers, also sets `Retry-After`. It
+refuses new work and never stops work that is running. A run past its output cap keeps running and
+keeps its event rows; the record carries a loss span where stored content ends.
+
+What they are not: request windows are held in each API process, so N replicas admit up to N times
+the rate; one service key is one credential however many people the product behind it serves, so its
+request budget is sized for the whole product; a ceiling is checked before the work is created, so
+creates that race can overshoot it by the number in flight; the output cap counts per ingest
+connection; and the inference ceiling counts tokens the engines report, which is not money. Each is
+set by a `SEALANT_BUDGET_*` variable ([reference](/docs/reference/environment-variables)), `0` turns
+one off, and the API logs at start which are off.
+
+## Credentials go where they were issued for
+
+Two credentials leave the control plane for a destination the caller names, and both destinations
+are checked at create, before anything is minted, sealed or queued.
+
+- A GitHub installation token is sent only to `https://<your GitHub host>/<owner>/<name>` for the
+  repository the `authRef` stands for. Another host, plain HTTP, embedded credentials, a port, a
+  query or a different repository is refused.
+- A capture session token is sent only to an `http(s)` channel endpoint, inside
+  `SEALANT_CAPTURE_ALLOWED_ENDPOINTS` when the operator set it. A plain-HTTP endpoint beyond
+  loopback needs the launcher's `transport.plaintext`, and `SEALANT_CAPTURE_REFUSE_PLAINTEXT` vetoes
+  that. The workspace daemon enforces the same transport rules again at boot and verifies
+  certificates against the public roots or the CA bundle the launcher named.
+
+None of this contains code running in a workspace, which can dial whatever its network reaches.
+Egress isolation is the runtime's job: the chart's workspace NetworkPolicy (DNS, the registry, the
+entries in `networkPolicies.workspaceEgressAllow`, and the Internet minus private ranges) on
+Kubernetes, the network connector on MicroVMs. The Docker adapter puts workspaces on a bridge
+network and does not filter their egress; do not treat it as a boundary against a hostile workspace.
+Whether a policy is enforced is a property of the cluster's CNI, so verify it with a deny probe from
+a workspace pod, including during pod start.
 
 ## Secrets and connected accounts
 

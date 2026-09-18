@@ -6,6 +6,9 @@ import {
   type FlushWorkspaceCaptureRequest,
   type ReplanWorkspaceCaptureRequest,
   WorkspaceBadGatewayError,
+  isOciRepository,
+  isOciTag,
+  OCI_REPOSITORY_MESSAGE,
   WorkspaceBadRequestError,
   WorkspaceDockerServiceUnsupportedError,
   WorkspaceRuntimeEnvReferencesUnsupportedError,
@@ -91,9 +94,16 @@ import {
   WorkspaceBuildJobPublisherService,
   WorkspaceLifecyclePublisherService,
 } from "../../services/control-plane-capabilities.js";
+import { requireLiveWorkspaceRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
+import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
 import { mapRun } from "../runs/runs.module.js";
 import { resolveDaemonTarget } from "../sessions/sessions.module.js";
 import { validateClientSuppliedAuthRefs } from "./client-authrefs.js";
+import {
+  captureDestinationRefusal,
+  gitHubWebHostOf,
+  parseAllowedCaptureOrigins,
+} from "./credential-destinations.js";
 
 interface WorkspaceEventDraft {
   readonly workspaceId: string;
@@ -192,6 +202,39 @@ const parseWorkspaceSpec = (spec: unknown) => {
 
   return Effect.succeed(parsed.data);
 };
+
+/**
+ * A capture source's session channel must be a destination this install hands a session token
+ * to: an approved origin when the operator pinned any, and a transport the daemon will dial.
+ */
+const validateCaptureDestination = (spec: NewWorkspace) =>
+  Effect.gen(function* () {
+    const source = spec.sources.workspace;
+    if (source.kind !== "capture") return;
+    const allowedOrigins = parseAllowedCaptureOrigins(env.SEALANT_CAPTURE_ALLOWED_ENDPOINTS);
+    if (allowedOrigins === null) {
+      return yield* new WorkspaceInternalServerError({
+        message:
+          "SEALANT_CAPTURE_ALLOWED_ENDPOINTS must be comma-separated http(s) origins with no path.",
+      });
+    }
+    if (source.transport !== undefined && env.DEFAULT_RUNTIME_ADAPTER === "cloudflare") {
+      // The adapter refuses it at launch, after the token is sealed and an image is built.
+      return yield* new WorkspaceBadRequestError({
+        message:
+          "The cloudflare runtime dials the capture channel over https with the public roots; source.transport is not supported.",
+      });
+    }
+    const refusal = captureDestinationRefusal({
+      endpoint: source.endpoint,
+      plaintext: source.transport?.plaintext === true,
+      allowedOrigins,
+      refusePlaintext: env.SEALANT_CAPTURE_REFUSE_PLAINTEXT,
+    });
+    if (refusal !== null) {
+      return yield* new WorkspaceForbiddenError({ message: refusal });
+    }
+  });
 
 /**
  * The capture source's session credential (sealantd ADR-0015) is the one secret the create request
@@ -536,7 +579,9 @@ const buildGitHubWorkspaceSource = (input: {
   return {
     kind: "git",
     provider: "github",
-    url: `https://github.com/${input.fullName}.git`,
+    // The same host `validateClientSuppliedAuthRefs` binds the ref to, so a rerun that resubmits
+    // this minted spec passes on GitHub Enterprise Server as it does on github.com.
+    url: `https://${gitHubWebHostOf(env.GITHUB_API_BASE_URL)}/${input.fullName}.git`,
     ref: input.ref,
     authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
   };
@@ -552,7 +597,9 @@ const buildGitHubDotfilesInput = (input: {
     kind: "git",
     purpose: "dotfiles",
     provider: "github",
-    url: `https://github.com/${input.fullName}.git`,
+    // The same host `validateClientSuppliedAuthRefs` binds the ref to, so a rerun that resubmits
+    // this minted spec passes on GitHub Enterprise Server as it does on github.com.
+    url: `https://${gitHubWebHostOf(env.GITHUB_API_BASE_URL)}/${input.fullName}.git`,
     ref: input.ref,
     authRef: createGitHubInstallationRepositoryAuthRef(input.installationRepositoryId),
   };
@@ -1361,6 +1408,14 @@ export const createWorkspace = (input: {
       }
     }
 
+    // The image name becomes registry URL segments and `docker` arguments in the worker. Refuse
+    // one outside the OCI grammar here, as a 400, not an hour later as a failed build.
+    if (!isOciRepository(body.repository.trim()) || !isOciTag(body.tag.trim())) {
+      return yield* new WorkspaceBadRequestError({
+        message: `repository ${OCI_REPOSITORY_MESSAGE}; tag must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.`,
+      });
+    }
+
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
 
     const envReferencesRefusal = runtimeEnvReferencesRefusal(
@@ -1402,6 +1457,10 @@ export const createWorkspace = (input: {
       sourceSelection: body.sourceSelection,
     });
 
+    // The capture token goes to the endpoint the caller names (CORE-05): check the destination
+    // before the token is sealed for a launch.
+    yield* validateCaptureDestination(parsedSpec);
+
     const sourceSelectionResult = yield* resolveGitHubSourceSelection({
       ownerUserId: body.ownerUserId,
       spec: parsedSpec,
@@ -1427,6 +1486,13 @@ export const createWorkspace = (input: {
         message: packageStandardization.errors[0] ?? "Package standardization failed.",
       });
     }
+
+    // Budgets last among the refusals (CORE-04): a request that was never going to launch spends
+    // nothing, and nothing has been created yet, so a refusal leaves no effect behind. Two creates
+    // that race past the ceiling together both pass it: the ceiling can be overshot by the
+    // number in flight, never by more.
+    yield* requireLiveWorkspaceRoom(body.ownerUserId);
+    yield* spendOwnerLaunch(body.ownerUserId);
 
     const resolvedSpec = packageStandardization.spec;
 
@@ -1615,6 +1681,8 @@ export const renameWorkspace = (input: {
   readonly payload: RenameWorkspaceRequest;
 }) => {
   return Effect.gen(function* () {
+    // Rename was addressed by id alone: any caller could rename any owner's workspace.
+    yield* requireScopedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const workspaces = yield* WorkspaceRepo;
     const workspace = yield* withInternalError(
       workspaces.setWorkspaceName({
@@ -1720,23 +1788,35 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
   });
 };
 
-export const getWorkspace = (workspaceId: string, ownerUserId?: string) => {
+/**
+ * The workspace, when it belongs to the owner the caller named (CORE-03). A call that names no
+ * owner finds nothing, before any lookup; a mismatch answers the same 404, so an id never reveals
+ * that it exists for someone else.
+ */
+const requireScopedWorkspace = (workspaceId: string, ownerUserId: string | undefined) => {
   return Effect.gen(function* () {
-    const workspaceRepo = yield* WorkspaceRepo;
+    const scope = resolveOwnerScope(ownerUserId);
+    if (scope.kind === "missing") {
+      return yield* new WorkspaceNotFoundError({
+        message: `Workspace not found: ${workspaceId} (${OWNER_REQUIRED_HINT})`,
+      });
+    }
     const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(workspaceId),
+      (yield* WorkspaceRepo).getWorkspaceById(workspaceId),
       "Failed to load workspace.",
     );
-
-    // Owner-scoped reads answer a uniform 404 — never reveal that the id exists for someone else.
-    if (
-      workspace === undefined ||
-      (ownerUserId !== undefined && workspace.ownerUserId !== ownerUserId)
-    ) {
+    if (workspace === undefined || !scopeAdmits(scope, workspace.ownerUserId)) {
       return yield* new WorkspaceNotFoundError({
         message: `Workspace not found: ${workspaceId}`,
       });
     }
+    return workspace;
+  });
+};
+
+export const getWorkspace = (workspaceId: string, ownerUserId: string | undefined) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireScopedWorkspace(workspaceId, ownerUserId);
 
     const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
 
@@ -1881,17 +1961,8 @@ export const listWorkspaceAttempts = (input: {
       name: "limit",
     });
 
+    const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspaceRepo = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-
-    if (workspace === undefined) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
 
     const links = yield* withInternalError(
       workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),
@@ -1969,17 +2040,8 @@ export const listWorkspaceEvents = (input: {
       name: "limit",
     });
 
+    const workspace = yield* requireScopedWorkspace(input.workspaceId, input.query.ownerUserId);
     const workspaceRepo = yield* WorkspaceRepo;
-    const workspace = yield* withInternalError(
-      workspaceRepo.getWorkspaceById(input.workspaceId),
-      "Failed to load workspace.",
-    );
-
-    if (workspace === undefined) {
-      return yield* new WorkspaceNotFoundError({
-        message: `Workspace not found: ${input.workspaceId}`,
-      });
-    }
 
     const links = yield* withInternalError(
       workspaceRepo.listWorkspaceAttemptLinks(workspace.id, limit),
@@ -2520,6 +2582,19 @@ export const restartWorkspace = (input: {
       });
     }
     const spec = yield* parseWorkspaceSpec(specPayload);
+    // A relaunch mints credentials again from the recorded spec, so the recorded spec is checked
+    // like a submitted one. A spec stored before refs were bound to their URL (CORE-05) may name a
+    // destination the ref was never issued for; it is refused here, not relaunched.
+    yield* validateClientSuppliedAuthRefs({ ownerUserId: input.payload.ownerUserId, spec }).pipe(
+      Effect.catchTags({
+        WorkspaceForbiddenError: (error) =>
+          Effect.fail(
+            new WorkspaceConflictError({
+              message: `Workspace ${input.workspaceId} cannot be restarted from its recorded spec: ${error.message}`,
+            }),
+          ),
+      }),
+    );
     if (spec.sources.workspace.kind === "capture") {
       // The session credential was sealed for the launch and cleared once it settled; a relaunch
       // would boot with no channel credential. Replacement is a new workspace with a fresh token.
@@ -2527,6 +2602,16 @@ export const restartWorkspace = (input: {
         message: `Workspace ${input.workspaceId} is capture-sourced and cannot be restarted in place: its session credential is not retained. Create a replacement workspace with a fresh captureToken.`,
       });
     }
+
+    // Budgets last among the refusals, as in create. A restart brings a settled workspace back to life: it needs room and spends a launch.
+    if (
+      workspace.status !== "queued" &&
+      workspace.status !== "running" &&
+      workspace.status !== "ready"
+    ) {
+      yield* requireLiveWorkspaceRoom(input.payload.ownerUserId);
+    }
+    yield* spendOwnerLaunch(input.payload.ownerUserId);
 
     // Stop the old runtime first (idempotent in the worker even if it already stopped/failed).
     const lifecyclePublisher = yield* WorkspaceLifecyclePublisherService;

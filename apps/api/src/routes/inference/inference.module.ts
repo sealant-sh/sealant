@@ -12,6 +12,7 @@
  * engine errors pass through `redactSecret` before leaving this module.
  */
 import {
+  BudgetExceededError,
   InferenceBadRequestError,
   InferenceConflictError,
   InferenceInternalServerError,
@@ -38,6 +39,7 @@ import {
 } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
+  InferenceUsageRepo,
   ProfileRepo,
   type ConnectedAccount,
   type ConnectedAccountRepoService,
@@ -46,6 +48,9 @@ import { persistClaudeCredentialsIfNewer, persistCodexAuthJsonIfNewer } from "@s
 import { Effect, Layer } from "effect";
 
 import { env } from "../../runtime-env.js";
+import { budgetLimits } from "../../services/budget-limits.js";
+import { budgetMessage, ceilingDecision, secondsUntilUtcMidnight } from "../../services/budgets.js";
+import { spendOwnerLaunch } from "../../services/owner-budgets.js";
 import {
   InferenceEngine,
   InferenceEngineError,
@@ -326,7 +331,35 @@ const respondWithCodex = (input: {
     return mapEngineTurn(engineTurn);
   });
 
-export const respond = (payload: InferenceRespondRequest) =>
+/**
+ * Which owner opened each parked exchange (CORE-03). A continuation is addressed by session id, and
+ * the session holds the opening owner's credentials, so it is served only to that owner. The
+ * engines keep their sessions in this process's memory, so this map lives beside them; it is
+ * bounded, oldest first, and an entry ends with its exchange.
+ */
+const SESSION_OWNERS_MAX = 10_000;
+const sessionOwners = new Map<string, string>();
+
+const rememberSessionOwner = (response: InferenceRespondResponse, ownerUserId: string): void => {
+  if (response.turn.type !== "toolCalls") {
+    sessionOwners.delete(response.sessionId);
+    return;
+  }
+  if (!sessionOwners.has(response.sessionId) && sessionOwners.size >= SESSION_OWNERS_MAX) {
+    const oldest = sessionOwners.keys().next();
+    if (oldest.done !== true) sessionOwners.delete(oldest.value);
+  }
+  sessionOwners.set(response.sessionId, ownerUserId);
+};
+
+const respondUnmetered = (payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
+    const response = yield* respondAs(payload);
+    rememberSessionOwner(response, payload.ownerUserId);
+    return response;
+  });
+
+const respondAs = (payload: InferenceRespondRequest) =>
   Effect.gen(function* () {
     const isNew = payload.prompt !== undefined;
     const isContinuation = payload.sessionId !== undefined || payload.toolResults !== undefined;
@@ -343,6 +376,13 @@ export const respond = (payload: InferenceRespondRequest) =>
       if (payload.sessionId === undefined || payload.toolResults === undefined) {
         return yield* new InferenceBadRequestError({
           message: "A continuation requires both sessionId and toolResults.",
+        });
+      }
+      // Another owner's session answers exactly like one that does not exist.
+      const openedBy = sessionOwners.get(payload.sessionId);
+      if (openedBy !== undefined && openedBy !== payload.ownerUserId) {
+        return yield* new InferenceNotFoundError({
+          message: `Inference session not found (or expired): ${payload.sessionId}. Start the exchange over.`,
         });
       }
       const engineTurn = yield* engine
@@ -524,4 +564,73 @@ export const respond = (payload: InferenceRespondRequest) =>
       );
 
     return mapEngineTurn(engineTurn);
+  });
+
+const utcDay = (now: Date): string => now.toISOString().slice(0, 10);
+
+/**
+ * `respond`, inside the owner's budgets (CORE-04). A new exchange needs room in the owner's daily
+ * token budget and spends one launch; a continuation belongs to an exchange already admitted, so
+ * it is never refused half-way. Usage is recorded when a turn reports it. Recording is
+ * best-effort: a failed write is logged and the answer the owner paid for is still returned, so
+ * the budget can under-count after a database fault and never over-refuses because of one.
+ */
+export const respond = (payload: InferenceRespondRequest) =>
+  Effect.gen(function* () {
+    const usage = yield* InferenceUsageRepo;
+    const now = new Date();
+    // Only a well-formed new exchange is metered: a malformed request spends nothing.
+    const opensExchange =
+      payload.prompt !== undefined &&
+      payload.sessionId === undefined &&
+      payload.toolResults === undefined;
+    if (opensExchange) {
+      const limit = budgetLimits.ownerInferenceTokensPerDay;
+      if (limit > 0) {
+        const spent = yield* usage
+          .tokensOn(payload.ownerUserId, utcDay(now))
+          .pipe(
+            Effect.mapError(
+              () =>
+                new InferenceInternalServerError({ message: "Failed to read inference usage." }),
+            ),
+          );
+        const decision = ceilingDecision(
+          "ownerInferenceTokensPerDay",
+          spent,
+          limit,
+          secondsUntilUtcMidnight(now),
+        );
+        if (!decision.allowed) {
+          return yield* new BudgetExceededError({
+            message: budgetMessage(decision),
+            budget: decision.budget,
+            limit: decision.limit,
+            retryAfterSeconds: decision.retryAfterSeconds,
+          });
+        }
+      }
+      yield* spendOwnerLaunch(payload.ownerUserId);
+    }
+
+    const response = yield* respondUnmetered(payload);
+
+    if (response.usage !== undefined) {
+      yield* usage
+        .record({
+          ownerUserId: payload.ownerUserId,
+          day: utcDay(new Date()),
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "Failed to record inference usage; the daily budget under-counts.",
+              cause,
+            ),
+          ),
+        );
+    }
+    return response;
   });

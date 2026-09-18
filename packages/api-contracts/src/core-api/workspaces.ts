@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { BudgetExceededError } from "./budgets.js";
 import { runCommandSchema, runSchema } from "./runs.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
@@ -199,6 +200,8 @@ export type WorkspaceCaptureReplanned = typeof workspaceCaptureReplannedSchema.T
 
 export const renameWorkspaceRequestSchema = Schema.Struct({
   name: NonEmptyString,
+  /** The workspace's owner. Required by the control plane: a rename that names none finds nothing. */
+  ownerUserId: Schema.optional(NonEmptyString),
 });
 export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 
@@ -298,7 +301,10 @@ export const workspaceDetailsSchema = Schema.Struct({
 });
 export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
 
-/** Owner scoping on a single read: present = must match (uniform 404), absent = unscoped. */
+/**
+ * Owner scoping on a single read: the workspace must belong to `ownerUserId` (uniform 404).
+ * Optional on the wire for older callers; the control plane requires it.
+ */
 export const getWorkspaceQuerySchema = Schema.Struct({
   ownerUserId: Schema.optional(NonEmptyString),
 });
@@ -317,6 +323,7 @@ export const listWorkspacesResponseSchema = Schema.Struct({
 export type ListWorkspacesResponse = typeof listWorkspacesResponseSchema.Type;
 
 export const listWorkspaceAttemptsQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
 });
 export type ListWorkspaceAttemptsQuery = typeof listWorkspaceAttemptsQuerySchema.Type;
@@ -347,6 +354,7 @@ export const listWorkspaceAttemptsResponseSchema = Schema.Struct({
 export type ListWorkspaceAttemptsResponse = typeof listWorkspaceAttemptsResponseSchema.Type;
 
 export const listWorkspaceEventsQuerySchema = Schema.Struct({
+  ownerUserId: Schema.optional(NonEmptyString),
   limit: Schema.optional(NonEmptyString),
 });
 export type ListWorkspaceEventsQuery = typeof listWorkspaceEventsQuerySchema.Type;
@@ -497,6 +505,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: createWorkspaceRequestSchema,
       success: createWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
       error: [
+        BudgetExceededError,
         WorkspaceBadRequestError,
         WorkspaceRuntimeEnvReferencesUnsupportedError,
         WorkspaceDockerServiceUnsupportedError,
@@ -599,6 +608,7 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
       payload: restartWorkspaceRequestSchema,
       success: restartWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
       error: [
+        BudgetExceededError,
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
         // The workspace has never launched (no spec to relaunch from) or is mid-launch.

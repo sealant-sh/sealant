@@ -12,6 +12,8 @@
 import { Schema } from "effect";
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi";
 
+import { BudgetExceededError } from "./budgets.js";
+
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
 export const runStatusSchema = Schema.Literals([
@@ -91,6 +93,8 @@ export const createRunRequestSchema = Schema.Struct({
 export type CreateRunRequest = typeof createRunRequestSchema.Type;
 
 export const updateRunRequestSchema = Schema.Struct({
+  /** The run's owner. Required by the control plane: an update that names no owner finds no run. */
+  ownerUserId: Schema.optional(NonEmptyString),
   status: Schema.optional(runStatusSchema),
   exitCode: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(Schema.String),
@@ -132,9 +136,9 @@ export const timelineEntrySchema = Schema.Struct({
 export type TimelineEntry = typeof timelineEntrySchema.Type;
 
 /**
- * Owner scoping on reads: when `ownerUserId` is present the run must belong to it (uniform 404
- * otherwise). Service principals acting for a user always send it; omitted = unscoped (the open
- * pre-auth model).
+ * Owner scoping on reads: the run must belong to `ownerUserId` (uniform 404 otherwise). The field
+ * stays optional on the wire for older callers, but the control plane requires it: a read that
+ * names no owner finds no run.
  */
 export const runOwnerQuerySchema = Schema.Struct({
   ownerUserId: Schema.optional(NonEmptyString),
@@ -283,7 +287,7 @@ export const RunsGroup = HttpApiGroup.make("runs")
     HttpApiEndpoint.post("createRun", "/", {
       payload: createRunRequestSchema,
       success: runSchema.pipe(HttpApiSchema.status(201)),
-      error: [RunBadRequestError, RunNotFoundError, RunInternalServerError],
+      error: [BudgetExceededError, RunBadRequestError, RunNotFoundError, RunInternalServerError],
     }),
   )
   .add(

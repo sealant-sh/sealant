@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import {
+  isOciDigest,
+  isOciReference,
+  isOciRepository,
+  isOciTag,
+  OCI_REFERENCE_MESSAGE,
+  OCI_REPOSITORY_MESSAGE,
+} from "@sealant/api-contracts";
+
 import { selectLoadedImageIdentifier } from "./docker-load-output.js";
 
 const execFileAsync = promisify(execFile);
@@ -35,28 +44,118 @@ const expectStringArray = (value: unknown, message: string): Array<string> => {
   return value;
 };
 
-const normalizeRepository = (repository: string): string => {
+/** A repository, tag or digest outside the OCI grammar: refused before any URL is built. */
+export class RegistryNameError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "RegistryNameError";
+  }
+}
+
+/**
+ * Refuse, never repair (CORE-08). These values become URL path segments and `docker` arguments;
+ * the OCI grammar admits no `..`, `%`, `?`, `#`, `\`, scheme, whitespace or empty segment, so a
+ * name that matches it cannot address anything but a repository. Surrounding slashes and
+ * whitespace are the one tolerated spelling, as before.
+ */
+export const normalizeRepository = (repository: string): string => {
   const trimmed = repository.trim().replace(/^\/+/, "").replace(/\/+$/, "");
 
   if (trimmed.length === 0) {
-    throw new Error("Repository names must not be empty.");
+    throw new RegistryNameError("Repository names must not be empty.");
+  }
+  if (!isOciRepository(trimmed)) {
+    throw new RegistryNameError(`Repository name ${OCI_REPOSITORY_MESSAGE}.`);
   }
 
   return trimmed;
 };
 
-const normalizeTag = (tag: string): string => {
+export const normalizeTag = (tag: string): string => {
   const trimmed = tag.trim();
 
   if (trimmed.length === 0) {
-    throw new Error("Image tags must not be empty.");
+    throw new RegistryNameError("Image tags must not be empty.");
+  }
+  if (!isOciTag(trimmed)) {
+    throw new RegistryNameError("Image tags must match [A-Za-z0-9_][A-Za-z0-9._-]{0,127}.");
+  }
+
+  return trimmed;
+};
+
+const normalizeReference = (reference: string): string => {
+  const trimmed = reference.trim();
+
+  if (!isOciReference(trimmed)) {
+    throw new RegistryNameError(`Manifest reference ${OCI_REFERENCE_MESSAGE}.`);
+  }
+
+  return trimmed;
+};
+
+export const normalizeDigest = (digest: string): string => {
+  const trimmed = digest.trim();
+
+  if (!isOciDigest(trimmed)) {
+    throw new RegistryNameError(
+      "Image digests must be algorithm:encoded (for example sha256:<64 hex>).",
+    );
   }
 
   return trimmed;
 };
 
 const joinRegistryUrl = (baseUrl: URL, path: string): URL => {
-  return new URL(path.replace(/^\//, ""), `${baseUrl.toString().replace(/\/?$/, "/")}`);
+  const base = `${baseUrl.toString().replace(/\/?$/, "/")}`;
+  const joined = new URL(path.replace(/^\//, ""), base);
+  // Belt and braces behind the name grammar: the request stays on the registry's origin and under
+  // its /v2/ API, whatever a path segment turned out to contain.
+  if (
+    joined.origin !== baseUrl.origin ||
+    !joined.pathname.startsWith(`${new URL(base).pathname}v2/`)
+  ) {
+    throw new RegistryNameError("Registry request path left the registry's /v2/ API.");
+  }
+  return joined;
+};
+
+/** Registry answers are small documents; anything larger or slower is not one. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_ERROR_BODY_BYTES = 4 * 1024;
+
+/** The response exceeded the byte bound, by its declared length or while streaming. */
+export class RegistryResponseTooLargeError extends Error {
+  public constructor(limit: number) {
+    super(`Registry response exceeded ${limit} bytes.`);
+    this.name = "RegistryResponseTooLargeError";
+  }
+}
+
+/** Read a body as text, stopping (and cancelling the stream) once `limit` bytes have arrived. */
+export const readBoundedText = async (response: Response, limit: number): Promise<string> => {
+  const declared = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel();
+    throw new RegistryResponseTooLargeError(limit);
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limit) {
+      await reader.cancel();
+      throw new RegistryResponseTooLargeError(limit);
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 };
 
 const buildBasicAuthHeader = (username: string, password: string): string => {
@@ -131,6 +230,10 @@ export interface ZotRegistryClientConfig {
   readonly password?: string;
   readonly fetch?: typeof fetch;
   readonly commandRunner?: CommandRunner;
+  /** Per-request deadline; default 30 s. */
+  readonly requestTimeoutMs?: number;
+  /** Largest response body read; default 8 MiB. */
+  readonly maxResponseBytes?: number;
 }
 
 /**
@@ -188,7 +291,13 @@ export class ZotRegistryClient implements RegistryClient {
 
   private readonly authorizationHeader?: string;
 
+  private readonly requestTimeoutMs: number;
+
+  private readonly maxResponseBytes: number;
+
   public constructor(config: ZotRegistryClientConfig) {
+    this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.maxResponseBytes = config.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
     this.baseUrl = new URL(config.baseUrl);
     this.pushRegistry = config.pushRegistry ?? this.baseUrl.host;
     this.fetchImpl = config.fetch ?? fetch;
@@ -225,7 +334,7 @@ export class ZotRegistryClient implements RegistryClient {
     }
 
     const body = expectRecord(
-      parseJsonObject(await response.text()),
+      parseJsonObject(await readBoundedText(response, this.maxResponseBytes)),
       "Expected a tags list object from the registry.",
     );
     const tags = body.tags;
@@ -242,7 +351,7 @@ export class ZotRegistryClient implements RegistryClient {
     reference: string,
   ): Promise<RegistryManifest | null> {
     const response = await this.request(
-      `/v2/${normalizeRepository(repository)}/manifests/${reference}`,
+      `/v2/${normalizeRepository(repository)}/manifests/${normalizeReference(reference)}`,
       {
         allowStatusCodes: [404],
         headers: {
@@ -260,13 +369,13 @@ export class ZotRegistryClient implements RegistryClient {
     return {
       ...(digest === null ? {} : { digest }),
       contentType: response.headers.get("content-type"),
-      body: parseJsonObject(await response.text()),
+      body: parseJsonObject(await readBoundedText(response, this.maxResponseBytes)),
     };
   }
 
   public async headManifest(repository: string, reference: string): Promise<string | null> {
     const response = await this.request(
-      `/v2/${normalizeRepository(repository)}/manifests/${reference}`,
+      `/v2/${normalizeRepository(repository)}/manifests/${normalizeReference(reference)}`,
       {
         method: "HEAD",
         allowStatusCodes: [404],
@@ -290,7 +399,7 @@ export class ZotRegistryClient implements RegistryClient {
    */
   public async deleteImage(input: DeleteImageInput): Promise<DeleteImageOutcome> {
     const repository = normalizeRepository(input.repository);
-    const digest = input.digest.trim();
+    const digest = normalizeDigest(input.digest);
     const response = await this.request(`/v2/${repository}/manifests/${digest}`, {
       method: "DELETE",
       allowStatusCodes: [404],
@@ -310,7 +419,7 @@ export class ZotRegistryClient implements RegistryClient {
   public async discoverExtensions(): Promise<Array<RegistryExtension>> {
     const response = await this.request("/v2/_oci/ext/discover");
     const body = expectRecord(
-      parseJsonObject(await response.text()),
+      parseJsonObject(await readBoundedText(response, this.maxResponseBytes)),
       "Expected an extension discovery object from the registry.",
     );
     const extensions = body.extensions;
@@ -396,12 +505,16 @@ export class ZotRegistryClient implements RegistryClient {
     const response = await this.fetchImpl(url, {
       method: options?.method ?? "GET",
       headers,
+      // A registry answer is never a redirect we follow: a 3xx is reported as a failed status, so
+      // the Basic credential and the request never move to a host this client was not given.
+      redirect: "manual",
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
 
     const allowed = new Set(options?.allowStatusCodes ?? []);
 
     if (!response.ok && !allowed.has(response.status)) {
-      const body = await response.text();
+      const body = await readBoundedText(response, MAX_ERROR_BODY_BYTES).catch(() => "");
       throw new RegistryClientHttpError(`Registry request failed with status ${response.status}.`, {
         status: response.status,
         url: url.toString(),

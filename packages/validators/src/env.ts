@@ -108,8 +108,30 @@ export const servicePrincipalsEnvSchema = z.object({
   // Comma-separated bearer secrets for SERVICE PRINCIPALS — trusted products (Mend) that act on
   // behalf of any owner. When set, every /v1 request must carry one of these as a bearer, except
   // the session surface (scoped user access tokens still authenticate alone) and the gateway
-  // routes (their own shared secret). Unset = the open, loopback-only pre-auth model.
+  // routes (their own shared secret). Unset, the API refuses to start: see SEALANT_ALLOW_OPEN_API.
   SEALANT_SERVICE_KEYS: z.string().trim().min(1).optional(),
+  // The explicit development exception to the rule above: with no service keys the API serves
+  // every /v1 route to anyone who can reach it. Honoured only outside NODE_ENV=production; a
+  // production process with no keys refuses to start whatever this says.
+  SEALANT_ALLOW_OPEN_API: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(false),
+  // Budgets (CORE-04). Each refuses new work with 429 and a Retry-After and never stops running
+  // work; 0 turns one off. Request windows are per API process; the rest are read from Postgres.
+  // One service key is one credential however many people the product behind it serves, so this
+  // one is sized for a whole product: 200 requests a second.
+  SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE: z.coerce.number().int().min(0).default(12000),
+  SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE: z.coerce.number().int().min(0).default(120),
+  SEALANT_BUDGET_OWNER_LIVE_WORKSPACES: z.coerce.number().int().min(0).default(100),
+  SEALANT_BUDGET_OWNER_ACTIVE_RUNS: z.coerce.number().int().min(0).default(100),
+  // Inference tokens (input + output) per owner per UTC day. Off by default: a sensible ceiling
+  // depends on the subscription behind each connected account, which only the operator knows.
+  SEALANT_BUDGET_OWNER_INFERENCE_TOKENS_PER_DAY: z.coerce.number().int().min(0).default(0),
+  // Every owned operation must name its owner (CORE-03). `false` restores unscoped reads and
+  // ID-only updates for one rollout, while an SDK caller that predates the rule is upgraded.
+  SEALANT_REQUIRE_OWNER_SCOPE: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(true),
 });
 
 export const credentialsEnvSchema = z.object({
@@ -255,6 +277,16 @@ export const workspaceLifecycleEnvSchema = z.object({
   // descendants of a root (mounting a whole root is a config error). Unset or empty = mount
   // sources are REJECTED — mounting host paths into workspaces is opt-in deployment policy.
   SEALANT_MOUNT_ALLOWED_STORE_ROOTS: z.string().optional(),
+  // Capture session channels the control plane will hand a session token to: comma-separated
+  // origins (`https://mend.example`). Unset = any http(s) origin the transport rules admit; set =
+  // only these. The token is the caller's own credential, so this is an operator's pin on where
+  // executors register, not an authorization of the caller.
+  SEALANT_CAPTURE_ALLOWED_ENDPOINTS: z.string().trim().min(1).optional(),
+  // The operator's veto on plain-HTTP capture channels, whatever a launcher states. Set it on an
+  // install whose executors are not on a private network with the channel.
+  SEALANT_CAPTURE_REFUSE_PLAINTEXT: z
+    .union([z.boolean(), z.enum(["true", "false"]).transform((value) => value === "true")])
+    .default(false),
 });
 
 /**

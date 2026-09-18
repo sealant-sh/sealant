@@ -15,10 +15,17 @@ import { InferenceEngineLive } from "./routes/inference/claude-engine.js";
 import { CodexInferenceEngineLive } from "./routes/inference/codex-engine.js";
 import { SessionOutputStreamRoute } from "./routes/sessions/sessions.sse.js";
 import { SessionAttachRoute } from "./routes/sessions/sessions.ws.js";
+import { parseAllowedCaptureOrigins } from "./routes/workspaces/credential-destinations.js";
 import { WorkspaceForwardRoute } from "./routes/workspaces/workspaces.ws.js";
 import { env } from "./runtime-env.js";
+import { budgetLimits } from "./services/budget-limits.js";
+import { budgetsOff, makeRateWindow } from "./services/budgets.js";
 import { ControlPlaneCapabilitiesLive } from "./services/control-plane-capabilities.js";
-import { servicePrincipalMiddleware, servicePrincipals } from "./services/service-principals.js";
+import {
+  authPosture,
+  servicePrincipalMiddleware,
+  servicePrincipals,
+} from "./services/service-principals.js";
 
 /**
  * Parse `CORS_ALLOWED_ORIGINS` from env into a normalized set.
@@ -256,9 +263,28 @@ const appLayer = Layer.mergeAll(apiLayer, sseLayer, wsLayer, forwardLayer, docsL
  */
 /**
  * Authentication gate (services/service-principals.ts). Runs INSIDE cors so preflights and the
- * 401 itself carry CORS headers; a no-op while `SEALANT_SERVICE_KEYS` is unset.
+ * 401 itself carry CORS headers. Without service keys the process has already refused to start,
+ * unless the development exception made it open (`resolveAuthPosture`).
  */
-const authGate = servicePrincipalMiddleware(servicePrincipals);
+if (parseAllowedCaptureOrigins(env.SEALANT_CAPTURE_ALLOWED_ENDPOINTS) === null) {
+  console.error(
+    "[api] refusing to start: SEALANT_CAPTURE_ALLOWED_ENDPOINTS must be comma-separated http(s) origins with no path.",
+  );
+  process.exit(78);
+}
+if (authPosture.kind === "refused") {
+  console.error(`[api] refusing to start: ${authPosture.message}`);
+  process.exit(78);
+}
+
+const authGate = servicePrincipalMiddleware(
+  servicePrincipals,
+  env.WORKSPACE_SSH_GATEWAY_TOKEN?.trim(),
+  {
+    window: makeRateWindow(),
+    requestsPerMinute: budgetLimits.principalRequestsPerMinute,
+  },
+);
 
 const serverLayer = HttpRouter.serve(appLayer, {
   middleware: (app) => corsMiddleware(authGate(app)),
@@ -272,10 +298,23 @@ const databaseUrl = new URL(env.DATABASE_URL);
 console.log(`[api] database: ${databaseUrl.protocol}//${databaseUrl.host}${databaseUrl.pathname}`);
 console.log(`[api] repology endpoint: ${env.REPOLOGY_API_BASE_URL}`);
 console.log(
-  servicePrincipals.enabled
+  authPosture.kind === "closed"
     ? "[api] authentication: service keys required on /v1"
-    : "[api] authentication: OPEN (SEALANT_SERVICE_KEYS unset) — keep this API on loopback",
+    : "[api] authentication: OPEN (SEALANT_ALLOW_OPEN_API, development only) — every /v1 route is served without a credential; keep this API on loopback",
 );
+
+const budgetsTurnedOff = budgetsOff(budgetLimits);
+console.log(
+  budgetsTurnedOff.length === 0
+    ? "[api] budgets: all set"
+    : `[api] budgets: off for ${budgetsTurnedOff.join(", ")} (0 = no limit)`,
+);
+
+if (!env.SEALANT_REQUIRE_OWNER_SCOPE) {
+  console.warn(
+    "[api] owner scope: NOT REQUIRED (SEALANT_REQUIRE_OWNER_SCOPE=false) — reads and updates that name no owner are served unscoped; for one rollout only",
+  );
+}
 
 /**
  * Boot the server runtime.

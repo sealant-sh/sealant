@@ -162,7 +162,9 @@ export interface WorkspaceStandbySource {
  * offer (Cloudflare, a MicroVM) and outlive any one executor. `token` is delivered once, through
  * the secret env channel (`SEALANT_CAPTURE_TOKEN`), never into the blueprint or any read; a
  * capture workspace therefore cannot be restarted in place — create a replacement with a fresh
- * token. `platform` is a hint recorded for placement bookkeeping. No allowlist applies.
+ * token. `platform` is a hint recorded for placement bookkeeping. The control plane refuses an
+ * `endpoint` outside the operator's approved origins (when any are set) and a plain-HTTP endpoint
+ * beyond loopback that `transport.plaintext` does not account for.
  */
 export interface WorkspaceCaptureSource {
   readonly kind: "capture";
@@ -182,6 +184,25 @@ export interface WorkspaceCaptureSource {
    */
   readonly harnessHome?: string;
   readonly platform?: string;
+  /**
+   * How the executor dials the channel and its object URLs. Omitted, the daemon requires HTTPS
+   * with a certificate the public roots verify, and refuses to boot otherwise.
+   */
+  readonly transport?: WorkspaceCaptureTransport;
+}
+
+/** Transport for a capture source (sealantd ADR-0015 "Transport"). Certificates are public material. */
+export interface WorkspaceCaptureTransport {
+  /**
+   * Your statement that the network between the executor and the channel is private (a VPC, a
+   * cluster network, a Docker network), so plain HTTP may be dialled. Never set it for a channel
+   * reached over the Internet.
+   */
+  readonly plaintext?: boolean;
+  /** PEM roots the channel's certificate must chain to, in place of the public roots. */
+  readonly channelCaPem?: string;
+  /** PEM roots presigned object URLs must chain to, in place of the public roots. */
+  readonly objectCaPem?: string;
 }
 
 /**

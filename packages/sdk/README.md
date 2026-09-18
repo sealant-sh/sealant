@@ -243,6 +243,12 @@ const workspace = await sealant.workspaces.create({
   before the daemon watcher starts. The daemon then captures that existing directory and keeps using
   the same path after a standby claim or capture replan. Omitting the option keeps the legacy
   behavior and captures no harness subtree.
+- `transport` is optional. Without it the daemon dials `endpoint` and every object URL over HTTPS
+  with a certificate the public roots verify, and refuses to boot otherwise. Set
+  `transport.plaintext: true` only when the executor and the channel share a private network;
+  `transport.channelCaPem` and `transport.objectCaPem` name a private CA for each path. The control
+  plane refuses a plain-HTTP endpoint beyond loopback that `plaintext` does not account for, and an
+  endpoint outside the operator's `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`.
 - `harnessHome` is not a host mount. It cannot overlap the workspace working directory, the daemon
   control directory, or an extra mount target. No mount allowlist applies to the harness root. On
   Kubernetes the workspace root is an `emptyDir`; on Cloudflare the sandbox is kept alive while the

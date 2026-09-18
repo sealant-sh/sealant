@@ -5,6 +5,8 @@ export * from "./core-api/inference.js";
 export * from "./core-api/packages.js";
 export * from "./core-api/profiles.js";
 export * from "./core-api/record-events.js";
+export * from "./core-api/budgets.js";
+export * from "./core-api/oci-names.js";
 export * from "./core-api/registries.js";
 export * from "./core-api/runs.js";
 export * from "./core-api/sessions.js";

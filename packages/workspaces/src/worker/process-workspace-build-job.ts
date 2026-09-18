@@ -34,7 +34,7 @@ import {
   planImageCoordinates,
   type WorkspaceImageBuilder,
 } from "../images/index.js";
-import type { RegistryClient } from "../registry/index.js";
+import { RegistryNameError, type RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
   type CredentialFileInjection,
@@ -281,8 +281,13 @@ const attemptPlanHashReuse = (input: {
       repository: priorJob.repository,
       tag: priorJob.tag,
     };
+    // A prior publish may carry a name from before names were held to the OCI grammar. That is
+    // "no image to reuse", and the job rebuilds under a name the client accepts.
     const registryDigest = yield* Effect.tryPromise(() =>
-      input.registryClient.headManifest(prior.repository, prior.tag),
+      input.registryClient.headManifest(prior.repository, prior.tag).catch((error: unknown) => {
+        if (error instanceof RegistryNameError) return null;
+        throw error;
+      }),
     );
 
     if (registryDigest !== priorJob.publishedDigest) {

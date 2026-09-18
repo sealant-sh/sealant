@@ -63,9 +63,9 @@ catalog:
 
 minimumReleaseAgeExclude:
   - "@sealant/runtime-client@0.6.2 || 0.7.0 || 0.11.0 || 0.13.0 || 0.14.0 || 0.15.0 || 0.15.1 ||
-    0.15.2 || 0.16.0"
+    0.15.2 || 0.16.0 || 0.17.0"
   - "@sealant/runtime-protocol@0.6.2 || 0.7.0 || 0.11.0 || 0.13.0 || 0.14.0 || 0.15.0 || 0.15.1 ||
-    0.15.2 || 0.16.0"
+    0.15.2 || 0.16.0 || 0.17.0"
 
 onlyBuiltDependencies:
   - better-sqlite3

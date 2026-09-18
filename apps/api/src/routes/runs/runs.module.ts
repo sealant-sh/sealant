@@ -27,7 +27,7 @@ import {
   type TimelineEntry,
   type UpdateRunRequest,
 } from "@sealant/api-contracts";
-import { RunRepo } from "@sealant/db";
+import { RunRepo, WorkspaceRepo } from "@sealant/db";
 import {
   payloadCaseValues,
   TelemetryQuery,
@@ -38,6 +38,9 @@ import { getHarnessIntegration } from "@sealant/workspaces";
 import { Context, Effect, Stream } from "effect";
 
 import { RunExecPublisherService } from "../../services/control-plane-capabilities.js";
+import { requireActiveRunRoom, spendOwnerLaunch } from "../../services/owner-budgets.js";
+import { OWNER_REQUIRED_HINT, resolveOwnerScope, scopeAdmits } from "../../services/owner-scope.js";
+import { CurrentPrincipal } from "../../services/service-principals.js";
 
 // StreamKind numerics from @sealant/runtime-protocol (avoid a runtime dep for constants).
 const STREAM_KIND_STDOUT = 2;
@@ -107,12 +110,19 @@ export const mapRun = (run: RunRecord): Run => ({
   updatedAt: run.updatedAt.toISOString(),
 });
 
-const requireRun = (runId: string, ownerUserId?: string) =>
+const requireRun = (runId: string, ownerUserId: string | undefined) =>
   Effect.gen(function* () {
+    // Before the lookup: a call that names no owner learns nothing, not even a timing difference.
+    const scope = resolveOwnerScope(ownerUserId);
+    if (scope.kind === "missing") {
+      return yield* new RunNotFoundError({
+        message: `Run not found: ${runId} (${OWNER_REQUIRED_HINT})`,
+      });
+    }
     const runs = yield* RunRepo;
     const run = yield* withRunInternalError(runs.getRunById(runId), "Failed to load run.");
     // Owner-scoped reads answer a uniform 404 — never reveal that the id exists for someone else.
-    if (run === undefined || (ownerUserId !== undefined && run.ownerUserId !== ownerUserId)) {
+    if (run === undefined || !scopeAdmits(scope, run.ownerUserId)) {
       return yield* new RunNotFoundError({ message: `Run not found: ${runId}` });
     }
     return run;
@@ -163,9 +173,44 @@ const parseLimit = (raw: string | undefined, fallback: number, max: number) => {
   return Effect.succeed(value);
 };
 
+/** The SSH gateway's harness id: the only runs its secret may create or update. */
+const SSH_GATEWAY_HARNESS_ID = "ssh";
+
+const isGatewayRecordedRun = (run: {
+  readonly harnessId: string;
+  readonly mode: string | null | undefined;
+}): boolean => run.harnessId === SSH_GATEWAY_HARNESS_ID && run.mode === "interactive";
+
 export const createRun = (payload: CreateRunRequest) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
+
+    const principal = yield* CurrentPrincipal;
+    if (
+      principal.kind === "gateway" &&
+      !isGatewayRecordedRun({ harnessId: payload.harnessId, mode: payload.mode })
+    ) {
+      return yield* new RunBadRequestError({
+        message: "The SSH gateway records interactive ssh runs only.",
+      });
+    }
+
+    // The run executes inside the workspace, so the workspace must be the named owner's. A
+    // foreign key proved only that both rows exist: any owner could start a run, server-side, in
+    // another owner's workspace. Uniform 404, like every other owner mismatch.
+    const workspace = yield* withRunInternalError(
+      (yield* WorkspaceRepo).getWorkspaceById(payload.workspaceId),
+      "Failed to load workspace.",
+    );
+    if (workspace === undefined || workspace.ownerUserId !== payload.ownerUserId) {
+      return yield* new RunNotFoundError({
+        message: `Workspace not found: ${payload.workspaceId}`,
+      });
+    }
+
+    // Budgets last among the refusals (CORE-04), before the run row exists.
+    yield* requireActiveRunRoom(payload.ownerUserId);
+    yield* spendOwnerLaunch(payload.ownerUserId);
 
     // Resolve the invocation: an explicit command wins (custom harnesses); otherwise, for a
     // one-shot run with a prompt on a built-in harness, the control plane constructs it — the
@@ -233,6 +278,9 @@ export const createRun = (payload: CreateRunRequest) =>
 
 export const listRuns = (query: ListRunsQuery) =>
   Effect.gen(function* () {
+    if (resolveOwnerScope(query.ownerUserId).kind === "missing") {
+      return yield* new RunBadRequestError({ message: `${OWNER_REQUIRED_HINT}.` });
+    }
     const limit = yield* parseLimit(query.limit, 50, 200);
     const runs = yield* RunRepo;
     const items = yield* withRunInternalError(
@@ -269,7 +317,13 @@ export const getRunChanges = (runId: string, ownerUserId?: string) =>
 export const updateRun = (input: { readonly runId: string; readonly payload: UpdateRunRequest }) =>
   Effect.gen(function* () {
     const runs = yield* RunRepo;
-    yield* requireRun(input.runId);
+    const run = yield* requireRun(input.runId, input.payload.ownerUserId);
+    // The SSH gateway's secret records the interactive runs of the sessions it carries, and
+    // nothing else: it is a narrower authority than a service key, not a second one.
+    const principal = yield* CurrentPrincipal;
+    if (principal.kind === "gateway" && !isGatewayRecordedRun(run)) {
+      return yield* new RunNotFoundError({ message: `Run not found: ${input.runId}` });
+    }
     const status: RunStatusWire | undefined = input.payload.status;
 
     const capturedChanges = {

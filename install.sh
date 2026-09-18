@@ -200,6 +200,9 @@ chmod 600 "$ENV_FILE"
 ensure_env_var SEALANT_DB_PASSWORD "$(generate_secret)"
 ensure_env_var WORKSPACE_SSH_GATEWAY_TOKEN "$(generate_secret)"
 ensure_env_var BETTER_AUTH_SECRET "$(generate_secret)"
+# The web app's service key: the API refuses to start without one, and serves /v1 only to callers
+# that present one. Other trusted callers (Mend) get their own in SEALANT_SERVICE_KEYS.
+ensure_env_var SEALANT_WEB_SERVICE_KEY "$(generate_secret)"
 set_env_var SEALANT_VERSION "$VERSION"
 API_PORT="$(setting SEALANT_API_PORT 4000 "${SEALANT_API_PORT:-}")"
 WEB_PORT="$(setting SEALANT_WEB_PORT 3000 "${SEALANT_WEB_PORT:-}")"

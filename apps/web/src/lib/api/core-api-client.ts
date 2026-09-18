@@ -82,6 +82,12 @@ interface CoreApiRequestOptions<TOutput> {
 }
 
 export interface CreateCoreApiClientOptions {
+  /**
+   * The owner every request is made for. The control plane serves an owned resource only to a call
+   * that names its owner, so a client scoped to the signed-in user cannot read or rename someone
+   * else's workspace or run by id, whatever a route forgets to check.
+   */
+  readonly ownerUserId?: string;
   readonly baseUrl?: string;
   readonly fetchImplementation?: typeof fetch;
 }
@@ -103,6 +109,15 @@ const getCoreApiBaseUrl = (): string => {
   return DEFAULT_CORE_API_URL;
 };
 
+/**
+ * The service key this server presents to the control plane (`SEALANT_SERVICE_KEYS` on the API).
+ * Server-side only: `process.env`, never `import.meta.env`, so it cannot be baked into a bundle.
+ */
+const getCoreApiServiceKey = (): string | undefined => {
+  const key = typeof process === "undefined" ? undefined : process.env.CORE_API_SERVICE_KEY;
+  return key === undefined || key.trim().length === 0 ? undefined : key.trim();
+};
+
 const readJson = async (response: Response): Promise<unknown> => {
   try {
     return await response.json();
@@ -116,6 +131,8 @@ const parseWithSchema = <TOutput>(schema: JsonSchema<TOutput>, input: unknown): 
 };
 
 export interface CoreApiClient {
+  /** The same client, with every request made for `ownerUserId`. */
+  forOwner(ownerUserId: string): CoreApiClient;
   readonly github: {
     importInstallation(
       input: InferSchema<typeof importGitHubInstallationRequestSchema>,
@@ -243,6 +260,8 @@ export interface CoreApiClient {
 class CoreApiClientImpl implements CoreApiClient {
   private readonly baseUrl: string;
   private readonly fetchImplementation: typeof fetch;
+  private readonly ownerUserId: string | undefined;
+  private readonly options: CreateCoreApiClientOptions;
 
   public readonly workspaces: CoreApiClient["workspaces"];
   public readonly packages: CoreApiClient["packages"];
@@ -254,6 +273,19 @@ class CoreApiClientImpl implements CoreApiClient {
   public readonly profiles: CoreApiClient["profiles"];
 
   public constructor(options: CreateCoreApiClientOptions = {}) {
+    // The control plane serves /v1 to service principals only. A production server without its key
+    // would answer every page with a 401 from the API; say so once, at start, where it is fixable.
+    if (
+      typeof process !== "undefined" &&
+      process.env.NODE_ENV === "production" &&
+      getCoreApiServiceKey() === undefined
+    ) {
+      throw new Error(
+        "CORE_API_SERVICE_KEY is unset: the web server cannot call the control plane. Set it to one of the API's SEALANT_SERVICE_KEYS.",
+      );
+    }
+    this.options = options;
+    this.ownerUserId = options.ownerUserId;
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? getCoreApiBaseUrl());
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.workspaces = {
@@ -639,9 +671,30 @@ class CoreApiClientImpl implements CoreApiClient {
     return url;
   }
 
-  private async requestJson<TOutput>(options: CoreApiRequestOptions<TOutput>): Promise<TOutput> {
+  public forOwner(ownerUserId: string): CoreApiClient {
+    return new CoreApiClientImpl({ ...this.options, ownerUserId });
+  }
+
+  /** The request made for this client's owner. It wins over an owner the caller named. */
+  private scoped<TOutput>(options: CoreApiRequestOptions<TOutput>): CoreApiRequestOptions<TOutput> {
+    const ownerUserId = this.ownerUserId;
+    if (ownerUserId === undefined) return options;
+    if (options.method === "GET" || options.method === "DELETE") {
+      return { ...options, query: { ...options.query, ownerUserId } };
+    }
+    const body = options.body;
+    const isPlainObject = typeof body === "object" && body !== null && !Array.isArray(body);
+    return isPlainObject ? { ...options, body: { ...body, ownerUserId } } : options;
+  }
+
+  private async requestJson<TOutput>(request: CoreApiRequestOptions<TOutput>): Promise<TOutput> {
+    const options = this.scoped(request);
     const url = this.buildUrl(options.path, options.query);
     const headers = new Headers(options.headers);
+    const serviceKey = getCoreApiServiceKey();
+    if (serviceKey !== undefined && !headers.has("authorization")) {
+      headers.set("authorization", `Bearer ${serviceKey}`);
+    }
 
     if (options.body !== undefined) {
       headers.set("content-type", "application/json");

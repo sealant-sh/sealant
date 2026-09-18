@@ -126,7 +126,11 @@ export const SessionOutputStreamRoute = HttpRouter.add(
         return HttpServerResponse.text("from must be a decimal integer", { status: 400 });
       }
 
-      const authorization = request.headers["authorization"];
+      // EventSource cannot set headers; the gate already admits `?token=` here, so read it too.
+      const queryToken = url.searchParams.get("token");
+      const authorization =
+        request.headers["authorization"] ??
+        (queryToken === null ? undefined : `Bearer ${queryToken}`);
       const outcome = yield* authorize({
         headers: authorization === undefined ? {} : { authorization },
         requiredScope: "session:read",

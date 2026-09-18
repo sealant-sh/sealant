@@ -66,18 +66,14 @@ subscriptions, and API-token management. Do not build against them — they are 
 
 ## Authentication
 
-The control plane has two modes, chosen by one environment variable on the API.
-
-**Open (default — `SEALANT_SERVICE_KEYS` unset).** The API does not authenticate requests. Identity
-is passed in the payload: user-scoped operations take an `ownerUserId` (or `userId`) in the request
-body or query string, the SDK defaults it to `usr_local` (override with `SEALANT_OWNER_USER_ID` or
-`SealantConfig.ownerUserId`), and whatever value you send is the owner the control plane attributes
-the work to. Treat network reachability as your only access control: keep the API on loopback unless
-you have put an authenticating proxy in front of it — see
+The API refuses to start unless `SEALANT_SERVICE_KEYS` holds at least one key. The one exception is
+for development: with `SEALANT_ALLOW_OPEN_API=true` and `NODE_ENV` other than `production`, the API
+serves `/v1` without a credential and takes identity from the payload (`ownerUserId`, which the SDK
+defaults to `usr_local`). Published images run with `NODE_ENV=production` and ignore it. See
 [Beyond localhost](/docs/guides/beyond-localhost) and the
 [security model](/docs/concepts/security-model).
 
-**Closed (`SEALANT_SERVICE_KEYS` set).** Every `/v1` request must carry a credential:
+Every `/v1` request must carry a credential:
 
 - A **service key** — one of the comma-separated secrets in `SEALANT_SERVICE_KEYS`, sent as
   `Authorization: Bearer <key>` (or `?token=<key>` on WebSocket routes). A service key belongs to a
