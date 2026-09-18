@@ -1,5 +1,102 @@
 # @sealant/api-contracts
 
+## 0.34.0
+
+### Minor Changes
+
+- 6e089f5: Per-credential and per-owner budgets. `BudgetExceededError` (HTTP 429, with `budget`, `limit` and
+  `retryAfterSeconds`) joins the errors of `createWorkspace`, `restartWorkspace`, `createRun` and
+  inference `respond`; the transport gate answers the same shape, with `Retry-After`, when one
+  credential exceeds its request rate (`Retry-After` is set there only; handler refusals carry
+  `retryAfterSeconds` in the body). A budget refuses new work and never stops running work. A ceiling
+  is checked before the work is created, so creates that race can overshoot it by the number in
+  flight.
+
+  - `SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE` (12000: one service key is a whole product) and
+    `SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE` (120), counted per API process.
+  - `SEALANT_BUDGET_OWNER_LIVE_WORKSPACES` (100) and `SEALANT_BUDGET_OWNER_ACTIVE_RUNS` (100), read
+    from Postgres. A launcher that keeps standby workspaces warm per owner should size the first to
+    its pool.
+  - `SEALANT_BUDGET_OWNER_INFERENCE_TOKENS_PER_DAY` (off). Usage is now recorded per owner per UTC day
+    in a new `inference_usage` table (migration `20260917211231_inference_usage`: counts only).
+  - `SEALANT_BUDGET_RUN_OUTPUT_BYTES` (1 GiB) on the worker: past it, output chunks keep their event
+    rows and lose their bytes, and the record carries one loss span where stored content ends.
+
+  `0` turns a budget off, and the API logs at start which are off.
+
+- 613376c: Credentials are bound to the destination they were issued for.
+
+  - A client-supplied `authRef` is now checked against its source URL: the installation token is
+    minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands for.
+    A grant on one installation could previously attach its token to a clone of any URL. A restart
+    checks the recorded spec the same way and answers 409 when it names another destination, and
+    server-minted sources use the GitHub host the install talks to, so reruns pass on GitHub
+    Enterprise Server.
+  - `WorkspaceCaptureSource.transport` (`plaintext`, `channelCaPem`, `objectCaPem`) tells the
+    workspace daemon how to dial the session channel and its object URLs. It needs a daemon with the
+    capture transport policy (sealant-sh/sealantd#86); an older daemon ignores it. Without `transport`
+    that daemon requires HTTPS with a publicly verifiable certificate and refuses to boot otherwise,
+    so **a launcher that reaches its channel over plain HTTP on a private network must now send
+    `transport: { plaintext: true }`**. The Cloudflare runtime does not support `transport`, and the
+    control plane says so at create.
+  - The control plane refuses a capture endpoint that is not `http(s)`, embeds credentials, is plain
+    HTTP beyond loopback without `transport.plaintext`, or falls outside the operator's
+    `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`. `SEALANT_CAPTURE_REFUSE_PLAINTEXT=true` vetoes plain HTTP
+    whatever a launcher states.
+
+- 5411f65: Every owned operation is made for a named owner.
+
+  - Reads, listings and changes of workspaces and runs require `ownerUserId` and serve the resource
+    only when it belongs to that owner. A call that names none, or another owner, answers the same 404
+    as a missing id. This closes the ID-only operations: `PATCH /v1/runs/:runId`,
+    `PATCH /v1/workspaces/:id/name`, and the workspace `attempts` and `events` listings took an id and
+    nothing else. `updateRun`, `renameWorkspace`, `listWorkspaceAttempts` and `listWorkspaceEvents`
+    gain an optional `ownerUserId` on the wire; the control plane requires it.
+  - `POST /v1/runs` creates a run only in a workspace that belongs to the owner it names. A foreign
+    key used to be the only check, so any owner could start a run, executed server-side, in another
+    owner's workspace.
+  - An inference continuation is served only to the owner who opened the exchange; another owner's
+    session id answers like one that does not exist. It was addressed by session id alone, on the
+    opening owner's credentials.
+  - The SDK names the owner on every record read. `workspace.exec()` read the timeline and scrollback
+    without one. **An SDK older than this release reading records from a control plane with this
+    release gets 404s**: upgrade callers together with the control plane, or set
+    `SEALANT_REQUIRE_OWNER_SCOPE=false` on the API for the window between the two.
+  - The SSH gateway's shared secret is now verified by the transport gate (its presence used to be
+    enough to pass it) and is its own, narrower authority: key and target resolution, plus creating
+    and updating the interactive `ssh` runs of the sessions it carries. The gateway sends it on its
+    run recorder calls, which a closed control plane used to answer 401, leaving SSH sessions
+    unrecorded.
+  - The web app makes every control-plane call for the signed-in user, so a workspace or run id from
+    another account reads like one that does not exist. Its workspace detail, attempts, events and
+    rename routes checked nothing.
+
+### Patch Changes
+
+- f0c7ce9: Registry repository names, tags and digests are held to the OCI grammar and refused otherwise, never
+  repaired. `GET /v1/registries/:id/tags` and `/manifest` now answer 400 for a `repository` or
+  `reference` outside it (`..`, `%2e`, `?`, `#`, a backslash, a scheme, uppercase, an empty segment),
+  and the registry client refuses the same before it builds a URL or a `docker` argument, keeps every
+  request on the registry's origin under `/v2/`, does not follow redirects, gives each request a
+  30-second deadline and reads at most 8 MiB of any answer. The local Docker image store holds names
+  to the same grammar, and `POST /v1/workspaces` answers 400 for a `repository` or `tag` outside it
+  instead of failing the build later. The SDK's generated repository slug and the plan coordinates
+  always satisfy the grammar (`.github` becomes `github`, `a..b` becomes `a-b`), and a prior publish
+  under a name the grammar refuses counts as nothing to reuse. `isOciRepository`, `isOciTag`,
+  `isOciDigest`, `isOciReference` and `toOciRepositoryComponent` are exported from
+  `@sealant/api-contracts`.
+- 7e6e1fa: Needs sealantd 0.17.0 (sealant-sh/sealantd#86): the capture session channel and every presigned
+  object URL are dialled over HTTPS with a verified certificate, and never fall back. A plain-HTTP
+  channel is dialled only to loopback, or when the launcher states the network is private:
+  `source.transport.plaintext` on the capture source (`SEALANT_CAPTURE_ALLOW_PLAINTEXT` in the
+  workspace), which this release already sends. A private CA for the channel or the object store rides
+  `source.transport.channelCaPem` / `objectCaPem`. **Behaviour change:** a launcher that reaches its
+  channel over plain HTTP on a private network without sending `transport: { plaintext: true }` now
+  gets a workspace that refuses to boot, with the reason in its log. No new API surface here:
+  `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.17.0, and the baked daemon
+  default for workspace images, the MicroVM image and the Cloudflare bridge image is now
+  `ghcr.io/sealant-sh/sealantd:0.17.0`.
+
 ## 0.33.1
 
 ### Patch Changes
