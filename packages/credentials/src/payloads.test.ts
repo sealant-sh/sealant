@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  narrowClaudeCredentialsJson,
   CLAUDE_TOKEN_PREFIX,
   extractClaudeOauthCredentials,
   extractCodexSecrets,
@@ -289,5 +290,69 @@ describe("extractCodexSecrets", () => {
     expect(extractCodexSecrets('["array"]')).toEqual([]);
     expect(extractCodexSecrets(JSON.stringify({ tokens: {} }))).toEqual([]);
     expect(extractCodexSecrets(JSON.stringify({ OPENAI_API_KEY: "" }))).toEqual([]);
+  });
+});
+
+describe("narrowClaudeCredentialsJson", () => {
+  const document = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: "sk-ant-oat01-access",
+      refreshToken: "sk-ant-ort01-refresh",
+      expiresAt: 1_789_000_000_000,
+      subscriptionType: "max",
+    },
+    mcpOAuth: {
+      "figma:https://figma.com": { refreshToken: "figma-refresh" },
+      "linear:https://linear.app": { refreshToken: "linear-refresh" },
+    },
+  });
+
+  /**
+   * The MCP section holds refresh tokens for servers the person authorized on their own machine.
+   * Stored whole they reach this database and every workspace attaching the account (Mend ADR 0005).
+   */
+  it("keeps the grant and drops what sat beside it", () => {
+    const narrowed = narrowClaudeCredentialsJson(document);
+    expect(narrowed.dropped).toEqual(["mcpOAuth"]);
+    expect(narrowed.credentialsJson).not.toContain("figma-refresh");
+    expect(narrowed.credentialsJson).not.toContain("linear-refresh");
+    // The grant is untouched: the workspace's Claude Code needs all of it, refresh token included.
+    expect(JSON.parse(narrowed.credentialsJson)).toEqual({
+      claudeAiOauth: {
+        accessToken: "sk-ant-oat01-access",
+        refreshToken: "sk-ant-ort01-refresh",
+        expiresAt: 1_789_000_000_000,
+        subscriptionType: "max",
+      },
+    });
+    // Still the shape Claude Code writes, so the re-materialized file reads like the original.
+    expect(narrowed.credentialsJson.endsWith("\n")).toBe(true);
+    expect(narrowed.credentialsJson).toContain('\n  "claudeAiOauth"');
+  });
+
+  it("still parses and validates after narrowing", () => {
+    const narrowed = narrowClaudeCredentialsJson(document);
+    const parsed = parseClaudeCredentialsJson(narrowed.credentialsJson);
+    expect(parsed.valid).toBe(true);
+    expect(parsed.valid ? parsed.metadata.expiresAt : undefined).toBe(1_789_000_000_000);
+  });
+
+  it("leaves a payload it does not understand exactly as it was", () => {
+    for (const raw of ["sk-ant-oat01-setup-token", "{ not json", "[]", '{"mcpOAuth":{}}']) {
+      expect(narrowClaudeCredentialsJson(raw)).toEqual({ credentialsJson: raw, dropped: [] });
+    }
+  });
+
+  /** Byte-for-byte when there is nothing to remove, whatever spacing the writer used. */
+  it("is a no-op for a document that already holds the grant alone", () => {
+    for (const already of [
+      `${JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-a" } }, undefined, 2)}\n`,
+      JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-a" } }),
+    ]) {
+      expect(narrowClaudeCredentialsJson(already)).toEqual({
+        credentialsJson: already,
+        dropped: [],
+      });
+    }
   });
 });

@@ -67,6 +67,7 @@ const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount =>
   updatedAt: wire.updatedAt,
   lastUsedAt: wire.lastUsedAt,
   lastSyncedAt: wire.lastSyncedAt,
+  credential: wire.credential,
 });
 
 // Wire the run-execution implementations into the Workspace facade (the injection point exists to

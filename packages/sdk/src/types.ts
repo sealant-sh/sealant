@@ -1228,6 +1228,19 @@ export type ConnectedAccountProvider = "claude" | "codex" | "github";
 export type ConnectedAccountStatus = "active" | "invalid" | "archived";
 
 /** A connected account as every surface sees it — NEVER carries secret material. */
+/**
+ * What the control plane observed about a credential's life. Null means nothing was observed: a
+ * setup token has no expiry, an account connected before this shipped has no stored one, and an
+ * account never swept has no refresh outcome. Read it to report freshness; never to decide that a
+ * credential works, which only using it establishes.
+ */
+export interface ConnectedAccountCredential {
+  readonly accessExpiresAt: string | null;
+  readonly refreshExpiresAt: string | null;
+  readonly lastRefreshAt: string | null;
+  readonly lastRefreshOutcome: "refreshed" | "fresh" | "failed" | null;
+}
+
 export interface ConnectedAccount {
   readonly connectedAccountId: string;
   readonly ownerUserId: string;
@@ -1242,6 +1255,7 @@ export interface ConnectedAccount {
   readonly updatedAt: string;
   readonly lastUsedAt: string | null;
   readonly lastSyncedAt: string | null;
+  readonly credential: ConnectedAccountCredential;
 }
 
 export interface ConnectConnectedAccountOptions {

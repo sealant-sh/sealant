@@ -22,6 +22,24 @@ export type ConnectedAccountProvider = typeof connectedAccountProviderSchema.Typ
 export const connectedAccountStatusSchema = Schema.Literals(["active", "invalid", "archived"]);
 export type ConnectedAccountStatus = typeof connectedAccountStatusSchema.Type;
 
+/**
+ * What the control plane observed about a credential's life, so a consumer can say "expired" as an
+ * observation instead of parsing a payload it must never see. Every field is null when nothing was
+ * observed: a setup token has no expiry, a row connected before this shipped has no stored one, and
+ * an account that has never been swept has no refresh outcome.
+ */
+export const connectedAccountCredentialSchema = Schema.Struct({
+  /** When the access token expires. Hours, for a Claude session credential. */
+  accessExpiresAt: Schema.NullOr(Schema.String),
+  /** When the grant itself expires, after which reconnecting is the only way back. */
+  refreshExpiresAt: Schema.NullOr(Schema.String),
+  /** When the platform last rotated or checked this credential. */
+  lastRefreshAt: Schema.NullOr(Schema.String),
+  /** What that attempt did: `refreshed`, `fresh` (nothing to do), or `failed`. */
+  lastRefreshOutcome: Schema.NullOr(Schema.Literals(["refreshed", "fresh", "failed"])),
+});
+export type ConnectedAccountCredential = typeof connectedAccountCredentialSchema.Type;
+
 export const connectedAccountSummarySchema = Schema.Struct({
   connectedAccountId: NonEmptyString,
   ownerUserId: NonEmptyString,
@@ -36,6 +54,8 @@ export const connectedAccountSummarySchema = Schema.Struct({
   updatedAt: Schema.String,
   lastUsedAt: Schema.NullOr(Schema.String),
   lastSyncedAt: Schema.NullOr(Schema.String),
+  /** Freshness as the control plane observed it; see the schema above for what null means. */
+  credential: connectedAccountCredentialSchema,
 });
 export type ConnectedAccountSummary = typeof connectedAccountSummarySchema.Type;
 

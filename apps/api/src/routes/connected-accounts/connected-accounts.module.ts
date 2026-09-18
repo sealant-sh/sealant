@@ -9,10 +9,12 @@ import {
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
   type ListConnectedAccountsResponse,
+  type ConnectedAccountCredential,
 } from "@sealant/api-contracts";
 import {
   CLAUDE_TOKEN_PREFIX,
   CredentialCipher,
+  narrowClaudeCredentialsJson,
   parseClaudeCredentialsJson,
   parseCodexAuthJson,
   sha256Hex,
@@ -59,6 +61,32 @@ const requireCredentialsKey = Effect.gen(function* () {
   }
 });
 
+/** Epoch millis from the non-secret metadata mirror, or null when nothing was stored. */
+const storedInstant = (metadata: Record<string, unknown>, key: string): string | null => {
+  const value = metadata[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+};
+
+/**
+ * Freshness as this control plane observed it. Everything here is already in the metadata mirror
+ * or a column: the payload stays sealed, and a consumer gets an observation instead of a guess
+ * (Mend's ADR 0005 asked for exactly this).
+ */
+const toCredentialFreshness = (account: ConnectedAccount): ConnectedAccountCredential => {
+  const outcome = account.metadata["lastRefreshOutcome"];
+  const lastRefreshOutcome: ConnectedAccountCredential["lastRefreshOutcome"] =
+    outcome === "refreshed" || outcome === "fresh" || outcome === "failed" ? outcome : null;
+  return {
+    accessExpiresAt: storedInstant(account.metadata, "expiresAt"),
+    refreshExpiresAt: storedInstant(account.metadata, "refreshTokenExpiresAt"),
+    // The sweeper and the sync-back both stamp lastSyncedAt when they touch a credential.
+    lastRefreshAt: account.lastSyncedAt?.toISOString() ?? null,
+    lastRefreshOutcome,
+  };
+};
+
 export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedAccountSummary => {
   return {
     connectedAccountId: account.id,
@@ -74,6 +102,7 @@ export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedA
     updatedAt: account.updatedAt.toISOString(),
     lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
     lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
+    credential: toCredentialFreshness(account),
   };
 };
 
@@ -148,7 +177,11 @@ const verifyGitHubToken = (token: string): Effect.Effect<GitHubTokenVerification
   );
 };
 
-const normalizeSecret = (
+/**
+ * Validate and shape a pasted credential for storage. Exported for tests: what this returns is
+ * what gets sealed, so the narrowing below is worth pinning without a route.
+ */
+export const normalizeSecret = (
   provider: ConnectedAccountProvider,
   secret: string,
 ): Effect.Effect<NormalizedCredential, ConnectedAccountBadRequestError> => {
@@ -166,11 +199,21 @@ const normalizeSecret = (
             return yield* new ConnectedAccountBadRequestError({ message: parsed.reason });
           }
 
+          // Narrowed to the grant: a .credentials.json also carries `mcpOAuth`, refresh tokens
+          // for the MCP servers the person authorized on their own machine. Those belong there,
+          // not in this database and not in every workspace that attaches the account. A client
+          // that narrows before sending (Mend does) sees no change here; one that does not is
+          // still stored narrow.
+          const narrowed = narrowClaudeCredentialsJson(secret);
+
           return {
             kind: "credentials-json",
-            // Stored verbatim so the exact file can be re-materialized in the workspace.
-            payloadJson: JSON.stringify({ credentialsJson: secret }),
-            metadata: { ...parsed.metadata, connectedVia: "paste" },
+            payloadJson: JSON.stringify({ credentialsJson: narrowed.credentialsJson }),
+            metadata: {
+              ...parsed.metadata,
+              connectedVia: "paste",
+              ...(narrowed.dropped.length === 0 ? {} : { droppedSections: [...narrowed.dropped] }),
+            },
           };
         }
 
