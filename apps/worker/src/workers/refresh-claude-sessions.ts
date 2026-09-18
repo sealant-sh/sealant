@@ -237,6 +237,24 @@ export const refreshClaudeSessionCredentials = async (
       if (outcome === "refreshed") {
         refreshed += 1;
       }
+      // Record what this sweep did, so a surface can report freshness as an observation instead
+      // of parsing a payload it must never see (Mend's ADR 0005). `skipped` is not recorded: it
+      // means this sweep had nothing to say about the credential.
+      if (outcome !== "skipped") {
+        yield* accounts
+          .updateSyncState({
+            id: account.id,
+            metadata: { ...account.metadata, lastRefreshOutcome: outcome },
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `keep-fresh sweeper: could not record the refresh outcome for ${account.id}.`,
+                cause,
+              ),
+            ),
+          );
+      }
     }
     return refreshed;
   });

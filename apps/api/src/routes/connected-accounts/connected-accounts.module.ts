@@ -9,6 +9,7 @@ import {
   type ConnectedAccountSummary,
   type CreateConnectedAccountRequest,
   type ListConnectedAccountsResponse,
+  type ConnectedAccountCredential,
 } from "@sealant/api-contracts";
 import {
   CLAUDE_TOKEN_PREFIX,
@@ -60,6 +61,32 @@ const requireCredentialsKey = Effect.gen(function* () {
   }
 });
 
+/** Epoch millis from the non-secret metadata mirror, or null when nothing was stored. */
+const storedInstant = (metadata: Record<string, unknown>, key: string): string | null => {
+  const value = metadata[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at.toISOString();
+};
+
+/**
+ * Freshness as this control plane observed it. Everything here is already in the metadata mirror
+ * or a column: the payload stays sealed, and a consumer gets an observation instead of a guess
+ * (Mend's ADR 0005 asked for exactly this).
+ */
+const toCredentialFreshness = (account: ConnectedAccount): ConnectedAccountCredential => {
+  const outcome = account.metadata["lastRefreshOutcome"];
+  const lastRefreshOutcome: ConnectedAccountCredential["lastRefreshOutcome"] =
+    outcome === "refreshed" || outcome === "fresh" || outcome === "failed" ? outcome : null;
+  return {
+    accessExpiresAt: storedInstant(account.metadata, "expiresAt"),
+    refreshExpiresAt: storedInstant(account.metadata, "refreshTokenExpiresAt"),
+    // The sweeper and the sync-back both stamp lastSyncedAt when they touch a credential.
+    lastRefreshAt: account.lastSyncedAt?.toISOString() ?? null,
+    lastRefreshOutcome,
+  };
+};
+
 export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedAccountSummary => {
   return {
     connectedAccountId: account.id,
@@ -75,6 +102,7 @@ export const toConnectedAccountSummary = (account: ConnectedAccount): ConnectedA
     updatedAt: account.updatedAt.toISOString(),
     lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
     lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
+    credential: toCredentialFreshness(account),
   };
 };
 

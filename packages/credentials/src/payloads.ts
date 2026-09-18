@@ -68,6 +68,11 @@ export interface ClaudeCredentialsMetadata {
   readonly subscriptionType?: string;
   /** `claudeAiOauth.expiresAt` (epoch millis) — the sync-back's newest-wins freshness marker. */
   readonly expiresAt?: number;
+  /**
+   * `claudeAiOauth.refreshTokenExpiresAt` (epoch millis): when the grant itself dies, not the
+   * access token. Absent on an older stored row and on a file that did not carry it.
+   */
+  readonly refreshTokenExpiresAt?: number;
   readonly scopeCount?: number;
 }
 
@@ -173,6 +178,12 @@ export const parseClaudeCredentialsJson = (raw: string): ParseClaudeCredentialsJ
       ? oauth.expiresAt
       : undefined;
   const scopeCount = Array.isArray(oauth.scopes) ? oauth.scopes.length : undefined;
+  // The grant's own life, beside the access token's. Non-secret, and the number a surface needs to
+  // say "this expires on the 15th" instead of finding out when a harness cannot authenticate.
+  const refreshTokenExpiresAt =
+    typeof oauth.refreshTokenExpiresAt === "number" && Number.isFinite(oauth.refreshTokenExpiresAt)
+      ? oauth.refreshTokenExpiresAt
+      : undefined;
 
   return {
     valid: true,
@@ -180,6 +191,7 @@ export const parseClaudeCredentialsJson = (raw: string): ParseClaudeCredentialsJ
       tokenSuffix: accessToken.slice(-4),
       ...(subscriptionType === undefined ? {} : { subscriptionType }),
       ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(refreshTokenExpiresAt === undefined ? {} : { refreshTokenExpiresAt }),
       ...(scopeCount === undefined ? {} : { scopeCount }),
     },
   };
