@@ -13,6 +13,7 @@ import {
 import {
   CLAUDE_TOKEN_PREFIX,
   CredentialCipher,
+  narrowClaudeCredentialsJson,
   parseClaudeCredentialsJson,
   parseCodexAuthJson,
   sha256Hex,
@@ -148,7 +149,11 @@ const verifyGitHubToken = (token: string): Effect.Effect<GitHubTokenVerification
   );
 };
 
-const normalizeSecret = (
+/**
+ * Validate and shape a pasted credential for storage. Exported for tests: what this returns is
+ * what gets sealed, so the narrowing below is worth pinning without a route.
+ */
+export const normalizeSecret = (
   provider: ConnectedAccountProvider,
   secret: string,
 ): Effect.Effect<NormalizedCredential, ConnectedAccountBadRequestError> => {
@@ -166,11 +171,21 @@ const normalizeSecret = (
             return yield* new ConnectedAccountBadRequestError({ message: parsed.reason });
           }
 
+          // Narrowed to the grant: a .credentials.json also carries `mcpOAuth`, refresh tokens
+          // for the MCP servers the person authorized on their own machine. Those belong there,
+          // not in this database and not in every workspace that attaches the account. A client
+          // that narrows before sending (Mend does) sees no change here; one that does not is
+          // still stored narrow.
+          const narrowed = narrowClaudeCredentialsJson(secret);
+
           return {
             kind: "credentials-json",
-            // Stored verbatim so the exact file can be re-materialized in the workspace.
-            payloadJson: JSON.stringify({ credentialsJson: secret }),
-            metadata: { ...parsed.metadata, connectedVia: "paste" },
+            payloadJson: JSON.stringify({ credentialsJson: narrowed.credentialsJson }),
+            metadata: {
+              ...parsed.metadata,
+              connectedVia: "paste",
+              ...(narrowed.dropped.length === 0 ? {} : { droppedSections: [...narrowed.dropped] }),
+            },
           };
         }
 

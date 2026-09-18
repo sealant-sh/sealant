@@ -1,6 +1,7 @@
 import {
   isNewerClaudeCredentials,
   isPlausibleClaudeExpiry,
+  narrowClaudeCredentialsJson,
   parseClaudeCredentialPayload,
   parseClaudeCredentialsJson,
   parseConnectedAccountRef,
@@ -142,8 +143,20 @@ export const persistClaudeCredentialsIfNewer = Effect.fn("persistClaudeCredentia
         return "skipped-not-newer" as const;
       }
 
+      // Narrowed on the way back too. A workspace's Claude Code writes the whole document it
+      // knows how to write, so a rotation can hand back an `mcpOAuth` section that was never
+      // stored — a session authorizing an MCP server would otherwise persist its refresh tokens
+      // into this database (Mend's ADR 0005).
+      const narrowed = narrowClaudeCredentialsJson(input.observedCredentialsJson);
+
+      if (narrowed.dropped.length > 0) {
+        yield* Effect.logInfo(
+          `${describe} narrowed: dropped ${narrowed.dropped.join(", ")} from the rotated file before storing it.`,
+        );
+      }
+
       const plaintextPayload = JSON.stringify({
-        credentialsJson: input.observedCredentialsJson,
+        credentialsJson: narrowed.credentialsJson,
       });
       const sealed = yield* input.credentialCipher.encrypt(plaintextPayload);
 

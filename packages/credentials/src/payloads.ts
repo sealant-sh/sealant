@@ -27,10 +27,11 @@ const asNonEmptyString = (value: unknown): string | undefined => {
 // Claude — two credential shapes:
 //  - setup-token: `claude setup-token` output (1-year, inference-scoped, no
 //    refresh; Anthropic classifies it as API auth).
-//  - credentials file: verbatim ~/.claude/.credentials.json contents that the
-//    operator minted for Sealant (e.g. via a second CLAUDE_CONFIG_DIR login) —
-//    a full Claude Code session that presents as the user's subscription.
-//    Stored as-is so the exact file can be re-materialized in the workspace.
+//  - credentials file: ~/.claude/.credentials.json contents that the operator
+//    minted for Sealant (e.g. via a second CLAUDE_CONFIG_DIR login) — a full
+//    Claude Code session that presents as the user's subscription. Stored as
+//    its `claudeAiOauth` grant alone, so the file re-materializes in the
+//    workspace without the MCP refresh tokens that sat beside it.
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_TOKEN_PREFIX = "sk-ant-oat01-";
@@ -81,6 +82,64 @@ export type ParseClaudeCredentialsJsonResult =
  * scopes?, subscriptionType? } }`. Requires a non-empty `claudeAiOauth.accessToken`; everything
  * else degrades to absent metadata rather than failing the parse.
  */
+/** The one section of a Claude credentials file the platform stores and a workspace needs. */
+export const CLAUDE_GRANT_SECTION = "claudeAiOauth";
+
+/** What {@link narrowClaudeCredentialsJson} did, so a caller can log it without the contents. */
+export interface NarrowedClaudeCredentialsJson {
+  /** The document to store: the grant alone, or the input untouched when it has no grant. */
+  readonly credentialsJson: string;
+  /** Sections left out, named for the log. Empty when there was nothing else to leave out. */
+  readonly dropped: ReadonlyArray<string>;
+}
+
+/**
+ * Keep the Claude grant and drop everything beside it.
+ *
+ * A `.credentials.json` is `{ claudeAiOauth, mcpOAuth }`, and `mcpOAuth` holds refresh tokens for
+ * whichever MCP servers the person authorized on their own machine — Figma, Atlassian, Linear.
+ * Those belong to that machine. Stored whole they reach this database and every workspace that
+ * attaches the account, which is a wider blast radius than anyone asked for (Mend's ADR 0005).
+ *
+ * The workspace loses nothing: Claude Code reads its grant from `claudeAiOauth`, and the MCP
+ * section is for MCP servers the workspace does not have. A payload with no grant section comes
+ * back untouched, because narrowing something this does not understand is how a credential gets
+ * mangled; the caller's own validation decides whether to accept it.
+ */
+export const narrowClaudeCredentialsJson = (raw: string): NarrowedClaudeCredentialsJson => {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { credentialsJson: raw, dropped: [] };
+  }
+
+  const root = asRecord(parsed);
+  const grant = root === undefined ? undefined : root[CLAUDE_GRANT_SECTION];
+
+  if (root === undefined || grant === undefined) {
+    return { credentialsJson: raw, dropped: [] };
+  }
+
+  const dropped = Object.keys(root)
+    .filter((key) => key !== CLAUDE_GRANT_SECTION)
+    .toSorted();
+
+  // Nothing to drop means nothing to rewrite: the file is stored exactly as it arrived, so a
+  // credential this never had to touch re-materializes byte for byte.
+  if (dropped.length === 0) {
+    return { credentialsJson: raw, dropped };
+  }
+
+  return {
+    // Two spaces and a trailing newline: the shape Claude Code writes, so the file this
+    // re-materializes in a workspace still reads like the one the person logged in with.
+    credentialsJson: `${JSON.stringify({ [CLAUDE_GRANT_SECTION]: grant }, undefined, 2)}\n`,
+    dropped,
+  };
+};
+
 export const parseClaudeCredentialsJson = (raw: string): ParseClaudeCredentialsJsonResult => {
   let parsed: unknown;
 

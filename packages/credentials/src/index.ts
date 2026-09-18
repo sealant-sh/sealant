@@ -61,6 +61,7 @@ export {
   hasKnownGitHubTokenPrefix,
   parseClaudeCredentialPayload,
   parseClaudeCredentialsFilePayload,
+  narrowClaudeCredentialsJson,
   parseClaudeCredentialsJson,
   parseCodexAuthJson,
   parseCodexCredentialPayload,

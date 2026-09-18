@@ -106,6 +106,30 @@ describe("persistClaudeCredentialsIfNewer", () => {
     expect(accounts.updateSyncState).toHaveBeenCalledOnce();
   });
 
+  /**
+   * A workspace's Claude Code writes the whole document it knows how to write, so a rotation can
+   * hand back an `mcpOAuth` section that was never stored. It must not be persisted: those refresh
+   * tokens belong to the machine that authorized those MCP servers (Mend's ADR 0005).
+   */
+  it("drops an mcpOAuth section the rotated file brought back", async () => {
+    const accounts = connectedAccountRepoStub(createClaudeAccount());
+    const rotated = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "sk-ant-oat01-rotated-wxyz",
+        refreshToken: "sk-ant-ort01-rotated",
+        expiresAt: STORED_EXPIRES_AT + 1_000,
+        subscriptionType: "max",
+      },
+      mcpOAuth: { "figma:https://figma.com": { refreshToken: "figma-refresh" } },
+    });
+    expect(await persist({ accounts, observed: rotated })).toBe("synced");
+    const written = accounts.replacePayload.mock.calls[0]?.[0] as
+      | { readonly encryptedPayload: string }
+      | undefined;
+    expect(written?.encryptedPayload).not.toContain("figma-refresh");
+    expect(written?.encryptedPayload).toContain("sk-ant-ort01-rotated");
+  });
+
   it("returns skipped-not-newer for equal or older files, without writing", async () => {
     const accounts = connectedAccountRepoStub(createClaudeAccount());
     expect(

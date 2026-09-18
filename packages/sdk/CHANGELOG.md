@@ -4,26 +4,25 @@
 
 ### Minor Changes
 
-- c7c259d: The control plane fails closed (no SDK surface change; the packages ride the release train). The API
-  now refuses to start when `SEALANT_SERVICE_KEYS` is unset. Missing configuration used to mean "serve
-  every `/v1` route to anyone who can reach the port".
-
+- c7c259d: The control plane fails closed (no SDK surface change; the packages ride the release
+  train). The API now refuses to start when `SEALANT_SERVICE_KEYS` is unset. Missing configuration
+  used to mean "serve every `/v1` route to anyone who can reach the port".
   - The one exception is explicit and for development: `SEALANT_ALLOW_OPEN_API=true`, honoured only
-    when `NODE_ENV` is not `production`. Every published image sets `NODE_ENV=production`. `pnpm dev`
-    sets the exception for the API it starts on loopback.
+    when `NODE_ENV` is not `production`. Every published image sets `NODE_ENV=production`.
+    `pnpm dev` sets the exception for the API it starts on loopback.
   - The web app is now a service principal: it presents `CORE_API_SERVICE_KEY` server-side.
     `install.sh` generates `SEALANT_WEB_SERVICE_KEY`, and the self-host compose file hands it to the
-    web app and prepends it to the API's `SEALANT_SERVICE_KEYS`. **An existing self-host install must
-    re-run `install.sh` (or add `SEALANT_WEB_SERVICE_KEY` to `.env`) before upgrading**; compose says
-    so when it is missing.
+    web app and prepends it to the API's `SEALANT_SERVICE_KEYS`. **An existing self-host install
+    must re-run `install.sh` (or add `SEALANT_WEB_SERVICE_KEY` to `.env`) before upgrading**;
+    compose says so when it is missing.
   - Helm chart 0.3.0: `SEALANT_SERVICE_KEYS` is a required key of the secret, and the web app reads
     `SEALANT_WEB_SERVICE_KEY` from it. **Add both to the secret before upgrading**; the web key must
     be one of the service keys.
   - The session surface (`/v1/sessions/*`, `/v1/workspaces/:id/forward`) no longer reads "no
-    `Authorization` header" as a trusted caller. The transport gate admits that surface on any bearer,
-    including a `?token=` the handlers did not read, so a request with a junk `?token=` and an
-    asserted `ownerUserId` was served as that owner. It is now refused, and the output stream accepts
-    a user access token as `?token=`.
+    `Authorization` header" as a trusted caller. The transport gate admits that surface on any
+    bearer, including a `?token=` the handlers did not read, so a request with a junk `?token=` and
+    an asserted `ownerUserId` was served as that owner. It is now refused, and the output stream
+    accepts a user access token as `?token=`.
   - `POST /v1/github/webhooks` passes the transport gate on its own: GitHub cannot present a bearer,
     and the handler verifies the delivery's signature. With service keys set it was answered 401
     before that check could run.
@@ -31,63 +30,60 @@
     header. It is no longer accepted from a URL on any other route.
   - The web server refuses to start in production without `CORE_API_SERVICE_KEY`.
 
-- 6e089f5: Per-credential and per-owner budgets. `BudgetExceededError` (HTTP 429, with `budget`, `limit` and
-  `retryAfterSeconds`) joins the errors of `createWorkspace`, `restartWorkspace`, `createRun` and
-  inference `respond`; the transport gate answers the same shape, with `Retry-After`, when one
-  credential exceeds its request rate (`Retry-After` is set there only; handler refusals carry
-  `retryAfterSeconds` in the body). A budget refuses new work and never stops running work. A ceiling
-  is checked before the work is created, so creates that race can overshoot it by the number in
-  flight.
-
+- 6e089f5: Per-credential and per-owner budgets. `BudgetExceededError` (HTTP 429, with `budget`,
+  `limit` and `retryAfterSeconds`) joins the errors of `createWorkspace`, `restartWorkspace`,
+  `createRun` and inference `respond`; the transport gate answers the same shape, with
+  `Retry-After`, when one credential exceeds its request rate (`Retry-After` is set there only;
+  handler refusals carry `retryAfterSeconds` in the body). A budget refuses new work and never stops
+  running work. A ceiling is checked before the work is created, so creates that race can overshoot
+  it by the number in flight.
   - `SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE` (12000: one service key is a whole product) and
     `SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE` (120), counted per API process.
   - `SEALANT_BUDGET_OWNER_LIVE_WORKSPACES` (100) and `SEALANT_BUDGET_OWNER_ACTIVE_RUNS` (100), read
     from Postgres. A launcher that keeps standby workspaces warm per owner should size the first to
     its pool.
-  - `SEALANT_BUDGET_OWNER_INFERENCE_TOKENS_PER_DAY` (off). Usage is now recorded per owner per UTC day
-    in a new `inference_usage` table (migration `20260917211231_inference_usage`: counts only).
+  - `SEALANT_BUDGET_OWNER_INFERENCE_TOKENS_PER_DAY` (off). Usage is now recorded per owner per UTC
+    day in a new `inference_usage` table (migration `20260917211231_inference_usage`: counts only).
   - `SEALANT_BUDGET_RUN_OUTPUT_BYTES` (1 GiB) on the worker: past it, output chunks keep their event
     rows and lose their bytes, and the record carries one loss span where stored content ends.
 
   `0` turns a budget off, and the API logs at start which are off.
 
 - 613376c: Credentials are bound to the destination they were issued for.
-
   - A client-supplied `authRef` is now checked against its source URL: the installation token is
-    minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands for.
-    A grant on one installation could previously attach its token to a clone of any URL. A restart
-    checks the recorded spec the same way and answers 409 when it names another destination, and
-    server-minted sources use the GitHub host the install talks to, so reruns pass on GitHub
+    minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands
+    for. A grant on one installation could previously attach its token to a clone of any URL. A
+    restart checks the recorded spec the same way and answers 409 when it names another destination,
+    and server-minted sources use the GitHub host the install talks to, so reruns pass on GitHub
     Enterprise Server.
   - `WorkspaceCaptureSource.transport` (`plaintext`, `channelCaPem`, `objectCaPem`) tells the
     workspace daemon how to dial the session channel and its object URLs. It needs a daemon with the
-    capture transport policy (sealant-sh/sealantd#86); an older daemon ignores it. Without `transport`
-    that daemon requires HTTPS with a publicly verifiable certificate and refuses to boot otherwise,
-    so **a launcher that reaches its channel over plain HTTP on a private network must now send
-    `transport: { plaintext: true }`**. The Cloudflare runtime does not support `transport`, and the
-    control plane says so at create.
+    capture transport policy (sealant-sh/sealantd#86); an older daemon ignores it. Without
+    `transport` that daemon requires HTTPS with a publicly verifiable certificate and refuses to
+    boot otherwise, so **a launcher that reaches its channel over plain HTTP on a private network
+    must now send `transport: { plaintext: true }`**. The Cloudflare runtime does not support
+    `transport`, and the control plane says so at create.
   - The control plane refuses a capture endpoint that is not `http(s)`, embeds credentials, is plain
     HTTP beyond loopback without `transport.plaintext`, or falls outside the operator's
     `SEALANT_CAPTURE_ALLOWED_ENDPOINTS`. `SEALANT_CAPTURE_REFUSE_PLAINTEXT=true` vetoes plain HTTP
     whatever a launcher states.
 
 - 5411f65: Every owned operation is made for a named owner.
-
   - Reads, listings and changes of workspaces and runs require `ownerUserId` and serve the resource
-    only when it belongs to that owner. A call that names none, or another owner, answers the same 404
-    as a missing id. This closes the ID-only operations: `PATCH /v1/runs/:runId`,
-    `PATCH /v1/workspaces/:id/name`, and the workspace `attempts` and `events` listings took an id and
-    nothing else. `updateRun`, `renameWorkspace`, `listWorkspaceAttempts` and `listWorkspaceEvents`
-    gain an optional `ownerUserId` on the wire; the control plane requires it.
+    only when it belongs to that owner. A call that names none, or another owner, answers the same
+    404 as a missing id. This closes the ID-only operations: `PATCH /v1/runs/:runId`,
+    `PATCH /v1/workspaces/:id/name`, and the workspace `attempts` and `events` listings took an id
+    and nothing else. `updateRun`, `renameWorkspace`, `listWorkspaceAttempts` and
+    `listWorkspaceEvents` gain an optional `ownerUserId` on the wire; the control plane requires it.
   - `POST /v1/runs` creates a run only in a workspace that belongs to the owner it names. A foreign
     key used to be the only check, so any owner could start a run, executed server-side, in another
     owner's workspace.
   - An inference continuation is served only to the owner who opened the exchange; another owner's
     session id answers like one that does not exist. It was addressed by session id alone, on the
     opening owner's credentials.
-  - The SDK names the owner on every record read. `workspace.exec()` read the timeline and scrollback
-    without one. **An SDK older than this release reading records from a control plane with this
-    release gets 404s**: upgrade callers together with the control plane, or set
+  - The SDK names the owner on every record read. `workspace.exec()` read the timeline and
+    scrollback without one. **An SDK older than this release reading records from a control plane
+    with this release gets 404s**: upgrade callers together with the control plane, or set
     `SEALANT_REQUIRE_OWNER_SCOPE=false` on the API for the window between the two.
   - The SSH gateway's shared secret is now verified by the transport gate (its presence used to be
     enough to pass it) and is its own, narrower authority: key and target resolution, plus creating
@@ -100,29 +96,29 @@
 
 ### Patch Changes
 
-- f0c7ce9: Registry repository names, tags and digests are held to the OCI grammar and refused otherwise, never
-  repaired. `GET /v1/registries/:id/tags` and `/manifest` now answer 400 for a `repository` or
-  `reference` outside it (`..`, `%2e`, `?`, `#`, a backslash, a scheme, uppercase, an empty segment),
-  and the registry client refuses the same before it builds a URL or a `docker` argument, keeps every
-  request on the registry's origin under `/v2/`, does not follow redirects, gives each request a
-  30-second deadline and reads at most 8 MiB of any answer. The local Docker image store holds names
-  to the same grammar, and `POST /v1/workspaces` answers 400 for a `repository` or `tag` outside it
-  instead of failing the build later. The SDK's generated repository slug and the plan coordinates
-  always satisfy the grammar (`.github` becomes `github`, `a..b` becomes `a-b`), and a prior publish
-  under a name the grammar refuses counts as nothing to reuse. `isOciRepository`, `isOciTag`,
-  `isOciDigest`, `isOciReference` and `toOciRepositoryComponent` are exported from
-  `@sealant/api-contracts`.
-- 7e6e1fa: Needs sealantd 0.17.0 (sealant-sh/sealantd#86): the capture session channel and every presigned
-  object URL are dialled over HTTPS with a verified certificate, and never fall back. A plain-HTTP
-  channel is dialled only to loopback, or when the launcher states the network is private:
-  `source.transport.plaintext` on the capture source (`SEALANT_CAPTURE_ALLOW_PLAINTEXT` in the
-  workspace), which this release already sends. A private CA for the channel or the object store rides
-  `source.transport.channelCaPem` / `objectCaPem`. **Behaviour change:** a launcher that reaches its
-  channel over plain HTTP on a private network without sending `transport: { plaintext: true }` now
-  gets a workspace that refuses to boot, with the reason in its log. No new API surface here:
-  `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.17.0, and the baked daemon
-  default for workspace images, the MicroVM image and the Cloudflare bridge image is now
-  `ghcr.io/sealant-sh/sealantd:0.17.0`.
+- f0c7ce9: Registry repository names, tags and digests are held to the OCI grammar and refused
+  otherwise, never repaired. `GET /v1/registries/:id/tags` and `/manifest` now answer 400 for a
+  `repository` or `reference` outside it (`..`, `%2e`, `?`, `#`, a backslash, a scheme, uppercase,
+  an empty segment), and the registry client refuses the same before it builds a URL or a `docker`
+  argument, keeps every request on the registry's origin under `/v2/`, does not follow redirects,
+  gives each request a 30-second deadline and reads at most 8 MiB of any answer. The local Docker
+  image store holds names to the same grammar, and `POST /v1/workspaces` answers 400 for a
+  `repository` or `tag` outside it instead of failing the build later. The SDK's generated
+  repository slug and the plan coordinates always satisfy the grammar (`.github` becomes `github`,
+  `a..b` becomes `a-b`), and a prior publish under a name the grammar refuses counts as nothing to
+  reuse. `isOciRepository`, `isOciTag`, `isOciDigest`, `isOciReference` and
+  `toOciRepositoryComponent` are exported from `@sealant/api-contracts`.
+- 7e6e1fa: Needs sealantd 0.17.0 (sealant-sh/sealantd#86): the capture session channel and every
+  presigned object URL are dialled over HTTPS with a verified certificate, and never fall back. A
+  plain-HTTP channel is dialled only to loopback, or when the launcher states the network is
+  private: `source.transport.plaintext` on the capture source (`SEALANT_CAPTURE_ALLOW_PLAINTEXT` in
+  the workspace), which this release already sends. A private CA for the channel or the object store
+  rides `source.transport.channelCaPem` / `objectCaPem`. **Behaviour change:** a launcher that
+  reaches its channel over plain HTTP on a private network without sending
+  `transport: { plaintext: true }` now gets a workspace that refuses to boot, with the reason in its
+  log. No new API surface here: `@sealant/runtime-client` and `@sealant/runtime-protocol` move to
+  0.17.0, and the baked daemon default for workspace images, the MicroVM image and the Cloudflare
+  bridge image is now `ghcr.io/sealant-sh/sealantd:0.17.0`.
 - Updated dependencies [6e089f5]
 - Updated dependencies [613376c]
 - Updated dependencies [5411f65]
@@ -134,15 +130,16 @@
 
 ### Patch Changes
 
-- dcd5f3c: Needs sealantd 0.16.0 (sealant-sh/sealantd#82, #83): a daemon-only release where every PUT URL the
-  capture executor mints is bound to the length the PUT then sends — the single-key fallback mint
-  declared `0` before, which a registrar that signs an upload for an exact content length cannot serve
-  — and where `plan.get` may name `sources`, gzipped archives the daemon lays down beside the worktree
-  at boot and at every `capture.replan`, keyed by content and refused if they would land inside the
-  worktree. That is how a control plane gets a directory beside the repository in a capture-source
-  workspace, which mounts nothing from the host. No new API surface here: `@sealant/runtime-client`
-  and `@sealant/runtime-protocol` move to 0.16.0, and the baked daemon default for workspace images,
-  the MicroVM image and the Cloudflare bridge image is now `ghcr.io/sealant-sh/sealantd:0.16.0`.
+- dcd5f3c: Needs sealantd 0.16.0 (sealant-sh/sealantd#82, #83): a daemon-only release where every
+  PUT URL the capture executor mints is bound to the length the PUT then sends — the single-key
+  fallback mint declared `0` before, which a registrar that signs an upload for an exact content
+  length cannot serve — and where `plan.get` may name `sources`, gzipped archives the daemon lays
+  down beside the worktree at boot and at every `capture.replan`, keyed by content and refused if
+  they would land inside the worktree. That is how a control plane gets a directory beside the
+  repository in a capture-source workspace, which mounts nothing from the host. No new API surface
+  here: `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.16.0, and the baked
+  daemon default for workspace images, the MicroVM image and the Cloudflare bridge image is now
+  `ghcr.io/sealant-sh/sealantd:0.16.0`.
 - Updated dependencies [dcd5f3c]
   - @sealant/api-contracts@0.33.1
 
@@ -150,16 +147,16 @@
 
 ### Minor Changes
 
-- c49e0ba: Support the existing Docker service requirement on Lambda MicroVM workspaces when the operator
-  configures a separate Docker-capable image and pins the same image ARN/version on API and worker.
-  Ordinary workspaces keep their default image. The elevated variant uses guest-root Docker inside the
-  MicroVM, with a private Unix socket and disposable graph storage, not a host Docker socket or a
-  rootless sidecar.
+- c49e0ba: Support the existing Docker service requirement on Lambda MicroVM workspaces when the
+  operator configures a separate Docker-capable image and pins the same image ARN/version on API and
+  worker. Ordinary workspaces keep their default image. The elevated variant uses guest-root Docker
+  inside the MicroVM, with a private Unix socket and disposable graph storage, not a host Docker
+  socket or a rootless sidecar.
 
-  The guest validates required-service readiness, prepares runtime directories after snapshot restore,
-  and reports Docker failure without losing the terminate hook's capture-flush opportunity. Docker
-  images now check daemon startup and cleanup during AWS image validation. This does not change the
-  fixed-image runtime model or make MicroVMs execute the workspace-profile OCI image.
+  The guest validates required-service readiness, prepares runtime directories after snapshot
+  restore, and reports Docker failure without losing the terminate hook's capture-flush opportunity.
+  Docker images now check daemon startup and cleanup during AWS image validation. This does not
+  change the fixed-image runtime model or make MicroVMs execute the workspace-profile OCI image.
 
   The existing requirement to package the matching `sealantctl` alongside `sealantd` remains. Docker
   activation requires a complete platform image; installing a client package alone is insufficient.
@@ -173,8 +170,8 @@
 
 ### Minor Changes
 
-- da0e848: Add `source.harnessHome` for capture-sourced workspaces. The optional executor-local directory is
-  validated, persisted in the workspace blueprint, sent to every runtime as
+- da0e848: Add `source.harnessHome` for capture-sourced workspaces. The optional executor-local
+  directory is validated, persisted in the workspace blueprint, sent to every runtime as
   `SEALANT_CAPTURE_HARNESS_HOME`, and retained across cold materialization and standby replans. When
   omitted, capture behavior is unchanged.
 
@@ -187,8 +184,8 @@
 
 ### Patch Changes
 
-- 9b36398: Needs sealantd 0.15.2 (sealant-sh/sealantd#78, #79): a daemon-only patch where the orphan reaper no
-  longer reaps the daemon's own children, so `capture.flush` stops failing with
+- 9b36398: Needs sealantd 0.15.2 (sealant-sh/sealantd#78, #79): a daemon-only patch where the orphan
+  reaper no longer reaps the daemon's own children, so `capture.flush` stops failing with
   `No child process (os error 10)` on 4–33% of flushes under load, and a byte-quota refusal is
   terminal instead of retried forever. No new API surface; `@sealant/runtime-client` and
   `@sealant/runtime-protocol` move to 0.15.2 and the baked daemon default for workspace images, the
@@ -200,8 +197,8 @@
 
 ### Patch Changes
 
-- 8769089: Needs sealantd 0.15.1 (sealant-sh/sealantd#76): a daemon-only patch where tracked files win over
-  `.gitignore` and packs and staging survive a long ship. No new API surface;
+- 8769089: Needs sealantd 0.15.1 (sealant-sh/sealantd#76): a daemon-only patch where tracked files
+  win over `.gitignore` and packs and staging survive a long ship. No new API surface;
   `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.15.1 and the baked daemon
   default for workspace images, the MicroVM image and the Cloudflare bridge image is now
   `ghcr.io/sealant-sh/sealantd:0.15.1`.
@@ -212,16 +209,16 @@
 
 ### Minor Changes
 
-- 28d3d5b: `worktreeId` is optional on the `capture` workspace source. A standby executor launched before its
-  worktree exists — to materialise the project base and a dependency cache, then be bound to a
-  worktree at claim — omits it; `SEALANT_CAPTURE_WORKTREE_ID` stays unset on every runtime (Docker,
-  Kubernetes, Cloudflare) and the daemon takes the worktree from the channel's plan answer.
-- c677bc9: A `microvm` runtime adapter id: workspaces can now run on AWS Lambda MicroVMs (one Firecracker VM
-  per workspace, driven with the Lambda MicroVMs API and reached through the VM's authenticated
-  inbound endpoint). Workspace reads report `runtime.adapter: "microvm"` for such workspaces, and
-  blueprints may request `target.runtime.family: "microvm"`. Nothing changes for Docker, Kubernetes or
-  Cloudflare deployments; a deployment registers the adapter only when the `SEALANT_MICROVM_*`
-  environment is configured.
+- 28d3d5b: `worktreeId` is optional on the `capture` workspace source. A standby executor launched
+  before its worktree exists — to materialise the project base and a dependency cache, then be bound
+  to a worktree at claim — omits it; `SEALANT_CAPTURE_WORKTREE_ID` stays unset on every runtime
+  (Docker, Kubernetes, Cloudflare) and the daemon takes the worktree from the channel's plan answer.
+- c677bc9: A `microvm` runtime adapter id: workspaces can now run on AWS Lambda MicroVMs (one
+  Firecracker VM per workspace, driven with the Lambda MicroVMs API and reached through the VM's
+  authenticated inbound endpoint). Workspace reads report `runtime.adapter: "microvm"` for such
+  workspaces, and blueprints may request `target.runtime.family: "microvm"`. Nothing changes for
+  Docker, Kubernetes or Cloudflare deployments; a deployment registers the adapter only when the
+  `SEALANT_MICROVM_*` environment is configured.
 
   `workspace.capture.flush()` (`POST /v1/workspaces/:id/capture/flush`): a final capture, then
   everything staged is shipped and registered on the session channel, answered with the daemon's
@@ -229,26 +226,27 @@
   connection, refused on workspaces that are not capture-sourced. Needs sealantd 0.14.0 in the
   workspace image, which is now the baked default.
 
-- fbf6c8c: `workspace.capture.replan()` (`POST /v1/workspaces/:id/capture/replan`): the daemon asks the session
-  channel for its plan again with no worktree named, delta-materialises the answer over what is on
-  disk, and captures under the answered worktree and epoch from then on (the fence lifts, foreign
-  queue entries drop). The claim hook for a standby executor. Synchronous over the control connection,
-  idempotent (`unchanged: true`), answered with the worktree id, epoch, optional head sequence and
-  capture id, and the files and bytes written, skipped and removed. Refused on workspaces that are not
-  capture-sourced.
+- fbf6c8c: `workspace.capture.replan()` (`POST /v1/workspaces/:id/capture/replan`): the daemon asks
+  the session channel for its plan again with no worktree named, delta-materialises the answer over
+  what is on disk, and captures under the answered worktree and epoch from then on (the fence lifts,
+  foreign queue entries drop). The claim hook for a standby executor. Synchronous over the control
+  connection, idempotent (`unchanged: true`), answered with the worktree id, epoch, optional head
+  sequence and capture id, and the files and bytes written, skipped and removed. Refused on
+  workspaces that are not capture-sourced.
 
   Needs sealantd 0.15.0, which also makes materialise a delta over what is on disk and sends
   `platform` on `plan.get`; `@sealant/runtime-client` and `@sealant/runtime-protocol` move to 0.15.0
-  and the baked daemon default for workspace images, the MicroVM image and the Cloudflare bridge image
-  is now `ghcr.io/sealant-sh/sealantd:0.15.0`.
+  and the baked daemon default for workspace images, the MicroVM image and the Cloudflare bridge
+  image is now `ghcr.io/sealant-sh/sealantd:0.15.0`.
 
 ### Patch Changes
 
-- b9e68f7: Docker runtime: `SEALANT_DOCKER_WORKSPACE_NETWORK=<name>` attaches every workspace container to an
-  existing Docker network (`--network <name>`), so a workspace resolves sibling Compose services — a
-  session channel, a bucket — by name without publishing them on the host. With the workspace Docker
-  service on, the container joins the shared network beside its sidecar network at creation (Docker
-  Engine 25+). Every workspace container also gets `--add-host host.docker.internal:host-gateway`.
+- b9e68f7: Docker runtime: `SEALANT_DOCKER_WORKSPACE_NETWORK=<name>` attaches every workspace
+  container to an existing Docker network (`--network <name>`), so a workspace resolves sibling
+  Compose services — a session channel, a bucket — by name without publishing them on the host. With
+  the workspace Docker service on, the container joins the shared network beside its sidecar network
+  at creation (Docker Engine 25+). Every workspace container also gets
+  `--add-host host.docker.internal:host-gateway`.
 - Updated dependencies [28d3d5b]
 - Updated dependencies [b9e68f7]
 - Updated dependencies [c677bc9]
@@ -262,26 +260,27 @@
 - af93419: A `capture` workspace source (sealantd ADR-0015):
   `workspaces.create({ source: { kind: "capture", endpoint, worktreeId, token } })` launches a
   workspace that mounts nothing and clones nothing — the daemon materialises the worktree from the
-  session channel onto the executor's own disk and ships captures back, so a session can run where no
-  host path exists and outlive any one executor. The create request carries the credential as
-  `captureToken`; the control plane seals it beside `secretEnv` and delivers it through the same boot
-  file as `SEALANT_CAPTURE_TOKEN`, never into the blueprint or a read response. A capture workspace
-  cannot be restarted in place. Runtime support: Docker (no workspace bind), Kubernetes (`emptyDir`
-  workspace root, no store claim) and Cloudflare (kept alive while live; planned stops now send
-  SIGTERM through `stop()` so the daemon can flush, with `destroy()` reserved for fencing).
+  session channel onto the executor's own disk and ships captures back, so a session can run where
+  no host path exists and outlive any one executor. The create request carries the credential as
+  `captureToken`; the control plane seals it beside `secretEnv` and delivers it through the same
+  boot file as `SEALANT_CAPTURE_TOKEN`, never into the blueprint or a read response. A capture
+  workspace cannot be restarted in place. Runtime support: Docker (no workspace bind), Kubernetes
+  (`emptyDir` workspace root, no store claim) and Cloudflare (kept alive while live; planned stops
+  now send SIGTERM through `stop()` so the daemon can flush, with `destroy()` reserved for fencing).
 
 ### Patch Changes
 
-- 4d64b6a: The worker now keeps workspace images and build scratch bounded. Every build's scratch directory
-  (the Containerfile, plan and spec JSON, and the `docker save` tarball on registry installs) is
-  removed once the image is published or the build fails; before this each build left up to ~800 MB
-  under the worker's temp directory for good. An hourly retention sweep (`WORKSPACE_IMAGE_GC_ENABLED`,
-  `WORKSPACE_IMAGE_GC_INTERVAL_MS`, `WORKSPACE_IMAGE_RETAINED_PLANS`, `WORKSPACE_IMAGE_MIN_AGE_HOURS`)
-  deletes images no live workspace launched from, no retained plan still needs, and nothing published
-  in the last week — on the Engine store by image id, on a registry by manifest — and removes build
-  scratch older than six hours, so an upgrade reclaims what earlier versions leaked. Stopping a
-  workspace now removes its containers with their anonymous volumes; the Docker sidecar used to leave
-  one behind per workspace, and `docker volume prune` clears the ones older installs accumulated.
+- 4d64b6a: The worker now keeps workspace images and build scratch bounded. Every build's scratch
+  directory (the Containerfile, plan and spec JSON, and the `docker save` tarball on registry
+  installs) is removed once the image is published or the build fails; before this each build left
+  up to ~800 MB under the worker's temp directory for good. An hourly retention sweep
+  (`WORKSPACE_IMAGE_GC_ENABLED`, `WORKSPACE_IMAGE_GC_INTERVAL_MS`, `WORKSPACE_IMAGE_RETAINED_PLANS`,
+  `WORKSPACE_IMAGE_MIN_AGE_HOURS`) deletes images no live workspace launched from, no retained plan
+  still needs, and nothing published in the last week — on the Engine store by image id, on a
+  registry by manifest — and removes build scratch older than six hours, so an upgrade reclaims what
+  earlier versions leaked. Stopping a workspace now removes its containers with their anonymous
+  volumes; the Docker sidecar used to leave one behind per workspace, and `docker volume prune`
+  clears the ones older installs accumulated.
 - Updated dependencies [af93419]
 - Updated dependencies [4d64b6a]
   - @sealant/api-contracts@0.30.0
@@ -905,7 +904,6 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
-
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
