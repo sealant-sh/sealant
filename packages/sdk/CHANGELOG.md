@@ -1,5 +1,43 @@
 # @sealant/sdk
 
+## 0.35.0
+
+### Minor Changes
+
+- 6a668f5: A connected account reports how fresh its credential is. `ConnectedAccountSummary` gains a
+  `credential` object with `accessExpiresAt`, `refreshExpiresAt`, `lastRefreshAt` and
+  `lastRefreshOutcome` (`refreshed`, `fresh` or `failed`), and the SDK's `ConnectedAccount` carries it
+  through.
+
+  Every field is null when nothing was observed: a setup token has no expiry, a row connected before
+  this shipped has no stored one, and an account the keep-fresh sweeper has never touched has no
+  outcome. The numbers come from the non-secret metadata mirror and the account's own columns, so the
+  sealed payload stays sealed and a consumer gets an observation rather than a guess.
+
+  Two smaller changes make that possible: a Claude credentials file now records its
+  `refreshTokenExpiresAt` beside the access expiry it already recorded, and the keep-fresh sweeper
+  records what each sweep did. A consumer can now tell someone their grant expires on the 15th, or has
+  expired, before a harness fails to authenticate rather than after.
+
+### Patch Changes
+
+- effb7c2: A Claude credentials file is stored as its `claudeAiOauth` grant alone. The file Claude Code writes
+  is `{ claudeAiOauth, mcpOAuth }`, and the `mcpOAuth` half holds refresh tokens for whichever MCP
+  servers the person authorized on their own machine. Connecting stored the document whole, so those
+  third-party tokens reached the control plane's database and every workspace that attached the
+  account; a rotated file read back by the sync-back worker could bring them back again.
+
+  Both ends now narrow: `POST /v1/connected-accounts` seals the grant and records the sections it left
+  out as `metadata.droppedSections`, and the workspace sync-back drops an `mcpOAuth` section a
+  rotation hands back. Nothing about the grant changes, so a workspace's Claude Code still has the
+  refresh token it rotates with, and a document with nothing to drop is stored byte for byte as it
+  arrived. A client that narrows before sending sees no difference; one that does not is stored narrow
+  anyway.
+
+- Updated dependencies [6a668f5]
+- Updated dependencies [effb7c2]
+  - @sealant/api-contracts@0.35.0
+
 ## 0.34.0
 
 ### Minor Changes
@@ -7,6 +45,7 @@
 - c7c259d: The control plane fails closed (no SDK surface change; the packages ride the release
   train). The API now refuses to start when `SEALANT_SERVICE_KEYS` is unset. Missing configuration
   used to mean "serve every `/v1` route to anyone who can reach the port".
+
   - The one exception is explicit and for development: `SEALANT_ALLOW_OPEN_API=true`, honoured only
     when `NODE_ENV` is not `production`. Every published image sets `NODE_ENV=production`.
     `pnpm dev` sets the exception for the API it starts on loopback.
@@ -37,6 +76,7 @@
   handler refusals carry `retryAfterSeconds` in the body). A budget refuses new work and never stops
   running work. A ceiling is checked before the work is created, so creates that race can overshoot
   it by the number in flight.
+
   - `SEALANT_BUDGET_PRINCIPAL_REQUESTS_PER_MINUTE` (12000: one service key is a whole product) and
     `SEALANT_BUDGET_OWNER_LAUNCHES_PER_MINUTE` (120), counted per API process.
   - `SEALANT_BUDGET_OWNER_LIVE_WORKSPACES` (100) and `SEALANT_BUDGET_OWNER_ACTIVE_RUNS` (100), read
@@ -50,6 +90,7 @@
   `0` turns a budget off, and the API logs at start which are off.
 
 - 613376c: Credentials are bound to the destination they were issued for.
+
   - A client-supplied `authRef` is now checked against its source URL: the installation token is
     minted only for `https://<GitHub host>/<owner>/<name>[.git]` of the repository the ref stands
     for. A grant on one installation could previously attach its token to a clone of any URL. A
@@ -904,6 +945,7 @@
 - 6d1d72d: Workspace lifecycle close-out: `workspace.stop()`, `workspace.restart()`, and
   `workspace.expire()` are real end-to-end operations instead of `SealantNotImplementedError`
   rejections.
+
   - New control-plane endpoints: `POST /v1/workspaces/:id/stop` (async 202 — the worker removes the
     container and records the terminal `stopped` state), `POST /v1/workspaces/:id/restart` (async
     202 — a fresh launch from the same resolved spec, recorded as a new attempt), and
