@@ -35,6 +35,7 @@ import {
   parseRuntimeAdapterStopResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
+  requirePublishedImage,
   type CredentialFileInjection,
   type WorkspaceCloneAuth,
   type RuntimeAdapterSupportInput,
@@ -432,8 +433,9 @@ const buildContainerName = (input: RuntimeAdapterLaunchInput, prefix: string): s
     return `${prefix}-${runToken}`;
   }
   // Fallback (no runId, e.g. ad-hoc/test launches): keep the legacy unique-per-launch name.
-  const repositoryToken = normalizeContainerToken(input.publishedImage.repository) || "workspace";
-  const tagToken = normalizeContainerToken(input.publishedImage.tag) || "latest";
+  const image = requirePublishedImage(input, "docker");
+  const repositoryToken = normalizeContainerToken(image.repository) || "workspace";
+  const tagToken = normalizeContainerToken(image.tag) || "latest";
   const suffix = Date.now().toString(36);
   return `${prefix}-${repositoryToken}-${tagToken}-${suffix}`;
 };
@@ -1558,7 +1560,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ? await this.provisionDockerService(containerName)
         : undefined;
       const dockerNetworkName = dockerService?.networkName;
-      const imageReference = parsed.publishedImage.digestReference;
+      const imageReference = requirePublishedImage(parsed, "docker").digestReference;
       // SSH "access" now means the gateway should be able to reach a shell over the daemon control
       // socket — it no longer publishes/injects an inner sshd (gateway-spec §4.3). The control reach is
       // always available via `docker exec` (or the §2.2 bind-mount), so no SSH port or `SEALANT_SSH_*`

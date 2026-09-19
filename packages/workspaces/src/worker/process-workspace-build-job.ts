@@ -112,7 +112,8 @@ const launchPublishedImage = async (input: {
   readonly spec: NewWorkspace;
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
-  readonly publishedImage: PublishedImage;
+  /** Absent when the selected runtime boots an image of its own (`RuntimeAdapter.builtImage`). */
+  readonly publishedImage?: PublishedImage;
   readonly workspaceCloneAuth?: WorkspaceCloneAuth;
   readonly platformEnv?: Record<string, string>;
   readonly credentialEnv?: Record<string, string>;
@@ -133,7 +134,7 @@ const launchPublishedImage = async (input: {
 
   return selectedAdapter.adapter.launch({
     blueprint: input.spec,
-    publishedImage: input.publishedImage,
+    ...(input.publishedImage === undefined ? {} : { publishedImage: input.publishedImage }),
     ...(input.workspaceCloneAuth === undefined
       ? {}
       : { workspaceCloneAuth: input.workspaceCloneAuth }),
@@ -429,6 +430,35 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
+    // The runtime is chosen before anything is built. One that boots an image of its own
+    // (MicroVM) never reads a built one, so there is nothing to build or publish: on a control
+    // plane with no Docker daemon the build could only fail, and with one it would run the
+    // blueprint's image setup commands on this host. Selection is pure, and phase B repeats it.
+    // A blueprint no adapter supports is phase B's to report, with the build left succeeded, so
+    // a selection error here means only "build as before".
+    const selected = yield* Effect.try(() =>
+      selectRuntimeAdapter({
+        blueprint: spec,
+        adapters: options.runtimeAdapters,
+        defaultAdapterId: options.defaultRuntimeAdapterId,
+      }),
+    ).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (selected?.adapter.builtImage === "unused") {
+      yield* jobs
+        .markJobSucceeded({
+          id: job.id,
+          builderId: null,
+          publishedReference: null,
+          publishedDigestReference: null,
+          publishedDigest: null,
+        })
+        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      yield* Effect.logInfo(
+        `The ${selected.adapterId} runtime boots its own image; skipped the workspace image build and publish.`,
+      );
+      return { publishedImage: undefined, spec };
+    }
+
     const imageBuilder =
       options.imageBuilder ??
       createDockerWorkspaceImageBuilder({
@@ -593,7 +623,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           spec,
           runtimeAdapters: options.runtimeAdapters,
           defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
-          publishedImage,
+          ...(publishedImage === undefined ? {} : { publishedImage }),
           ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),
           // Worker-resolved dotfiles clone auth rides the TRANSIENT platform launch field, never a
           // blueprint env map: the blueprint is the persisted restart source and must stay free of
@@ -667,7 +697,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     ),
   );
 
-  return publishedImage;
+  return publishedImage ?? null;
 });
 
 /**

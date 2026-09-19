@@ -392,6 +392,127 @@ describe("processWorkspaceBuildJobEffect", () => {
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
 
+  it.effect("builds and publishes nothing for a runtime that boots its own image", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_fixed_image",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "shell",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "arch" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    // A control plane with no Docker daemon: any build or publish would fail there, and on one
+    // with a daemon it would run the blueprint's image setup on the control plane's host.
+    const compileWorkspaceSpec = vi.fn(async () => {
+      throw new Error("the image must not be compiled");
+    });
+    const planWorkspaceSpec = vi.fn(() => {
+      throw new Error("the image must not be planned");
+    });
+    const registryClient = {
+      publishOciImage: vi.fn(async () => {
+        throw new Error("nothing must be published");
+      }),
+      headManifest: vi.fn(async () => {
+        throw new Error("the registry must not be asked");
+      }),
+    } as unknown as RegistryClient;
+    const imageBuilder = {
+      plan: vi.fn(() => {
+        throw new Error("an injected builder must not plan either");
+      }),
+      buildAndPublish: vi.fn(async () => {
+        throw new Error("an injected builder must not run either");
+      }),
+    };
+    const launch = vi.fn(async () => ({
+      adapter: "microvm" as const,
+      resourceId: "microvm_123",
+      reference: "microvm_123",
+      status: "running" as const,
+    }));
+    const microvm = {
+      ...createRuntimeAdapterStub("microvm", { launch }),
+      builtImage: "unused" as const,
+    };
+
+    return Effect.gen(function* () {
+      const published = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_fixed_image",
+          compileWorkspaceSpec,
+          planWorkspaceSpec,
+          registryClient,
+          imageBuilder,
+          runtimeAdapters: [microvm],
+          defaultRuntimeAdapterId: "microvm",
+        }),
+      );
+
+      expect(published).toBeNull();
+      expect(compileWorkspaceSpec).not.toHaveBeenCalled();
+      expect(planWorkspaceSpec).not.toHaveBeenCalled();
+      expect(imageBuilder.plan).not.toHaveBeenCalled();
+      expect(imageBuilder.buildAndPublish).not.toHaveBeenCalled();
+      expect(jobs.getLatestSucceededJobByPlanHash).not.toHaveBeenCalled();
+      // The job row says what happened: it succeeded, and no image was built or published.
+      expect(jobs.markJobSucceeded).toHaveBeenCalledWith({
+        id: "job_fixed_image",
+        builderId: null,
+        publishedReference: null,
+        publishedDigestReference: null,
+        publishedDigest: null,
+      });
+      // The launch still happens, and carries no image rather than an invented one.
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(launch).toHaveBeenCalledWith(
+        expect.not.objectContaining({ publishedImage: expect.anything() }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
+  it.effect("still builds for the runtime that runs the image when both are registered", () => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_docker_beside_microvm",
+        runId: null,
+        repository: "sealant/workspaces/demo",
+        tag: "shell",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "arch" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const compileWorkspaceSpec = vi.fn(async () => createCompileResult({ id: "arch" }));
+    const dockerLaunch = vi.fn(async () => ({
+      adapter: "docker" as const,
+      resourceId: "container_123",
+      reference: "container_123",
+      status: "running" as const,
+    }));
+    const microvm = { ...createRuntimeAdapterStub("microvm"), builtImage: "unused" as const };
+
+    return Effect.gen(function* () {
+      const published = yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_docker_beside_microvm",
+          compileWorkspaceSpec,
+          runtimeAdapters: [microvm, createRuntimeAdapterStub("docker", { launch: dockerLaunch })],
+          defaultRuntimeAdapterId: "docker",
+        }),
+      );
+
+      expect(compileWorkspaceSpec).toHaveBeenCalledTimes(1);
+      expect(published).not.toBeNull();
+      expect(dockerLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ publishedImage: published }),
+      );
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  });
+
   it.effect("skips build and publish when the plan hash matches a published image", () => {
     const priorPlanHash = "a".repeat(64);
     const jobs = workspaceBuildJobRepoStub({

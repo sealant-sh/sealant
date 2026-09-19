@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseRuntimeAdapterSupport,
   parseRuntimeAdapterSupportInput,
+  requirePublishedImage,
   selectRuntimeAdapter,
   type RuntimeAdapter,
 } from "./runtime-adapter.js";
@@ -134,6 +135,31 @@ const createAdapter = (
     },
   };
 };
+
+describe("requirePublishedImage", () => {
+  const image = {
+    repository: "sealant/workspaces/demo",
+    tag: "plan-abc",
+    reference: "127.0.0.1:5000/sealant/workspaces/demo:plan-abc",
+    digestReference: "127.0.0.1:5000/sealant/workspaces/demo@sha256:abc",
+    digest: "sha256:abc",
+  };
+
+  it("hands an adapter that runs the built image that image", () => {
+    expect(requirePublishedImage({ publishedImage: image }, "docker")).toBe(image);
+  });
+
+  it("refuses, naming the adapter, when the worker built none", () => {
+    // Only a runtime that declares `builtImage: "unused"` is launched without one. Reaching an
+    // adapter that runs the image with none is a miswired pipeline, never a silent empty image.
+    expect(() => requirePublishedImage({}, "k8s")).toThrowError(
+      expect.objectContaining({
+        code: "published-image-required",
+        message: expect.stringContaining("k8s adapter"),
+      }),
+    );
+  });
+});
 
 describe("selectRuntimeAdapter", () => {
   it("uses the default adapter when runtime target is auto", () => {

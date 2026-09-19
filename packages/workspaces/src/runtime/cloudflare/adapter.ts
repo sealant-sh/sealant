@@ -10,6 +10,7 @@ import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterStopInput,
+  requirePublishedImage,
   type RuntimeAdapter,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
@@ -172,7 +173,7 @@ export class CloudflareRuntimeAdapter implements RuntimeAdapter {
                   }
                 : {}),
             },
-      image: parsed.publishedImage,
+      image: requirePublishedImage(parsed, "cloudflare"),
       // Later wins, matching the docker adapter's -e ordering: blueprint env, then
       // worker-resolved platform env (must not be shadowed), then credential env.
       env: {

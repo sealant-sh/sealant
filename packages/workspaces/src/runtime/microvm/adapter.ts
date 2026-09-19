@@ -445,6 +445,9 @@ const describeEnded = (vm: MicrovmDescription): string =>
 
 export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   readonly id = "microvm" as const;
+  // A MicroVM boots a registered image (`SEALANT_MICROVM_IMAGE_ARN`, or the Docker-capable one)
+  // and never reads an image built from the blueprint, so the worker builds none.
+  readonly builtImage = "unused" as const;
 
   readonly #config: MicrovmRuntimeConfig;
   readonly #api: MicrovmApi;

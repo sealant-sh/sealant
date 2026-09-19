@@ -68,7 +68,10 @@ export const credentialFileInjectionSchema = z.strictObject({
 
 export const runtimeAdapterLaunchInputSchema = z.strictObject({
   blueprint: runtimeAdapterBlueprintSchema,
-  publishedImage: publishedImageSchema,
+  // Absent when the selected runtime boots an image of its own (`RuntimeAdapter.builtImage`), so
+  // the worker built none. An adapter that runs the built image asks for it with
+  // `requirePublishedImage`.
+  publishedImage: publishedImageSchema.optional(),
   workspaceCloneAuth: workspaceCloneAuthSchema.optional(),
   // Connected-account env injections (e.g. CLAUDE_CODE_OAUTH_TOKEN); they join the existing `-e`
   // args, sharing the exposure profile of today's clone tokens (plaintext-argv hardening is a
@@ -274,6 +277,15 @@ export interface RuntimeAdapterExitWatch {
 
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
+  /**
+   * Whether this runtime runs the image the worker builds from the blueprint. Absent means it
+   * does (Docker, Kubernetes, Cloudflare). `"unused"` means it boots an image of its own and never
+   * reads the built one (MicroVM: a registered image ARN). The worker then skips the build and
+   * the publish for a workspace this adapter is selected for: on a control plane with no Docker
+   * daemon the build could only fail, and with one it would run the blueprint's image setup
+   * commands on the control plane's host to produce an image nothing boots.
+   */
+  readonly builtImage?: "unused";
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult>;
@@ -297,6 +309,20 @@ const createSelectionError = (code: string, message: string): Error & { code: st
   const error = new Error(message) as Error & { code: string };
   error.code = code;
   return error;
+};
+
+/** The built image, for an adapter that runs it. Absent means the worker's pipeline is miswired. */
+export const requirePublishedImage = (
+  input: { readonly publishedImage?: PublishedImage | undefined },
+  adapterId: RuntimeAdapterId,
+): PublishedImage => {
+  if (input.publishedImage === undefined) {
+    throw createSelectionError(
+      "published-image-required",
+      `The ${adapterId} adapter runs the image built from the blueprint, and this launch carries none.`,
+    );
+  }
+  return input.publishedImage;
 };
 
 const candidateAdapterIds = (

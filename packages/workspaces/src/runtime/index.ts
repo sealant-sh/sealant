@@ -6,6 +6,7 @@ export {
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   publishedImageSchema,
+  requirePublishedImage,
   runtimeAdapterBlueprintSchema,
   runtimeAdapterExitEventSchema,
   runtimeAdapterIdSchema,

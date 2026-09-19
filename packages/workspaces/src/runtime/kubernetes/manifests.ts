@@ -28,7 +28,7 @@ import type {
 import { getHarnessIntegration } from "../../harness/integrations.js";
 import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js";
 import { bindableMountsEnv, bindsEnv } from "../mount-intent.js";
-import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
+import { requirePublishedImage, type RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import {
   COMPONENT_WORKSPACE,
   LABEL_ADAPTER,
@@ -548,7 +548,7 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
 
   const container: V1Container = {
     name: WORKSPACE_CONTAINER_NAME,
-    image: input.publishedImage.digestReference,
+    image: requirePublishedImage(input, "k8s").digestReference,
     imagePullPolicy: "IfNotPresent",
     workingDir: input.blueprint.runtime.workingDirectory,
     env: envList(build.plainEnv, names.envSecret, build.secretEnvKeys),

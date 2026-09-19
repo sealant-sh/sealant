@@ -60,11 +60,12 @@ export interface ClaimWorkspaceBuildJobByIdInput {
 
 export interface MarkWorkspaceBuildJobSucceededInput {
   readonly id: string;
-  readonly builderId: string;
+  /** Null, with the three published fields, when the selected runtime uses no built image. */
+  readonly builderId: string | null;
   readonly resultPayload?: NonNullable<WorkspaceBuildJob["resultPayload"]>;
-  readonly publishedReference: string;
-  readonly publishedDigestReference: string;
-  readonly publishedDigest: string;
+  readonly publishedReference: string | null;
+  readonly publishedDigestReference: string | null;
+  readonly publishedDigest: string | null;
   readonly finishedAt?: Date;
 }
 

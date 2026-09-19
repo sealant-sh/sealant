@@ -628,6 +628,21 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(api.terminates).toEqual([]);
   });
 
+  it("boots its registered image and needs none built: a launch without one succeeds", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [json(200, { booted: true, controlSocket: true })],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+    const { publishedImage: _built, ...withoutBuiltImage } = captureLaunch;
+
+    // What the worker reads to skip the build and publish for a workspace this adapter is
+    // selected for.
+    expect(adapter.builtImage).toBe("unused");
+    await expect(adapter.launch(withoutBuiltImage)).resolves.toMatchObject({ status: "ready" });
+  });
+
   it("retries an endpoint 502 before valid agent health", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint(
