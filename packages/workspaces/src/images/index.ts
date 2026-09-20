@@ -37,3 +37,29 @@ export {
   planImageCoordinates,
   type ImageCoordinates,
 } from "./plan-coordinates.js";
+export {
+  MICROVM_IMAGE_MANAGED_TAG,
+  MICROVM_IMAGE_PLAN_TAG,
+  MicrovmImageBuildError,
+  MicrovmWorkspaceImageBuilder,
+  microvmImageReference,
+  parseMicrovmImageReference,
+  type MicrovmImageBuildConfig,
+  type MicrovmWorkspaceImageBuilderOptions,
+} from "./microvm/builder.js";
+export {
+  createLiveMicrovmImageApi,
+  createS3MicrovmArtifactStore,
+  type MicrovmArtifactStore,
+  type MicrovmImageApi,
+  type MicrovmImageCreateInput,
+  type MicrovmImageDescription,
+  type MicrovmImageState,
+} from "./microvm/image-api.js";
+export {
+  MICROVM_AGENT_FILES,
+  MICROVM_RECIPE_VERSION,
+  microvmImageName,
+  microvmRecipe,
+  mirroredBaseImage,
+} from "./microvm/recipe.js";
