@@ -131,7 +131,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   const microvmImageApi =
     microvmConfig === undefined
       ? undefined
-      : createLiveMicrovmImageApi({ region: microvmConfig.region });
+      : createLiveMicrovmImageApi({
+          region: microvmConfig.region,
+          accountArn: microvmConfig.build.roleArn,
+        });
   const microvmContextFiles =
     microvmConfig === undefined ? undefined : await loadMicrovmContextFiles();
   const microvmRuntimes =

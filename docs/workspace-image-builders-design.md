@@ -149,6 +149,19 @@ itself: a single-user self-host is a supported shape.
   MicroVM images that no build job names, which a build that died after `CreateMicrovmImage` or a
   database started fresh leaves behind. Past a configured number of images the builder refuses to
   create another and says why. The per-build zip is deleted once the image is `CREATED` or failed.
+- **Proven live, 2026-09-20** (`src/images/microvm/built-image.e2e.ts`, opt-in). A Fedora blueprint
+  with a catalog package built in 203 s. The same plan again took under a second and built and
+  uploaded nothing. The adapter booted that image in 7 s, and inside the VM were the blueprint's OS,
+  its package, `sealantd`, a `sealantctl` that reaches the daemon, and the cloned repository. A
+  fenced stop took 3 s, and the console shows the terminate hook's `sealantctl capture flush`
+  answered by the daemon. The run found two faults no fake could:
+  - `GetMicrovmImage` and `DeleteMicrovmImage` take an image ARN and refuse a bare name ("Invalid
+    ARN format"). The live API completes a name with the build role's partition and account.
+  - The create request's `clientToken` was the plan hash. A plan is built again once its image is
+    deleted, and the second create, replaying a token the platform had already completed, sat in
+    `CREATING` for the whole thirty-minute timeout with no build running. An image in that state
+    cannot be deleted either. The token is now one per attempt; the name already makes one plan one
+    image. With that, delete then rebuild of the same name took 203 s.
 - **Names, not tags.** `ListMicrovmImages` returns no tags, so a listing can only tell whose an
   image is by its name: `<prefix>-<24 hex of the plan hash>`, prefix `sealant-ws`
   (`SEALANT_MICROVM_IMAGE_NAME_PREFIX`). The cap counts those names and the sweep deletes only

@@ -229,7 +229,8 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
       entries.push({ name: file, content: await this.#options.readContextFile(file) });
     }
     // An unguessable key: a build role cannot list the bucket, so it cannot find another build's.
-    const key = `${config.artifactPrefix}/${(this.#options.uniqueId ?? randomUUID)()}.zip`;
+    const attempt = (this.#options.uniqueId ?? randomUUID)();
+    const key = `${config.artifactPrefix}/${attempt}.zip`;
     const uri = await artifacts.put(key, zipStored(entries));
     try {
       await api.createImage({
@@ -247,7 +248,11 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
           [MICROVM_IMAGE_MANAGED_TAG]: "true",
           [MICROVM_IMAGE_PLAN_TAG]: planned.planHash,
         },
-        clientToken: planned.planHash,
+        // One token per attempt, never the plan hash. The name already makes one plan one image.
+        // A plan is built again after its image was deleted (retention, or a failed build that
+        // was cleared), and a token the platform has already completed left that second create in
+        // CREATING with no build running, where it cannot even be deleted (observed 2026-09-20).
+        clientToken: attempt,
       });
       const image = await this.#settled(name);
       if (image === undefined || !READY.has(image.state)) {

@@ -144,7 +144,8 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       memoryMiB: 4096,
       agentPort: 8080,
       allOsCapabilities: false,
-      clientToken: planned.planHash,
+      // The attempt's own id, the same one that names its build context. Never the plan hash.
+      clientToken: "build-1",
       tags: { [MICROVM_IMAGE_MANAGED_TAG]: "true" },
     });
     expect(publishedImage).toEqual({
@@ -323,6 +324,24 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       blueprint(["jq"]),
     );
     expect(staging.publishedImage.repository).toMatch(/^staging-ws-[0-9a-f]{24}$/);
+  });
+
+  it("builds a plan again under a new request token once its image is gone", async () => {
+    // Against the platform, a second create that replayed the first one's token sat in CREATING
+    // for the whole build timeout with no build running, and could not be deleted (2026-09-20).
+    const aws = fakeAws();
+    const builder = builderFor(aws);
+    const spec = blueprint(["ripgrep"]);
+
+    const first = await build(builder, spec);
+    await aws.api.deleteImage(first.publishedImage.repository);
+    const second = await build(builder, spec);
+
+    expect(second.publishedImage.repository).toBe(first.publishedImage.repository);
+    expect(aws.created.map((input) => input.clientToken)).toEqual(["build-1", "build-2"]);
+    expect(aws.created.map((input) => input.clientToken)).not.toContain(
+      builder.plan(spec).planHash,
+    );
   });
 
   it("reports a failed managed build with the platform's reason, and still deletes the context", async () => {
