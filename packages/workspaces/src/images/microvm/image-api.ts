@@ -57,7 +57,7 @@ export interface MicrovmImageCreateInput {
   /** The Docker-capable variant asks for the image-level `ALL` OS capability. */
   readonly allOsCapabilities: boolean;
   readonly tags: Readonly<Record<string, string>>;
-  /** Idempotency: a redelivered build of the same plan creates one image. */
+  /** Idempotency of this one request. Unique per build attempt: see the builder. */
   readonly clientToken: string;
 }
 
@@ -124,6 +124,12 @@ const toDescription = (output: {
 
 export interface LiveMicrovmImageApiOptions {
   readonly region: string;
+  /**
+   * An ARN of the account the images live in: the build role's. `GetMicrovmImage` and
+   * `DeleteMicrovmImage` take an image ARN and refuse a bare name ("Invalid ARN format", observed
+   * 2026-09-20), so the name is completed with this ARN's partition and account.
+   */
+  readonly accountArn: string;
   /** Test seam / custom endpoints; credentials come from the default provider chain. */
   readonly client?: LambdaMicrovmsClient;
 }
@@ -149,13 +155,23 @@ const hooksFor = (agentPort: number): NonNullable<CreateMicrovmImageCommandInput
   },
 });
 
+/** `arn:<partition>:lambda:<region>:<account>:microvm-image:<name>`, from any ARN of that account. */
+export const microvmImageArn = (accountArn: string, region: string, name: string): string => {
+  const [, partition, , , account] = accountArn.split(":");
+  if (partition === undefined || account === undefined || !/^\d{12}$/.test(account)) {
+    throw new Error(`'${accountArn}' names no AWS account to look MicroVM images up in.`);
+  }
+  return `arn:${partition}:lambda:${region}:${account}:microvm-image:${name}`;
+};
+
 export const createLiveMicrovmImageApi = (options: LiveMicrovmImageApiOptions): MicrovmImageApi => {
   const client = options.client ?? new LambdaMicrovmsClient({ region: options.region });
+  const arnOf = (name: string): string => microvmImageArn(options.accountArn, options.region, name);
   return {
     getImage: async (name) => {
       try {
         return toDescription(
-          await client.send(new GetMicrovmImageCommand({ imageIdentifier: name })),
+          await client.send(new GetMicrovmImageCommand({ imageIdentifier: arnOf(name) })),
         );
       } catch (error) {
         if (isResourceNotFound(error)) return undefined;
@@ -186,7 +202,7 @@ export const createLiveMicrovmImageApi = (options: LiveMicrovmImageApiOptions): 
       ),
     deleteImage: async (name) => {
       try {
-        await client.send(new DeleteMicrovmImageCommand({ imageIdentifier: name }));
+        await client.send(new DeleteMicrovmImageCommand({ imageIdentifier: arnOf(name) }));
         return "deleted";
       } catch (error) {
         if (isResourceNotFound(error)) return "not-found";
