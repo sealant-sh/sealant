@@ -132,3 +132,4 @@ export type {
   SelectRuntimeAdapterInput,
   WorkspaceCloneAuth,
 } from "./runtime-adapter.js";
+export type { RegisteredRuntime } from "./registered-runtime.js";

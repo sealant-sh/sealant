@@ -500,9 +500,12 @@ describe("microvm agent guest-local Docker", () => {
   });
 
   it("reports an unidentified probe failure without printing probe output", async () => {
+    // The probe has to start and exit 1 inside its own timeout, or what is reported is the probe's
+    // timeout. A node process can take longer than the default 150 ms to start on a loaded runner.
     const agent = await startAgent({
       FAKE_DOCKER_PROBE_MODE: "never",
-      SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "80",
+      SEALANT_MICROVM_DOCKER_READY_TIMEOUT_MS: "1500",
+      SEALANT_MICROVM_DOCKER_PROBE_TIMEOUT_MS: "1400",
     });
 
     expect(await hook(agent, "validate")).toMatchObject({ status: 503 });

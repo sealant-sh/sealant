@@ -32,8 +32,12 @@ setInterval(() => {}, 1000);
 process.on("SIGTERM", () => process.exit(0));
 `;
 
+// \`docker info\` answers only once the daemon is up, as the real one does. A fake that always
+// answered let the service report ready, and stop, before the fake daemon had started and written
+// its record: on a loaded runner a node process takes longer to start than one probe interval.
 const FAKE_DOCKER = `#!/usr/bin/env node
 const fs = require("node:fs");
+if (!fs.existsSync(process.env.FAKE_DOCKERD_RECORD)) process.exit(1);
 fs.writeFileSync(process.env.FAKE_DOCKER_RECORD, JSON.stringify(process.argv.slice(2)));
 process.exit(0);
 `;
@@ -57,7 +61,7 @@ service = createDockerService({
   dataRoot: paths.dataRoot,
   execRoot: paths.execRoot,
   pidFile: paths.pidFile,
-  readinessTimeoutMs: 500,
+  readinessTimeoutMs: 4000,
   probeIntervalMs: 10,
   probeTimeoutMs: 100,
   shutdownTimeoutMs: 100,
@@ -68,7 +72,7 @@ service = createDockerService({
   },
 });
 service.start();
-setTimeout(() => void finish("FAILED:test-timeout"), 3000);
+setTimeout(() => void finish("FAILED:test-timeout"), 8000);
 `;
 
 type ServicePaths = {
