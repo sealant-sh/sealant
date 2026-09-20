@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dockerServiceRefusal, microvmDockerCapabilityEnabled } from "./workspaces.module.js";
+import { dockerServiceRefusal } from "./workspaces.module.js";
 
 /**
  * The create-time gate for `tooling.services.docker`: refuse synchronously on an install whose
@@ -11,30 +11,6 @@ const spec = (input: { readonly docker?: boolean; readonly family?: string }) =>
     services: input.docker === undefined ? undefined : { docker: { enabled: input.docker } },
   },
   target: { runtime: { family: input.family ?? "auto" } },
-});
-
-describe("microvmDockerCapabilityEnabled", () => {
-  const baseImageArn = "arn:aws:lambda:eu-central-1:123456789012:microvm-image:base";
-  const dockerImageArn = "arn:aws:lambda:eu-central-1:123456789012:microvm-image:docker-capable";
-
-  it("requires the base image and both pinned Docker image coordinates", () => {
-    expect(microvmDockerCapabilityEnabled({ dockerImageArn, dockerImageVersion: "7" })).toBe(false);
-    expect(microvmDockerCapabilityEnabled({ baseImageArn, dockerImageArn })).toBe(false);
-    expect(microvmDockerCapabilityEnabled({ baseImageArn, dockerImageVersion: "7" })).toBe(false);
-  });
-
-  it("requires a Docker image ARN different from the base image ARN", () => {
-    expect(
-      microvmDockerCapabilityEnabled({
-        baseImageArn,
-        dockerImageArn: baseImageArn,
-        dockerImageVersion: "7",
-      }),
-    ).toBe(false);
-    expect(
-      microvmDockerCapabilityEnabled({ baseImageArn, dockerImageArn, dockerImageVersion: "7" }),
-    ).toBe(true);
-  });
 });
 
 describe("dockerServiceRefusal", () => {
@@ -97,14 +73,14 @@ describe("dockerServiceRefusal", () => {
       microvmDockerEnabled: false,
     };
     expect(dockerServiceRefusal(spec({ docker: true }), disabled)).toContain(
-      "SEALANT_MICROVM_DOCKER_IMAGE_ARN",
+      "SEALANT_MICROVM_DOCKER_ENABLED",
     );
     expect(
       dockerServiceRefusal(spec({ docker: true, family: "microvm" }), {
         ...disabled,
         defaultAdapterFamily: "docker",
       }),
-    ).toContain("SEALANT_MICROVM_DOCKER_IMAGE_VERSION");
+    ).toContain("SEALANT_MICROVM_DOCKER_ENABLED");
     expect(
       dockerServiceRefusal(spec({ docker: true }), {
         ...disabled,

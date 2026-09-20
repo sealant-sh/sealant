@@ -4,7 +4,12 @@ import { planWorkspaceImageBuild } from "../../buildkit/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import { microvmImageName, microvmRecipe, mirroredBaseImage } from "./recipe.js";
 
-const settings = { agentPort: 8080, memoryMiB: 4096, dockerService: false };
+const settings = {
+  agentPort: 8080,
+  memoryMiB: 4096,
+  dockerService: false,
+  contextDigest: "a".repeat(64),
+};
 
 const plannedFor = (family: "fedora" | "arch") =>
   planWorkspaceImageBuild({
@@ -58,6 +63,29 @@ describe("microvmRecipe", () => {
       if (line.startsWith("FROM ") || line.startsWith("ENTRYPOINT ")) continue;
       expect(containerfile).toContain(line);
     }
+  });
+
+  it("takes sealantctl from the same released daemon image as sealantd, for the hooks' capture flush", () => {
+    const planned = plannedFor("fedora");
+    const daemonImage = /--from=(\S+) \/usr\/local\/bin\/sealantd /.exec(
+      planned.containerfile,
+    )?.[1];
+    expect(daemonImage).toMatch(/sealantd/);
+
+    const { containerfile } = microvmRecipe(planned, settings);
+
+    expect(containerfile).toContain(
+      `COPY --chmod=755 --from=${String(daemonImage)} /usr/local/bin/sealantctl /usr/local/bin/sealantctl`,
+    );
+    expect(() =>
+      microvmRecipe(
+        {
+          ...planned,
+          containerfile: 'FROM fedora:41\nENTRYPOINT ["/usr/local/bin/sealantd", "boot"]\n',
+        },
+        settings,
+      ),
+    ).toThrow(/sealantctl/);
   });
 
   it("follows the blueprint's OS family", () => {

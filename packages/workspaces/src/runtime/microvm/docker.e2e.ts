@@ -3,8 +3,9 @@
  *
  * This spec is excluded from normal unit tests and remains skipped unless the caller explicitly
  * sets `SEALANT_MICROVM_DOCKER_E2E=1`. Before creating a VM it also requires exact expected AWS
- * account, region, and exact candidate-image ARN/version, then checks them against the standard
- * runtime configuration. This only checks account/region coordinates embedded in configured ARNs; it does
+ * account, region, and exact candidate-image ARN/version, then checks them against the candidate
+ * (`SEALANT_MICROVM_DOCKER_E2E_CANDIDATE_ARN` / `_VERSION`, a Docker-capable image the MicroVM
+ * image builder made) and the standard runtime configuration. This only checks account/region coordinates embedded in configured ARNs; it does
  * not attest the ambient AWS principal. The coordinator's parent preflight must verify the actual
  * caller with STS before invoking Vitest. A coordinator may load variables from a private file;
  * this file never reads or prints that file, credentials, endpoint tokens, or raw errors. Set
@@ -46,6 +47,7 @@ import {
   safeErrorEvidence,
 } from "./docker-e2e-validation.js";
 import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
+import { microvmImageReference } from "./image-reference.js";
 
 const E2E_ENABLED = process.env.SEALANT_MICROVM_DOCKER_E2E === "1";
 const FIXTURE_PREFIX = "sealant-microvm-docker-e2e";
@@ -173,7 +175,13 @@ const arnCoordinates = (
   return { region, accountId };
 };
 
-const e2eConfig = (): MicrovmRuntimeConfig => {
+interface E2eConfig {
+  readonly config: MicrovmRuntimeConfig;
+  /** The built, Docker-capable image under test: what the launch is told the build published. */
+  readonly candidateImage: { readonly arn: string; readonly version: string };
+}
+
+const e2eConfig = (): E2eConfig => {
   const expectedAccountId = requiredEnvironment("SEALANT_MICROVM_DOCKER_E2E_EXPECTED_ACCOUNT_ID");
   const expectedRegion = requiredEnvironment("SEALANT_MICROVM_DOCKER_E2E_EXPECTED_REGION");
   const expectedImageArn = requiredEnvironment("SEALANT_MICROVM_DOCKER_E2E_EXPECTED_CANDIDATE_ARN");
@@ -181,9 +189,12 @@ const e2eConfig = (): MicrovmRuntimeConfig => {
     "SEALANT_MICROVM_DOCKER_E2E_EXPECTED_CANDIDATE_VERSION",
   );
   const configuredRegion = requiredEnvironment("SEALANT_MICROVM_REGION");
-  const configuredImageArn = requiredEnvironment("SEALANT_MICROVM_IMAGE_ARN");
-  const configuredDockerImageArn = requiredEnvironment("SEALANT_MICROVM_DOCKER_IMAGE_ARN");
-  const configuredDockerImageVersion = requiredEnvironment("SEALANT_MICROVM_DOCKER_IMAGE_VERSION");
+  const configuredDockerImageArn = requiredEnvironment("SEALANT_MICROVM_DOCKER_E2E_CANDIDATE_ARN");
+  const configuredDockerImageVersion = requiredEnvironment(
+    "SEALANT_MICROVM_DOCKER_E2E_CANDIDATE_VERSION",
+  );
+  const buildRoleArn = requiredEnvironment("SEALANT_MICROVM_BUILD_ROLE_ARN");
+  const artifactBucket = requiredEnvironment("SEALANT_MICROVM_ARTIFACT_BUCKET");
   const executionRoleArn = requiredEnvironment("SEALANT_MICROVM_EXEC_ROLE_ARN");
   const egressConnector = requiredEnvironment("SEALANT_MICROVM_EGRESS_CONNECTOR");
   const controlBearerToken = requiredEnvironment("SEALANT_CONTROL_BEARER_TOKEN");
@@ -211,12 +222,9 @@ const e2eConfig = (): MicrovmRuntimeConfig => {
   try {
     config = microvmRuntimeConfigFromEnv({
       SEALANT_MICROVM_REGION: configuredRegion,
-      SEALANT_MICROVM_IMAGE_ARN: configuredImageArn,
-      ...(process.env.SEALANT_MICROVM_IMAGE_VERSION === undefined
-        ? {}
-        : { SEALANT_MICROVM_IMAGE_VERSION: process.env.SEALANT_MICROVM_IMAGE_VERSION }),
-      SEALANT_MICROVM_DOCKER_IMAGE_ARN: configuredDockerImageArn,
-      SEALANT_MICROVM_DOCKER_IMAGE_VERSION: configuredDockerImageVersion,
+      SEALANT_MICROVM_BUILD_ROLE_ARN: buildRoleArn,
+      SEALANT_MICROVM_ARTIFACT_BUCKET: artifactBucket,
+      SEALANT_MICROVM_DOCKER_ENABLED: true,
       SEALANT_MICROVM_EXEC_ROLE_ARN: executionRoleArn,
       SEALANT_MICROVM_EGRESS_CONNECTOR: egressConnector,
       ...(process.env.SEALANT_MICROVM_INGRESS_CONNECTOR === undefined
@@ -233,7 +241,10 @@ const e2eConfig = (): MicrovmRuntimeConfig => {
   if (config === undefined) {
     throw new Error("The explicitly enabled MicroVM Docker E2E runtime configuration is absent.");
   }
-  return config;
+  return {
+    config,
+    candidateImage: { arn: configuredDockerImageArn, version: configuredDockerImageVersion },
+  };
 };
 
 type CapturedOperation<A> =
@@ -457,11 +468,8 @@ const waitForDockerFailure = async (
 
 describe.skipIf(!E2E_ENABLED)("Lambda MicroVM guest-local Docker (live provider)", () => {
   it("runs Docker workflows and reports daemon loss through the authenticated control plane", async () => {
-    const config = e2eConfig();
-    const candidateImage = config.dockerImage;
-    if (candidateImage === undefined) {
-      throw new Error("MicroVM Docker E2E needs a configured candidate image.");
-    }
+    const { config, candidateImage } = e2eConfig();
+    const candidateReference = microvmImageReference(candidateImage.arn, candidateImage.version);
     const fixtureId = `${FIXTURE_PREFIX}-${randomUUID().slice(0, 8)}`;
     let evidence: EvidenceRecorder;
     try {
@@ -582,10 +590,10 @@ describe.skipIf(!E2E_ENABLED)("Lambda MicroVM guest-local Docker (live provider)
                 },
               },
               publishedImage: {
-                repository: `${FIXTURE_PREFIX}/unused`,
-                tag: "fixture",
-                reference: `${FIXTURE_PREFIX}:unused`,
-                digestReference: `${FIXTURE_PREFIX}@sha256:e2e-fixture`,
+                repository: FIXTURE_PREFIX,
+                tag: candidateImage.version,
+                reference: candidateReference,
+                digestReference: candidateReference,
                 digest: "sha256:e2e-fixture",
               },
             }),

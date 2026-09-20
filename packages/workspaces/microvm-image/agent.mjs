@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// The Sealant MicroVM agent: PID 1 of the workspace image built by `build-image.sh`.
+// The Sealant MicroVM agent: PID 1 of every workspace image the MicroVM image builder makes
+// (`src/images/microvm/`), which copies this file in on top of the blueprint's own recipe.
 //
 // It mirrors the typed contract in `src/runtime/microvm/agent-contract.ts` by hand (this file
 // runs inside an AWS Lambda MicroVM with nothing but Node's standard library) and exists for

@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import type { PlannedWorkspaceImageBuild } from "../../buildkit/index.js";
 
 /** Bump when the agent layer below changes in a way old images must not be reused across. */
-export const MICROVM_RECIPE_VERSION = "1";
+export const MICROVM_RECIPE_VERSION = "2";
 
 /** Files the recipe copies in, relative to the build context. The builder supplies their bytes. */
 export const MICROVM_AGENT_FILES = ["agent.mjs", "docker-service.mjs"] as const;
@@ -66,6 +66,11 @@ export interface MicrovmRecipeSettings {
    * created with the image-level `ALL` OS capability, which only such a workspace receives.
    */
   readonly dockerService: boolean;
+  /**
+   * A digest of the files the recipe copies in. They are not in the Containerfile's text, so
+   * without this a release that changed the agent would go on booting images with the old one.
+   */
+  readonly contextDigest: string;
 }
 
 export interface MicrovmRecipe {
@@ -75,6 +80,9 @@ export interface MicrovmRecipe {
 }
 
 const ENTRYPOINT = /^ENTRYPOINT \[.*\]\s*$/m;
+/** The planned Containerfile copies the daemon out of its released image; the client sits beside it. */
+const SEALANTD_COPY =
+  /^COPY .*--from=(\S+) \/usr\/local\/bin\/sealantd \/usr\/local\/bin\/sealantd\s*$/m;
 const FROM_LINE = /^FROM (\S+)(.*)$/m;
 
 /**
@@ -89,6 +97,12 @@ export const microvmRecipe = (
   if (!ENTRYPOINT.test(planned.containerfile) || !FROM_LINE.test(planned.containerfile)) {
     throw new Error(
       "The planned Containerfile has no FROM or ENTRYPOINT line to build a MicroVM recipe on.",
+    );
+  }
+  const sealantdImage = SEALANTD_COPY.exec(planned.containerfile)?.[1];
+  if (sealantdImage === undefined) {
+    throw new Error(
+      "The planned Containerfile copies no sealantd from a released image, so the MicroVM recipe cannot take sealantctl from beside it.",
     );
   }
   const dockerPackages = DOCKER_SERVICE_PACKAGES[planned.osFamily];
@@ -113,6 +127,9 @@ export const microvmRecipe = (
     "# The agent needs node. A distro family installs it with the harness; a custom base image",
     "# has to bring it, and says so here rather than at the first launch.",
     "RUN node --version",
+    "# The platform's suspend and terminate hooks reach the agent with no control plane connected,",
+    "# so the agent flushes captures itself, with the daemon's own client.",
+    `COPY --chmod=755 --from=${sealantdImage} /usr/local/bin/sealantctl /usr/local/bin/sealantctl`,
     `COPY ${MICROVM_AGENT_FILES.join(" ")} /opt/sealant/`,
     `ENV SEALANT_MICROVM_AGENT_PORT=${String(settings.agentPort)}`,
     'RUN mkdir -p /workspace /run/sealant && git config --system safe.directory "*"',

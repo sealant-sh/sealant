@@ -61,6 +61,11 @@ export interface MicrovmImageBuildConfig {
    * Two control planes that share an AWS account take different prefixes.
    */
   readonly imageNamePrefix: string;
+  /**
+   * Whether the operator allows workspace-scoped Docker. Without it no image is ever created with
+   * the elevated OS capability, whatever a blueprint asks for.
+   */
+  readonly dockerService: boolean;
   /** Past this many images of its own the builder refuses to create another. */
   readonly maxImages: number;
   readonly pollIntervalMs: number;
@@ -77,6 +82,8 @@ export interface MicrovmWorkspaceImageBuilderOptions {
    * that way even if one ever could.
    */
   readonly readContextFile: (name: MicrovmContextFile) => Promise<Uint8Array>;
+  /** A digest of those files, so a release that changes the agent builds new images. */
+  readonly contextDigest: string;
   /** Test seams. */
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
   readonly sleep?: (milliseconds: number) => Promise<void>;
@@ -119,6 +126,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
       agentPort: this.#options.config.agentPort,
       memoryMiB: this.#options.config.memoryMiB,
       dockerService: wantsDockerService(spec),
+      contextDigest: this.#options.contextDigest,
     });
     return { ...planned, containerfile: recipe.containerfile, planHash: recipe.planHash };
   };
@@ -126,6 +134,12 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
   readonly buildAndPublish = async (
     input: BuildAndPublishInput,
   ): Promise<BuildAndPublishResult> => {
+    if (wantsDockerService(input.spec) && !this.#options.config.dockerService) {
+      throw new MicrovmImageBuildError(
+        "microvm-image-docker-disabled",
+        "Workspace-scoped Docker (tooling.services.docker) is not enabled on this Lambda MicroVM deployment (SEALANT_MICROVM_DOCKER_ENABLED). Nothing was built.",
+      );
+    }
     const planned = this.plan(input.spec);
     const name = microvmImageName(planned.planHash, this.#options.config.imageNamePrefix);
 

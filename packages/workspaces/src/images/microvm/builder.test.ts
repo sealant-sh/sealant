@@ -29,6 +29,7 @@ const config: MicrovmImageBuildConfig = {
   agentPort: 8080,
   logGroup: "/aws/lambda/microvms/build",
   imageNamePrefix: "sealant-ws",
+  dockerService: false,
   maxImages: 3,
   pollIntervalMs: 1,
   buildTimeoutMs: 1_000,
@@ -115,6 +116,7 @@ const builderFor = (
     artifacts: aws.artifacts,
     config: { ...config, ...overrides },
     readContextFile: async (name) => Buffer.from(`// ${name}\n`),
+    contextDigest: "a".repeat(64),
     sleep: async () => undefined,
     uniqueId: () => `build-${String((id += 1))}`,
   });
@@ -171,6 +173,7 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       artifacts,
       config,
       readContextFile: async (name) => Buffer.from(`// trusted ${name}\n`),
+      contextDigest: "a".repeat(64),
       sleep: async () => undefined,
     });
 
@@ -265,6 +268,31 @@ describe("MicrovmWorkspaceImageBuilder", () => {
     expect(aws.objects.size).toBe(0);
   });
 
+  it("gives the elevated OS capability only to a Docker workspace, and only where the operator allows it", async () => {
+    const dockerSpec: NewWorkspace = {
+      ...blueprint(["ripgrep"]),
+      tooling: {
+        ...blueprint(["ripgrep"]).tooling,
+        services: { docker: { enabled: true } },
+      },
+    };
+
+    const refused = fakeAws();
+    await expect(build(builderFor(refused), dockerSpec)).rejects.toMatchObject({
+      code: "microvm-image-docker-disabled",
+    });
+    expect(refused.created).toHaveLength(0);
+    expect(refused.objects.size).toBe(0);
+
+    const allowed = fakeAws();
+    const builder = builderFor(allowed, { dockerService: true });
+    const docker = await build(builder, dockerSpec);
+    const plain = await build(builder, blueprint(["ripgrep"]));
+
+    expect(allowed.created.map((input) => input.allOsCapabilities)).toEqual([true, false]);
+    expect(docker.publishedImage.repository).not.toBe(plain.publishedImage.repository);
+  });
+
   it("counts only its own images toward the cap, told by name since a listing carries no tags", async () => {
     const aws = fakeAws();
     const foreign = (name: string) =>
@@ -317,6 +345,7 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       artifacts: aws.artifacts,
       config,
       readContextFile: async () => Buffer.alloc(0),
+      contextDigest: "a".repeat(64),
       sleep: async () => {
         clock += 400;
       },

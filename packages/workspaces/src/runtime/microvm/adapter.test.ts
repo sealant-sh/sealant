@@ -11,9 +11,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SealantTarget } from "../../sealantd/runtime.js";
-import { cases } from "../docker-runtime-adapter.golden-fixture.js";
+import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
-import type { CredentialFileInjection } from "../runtime-adapter.js";
+import type { CredentialFileInjection, PublishedImage } from "../runtime-adapter.js";
 import {
   buildRunInput,
   clientTokenForRun,
@@ -37,12 +37,13 @@ import type {
   MicrovmState,
 } from "./api.js";
 import { microvmRuntimeConfigFromEnv, type MicrovmRuntimeConfig } from "./config.js";
+import { microvmImageReference } from "./image-reference.js";
 
 const config: MicrovmRuntimeConfig = (() => {
   const parsed = microvmRuntimeConfigFromEnv({
     SEALANT_MICROVM_REGION: "eu-central-1",
-    SEALANT_MICROVM_IMAGE_ARN:
-      "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace",
+    SEALANT_MICROVM_BUILD_ROLE_ARN: "arn:aws:iam::123456789012:role/sealant-microvm-build",
+    SEALANT_MICROVM_ARTIFACT_BUCKET: "sealant-artifacts",
     SEALANT_MICROVM_EXEC_ROLE_ARN: "arn:aws:iam::123456789012:role/sealant-microvm-exec",
     SEALANT_MICROVM_EGRESS_CONNECTOR:
       "arn:aws:lambda:eu-central-1:123456789012:network-connector:vpc-egress",
@@ -56,12 +57,30 @@ const config: MicrovmRuntimeConfig = (() => {
   return parsed;
 })();
 
-const dockerConfig: MicrovmRuntimeConfig = {
-  ...config,
-  dockerImage: {
-    arn: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace-docker",
-    version: "7",
-  },
+const dockerConfig: MicrovmRuntimeConfig = { ...config, dockerService: true };
+
+/** What the MicroVM image builder publishes for a blueprint: the only thing a launch boots. */
+const builtImage = {
+  imageArn:
+    "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-ws-0123456789abcdef01234567",
+  imageVersion: "1.0",
+};
+const builtReference = microvmImageReference(builtImage.imageArn, builtImage.imageVersion);
+const builtPublishedImage: PublishedImage = {
+  repository: "sealant-ws-0123456789abcdef01234567",
+  tag: builtImage.imageVersion,
+  reference: builtReference,
+  digestReference: builtReference,
+  digest: `sha256:${"0".repeat(64)}`,
+};
+const withBuiltImage = <Launch extends { readonly publishedImage: PublishedImage }>(
+  launch: Launch,
+): Launch => ({ ...launch, publishedImage: builtPublishedImage });
+const cases = {
+  capture: withBuiltImage(goldenCases.capture),
+  dind: withBuiltImage(goldenCases.dind),
+  gitSource: withBuiltImage(goldenCases.gitSource),
+  mendMount: withBuiltImage(goldenCases.mendMount),
 };
 
 const ENDPOINT = "abc123.lambda-microvm.eu-central-1.on.aws";
@@ -281,7 +300,7 @@ describe("supportForMicrovm", () => {
     expect(supportForMicrovm(config, { blueprint: cases.dind.blueprint })).toMatchObject({
       supported: false,
       reason: "unsupported-runtime-requirement",
-      message: expect.stringContaining("SEALANT_MICROVM_DOCKER_IMAGE_ARN"),
+      message: expect.stringContaining("SEALANT_MICROVM_DOCKER_ENABLED"),
     });
     expect(supportForMicrovm(dockerConfig, { blueprint: cases.dind.blueprint })).toEqual({
       supported: true,
@@ -301,9 +320,11 @@ describe("buildRunInput", () => {
   it("pins the RunMicrovm request: image, role, connectors, an idle policy that cannot fire, the cap, the payload", () => {
     const input = buildRunInput(config, "run-golden-4", launchSecret, {
       dockerService: "disabled",
+      image: builtImage,
     });
     expect(input).toEqual({
-      imageIdentifier: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace",
+      imageIdentifier: builtImage.imageArn,
+      imageVersion: "1.0",
       executionRoleArn: "arn:aws:iam::123456789012:role/sealant-microvm-exec",
       ingressNetworkConnectors: [
         "arn:aws:lambda:eu-central-1:aws:network-connector:aws-network-connector:ALL_INGRESS",
@@ -332,12 +353,13 @@ describe("buildRunInput", () => {
     expect(input.runHookPayload).not.toContain("mst_secret");
   });
 
-  it("selects the pinned elevated image and v2 service requirement only for Docker", () => {
+  it("sends the v2 service requirement only for Docker, and boots the built image either way", () => {
     const input = buildRunInput(dockerConfig, "run-golden-4", launchSecret, {
       dockerService: "required",
+      image: builtImage,
     });
-    expect(input.imageIdentifier).toBe(dockerConfig.dockerImage?.arn);
-    expect(input.imageVersion).toBe("7");
+    expect(input.imageIdentifier).toBe(builtImage.imageArn);
+    expect(input.imageVersion).toBe("1.0");
     expect(runHookPayloadSchema.parse(JSON.parse(input.runHookPayload))).toEqual({
       version: DOCKER_AGENT_CONTRACT_VERSION,
       runId: "run-golden-4",
@@ -351,6 +373,7 @@ describe("buildRunInput", () => {
     expect(() =>
       buildRunInput(config, `run-${"😀".repeat(1_024)}`, launchSecret, {
         dockerService: "disabled",
+        image: builtImage,
       }),
     ).toThrow(/4096-byte platform limit/);
   });
@@ -482,7 +505,10 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       endpoint: `wss://${ENDPOINT}/sealant/control`,
     });
     expect(api.runs).toEqual([
-      buildRunInput(config, "run-golden-4", launchSecret, { dockerService: "disabled" }),
+      buildRunInput(config, "run-golden-4", launchSecret, {
+        dockerService: "disabled",
+        image: builtImage,
+      }),
     ]);
     expect(api.terminates).toEqual([]);
 
@@ -527,7 +553,7 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(control.written).toEqual([{ target, files }]);
   });
 
-  it("selects the Docker image and sends the v2 requirement with reserved socket env", async () => {
+  it("boots the built image and sends the v2 requirement with reserved socket env", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint(
       [json(200, { outcome: "booting" })],
@@ -549,8 +575,8 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       secretEnv: { DOCKER_CONFIG: "/workspace/.docker" },
     });
 
-    expect(api.runs[0]?.imageIdentifier).toBe(dockerConfig.dockerImage?.arn);
-    expect(api.runs[0]?.imageVersion).toBe("7");
+    expect(api.runs[0]?.imageIdentifier).toBe(builtImage.imageArn);
+    expect(api.runs[0]?.imageVersion).toBe("1.0");
     const request = agentLaunchRequestSchema.parse(endpoint.requests[0]?.body);
     expect(request).toMatchObject({
       version: 2,
@@ -800,6 +826,10 @@ describe("MicrovmRuntimeAdapter.launch", () => {
         workspaceCloneAuth: { type: "file-ref", path: "/keys/deploy" },
       }),
     ).rejects.toThrow(/file-ref/);
+    // A container image reference, as the Docker and Kubernetes builders publish, is never booted.
+    await expect(adapter.launch(goldenCases.capture)).rejects.toThrow(
+      /not made by the MicroVM image builder/,
+    );
     expect(api.runs).toEqual([]);
   });
 });

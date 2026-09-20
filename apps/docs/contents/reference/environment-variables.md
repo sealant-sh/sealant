@@ -252,38 +252,58 @@ object model: `docs/kubernetes-support-design.md` in the repository.
 Set these only when the worker runs workspaces as AWS Lambda MicroVMs
 (`DEFAULT_RUNTIME_ADAPTER=microvm`, or a blueprint that requests that family). One Firecracker VM
 per workspace attempt, driven with the Lambda MicroVMs API and reached through the VM's
-authenticated inbound endpoint; the API and SSH gateway need `SEALANT_MICROVM_REGION` (plus the
-token knobs) to mint the endpoint tokens their control connections carry. When guest-local Docker is
-enabled, set the same base image ARN and pinned Docker image ARN/version on both the API and worker:
-the API gates workspace creation from them, while the worker registers and launches the capable
-adapter. The worker's AWS credentials come from the default provider chain (an instance profile,
-`AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and need `lambda:RunMicrovm`,
-`lambda:GetMicrovm`, `lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken`; the API and
-gateway need the last two. Sizing (vCPU, memory, disk) is a property of the image version, not of a
-launch: build the image with `packages/workspaces/microvm-image/build-image.sh` (4 GiB baseline → 2
-vCPU / 16 GiB disk by default).
+authenticated inbound endpoint. The API and SSH gateway need `SEALANT_MICROVM_REGION` (plus the
+token knobs) to mint the endpoint tokens their control connections carry.
 
-| Variable                                  | Default                            | Purpose                                                                                                                                                   |
-| ----------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SEALANT_MICROVM_IMAGE_ARN`               | unset                              | The workspace image (`arn:aws:lambda:<region>:<account>:microvm-image:<name>`); setting it enables the adapter and makes region, role and token required. |
-| `SEALANT_MICROVM_REGION`                  | —                                  | AWS region of the MicroVMs. Also set on the API and SSH gateway.                                                                                          |
-| `SEALANT_MICROVM_EXEC_ROLE_ARN`           | —                                  | IAM role every VM runs under (`lambda.amazonaws.com` trust; logs only — agent code in the VM is treated as hostile).                                      |
-| `SEALANT_CONTROL_BEARER_TOKEN`            | —                                  | Authenticates control connections to the in-VM agent (same variable Cloudflare uses). Required with the adapter; set on the API and gateway too.          |
-| `SEALANT_MICROVM_IMAGE_VERSION`           | latest ACTIVE                      | Pin an image version.                                                                                                                                     |
-| `SEALANT_MICROVM_DOCKER_IMAGE_ARN`        | unset                              | Separate image used only for `tooling.services.docker`; requires the base image ARN, must differ from it, and must be set identically on API and worker.  |
-| `SEALANT_MICROVM_DOCKER_IMAGE_VERSION`    | required with Docker image ARN     | Pinned Docker-capable image version. Set the same value on API and worker; partial or API-only/worker-only capability configuration is invalid.           |
-| `SEALANT_MICROVM_EGRESS_CONNECTOR`        | unset (public internet)            | VPC egress network connector ARN.                                                                                                                         |
-| `SEALANT_MICROVM_INGRESS_CONNECTOR`       | the region's managed `ALL_INGRESS` | Ingress connector ARN; the VM's inbound endpoint (control reach) needs one.                                                                               |
-| `SEALANT_MICROVM_MAX_DURATION_SECONDS`    | `28800`                            | Lifetime cap per VM (platform maximum 8 h, suspended time included). Reported on inspect as the deadline so the engine can replace an executor before it. |
-| `SEALANT_MICROVM_LOG_GROUP`               | unset (disabled)                   | CloudWatch log group for the VM console.                                                                                                                  |
-| `SEALANT_MICROVM_AGENT_PORT`              | `8080`                             | The in-VM agent's port (endpoint target and lifecycle hooks). Must match the image.                                                                       |
-| `SEALANT_MICROVM_READINESS_TIMEOUT_MS`    | `300000`                           | RunMicrovm → RUNNING → launch material accepted → daemon health.                                                                                          |
-| `SEALANT_MICROVM_TERMINATE_TIMEOUT_MS`    | `90000`                            | Fence bound: TerminateMicrovm → TERMINATED, through the image's terminate hook.                                                                           |
-| `SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS`   | `15000`                            | `watchExits` polling cadence (there is no event stream).                                                                                                  |
-| `SEALANT_MICROVM_TOKEN_TTL_MINUTES`       | `60`                               | Endpoint token lifetime (platform maximum 60).                                                                                                            |
-| `SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS` | `300000`                           | A token this close to expiry is re-minted before use, and held tokens are refreshed at this margin.                                                       |
-| `SEALANT_MICROVM_FLUSH_TIMEOUT_MS`        | `50000`                            | Bound on `sealantctl capture flush` inside the suspend/terminate hooks (the platform's hook timeout is at most 60 s).                                     |
-| `SEALANT_MICROVM_WS_AUTH`                 | `header`                           | How the endpoint token rides a WebSocket upgrade: `X-aws-proxy-*` headers, or the documented `lambda-microvms.*` subprotocols.                            |
+There is no image to register. Each workspace boots the image built from its own blueprint: its OS
+family or base image, its packages and its shell, with the in-VM agent on top. AWS's managed image
+build runs that recipe, so no build step runs on the control plane and the worker needs no Docker
+for MicroVM workspaces. One recipe is one image, named `sealant-ws-<plan hash>` and reused by every
+workspace with the same plan. Sizing (vCPU, memory, disk) is a property of an image, so it is a
+build setting: `SEALANT_MICROVM_MEMORY_MIB`.
+
+A recipe step can obtain the build role's credentials. Give that role `s3:GetObject` on the
+artifacts prefix and the two CloudWatch log actions, and nothing else. The worker's own credentials
+come from the default provider chain (an instance profile, `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`). They need `lambda:RunMicrovm`, `lambda:GetMicrovm`,
+`lambda:TerminateMicrovm` and `lambda:CreateMicrovmAuthToken` to run workspaces, and
+`lambda:CreateMicrovmImage`, `lambda:GetMicrovmImage`, `lambda:DeleteMicrovmImage`,
+`lambda:ListMicrovmImages`, `iam:PassRole` on the build role and `s3:PutObject` / `s3:DeleteObject`
+on the artifacts prefix to build their images. The API and gateway need `lambda:GetMicrovm` and
+`lambda:CreateMicrovmAuthToken`.
+
+`SEALANT_MICROVM_IMAGE_ARN`, `SEALANT_MICROVM_IMAGE_VERSION`, `SEALANT_MICROVM_DOCKER_IMAGE_ARN` and
+`SEALANT_MICROVM_DOCKER_IMAGE_VERSION` are retired. The API and the worker refuse to start while one
+is set.
+
+| Variable                                  | Default                            | Purpose                                                                                                                                                      |
+| ----------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SEALANT_MICROVM_BUILD_ROLE_ARN`          | unset                              | IAM role the managed image build runs a recipe under. Setting it enables the adapter and makes region, bucket, execution role and token required.            |
+| `SEALANT_MICROVM_ARTIFACT_BUCKET`         | —                                  | S3 bucket the worker uploads each build context to. The context is deleted when its build ends.                                                              |
+| `SEALANT_MICROVM_ARTIFACT_PREFIX`         | `sealant/workspace-images`         | Key prefix for build contexts: the only thing the build role can read.                                                                                       |
+| `SEALANT_MICROVM_BASE_IMAGE_ARN`          | the region's managed `al2023-1`    | The managed base booted under a recipe's root filesystem. A recipe's own `FROM` is free.                                                                     |
+| `SEALANT_MICROVM_IMAGE_NAME_PREFIX`       | `sealant-ws`                       | Images are named `<prefix>-<plan hash>`; the cap and retention go by that name. Two control planes in one AWS account take different prefixes.               |
+| `SEALANT_MICROVM_MEMORY_MIB`              | `4096`                             | `minimumMemoryInMiB` of every built image. vCPU and disk follow from it (4 GiB gives 2 vCPU and a 16 GiB disk).                                              |
+| `SEALANT_MICROVM_MAX_IMAGES`              | `50`                               | Past this many workspace images of its own the worker refuses to build another, and says so.                                                                 |
+| `SEALANT_MICROVM_BUILD_LOG_GROUP`         | unset (disabled)                   | CloudWatch log group for build logs.                                                                                                                         |
+| `SEALANT_MICROVM_BUILD_TIMEOUT_MS`        | `1800000`                          | How long the worker waits for a managed build. One took 144 to 205 s when measured.                                                                          |
+| `SEALANT_MICROVM_BUILD_POLL_INTERVAL_MS`  | `10000`                            | How often the worker reads a build's state.                                                                                                                  |
+| `SEALANT_MICROVM_DOCKER_ENABLED`          | `false`                            | Serve `tooling.services.docker`. Such a workspace's image carries the engine and is created with the `ALL` OS capability. Set identically on API and worker. |
+| `SEALANT_MICROVM_REGION`                  | —                                  | AWS region of the MicroVMs. Also set on the API and SSH gateway.                                                                                             |
+| `SEALANT_MICROVM_EXEC_ROLE_ARN`           | —                                  | IAM role every VM runs under (`lambda.amazonaws.com` trust; logs only — agent code in the VM is treated as hostile).                                         |
+| `SEALANT_CONTROL_BEARER_TOKEN`            | —                                  | Authenticates control connections to the in-VM agent (same variable Cloudflare uses). Required with the adapter; set on the API and gateway too.             |
+| `SEALANT_MICROVM_EGRESS_CONNECTOR`        | unset (public internet)            | VPC egress network connector ARN.                                                                                                                            |
+| `SEALANT_MICROVM_INGRESS_CONNECTOR`       | the region's managed `ALL_INGRESS` | Ingress connector ARN; the VM's inbound endpoint (control reach) needs one.                                                                                  |
+| `SEALANT_MICROVM_MAX_DURATION_SECONDS`    | `28800`                            | Lifetime cap per VM (platform maximum 8 h, suspended time included). Reported on inspect as the deadline so the engine can replace an executor before it.    |
+| `SEALANT_MICROVM_LOG_GROUP`               | unset (disabled)                   | CloudWatch log group for the VM console.                                                                                                                     |
+| `SEALANT_MICROVM_AGENT_PORT`              | `8080`                             | The in-VM agent's port (endpoint target and lifecycle hooks). Must match the image.                                                                          |
+| `SEALANT_MICROVM_READINESS_TIMEOUT_MS`    | `300000`                           | RunMicrovm → RUNNING → launch material accepted → daemon health.                                                                                             |
+| `SEALANT_MICROVM_TERMINATE_TIMEOUT_MS`    | `90000`                            | Fence bound: TerminateMicrovm → TERMINATED, through the image's terminate hook.                                                                              |
+| `SEALANT_MICROVM_EXIT_POLL_INTERVAL_MS`   | `15000`                            | `watchExits` polling cadence (there is no event stream).                                                                                                     |
+| `SEALANT_MICROVM_TOKEN_TTL_MINUTES`       | `60`                               | Endpoint token lifetime (platform maximum 60).                                                                                                               |
+| `SEALANT_MICROVM_TOKEN_REFRESH_MARGIN_MS` | `300000`                           | A token this close to expiry is re-minted before use, and held tokens are refreshed at this margin.                                                          |
+| `SEALANT_MICROVM_FLUSH_TIMEOUT_MS`        | `50000`                            | Bound on `sealantctl capture flush` inside the suspend/terminate hooks (the platform's hook timeout is at most 60 s).                                        |
+| `SEALANT_MICROVM_WS_AUTH`                 | `header`                           | How the endpoint token rides a WebSocket upgrade: `X-aws-proxy-*` headers, or the documented `lambda-microvms.*` subprotocols.                               |
 
 ## Notable runtime defaults
 

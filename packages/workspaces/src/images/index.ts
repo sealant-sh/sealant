@@ -46,6 +46,11 @@ export {
   type MicrovmWorkspaceImageBuilderOptions,
 } from "./microvm/builder.js";
 export {
+  loadMicrovmContextFiles,
+  MicrovmContextFilesError,
+  type MicrovmContextFiles,
+} from "./microvm/context-files.js";
+export {
   createLiveMicrovmImageApi,
   createS3MicrovmArtifactStore,
   type MicrovmArtifactStore,
