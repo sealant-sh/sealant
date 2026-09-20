@@ -24,6 +24,11 @@ import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
 import { Effect, Layer, Result } from "effect";
 import { vi } from "vitest";
 
+import {
+  createDockerWorkspaceImageBuilder,
+  type DockerWorkspaceImageBuilderOptions,
+  type WorkspaceImageBuilder,
+} from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
 import type { RuntimeAdapter } from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
@@ -319,17 +324,47 @@ const provideRepos = (stubs: {
     ),
   );
 
-const baseOptions = (
-  overrides: Partial<ProcessWorkspaceBuildJobEffectOptions>,
-): ProcessWorkspaceBuildJobEffectOptions => ({
-  jobId: "job_123",
-  workerId: "worker-test",
-  leaseDurationMs: 60000,
-  runtimeAdapters: [createRuntimeAdapterStub("docker")],
-  defaultRuntimeAdapterId: "docker",
-  registryClient: successRegistryClient(),
-  ...overrides,
-});
+/**
+ * What a test says about the build, in the terms these tests were written in: the adapters, and
+ * the compiler and planner the Docker builder runs. The pipeline itself takes registered runtimes
+ * (an adapter plus the builder of its image), so `baseOptions` pairs every adapter with one Docker
+ * builder made from those seams, or with the `imageBuilder` a test supplies.
+ */
+interface BuildJobTestOverrides extends Partial<
+  Omit<ProcessWorkspaceBuildJobEffectOptions, "runtimes">
+> {
+  readonly runtimeAdapters?: readonly RuntimeAdapter[];
+  readonly compileWorkspaceSpec?: DockerWorkspaceImageBuilderOptions["compileWorkspaceSpec"];
+  readonly planWorkspaceSpec?: DockerWorkspaceImageBuilderOptions["planWorkspaceSpec"];
+  readonly imageBuilder?: WorkspaceImageBuilder;
+}
+
+const baseOptions = (overrides: BuildJobTestOverrides): ProcessWorkspaceBuildJobEffectOptions => {
+  const {
+    runtimeAdapters = [createRuntimeAdapterStub("docker")],
+    compileWorkspaceSpec,
+    planWorkspaceSpec,
+    imageBuilder,
+    ...rest
+  } = overrides;
+  const registryClient = rest.registryClient ?? successRegistryClient();
+  const builder =
+    imageBuilder ??
+    createDockerWorkspaceImageBuilder({
+      registryClient,
+      ...(compileWorkspaceSpec === undefined ? {} : { compileWorkspaceSpec }),
+      ...(planWorkspaceSpec === undefined ? {} : { planWorkspaceSpec }),
+    });
+  return {
+    jobId: "job_123",
+    workerId: "worker-test",
+    leaseDurationMs: 60000,
+    defaultRuntimeAdapterId: "docker",
+    ...rest,
+    registryClient,
+    runtimes: runtimeAdapters.map((adapter) => ({ adapter, imageBuilder: builder })),
+  };
+};
 
 const fakeCredentialCipher: CredentialCipherService = {
   encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k-test" }),

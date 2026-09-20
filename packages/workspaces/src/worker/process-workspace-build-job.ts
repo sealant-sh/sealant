@@ -28,17 +28,13 @@ import { Effect, Exit, Layer, Option } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
-import {
-  createDockerWorkspaceImageBuilder,
-  parsePublishedReference,
-  planImageCoordinates,
-  type WorkspaceImageBuilder,
-} from "../images/index.js";
+import { parsePublishedReference, planImageCoordinates } from "../images/index.js";
 import { RegistryNameError, type RegistryClient } from "../registry/index.js";
 import {
   selectRuntimeAdapter,
   type CredentialFileInjection,
   type PublishedImage,
+  type RegisteredRuntime,
   type RuntimeAdapter,
   type RuntimeAdapterId,
   type WorkspaceCloneAuth,
@@ -74,7 +70,11 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly workerId: string;
   readonly leaseDurationMs: number;
   readonly db: DB;
-  readonly runtimeAdapters: readonly RuntimeAdapter[];
+  /**
+   * Every runtime this worker can launch on, each with the builder of the image it boots. The
+   * selected runtime's builder builds the blueprint's image; there is no worker-wide builder.
+   */
+  readonly runtimes: readonly RegisteredRuntime[];
   readonly defaultRuntimeAdapterId: RuntimeAdapterId;
   readonly registryClient: RegistryClient;
   readonly gitHubSourceIntegration?: GitHubSourceIntegration;
@@ -84,20 +84,6 @@ export interface ProcessWorkspaceBuildJobOptions {
    * credentialRefs then fails with a typed misconfiguration error.
    */
   readonly credentialCipher?: CredentialCipherService;
-  readonly compileWorkspaceSpec?: (spec: NewWorkspace) => Promise<WorkspaceBuild>;
-  /**
-   * Docker-free planner used for the plan-hash short-circuit. Defaults to the real BuildKit
-   * planner when `compileWorkspaceSpec` is not overridden; when a custom compiler is injected
-   * without a matching planner the short-circuit is disabled (the planner's hash would not
-   * describe what the custom compiler builds).
-   */
-  readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
-  /**
-   * How images are built and published. Defaults to the Docker builder over `registryClient`
-   * (honouring `compileWorkspaceSpec` / `planWorkspaceSpec`); Kubernetes workers inject the
-   * BuildKit-Job builder.
-   */
-  readonly imageBuilder?: WorkspaceImageBuilder;
   /**
    * Stages boot material (dotfiles archives, secret env) for the selected runtime. Defaults to
    * host directories the Docker adapter bind-mounts; Kubernetes deployments inject their own.
@@ -429,17 +415,28 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
-    const imageBuilder =
-      options.imageBuilder ??
-      createDockerWorkspaceImageBuilder({
-        registryClient: options.registryClient,
-        ...(options.compileWorkspaceSpec === undefined
-          ? {}
-          : { compileWorkspaceSpec: options.compileWorkspaceSpec }),
-        ...(options.planWorkspaceSpec === undefined
-          ? {}
-          : { planWorkspaceSpec: options.planWorkspaceSpec }),
-      });
+    // The runtime is chosen before anything is built, because the image is built by the builder
+    // registered with it (docs/workspace-image-builders-design.md, D1). Selection is pure, and
+    // phase B repeats it. A blueprint no adapter supports is phase B's to report, with the build
+    // left succeeded, so an unsupported blueprint builds with the default runtime's builder.
+    const adapters = options.runtimes.map((runtime) => runtime.adapter);
+    const selectedAdapterId = yield* Effect.try(
+      () =>
+        selectRuntimeAdapter({
+          blueprint: spec,
+          adapters,
+          defaultAdapterId: options.defaultRuntimeAdapterId,
+        }).adapterId,
+    ).pipe(Effect.catch(() => Effect.succeed(options.defaultRuntimeAdapterId)));
+    const runtime =
+      options.runtimes.find((candidate) => candidate.adapter.id === selectedAdapterId) ??
+      options.runtimes[0];
+    if (runtime === undefined) {
+      return yield* toWorkspaceBuildJobProcessingError(
+        new Error("This worker has no runtime registered, so nothing can build or launch."),
+      );
+    }
+    const imageBuilder = runtime.imageBuilder;
     // Plan once: the hash both keys the reuse lookup and names the publish. A planner that throws
     // is treated like no planner — the full build surfaces the real error.
     const planned =
@@ -591,7 +588,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       try: () =>
         launchPublishedImage({
           spec,
-          runtimeAdapters: options.runtimeAdapters,
+          runtimeAdapters: options.runtimes.map((runtime) => runtime.adapter),
           defaultRuntimeAdapterId: options.defaultRuntimeAdapterId,
           publishedImage,
           ...(workspaceCloneAuth === undefined ? {} : { workspaceCloneAuth }),

@@ -18,6 +18,7 @@ import {
   createZotRegistryClient,
   CloudflareRuntimeAdapter,
   cloudflareRuntimeConfigFromEnv,
+  createDockerWorkspaceImageBuilder,
   DockerRuntimeAdapter,
   K3sRuntimeAdapter,
   K8sRuntimeAdapter,
@@ -216,6 +217,17 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...microvmAdapters,
   ];
 
+  // Every runtime is registered with the builder of the image it boots
+  // (docs/workspace-image-builders-design.md, D1). Today that is one builder for all of them:
+  // the BuildKit Job where a build namespace is configured, the host's Docker otherwise. MicroVM
+  // still boots its registered image and ignores what is built, which the conformance test
+  // records as an expected failure until the MicroVM builder lands.
+  const workerImageBuilder = imageBuilder ?? createDockerWorkspaceImageBuilder({ registryClient });
+  const runtimes = runtimeAdapters.map((adapter) => ({
+    adapter,
+    imageBuilder: workerImageBuilder,
+  }));
+
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
   // failed delivery visible in the queue's DLQ.
@@ -229,13 +241,12 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
           db,
-          runtimeAdapters,
+          runtimes,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
           gitHubSourceIntegration,
           registryClient,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
-          ...(imageBuilder === undefined ? {} : { imageBuilder }),
         });
       } catch (error) {
         console.error("Workspace build job failed", {
@@ -309,16 +320,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       workerId: env.WORKER_ID,
       leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
-      runtimeAdapters,
+      // The reaper re-drives the same pipeline as the consumer, so it takes the same registered
+      // runtimes: a reaped job builds with the same builder a first delivery would.
+      runtimes,
       defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
       gitHubSourceIntegration,
       registryClient,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
-      // The reaper re-drives the same pipeline as the consumer, so it needs the same
-      // deployment-specific injections — omitting them here made every reaped job on
-      // Kubernetes fall back to the docker builder and die on the absent socket.
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
-      ...(imageBuilder === undefined ? {} : { imageBuilder }),
     }).catch((error: unknown) => {
       console.error("Workspace build job reaper tick failed", { error });
     });

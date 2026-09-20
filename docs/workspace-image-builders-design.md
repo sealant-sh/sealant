@@ -4,12 +4,15 @@ Status: proposed 2026-09-20. Scope: `sealant-sh/sealant`, with one gate item in 
 
 ## 0. The two rules this design serves
 
-1. **A blueprint's image customisation works on every runtime.** Packages, the default shell and
-   setup commands are part of what a project is. A runtime that ignores them runs a different
-   project. This holds for every compute adapter Sealant has and every one it adds.
+1. **A blueprint's image customisation works on every runtime.** The operating system (a distro
+   family, or the project's own base image), the packages and the default shell are part of what a
+   project is. A runtime that ignores them runs a different project. This holds for every compute
+   adapter Sealant has and every one it adds. Setup commands are not part of a blueprint: a control
+   plane such as Mend runs them inside the live workspace, which already works on every runtime.
 2. **A blueprint's image customisation never runs where it can read the control plane's credentials
-   or harm it.** Setup commands are written by whoever owns the project. On a multi-tenant control
-   plane that is a stranger.
+   or harm it.** A custom base image is chosen by whoever owns the project, and the build runs steps
+   inside it: its `/bin/sh`, its package manager, its `ONBUILD` triggers. On a multi-tenant control
+   plane the owner is a stranger.
 
 ## 1. Current state (inspected on `origin/main`, 2026-09-20)
 
@@ -51,31 +54,35 @@ tenant's image is built from.
 
 ### D1. An adapter names the builder of the image it boots
 
-`RuntimeAdapter` gains a required member:
+A runtime is registered with the worker as a pair:
 
 ```ts
-interface RuntimeAdapter {
-  readonly id: RuntimeAdapterId;
+interface RegisteredRuntime {
+  readonly adapter: RuntimeAdapter;
   /** Builds, from a blueprint, the image this adapter boots. Never absent. */
   readonly imageBuilder: WorkspaceImageBuilder;
-  // supports, launch, stop, inspect, watchExits: unchanged
 }
 ```
 
-The worker selects the adapter first (selection is pure), then plans, reuses by plan hash, builds
-and publishes with **that adapter's** builder, then launches. The worker-wide `imageBuilder` option
-goes away; the Docker and Kubernetes adapters are constructed with the builders the worker injects
-today. A blueprint no adapter supports is still reported by the launch, with nothing built.
+The build job takes `runtimes`, not adapters and a worker-wide builder. It selects the adapter first
+(selection is pure), then plans, reuses by plan hash, builds and publishes with **that runtime's**
+builder, then launches. A blueprint no adapter supports is still reported by the launch, and builds
+with the default runtime's builder as before.
 
-There is no "unused" escape. An adapter that cannot customise its image does not compile.
+The pair is registered, instead of the builder being a member of `RuntimeAdapter`, because an
+adapter is constructed in about ninety places, most of them tests that never build an image. The
+guarantee is the same: nothing can take workspaces without a builder, and D2 covers every id.
+
+There is no "unused" escape. A runtime that cannot build its image cannot be registered.
 
 ### D2. A conformance test every adapter must pass
 
-`runtime-adapter.conformance.test.ts` runs each registered adapter id against one blueprint that
-selects a catalog package and a setup command, and asserts on what the builder was asked to produce:
-the package and the command are both in the recipe handed to that runtime's build, and the launch
-boots the image that build published. It iterates `runtimeAdapterIdSchema.options`, so adding an id
-without a builder and a conformance case fails CI.
+`runtime-adapter.conformance.test.ts` holds each adapter id to two facts, for one blueprint that
+requires an OS family and selects a catalog package: the recipe planned for the build starts from
+that family and installs the package, and the launch boots the image that build published and no
+other. Its cases are keyed by `RuntimeAdapterId`, so adding an id without a case does not compile.
+An adapter that does not conform yet is listed by name under `it.fails`, which fails once the
+adapter conforms, so the entry is removed with the fix. MicroVM is the one entry today.
 
 This pins the contract at the recipe, not inside a live machine. Live proof stays with each
 runtime's e2e (`docker.e2e.ts`, the kind e2e, the MicroVM e2e), which gains the same blueprint.
@@ -118,10 +125,21 @@ itself: a single-user self-host is a supported shape.
   builder applies when the blueprint asks for the Docker service.
 - **Base images.** Distro bases come from public ECR mirrors (`public.ecr.aws/docker/library/…`), so
   the build role needs no registry permission.
-- **Trusted material.** The agent files and `sealantd` are read from the worker's own image, where
-  the release put them. They are never read back from the artifacts bucket. `sealantctl` is
-  published in the sealantd image, or dropped from the recipe: the worker must be able to build a
-  MicroVM image from released artifacts alone.
+- **Trusted material.** The agent files and the ARM64 `sealantd` are baked into the worker's own
+  image when Sealant is released (`COPY --from` the sealantd image, as `apps/cf-bridge/Dockerfile`
+  already does), and read from there. They are never read back from the artifacts bucket, and
+  building a MicroVM image needs no Docker on the control plane. `sealantctl` is published in the
+  sealantd image, or dropped from the recipe: the worker must be able to build a MicroVM image from
+  released artifacts alone.
+- **One recipe, one image.** Two workspaces with the same plan produce one build. On 2026-08-30 to
+  2026-09-12 a host worker whose reuse lookup never matched built an image per workspace and left
+  513 build directories, 400 GB (fixed for the host builder in #229). Here the same fault would pile
+  up images in an AWS account, where nothing fills up to warn anyone. A test asserts the second
+  workspace builds nothing.
+- **Retention and a cap.** The builder ships with both. The retention sweep deletes MicroVM images
+  that no live workspace boots and that fall outside the most recent plans, with an age floor, as
+  the registry sweep does. Past a configured number of images the builder refuses to create another
+  and says why. The per-build zip is deleted once the image is `CREATED` or failed.
 - **First launch.** Two to three minutes, once per distinct plan. The job stays `running`; Mend
   already tells the user a first launch builds the image.
 
@@ -156,13 +174,14 @@ plane whose image builds run on its own host.
    customised blueprint. `build-image.sh` becomes a thin caller of the same context assembly, for
    operators who pre-build.
 3. D5. The AWS OpenTofu in mend gains per-organization roles and prefixes.
-4. D6 in mend, then its single-instance deployment (mend#312) mounts the Docker socket again for
-   staging trusted binaries only, and drops the "sessions will not start" caveat.
+4. D6 in mend, then its single-instance deployment (mend#312) drops the "sessions will not start"
+   caveat. That deployment never mounts the Docker socket: the socket is root on the host, and "for
+   staging only" would be a promise about the worker's code, not a control.
 
 ## 5. Out of scope
 
-- Image retention for MicroVM images (the sweep exists for registries; MicroVM images need their
-  own, keyed by plan hash and last use). Account quotas on images were not measured.
+- Account quotas on MicroVM images were not measured. The cap in D4 is set below whatever they turn
+  out to be.
 - Build caching across plans. Each plan is a full build.
 - A Cloudflare builder beyond what that adapter does today; it is covered by conformance like the
   rest.

@@ -297,6 +297,10 @@ export class KubernetesWorkspaceImageBuilder implements WorkspaceImageBuilder {
     this.#readSecretFile = options.readSecretFile ?? ((path) => readFile(path));
   }
 
+  // A rootless BuildKit Job in its own namespace, with a service account of its own: recipe steps
+  // run in a Pod, never on the worker.
+  readonly isolation = "isolated" as const;
+
   readonly plan = (spec: NewWorkspace): PlannedWorkspaceImageBuild =>
     planWorkspaceImageBuild({ blueprint: spec });
 

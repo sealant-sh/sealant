@@ -37,7 +37,16 @@ export interface BuildAndPublishResult {
   readonly build: WorkspaceBuild;
 }
 
+/**
+ * Where a blueprint's recipe steps run (docs/workspace-image-builders-design.md, D3).
+ * `host`: they share the control plane's kernel, Docker daemon or credentials. Fine on a
+ * single-user install, where the tenant is the operator. `isolated`: they run somewhere that
+ * cannot reach the control plane or its credentials.
+ */
+export type WorkspaceImageBuilderIsolation = "host" | "isolated";
+
 export interface WorkspaceImageBuilder {
+  readonly isolation: WorkspaceImageBuilderIsolation;
   /**
    * Docker-free planning: blueprint → OS family → Containerfile → plan hash. Undefined when the
    * builder cannot plan (a custom compiler without a matching planner) — callers then skip the
@@ -124,6 +133,9 @@ export const createDockerWorkspaceImageBuilder = (
   };
 
   return {
+    // `docker build` on the control plane's own daemon: recipe steps share its kernel, and on a
+    // cloud host a build step can reach the instance metadata service.
+    isolation: "host",
     plan,
     buildAndPublish: async (input) => {
       const build = await compile(input.spec);
