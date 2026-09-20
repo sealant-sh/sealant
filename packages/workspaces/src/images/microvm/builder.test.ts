@@ -26,6 +26,7 @@ const config: MicrovmImageBuildConfig = {
   memoryMiB: 4096,
   agentPort: 8080,
   logGroup: "/aws/lambda/microvms/build",
+  imageNamePrefix: "sealant-ws",
   maxImages: 3,
   pollIntervalMs: 1,
   buildTimeoutMs: 1_000,
@@ -82,7 +83,12 @@ const fakeAws = (
       deleted.push(name);
       return images.delete(name) ? "deleted" : "not-found";
     },
-    listImages: async () => [...images.values()].map((entry) => entry.description),
+    // As the platform answers: a name filter, and no tags on any item.
+    listImages: async (nameContains) =>
+      [...images.values()]
+        .map((entry) => entry.description)
+        .filter((description) => description.name.includes(nameContains))
+        .map(({ tags: _tags, ...summary }) => summary),
   };
   const artifacts: MicrovmArtifactStore = {
     put: async (key, bytes) => {
@@ -257,20 +263,36 @@ describe("MicrovmWorkspaceImageBuilder", () => {
     expect(aws.objects.size).toBe(0);
   });
 
-  it("counts only its own images toward the cap", async () => {
+  it("counts only its own images toward the cap, told by name since a listing carries no tags", async () => {
     const aws = fakeAws();
-    aws.images.set("someone-elses", {
-      polls: 0,
-      description: {
-        imageArn: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:someone-elses",
-        name: "someone-elses",
-        state: "CREATED",
-        latestActiveImageVersion: "1.0",
-      },
-    });
-    const builder = builderFor(aws, { maxImages: 1 });
+    const foreign = (name: string) =>
+      aws.images.set(name, {
+        polls: 0,
+        description: {
+          imageArn: `arn:aws:lambda:eu-central-1:123456789012:microvm-image:${name}`,
+          name,
+          state: "CREATED",
+          latestActiveImageVersion: "1.0",
+        },
+      });
+    foreign("someone-elses");
+    // Another control plane in the same account, under its own prefix.
+    foreign(`staging-ws-${"a".repeat(24)}`);
+    // The prefix alone is not enough: the rest must be a plan hash.
+    foreign("sealant-ws-by-hand");
 
-    await expect(build(builder, blueprint(["ripgrep"]))).resolves.toBeDefined();
+    await expect(
+      build(builderFor(aws, { maxImages: 1 }), blueprint(["ripgrep"])),
+    ).resolves.toBeDefined();
+    await expect(build(builderFor(aws, { maxImages: 1 }), blueprint(["jq"]))).rejects.toMatchObject(
+      { code: "microvm-image-cap" },
+    );
+    // The other control plane is not held to this one's count.
+    const staging = await build(
+      builderFor(aws, { maxImages: 2, imageNamePrefix: "staging-ws" }),
+      blueprint(["jq"]),
+    );
+    expect(staging.publishedImage.repository).toMatch(/^staging-ws-[0-9a-f]{24}$/);
   });
 
   it("reports a failed managed build with the platform's reason, and still deletes the context", async () => {

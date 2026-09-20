@@ -59,6 +59,8 @@ export {
 export {
   MICROVM_AGENT_FILES,
   MICROVM_RECIPE_VERSION,
+  isMicrovmImageNameOf,
+  MICROVM_IMAGE_NAME_PREFIX,
   microvmImageName,
   microvmRecipe,
   mirroredBaseImage,

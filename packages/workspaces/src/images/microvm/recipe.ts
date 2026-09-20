@@ -94,5 +94,16 @@ export const microvmRecipe = (
   return { containerfile, planHash };
 };
 
+export const MICROVM_IMAGE_NAME_PREFIX = "sealant-ws";
+
 /** `sealant-ws-<24 hex>`: an image name is 1 to 64 of `[A-Za-z0-9-_]`, and one plan is one image. */
-export const microvmImageName = (planHash: string): string => `sealant-ws-${planHash.slice(0, 24)}`;
+export const microvmImageName = (planHash: string, prefix = MICROVM_IMAGE_NAME_PREFIX): string =>
+  `${prefix}-${planHash.slice(0, 24)}`;
+
+/**
+ * Whose image a name says it is. `ListMicrovmImages` returns no tags (read 2026-09-20), so the
+ * name is the only thing a listing can count or sweep by. Two control planes that share an AWS
+ * account take different prefixes, or each would count and sweep the other's images.
+ */
+export const isMicrovmImageNameOf = (name: string, prefix: string): boolean =>
+  name.startsWith(`${prefix}-`) && /^[0-9a-f]{24}$/.test(name.slice(prefix.length + 1));

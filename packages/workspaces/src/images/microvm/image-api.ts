@@ -66,7 +66,11 @@ export interface MicrovmImageApi {
   readonly getImage: (name: string) => Promise<MicrovmImageDescription | undefined>;
   readonly createImage: (input: MicrovmImageCreateInput) => Promise<MicrovmImageDescription>;
   readonly deleteImage: (name: string) => Promise<"deleted" | "not-found">;
-  readonly listImages: () => Promise<readonly MicrovmImageDescription[]>;
+  /**
+   * Images whose name contains the text. A listing carries no tags, so callers tell their own
+   * images by name.
+   */
+  readonly listImages: (nameContains: string) => Promise<readonly MicrovmImageDescription[]>;
 }
 
 /** Where a build context is uploaded for the managed build to read. */
@@ -189,12 +193,15 @@ export const createLiveMicrovmImageApi = (options: LiveMicrovmImageApiOptions): 
         throw error;
       }
     },
-    listImages: async () => {
+    listImages: async (nameContains) => {
       const images: MicrovmImageDescription[] = [];
       let nextToken: string | undefined;
       do {
         const page = await client.send(
-          new ListMicrovmImagesCommand(nextToken === undefined ? {} : { nextToken }),
+          new ListMicrovmImagesCommand({
+            nameFilter: nameContains,
+            ...(nextToken === undefined ? {} : { nextToken }),
+          }),
         );
         for (const item of page.items ?? []) images.push(toDescription(item));
         nextToken = page.nextToken;

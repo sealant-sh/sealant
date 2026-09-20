@@ -28,10 +28,18 @@ import type {
   MicrovmImageApi,
   MicrovmImageDescription,
 } from "./image-api.js";
-import { MICROVM_AGENT_FILES, microvmImageName, microvmRecipe } from "./recipe.js";
+import {
+  isMicrovmImageNameOf,
+  MICROVM_AGENT_FILES,
+  microvmImageName,
+  microvmRecipe,
+} from "./recipe.js";
 import { zipStored, type ZipEntry } from "./zip.js";
 
-/** Every image this builder creates carries it, so retention and the cap count only its own. */
+/**
+ * For a person reading the console. Nothing here decides by them: a listing carries no tags, so
+ * the cap and retention tell this builder's images by name (`imageNamePrefix`).
+ */
 export const MICROVM_IMAGE_MANAGED_TAG = "sealant:workspace-image";
 export const MICROVM_IMAGE_PLAN_TAG = "sealant:plan-hash";
 
@@ -45,6 +53,11 @@ export interface MicrovmImageBuildConfig {
   readonly memoryMiB: number;
   readonly agentPort: number;
   readonly logGroup?: string | undefined;
+  /**
+   * Every image is named `<prefix>-<plan hash>`, and a name with this prefix is this builder's.
+   * Two control planes that share an AWS account take different prefixes.
+   */
+  readonly imageNamePrefix: string;
   /** Past this many images of its own the builder refuses to create another. */
   readonly maxImages: number;
   readonly pollIntervalMs: number;
@@ -127,7 +140,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     input: BuildAndPublishInput,
   ): Promise<BuildAndPublishResult> => {
     const planned = this.plan(input.spec);
-    const name = microvmImageName(planned.planHash);
+    const name = microvmImageName(planned.planHash, this.#options.config.imageNamePrefix);
 
     let image = await this.#settled(name);
     let built = false;
@@ -196,8 +209,9 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     planned: PlannedWorkspaceImageBuild,
   ): Promise<MicrovmImageDescription> {
     const { api, artifacts, config } = this.#options;
-    const own = (await api.listImages()).filter(
-      (candidate) => candidate.tags?.[MICROVM_IMAGE_MANAGED_TAG] === "true",
+    // By name: a listing carries no tags.
+    const own = (await api.listImages(config.imageNamePrefix)).filter((candidate) =>
+      isMicrovmImageNameOf(candidate.name, config.imageNamePrefix),
     );
     if (own.length >= config.maxImages) {
       throw new MicrovmImageBuildError(
