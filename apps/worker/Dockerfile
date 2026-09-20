@@ -37,7 +37,7 @@ WORKDIR /app
 COPY --from=builder /app/apps/worker/dist ./dist
 # What a MicroVM workspace image's recipe copies in: the in-VM agent and the guest-local Docker
 # installer. The MicroVM image builder reads them from beside dist/ and sends them with each build.
-COPY --from=builder /app/packages/workspaces/microvm-image/agent.mjs /app/packages/workspaces/microvm-image/docker-service.mjs /app/packages/workspaces/microvm-image/download-docker.sh ./microvm-image/
+COPY --from=builder /app/packages/workspaces/microvm-image/ ./microvm-image/
 # The Agent SDK's platform package (the keep-fresh sweeper spawns its `claude` binary) — see the
 # builder stage.
 COPY --from=builder /staged/node_modules ./node_modules

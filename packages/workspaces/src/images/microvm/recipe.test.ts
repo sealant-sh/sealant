@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { planWorkspaceImageBuild } from "../../buildkit/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
-import { microvmImageName, microvmRecipe, mirroredBaseImage } from "./recipe.js";
+import {
+  ARCHLINUXARM_KEY_FINGERPRINT,
+  microvmImageName,
+  microvmRecipe,
+  mirroredBaseImage,
+} from "./recipe.js";
 
 const settings = {
   agentPort: 8080,
@@ -11,7 +16,7 @@ const settings = {
   contextDigest: "a".repeat(64),
 };
 
-const plannedFor = (family: "fedora" | "arch") =>
+const plannedFor = (family: "fedora" | "arch" | "ubuntu") =>
   planWorkspaceImageBuild({
     blueprint: {
       ...cases.gitSource.blueprint,
@@ -65,6 +70,24 @@ describe("microvmRecipe", () => {
     }
   });
 
+  it("builds Arch from the signed Arch Linux ARM rootfs, since Docker Hub's archlinux is x86_64 only", () => {
+    const { containerfile } = microvmRecipe(plannedFor("arch"), settings);
+    expect(containerfile).toMatch(
+      /^FROM public\.ecr\.aws\/docker\/library\/fedora:41 AS archlinuxarm$/m,
+    );
+    expect(containerfile).toContain("COPY archlinuxarm-builder.asc /tmp/archlinuxarm-builder.asc");
+    expect(containerfile).toContain(ARCHLINUXARM_KEY_FINGERPRINT);
+    expect(containerfile).toContain(
+      "gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz",
+    );
+    expect(containerfile).toMatch(/^FROM scratch$/m);
+    expect(containerfile).toContain("pacman-key --populate archlinuxarm");
+    expect(containerfile).not.toContain("FROM public.ecr.aws/docker/library/archlinux");
+    // The rest of the planned recipe, the family's own packages and the agent, follows unchanged.
+    expect(containerfile).toContain("pacman -S");
+    expect(containerfile).toContain('ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]');
+  });
+
   it("takes sealantctl from the same released daemon image as sealantd, for the hooks' capture flush", () => {
     const planned = plannedFor("fedora");
     const daemonImage = /--from=(\S+) \/usr\/local\/bin\/sealantd /.exec(
@@ -89,8 +112,8 @@ describe("microvmRecipe", () => {
   });
 
   it("follows the blueprint's OS family", () => {
-    expect(microvmRecipe(plannedFor("arch"), settings).containerfile).toMatch(
-      /^FROM public\.ecr\.aws\/docker\/library\/archlinux:/m,
+    expect(microvmRecipe(plannedFor("ubuntu"), settings).containerfile).toMatch(
+      /^FROM public\.ecr\.aws\/docker\/library\/ubuntu:/m,
     );
   });
 
@@ -122,13 +145,24 @@ describe("microvmRecipe", () => {
     ).toContain("RUN pacman -Sy --noconfirm --needed iproute2");
   });
 
-  it("refuses guest-local Docker on a family it cannot install it for, naming the ones it can", () => {
+  it("installs what guest-local Docker needs on every managed family, and refuses a custom base", () => {
+    for (const family of ["fedora", "arch", "ubuntu", "nix"] as const) {
+      const { containerfile } = microvmRecipe(
+        { ...plannedFor("fedora"), osFamily: family },
+        { ...settings, dockerService: true },
+      );
+      expect(containerfile).toContain("download-docker.sh");
+      expect(containerfile).toMatch(/iproute2?\b/);
+    }
+    // A custom base image brings its own package manager, which the recipe cannot drive.
     expect(() =>
       microvmRecipe(
-        { ...plannedFor("fedora"), osFamily: "nix" },
+        { ...plannedFor("fedora"), osFamily: "custom" },
         { ...settings, dockerService: true },
       ),
-    ).toThrow(/needs one of the fedora, arch, ubuntu OS families; this blueprint resolves to nix/);
+    ).toThrow(
+      /needs one of the fedora, arch, ubuntu, nix OS families; this blueprint resolves to custom/,
+    );
   });
 
   it("refuses a Containerfile it cannot build on", () => {

@@ -23,7 +23,10 @@ const harnessIntegrations: Record<HarnessId, HarnessIntegration> = {
   opencode: {
     id: "opencode",
     installPackages: ["nodejs"],
-    installCommand: "npm install -g opencode-ai@latest",
+    // --allow-scripts, as for claude-code below: opencode's postinstall is what fetches the native
+    // binary for the platform, and a recent npm skips it unless allowed. Observed on Arch Linux
+    // ARM on 2026-09-20: "opencode-ai's postinstall script was not run".
+    installCommand: "npm install -g --allow-scripts=opencode-ai opencode-ai@latest",
     launchCommand: "opencode",
     buildRunCommand: (prompt) => ({ executable: "opencode", args: ["run", prompt] }),
   },

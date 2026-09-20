@@ -162,6 +162,33 @@ itself: a single-user self-host is a supported shape.
     `CREATING` for the whole thirty-minute timeout with no build running. An image in that state
     cannot be deleted either. The token is now one per attempt; the name already makes one plan one
     image. With that, delete then rebuild of the same name took 203 s.
+- **Every managed family, with Docker, proven live on 2026-09-20** (the same spec, one run per
+  family with `SEALANT_MICROVM_BUILT_IMAGE_E2E_DOCKER=1`). Build, boot, and inside the VM the OS,
+  the package, `sealantd`, a `sealantctl` that reaches the daemon, all three harnesses,
+  `docker info`, and one container run:
+
+  | Family | Build | Boot | Base                                       |
+  | ------ | ----- | ---- | ------------------------------------------ |
+  | fedora | 223 s | 7 s  | `fedora:41` from the public ECR mirror     |
+  | ubuntu | 264 s | 8 s  | `ubuntu:24.04` from the public ECR mirror  |
+  | nix    | 244 s | 8 s  | `nixos/nix:latest`                         |
+  | arch   | 385 s | 8 s  | Arch Linux ARM's signed rootfs (see below) |
+
+  Three faults found on the way, none of them in Docker itself:
+  - **Arch has no ARM64 container image.** Docker Hub's `archlinux` is x86_64 only, and a MicroVM is
+    ARM64, so no Arch workspace could be built there at all. The official ARM port, Arch Linux ARM,
+    ships a rootfs tarball signed by its build system key. The recipe's first stage fetches the
+    tarball and its signature over the port's mirrors, verifies the signature against the key
+    shipped in the build context (`microvm-image/archlinuxarm-builder.asc`, fingerprint pinned in
+    the recipe), unpacks it, and the image starts from that filesystem.
+  - **No native harness binary started on the nix image.** It has no `/lib64/ld-linux-*`: every
+    binary in it names a loader inside the store. `codex`, `claude` and `opencode` install and then
+    fail to execute. The nix package layer now links glibc's loader into `/lib` and `/lib64`. This
+    is the family's recipe, so it fixes the Docker and Kubernetes runtimes too.
+  - **opencode's postinstall was skipped by a recent npm** (Arch ships one), so its native binary
+    was never fetched. Its install now carries `--allow-scripts=opencode-ai`, as claude-code's
+    already did. Every family's recipe.
+
 - **Names, not tags.** `ListMicrovmImages` returns no tags, so a listing can only tell whose an
   image is by its name: `<prefix>-<24 hex of the plan hash>`, prefix `sealant-ws`
   (`SEALANT_MICROVM_IMAGE_NAME_PREFIX`). The cap counts those names and the sweep deletes only

@@ -15,6 +15,11 @@
  *   4. a fenced stop ends the VM through the terminate hook. With `SEALANT_MICROVM_LOG_GROUP` set,
  *      the VM's console shows the hook's `sealantctl capture flush` and the daemon's answer.
  *
+ * `SEALANT_MICROVM_BUILT_IMAGE_E2E_FAMILY` picks the OS family (fedora by default; nix, arch and
+ * ubuntu are the others). `SEALANT_MICROVM_BUILT_IMAGE_E2E_DOCKER=1` asks the blueprint for
+ * workspace-scoped Docker: the image then carries the engine, is created with the `ALL` OS
+ * capability, and inside the VM `docker info` and one container run are checked as well.
+ *
  * It deletes the image it built unless `SEALANT_MICROVM_BUILT_IMAGE_E2E_KEEP=1`. It prints what it
  * observed and never credentials, tokens or raw provider errors.
  */
@@ -38,7 +43,15 @@ import { createLiveMicrovmImageApi, createS3MicrovmArtifactStore } from "./image
 
 const E2E_ENABLED = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E === "1";
 const KEEP_IMAGE = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_KEEP === "1";
+const WITH_DOCKER = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_DOCKER === "1";
+const FAMILIES = ["fedora", "arch", "ubuntu", "nix"] as const;
+type Family = (typeof FAMILIES)[number];
+const FAMILY: Family =
+  FAMILIES.find((family) => family === process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_FAMILY) ??
+  "fedora";
 const PACKAGE = "ripgrep";
+/** From the public ECR mirror, so the run inside the VM needs no Docker Hub login. */
+const PROBE_CONTAINER = "public.ecr.aws/docker/library/alpine:3.20";
 
 const numberFromEnv = (name: string): number | undefined => {
   const raw = process.env[name];
@@ -61,7 +74,10 @@ const blueprint = (marker: string): NewWorkspace =>
     },
     harness: { id: "opencode" },
     access: { ssh: { enabled: false, listenPort: 2222 } },
-    tooling: { packages: [{ id: PACKAGE }] },
+    tooling: {
+      packages: [{ id: PACKAGE }],
+      ...(WITH_DOCKER ? { services: { docker: { enabled: true } } } : {}),
+    },
     customization: {
       defaultShell: "bash",
       dotfilesManager: "auto",
@@ -83,7 +99,7 @@ const blueprint = (marker: string): NewWorkspace =>
       network: { outbound: true },
     },
     target: {
-      os: { family: "fedora", mode: "require" },
+      os: { family: FAMILY, mode: "require" },
       runtime: { family: "microvm", mode: "require" },
     },
   });
@@ -98,7 +114,7 @@ describe.skipIf(!E2E_ENABLED)(
   "Lambda MicroVM boots the image built from its blueprint (live)",
   () => {
     it(
-      "builds a customised blueprint once, boots it, and finds the OS, the package and sealantctl inside",
+      `builds a customised ${FAMILY} blueprint${WITH_DOCKER ? " with Docker" : ""} once, boots it, and finds the OS, the package and sealantctl inside`,
       { timeout: 45 * 60_000 },
       async () => {
         const config = microvmRuntimeConfigFromEnv({
@@ -112,6 +128,7 @@ describe.skipIf(!E2E_ENABLED)(
           SEALANT_MICROVM_EXEC_ROLE_ARN: process.env.SEALANT_MICROVM_EXEC_ROLE_ARN,
           SEALANT_MICROVM_EGRESS_CONNECTOR: process.env.SEALANT_MICROVM_EGRESS_CONNECTOR,
           SEALANT_MICROVM_LOG_GROUP: process.env.SEALANT_MICROVM_LOG_GROUP,
+          SEALANT_MICROVM_DOCKER_ENABLED: WITH_DOCKER,
           SEALANT_MICROVM_MAX_DURATION_SECONDS: 900,
           SEALANT_CONTROL_BEARER_TOKEN: process.env.SEALANT_CONTROL_BEARER_TOKEN,
         });
@@ -138,7 +155,7 @@ describe.skipIf(!E2E_ENABLED)(
             agentPort: config.agentPort,
             logGroup: config.build.logGroup,
             imageNamePrefix: config.build.imageNamePrefix,
-            dockerService: false,
+            dockerService: WITH_DOCKER,
             maxImages: config.build.maxImages,
             pollIntervalMs: config.build.pollIntervalMs,
             buildTimeoutMs: config.build.timeoutMs,
@@ -243,18 +260,42 @@ describe.skipIf(!E2E_ENABLED)(
                   'printf "sealantctl=%s\\n" "$(sealantctl --version)"',
                   'printf "health=%s\\n" "$(sealantctl --socket /run/sealant/control.sock health 2>&1 | head -c 200 | tr "\\n" " ")"',
                   'printf "repo=%s\\n" "$(git -C /workspace/repo rev-parse --is-inside-work-tree 2>/dev/null)"',
+                  // The baked harnesses have to run on this base, not only install.
+                  'for h in codex claude opencode; do printf "harness %s=%s\\n" "$h" "$(command -v "$h" >/dev/null 2>&1 && "$h" --version 2>&1 | head -n 1 | head -c 80 || echo missing)"; done',
+                  ...(WITH_DOCKER
+                    ? [
+                        `printf "docker=%s\\n" "$(docker info --format '{{.ServerVersion}}' 2>&1 | head -c 120)"`,
+                        `printf "container=%s\\n" "$(docker run --rm ${PROBE_CONTAINER} sh -c 'echo ran-in-a-container' 2>&1 | tail -n 1 | head -c 120)"`,
+                      ]
+                    : []),
                 ].join("; "),
               ],
             }).pipe(Effect.provide(SealantRuntimeControlLive)),
           );
           observed("inside the VM", { exitCode: inside.exitCode, stdout: inside.stdout });
           expect(inside.exitCode).toBe(0);
-          expect(inside.stdout).toContain("os=fedora");
+          // /etc/os-release ids: fedora, ubuntu, `archarm` (Arch Linux ARM), and the nix image's base.
+          const OS_ID: Record<Family, RegExp> = {
+            fedora: /^os=fedora$/m,
+            ubuntu: /^os=ubuntu$/m,
+            arch: /^os=archarm$/m,
+            // The nix image has no /etc/os-release at all.
+            nix: /^os=$/m,
+          };
+          expect(inside.stdout).toMatch(OS_ID[FAMILY]);
           expect(inside.stdout).toMatch(/package=ripgrep \d/);
           expect(inside.stdout).toContain("sealantd=/usr/local/bin/sealantd");
           expect(inside.stdout).toMatch(/sealantctl=sealantctl /);
           // The client the terminate hook flushes captures with reaches the daemon.
           expect(inside.stdout).toContain('"state":"healthy"');
+          // Every baked harness starts on this base.
+          expect(inside.stdout).toMatch(/^harness codex=codex-cli \d/m);
+          expect(inside.stdout).toMatch(/^harness claude=\d/m);
+          expect(inside.stdout).toMatch(/^harness opencode=\d/m);
+          if (WITH_DOCKER) {
+            expect(inside.stdout).toMatch(/^docker=\d+\.\d+/m);
+            expect(inside.stdout).toContain("container=ran-in-a-container");
+          }
 
           // 4. A fenced stop goes through the terminate hook, where the agent runs the flush.
           const stopStarted = Date.now();

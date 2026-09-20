@@ -32,6 +32,7 @@ import type {
 import {
   isMicrovmImageNameOf,
   MICROVM_AGENT_FILES,
+  MICROVM_ARCH_FILES,
   MICROVM_DOCKER_FILES,
   microvmImageName,
   microvmRecipe,
@@ -225,7 +226,11 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     const entries: ZipEntry[] = [
       { name: "Dockerfile", content: Buffer.from(planned.containerfile, "utf8") },
     ];
-    for (const file of [...MICROVM_AGENT_FILES, ...(dockerService ? MICROVM_DOCKER_FILES : [])]) {
+    for (const file of [
+      ...MICROVM_AGENT_FILES,
+      ...(dockerService ? MICROVM_DOCKER_FILES : []),
+      ...(planned.osFamily === "arch" ? MICROVM_ARCH_FILES : []),
+    ]) {
       entries.push({ name: file, content: await this.#options.readContextFile(file) });
     }
     // An unguessable key: a build role cannot list the bucket, so it cannot find another build's.

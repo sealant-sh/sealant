@@ -809,7 +809,9 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain(
       "RUN npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",
     );
-    expect(containerfile).toContain("RUN npm install -g opencode-ai@latest");
+    expect(containerfile).toContain(
+      "RUN npm install -g --allow-scripts=opencode-ai opencode-ai@latest",
+    );
     // Codex's sandbox prerequisite is baked with the CLI — no "could not find bubblewrap" banner.
     expect(containerfile).toMatch(/dnf -y install [^\n]*\bbubblewrap\b/);
     expect(containerfile).toContain(
@@ -954,6 +956,9 @@ describe("compileWorkspaceBuildSpec", () => {
     expect(containerfile).toContain("nixpkgs#gitMinimal");
     expect(containerfile).toContain("nixpkgs#bubblewrap");
     expect(containerfile).not.toContain("nixpkgs#git'");
+    // The FHS loader link, or no native harness binary starts on the nix image.
+    expect(containerfile).toContain("nixpkgs#glibc.outPath");
+    expect(containerfile).toContain('ln -sf "$loader" "/lib64/$(basename "$loader")"');
     expect(containerfile).toContain("RUN npm install -g --prefix /usr/local @openai/codex@latest");
     expect(containerfile).toContain(
       "RUN npm install -g --prefix /usr/local --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest",

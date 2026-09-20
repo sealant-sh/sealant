@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadMicrovmContextFiles, MicrovmContextFilesError } from "./context-files.js";
-import { MICROVM_AGENT_FILES, MICROVM_DOCKER_FILES } from "./recipe.js";
+import { MICROVM_AGENT_FILES, MICROVM_ARCH_FILES, MICROVM_DOCKER_FILES } from "./recipe.js";
 
 const scratch: string[] = [];
 afterEach(async () => {
@@ -17,7 +17,7 @@ describe("loadMicrovmContextFiles", () => {
   it("reads the package's own files from source", async () => {
     const { read, digest } = await loadMicrovmContextFiles();
     expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    for (const file of [...MICROVM_AGENT_FILES, ...MICROVM_DOCKER_FILES]) {
+    for (const file of [...MICROVM_AGENT_FILES, ...MICROVM_DOCKER_FILES, ...MICROVM_ARCH_FILES]) {
       expect((await read(file)).byteLength).toBeGreaterThan(0);
     }
   });
@@ -27,7 +27,7 @@ describe("loadMicrovmContextFiles", () => {
     scratch.push(app);
     await mkdir(path.join(app, "dist"));
     await mkdir(path.join(app, "microvm-image"));
-    for (const file of [...MICROVM_AGENT_FILES, ...MICROVM_DOCKER_FILES]) {
+    for (const file of [...MICROVM_AGENT_FILES, ...MICROVM_DOCKER_FILES, ...MICROVM_ARCH_FILES]) {
       await writeFile(path.join(app, "microvm-image", file), `// ${file}\n`);
     }
 
