@@ -111,26 +111,32 @@ itself: a single-user self-host is a supported shape.
 `MicrovmWorkspaceImageBuilder` implements the interface with the Lambda MicroVM image API:
 
 - **Plan.** The existing planner: blueprint → OS family → Containerfile → plan hash. The MicroVM
-  recipe is the planned Containerfile for the blueprint's OS family followed by the agent layer that
-  `microvm-image/Dockerfile` carries today (the agent files, `sealantd`, the boot `ENV`, the
-  entrypoint). The hash covers both, plus the daemon version and the image settings (memory, hooks,
-  OS capabilities), so a daemon upgrade builds new images.
+  recipe is that Containerfile with the agent layer in place of its entrypoint: `sealantctl`, the
+  agent files, the agent port, and guest-local Docker when the blueprint asks for it. The planned
+  Containerfile already carries `sealantd` and the boot `ENV`. The hash covers the recipe's text, so
+  the daemon pin is in it, plus the image settings (memory, port, Docker) and a digest of the files
+  the recipe copies in. A daemon upgrade or a changed agent builds new images.
 - **Build.** Zip the context, upload it to an unguessable per-build key, `CreateMicrovmImage` named
   by the plan hash, poll to `CREATED`. A failed build fails the job with the state reason.
 - **Publish.** `PublishedImage` records the image ARN and version. Reuse by plan hash then finds a
   built image by name, exactly as it does a registry tag, and `GetMicrovmImage` is the liveness
   check in place of a registry `HEAD`.
-- **Launch.** The adapter boots the published image. `SEALANT_MICROVM_IMAGE_ARN` stops being the
-  image every workspace runs and is removed; the Docker-capable variant becomes an image setting the
-  builder applies when the blueprint asks for the Docker service.
+- **Launch.** The adapter boots the published image, pinned to the version the build made, and
+  refuses a launch whose published image is not a MicroVM image. `SEALANT_MICROVM_IMAGE_ARN` and the
+  three settings beside it are retired: the API and the worker refuse to start while one is set. The
+  Docker-capable variant is an image setting the builder applies when the blueprint asks for the
+  Docker service and the operator allows it (`SEALANT_MICROVM_DOCKER_ENABLED`, off by default, since
+  that image is created with the `ALL` OS capability).
 - **Base images.** Distro bases come from public ECR mirrors (`public.ecr.aws/docker/library/…`), so
   the build role needs no registry permission.
-- **Trusted material.** The agent files and the ARM64 `sealantd` are baked into the worker's own
-  image when Sealant is released (`COPY --from` the sealantd image, as `apps/cf-bridge/Dockerfile`
-  already does), and read from there. They are never read back from the artifacts bucket, and
-  building a MicroVM image needs no Docker on the control plane. `sealantctl` is published in the
-  sealantd image, or dropped from the recipe: the worker must be able to build a MicroVM image from
-  released artifacts alone.
+- **Trusted material.** The agent files are copied into the worker's own image when Sealant is
+  released and read from there, never from the artifacts bucket. The worker checks they are present
+  when it starts. `sealantd` and `sealantctl` are not in the build context at all: the recipe takes
+  both with `COPY --from` the released sealantd image, which the managed build pulls (measured
+  2026-09-20). So a build context is a Containerfile and two or three small scripts, and building a
+  MicroVM image needs no Docker on the control plane. The agent's suspend and terminate hooks run
+  `sealantctl capture flush`, so the recipe needs a sealantd release whose image ships the client
+  (sealantd#94).
 - **One recipe, one image.** Two workspaces with the same plan produce one build. On 2026-08-30 to
   2026-09-12 a host worker whose reuse lookup never matched built an image per workspace and left
   513 build directories, 400 GB (fixed for the host builder in #229). Here the same fault would pile
@@ -170,9 +176,9 @@ plane whose image builds run on its own host.
 
 1. D1 and D3, with the Docker and Kubernetes adapters carrying today's builders. No behaviour
    change. D2's conformance test, which MicroVM fails.
-2. D4 with a single deployment-wide role and prefix. MicroVM passes conformance; its e2e gains the
-   customised blueprint. `build-image.sh` becomes a thin caller of the same context assembly, for
-   operators who pre-build.
+2. D4 with a single deployment-wide role and prefix. MicroVM passes conformance. `build-image.sh`
+   and its two hand-written Dockerfiles are removed: there is no image to pre-build, and the script
+   could not run against a released daemon.
 3. D5. The AWS OpenTofu in mend gains per-organization roles and prefixes.
 4. D6 in mend, then its single-instance deployment (mend#312) drops the "sessions will not start"
    caveat. That deployment never mounts the Docker socket: the socket is root on the host, and "for

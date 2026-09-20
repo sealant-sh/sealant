@@ -1333,20 +1333,10 @@ export const runtimeEnvReferencesRefusal = (
   return `This deployment runs workspaces on the '${family}' runtime, which cannot resolve cluster env references: ${names}. Remove them, or run against a Kubernetes deployment.`;
 };
 
-export const microvmDockerCapabilityEnabled = (input: {
-  readonly baseImageArn?: string | undefined;
-  readonly dockerImageArn?: string | undefined;
-  readonly dockerImageVersion?: string | undefined;
-}): boolean =>
-  input.baseImageArn !== undefined &&
-  input.dockerImageArn !== undefined &&
-  input.dockerImageVersion !== undefined &&
-  input.dockerImageArn !== input.baseImageArn;
-
 /**
  * Pure create-time gate for `tooling.services.docker`. Docker always serves it. Kubernetes needs
- * its rootless sidecar enabled. MicroVM needs a separately configured Docker-capable image so the
- * default image keeps its restricted Linux capabilities. Refuse here synchronously and keep the
+ * its rootless sidecar enabled. MicroVM needs the operator to allow it, because the image built for
+ * such a workspace is created with the elevated OS capability. Refuse here synchronously and keep the
  * adapter's own refusal as a second check.
  */
 export const dockerServiceRefusal = (
@@ -1382,7 +1372,7 @@ export const dockerServiceRefusal = (
   if (family === "microvm") {
     return install.microvmDockerEnabled
       ? null
-      : "This deployment has no complete Lambda MicroVM image configuration for Docker (SEALANT_MICROVM_IMAGE_ARN plus the separate SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION). Turn Docker off for this workspace, or ask the operator to configure both images.";
+      : "This deployment runs workspaces on Lambda MicroVMs without workspace-scoped Docker enabled (SEALANT_MICROVM_DOCKER_ENABLED). Turn Docker off for this workspace, or ask the operator to enable it.";
   }
   return `This deployment runs workspaces on the '${family}' runtime, which has no workspace-scoped Docker. Turn Docker off for this workspace.`;
 };
@@ -1432,11 +1422,7 @@ export const createWorkspace = (input: {
     const dockerRefusal = dockerServiceRefusal(parsedSpec, {
       defaultAdapterFamily: env.DEFAULT_RUNTIME_ADAPTER,
       kubernetesDockerEnabled: env.SEALANT_K8S_DOCKER_ENABLED,
-      microvmDockerEnabled: microvmDockerCapabilityEnabled({
-        baseImageArn: env.SEALANT_MICROVM_IMAGE_ARN,
-        dockerImageArn: env.SEALANT_MICROVM_DOCKER_IMAGE_ARN,
-        dockerImageVersion: env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION,
-      }),
+      microvmDockerEnabled: env.SEALANT_MICROVM_DOCKER_ENABLED,
     });
     if (dockerRefusal !== null) {
       return yield* new WorkspaceDockerServiceUnsupportedError({

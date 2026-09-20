@@ -33,14 +33,25 @@ describe("parseWorkerEnv", () => {
     ).toBe("mend_default");
   });
 
-  it("rejects Docker-capable MicroVM coordinates without the base image", () => {
+  it("refuses a retired one-image MicroVM setting instead of ignoring it", () => {
     expect(() =>
       parseWorkerEnv({
-        SEALANT_MICROVM_DOCKER_IMAGE_ARN:
-          "arn:aws:lambda:eu-central-1:123456789012:microvm-image:docker-capable",
-        SEALANT_MICROVM_DOCKER_IMAGE_VERSION: "7",
+        SEALANT_MICROVM_IMAGE_ARN: "arn:aws:lambda:eu-central-1:123456789012:microvm-image:base",
       }),
-    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN/);
+    ).toThrow(/SEALANT_MICROVM_IMAGE_ARN is retired/);
+  });
+
+  it("needs the build role where MicroVM is the default runtime", () => {
+    expect(() => parseWorkerEnv({ DEFAULT_RUNTIME_ADAPTER: "microvm" })).toThrow(
+      /SEALANT_MICROVM_BUILD_ROLE_ARN/,
+    );
+    expect(
+      parseWorkerEnv({
+        DEFAULT_RUNTIME_ADAPTER: "microvm",
+        SEALANT_MICROVM_BUILD_ROLE_ARN: "arn:aws:iam::123456789012:role/sealant-microvm-build",
+        SEALANT_MICROVM_MEMORY_MIB: "8192",
+      }),
+    ).toMatchObject({ SEALANT_MICROVM_MEMORY_MIB: 8192 });
   });
 
   it("loads the GitHub App private key from GITHUB_APP_PRIVATE_KEY_PATH", () => {

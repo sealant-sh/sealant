@@ -10,12 +10,16 @@
  *   2. the launch boots the image that build published, and no other.
  *
  * The cases are keyed by `RuntimeAdapterId`, so adding an id without a case does not compile, and
- * a case that cannot say which image it boots fails here. Live proof stays with each runtime's e2e.
+ * a case that cannot say which image it boots fails here. A runtime that boots no container image
+ * (MicroVM) builds with its own builder here, and is held to the same two facts. Live proof stays
+ * with each runtime's e2e.
  */
 import type { NewWorkspace } from "@sealant/validators";
 import { describe, expect, it, vi } from "vitest";
 
 import { planWorkspaceImageBuild } from "../buildkit/index.js";
+import { MicrovmWorkspaceImageBuilder } from "../images/microvm/builder.js";
+import type { MicrovmImageDescription } from "../images/microvm/image-api.js";
 import { CloudflareRuntimeAdapter } from "./cloudflare/adapter.js";
 import { cloudflareRuntimeConfigSchema } from "./cloudflare/config.js";
 import { cases, publishedImage } from "./docker-runtime-adapter.golden-fixture.js";
@@ -24,8 +28,10 @@ import { kubernetesRuntimeConfigSchema } from "./kubernetes/config.js";
 import { buildLaunchSecret, buildPod, workspaceLabels } from "./kubernetes/manifests.js";
 import { workspaceResourceNames } from "./kubernetes/names.js";
 import { lowerMountIntents } from "./kubernetes/volumes.js";
-import { buildRunInput } from "./microvm/adapter.js";
+import { MicrovmRuntimeAdapter } from "./microvm/adapter.js";
+import type { MicrovmRunInput } from "./microvm/api.js";
 import { microvmRuntimeConfigFromEnv } from "./microvm/config.js";
+import { microvmImageReference } from "./microvm/image-reference.js";
 import { collectMountIntents } from "./mount-intent.js";
 import { runtimeAdapterIdSchema, type RuntimeAdapterId } from "./runtime-adapter.js";
 
@@ -79,8 +85,53 @@ const kubernetesBootedImage = (adapter: "k8s" | "k3s"): string => {
   return pod.spec?.containers[0]?.image ?? "";
 };
 
-/** The image each adapter's launch boots, read from the plan or request it produces. */
-const bootedImage: Record<RuntimeAdapterId, () => Promise<string>> = {
+/** A MicroVM builder over an in-memory account: a created image is built at the next read. */
+const microvmBuilder = (): MicrovmWorkspaceImageBuilder => {
+  const images = new Map<string, MicrovmImageDescription>();
+  return new MicrovmWorkspaceImageBuilder({
+    api: {
+      getImage: async (name) => images.get(name),
+      createImage: async (input) => {
+        const created: MicrovmImageDescription = {
+          imageArn: `arn:aws:lambda:eu-central-1:123456789012:microvm-image:${input.name}`,
+          name: input.name,
+          state: "CREATED",
+          latestActiveImageVersion: "1.0",
+        };
+        images.set(input.name, created);
+        return created;
+      },
+      deleteImage: async (name) => (images.delete(name) ? "deleted" : "not-found"),
+      listImages: async (nameContains) =>
+        [...images.values()].filter((image) => image.name.includes(nameContains)),
+    },
+    artifacts: { put: async (key) => `s3://artifacts/${key}`, remove: async () => undefined },
+    config: {
+      baseImageArn: "arn:aws:lambda:eu-central-1:aws:microvm-image:al2023-1",
+      buildRoleArn: "arn:aws:iam::123456789012:role/sealant-microvm-build",
+      artifactPrefix: "sealant/workspace-images",
+      memoryMiB: 4096,
+      agentPort: 8080,
+      imageNamePrefix: "sealant-ws",
+      dockerService: false,
+      maxImages: 50,
+      pollIntervalMs: 1,
+      buildTimeoutMs: 1_000,
+    },
+    readContextFile: async () => Buffer.alloc(0),
+    contextDigest: "0".repeat(64),
+    sleep: async () => undefined,
+  });
+};
+
+interface BuiltAndBooted {
+  /** What the runtime's build published for the blueprint. */
+  readonly published: string;
+  /** What the launch booted, read from the plan or request it produced. */
+  readonly booted: string;
+}
+
+const bootedImage: Record<RuntimeAdapterId, () => Promise<BuiltAndBooted>> = {
   docker: async () => {
     const calls: string[][] = [];
     const adapter = new DockerRuntimeAdapter({
@@ -97,10 +148,19 @@ const bootedImage: Record<RuntimeAdapterId, () => Promise<string>> = {
     });
     await adapter.launch(launchInput);
     const run = calls.find((args) => args[0] === "run") ?? [];
-    return run.find((arg) => arg === publishedImage.digestReference) ?? run.join(" ");
+    return {
+      published: publishedImage.digestReference,
+      booted: run.find((arg) => arg === publishedImage.digestReference) ?? run.join(" "),
+    };
   },
-  k8s: async () => kubernetesBootedImage("k8s"),
-  k3s: async () => kubernetesBootedImage("k3s"),
+  k8s: async () => ({
+    published: publishedImage.digestReference,
+    booted: kubernetesBootedImage("k8s"),
+  }),
+  k3s: async () => ({
+    published: publishedImage.digestReference,
+    booted: kubernetesBootedImage("k3s"),
+  }),
   cloudflare: async () => {
     const bodies: unknown[] = [];
     const adapter = new CloudflareRuntimeAdapter({
@@ -125,40 +185,66 @@ const bootedImage: Record<RuntimeAdapterId, () => Promise<string>> = {
     });
     await adapter.launch(launchInput);
     const launch = bodies[0] as { image?: { digestReference?: string } } | undefined;
-    return launch?.image?.digestReference ?? "";
+    return {
+      published: publishedImage.digestReference,
+      booted: launch?.image?.digestReference ?? "",
+    };
   },
   microvm: async () => {
     const config = microvmRuntimeConfigFromEnv({
       SEALANT_MICROVM_REGION: "eu-central-1",
-      SEALANT_MICROVM_IMAGE_ARN:
-        "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-workspace",
+      SEALANT_MICROVM_BUILD_ROLE_ARN: "arn:aws:iam::123456789012:role/sealant-microvm-build",
+      SEALANT_MICROVM_ARTIFACT_BUCKET: "sealant-artifacts",
       SEALANT_MICROVM_EXEC_ROLE_ARN: "arn:aws:iam::123456789012:role/sealant-microvm-exec",
       SEALANT_CONTROL_BEARER_TOKEN: "control-token",
     });
     if (config === undefined) throw new Error("the MicroVM runtime is not configured");
-    // The run request takes no built image at all today: it names the one registered image.
-    return buildRunInput(config, "run-conformance", "launch-secret", { dockerService: "disabled" })
-      .imageIdentifier;
+    const runs: MicrovmRunInput[] = [];
+    const adapter = new MicrovmRuntimeAdapter({
+      config,
+      api: {
+        runMicrovm: async (input) => {
+          runs.push(input);
+          // The request is what this file reads; the launch need go no further.
+          throw new Error("stop after RunMicrovm");
+        },
+        getMicrovm: async () => undefined,
+        terminateMicrovm: async () => "not-found",
+        createAuthToken: async () => "token",
+      },
+    });
+    // A MicroVM boots no container image, so this case builds with the MicroVM builder.
+    const built = await microvmBuilder().buildAndPublish({
+      spec: customisedBlueprint,
+      repository: "ignored",
+      tag: "ignored",
+      buildId: "job-conformance",
+    });
+    await adapter
+      .launch({ ...launchInput, publishedImage: built.publishedImage })
+      .catch(() => undefined);
+    const run = runs[0];
+    return {
+      published: built.publishedImage.digestReference,
+      booted:
+        run === undefined ? "" : microvmImageReference(run.imageIdentifier, run.imageVersion ?? ""),
+    };
   },
 };
 
-/**
- * Adapters that do not yet boot the image built from the blueprint. `it.fails` passes while the
- * assertion fails and FAILS once it holds, so the entry must be deleted with the fix.
- *
- * microvm: boots `SEALANT_MICROVM_IMAGE_ARN`, one hand-registered image, so a blueprint's OS
- * family, base image and packages do nothing there. Fixed by the MicroVM builder (design D4).
- */
-const NOT_YET_CONFORMING: ReadonlySet<RuntimeAdapterId> = new Set(["microvm"]);
-
 describe("runtime adapter conformance: a blueprint's image customisation", () => {
   it("the recipe planned for the build starts from the OS family and installs the package", () => {
-    // One planner serves every registered builder today. When a runtime gains a builder with a
-    // recipe of its own (MicroVM, D4), that builder's plan is asserted here as well.
+    // The Docker, Kubernetes and Cloudflare builders build this plan as it is. The MicroVM
+    // builder has a recipe of its own on top of it, held to the same two facts.
     const planned = planWorkspaceImageBuild({ blueprint: customisedBlueprint });
     expect(planned.osFamily).toBe("fedora");
     expect(planned.containerfile).toMatch(/^FROM fedora:/m);
     expect(planned.containerfile).toContain(PACKAGE);
+
+    const microvm = microvmBuilder().plan(customisedBlueprint);
+    expect(microvm.osFamily).toBe("fedora");
+    expect(microvm.containerfile).toMatch(/^FROM public\.ecr\.aws\/docker\/library\/fedora:/m);
+    expect(microvm.containerfile).toContain(PACKAGE);
   });
 
   it("has a case for every adapter id, and no case for an id that does not exist", () => {
@@ -168,9 +254,10 @@ describe("runtime adapter conformance: a blueprint's image customisation", () =>
   });
 
   for (const adapterId of runtimeAdapterIdSchema.options) {
-    const check = NOT_YET_CONFORMING.has(adapterId) ? it.fails : it;
-    check(`${adapterId} boots the image the build published`, async () => {
-      expect(await bootedImage[adapterId]()).toBe(publishedImage.digestReference);
+    it(`${adapterId} boots the image the build published`, async () => {
+      const { published, booted } = await bootedImage[adapterId]();
+      expect(published).not.toBe("");
+      expect(booted).toBe(published);
     });
   }
 });

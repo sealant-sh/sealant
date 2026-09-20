@@ -71,6 +71,7 @@ import {
 import type { MicrovmApi, MicrovmDescription, MicrovmRunInput } from "./api.js";
 import type { MicrovmRuntimeConfig } from "./config.js";
 import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
+import { parseMicrovmImageReference } from "./image-reference.js";
 
 export interface MicrovmRuntimeAdapterOptions {
   readonly config: MicrovmRuntimeConfig;
@@ -176,7 +177,7 @@ const wantsDockerService = (input: RuntimeAdapterSupportInput): boolean =>
 
 /** The support decision, pure. */
 export const supportForMicrovm = (
-  config: Pick<MicrovmRuntimeConfig, "dockerImage">,
+  config: Pick<MicrovmRuntimeConfig, "dockerService">,
   input: RuntimeAdapterSupportInput,
 ): RuntimeAdapterSupport => {
   const family = input.blueprint.target.runtime.family;
@@ -202,12 +203,14 @@ export const supportForMicrovm = (
         "The microvm adapter cannot disable outbound network access; egress is a property of the VM's network connector.",
     };
   }
-  if (wantsDockerService(input) && config.dockerImage === undefined) {
+  // Workspace-scoped Docker is a property of the image built for the blueprint: the builder adds
+  // the engine and creates that image, and only that image, with the elevated OS capability.
+  if (wantsDockerService(input) && !config.dockerService) {
     return {
       supported: false,
       reason: "unsupported-runtime-requirement",
       message:
-        "Workspace-scoped Docker needs a separate Docker-capable Lambda MicroVM image (SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION).",
+        "Workspace-scoped Docker (tooling.services.docker) is not enabled on this Lambda MicroVM deployment (SEALANT_MICROVM_DOCKER_ENABLED).",
     };
   }
   if (input.blueprint.runtime.ociRuntime === "runsc") {
@@ -261,15 +264,12 @@ export const buildRunInput = (
   config: MicrovmRuntimeConfig,
   runId: string,
   launchSecret: string,
-  options: { readonly dockerService: "disabled" | "required" },
+  options: {
+    readonly dockerService: "disabled" | "required";
+    /** The image built from the blueprint. A MicroVM boots that image and no other. */
+    readonly image: { readonly imageArn: string; readonly imageVersion: string };
+  },
 ): MicrovmRunInput => {
-  const dockerImage = options.dockerService === "required" ? config.dockerImage : undefined;
-  if (options.dockerService === "required" && dockerImage === undefined) {
-    throw createAdapterError(
-      "unsupported-runtime-requirement",
-      "A Docker-enabled MicroVM launch needs SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION.",
-    );
-  }
   const payload: RunHookPayload =
     options.dockerService === "required"
       ? {
@@ -287,10 +287,9 @@ export const buildRunInput = (
     );
   }
   return {
-    imageIdentifier: dockerImage?.arn ?? config.imageArn,
-    ...((dockerImage?.version ?? config.imageVersion) === undefined
-      ? {}
-      : { imageVersion: dockerImage?.version ?? config.imageVersion }),
+    imageIdentifier: options.image.imageArn,
+    // Pinned, so a workspace cannot drift to a version activated after its build.
+    imageVersion: options.image.imageVersion,
     executionRoleArn: config.executionRoleArn,
     ingressNetworkConnectors: [config.ingressNetworkConnector],
     ...(config.egressNetworkConnector === undefined
@@ -506,6 +505,14 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       );
     }
     const config = this.#config;
+    // Read before anything is staged: a launch that names no MicroVM image must cost nothing.
+    const image = parseMicrovmImageReference(parsed.publishedImage.digestReference);
+    if (image === undefined) {
+      throw createAdapterError(
+        "unsupported-runtime-requirement",
+        `The microvm adapter boots the MicroVM image built for the blueprint, and '${parsed.publishedImage.digestReference}' is not one. The build for this run was not made by the MicroVM image builder.`,
+      );
+    }
 
     // Launch material: the sealed secret env (pass-through, or the host-staged boot file), and
     // any staged dotfiles, all inlined for one authenticated push. Read BEFORE RunMicrovm so a
@@ -549,6 +556,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     const vm = await this.#api.runMicrovm(
       buildRunInput(config, runId, launchSecret, {
         dockerService: dockerService ? "required" : "disabled",
+        image,
       }),
     );
     const microvmId = vm.microvmId;

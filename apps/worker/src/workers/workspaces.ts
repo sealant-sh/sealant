@@ -24,7 +24,11 @@ import {
   K8sRuntimeAdapter,
   MicrovmEndpointTokens,
   MicrovmRuntimeAdapter,
+  MicrovmWorkspaceImageBuilder,
   createLiveMicrovmApi,
+  createLiveMicrovmImageApi,
+  loadMicrovmContextFiles,
+  createS3MicrovmArtifactStore,
   microvmRuntimeConfigFromEnv,
   parseDockerVolumeMappings,
   processWorkspaceBuildJob,
@@ -104,7 +108,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...(env.GITHUB_APP_ID === undefined ? {} : { appId: env.GITHUB_APP_ID }),
     ...(env.GITHUB_APP_PRIVATE_KEY === undefined ? {} : { privateKey: env.GITHUB_APP_PRIVATE_KEY }),
   });
-  // Lambda MicroVMs: registered only when the image ARN (and the rest of the contract) is set.
+  // Lambda MicroVMs: registered only when the build role (and the rest of the contract) is set.
   // The adapter and this worker's control connections share one endpoint-token cache.
   const microvmConfig = microvmRuntimeConfigFromEnv(env);
   const microvmApi =
@@ -121,15 +125,47 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           refreshMarginMs: microvmConfig.endpointTokenRefreshMarginMs,
           webSocketAuth: microvmConfig.endpointWebSocketAuth,
         });
-  const microvmAdapters =
-    microvmConfig === undefined || microvmApi === undefined || microvmTokens === undefined
+  // A MicroVM boots no container image, so it is registered with a builder of its own: AWS's
+  // managed image build, under a role that can read one artifacts prefix and nothing else. The
+  // recipe's files are checked here, so a release without them stops the worker at start.
+  const microvmContextFiles =
+    microvmConfig === undefined ? undefined : await loadMicrovmContextFiles();
+  const microvmRuntimes =
+    microvmConfig === undefined ||
+    microvmContextFiles === undefined ||
+    microvmApi === undefined ||
+    microvmTokens === undefined
       ? []
       : [
-          new MicrovmRuntimeAdapter({
-            config: microvmConfig,
-            api: microvmApi,
-            tokens: microvmTokens,
-          }),
+          {
+            adapter: new MicrovmRuntimeAdapter({
+              config: microvmConfig,
+              api: microvmApi,
+              tokens: microvmTokens,
+            }),
+            imageBuilder: new MicrovmWorkspaceImageBuilder({
+              api: createLiveMicrovmImageApi({ region: microvmConfig.region }),
+              artifacts: createS3MicrovmArtifactStore({
+                region: microvmConfig.region,
+                bucket: microvmConfig.build.artifactBucket,
+              }),
+              config: {
+                baseImageArn: microvmConfig.build.baseImageArn,
+                buildRoleArn: microvmConfig.build.roleArn,
+                artifactPrefix: microvmConfig.build.artifactPrefix,
+                memoryMiB: microvmConfig.build.memoryMiB,
+                agentPort: microvmConfig.agentPort,
+                logGroup: microvmConfig.build.logGroup,
+                imageNamePrefix: microvmConfig.build.imageNamePrefix,
+                dockerService: microvmConfig.dockerService,
+                maxImages: microvmConfig.build.maxImages,
+                pollIntervalMs: microvmConfig.build.pollIntervalMs,
+                buildTimeoutMs: microvmConfig.build.timeoutMs,
+              },
+              readContextFile: microvmContextFiles.read,
+              contextDigest: microvmContextFiles.digest,
+            }),
+          },
         ];
 
   // How this worker reaches each runtime family: nothing extra for Docker, client mTLS for
@@ -210,23 +246,23 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ? []
       : [new CloudflareRuntimeAdapter({ config: cloudflareConfig })];
 
-  const runtimeAdapters = [
-    ...dockerAdapters,
-    ...kubernetesAdapters,
-    ...cloudflareAdapters,
-    ...microvmAdapters,
-  ];
+  const containerAdapters = [...dockerAdapters, ...kubernetesAdapters, ...cloudflareAdapters];
 
   // Every runtime is registered with the builder of the image it boots
-  // (docs/workspace-image-builders-design.md, D1). Today that is one builder for all of them:
-  // the BuildKit Job where a build namespace is configured, the host's Docker otherwise. MicroVM
-  // still boots its registered image and ignores what is built, which the conformance test
-  // records as an expected failure until the MicroVM builder lands.
-  const workerImageBuilder = imageBuilder ?? createDockerWorkspaceImageBuilder({ registryClient });
-  const runtimes = runtimeAdapters.map((adapter) => ({
-    adapter,
-    imageBuilder: workerImageBuilder,
-  }));
+  // (docs/workspace-image-builders-design.md, D1). The container runtimes share one: the BuildKit
+  // Job where a build namespace is configured, the host's Docker otherwise. It is made only where
+  // one of them is registered, so a MicroVM-only worker needs no Docker and no registry to build.
+  const containerImageBuilder =
+    containerAdapters.length === 0
+      ? undefined
+      : (imageBuilder ?? createDockerWorkspaceImageBuilder({ registryClient }));
+  const runtimes = [
+    ...(containerImageBuilder === undefined
+      ? []
+      : containerAdapters.map((adapter) => ({ adapter, imageBuilder: containerImageBuilder }))),
+    ...microvmRuntimes,
+  ];
+  const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
 
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the

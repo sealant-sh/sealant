@@ -4,10 +4,11 @@
  *
  * Validated once from the environment; nothing here touches AWS. Docker, Kubernetes and
  * Cloudflare deployments never construct this — the adapter is only built when
- * `SEALANT_MICROVM_IMAGE_ARN` is set. Sizing is NOT here on purpose: `RunMicrovm` takes no
- * vCPU/memory/disk — they are properties of the image version (`resources.minimumMemoryInMiB`,
- * vCPU = memory / 2 GiB, disk by tier: 16 GiB at 4 GiB), set by `microvm-image/build-image.sh`.
- * The POC defaults (4 GiB → 2 vCPU / 16 GiB) live there.
+ * `SEALANT_MICROVM_BUILD_ROLE_ARN` is set. There is no image to configure: every workspace boots
+ * the image built from its own blueprint (docs/workspace-image-builders-design.md), so what is
+ * configured is how those images are built. `RunMicrovm` takes no vCPU/memory/disk — they are
+ * properties of the image (`resources.minimumMemoryInMiB`, vCPU = memory / 2 GiB, disk by tier:
+ * 16 GiB at 4 GiB), so sizing is a build setting: `SEALANT_MICROVM_MEMORY_MIB`.
  *
  * Sources (read 2026-09-13): https://docs.aws.amazon.com/lambda/latest/microvm-api/API_RunMicrovm.html
  * (maximumDurationInSeconds 1–28800), https://docs.aws.amazon.com/lambda/latest/microvm-api/API_CreateMicrovmAuthToken.html
@@ -27,13 +28,18 @@ export const MICROVM_HOOK_TIMEOUT_CAP_SECONDS = 60;
 /** The longest-lived endpoint token the platform mints. */
 export const MICROVM_ENDPOINT_TOKEN_MAX_MINUTES = 60;
 
-const imageArnSchema = z
+/** The managed base the platform boots under a recipe's root filesystem, or an account's own. */
+const baseImageArnSchema = z
   .string()
   .trim()
   .regex(
-    /^arn:aws[a-z-]*:lambda:[a-z0-9-]+:\d{12}:microvm-image:[A-Za-z0-9_-]+$/,
-    "must be a MicroVM image ARN (arn:aws:lambda:<region>:<account>:microvm-image:<name>)",
+    /^arn:aws[a-z-]*:lambda:[a-z0-9-]+:(\d{12}|aws):microvm-image:[A-Za-z0-9_-]+$/,
+    "must be a MicroVM image ARN (arn:aws:lambda:<region>:<account or aws>:microvm-image:<name>)",
   );
+
+/** The only managed base there is (observed 2026-09-20). A recipe's own `FROM` is free. */
+export const managedBaseImageArn = (region: string): string =>
+  `arn:aws:lambda:${region}:aws:microvm-image:al2023-1`;
 
 const roleArnSchema = z
   .string()
@@ -57,17 +63,49 @@ export const microvmRuntimeConfigSchema = z
       .string()
       .trim()
       .regex(/^[a-z]{2}(-[a-z]+)+-\d$/, "must be an AWS region"),
-    imageArn: imageArnSchema,
-    /** Defaults to the image's latest ACTIVE version. */
-    imageVersion: z.string().trim().min(1).optional(),
-    /** Separate elevated image selected only for workspaces that require guest-local Docker. */
-    dockerImage: z
-      .strictObject({
-        arn: imageArnSchema,
-        /** Required so the elevated image cannot drift to a newly activated version. */
-        version: z.string().trim().min(1),
-      })
-      .optional(),
+    /** How workspace images are built. Nothing here is a tenant's to choose. */
+    build: z.strictObject({
+      /**
+       * The role the managed image build runs recipe steps under. A step can obtain its
+       * credentials, so it holds `s3:GetObject` on the artifacts prefix and the two log actions,
+       * and nothing else.
+       */
+      roleArn: roleArnSchema,
+      artifactBucket: z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "must be an S3 bucket name"),
+      /** Key prefix for build contexts, without a leading or trailing slash. */
+      artifactPrefix: z
+        .string()
+        .trim()
+        .regex(
+          /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/,
+          "must be a key prefix without outer slashes",
+        ),
+      baseImageArn: baseImageArnSchema,
+      /**
+       * Every image is named `<prefix>-<plan hash>`, and the cap and retention count and sweep the
+       * names with this prefix. Two control planes that share an AWS account take different ones.
+       */
+      imageNamePrefix: z
+        .string()
+        .trim()
+        .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, "must be 1 to 32 of [A-Za-z0-9_-]"),
+      /** `minimumMemoryInMiB`; vCPU and disk follow from it. */
+      memoryMiB: z.number().int().min(512),
+      /** Past this many images of its own the builder refuses to create another. */
+      maxImages: z.number().int().min(1),
+      /** CloudWatch log group for build logs; build logging is disabled when unset. */
+      logGroup: z.string().trim().min(1).optional(),
+      timeoutMs: z.number().int().positive(),
+      pollIntervalMs: z.number().int().positive(),
+    }),
+    /**
+     * Whether this install serves `tooling.services.docker`. Such a workspace's image carries the
+     * engine and is created with the image-level `ALL` OS capability: an operator decision.
+     */
+    dockerService: z.boolean(),
     executionRoleArn: roleArnSchema,
     egressNetworkConnector: connectorArnSchema.optional(),
     ingressNetworkConnector: connectorArnSchema,
@@ -107,19 +145,24 @@ export const microvmRuntimeConfigSchema = z
       message: "the endpoint token refresh margin must be shorter than the token TTL",
       path: ["endpointTokenRefreshMarginMs"],
     },
-  )
-  .refine(
-    (config) => config.dockerImage === undefined || config.dockerImage.arn !== config.imageArn,
-    {
-      message: "the Docker-capable image ARN must differ from the default image ARN",
-      path: ["dockerImage", "arn"],
-    },
   );
 
 export type MicrovmRuntimeConfig = z.infer<typeof microvmRuntimeConfigSchema>;
 
 export interface MicrovmRuntimeEnvLike {
   readonly SEALANT_MICROVM_REGION?: string | undefined;
+  readonly SEALANT_MICROVM_BUILD_ROLE_ARN?: string | undefined;
+  readonly SEALANT_MICROVM_ARTIFACT_BUCKET?: string | undefined;
+  readonly SEALANT_MICROVM_ARTIFACT_PREFIX?: string | undefined;
+  readonly SEALANT_MICROVM_BASE_IMAGE_ARN?: string | undefined;
+  readonly SEALANT_MICROVM_IMAGE_NAME_PREFIX?: string | undefined;
+  readonly SEALANT_MICROVM_MEMORY_MIB?: number | undefined;
+  readonly SEALANT_MICROVM_MAX_IMAGES?: number | undefined;
+  readonly SEALANT_MICROVM_BUILD_LOG_GROUP?: string | undefined;
+  readonly SEALANT_MICROVM_BUILD_TIMEOUT_MS?: number | undefined;
+  readonly SEALANT_MICROVM_BUILD_POLL_INTERVAL_MS?: number | undefined;
+  readonly SEALANT_MICROVM_DOCKER_ENABLED?: boolean | undefined;
+  /** Retired: one hand-registered image for every workspace. Setting any of them is an error. */
   readonly SEALANT_MICROVM_IMAGE_ARN?: string | undefined;
   readonly SEALANT_MICROVM_IMAGE_VERSION?: string | undefined;
   readonly SEALANT_MICROVM_DOCKER_IMAGE_ARN?: string | undefined;
@@ -148,47 +191,48 @@ export class MicrovmRuntimeConfigError extends Error {
 export const microvmRuntimeConfigFromEnv = (
   env: MicrovmRuntimeEnvLike,
 ): MicrovmRuntimeConfig | undefined => {
-  if (env.SEALANT_MICROVM_IMAGE_ARN === undefined) {
-    if (
-      env.SEALANT_MICROVM_DOCKER_IMAGE_ARN !== undefined ||
-      env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION !== undefined
-    ) {
-      throw new MicrovmRuntimeConfigError(
-        "SEALANT_MICROVM_IMAGE_ARN must be set when either Docker-capable MicroVM image variable is configured.",
-      );
-    }
+  const retired = (
+    [
+      "SEALANT_MICROVM_IMAGE_ARN",
+      "SEALANT_MICROVM_IMAGE_VERSION",
+      "SEALANT_MICROVM_DOCKER_IMAGE_ARN",
+      "SEALANT_MICROVM_DOCKER_IMAGE_VERSION",
+    ] as const
+  ).filter((key) => env[key] !== undefined);
+  if (retired.length > 0) {
+    throw new MicrovmRuntimeConfigError(
+      `${retired.join(", ")} ${retired.length === 1 ? "is" : "are"} retired. A MicroVM workspace no longer boots one registered image: it boots the image built from its blueprint. Remove ${retired.length === 1 ? "it" : "them"} and set SEALANT_MICROVM_BUILD_ROLE_ARN and SEALANT_MICROVM_ARTIFACT_BUCKET (docs/workspace-image-builders-design.md).`,
+    );
+  }
+  if (env.SEALANT_MICROVM_BUILD_ROLE_ARN === undefined) {
     return undefined;
   }
   const missing = (key: string): never => {
     throw new MicrovmRuntimeConfigError(
-      `${key} must be set when SEALANT_MICROVM_IMAGE_ARN is configured.`,
+      `${key} must be set when SEALANT_MICROVM_BUILD_ROLE_ARN is configured.`,
     );
   };
   const region = env.SEALANT_MICROVM_REGION ?? missing("SEALANT_MICROVM_REGION");
-  if (
-    env.SEALANT_MICROVM_DOCKER_IMAGE_ARN === undefined &&
-    env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION !== undefined
-  ) {
-    throw new MicrovmRuntimeConfigError(
-      "SEALANT_MICROVM_DOCKER_IMAGE_ARN must be set when SEALANT_MICROVM_DOCKER_IMAGE_VERSION is configured.",
-    );
-  }
   const candidate = {
     region,
-    imageArn: env.SEALANT_MICROVM_IMAGE_ARN,
-    ...(env.SEALANT_MICROVM_IMAGE_VERSION === undefined
-      ? {}
-      : { imageVersion: env.SEALANT_MICROVM_IMAGE_VERSION }),
-    ...(env.SEALANT_MICROVM_DOCKER_IMAGE_ARN === undefined
-      ? {}
-      : {
-          dockerImage: {
-            arn: env.SEALANT_MICROVM_DOCKER_IMAGE_ARN,
-            version:
-              env.SEALANT_MICROVM_DOCKER_IMAGE_VERSION ??
-              missing("SEALANT_MICROVM_DOCKER_IMAGE_VERSION"),
-          },
-        }),
+    build: {
+      roleArn: env.SEALANT_MICROVM_BUILD_ROLE_ARN,
+      artifactBucket:
+        env.SEALANT_MICROVM_ARTIFACT_BUCKET ?? missing("SEALANT_MICROVM_ARTIFACT_BUCKET"),
+      artifactPrefix: env.SEALANT_MICROVM_ARTIFACT_PREFIX ?? "sealant/workspace-images",
+      baseImageArn: env.SEALANT_MICROVM_BASE_IMAGE_ARN ?? managedBaseImageArn(region),
+      imageNamePrefix: env.SEALANT_MICROVM_IMAGE_NAME_PREFIX ?? "sealant-ws",
+      // 4 GiB: 2 vCPU and a 16 GiB disk on the platform's tiers.
+      memoryMiB: env.SEALANT_MICROVM_MEMORY_MIB ?? 4096,
+      maxImages: env.SEALANT_MICROVM_MAX_IMAGES ?? 50,
+      ...(env.SEALANT_MICROVM_BUILD_LOG_GROUP === undefined
+        ? {}
+        : { logGroup: env.SEALANT_MICROVM_BUILD_LOG_GROUP }),
+      // A managed build took 144 to 205 s when measured; thirty minutes is its own script's bound.
+      timeoutMs: env.SEALANT_MICROVM_BUILD_TIMEOUT_MS ?? 1_800_000,
+      pollIntervalMs: env.SEALANT_MICROVM_BUILD_POLL_INTERVAL_MS ?? 10_000,
+    },
+    dockerService: env.SEALANT_MICROVM_DOCKER_ENABLED ?? false,
     executionRoleArn: env.SEALANT_MICROVM_EXEC_ROLE_ARN ?? missing("SEALANT_MICROVM_EXEC_ROLE_ARN"),
     ...(env.SEALANT_MICROVM_EGRESS_CONNECTOR === undefined
       ? {}

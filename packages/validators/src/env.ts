@@ -349,12 +349,40 @@ export const defaultRuntimeAdapterEnvSchema = z.object({
 export const microvmRuntimeEnvSchema = z.object({
   /** AWS region of the MicroVMs; setting it lets a process mint endpoint tokens. */
   SEALANT_MICROVM_REGION: z.string().trim().min(1).optional(),
-  /** MicroVM image ARN (worker); setting it enables the adapter and makes the rest required. */
+  /**
+   * The role AWS's managed image build runs a blueprint's recipe under (worker). Setting it
+   * enables the adapter and makes the rest required. A recipe step can obtain this role's
+   * credentials, so it holds `s3:GetObject` on the artifacts prefix and the two log actions only.
+   */
+  SEALANT_MICROVM_BUILD_ROLE_ARN: z.string().trim().min(1).optional(),
+  /** Bucket the worker uploads build contexts to; each is deleted when its build ends. */
+  SEALANT_MICROVM_ARTIFACT_BUCKET: z.string().trim().min(1).optional(),
+  /** Key prefix for build contexts, the only one the build role can read. */
+  SEALANT_MICROVM_ARTIFACT_PREFIX: z.string().trim().min(1).optional(),
+  /** The managed base booted under a recipe's root filesystem; the region's `al2023-1` when unset. */
+  SEALANT_MICROVM_BASE_IMAGE_ARN: z.string().trim().min(1).optional(),
+  /** Names this control plane's images; two that share an AWS account take different ones. */
+  SEALANT_MICROVM_IMAGE_NAME_PREFIX: z.string().trim().min(1).optional(),
+  /** `minimumMemoryInMiB` of every built image; vCPU and disk follow from it. */
+  SEALANT_MICROVM_MEMORY_MIB: z.coerce.number().int().positive().optional(),
+  /** Past this many workspace images the builder refuses to create another. */
+  SEALANT_MICROVM_MAX_IMAGES: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_BUILD_LOG_GROUP: z.string().trim().min(1).optional(),
+  SEALANT_MICROVM_BUILD_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  SEALANT_MICROVM_BUILD_POLL_INTERVAL_MS: z.coerce.number().int().positive().optional(),
+  /**
+   * Whether a MicroVM install serves `tooling.services.docker`. Such a workspace's image is
+   * created with the image-level `ALL` OS capability, an operator decision. The worker reads it
+   * to build that image; the API reads it for the create-time refusal. Set the SAME value on both.
+   */
+  SEALANT_MICROVM_DOCKER_ENABLED: z.stringbool().or(z.boolean()).default(false),
+  /**
+   * Retired: one hand-registered image booted for every workspace. Kept in the grammar so a
+   * deployment that still sets one is told to remove it instead of having it silently ignored.
+   */
   SEALANT_MICROVM_IMAGE_ARN: z.string().trim().min(1).optional(),
   SEALANT_MICROVM_IMAGE_VERSION: z.string().trim().min(1).optional(),
-  /** Separate VM-contained Docker image; API and worker require it with base ARN + pinned version. */
   SEALANT_MICROVM_DOCKER_IMAGE_ARN: z.string().trim().min(1).optional(),
-  /** Required with the elevated Docker image ARN, identically on API and worker. */
   SEALANT_MICROVM_DOCKER_IMAGE_VERSION: z.string().trim().min(1).optional(),
   /** Execution role every VM runs under (worker). */
   SEALANT_MICROVM_EXEC_ROLE_ARN: z.string().trim().min(1).optional(),
@@ -374,42 +402,23 @@ export const microvmRuntimeEnvSchema = z.object({
   SEALANT_MICROVM_WS_AUTH: z.enum(["header", "subprotocol"]).optional(),
 });
 
-const addMicrovmDockerImageIssues = (
-  input: {
-    readonly SEALANT_MICROVM_IMAGE_ARN?: string | undefined;
-    readonly SEALANT_MICROVM_DOCKER_IMAGE_ARN?: string | undefined;
-    readonly SEALANT_MICROVM_DOCKER_IMAGE_VERSION?: string | undefined;
-  },
+const RETIRED_MICROVM_IMAGE_KEYS = [
+  "SEALANT_MICROVM_IMAGE_ARN",
+  "SEALANT_MICROVM_IMAGE_VERSION",
+  "SEALANT_MICROVM_DOCKER_IMAGE_ARN",
+  "SEALANT_MICROVM_DOCKER_IMAGE_VERSION",
+] as const;
+
+const addRetiredMicrovmImageIssues = (
+  input: Readonly<Partial<Record<(typeof RETIRED_MICROVM_IMAGE_KEYS)[number], string | undefined>>>,
   ctx: z.RefinementCtx,
 ): void => {
-  const baseArn = input.SEALANT_MICROVM_IMAGE_ARN;
-  const dockerArn = input.SEALANT_MICROVM_DOCKER_IMAGE_ARN;
-  const dockerVersion = input.SEALANT_MICROVM_DOCKER_IMAGE_VERSION;
-  if ((dockerArn !== undefined || dockerVersion !== undefined) && baseArn === undefined) {
+  for (const key of RETIRED_MICROVM_IMAGE_KEYS) {
+    if (input[key] === undefined) continue;
     ctx.addIssue({
       code: "custom",
-      message:
-        "SEALANT_MICROVM_IMAGE_ARN is required when a Docker-capable MicroVM image is configured.",
-      path: ["SEALANT_MICROVM_IMAGE_ARN"],
-    });
-  }
-  if ((dockerArn === undefined) !== (dockerVersion === undefined)) {
-    ctx.addIssue({
-      code: "custom",
-      message:
-        "SEALANT_MICROVM_DOCKER_IMAGE_ARN and SEALANT_MICROVM_DOCKER_IMAGE_VERSION must be provided together.",
-      path: [
-        dockerArn === undefined
-          ? "SEALANT_MICROVM_DOCKER_IMAGE_ARN"
-          : "SEALANT_MICROVM_DOCKER_IMAGE_VERSION",
-      ],
-    });
-  }
-  if (baseArn !== undefined && dockerArn === baseArn) {
-    ctx.addIssue({
-      code: "custom",
-      message: "SEALANT_MICROVM_DOCKER_IMAGE_ARN must differ from SEALANT_MICROVM_IMAGE_ARN.",
-      path: ["SEALANT_MICROVM_DOCKER_IMAGE_ARN"],
+      message: `${key} is retired: a MicroVM workspace boots the image built from its blueprint, not one registered image. Remove it; the worker takes SEALANT_MICROVM_BUILD_ROLE_ARN and SEALANT_MICROVM_ARTIFACT_BUCKET, and Docker is SEALANT_MICROVM_DOCKER_ENABLED.`,
+      path: [key],
     });
   }
 };
@@ -426,7 +435,7 @@ export const appServerEnvSchema = databaseEnvSchema
 
 export const appEnvSchema = appServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
-  addMicrovmDockerImageIssues(input, ctx);
+  addRetiredMicrovmImageIssues(input, ctx);
   addRegistryCredentialsIssue(input.REGISTRY_USERNAME, input.REGISTRY_PASSWORD, ctx);
   addRegistryConnectionIssue(input.REGISTRY_BASE_URL, input.REGISTRY_PUSH_REGISTRY, ctx);
   addCredentialsKeyIssue(input.SEALANT_CREDENTIALS_KEY, ctx);
@@ -613,16 +622,16 @@ export const workerServerEnvSchema = databaseEnvSchema
 
 export const workerEnvSchema = workerServerEnvSchema.superRefine((input, ctx) => {
   addControlClientTlsIssue(input, ctx);
-  addMicrovmDockerImageIssues(input, ctx);
+  addRetiredMicrovmImageIssues(input, ctx);
   if (
     input.DEFAULT_RUNTIME_ADAPTER === "microvm" &&
-    input.SEALANT_MICROVM_IMAGE_ARN === undefined
+    input.SEALANT_MICROVM_BUILD_ROLE_ARN === undefined
   ) {
     ctx.addIssue({
       code: "custom",
       message:
-        "DEFAULT_RUNTIME_ADAPTER=microvm requires SEALANT_MICROVM_IMAGE_ARN (and the rest of the SEALANT_MICROVM_* contract).",
-      path: ["SEALANT_MICROVM_IMAGE_ARN"],
+        "DEFAULT_RUNTIME_ADAPTER=microvm requires SEALANT_MICROVM_BUILD_ROLE_ARN (and the rest of the SEALANT_MICROVM_* contract).",
+      path: ["SEALANT_MICROVM_BUILD_ROLE_ARN"],
     });
   }
   if (
