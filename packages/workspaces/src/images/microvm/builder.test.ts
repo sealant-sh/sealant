@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import {
+  microvmImageReference,
+  parseMicrovmImageReference,
+} from "../../runtime/microvm/image-reference.js";
+import {
   MICROVM_IMAGE_MANAGED_TAG,
   MicrovmImageBuildError,
   MicrovmWorkspaceImageBuilder,
-  microvmImageReference,
-  parseMicrovmImageReference,
   type MicrovmImageBuildConfig,
 } from "./builder.js";
 import type {
@@ -112,7 +114,7 @@ const builderFor = (
     api: aws.api,
     artifacts: aws.artifacts,
     config: { ...config, ...overrides },
-    readAgentFile: async (name) => Buffer.from(`// ${name}\n`),
+    readContextFile: async (name) => Buffer.from(`// ${name}\n`),
     sleep: async () => undefined,
     uniqueId: () => `build-${String((id += 1))}`,
   });
@@ -168,7 +170,7 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       api: aws.api,
       artifacts,
       config,
-      readAgentFile: async (name) => Buffer.from(`// trusted ${name}\n`),
+      readContextFile: async (name) => Buffer.from(`// trusted ${name}\n`),
       sleep: async () => undefined,
     });
 
@@ -314,7 +316,7 @@ describe("MicrovmWorkspaceImageBuilder", () => {
       api: aws.api,
       artifacts: aws.artifacts,
       config,
-      readAgentFile: async () => Buffer.alloc(0),
+      readContextFile: async () => Buffer.alloc(0),
       sleep: async () => {
         clock += 400;
       },

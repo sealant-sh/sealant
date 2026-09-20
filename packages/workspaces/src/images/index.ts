@@ -42,8 +42,6 @@ export {
   MICROVM_IMAGE_PLAN_TAG,
   MicrovmImageBuildError,
   MicrovmWorkspaceImageBuilder,
-  microvmImageReference,
-  parseMicrovmImageReference,
   type MicrovmImageBuildConfig,
   type MicrovmWorkspaceImageBuilderOptions,
 } from "./microvm/builder.js";

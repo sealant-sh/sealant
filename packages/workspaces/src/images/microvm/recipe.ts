@@ -20,6 +20,26 @@ export const MICROVM_RECIPE_VERSION = "1";
 
 /** Files the recipe copies in, relative to the build context. The builder supplies their bytes. */
 export const MICROVM_AGENT_FILES = ["agent.mjs", "docker-service.mjs"] as const;
+/** Copied in as well when the blueprint asks for the workspace's own Docker. */
+export const MICROVM_DOCKER_FILES = ["download-docker.sh"] as const;
+export type MicrovmContextFile =
+  | (typeof MICROVM_AGENT_FILES)[number]
+  | (typeof MICROVM_DOCKER_FILES)[number];
+
+/**
+ * What guest-local Docker needs beside the engine itself: network namespaces and the tools
+ * `download-docker.sh` runs with. Named per package manager, since the recipe keeps the
+ * blueprint's distro. A family without an entry cannot carry the Docker service on a MicroVM.
+ */
+const DOCKER_SERVICE_PACKAGES: Readonly<Record<string, string>> = {
+  fedora: "dnf -y install iproute iptables-nft kmod curl tar && dnf clean all",
+  arch: "pacman -Sy --noconfirm --needed iproute2 iptables-nft kmod curl tar",
+  ubuntu:
+    "apt-get update && apt-get install -y --no-install-recommends iproute2 iptables kmod curl tar ca-certificates && rm -rf /var/lib/apt/lists/*",
+};
+
+export const microvmDockerServiceFamilies = (): readonly string[] =>
+  Object.keys(DOCKER_SERVICE_PACKAGES);
 
 const DOCKER_HUB_LIBRARY_MIRROR = "public.ecr.aws/docker/library/";
 
@@ -41,6 +61,11 @@ export interface MicrovmRecipeSettings {
   readonly agentPort: number;
   /** `minimumMemoryInMiB`: vCPU and disk follow from it on the platform. */
   readonly memoryMiB: number;
+  /**
+   * The blueprint asks for a Docker daemon of its own. The image then carries the engine and is
+   * created with the image-level `ALL` OS capability, which only such a workspace receives.
+   */
+  readonly dockerService: boolean;
 }
 
 export interface MicrovmRecipe {
@@ -66,7 +91,25 @@ export const microvmRecipe = (
       "The planned Containerfile has no FROM or ENTRYPOINT line to build a MicroVM recipe on.",
     );
   }
+  const dockerPackages = DOCKER_SERVICE_PACKAGES[planned.osFamily];
+  if (settings.dockerService && dockerPackages === undefined) {
+    throw new Error(
+      `Workspace-scoped Docker on a MicroVM needs one of the ${microvmDockerServiceFamilies().join(", ")} OS families; this blueprint resolves to ${planned.osFamily}.`,
+    );
+  }
+  const dockerLayer =
+    !settings.dockerService || dockerPackages === undefined
+      ? []
+      : [
+          "# Guest-local Docker: the engine, pinned by checksum, and what its networking needs.",
+          `RUN ${dockerPackages}`,
+          "COPY --chmod=755 download-docker.sh /opt/sealant/download-docker.sh",
+          "RUN /opt/sealant/download-docker.sh && rm /opt/sealant/download-docker.sh",
+          "ENV SEALANT_MICROVM_DOCKER_CAPABLE=1",
+          "RUN mkdir -p /run/docker /var/lib/sealant/docker && chmod 0700 /run/docker /var/lib/sealant/docker",
+        ];
   const agentLayer = [
+    ...dockerLayer,
     "# The agent needs node. A distro family installs it with the harness; a custom base image",
     "# has to bring it, and says so here rather than at the first launch.",
     "RUN node --version",

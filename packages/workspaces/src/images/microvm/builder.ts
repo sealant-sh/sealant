@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
 
 import { planWorkspaceImageBuild, type PlannedWorkspaceImageBuild } from "../../buildkit/index.js";
+import { microvmImageReference } from "../../runtime/microvm/image-reference.js";
 import type { PublishedImage } from "../../runtime/runtime-adapter.js";
 import type {
   BuildAndPublishInput,
@@ -31,8 +32,10 @@ import type {
 import {
   isMicrovmImageNameOf,
   MICROVM_AGENT_FILES,
+  MICROVM_DOCKER_FILES,
   microvmImageName,
   microvmRecipe,
+  type MicrovmContextFile,
 } from "./recipe.js";
 import { zipStored, type ZipEntry } from "./zip.js";
 
@@ -69,11 +72,11 @@ export interface MicrovmWorkspaceImageBuilderOptions {
   readonly artifacts: MicrovmArtifactStore;
   readonly config: MicrovmImageBuildConfig;
   /**
-   * The agent files the recipe copies in, read from where the release put them on the worker.
-   * Never read back from the artifacts bucket: a build role can write nothing there, and this
-   * keeps it that way even if one ever could.
+   * The files the recipe copies in, read from where the release put them on the worker. Never
+   * read back from the artifacts bucket: a build role can write nothing there, and this keeps it
+   * that way even if one ever could.
    */
-  readonly readAgentFile: (name: (typeof MICROVM_AGENT_FILES)[number]) => Promise<Uint8Array>;
+  readonly readContextFile: (name: MicrovmContextFile) => Promise<Uint8Array>;
   /** Test seams. */
   readonly planWorkspaceSpec?: (spec: NewWorkspace) => PlannedWorkspaceImageBuild;
   readonly sleep?: (milliseconds: number) => Promise<void>;
@@ -97,23 +100,6 @@ const IN_PROGRESS: ReadonlySet<MicrovmImageDescription["state"]> = new Set([
   "DELETING",
 ]);
 
-/** `<image ARN>:<version>`: what a launch needs. An ARN has colons and a version has none. */
-export const microvmImageReference = (imageArn: string, version: string): string =>
-  `${imageArn}:${version}`;
-
-export const parseMicrovmImageReference = (
-  reference: string,
-): { readonly imageArn: string; readonly imageVersion: string } | undefined => {
-  const at = reference.lastIndexOf(":");
-  const imageArn = reference.slice(0, at);
-  const imageVersion = reference.slice(at + 1);
-  return at > 0 &&
-    /^arn:aws[a-z-]*:lambda:[^:]+:\d{12}:microvm-image:[A-Za-z0-9_-]+$/.test(imageArn) &&
-    imageVersion !== ""
-    ? { imageArn, imageVersion }
-    : undefined;
-};
-
 export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
   // AWS's managed image build: recipe steps run on the platform, under the build role.
   readonly isolation = "isolated" as const;
@@ -132,6 +118,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     const recipe = microvmRecipe(planned, {
       agentPort: this.#options.config.agentPort,
       memoryMiB: this.#options.config.memoryMiB,
+      dockerService: wantsDockerService(spec),
     });
     return { ...planned, containerfile: recipe.containerfile, planHash: recipe.planHash };
   };
@@ -150,7 +137,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
       image = await this.#settled(name);
     }
     if (image === undefined) {
-      image = await this.#build(name, planned);
+      image = await this.#build(name, planned, wantsDockerService(input.spec));
       built = true;
     }
 
@@ -207,6 +194,7 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
   async #build(
     name: string,
     planned: PlannedWorkspaceImageBuild,
+    dockerService: boolean,
   ): Promise<MicrovmImageDescription> {
     const { api, artifacts, config } = this.#options;
     // By name: a listing carries no tags.
@@ -223,8 +211,8 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     const entries: ZipEntry[] = [
       { name: "Dockerfile", content: Buffer.from(planned.containerfile, "utf8") },
     ];
-    for (const file of MICROVM_AGENT_FILES) {
-      entries.push({ name: file, content: await this.#options.readAgentFile(file) });
+    for (const file of [...MICROVM_AGENT_FILES, ...(dockerService ? MICROVM_DOCKER_FILES : [])]) {
+      entries.push({ name: file, content: await this.#options.readContextFile(file) });
     }
     // An unguessable key: a build role cannot list the bucket, so it cannot find another build's.
     const key = `${config.artifactPrefix}/${(this.#options.uniqueId ?? randomUUID)()}.zip`;
@@ -239,7 +227,8 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
         memoryMiB: config.memoryMiB,
         agentPort: config.agentPort,
         logGroup: config.logGroup,
-        allOsCapabilities: false,
+        // Only an image that carries guest-local Docker is given the elevated capability.
+        allOsCapabilities: dockerService,
         tags: {
           [MICROVM_IMAGE_MANAGED_TAG]: "true",
           [MICROVM_IMAGE_PLAN_TAG]: planned.planHash,
@@ -262,6 +251,9 @@ export class MicrovmWorkspaceImageBuilder implements WorkspaceImageBuilder {
     }
   }
 }
+
+const wantsDockerService = (spec: NewWorkspace): boolean =>
+  spec.tooling.services?.docker?.enabled === true;
 
 const defaultSleep = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));

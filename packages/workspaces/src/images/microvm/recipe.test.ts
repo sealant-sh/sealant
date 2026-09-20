@@ -4,7 +4,7 @@ import { planWorkspaceImageBuild } from "../../buildkit/index.js";
 import { cases } from "../../runtime/docker-runtime-adapter.golden-fixture.js";
 import { microvmImageName, microvmRecipe, mirroredBaseImage } from "./recipe.js";
 
-const settings = { agentPort: 8080, memoryMiB: 4096 };
+const settings = { agentPort: 8080, memoryMiB: 4096, dockerService: false };
 
 const plannedFor = (family: "fedora" | "arch") =>
   planWorkspaceImageBuild({
@@ -76,6 +76,31 @@ describe("microvmRecipe", () => {
     expect(microvmRecipe(planned, { ...settings, memoryMiB: 8192 }).planHash).not.toBe(base);
     expect(microvmRecipe(planned, { ...settings, agentPort: 9090 }).planHash).not.toBe(base);
     expect(microvmRecipe(plannedFor("arch"), settings).planHash).not.toBe(base);
+  });
+
+  it("adds guest-local Docker only when asked, with the distro's own package manager", () => {
+    const plain = microvmRecipe(plannedFor("fedora"), settings);
+    expect(plain.containerfile).not.toContain("download-docker.sh");
+
+    const fedora = microvmRecipe(plannedFor("fedora"), { ...settings, dockerService: true });
+    expect(fedora.containerfile).toContain("RUN dnf -y install iproute iptables-nft kmod");
+    expect(fedora.containerfile).toContain("RUN /opt/sealant/download-docker.sh");
+    expect(fedora.containerfile).toContain("ENV SEALANT_MICROVM_DOCKER_CAPABLE=1");
+    // A different image, so a workspace without Docker never boots the elevated one.
+    expect(fedora.planHash).not.toBe(plain.planHash);
+
+    expect(
+      microvmRecipe(plannedFor("arch"), { ...settings, dockerService: true }).containerfile,
+    ).toContain("RUN pacman -Sy --noconfirm --needed iproute2");
+  });
+
+  it("refuses guest-local Docker on a family it cannot install it for, naming the ones it can", () => {
+    expect(() =>
+      microvmRecipe(
+        { ...plannedFor("fedora"), osFamily: "nix" },
+        { ...settings, dockerService: true },
+      ),
+    ).toThrow(/needs one of the fedora, arch, ubuntu OS families; this blueprint resolves to nix/);
   });
 
   it("refuses a Containerfile it cannot build on", () => {
