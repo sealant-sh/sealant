@@ -13,7 +13,9 @@ it takes the Containerfile planned for the blueprint, puts the in-VM agent on to
 managed image build run it under a build role. No recipe step runs on the control plane, and a
 worker that serves only MicroVMs needs no Docker and no registry. One plan is one image, named
 `sealant-ws-<plan hash>` and reused by every workspace with that plan. A cap
-(`SEALANT_MICROVM_MAX_IMAGES`, 50) refuses to build past it and says so.
+(`SEALANT_MICROVM_MAX_IMAGES`, 50) refuses to build past it and says so, and the worker's image
+retention deletes the ones nothing uses. Images are told by name, so two control planes that share
+an AWS account set different `SEALANT_MICROVM_IMAGE_NAME_PREFIX` values.
 
 Breaking for a MicroVM deployment. `SEALANT_MICROVM_IMAGE_ARN`, `SEALANT_MICROVM_IMAGE_VERSION`,
 `SEALANT_MICROVM_DOCKER_IMAGE_ARN` and `SEALANT_MICROVM_DOCKER_IMAGE_VERSION` are retired, and the

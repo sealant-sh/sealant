@@ -142,10 +142,18 @@ itself: a single-user self-host is a supported shape.
   513 build directories, 400 GB (fixed for the host builder in #229). Here the same fault would pile
   up images in an AWS account, where nothing fills up to warn anyone. A test asserts the second
   workspace builds nothing.
-- **Retention and a cap.** The builder ships with both. The retention sweep deletes MicroVM images
-  that no live workspace boots and that fall outside the most recent plans, with an age floor, as
-  the registry sweep does. Past a configured number of images the builder refuses to create another
-  and says why. The per-build zip is deleted once the image is `CREATED` or failed.
+- **Retention and a cap.** The builder ships with both. The worker's one retention sweep decides
+  what to keep from the build-job history, whatever the runtime: a live workspace's image, the
+  newest image of the last N plans, anything inside the age floor. It deletes a MicroVM image with
+  `DeleteMicrovmImage` and everything else through the registry. It also sweeps this control plane's
+  MicroVM images that no build job names, which a build that died after `CreateMicrovmImage` or a
+  database started fresh leaves behind. Past a configured number of images the builder refuses to
+  create another and says why. The per-build zip is deleted once the image is `CREATED` or failed.
+- **Names, not tags.** `ListMicrovmImages` returns no tags, so a listing can only tell whose an
+  image is by its name: `<prefix>-<24 hex of the plan hash>`, prefix `sealant-ws`
+  (`SEALANT_MICROVM_IMAGE_NAME_PREFIX`). The cap counts those names and the sweep deletes only
+  those. Two control planes that share an AWS account take different prefixes; with the same one
+  each would count, and after the age floor delete, the other's images.
 - **First launch.** Two to three minutes, once per distinct plan. The job stays `running`; Mend
   already tells the user a first launch builds the image.
 

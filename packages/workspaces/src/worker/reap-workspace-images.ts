@@ -11,12 +11,26 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
+import type { MicrovmImageApi } from "../images/microvm/image-api.js";
+import { isMicrovmImageNameOf, microvmImageName } from "../images/microvm/recipe.js";
 import { parsePublishedReference } from "../images/plan-coordinates.js";
 import type { RegistryClient } from "../registry/client.js";
+import { parseMicrovmImageReference } from "../runtime/microvm/image-reference.js";
 
 export interface ReapWorkspaceImagesOptions {
   readonly db: DB;
   readonly registryClient: RegistryClient;
+  /**
+   * The account's MicroVM images, where the worker builds them. A MicroVM image is not in any
+   * registry, so it is deleted here; without this, such images are left alone. An image of this
+   * control plane's that no build job names (a build that died after `CreateMicrovmImage`, a
+   * database started fresh) is swept by the same rules. It is told by its name, `<namePrefix>-<plan
+   * hash>`, since a listing carries no tags, and aged by its creation time.
+   */
+  readonly microvmImages?: {
+    readonly api: Pick<MicrovmImageApi, "deleteImage" | "listImages">;
+    readonly namePrefix: string;
+  };
   /**
    * How many distinct build plans keep their newest image even with no workspace on them, so the
    * plan-hash short-circuit still answers the next create from the store. Defaults to 10.
@@ -68,7 +82,8 @@ const LIVE_WORKSPACE_STATUSES = ["queued", "running", "ready"] as const;
  *
  * Everything else the build-job history says was published is deleted through the store: on the
  * Engine store an `image rm -f` by image id (refused, and kept, while any container references
- * it), on a registry a manifest delete. Best-effort per image: one failure never aborts the sweep,
+ * it), on a registry a manifest delete, on Lambda MicroVMs a `DeleteMicrovmImage`. There one plan is
+ * one image whose digest is the plan hash, so every workspace on a plan keeps the same image. Best-effort per image: one failure never aborts the sweep,
  * and the job rows are never touched — they stay the audit trail of what was built.
  */
 export const reapWorkspaceImages = async (
@@ -142,6 +157,17 @@ export const reapWorkspaceImages = async (
         summary.deferred += 1;
         continue;
       }
+      const microvmImage = parseMicrovmImageReference(image.publishedReference);
+      if (microvmImage !== undefined) {
+        if (options.microvmImages === undefined) continue;
+        attempted += 1;
+        const name = microvmImage.imageArn.slice(microvmImage.imageArn.lastIndexOf(":") + 1);
+        const removed = yield* deleteMicrovmImage(options.microvmImages.api, name);
+        if (removed === "deleted") summary.deleted += 1;
+        else if (removed === "not-found") summary.missing += 1;
+        else summary.failed += 1;
+        continue;
+      }
       attempted += 1;
       const repository =
         parsePublishedReference(image.publishedReference)?.repository ?? image.repository;
@@ -170,8 +196,55 @@ export const reapWorkspaceImages = async (
           break;
       }
     }
+
+    // MicroVM images of this control plane's that no build job names.
+    const microvmImages = options.microvmImages;
+    if (microvmImages !== undefined) {
+      const { api, namePrefix } = microvmImages;
+      // Every name the job history accounts for: kept above, or a candidate the loop above owns.
+      const accountedFor = new Set(
+        [...keep, ...published.map((image) => image.digest)].map((digest) =>
+          microvmImageName(planOf(digest), namePrefix),
+        ),
+      );
+      const listed = yield* Effect.tryPromise(() => api.listImages(namePrefix)).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Image retention: listing MicroVM images failed.", cause).pipe(
+            Effect.as([] as Awaited<ReturnType<MicrovmImageApi["listImages"]>>),
+          ),
+        ),
+      );
+      for (const image of listed) {
+        if (!isMicrovmImageNameOf(image.name, namePrefix) || accountedFor.has(image.name)) continue;
+        // Still changing, or no creation time: not enough known to delete it.
+        if (image.state === "CREATING" || image.state === "UPDATING") continue;
+        if (image.state === "DELETING" || image.createdAt === undefined) continue;
+        if (image.createdAt.getTime() > publishedAfter) continue;
+        if (attempted >= maxDeletes) {
+          summary.deferred += 1;
+          continue;
+        }
+        attempted += 1;
+        const removed = yield* deleteMicrovmImage(api, image.name);
+        if (removed === "deleted") summary.deleted += 1;
+        else if (removed === "not-found") summary.missing += 1;
+        else summary.failed += 1;
+      }
+    }
     return summary;
   });
 
   return Effect.runPromise(program.pipe(Effect.provide(dataAccessLayer)));
 };
+
+const deleteMicrovmImage = (api: Pick<MicrovmImageApi, "deleteImage">, name: string) =>
+  Effect.tryPromise(() => api.deleteImage(name)).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`Image retention: deleting the MicroVM image ${name} failed.`, cause).pipe(
+        Effect.as("failed" as const),
+      ),
+    ),
+  );
+
+/** A MicroVM image's digest is `sha256:<plan hash>`. */
+const planOf = (digest: string): string => digest.slice(digest.indexOf(":") + 1);
