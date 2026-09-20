@@ -128,11 +128,16 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // A MicroVM boots no container image, so it is registered with a builder of its own: AWS's
   // managed image build, under a role that can read one artifacts prefix and nothing else. The
   // recipe's files are checked here, so a release without them stops the worker at start.
+  const microvmImageApi =
+    microvmConfig === undefined
+      ? undefined
+      : createLiveMicrovmImageApi({ region: microvmConfig.region });
   const microvmContextFiles =
     microvmConfig === undefined ? undefined : await loadMicrovmContextFiles();
   const microvmRuntimes =
     microvmConfig === undefined ||
     microvmContextFiles === undefined ||
+    microvmImageApi === undefined ||
     microvmApi === undefined ||
     microvmTokens === undefined
       ? []
@@ -144,7 +149,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
               tokens: microvmTokens,
             }),
             imageBuilder: new MicrovmWorkspaceImageBuilder({
-              api: createLiveMicrovmImageApi({ region: microvmConfig.region }),
+              api: microvmImageApi,
               artifacts: createS3MicrovmArtifactStore({
                 region: microvmConfig.region,
                 bucket: microvmConfig.build.artifactBucket,
@@ -440,6 +445,15 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         registryClient,
         retainedPlans: env.WORKSPACE_IMAGE_RETAINED_PLANS,
         minAgeMs: env.WORKSPACE_IMAGE_MIN_AGE_HOURS * 60 * 60 * 1000,
+        // MicroVM images are in no registry: retention deletes them with the image API.
+        ...(microvmConfig === undefined || microvmImageApi === undefined
+          ? {}
+          : {
+              microvmImages: {
+                api: microvmImageApi,
+                namePrefix: microvmConfig.build.imageNamePrefix,
+              },
+            }),
       });
       if (contexts.removed > 0 || images.deleted > 0 || images.failed > 0) {
         console.log("Workspace image retention", {
