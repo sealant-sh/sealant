@@ -1,5 +1,55 @@
 # @sealant/api-contracts
 
+## 0.36.0
+
+### Minor Changes
+
+- 9acbe11: A Lambda MicroVM workspace boots the image built from its blueprint (server-side; the packages ride
+  the release train). Until now the MicroVM adapter booted one hand-registered image for every
+  workspace, so a blueprint's OS family, base image, packages and shell did nothing there, and the
+  container image the worker built for the run was never used.
+
+  Each runtime is now registered with the builder of the image it boots. MicroVM gets one of its own:
+  it takes the Containerfile planned for the blueprint, puts the in-VM agent on top, and has AWS's
+  managed image build run it under a build role. No recipe step runs on the control plane, and a
+  worker that serves only MicroVMs needs no Docker and no registry. One plan is one image, named
+  `sealant-ws-<plan hash>` and reused by every workspace with that plan. A cap
+  (`SEALANT_MICROVM_MAX_IMAGES`, 50) refuses to build past it and says so, and the worker's image
+  retention deletes the ones nothing uses. Images are told by name, so two control planes that share
+  an AWS account set different `SEALANT_MICROVM_IMAGE_NAME_PREFIX` values.
+
+  Breaking for a MicroVM deployment. `SEALANT_MICROVM_IMAGE_ARN`, `SEALANT_MICROVM_IMAGE_VERSION`,
+  `SEALANT_MICROVM_DOCKER_IMAGE_ARN` and `SEALANT_MICROVM_DOCKER_IMAGE_VERSION` are retired, and the
+  API and worker refuse to start while one is set. Set `SEALANT_MICROVM_BUILD_ROLE_ARN` (it now
+  enables the adapter) and `SEALANT_MICROVM_ARTIFACT_BUCKET` on the worker. Workspace-scoped Docker is
+  `SEALANT_MICROVM_DOCKER_ENABLED` on the API and worker, off by default, because such an image is
+  created with the `ALL` OS capability. A recipe step can obtain the build role's credentials, so give
+  that role `s3:GetObject` on the artifacts prefix and the two log actions only. The worker needs the
+  four `lambda:*MicrovmImage` actions, `iam:PassRole` on the build role, and `s3:PutObject` /
+  `s3:DeleteObject` on the prefix. `microvm-image/build-image.sh` and its Dockerfiles are removed.
+
+  Needs a sealantd release whose image ships `sealantctl` (sealant-sh/sealantd#94): the recipe copies
+  it from beside the daemon, for the capture flush in the suspend and terminate hooks.
+
+### Patch Changes
+
+- be6dcd4: Two faults in the MicroVM image builder, found by its first run against AWS (server-side; the
+  packages ride the release train). It looked images up and deleted them by name, where the platform
+  takes an image ARN, so every build failed at its first lookup with "Invalid ARN format". And it sent
+  the plan hash as the create request's `clientToken`: a plan built again after its image was deleted
+  replayed a token the platform had already completed, and that create sat in `CREATING` for the whole
+  build timeout with no build running. The name is now completed to an ARN from the build role's
+  account, and the token is one per build attempt. An opt-in live spec
+  (`SEALANT_MICROVM_BUILT_IMAGE_E2E=1`) builds a customised blueprint, boots it and checks inside the
+  VM.
+- 679caa3: sealantd 0.18.1 (daemon image only; the packages ride the release train). The released daemon image
+  now ships `sealantctl` beside `sealantd` and `socat` (sealant-sh/sealantd#94). The MicroVM image
+  builder copies it into every workspace image, because the in-VM agent runs
+  `sealantctl capture flush` in the platform's suspend and terminate hooks. Against 0.18.0 that copy
+  fails and no MicroVM image builds. The baked daemon default for workspace images and the Cloudflare
+  bridge image is now `ghcr.io/sealant-sh/sealantd:0.18.1`, and `@sealant/runtime-client` and
+  `@sealant/runtime-protocol` move to `^0.18.1`. No daemon behaviour changed.
+
 ## 0.35.1
 
 ### Patch Changes
