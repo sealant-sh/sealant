@@ -50,6 +50,42 @@ const FAMILY: Family =
   FAMILIES.find((family) => family === process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_FAMILY) ??
   "fedora";
 const PACKAGE = "ripgrep";
+/**
+ * `SEALANT_MICROVM_BUILT_IMAGE_E2E_PACKAGES=mend-defaults` asks for Mend's default workspace
+ * package list instead of ripgrep alone, and checks each tool answers `--version` inside the VM.
+ */
+const MEND_DEFAULTS = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_PACKAGES === "mend-defaults";
+const PACKAGES = MEND_DEFAULTS
+  ? [
+      "pnpm",
+      "python",
+      "uv",
+      "mise",
+      "github-cli",
+      "lazygit",
+      "bat",
+      "curl",
+      "jq",
+      "ripgrep",
+      "fd",
+      "fzf",
+    ]
+  : [PACKAGE];
+/** Command per package id, for the check inside the VM. */
+const PACKAGE_COMMANDS: Readonly<Record<string, string>> = {
+  pnpm: "pnpm --version",
+  python: "python3 --version",
+  uv: "uv --version",
+  mise: "mise --version",
+  "github-cli": "gh --version",
+  lazygit: "lazygit --version",
+  bat: "bat --version",
+  curl: "curl --version",
+  jq: "jq --version",
+  ripgrep: "rg --version",
+  fd: "fd --version",
+  fzf: "fzf --version",
+};
 /** From the public ECR mirror, so the run inside the VM needs no Docker Hub login. */
 const PROBE_CONTAINER = "public.ecr.aws/docker/library/alpine:3.20";
 
@@ -75,7 +111,7 @@ const blueprint = (marker: string): NewWorkspace =>
     harness: { id: "opencode" },
     access: { ssh: { enabled: false, listenPort: 2222 } },
     tooling: {
-      packages: [{ id: PACKAGE }],
+      packages: PACKAGES.map((id) => ({ id })),
       ...(WITH_DOCKER ? { services: { docker: { enabled: true } } } : {}),
     },
     customization: {
@@ -114,7 +150,7 @@ describe.skipIf(!E2E_ENABLED)(
   "Lambda MicroVM boots the image built from its blueprint (live)",
   () => {
     it(
-      `builds a customised ${FAMILY} blueprint${WITH_DOCKER ? " with Docker" : ""} once, boots it, and finds the OS, the package and sealantctl inside`,
+      `builds a customised ${FAMILY} blueprint${WITH_DOCKER ? " with Docker" : ""}${MEND_DEFAULTS ? " and Mend's default packages" : ""} once, boots it, and finds the OS, the packages and sealantctl inside`,
       { timeout: 45 * 60_000 },
       async () => {
         const config = microvmRuntimeConfigFromEnv({
@@ -260,6 +296,10 @@ describe.skipIf(!E2E_ENABLED)(
                   'printf "sealantctl=%s\\n" "$(sealantctl --version)"',
                   'printf "health=%s\\n" "$(sealantctl --socket /run/sealant/control.sock health 2>&1 | head -c 200 | tr "\\n" " ")"',
                   'printf "repo=%s\\n" "$(git -C /workspace/repo rev-parse --is-inside-work-tree 2>/dev/null)"',
+                  ...PACKAGES.map(
+                    (id) =>
+                      `printf "package %s=%s\\n" ${id} "$(${PACKAGE_COMMANDS[id] ?? `${id} --version`} 2>&1 | head -n 1 | head -c 60)"`,
+                  ),
                   // The baked harnesses have to run on this base, not only install.
                   'for h in codex claude opencode; do printf "harness %s=%s\\n" "$h" "$(command -v "$h" >/dev/null 2>&1 && "$h" --version 2>&1 | head -n 1 | head -c 80 || echo missing)"; done',
                   ...(WITH_DOCKER
@@ -284,6 +324,10 @@ describe.skipIf(!E2E_ENABLED)(
           };
           expect(inside.stdout).toMatch(OS_ID[FAMILY]);
           expect(inside.stdout).toMatch(/package=ripgrep \d/);
+          for (const id of PACKAGES) {
+            // Each tool answers --version with something that starts with a digit or its name.
+            expect(inside.stdout, id).toMatch(new RegExp(`^package ${id}=[^\\n]*\\d`, "m"));
+          }
           expect(inside.stdout).toContain("sealantd=/usr/local/bin/sealantd");
           expect(inside.stdout).toMatch(/sealantctl=sealantctl /);
           // The client the terminate hook flushes captures with reaches the daemon.

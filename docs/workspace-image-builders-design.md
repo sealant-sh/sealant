@@ -189,6 +189,17 @@ itself: a single-user self-host is a supported shape.
     was never fetched. Its install now carries `--allow-scripts=opencode-ai`, as claude-code's
     already did. Every family's recipe.
 
+- **The package catalog (2026-09-21).** The first session on alpha.mend.run failed to build: Arch
+  Linux ARM has no `mise`, and an id the family map did not know was handed to the package manager
+  as is. Mend's default list (pnpm, python, uv, mise, github-cli, lazygit, bat, curl, jq, ripgrep,
+  fd, fzf) existed only on Arch x86_64: Fedora 41 has no mise or lazygit, Ubuntu 24.04 also lacks uv
+  and pnpm, both call the GitHub CLI gh. `buildkit/package-catalog.ts` now answers every id on every
+  family, by the repository package, a pinned upstream release (one archive per architecture,
+  SHA-256 checked before unpacking) or npm, and links the asked-for name where a repository installs
+  another. An unknown id is refused at plan time and at `POST /v1/workspaces`. The live spec with
+  `SEALANT_MICROVM_BUILT_IMAGE_E2E_PACKAGES=mend-defaults` built, booted and ran every tool of that
+  list, the three harnesses, and a container, on all four families (fedora 234 s, ubuntu 244 s, nix
+  284 s, arch 456 s; boot 8 to 9 s).
 - **Names, not tags.** `ListMicrovmImages` returns no tags, so a listing can only tell whose an
   image is by its name: `<prefix>-<24 hex of the plan hash>`, prefix `sealant-ws`
   (`SEALANT_MICROVM_IMAGE_NAME_PREFIX`). The cap counts those names and the sweep deletes only

@@ -26,6 +26,13 @@ import {
   isBakedHarnessId,
   type HarnessIntegration,
 } from "../harness/integrations.js";
+import {
+  RELEASE_INSTALL_PACKAGES,
+  UnknownWorkspacePackageError,
+  WORKSPACE_PACKAGE_CATALOG,
+  renderReleaseInstall,
+  unknownWorkspacePackageIds,
+} from "./package-catalog.js";
 
 /**
  * This module contains the full BuildKit-backed executor implementation used by worker-side build
@@ -76,11 +83,6 @@ export interface BuildkitCompilerOptions {
   readonly emitTarball?: boolean;
 }
 
-/** Maps a logical package request id to concrete distro packages to install. */
-interface PackageMapping {
-  readonly installPackages: readonly string[];
-}
-
 /**
  * Per-distro behavior contract used by planning and rendering.
  *
@@ -90,7 +92,6 @@ interface PackageMapping {
 interface DistroDefinition {
   readonly baseImage: string;
   readonly packageManager: BuildkitPackageManager;
-  readonly packageMap: Record<string, PackageMapping>;
   readonly internalPackages: readonly string[];
   /**
    * Distro-native package ids required by the `sealantd boot` supervisor that PID-1s every image.
@@ -178,22 +179,6 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   fedora: {
     baseImage: "fedora:41",
     packageManager: "dnf",
-    packageMap: {
-      bash: { installPackages: ["bash"] },
-      chezmoi: { installPackages: ["chezmoi"] },
-      curl: { installPackages: ["curl"] },
-      fish: { installPackages: ["fish"] },
-      git: { installPackages: ["git"] },
-      jq: { installPackages: ["jq"] },
-      neovim: { installPackages: ["neovim"] },
-      nodejs: { installPackages: ["nodejs", "npm"] },
-      pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
-      ripgrep: { installPackages: ["ripgrep"] },
-      stow: { installPackages: ["stow"] },
-      tar: { installPackages: ["tar"] },
-      tmux: { installPackages: ["tmux"] },
-      zsh: { installPackages: ["zsh"] },
-    },
     internalPackages: [
       "bash",
       "ca-certificates",
@@ -217,22 +202,6 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   arch: {
     baseImage: "archlinux:latest",
     packageManager: "pacman",
-    packageMap: {
-      bash: { installPackages: ["bash"] },
-      chezmoi: { installPackages: ["chezmoi"] },
-      curl: { installPackages: ["curl"] },
-      fish: { installPackages: ["fish"] },
-      git: { installPackages: ["git"] },
-      jq: { installPackages: ["jq"] },
-      neovim: { installPackages: ["neovim"] },
-      nodejs: { installPackages: ["nodejs", "npm"] },
-      pnpm: { installPackages: ["nodejs", "npm", "pnpm"] },
-      ripgrep: { installPackages: ["ripgrep"] },
-      stow: { installPackages: ["stow"] },
-      tar: { installPackages: ["tar"] },
-      tmux: { installPackages: ["tmux"] },
-      zsh: { installPackages: ["zsh"] },
-    },
     internalPackages: ["bash", "ca-certificates", "coreutils", "git", "openssh", "shadow"],
     sealantdPackages: ["socat"],
     shellPaths: {
@@ -245,28 +214,6 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   ubuntu: {
     baseImage: "ubuntu:24.04",
     packageManager: "apt",
-    packageMap: {
-      bash: { installPackages: ["bash"] },
-      // Ubuntu 24.04 does not package chezmoi (it appears in the archive only from 26.10) —
-      // the binary is fetched from the pinned upstream release by `renderChezmoiInstallStep`,
-      // which needs curl + CA roots. This mapping installs only those prerequisites.
-      chezmoi: { installPackages: ["curl", "ca-certificates"] },
-      curl: { installPackages: ["curl"] },
-      fish: { installPackages: ["fish"] },
-      git: { installPackages: ["git"] },
-      jq: { installPackages: ["jq"] },
-      neovim: { installPackages: ["neovim"] },
-      nodejs: { installPackages: ["nodejs", "npm"] },
-      // NOTE: no `pnpm` mapping — Ubuntu 24.04 does not package pnpm. The standardization
-      // catalog marks it unsupported for ubuntu, so API-validated creates fail readable at
-      // create time; a raw blueprint request falls through to `apt-get install pnpm` and fails
-      // with apt's own readable error.
-      ripgrep: { installPackages: ["ripgrep"] },
-      stow: { installPackages: ["stow"] },
-      tar: { installPackages: ["tar"] },
-      tmux: { installPackages: ["tmux"] },
-      zsh: { installPackages: ["zsh"] },
-    },
     internalPackages: [
       "bash",
       "ca-certificates",
@@ -290,22 +237,6 @@ const distroDefinitions: Record<BuildkitDistroOsFamily, DistroDefinition> = {
   nix: {
     baseImage: "nixos/nix:latest",
     packageManager: "nix",
-    packageMap: {
-      bash: { installPackages: ["bash"] },
-      chezmoi: { installPackages: ["chezmoi"] },
-      curl: { installPackages: ["curl"] },
-      fish: { installPackages: ["fish"] },
-      git: { installPackages: ["gitMinimal"] },
-      jq: { installPackages: ["jq"] },
-      neovim: { installPackages: ["neovim"] },
-      nodejs: { installPackages: ["nodejs"] },
-      pnpm: { installPackages: ["nodejs", "pnpm"] },
-      ripgrep: { installPackages: ["ripgrep"] },
-      stow: { installPackages: ["stow"] },
-      tar: { installPackages: ["gnutar"] },
-      tmux: { installPackages: ["tmux"] },
-      zsh: { installPackages: ["zsh"] },
-    },
     internalPackages: ["bash", "cacert", "coreutils", "gitMinimal", "openssh", "shadow"],
     sealantdPackages: ["socat"],
     shellPaths: {
@@ -602,7 +533,6 @@ const resolvePackages = (
     }));
   }
 
-  const distro = distroDefinitions[osFamily];
   // Every baked harness contributes its packages (dedup happens at render).
   const harnessPackageRequests: WorkspaceBlueprint["tooling"]["packages"] =
     imageHarnessIntegrations(resolveHarnessIntegration(blueprint)).flatMap((integration) =>
@@ -649,12 +579,14 @@ const resolvePackages = (
     }
   }
 
+  const unknown = unknownWorkspacePackageIds(requests.map((request) => request.id));
+  if (unknown.length > 0) throw new UnknownWorkspacePackageError(unknown);
   return requests.map((request) => {
-    const mapping = distro.packageMap[request.id] ?? { installPackages: [request.id] };
+    const install = WORKSPACE_PACKAGE_CATALOG[request.id]?.[osFamily];
     return {
       requestId: request.id,
       ...(request.version === undefined ? {} : { requestedVersion: request.version }),
-      installPackages: [...mapping.installPackages],
+      installPackages: [...(install?.packages ?? [])],
     };
   });
 };
@@ -801,14 +733,53 @@ const renderCustomBaseContractPreflight = (): string => {
   return `RUN /bin/sh -c ${shellQuote(script)}`;
 };
 
+/** What the catalog adds for this plan beyond repository packages, in request order, once each. */
+const catalogExtras = (plan: ResolvedImagePlan) => {
+  if (plan.osFamily === "custom") return { releases: [], npmGlobal: [], postInstall: [] };
+  const family = plan.osFamily;
+  const seen = new Set<string>();
+  const releases = [];
+  const npmGlobal = [];
+  const postInstall = [];
+  for (const pkg of plan.packages) {
+    if (seen.has(pkg.requestId)) continue;
+    seen.add(pkg.requestId);
+    const install = WORKSPACE_PACKAGE_CATALOG[pkg.requestId]?.[family];
+    if (install?.release !== undefined) releases.push(install.release);
+    if (install?.npmGlobal !== undefined) npmGlobal.push(...install.npmGlobal);
+    if (install?.postInstall !== undefined) postInstall.push(...install.postInstall);
+  }
+  return { releases, npmGlobal, postInstall };
+};
+
+const renderCatalogExtras = (plan: ResolvedImagePlan): string[] => {
+  const { releases, npmGlobal, postInstall } = catalogExtras(plan);
+  const lines: string[] = [];
+  for (const release of releases) lines.push("", renderReleaseInstall(release));
+  if (npmGlobal.length > 0) {
+    lines.push(
+      "",
+      "# No repository package on this family; installed from npm beside the harnesses.",
+      `RUN npm install -g ${npmGlobal.map((name) => shellQuote(name)).join(" ")}`,
+    );
+  }
+  if (postInstall.length > 0) {
+    lines.push("", "# The name the blueprint asked for, where the package installs another.");
+    lines.push(`RUN ${postInstall.join(" && ")}`);
+  }
+  return lines;
+};
+
 const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
   if (plan.osFamily === "custom") {
     throw new Error("Custom-base plans render through renderCustomBasePackageInstallCommand.");
   }
 
   const distro = distroDefinitions[plan.osFamily];
+  const extras = catalogExtras(plan);
   const packageList = normalizeInstallPackages([
     ...distro.internalPackages,
+    ...(extras.releases.length > 0 ? RELEASE_INSTALL_PACKAGES[plan.osFamily] : []),
     // `socat` (and any other relay deps) are always installed: `sealantd boot` is the mandatory
     // PID-1 entrypoint and its control socket is bridged to the host over a `docker exec` relay.
     ...distro.sealantdPackages,
@@ -1253,6 +1224,7 @@ const renderContainerfile = (plan: ResolvedImagePlan): string => {
     `FROM ${plan.baseImage}`,
     "",
     renderPackageInstallCommand(plan),
+    ...renderCatalogExtras(plan),
     ...(chezmoiInstallStep === undefined ? [] : ["", chezmoiInstallStep]),
     "",
     harnessInstallStep,
