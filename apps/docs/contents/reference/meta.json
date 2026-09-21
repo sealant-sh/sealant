@@ -2,6 +2,7 @@
   "title": "Reference",
   "pages": [
     "environment-variables",
+    "workspace-packages",
     "ports-and-data",
     "installer-and-compose",
     "http-api",

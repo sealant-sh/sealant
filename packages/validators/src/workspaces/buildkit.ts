@@ -39,7 +39,9 @@ export const buildkitSecretSchema = z.strictObject({
 export const resolvedImagePackageSchema = z.strictObject({
   requestId: nonEmptyStringSchema,
   requestedVersion: nonEmptyStringSchema.optional(),
-  installPackages: z.array(nonEmptyStringSchema).min(1),
+  // Empty for a package the catalog installs from a pinned upstream release instead of the
+  // family's repositories (mise on Fedora, for one).
+  installPackages: z.array(nonEmptyStringSchema),
 });
 
 export const resolvedDotfilesPlanSchema = z.strictObject({

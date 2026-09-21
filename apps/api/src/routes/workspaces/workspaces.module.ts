@@ -75,6 +75,8 @@ import {
 import { newWorkspaceSchema, workspaceBindSchema, type NewWorkspace } from "@sealant/validators";
 import {
   bindRootMountPath,
+  UnknownWorkspacePackageError,
+  unknownWorkspacePackageIds,
   SealantRuntime,
   type SealantError,
   type SealantSession,
@@ -1407,6 +1409,19 @@ export const createWorkspace = (input: {
     }
 
     const parsedSpec = yield* parseWorkspaceSpec(body.spec);
+
+    // A managed family installs the catalog's packages only. Refuse an unknown id here, as a 400
+    // naming it, rather than minutes later as a failed build. A custom base image takes any
+    // name its own package manager knows.
+    const unknownPackages =
+      parsedSpec.target.os.family === "custom"
+        ? []
+        : unknownWorkspacePackageIds(parseRequestedPackageIds(parsedSpec));
+    if (unknownPackages.length > 0) {
+      return yield* new WorkspaceBadRequestError({
+        message: new UnknownWorkspacePackageError(unknownPackages).message,
+      });
+    }
 
     const envReferencesRefusal = runtimeEnvReferencesRefusal(
       parsedSpec,
