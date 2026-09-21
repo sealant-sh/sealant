@@ -828,9 +828,12 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     return [
       "RUN sed -i 's/^DownloadUser/#DownloadUser/' /etc/pacman.conf",
       "RUN --mount=type=cache,target=/var/cache/pacman/pkg \\",
+      // The `|| true` covers the cache clean only. Written as `a && b && c || true` it covered
+      // the whole chain: a package that pacman could not find passed the step, and the build died
+      // steps later on a missing `npm` (Arch Linux ARM, 2026-09-21).
       "    pacman -Syu --noconfirm && \\",
       `    pacman -S --noconfirm --needed ${packageList.join(" ")} && \\`,
-      "    pacman -Scc --noconfirm || true",
+      "    { pacman -Scc --noconfirm || true; }",
     ].join("\n");
   }
 
