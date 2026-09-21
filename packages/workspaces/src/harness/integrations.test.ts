@@ -11,7 +11,7 @@ describe("harness integrations", () => {
     expect(opencode).toMatchObject({
       id: "opencode",
       installPackages: ["nodejs"],
-      installCommand: "npm install -g opencode-ai@latest",
+      installCommand: "npm install -g --allow-scripts=opencode-ai opencode-ai@latest",
       launchCommand: "opencode",
     });
     expect(codex).toMatchObject({

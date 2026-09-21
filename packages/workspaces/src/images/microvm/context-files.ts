@@ -12,7 +12,12 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { MICROVM_AGENT_FILES, MICROVM_DOCKER_FILES, type MicrovmContextFile } from "./recipe.js";
+import {
+  MICROVM_AGENT_FILES,
+  MICROVM_ARCH_FILES,
+  MICROVM_DOCKER_FILES,
+  type MicrovmContextFile,
+} from "./recipe.js";
 
 const CANDIDATE_DIRECTORIES = ["../../../microvm-image/", "../microvm-image/"] as const;
 
@@ -33,7 +38,11 @@ export interface MicrovmContextFiles {
 export const loadMicrovmContextFiles = async (
   options: { readonly directory?: string; readonly moduleUrl?: string } = {},
 ): Promise<MicrovmContextFiles> => {
-  const files: readonly MicrovmContextFile[] = [...MICROVM_AGENT_FILES, ...MICROVM_DOCKER_FILES];
+  const files: readonly MicrovmContextFile[] = [
+    ...MICROVM_AGENT_FILES,
+    ...MICROVM_DOCKER_FILES,
+    ...MICROVM_ARCH_FILES,
+  ];
   const candidates =
     options.directory === undefined
       ? CANDIDATE_DIRECTORIES.map((relative) =>

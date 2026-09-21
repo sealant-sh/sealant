@@ -852,6 +852,18 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
     "RUN nix profile add --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' \\",
     `    ${nixPackageList.join(" ")} && \\`,
     "    nix --extra-experimental-features 'nix-command flakes' profile list > /dev/null",
+    // The nix image has no /lib64/ld-linux-*: every binary in it names a loader inside the store.
+    // A harness's native binary (codex, claude, opencode) names the FHS loader path and cannot
+    // start without it, though npm installs it without complaint. Linking glibc's loader into the
+    // FHS paths makes those binaries run; the loader then finds libc beside itself in the store.
+    // Verified on the nix image on 2026-09-20: all three harnesses ran only after this.
+    "RUN set -eu; \\",
+    "    glibc=\"$(nix --extra-experimental-features 'nix-command flakes' eval --raw --accept-flake-config nixpkgs#glibc.outPath)\"; \\",
+    "    nix --extra-experimental-features 'nix-command flakes' build --no-link --accept-flake-config nixpkgs#glibc.out; \\",
+    '    loader="$(ls "$glibc"/lib/ld-linux-*.so.* | head -n 1)"; \\',
+    "    mkdir -p /lib /lib64; \\",
+    '    ln -sf "$loader" "/lib/$(basename "$loader")"; \\',
+    '    ln -sf "$loader" "/lib64/$(basename "$loader")"',
   ].join("\n");
 };
 
@@ -860,7 +872,8 @@ const renderPackageInstallCommand = (plan: ResolvedImagePlan): string => {
  * not baked), in a stable order, so one harness's release never busts another's layer cache.
  *
  * Nix images rewrite plain `npm install -g ...` commands to include `--prefix /usr/local` to avoid
- * relying on npm global locations that can be awkward in nix-based containers.
+ * relying on npm global locations that can be awkward in nix-based containers. A harness's native
+ * binary needs the FHS loader link the package layer makes (see renderPackageInstallCommand).
  */
 const renderHarnessInstallCommand = (plan: ResolvedImagePlan): string => {
   const integrations = imageHarnessIntegrations(resolveHarnessIntegration(plan.blueprint));

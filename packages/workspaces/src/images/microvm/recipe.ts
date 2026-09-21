@@ -22,9 +22,38 @@ export const MICROVM_RECIPE_VERSION = "2";
 export const MICROVM_AGENT_FILES = ["agent.mjs", "docker-service.mjs"] as const;
 /** Copied in as well when the blueprint asks for the workspace's own Docker. */
 export const MICROVM_DOCKER_FILES = ["download-docker.sh"] as const;
+/** Copied in for an Arch blueprint: the key the Arch Linux ARM rootfs is verified against. */
+export const MICROVM_ARCH_FILES = ["archlinuxarm-builder.asc"] as const;
 export type MicrovmContextFile =
   | (typeof MICROVM_AGENT_FILES)[number]
-  | (typeof MICROVM_DOCKER_FILES)[number];
+  | (typeof MICROVM_DOCKER_FILES)[number]
+  | (typeof MICROVM_ARCH_FILES)[number];
+
+/**
+ * Arch on ARM64. Docker Hub's `archlinux` image is x86_64 only, and a MicroVM is ARM64. The
+ * official ARM port, Arch Linux ARM, ships a rootfs tarball instead of an image, signed by its
+ * build system key (fingerprint below, checked against a downloaded tarball on 2026-09-20). A
+ * first stage fetches the tarball and its signature over the project's mirrors, verifies the
+ * signature against the key shipped in the build context, and unpacks it; the image proper starts
+ * from that filesystem. `pacman-key --populate archlinuxarm` then trusts the port's package keys.
+ */
+export const ARCHLINUXARM_KEY_FINGERPRINT = "68B3537F39A313B3E574D06777193F152BDBE6A6";
+const ARCHLINUXARM_ROOTFS = "http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz";
+const archlinuxArmPrelude = (fetchStageImage: string): string =>
+  [
+    `FROM ${fetchStageImage} AS archlinuxarm`,
+    "RUN dnf -y install gnupg2 curl tar && dnf clean all",
+    "COPY archlinuxarm-builder.asc /tmp/archlinuxarm-builder.asc",
+    "RUN set -eu; gpg --batch --import /tmp/archlinuxarm-builder.asc; \\",
+    `    gpg --batch --list-keys --with-colons | grep -q '^fpr:.*:${ARCHLINUXARM_KEY_FINGERPRINT}:'; \\`,
+    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz ${ARCHLINUXARM_ROOTFS}; \\`,
+    `    curl -fsSL --retry 3 -o /tmp/rootfs.tar.gz.sig ${ARCHLINUXARM_ROOTFS}.sig; \\`,
+    "    gpg --batch --verify /tmp/rootfs.tar.gz.sig /tmp/rootfs.tar.gz; \\",
+    "    mkdir /rootfs && tar -xpf /tmp/rootfs.tar.gz --numeric-owner -C /rootfs && rm /tmp/rootfs.tar.gz*",
+    "FROM scratch",
+    "COPY --from=archlinuxarm /rootfs /",
+    "RUN pacman-key --init && pacman-key --populate archlinuxarm",
+  ].join("\n");
 
 /**
  * What guest-local Docker needs beside the engine itself: network namespaces and the tools
@@ -33,9 +62,13 @@ export type MicrovmContextFile =
  */
 const DOCKER_SERVICE_PACKAGES: Readonly<Record<string, string>> = {
   fedora: "dnf -y install iproute iptables-nft kmod curl tar && dnf clean all",
+  // Arch ships iptables-nft in place of iptables; `--needed` keeps whichever is present.
   arch: "pacman -Sy --noconfirm --needed iproute2 iptables-nft kmod curl tar",
   ubuntu:
     "apt-get update && apt-get install -y --no-install-recommends iproute2 iptables kmod curl tar ca-certificates && rm -rf /var/lib/apt/lists/*",
+  // The same profile the family's own packages go into (buildkit-builder.ts); the engine and the
+  // plugins are static binaries under /usr/local from download-docker.sh, on every family.
+  nix: "nix profile add --priority 6 --accept-flake-config --extra-experimental-features 'nix-command flakes' nixpkgs#iproute2 nixpkgs#iptables nixpkgs#kmod nixpkgs#curl nixpkgs#gnutar",
 };
 
 export const microvmDockerServiceFamilies = (): readonly string[] =>
@@ -99,6 +132,7 @@ export const microvmRecipe = (
       "The planned Containerfile has no FROM or ENTRYPOINT line to build a MicroVM recipe on.",
     );
   }
+  const fromLine = FROM_LINE.exec(planned.containerfile);
   const sealantdImage = SEALANTD_COPY.exec(planned.containerfile)?.[1];
   if (sealantdImage === undefined) {
     throw new Error(
@@ -136,9 +170,10 @@ export const microvmRecipe = (
     'ENTRYPOINT ["node", "/opt/sealant/agent.mjs"]',
   ].join("\n");
   const containerfile = planned.containerfile
-    .replace(
-      FROM_LINE,
-      (_line, reference: string, rest: string) => `FROM ${mirroredBaseImage(reference)}${rest}`,
+    .replace(FROM_LINE, (_line, reference: string, rest: string) =>
+      planned.osFamily === "arch" && fromLine !== null
+        ? archlinuxArmPrelude(mirroredBaseImage("fedora:41"))
+        : `FROM ${mirroredBaseImage(reference)}${rest}`,
     )
     .replace(ENTRYPOINT, agentLayer);
   const planHash = createHash("sha256")
