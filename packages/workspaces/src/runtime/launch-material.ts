@@ -97,8 +97,10 @@ const secretEnvStagingDir = (runId: string | null): string =>
 /**
  * Stage the spec's dotfiles archives into a host directory the adapter bind-mounts read-only:
  * `manifest.json` plus one `<index>.tar.gz` per archive. The path is deterministic per run so a
- * redelivered launch overwrites its own staging instead of leaking a new directory, and a workspace
- * restart re-stages from the job payload. Returns undefined when there is nothing to stage.
+ * redelivered launch overwrites its own staging instead of leaking a new directory. A workspace
+ * restart is a new run with its own staging: the API copies the archives from the previous build
+ * job's payload into the new job (the attempt snapshot never holds them), and this stages them
+ * again from that. Returns undefined when there is nothing to stage.
  */
 const stageDotfilesArchives = async (
   spec: NewWorkspace,
