@@ -640,6 +640,43 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(api.terminates).toEqual(["microvm-1"]);
   });
 
+  it("reports the daemon's last output with its exit, secrets redacted and control bytes dropped", async () => {
+    const api = new FakeMicrovmApi();
+    const output = [
+      "sealantd boot: applying dotfiles archive 0.tar.gz (manager auto)",
+      // An agent that failed to redact (an older one, or a compromised guest) is not trusted.
+      "\u001b[31merror\u001b[0m: stow: conflict with token control-token and mst_secret_long_value\r",
+    ].join("\n");
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(503, {
+          booted: true,
+          controlSocket: false,
+          daemonExit: { code: 1, signal: null, output },
+        }),
+      ],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+
+    const failure = await adapter
+      .launch({ ...captureLaunch, secretEnv: { MEND_SESSION_TOKEN: "mst_secret_long_value" } })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toMatchObject({ code: "microvm-guest-failed", phase: "sealantd" });
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).toContain("(code 1, signal null). Its last output:\n");
+    expect(message).toContain("applying dotfiles archive 0.tar.gz (manager auto)");
+    expect(message).toContain("stow: conflict with token [redacted] and [redacted]");
+    expect(message).not.toContain("control-token");
+    expect(message).not.toContain("mst_secret_long_value");
+    expect(message).not.toContain("\u001b");
+    expect(message).not.toContain("\r");
+    expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
   it("retries a transient health transport failure", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint(

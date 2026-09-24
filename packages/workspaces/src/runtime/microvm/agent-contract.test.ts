@@ -36,6 +36,28 @@ describe("MicroVM agent contract", () => {
     });
   });
 
+  it("carries a bounded tail of the daemon's output with its exit, and still reads an exit without one", () => {
+    const exit = { code: 1, signal: null };
+    expect(
+      agentHealthResponseSchema.parse({ booted: true, controlSocket: false, daemonExit: exit }),
+    ).toEqual({ booted: true, controlSocket: false, daemonExit: exit });
+    const withOutput = { ...exit, output: "dotfiles: stow failed" };
+    expect(
+      agentHealthResponseSchema.parse({
+        booted: true,
+        controlSocket: false,
+        daemonExit: withOutput,
+      }),
+    ).toEqual({ booted: true, controlSocket: false, daemonExit: withOutput });
+    expect(
+      agentHealthResponseSchema.safeParse({
+        booted: true,
+        controlSocket: false,
+        daemonExit: { ...exit, output: "x".repeat(4097) },
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires Docker explicitly in both v2 launch phases", () => {
     const services = { docker: "required" } as const;
     expect(

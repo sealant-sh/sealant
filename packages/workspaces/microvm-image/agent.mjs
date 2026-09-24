@@ -80,6 +80,19 @@ const DOCKER_SERVICE_OPTIONS = {
   logMaxBytes: DOCKER_LOG_MAX_BYTES,
 };
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
+// The tail of sealantd's own output that health reports once the daemon has exited, so a failed
+// boot says why without the VM console. Each stream is kept apart: stdout and stderr are two
+// pipes, and the order the agent reads them in is not the order they were written. Twice as much
+// is kept as is reported, so a secret cut at the kept window's edge is still whole in the part
+// that is redacted and reported.
+const DAEMON_OUTPUT_TAIL_CHARS = 4096;
+const DAEMON_OUTPUT_KEEP_BYTES = 2 * DAEMON_OUTPUT_TAIL_CHARS;
+// The daemon's last lines can still be in its pipes when it exits. Wait this long for them, and
+// no longer: a child that inherited the pipes can hold them open after sealantd is gone.
+const DAEMON_OUTPUT_DRAIN_MS = 500;
+// Secret values shorter than this are not redacted: replacing every "1" or "on" in the output
+// would destroy it, and a value that short is not a credential.
+const MIN_REDACTED_LENGTH = 8;
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 const imageValidation = {
@@ -101,6 +114,10 @@ const state = {
   booted: false,
   daemon: null,
   daemonExit: null,
+  /** The last DAEMON_OUTPUT_KEEP_BYTES of each of sealantd's stdout and stderr. */
+  daemonOutput: { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) },
+  /** Launch values that never leave the VM in reported output: the control token, secret env. */
+  redactions: [],
   dockerService: null,
   hookChildren: new Set(),
 };
@@ -502,19 +519,95 @@ const dockerEnvironment = {
   DOCKER_CERT_PATH: "",
 };
 
+/** Secret-looking launch values to redact from reported output, longest first. */
+const redactionsFor = (controlToken, secretEnvJson) => {
+  const values = [controlToken];
+  if (typeof secretEnvJson === "string") {
+    try {
+      const parsed = JSON.parse(secretEnvJson);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        values.push(...Object.values(parsed).filter((value) => typeof value === "string"));
+      }
+    } catch {
+      // Not an object: there is nothing to name, and the launch itself decides what that means.
+    }
+  }
+  return (
+    [...new Set(values)]
+      .filter((value) => value.length >= MIN_REDACTED_LENGTH)
+      // A fresh array, and the agent runs on the image's own Node, which may predate toSorted.
+      // oxlint-disable-next-line unicorn/no-array-sort
+      .sort((a, b) => b.length - a.length)
+  );
+};
+
+const keepDaemonOutput = (stream, chunk) => {
+  const joined = Buffer.concat([state.daemonOutput[stream], chunk]);
+  state.daemonOutput[stream] =
+    joined.length > DAEMON_OUTPUT_KEEP_BYTES
+      ? joined.subarray(joined.length - DAEMON_OUTPUT_KEEP_BYTES)
+      : joined;
+};
+
+/** Newlines and tabs stay; other control characters (colour codes, carriage returns) do not. */
+const isReportable = (character) => {
+  const code = character.codePointAt(0) ?? 0;
+  return code === 9 || code === 10 || (code >= 32 && code !== 127);
+};
+
+/** One kept stream as it can be reported: redacted, printable, trimmed. */
+const reportableStream = (stream) => {
+  let text = state.daemonOutput[stream].toString("utf8");
+  for (const secret of state.redactions) {
+    text = text.split(secret).join("[redacted]");
+  }
+  return Array.from(text).filter(isReportable).join("").trim();
+};
+
+/**
+ * The output health reports, at most DAEMON_OUTPUT_TAIL_CHARS: the end of stdout, then the end
+ * of stderr. stderr (where a boot error is written) has first claim on the room; stdout gets the
+ * rest.
+ */
+const reportedDaemonOutput = () => {
+  const stderr = reportableStream("stderr").slice(-DAEMON_OUTPUT_TAIL_CHARS);
+  const room = DAEMON_OUTPUT_TAIL_CHARS - stderr.length - (stderr === "" ? 0 : 1);
+  const stdout = room > 0 ? reportableStream("stdout").slice(-room) : "";
+  return [stdout, stderr]
+    .filter((part) => part !== "")
+    .join("\n")
+    .trim();
+};
+
 const startDaemon = (bootEnv) => {
   const env = { ...process.env, ...bootEnv, SEALANT_CONTROL_SOCKET: CONTROL_SOCKET };
   if (state.contractVersion === DOCKER_CONTRACT_VERSION) Object.assign(env, dockerEnvironment);
   const child = spawn(SEALANTD, ["boot"], {
     detached: true,
     env,
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   state.booted = true;
   state.daemon = child;
+  // The console (the VM's log group) still receives every byte; the agent keeps a tail as well.
+  child.stdout.on("data", (chunk) => {
+    process.stdout.write(chunk);
+    keepDaemonOutput("stdout", chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    process.stderr.write(chunk);
+    keepDaemonOutput("stderr", chunk);
+  });
   child.on("exit", (code, signal) => {
-    state.daemonExit = { code, signal };
-    log(`sealantd boot exited (code ${code}, signal ${signal})`);
+    const settle = () => {
+      if (state.daemonExit !== null) return;
+      state.daemonExit = { code, signal };
+      log(`sealantd boot exited (code ${code}, signal ${signal})`);
+    };
+    child.once("close", settle);
+    // A busy loop can reach this timer before it has read what is already in the pipes; one
+    // more turn (setImmediate runs after the poll phase) reads that first.
+    setTimeout(() => setImmediate(settle), DAEMON_OUTPUT_DRAIN_MS).unref();
   });
   child.on("error", () => {
     state.daemonExit = { code: null, signal: null };
@@ -678,6 +771,7 @@ const handleLaunch = async (req, res) => {
 
   // Material is durable and the launch is now claimed. Retries cannot start a second child.
   state.controlToken = body.controlToken;
+  state.redactions = redactionsFor(body.controlToken, secretEnvJson);
   state.flushTimeoutMs = body.flushTimeoutMs;
   state.launchSecret = null;
   state.launchAccepted = true;
@@ -699,6 +793,15 @@ const handleLaunch = async (req, res) => {
 
 const controlSocketReady = () => existsSync(CONTROL_SOCKET);
 
+const daemonExitReport = () => {
+  const output = reportedDaemonOutput();
+  return {
+    code: state.daemonExit.code,
+    signal: state.daemonExit.signal,
+    ...(output === "" ? {} : { output }),
+  };
+};
+
 const handleHealth = (req, res) => {
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
     return message(res, 401, "control token does not match");
@@ -706,9 +809,7 @@ const handleHealth = (req, res) => {
   const common = {
     booted: state.booted,
     controlSocket: controlSocketReady(),
-    ...(state.daemonExit === null
-      ? {}
-      : { daemonExit: { code: state.daemonExit.code, signal: state.daemonExit.signal } }),
+    ...(state.daemonExit === null ? {} : { daemonExit: daemonExitReport() }),
   };
   if (state.contractVersion !== DOCKER_CONTRACT_VERSION) {
     const healthy = state.booted && common.controlSocket && state.daemonExit === null;

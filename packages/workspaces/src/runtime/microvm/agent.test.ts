@@ -38,9 +38,21 @@ const record = process.env.FAKE_SEALANTD_RECORD;
 const temp = record + ".tmp";
 fs.writeFileSync(temp, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));
 fs.renameSync(temp, record);
-const server = net.createServer((socket) => socket.pipe(socket));
-server.listen(socketPath);
-process.on("SIGTERM", () => { server.close(); process.exit(0); });
+if (process.env.FAKE_SEALANTD_FAIL === "1") {
+  // A boot that fails the way a dotfiles apply does: plenty of output first, the reason last.
+  for (let line = 0; line < 400; line += 1) process.stdout.write("boot: step " + line + " ok\\n");
+  const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
+  process.stderr.write(
+    "Error: dotfiles: stow failed for package legacy (token control-token, capture " +
+      secrets.SEALANT_CAPTURE_TOKEN + ")\\n",
+  );
+  // Not process.exit(): writes to a pipe can still be queued, and exit would drop them.
+  process.exitCode = 3;
+} else {
+  const server = net.createServer((socket) => socket.pipe(socket));
+  server.listen(socketPath);
+  process.on("SIGTERM", () => { server.close(); process.exit(0); });
+}
 `;
 
 const FAKE_SEALANTCTL = `#!/bin/sh
@@ -59,6 +71,8 @@ interface Agent {
   readonly socketPath: string;
   readonly recordFile: string;
   readonly ctlLog: string;
+  /** Everything the agent has written to its console (the VM's log group) so far. */
+  readonly output: () => string;
 }
 
 const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent> => {
@@ -87,8 +101,8 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  let output = "";
   const port = await new Promise<number>((resolve, reject) => {
-    let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = /listening on :(\d+)/.exec(output);
@@ -101,7 +115,7 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
     });
     child.once("exit", (code) => reject(new Error(`agent exited early (${code}): ${output}`)));
   });
-  return { child, port, dir, stateDir, socketPath, recordFile, ctlLog };
+  return { child, port, dir, stateDir, socketPath, recordFile, ctlLog, output: () => output };
 };
 
 const stopAgent = async (agent: Agent): Promise<void> => {
@@ -420,6 +434,48 @@ describe("microvm agent", () => {
       expect(await readFile(secretFile, "utf8")).toBe(bigRequest.secretEnvJson);
     } finally {
       await stopAgent(racing);
+    }
+  });
+
+  it("reports why sealantd exited: the tail of its output, bounded and redacted", async () => {
+    const failing = await startAgent({ FAKE_SEALANTD_FAIL: "1" });
+    try {
+      await hook(failing, "run", {
+        microvmId: "microvm-4",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      const secretEnvJson = JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_capture_secret" });
+      expect(
+        await call(failing, "POST", AGENT_LAUNCH_ROUTE, {
+          body: { ...launchRequest, secretEnvJson },
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+
+      let health: { readonly status: number; readonly body: unknown } | undefined;
+      await waitFor(async () => {
+        health = await call(failing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+      });
+      expect(health?.status).toBe(503);
+      const parsed = agentHealthResponseSchema.parse(health?.body);
+      expect(parsed.daemonExit).toMatchObject({ code: 3, signal: null });
+      const output = parsed.daemonExit?.output ?? "";
+      // The reason (stderr) comes last, whole, with the launch's secrets redacted.
+      expect(output).toMatch(
+        /\nError: dotfiles: stow failed for package legacy \(token \[redacted\], capture \[redacted\]\)$/,
+      );
+      expect(output).not.toContain("control-token");
+      expect(output).not.toContain("mst_capture_secret");
+      // Bounded: the earliest lines of a long boot are gone, the latest are kept.
+      expect(output.length).toBeLessThanOrEqual(4096);
+      expect(output).not.toContain("boot: step 0 ok");
+      expect(output).toContain("boot: step 399 ok");
+      // The console still receives every byte, unredacted, as before.
+      expect(failing.output()).toContain("boot: step 0 ok");
+      expect(failing.output()).toContain("stow failed for package legacy");
+    } finally {
+      await stopAgent(failing);
     }
   });
 

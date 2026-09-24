@@ -59,6 +59,7 @@ import {
   agentHealthResponseSchema,
   agentLaunchResponseSchema,
   CONTROL_SOCKET_PATH,
+  DAEMON_EXIT_OUTPUT_MAX_CHARS,
   DOCKER_AGENT_CONTRACT_VERSION,
   DOCKER_SOCKET_PATH,
   DOTFILES_ARCHIVE_DIR,
@@ -437,6 +438,36 @@ export const endpointHost = (endpoint: string): string =>
 const isEnded = (state: MicrovmDescription["state"]): boolean =>
   state === "TERMINATING" || state === "TERMINATED";
 
+/** Below this length a value is not treated as a secret to redact (see `agent.mjs`). */
+const MIN_REDACTED_LENGTH = 8;
+
+/**
+ * sealantd's last output as the guest reported it, fit for an error message: the launch's own
+ * secrets redacted again here (the agent already does; this does not trust it to), control
+ * characters other than newlines and tabs dropped, and bounded by the contract's limit.
+ */
+const reportableGuestOutput = (
+  output: string | undefined,
+  redactions: readonly string[],
+): string | undefined => {
+  if (output === undefined) return undefined;
+  let text = output;
+  for (const secret of [...redactions]
+    .filter((value) => value.length >= MIN_REDACTED_LENGTH)
+    .toSorted((a, b) => b.length - a.length)) {
+    text = text.split(secret).join("[redacted]");
+  }
+  const printable = Array.from(text)
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code === 9 || code === 10 || (code >= 32 && code !== 127);
+    })
+    .join("")
+    .slice(-DAEMON_EXIT_OUTPUT_MAX_CHARS)
+    .trim();
+  return printable === "" ? undefined : printable;
+};
+
 const describeEnded = (vm: MicrovmDescription): string =>
   vm.stateReason !== undefined && vm.stateReason.trim().length > 0
     ? `${vm.state}: ${vm.stateReason.trim()}`
@@ -574,7 +605,10 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       const host = endpointHost(endpoint);
       await this.#pushLaunchMaterial(host, microvmId, runId, launchSecret, request, deadline);
       const target = this.#controlTarget(host, microvmId);
-      await this.#awaitHealthy(target, host, microvmId, runId, dockerService, deadline);
+      await this.#awaitHealthy(target, host, microvmId, runId, dockerService, deadline, [
+        config.controlBearerToken,
+        ...Object.values(secretEnv ?? {}),
+      ]);
       if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
         await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
       }
@@ -622,7 +656,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
     if (vm.state === "RUNNING" && vm.endpoint !== undefined && vm.endpoint.trim().length > 0) {
       const health = await this.#readAgentHealth(endpointHost(vm.endpoint), input.resourceId);
-      const failure = this.#guestFailure(health, false);
+      const failure = this.#guestFailure(health, false, [this.#config.controlBearerToken]);
       if (failure !== undefined) {
         return {
           state: "exited",
@@ -843,6 +877,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   #guestFailure(
     health: AgentHealthResponse,
     dockerRequired: boolean,
+    redactions: readonly string[],
   ):
     | {
         readonly phase: "protocol" | "sealantd" | "docker";
@@ -856,9 +891,10 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     if (health.daemonExit !== undefined) {
       const signal = safeGuestSignal(health.daemonExit.signal);
       const signalText = signal === undefined ? "unrecognized" : String(signal);
+      const output = reportableGuestOutput(health.daemonExit.output, redactions);
       return {
         phase: "sealantd",
-        message: `sealantd in the MicroVM exited before the workspace stopped (code ${String(health.daemonExit.code)}, signal ${signalText}).`,
+        message: `sealantd in the MicroVM exited before the workspace stopped (code ${String(health.daemonExit.code)}, signal ${signalText}).${output === undefined ? "" : ` Its last output:\n${output}`}`,
         ...(health.daemonExit.code === null ? {} : { exitCode: health.daemonExit.code }),
         guestExitCode: health.daemonExit.code,
         ...(signal === undefined ? {} : { guestSignal: signal }),
@@ -894,11 +930,12 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     runId: string,
     dockerRequired: boolean,
     deadline: number,
+    redactions: readonly string[],
   ): Promise<void> {
     while (this.#now() <= deadline) {
       try {
         const health = await this.#readAgentHealth(host, microvmId);
-        const failure = this.#guestFailure(health, dockerRequired);
+        const failure = this.#guestFailure(health, dockerRequired, redactions);
         if (failure !== undefined) {
           throw new MicrovmGuestFailure(
             failure.phase,
