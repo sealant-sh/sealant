@@ -82,11 +82,12 @@ const DOCKER_SERVICE_OPTIONS = {
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 // The tail of sealantd's own output that health reports once the daemon has exited, so a failed
 // boot says why without the VM console. Each stream is kept apart: stdout and stderr are two
-// pipes, and the order the agent reads them in is not the order they were written. Twice as much
-// is kept as is reported, so a secret cut at the kept window's edge is still whole in the part
-// that is redacted and reported.
+// pipes, and the order the agent reads them in is not the order they were written. The kept window
+// is in bytes and the report in UTF-16 characters, and one character can take three bytes, so four
+// bytes are kept per reported character: whatever the text, the window's first 1365 characters or
+// more are never reported, and a secret cut at its edge is not reported in part.
 const DAEMON_OUTPUT_TAIL_CHARS = 4096;
-const DAEMON_OUTPUT_KEEP_BYTES = 2 * DAEMON_OUTPUT_TAIL_CHARS;
+const DAEMON_OUTPUT_KEEP_BYTES = 4 * DAEMON_OUTPUT_TAIL_CHARS;
 // The daemon's last lines can still be in its pipes when it exits. Wait this long for them, and
 // no longer: a child that inherited the pipes can hold them open after sealantd is gone.
 const DAEMON_OUTPUT_DRAIN_MS = 500;
@@ -113,6 +114,11 @@ const state = {
   flushTimeoutMs: 50_000,
   booted: false,
   daemon: null,
+  /**
+   * Set the moment sealantd exits. `daemonExit` (what health reports) follows once its output
+   * has drained, but nothing may count the daemon as up in between.
+   */
+  daemonExited: false,
   daemonExit: null,
   /** The last DAEMON_OUTPUT_KEEP_BYTES of each of sealantd's stdout and stderr. */
   daemonOutput: { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) },
@@ -442,8 +448,7 @@ const handleHook = async (hook, req, res) => {
         return json(res, 200, { status: "ok", hook, booted: state.booted });
       }
       const dockerReady = (await state.dockerService?.verify()) === true;
-      const ready =
-        dockerReady && state.booted && state.daemonExit === null && controlSocketReady();
+      const ready = dockerReady && state.booted && !state.daemonExited && controlSocketReady();
       return json(res, ready ? 200 : 503, {
         status: ready ? "ok" : "unavailable",
         hook,
@@ -599,6 +604,7 @@ const startDaemon = (bootEnv) => {
     keepDaemonOutput("stderr", chunk);
   });
   child.on("exit", (code, signal) => {
+    state.daemonExited = true;
     const settle = () => {
       if (state.daemonExit !== null) return;
       state.daemonExit = { code, signal };
@@ -610,6 +616,7 @@ const startDaemon = (bootEnv) => {
     setTimeout(() => setImmediate(settle), DAEMON_OUTPUT_DRAIN_MS).unref();
   });
   child.on("error", () => {
+    state.daemonExited = true;
     state.daemonExit = { code: null, signal: null };
     log("sealantd boot could not start");
   });
@@ -812,13 +819,13 @@ const handleHealth = (req, res) => {
     ...(state.daemonExit === null ? {} : { daemonExit: daemonExitReport() }),
   };
   if (state.contractVersion !== DOCKER_CONTRACT_VERSION) {
-    const healthy = state.booted && common.controlSocket && state.daemonExit === null;
+    const healthy = state.booted && common.controlSocket && !state.daemonExited;
     return json(res, healthy ? 200 : 503, common);
   }
   const docker = state.dockerService?.health() ?? { status: "starting" };
   const body = { version: DOCKER_CONTRACT_VERSION, ...common, services: { docker } };
   const healthy =
-    docker.status === "ready" && state.booted && common.controlSocket && state.daemonExit === null;
+    docker.status === "ready" && state.booted && common.controlSocket && !state.daemonExited;
   return json(res, healthy ? 200 : 503, body);
 };
 
