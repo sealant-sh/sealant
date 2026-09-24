@@ -47,15 +47,14 @@ const handleThemeChange = createClientOnlyFn((userTheme: UserTheme) => {
   }
 });
 
-const handleSystemThemeChange = () => handleThemeChange("system");
-
 /**
  * Subscribes to system theme preference updates while in `system` mode.
  */
 const setupPreferredListener = createClientOnlyFn(() => {
   const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  mediaQuery.addEventListener("change", handleSystemThemeChange);
-  return () => mediaQuery.removeEventListener("change", handleSystemThemeChange);
+  const handler = () => handleThemeChange("system");
+  mediaQuery.addEventListener("change", handler);
+  return () => mediaQuery.removeEventListener("change", handler);
 });
 
 const themeScript = (function () {
