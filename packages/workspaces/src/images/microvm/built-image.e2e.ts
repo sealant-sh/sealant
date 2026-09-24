@@ -20,6 +20,13 @@
  * workspace-scoped Docker: the image then carries the engine, is created with the `ALL` OS
  * capability, and inside the VM `docker info` and one container run are checked as well.
  *
+ * `SEALANT_MICROVM_BUILT_IMAGE_E2E_DOTFILES=1` launches with dotfiles the way Mend's hosted
+ * instance does: zsh as the default shell, an `auto` archive shaped like a real user's repository
+ * and a `copy` archive (`runtime/dotfiles-e2e-fixture.ts`), staged and pushed to the agent by the
+ * worker's own path. Inside the VM it checks the dot entries landed in /root, nothing from the
+ * repository's plain directories was stowed there, root's login shell is zsh, and the processes
+ * sealantd starts see `HOME=/root`. The family defaults to arch in this mode, as on that instance.
+ *
  * It deletes the image it built unless `SEALANT_MICROVM_BUILT_IMAGE_E2E_KEEP=1`. It prints what it
  * observed and never credentials, tokens or raw provider errors.
  */
@@ -29,6 +36,13 @@ import { newWorkspaceSchema, type NewWorkspace } from "@sealant/validators";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
+import {
+  DOTFILES_E2E_FOREGROUND,
+  DOTFILES_PROBE_SCRIPT,
+  dotfilesE2eArchives,
+  dotfilesProbeFindings,
+} from "../../runtime/dotfiles-e2e-fixture.js";
+import { hostDirectoryLaunchMaterialStager } from "../../runtime/launch-material.js";
 import { MicrovmRuntimeAdapter } from "../../runtime/microvm/adapter.js";
 import { createLiveMicrovmApi } from "../../runtime/microvm/api.js";
 import { microvmRuntimeConfigFromEnv } from "../../runtime/microvm/config.js";
@@ -44,11 +58,12 @@ import { createLiveMicrovmImageApi, createS3MicrovmArtifactStore } from "./image
 const E2E_ENABLED = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E === "1";
 const KEEP_IMAGE = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_KEEP === "1";
 const WITH_DOCKER = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_DOCKER === "1";
+const WITH_DOTFILES = process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_DOTFILES === "1";
 const FAMILIES = ["fedora", "arch", "ubuntu", "nix"] as const;
 type Family = (typeof FAMILIES)[number];
 const FAMILY: Family =
   FAMILIES.find((family) => family === process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_FAMILY) ??
-  "fedora";
+  (WITH_DOTFILES ? "arch" : "fedora");
 const PACKAGE = "ripgrep";
 /**
  * `SEALANT_MICROVM_BUILT_IMAGE_E2E_PACKAGES=mend-defaults` asks for Mend's default workspace
@@ -95,7 +110,10 @@ const numberFromEnv = (name: string): number | undefined => {
 };
 
 /** A blueprint that customises its image, with a marker so each run is a plan of its own. */
-const blueprint = (marker: string): NewWorkspace =>
+const blueprint = (
+  marker: string,
+  dotfilesArchives: NewWorkspace["runtime"]["dotfilesArchives"],
+): NewWorkspace =>
   parseBlueprint({
     version: "1",
     sources: {
@@ -115,19 +133,25 @@ const blueprint = (marker: string): NewWorkspace =>
       ...(WITH_DOCKER ? { services: { docker: { enabled: true } } } : {}),
     },
     customization: {
-      defaultShell: "bash",
+      defaultShell: WITH_DOTFILES ? "zsh" : "bash",
       dotfilesManager: "auto",
       dotfilesTarget: "home",
-      applyDotfiles: false,
+      applyDotfiles: WITH_DOTFILES,
       dotfilesBootstrap: false,
     },
     lifecycle: {
       setup: [],
-      startup: { steps: [], foreground: { kind: "command", run: "sleep 600", shell: "bash" } },
+      startup: {
+        steps: [],
+        foreground: WITH_DOTFILES
+          ? DOTFILES_E2E_FOREGROUND
+          : { kind: "command", run: "sleep 600", shell: "bash" },
+      },
     },
     runtime: {
       env: { SEALANT_E2E_MARKER: marker },
       credentialRefs: [],
+      dotfilesArchives,
       workspaceRoot: "/workspace",
       workingDirectory: "/workspace/repo",
       persistence: "ephemeral",
@@ -150,7 +174,7 @@ describe.skipIf(!E2E_ENABLED)(
   "Lambda MicroVM boots the image built from its blueprint (live)",
   () => {
     it(
-      `builds a customised ${FAMILY} blueprint${WITH_DOCKER ? " with Docker" : ""}${MEND_DEFAULTS ? " and Mend's default packages" : ""} once, boots it, and finds the OS, the packages and sealantctl inside`,
+      `builds a customised ${FAMILY} blueprint${WITH_DOCKER ? " with Docker" : ""}${MEND_DEFAULTS ? " and Mend's default packages" : ""}${WITH_DOTFILES ? " and dotfiles" : ""} once, boots it, and finds the OS, the packages and sealantctl inside`,
       { timeout: 45 * 60_000 },
       async () => {
         const config = microvmRuntimeConfigFromEnv({
@@ -201,7 +225,10 @@ describe.skipIf(!E2E_ENABLED)(
         });
 
         // A fixed marker reuses one image across runs (with `_KEEP=1`); unset, every run builds.
-        const spec = blueprint(process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_MARKER ?? randomUUID());
+        const spec = blueprint(
+          process.env.SEALANT_MICROVM_BUILT_IMAGE_E2E_MARKER ?? randomUUID(),
+          WITH_DOTFILES ? await dotfilesE2eArchives() : [],
+        );
         const fixtureId = `sealant-built-image-e2e-${randomUUID().slice(0, 8)}`;
         let imageName: string | undefined;
         let microvmId: string | undefined;
@@ -250,13 +277,21 @@ describe.skipIf(!E2E_ENABLED)(
           expect(second.publishedImage).toEqual(first.publishedImage);
           expect(second.build.metadata?.notes?.[0]).toMatch(/^Reused the MicroVM image/);
 
-          // 3. The adapter boots what the build published.
+          // 3. The adapter boots what the build published, with the dotfiles staged as the
+          // worker stages them (the adapter inlines them into the agent's launch push).
+          const staged = await hostDirectoryLaunchMaterialStager.stage({
+            spec,
+            runId: fixtureId,
+          });
           const launchStarted = Date.now();
           const launched = await adapter.launch(
             parseRuntimeAdapterLaunchInput({
               runId: fixtureId,
               blueprint: spec,
               publishedImage: first.publishedImage,
+              ...(staged.dotfilesArchiveDir === undefined
+                ? {}
+                : { dotfilesArchiveDir: staged.dotfilesArchiveDir }),
             }),
           );
           microvmId = launched.resourceId;
@@ -341,6 +376,19 @@ describe.skipIf(!E2E_ENABLED)(
             expect(inside.stdout).toContain("container=ran-in-a-container");
           }
 
+          if (WITH_DOTFILES) {
+            const probe = await Effect.runPromise(
+              execInWorkspace(target, {
+                executable: "sh",
+                args: ["-c", DOTFILES_PROBE_SCRIPT],
+              }).pipe(Effect.provide(SealantRuntimeControlLive)),
+            );
+            const findings = dotfilesProbeFindings(probe.stdout);
+            observed("dotfiles", { exitCode: probe.exitCode, stdout: probe.stdout, findings });
+            expect(probe.exitCode).toBe(0);
+            expect(findings).toEqual([]);
+          }
+
           // 4. A fenced stop goes through the terminate hook, where the agent runs the flush.
           const stopStarted = Date.now();
           const stopped = await adapter.stop({ resourceId: launched.resourceId, fence: true });
@@ -354,6 +402,7 @@ describe.skipIf(!E2E_ENABLED)(
           if (microvmId !== undefined) {
             await adapter.stop({ resourceId: microvmId, fence: true }).catch(() => undefined);
           }
+          await hostDirectoryLaunchMaterialStager.removeAll(fixtureId);
           if (imageName !== undefined && !KEEP_IMAGE) {
             const removed = await imageApi.deleteImage(imageName).catch(() => "failed" as const);
             observed("image cleanup", { image: imageName, removed });
