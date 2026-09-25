@@ -72,7 +72,12 @@ import {
   GitHubSourceIntegrationService,
   createGitHubInstallationRepositoryAuthRef,
 } from "@sealant/source-integrations";
-import { newWorkspaceSchema, workspaceBindSchema, type NewWorkspace } from "@sealant/validators";
+import {
+  newWorkspaceSchema,
+  workspaceBindSchema,
+  workspaceDotfilesArchiveSchema,
+  type NewWorkspace,
+} from "@sealant/validators";
 import {
   bindRootMountPath,
   UnknownWorkspacePackageError,
@@ -87,6 +92,7 @@ import {
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
 import { type Context, Effect, Result } from "effect";
+import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
@@ -203,6 +209,40 @@ const parseWorkspaceSpec = (spec: unknown) => {
   }
 
   return Effect.succeed(parsed.data);
+};
+
+/**
+ * The spec as the attempt snapshot records it. The snapshot backs sync-backs and the workspace
+ * detail view; the dotfiles archive payloads (multi-MB base64 of the caller's shell configs)
+ * belong only in the build job payload the worker consumes, not in the durable, API-visible
+ * snapshot.
+ */
+const snapshotSpecOf = (spec: NewWorkspace): NewWorkspace =>
+  spec.runtime.dotfilesArchives.length === 0
+    ? spec
+    : { ...spec, runtime: { ...spec.runtime, dotfilesArchives: [] } };
+
+const recordedDotfilesArchivesSchema = z.object({
+  runtime: z
+    .object({ dotfilesArchives: z.array(workspaceDotfilesArchiveSchema).default([]) })
+    .prefault({}),
+});
+
+/**
+ * The dotfiles archives a previous launch carried, read from its build job payload: the one
+ * place they are kept (see `snapshotSpecOf`). Only this field is read, so an unrelated change to
+ * the spec schema since that launch cannot cost a relaunch its dotfiles.
+ */
+const recordedDotfilesArchives = (workspaceId: string, jobPayload: unknown) => {
+  const parsed = recordedDotfilesArchivesSchema.safeParse(jobPayload);
+  if (!parsed.success) {
+    return Effect.fail(
+      new WorkspaceConflictError({
+        message: `Workspace ${workspaceId} cannot be restarted: the dotfiles archives its last launch recorded do not parse (${parsed.error.issues[0]?.message ?? "invalid"}).`,
+      }),
+    );
+  }
+  return Effect.succeed(parsed.data.runtime.dotfilesArchives);
 };
 
 /**
@@ -1574,19 +1614,9 @@ export const createWorkspace = (input: {
           relation: "launch",
         });
 
-        // The attempt snapshot backs sync-backs and the workspace detail view; the dotfiles
-        // archive payloads (multi-MB base64 of the caller's shell configs) belong only in the
-        // job payload the worker consumes, not in the durable, API-visible snapshot.
-        const snapshotSpec: NewWorkspace =
-          resolvedSpec.runtime.dotfilesArchives.length === 0
-            ? resolvedSpec
-            : {
-                ...resolvedSpec,
-                runtime: { ...resolvedSpec.runtime, dotfilesArchives: [] },
-              };
         yield* workspaceAttempts.setAttemptSnapshot({
           runId: attempt.id,
-          specPayload: snapshotSpec,
+          specPayload: snapshotSpecOf(resolvedSpec),
         });
 
         yield* workspaceBuildJobs.insertQueuedJob({
@@ -2582,7 +2612,18 @@ export const restartWorkspace = (input: {
         message: `Workspace ${input.workspaceId} has no recorded spec to relaunch from.`,
       });
     }
-    const spec = yield* parseWorkspaceSpec(specPayload);
+    const recordedSpec = yield* parseWorkspaceSpec(specPayload);
+    // The snapshot never carries the dotfiles archive payloads (`snapshotSpecOf`); the previous
+    // build job does. Relaunch with them, so the restarted workspace applies the same dotfiles
+    // and its image plan keeps the managers they need (tar, chezmoi, stow).
+    const dotfilesArchives =
+      recordedSpec.runtime.dotfilesArchives.length > 0
+        ? recordedSpec.runtime.dotfilesArchives
+        : yield* recordedDotfilesArchives(workspace.id, previousJob.requestPayload);
+    const spec: NewWorkspace = {
+      ...recordedSpec,
+      runtime: { ...recordedSpec.runtime, dotfilesArchives },
+    };
     // A relaunch mints credentials again from the recorded spec, so the recorded spec is checked
     // like a submitted one. A spec stored before refs were bound to their URL (CORE-05) may name a
     // destination the ref was never issued for; it is refused here, not relaunched.
@@ -2659,7 +2700,7 @@ export const restartWorkspace = (input: {
 
         yield* workspaceAttempts.setAttemptSnapshot({
           runId: attempt.id,
-          specPayload: spec,
+          specPayload: snapshotSpecOf(spec),
         });
 
         yield* workspaceBuildJobs.insertQueuedJob({

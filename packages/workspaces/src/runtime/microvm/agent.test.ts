@@ -38,9 +38,38 @@ const record = process.env.FAKE_SEALANTD_RECORD;
 const temp = record + ".tmp";
 fs.writeFileSync(temp, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));
 fs.renameSync(temp, record);
-const server = net.createServer((socket) => socket.pipe(socket));
-server.listen(socketPath);
-process.on("SIGTERM", () => { server.close(); process.exit(0); });
+if (process.env.FAKE_SEALANTD_FAIL === "1") {
+  // A boot that fails the way a dotfiles apply does: plenty of output first, the reason last.
+  for (let line = 0; line < 400; line += 1) process.stdout.write("boot: step " + line + " ok\\n");
+  const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
+  process.stderr.write(
+    "Error: dotfiles: stow failed for package legacy (token control-token, capture " +
+      secrets.SEALANT_CAPTURE_TOKEN + ")\\n",
+  );
+  // Not process.exit(): writes to a pipe can still be queued, and exit would drop them.
+  process.exitCode = 3;
+} else if (process.env.FAKE_SEALANTD_MULTIBYTE === "1") {
+  // A secret, then enough three-byte characters that an 8 KiB window would begin inside it.
+  const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
+  fs.writeSync(2, secrets.SEALANT_CAPTURE_TOKEN + "\u20ac".repeat(2726));
+  process.exit(6);
+} else if (process.env.FAKE_SEALANTD_CRASH === "1") {
+  // Dies once the control socket is up, leaving the socket file behind, while a process it
+  // started still holds its output pipes open (so the agent never sees them close).
+  const server = net.createServer(() => undefined);
+  server.listen(socketPath, () => {
+    require("node:child_process")
+      .spawn("sleep", ["3"], { detached: true, stdio: ["ignore", "inherit", "inherit"] })
+      .unref();
+    fs.writeSync(2, "Error: sealantd crashed after its control socket was up\\n");
+    fs.writeFileSync(record + ".pid", String(process.pid));
+    process.exit(5);
+  });
+} else {
+  const server = net.createServer((socket) => socket.pipe(socket));
+  server.listen(socketPath);
+  process.on("SIGTERM", () => { server.close(); process.exit(0); });
+}
 `;
 
 const FAKE_SEALANTCTL = `#!/bin/sh
@@ -59,6 +88,8 @@ interface Agent {
   readonly socketPath: string;
   readonly recordFile: string;
   readonly ctlLog: string;
+  /** Everything the agent has written to its console (the VM's log group) so far. */
+  readonly output: () => string;
 }
 
 const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent> => {
@@ -87,8 +118,8 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  let output = "";
   const port = await new Promise<number>((resolve, reject) => {
-    let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = /listening on :(\d+)/.exec(output);
@@ -101,7 +132,7 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
     });
     child.once("exit", (code) => reject(new Error(`agent exited early (${code}): ${output}`)));
   });
-  return { child, port, dir, stateDir, socketPath, recordFile, ctlLog };
+  return { child, port, dir, stateDir, socketPath, recordFile, ctlLog, output: () => output };
 };
 
 const stopAgent = async (agent: Agent): Promise<void> => {
@@ -420,6 +451,126 @@ describe("microvm agent", () => {
       expect(await readFile(secretFile, "utf8")).toBe(bigRequest.secretEnvJson);
     } finally {
       await stopAgent(racing);
+    }
+  });
+
+  it("reports why sealantd exited: the tail of its output, bounded and redacted", async () => {
+    const failing = await startAgent({ FAKE_SEALANTD_FAIL: "1" });
+    try {
+      await hook(failing, "run", {
+        microvmId: "microvm-4",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      const secretEnvJson = JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_capture_secret" });
+      expect(
+        await call(failing, "POST", AGENT_LAUNCH_ROUTE, {
+          body: { ...launchRequest, secretEnvJson },
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+
+      let health: { readonly status: number; readonly body: unknown } | undefined;
+      await waitFor(async () => {
+        health = await call(failing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+      });
+      expect(health?.status).toBe(503);
+      const parsed = agentHealthResponseSchema.parse(health?.body);
+      expect(parsed.daemonExit).toMatchObject({ code: 3, signal: null });
+      const output = parsed.daemonExit?.output ?? "";
+      // The reason (stderr) comes last, whole, with the launch's secrets redacted.
+      expect(output).toMatch(
+        /\nError: dotfiles: stow failed for package legacy \(token \[redacted\], capture \[redacted\]\)$/,
+      );
+      expect(output).not.toContain("control-token");
+      expect(output).not.toContain("mst_capture_secret");
+      // Bounded: the earliest lines of a long boot are gone, the latest are kept.
+      expect(output.length).toBeLessThanOrEqual(4096);
+      expect(output).not.toContain("boot: step 0 ok");
+      expect(output).toContain("boot: step 399 ok");
+      // The console still receives every byte, unredacted, as before.
+      expect(failing.output()).toContain("boot: step 0 ok");
+      expect(failing.output()).toContain("stow failed for package legacy");
+    } finally {
+      await stopAgent(failing);
+    }
+  });
+
+  it("reports no part of a secret cut at the edge of the kept output, whatever the characters", async () => {
+    const failing = await startAgent({ FAKE_SEALANTD_MULTIBYTE: "1" });
+    try {
+      await hook(failing, "run", {
+        microvmId: "microvm-6",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      const secretEnvJson = JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_capture_secret" });
+      expect(
+        await call(failing, "POST", AGENT_LAUNCH_ROUTE, {
+          body: { ...launchRequest, secretEnvJson },
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+
+      let health: { readonly status: number; readonly body: unknown } | undefined;
+      await waitFor(async () => {
+        health = await call(failing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+      });
+      const output = agentHealthResponseSchema.parse(health?.body).daemonExit?.output ?? "";
+      expect(output).not.toContain("secret");
+      expect(output).toBe(`[redacted]${"\u20ac".repeat(2726)}`);
+    } finally {
+      await stopAgent(failing);
+    }
+  });
+
+  it("never reports a daemon that has exited as healthy, even before its output has drained", async () => {
+    const crashing = await startAgent({ FAKE_SEALANTD_CRASH: "1" });
+    try {
+      await hook(crashing, "run", {
+        microvmId: "microvm-5",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      expect(
+        await call(crashing, "POST", AGENT_LAUNCH_ROUTE, {
+          body: launchRequest,
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+
+      // Once the daemon is gone (reaped by the agent), and while its pipes are still held open,
+      // the stale socket file must not make it look healthy.
+      let pid = 0;
+      await waitFor(async () => {
+        pid = Number(await readFile(`${crashing.recordFile}.pid`, "utf8").catch(() => "0"));
+        return pid > 0;
+      });
+      await waitFor(async () => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      const early = await call(crashing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+      expect(early.status).toBe(503);
+      expect(early.body).toMatchObject({ booted: true, controlSocket: true });
+
+      // The exit is reported once the drain wait is over, with what the daemon last wrote.
+      let health: { readonly status: number; readonly body: unknown } | undefined;
+      await waitFor(async () => {
+        health = await call(crashing, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: unknown }).daemonExit !== undefined;
+      });
+      expect(health?.status).toBe(503);
+      expect(agentHealthResponseSchema.parse(health?.body).daemonExit).toEqual({
+        code: 5,
+        signal: null,
+        output: "Error: sealantd crashed after its control socket was up",
+      });
+    } finally {
+      await stopAgent(crashing);
     }
   });
 

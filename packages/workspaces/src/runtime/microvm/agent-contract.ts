@@ -158,9 +158,19 @@ export const agentLaunchResponseSchema = z.strictObject({
 
 export type AgentLaunchResponse = z.infer<typeof agentLaunchResponseSchema>;
 
+/** The most output a daemon exit reports (`agent.mjs` keeps the tail of sealantd's output). */
+export const DAEMON_EXIT_OUTPUT_MAX_CHARS = 4096;
+
 const processExitSchema = z.strictObject({
   code: z.number().int().nullable(),
   signal: z.string().nullable(),
+  /**
+   * What sealantd printed last before it exited: the end of its stdout, then the end of its
+   * stderr (which has first claim on the room), so a failed boot (a dotfiles apply that failed,
+   * say) says why without the VM console. The agent redacts the control token and every secret
+   * env value first. Absent when the daemon printed nothing, and from agents older than this field.
+   */
+  output: z.string().max(DAEMON_EXIT_OUTPUT_MAX_CHARS).optional(),
 });
 
 const dockerProbeFailureSchema = z.strictObject({
