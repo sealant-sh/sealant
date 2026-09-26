@@ -18,7 +18,11 @@ import {
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
-import type { PackageStandardizer } from "@sealant/workspaces";
+import {
+  createPackageStandardizer,
+  planWorkspaceImageBuild,
+  type PackageStandardizer,
+} from "@sealant/workspaces";
 import { Effect, Layer, Result } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -67,7 +71,10 @@ interface RecordingState {
   publishedJobId?: string;
 }
 
-const makeRecordingLayer = (state: RecordingState) => {
+const makeRecordingLayer = (
+  state: RecordingState,
+  packageStandardizer: PackageStandardizer = { resolvePackage: () => Effect.die("unused") },
+) => {
   const workspaceRepo: WorkspaceRepoService = {
     createWorkspace: (input) =>
       Effect.succeed<Workspace>({
@@ -191,10 +198,6 @@ const makeRecordingLayer = (state: RecordingState) => {
     markJobFailed: () => Effect.die("unused"),
     clearSecretEnv: () => Effect.die("unused"),
     listPublishedImages: () => Effect.die("unused"),
-  };
-
-  const packageStandardizer: PackageStandardizer = {
-    resolvePackage: () => Effect.die("unused"),
   };
 
   return Layer.mergeAll(
@@ -347,6 +350,78 @@ describe("createWorkspace capture harness home", () => {
         expect(state.snapshot).toBeUndefined();
         expect(state.job).toBeUndefined();
         expect(state.sealedPlaintext).toBeUndefined();
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+  });
+});
+
+describe("createWorkspace package ids", () => {
+  const payloadWithPackages = (
+    family: "arch" | "fedora" | "nix" | "ubuntu",
+    ids: readonly string[],
+  ): CreateWorkspaceRequest => ({
+    ...capturePayload("/workspace/harness-home"),
+    spec: {
+      sources: {
+        workspace: {
+          kind: "capture",
+          endpoint: "https://mend.example.com/session/s1",
+          worktreeId: "wt_1",
+          harnessHome: "/workspace/harness-home",
+        },
+      },
+      harness: { id: "claude-code" },
+      target: { os: { family, mode: "require" } },
+      tooling: { packages: ids.map((id) => ({ id })) },
+    },
+  });
+
+  // The standardizer the API runs, offline: had the create path asked it, it would answer from its
+  // own map (`python` is `python3` on nix) as it did on alpha.
+  const standardizer = createPackageStandardizer({
+    repologyClient: {
+      getProject: () => Promise.reject(new Error("no network in this test")),
+      searchProjects: () => Promise.reject(new Error("no network in this test")),
+    },
+  });
+
+  // Alpha, 2026-09-25: the create path rewrote `python` to `python3` and `github-cli` to `gh`, and
+  // the image planner, which knows catalog ids only, refused both on nix, Fedora and Ubuntu.
+  it.each(["nix", "fedora", "ubuntu", "arch"] as const)(
+    "keeps catalog ids in the stored spec on %s, and the stored spec plans",
+    async (family) => {
+      const state: RecordingState = {};
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* createWorkspace({
+            payload: payloadWithPackages(family, ["python", "github-cli"]),
+            headers: {},
+          });
+          expect(state.snapshot?.tooling.packages).toEqual([
+            { id: "python" },
+            { id: "github-cli" },
+          ]);
+          expect(state.job?.tooling.packages).toEqual([{ id: "python" }, { id: "github-cli" }]);
+          if (state.job === undefined) throw new Error("no job was queued");
+          const { containerfile } = planWorkspaceImageBuild({ blueprint: state.job });
+          expect(containerfile).toMatch(family === "arch" ? /\bgithub-cli\b/ : /\bgh\b/);
+        }).pipe(Effect.provide(makeRecordingLayer(state, standardizer))),
+      );
+    },
+  );
+
+  it("refuses an id the catalog does not know, naming it, before anything is stored", async () => {
+    const state: RecordingState = {};
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const result = yield* Effect.result(
+          createWorkspace({ payload: payloadWithPackages("nix", ["python3"]), headers: {} }),
+        );
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(result.failure.message).toContain("Unknown workspace package 'python3'");
+        }
+        expect(state.job).toBeUndefined();
       }).pipe(Effect.provide(makeRecordingLayer(state))),
     );
   });
