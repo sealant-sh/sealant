@@ -97,7 +97,6 @@ import { z } from "zod";
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
 import { env } from "../../runtime-env.js";
 import {
-  PackageStandardizerService,
   RunExecPublisherService,
   WorkspaceBuildJobPublisherService,
   WorkspaceLifecyclePublisherService,
@@ -502,112 +501,17 @@ const parseRequestedOsFamily = (
   return spec.target.os.family;
 };
 
-const dedupePackageNames = (values: readonly string[]): string[] => {
-  const deduped = new Set<string>();
-
-  for (const value of values) {
-    const normalized = value.trim();
-
-    if (normalized.length > 0) {
-      deduped.add(normalized);
-    }
-  }
-
-  return [...deduped];
-};
-
-const standardizeRequestedPackages = (spec: NewWorkspace) => {
-  return Effect.gen(function* () {
-    const packageStandardizer = yield* PackageStandardizerService;
-    const requestedPackages = parseRequestedPackageIds(spec);
-
-    if (requestedPackages.length === 0) {
-      const noRequestedErrors: string[] = [];
-
-      return {
-        spec,
-        errors: noRequestedErrors,
-      };
-    }
-
-    const targetOs = parseRequestedOsFamily(spec);
-
-    if (targetOs === "auto") {
-      return {
-        spec,
-        errors: [
-          "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, nix, or ubuntu for this request.",
-        ],
-      };
-    }
-
-    // Custom base images have no managed package catalog: requested names pass through verbatim
-    // to whatever package manager the base itself carries (the build fails readable when it has
-    // none). Standardizing against a distro archive here would only reject valid base-native
-    // names.
-    if (targetOs === "custom") {
-      const customPassthroughErrors: string[] = [];
-
-      return {
-        spec,
-        errors: customPassthroughErrors,
-      };
-    }
-
-    const standardizedPackageNames: string[] = [];
-    const packageErrors: string[] = [];
-
-    for (const requested of requestedPackages) {
-      const resolution = yield* packageStandardizer
-        .resolvePackage({
-          query: requested,
-          targetOs,
-        })
-        .pipe(
-          Effect.mapError(
-            (error) =>
-              new WorkspaceInternalServerError({
-                message: toErrorMessage(error, "Package resolution failed."),
-              }),
-          ),
-        );
-
-      const osSupport = resolution.osSupport[targetOs];
-
-      if (!osSupport.supported || osSupport.packageName === undefined) {
-        packageErrors.push(
-          `Package '${requested}' is not available for ${targetOs}. Resolution status: ${resolution.status}.`,
-        );
-        continue;
-      }
-
-      standardizedPackageNames.push(osSupport.packageName);
-    }
-
-    if (packageErrors.length > 0) {
-      return {
-        spec,
-        errors: packageErrors,
-      };
-    }
-
-    const nextSpec: NewWorkspace = {
-      ...spec,
-      tooling: {
-        ...spec.tooling,
-        packages: dedupePackageNames(standardizedPackageNames).map((id) => ({ id })),
-      },
-    };
-
-    const parsedNextSpec = yield* parseWorkspaceSpec(nextSpec);
-    const emptyErrors: string[] = [];
-
-    return {
-      spec: parsedNextSpec,
-      errors: emptyErrors,
-    };
-  });
-};
+/**
+ * A managed family needs a named target for its packages. The ids themselves are checked against
+ * the catalog when the request arrives and stay catalog ids in the spec: the image planner maps
+ * each one to its family's own names. Rewriting them here to one family's names (`python3`, `gh`)
+ * handed the planner names the catalog does not know, and every nix, Fedora and Ubuntu image that
+ * asked for `python` or `github-cli` failed to build (alpha, 2026-09-25).
+ */
+const packageTargetRefusal = (spec: NewWorkspace): string | undefined =>
+  parseRequestedPackageIds(spec).length > 0 && parseRequestedOsFamily(spec) === "auto"
+    ? "Package validation requires an explicit target OS. Set spec.target.os.family to arch, fedora, nix, or ubuntu for this request."
+    : undefined;
 
 const cloneSpecForSourceSelection = (spec: NewWorkspace): NewWorkspace => {
   return structuredClone(spec);
@@ -1518,14 +1422,9 @@ export const createWorkspace = (input: {
     const runId = yield* randomId;
     const jobId = yield* randomId;
 
-    const packageStandardization = yield* standardizeRequestedPackages(
-      dotfilesSelectionResult.spec,
-    );
-
-    if (packageStandardization.errors.length > 0) {
-      return yield* new WorkspaceBadRequestError({
-        message: packageStandardization.errors[0] ?? "Package standardization failed.",
-      });
+    const packageRefusal = packageTargetRefusal(dotfilesSelectionResult.spec);
+    if (packageRefusal !== undefined) {
+      return yield* new WorkspaceBadRequestError({ message: packageRefusal });
     }
 
     // Budgets last among the refusals (CORE-04): a request that was never going to launch spends
@@ -1535,7 +1434,7 @@ export const createWorkspace = (input: {
     yield* requireLiveWorkspaceRoom(body.ownerUserId);
     yield* spendOwnerLaunch(body.ownerUserId);
 
-    const resolvedSpec = packageStandardization.spec;
+    const resolvedSpec = dotfilesSelectionResult.spec;
 
     // Connected-account selection -> opaque blueprint credentialRefs. The contract-level
     // `credentials` field wins over one embedded in the spec (newWorkspaceSchema allows both).

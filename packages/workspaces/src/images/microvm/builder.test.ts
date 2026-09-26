@@ -379,6 +379,37 @@ describe("MicrovmWorkspaceImageBuilder", () => {
   });
 });
 
+describe("MicrovmWorkspaceImageBuilder.plan package ids", () => {
+  const onFamily = (
+    family: "arch" | "fedora" | "nix" | "ubuntu",
+    packages: readonly string[],
+  ): NewWorkspace => {
+    const spec = blueprint(packages);
+    return { ...spec, target: { ...spec.target, os: { family, mode: "require" } } };
+  };
+
+  // Alpha, 2026-09-25 (Mend 0.32.1, Sealant 0.37.1): a nix project with `python` and `github-cli`
+  // failed its build with "Unknown workspace packages 'python3', 'gh'". The planner takes catalog
+  // ids and maps them itself; it is handed ids, never one family's package names.
+  it.each([
+    ["nix", /nixpkgs#python3\b/, /nixpkgs#gh\b/],
+    ["fedora", /dnf -y install .*\bpython3\b/, /dnf -y install .*\bgh\b/],
+    ["ubuntu", /apt-get install .*\bpython3\b/, /apt-get install .*\bgh\b/],
+    ["arch", /pacman -S .*\bpython\b/, /pacman -S .*\bgithub-cli\b/],
+  ] as const)("plans python and github-cli on %s", (family, python, githubCli) => {
+    const planned = builderFor(fakeAws()).plan(onFamily(family, ["python", "github-cli"]));
+    expect(planned.osFamily).toBe(family);
+    expect(planned.containerfile).toMatch(python);
+    expect(planned.containerfile).toMatch(githubCli);
+  });
+
+  it("refuses a family's package name where the catalog id belongs, naming it", () => {
+    expect(() => builderFor(fakeAws()).plan(onFamily("nix", ["python3", "gh"]))).toThrow(
+      /Unknown workspace packages 'python3', 'gh'/,
+    );
+  });
+});
+
 describe("microvmImageReference", () => {
   it("round-trips an image ARN and version", () => {
     const arn = "arn:aws:lambda:eu-central-1:123456789012:microvm-image:sealant-ws-abc123";

@@ -98,6 +98,58 @@ describe("the workspace package catalog", () => {
     expect(nix).toContain("nixpkgs#mise");
   });
 
+  it("offers a zsh profile's tools on every managed family", () => {
+    const profile = [
+      "zsh",
+      "starship",
+      "zsh-autosuggestions",
+      "zsh-syntax-highlighting",
+      "zsh-history-substring-search",
+      "direnv",
+      "eza",
+    ];
+    // Fedora 41 and Ubuntu 24.04 package neither starship nor zsh-history-substring-search.
+    for (const family of ["fedora", "ubuntu"] as const) {
+      const containerfile = containerfileFor(family, profile);
+      expect(containerfile, family).toContain("starship 1.26.0");
+      expect(containerfile, family).toContain("zsh-history-substring-search 1.1.0");
+      for (const name of ["zsh-autosuggestions", "zsh-syntax-highlighting", "direnv", "eza"]) {
+        expect(containerfile, `${family} ${name}`).toMatch(
+          new RegExp(`(dnf -y install|apt-get install) .*\\b${name}\\b`),
+        );
+      }
+    }
+    // Arch packages all of them, on x86_64 and on ARM.
+    const arch = containerfileFor("arch", profile);
+    expect(arch).not.toContain("pinned by checksum");
+    for (const name of profile) expect(arch, name).toMatch(new RegExp(`pacman -S .*\\b${name}\\b`));
+    // So does nixpkgs, under the same attribute names.
+    const nix = containerfileFor("nix", profile);
+    expect(nix).not.toContain("pinned by checksum");
+    for (const name of profile) expect(nix, name).toContain(`'nixpkgs#${name}'`);
+  });
+
+  it("installs a zsh plugin's release as a file to source, not a program", () => {
+    const release = WORKSPACE_PACKAGE_CATALOG["zsh-history-substring-search"]!.ubuntu.release!;
+    const step = renderReleaseInstall(release);
+    // The tag's archive is the same script for every architecture.
+    expect(release.archives.aarch64).toEqual(release.archives.x86_64);
+    expect(step).toContain(
+      "url='https://github.com/zsh-users/zsh-history-substring-search/archive/refs/tags/v1.1.0.tar.gz'; sha=9b52eca6c894dd98caa5f07160199f3f3179ff017575d5acc9fdc467b1ac70f8",
+    );
+    expect(step).toContain(
+      `install -D -m 0644 "$d/$m" '/usr/local/share/zsh-history-substring-search'"/$(basename "$m")"`,
+    );
+    expect(step).not.toContain("/usr/local/bin");
+    expect(step.indexOf("sha256sum -c")).toBeLessThan(step.indexOf("tar -xzf"));
+    // starship is a program: /usr/local/bin, executable.
+    const starship = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.starship!.fedora.release!);
+    expect(starship).toContain(
+      "aarch64) url='https://github.com/starship/starship/releases/download/v1.26.0/starship-aarch64-unknown-linux-musl.tar.gz'; sha=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b",
+    );
+    expect(starship).toContain('install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"');
+  });
+
   it("renders a release install that checks the checksum before unpacking, per architecture", () => {
     const step = renderReleaseInstall(WORKSPACE_PACKAGE_CATALOG.mise!.fedora.release!);
     expect(step).toContain(

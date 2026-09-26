@@ -13,6 +13,21 @@
  * workspace is created, instead of being handed to the package manager to fail minutes into a
  * build. Measured on 2026-09-21: Fedora 41 has no `mise` or `lazygit` and calls the GitHub CLI
  * `gh`; Ubuntu 24.04 also lacks `uv` and `pnpm`; Arch Linux ARM lacks `mise`; nixpkgs has all.
+ * Measured on 2026-09-26: neither Fedora 41 nor Ubuntu 24.04 has `starship` or
+ * `zsh-history-substring-search`; Arch (x86_64 and ARM) and nixpkgs have both.
+ *
+ * A zsh plugin's `.zsh` file lands where its family puts it, which differs:
+ *
+ * - `zsh-autosuggestions`: Fedora and Ubuntu `/usr/share/zsh-autosuggestions/`, Arch
+ *   `/usr/share/zsh/plugins/zsh-autosuggestions/`, nix
+ *   `/root/.nix-profile/share/zsh-autosuggestions/`.
+ * - `zsh-syntax-highlighting`: Fedora and Ubuntu `/usr/share/zsh-syntax-highlighting/`, Arch
+ *   `/usr/share/zsh/plugins/zsh-syntax-highlighting/`, nix
+ *   `/root/.nix-profile/share/zsh-syntax-highlighting/`.
+ * - `zsh-history-substring-search`: Fedora and Ubuntu (the release)
+ *   `/usr/local/share/zsh-history-substring-search/`, Arch
+ *   `/usr/share/zsh/plugins/zsh-history-substring-search/`, nix
+ *   `/root/.nix-profile/share/zsh-history-substring-search/`.
  */
 import type { BuildkitTargetOsFamily } from "@sealant/validators";
 
@@ -21,7 +36,10 @@ export const CATALOG_OS_FAMILIES: readonly CatalogOsFamily[] = ["fedora", "arch"
 
 export type ReleaseArchitecture = "x86_64" | "aarch64";
 
-/** A pinned upstream release archive, one per architecture, unpacked into /usr/local/bin. */
+/**
+ * A pinned upstream release archive, one per architecture. Its members are binaries installed to
+ * /usr/local/bin, or, for a shell plugin, files installed to the release's own directory.
+ */
 export interface ReleaseInstall {
   /** For the log and the error. */
   readonly name: string;
@@ -30,6 +48,11 @@ export interface ReleaseInstall {
   readonly archives: Readonly<Record<ReleaseArchitecture, { url: string; sha256: string }>>;
   /** Paths inside the archive to install, each to /usr/local/bin/<basename>. */
   readonly members: Readonly<Record<ReleaseArchitecture, readonly string[]>>;
+  /**
+   * Installs the members to <directory>/<basename> as plain files (0644) instead of to
+   * /usr/local/bin as programs: a shell plugin is sourced, not run.
+   */
+  readonly directory?: string;
 }
 
 export interface FamilyInstall {
@@ -106,6 +129,44 @@ const uv: ReleaseInstall = {
   },
 };
 
+const STARSHIP_VERSION = "1.26.0";
+const starship: ReleaseInstall = {
+  name: "starship",
+  version: STARSHIP_VERSION,
+  archives: {
+    x86_64: {
+      url: `https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/starship-x86_64-unknown-linux-musl.tar.gz`,
+      sha256: "b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3",
+    },
+    aarch64: {
+      url: `https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/starship-aarch64-unknown-linux-musl.tar.gz`,
+      sha256: "dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b",
+    },
+  },
+  members: { x86_64: ["starship"], aarch64: ["starship"] },
+};
+
+// A zsh script, the same for every architecture: the archive GitHub serves for the release tag.
+const ZSH_HISTORY_SUBSTRING_SEARCH_VERSION = "1.1.0";
+const zshHistorySubstringSearchArchive = {
+  url: `https://github.com/zsh-users/zsh-history-substring-search/archive/refs/tags/v${ZSH_HISTORY_SUBSTRING_SEARCH_VERSION}.tar.gz`,
+  sha256: "9b52eca6c894dd98caa5f07160199f3f3179ff017575d5acc9fdc467b1ac70f8",
+};
+const zshHistorySubstringSearchMember = `zsh-history-substring-search-${ZSH_HISTORY_SUBSTRING_SEARCH_VERSION}/zsh-history-substring-search.zsh`;
+const zshHistorySubstringSearch: ReleaseInstall = {
+  name: "zsh-history-substring-search",
+  version: ZSH_HISTORY_SUBSTRING_SEARCH_VERSION,
+  archives: {
+    x86_64: zshHistorySubstringSearchArchive,
+    aarch64: zshHistorySubstringSearchArchive,
+  },
+  members: {
+    x86_64: [zshHistorySubstringSearchMember],
+    aarch64: [zshHistorySubstringSearchMember],
+  },
+  directory: "/usr/local/share/zsh-history-substring-search",
+};
+
 const fd: CatalogEntry = {
   fedora: { packages: ["fd-find"] },
   arch: { packages: ["fd"] },
@@ -132,6 +193,8 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     nix: { packages: ["chezmoi"] },
   },
   curl: everywhere("curl"),
+  direnv: everywhere("direnv"),
+  eza: everywhere("eza"),
   fd,
   // Debian's and Fedora's name for it, kept as an id since blueprints have used it.
   "fd-find": fd,
@@ -179,6 +242,12 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     nix: { packages: ["python3"] },
   },
   ripgrep: everywhere("ripgrep"),
+  starship: {
+    fedora: { release: starship },
+    arch: { packages: ["starship"] },
+    ubuntu: { release: starship },
+    nix: { packages: ["starship"] },
+  },
   stow: everywhere("stow"),
   tar: everywhere("tar", "gnutar"),
   tmux: everywhere("tmux"),
@@ -189,6 +258,14 @@ export const WORKSPACE_PACKAGE_CATALOG: Readonly<Record<string, CatalogEntry>> =
     nix: { packages: ["uv"] },
   },
   zsh: everywhere("zsh"),
+  "zsh-autosuggestions": everywhere("zsh-autosuggestions"),
+  "zsh-history-substring-search": {
+    fedora: { release: zshHistorySubstringSearch },
+    arch: { packages: ["zsh-history-substring-search"] },
+    ubuntu: { release: zshHistorySubstringSearch },
+    nix: { packages: ["zsh-history-substring-search"] },
+  },
+  "zsh-syntax-highlighting": everywhere("zsh-syntax-highlighting"),
 };
 
 export const knownWorkspacePackageIds = (): readonly string[] =>
@@ -222,8 +299,9 @@ const shellSingleQuote = (value: string): string => `'${value.replaceAll("'", `'
 
 /**
  * One `RUN` per release: picks the archive for the machine's architecture, downloads it, checks
- * the SHA-256 against the pinned value, and installs the named members to /usr/local/bin. Nothing
- * is unpacked before the checksum matches, and a machine of another architecture fails the step.
+ * the SHA-256 against the pinned value, and installs the named members to /usr/local/bin (or the
+ * release's own directory). Nothing is unpacked before the checksum matches, and a machine of
+ * another architecture fails the step.
  */
 export const renderReleaseInstall = (release: ReleaseInstall): string => {
   const branch = (arch: ReleaseArchitecture): string => {
@@ -231,7 +309,11 @@ export const renderReleaseInstall = (release: ReleaseInstall): string => {
     const members = release.members[arch];
     return `${arch}) url=${shellSingleQuote(archive.url)}; sha=${archive.sha256}; members=${shellSingleQuote(members.join(" "))};;`;
   };
-  const installAll = `for m in $members; do install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"; done`;
+  const installOne =
+    release.directory === undefined
+      ? `install -m 0755 "$d/$m" "/usr/local/bin/$(basename "$m")"`
+      : `install -D -m 0644 "$d/$m" ${shellSingleQuote(release.directory)}"/$(basename "$m")"`;
+  const installAll = `for m in $members; do ${installOne}; done`;
   return [
     `# ${release.name} ${release.version}: the project's own release, pinned by checksum, since the`,
     "# repositories of this family or this architecture have no package for it.",
