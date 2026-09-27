@@ -124,6 +124,22 @@ export {
 } from "./repositories/workspaces.js";
 
 export {
+  DatabaseTransaction,
+  DatabaseTransactionError,
+  DatabaseTransactionLive,
+  type DatabaseTransactionService,
+} from "./repositories/transaction.js";
+
+export {
+  WorkspaceCreateReservationRepo,
+  WorkspaceCreateReservationRepoLive,
+  WorkspaceCreateReservationRepoUnexpectedError,
+  type WorkspaceCreateReservationKey,
+  type WorkspaceCreateReservationRepoError,
+  type WorkspaceCreateReservationRepoService,
+} from "./repositories/workspace-create-reservations.js";
+
+export {
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceCaptureDrainRepoUnexpectedError,
@@ -305,6 +321,7 @@ export {
   workspaceRuntimeInstances,
   workspaceRuntimeInstanceStatusValues,
   workspaceCaptureDrains,
+  workspaceCreateReservations,
   workspaceCaptureDrainStateValues,
   workspaceBuildJobs,
   workspaceBuildJobStatusValues,
@@ -371,6 +388,8 @@ export {
   type NewWorkspaceCaptureDrain,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
+  type WorkspaceCreateReservation,
+  type WorkspaceCreateReservationState,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobStatus,
   type NewSshKey,

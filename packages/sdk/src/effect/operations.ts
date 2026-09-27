@@ -6,6 +6,7 @@
  */
 import type {
   BindWorkspaceRequest,
+  CancelWorkspaceCreateRequest,
   FlushWorkspaceCaptureRequest,
   GetWorkspaceCaptureStatusQuery,
   CloseSessionRequest,
@@ -54,6 +55,22 @@ export const getWorkspaceOp = (workspaceId: string, ownerUserId?: string) =>
       params: { workspaceId },
       query: ownerUserId === undefined ? {} : { ownerUserId },
     }),
+  );
+
+export const getWorkspaceCreateOp = (idempotencyKey: string, ownerUserId: string) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.getWorkspaceCreate({
+      params: { idempotencyKey },
+      query: { ownerUserId },
+    }),
+  );
+
+export const cancelWorkspaceCreateOp = (
+  idempotencyKey: string,
+  payload: CancelWorkspaceCreateRequest,
+) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.cancelWorkspaceCreate({ params: { idempotencyKey }, payload }),
   );
 
 export const listWorkspacesOp = (query: ListWorkspacesQuery) =>

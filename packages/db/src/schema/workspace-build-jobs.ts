@@ -268,6 +268,8 @@ export const workspaceCaptureDrains = pgTable(
     completionCaptureN: bigint("completion_capture_n", { mode: "number" }),
     completionAttestedAt: timestamp("completion_attested_at", { mode: "date", withTimezone: true }),
     completionAttestedBy: text("completion_attested_by"),
+    /** The launch identity the attestation named, when it named one (it matched the run's). */
+    completionLaunchId: text("completion_launch_id"),
     /**
      * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
      * without a complete final flush, or its launch failed after it started). Set once (the

@@ -387,6 +387,8 @@ export interface WorkspaceCaptureDrain {
     readonly epoch: number;
     readonly captureN: number;
     readonly attestedAt: string;
+    /** The launch identity the attestation named. */
+    readonly launchId?: string;
   };
 }
 
@@ -405,6 +407,12 @@ export interface WorkspaceCompletionAttestation {
    * reports it (its `reference`, or the run id, are accepted too).
    */
   readonly executorId: string;
+  /**
+   * The launch identity the seal names (`final_seal.executor`). Required when the create named a
+   * `launchId` — and it must be that one; an attestation naming another launch, or none, is
+   * ignored. A seal never transfers to another executor.
+   */
+  readonly launchId?: string;
 }
 
 /** Options for `workspace.stop()`. */
@@ -725,9 +733,36 @@ export interface CreateOptions {
    * Makes `create()` idempotent for this client's owner: a repeated create with the same key
    * returns the workspace the first one made (`workspace.launch?.replayed` is `true`) instead of
    * creating another. A caller that lost a create's answer (a crash, a timeout) repeats it, or
-   * finds the workspace with `workspaces.findByIdempotencyKey(key)`.
+   * finds the workspace with `workspaces.findByIdempotencyKey(key)`. `workspaces.createState(key)`
+   * says what became of the create (`pending`, `found`, `cancelled`, `none`), and
+   * `workspaces.cancelCreate(key)` makes sure a create with the key never launches — a delayed
+   * original request included.
    */
   readonly idempotencyKey?: string;
+  /**
+   * Your immutable identity for the ONE executor this create launches, minted before create (an
+   * idempotency key, unique per launch attempt, serves). Recorded with the launch and reported as
+   * `runtime.launchId`; a `stop({ completion })` about this executor must name it.
+   */
+  readonly launchId?: string;
+}
+
+/**
+ * What became of an idempotent create, by its key:
+ *
+ *  - `pending`: a create with the key started and has not committed (in flight, or it died first).
+ *    Repeat the create to finish it, or `cancelCreate` to make sure it never launches.
+ *  - `found`: it committed; `workspaceId` / `runId` / `launchId` name what it made.
+ *  - `cancelled`: the key was cancelled; no create with it launches.
+ *  - `none`: no create with the key has reached the control plane — as of now only; a delayed
+ *    request can still arrive. `cancelCreate` is the answer that stays true.
+ */
+export interface WorkspaceCreateState {
+  readonly idempotencyKey: string;
+  readonly state: "pending" | "found" | "cancelled" | "none";
+  readonly workspaceId?: string;
+  readonly runId?: string;
+  readonly launchId?: string;
 }
 
 /**
@@ -744,6 +779,8 @@ export interface WorkspaceRuntimeInfo {
   readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
   /** The run (launch attempt) the executor belongs to, when the control plane reports it. */
   readonly runId?: string;
+  /** The launch identity the create named for this executor (`CreateOptions.launchId`). */
+  readonly launchId?: string;
   /** ISO-8601 instant the runtime ends it on its own; `null` where there is no such cap. */
   readonly deadline: string | null;
 }
@@ -759,6 +796,8 @@ export interface WorkspaceLaunch {
   readonly runtime?: WorkspaceRuntimeInfo;
   /** An earlier create with the same `idempotencyKey` made this workspace. */
   readonly replayed: boolean;
+  /** The launch identity the create named. */
+  readonly launchId?: string;
 }
 
 export interface ListOptions {

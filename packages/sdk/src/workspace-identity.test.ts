@@ -161,3 +161,65 @@ describe("workspaces.create({ idempotencyKey }) and the executor's identity", ()
     expect(workspace.launch).toBeUndefined();
   });
 });
+
+describe("workspaces.createState() / cancelCreate() and the launch identity (review 3 #21, decision 5)", () => {
+  it("reads what became of a create by its key, precisely", async () => {
+    const { sealant, requests } = scripted(() =>
+      json({ idempotencyKey: "key_1", state: "pending", launchId: "key_1" }),
+    );
+    await expect(sealant.workspaces.createState("key_1")).resolves.toEqual({
+      idempotencyKey: "key_1",
+      state: "pending",
+      launchId: "key_1",
+    });
+    expect(requests[0]?.method).toBe("GET");
+    expect(requests[0]?.url.pathname).toBe("/v1/workspaces/idempotency-keys/key_1");
+  });
+
+  it("fails on an answer it does not understand, never reads it as none", async () => {
+    const { sealant } = scripted(() => json({ idempotencyKey: "key_1", state: "gone" }));
+    await expect(sealant.workspaces.createState("key_1")).rejects.toThrow();
+  });
+
+  it("cancels a create by its key", async () => {
+    const { sealant, requests } = scripted(() =>
+      json({ idempotencyKey: "key_1", state: "cancelled" }),
+    );
+    await expect(sealant.workspaces.cancelCreate("key_1")).resolves.toEqual({
+      idempotencyKey: "key_1",
+      state: "cancelled",
+    });
+    expect(requests[0]).toMatchObject({ method: "POST" });
+    expect(requests[0]?.url.pathname).toBe("/v1/workspaces/idempotency-keys/key_1/cancel");
+    expect(requests[0]?.body).toMatchObject({ ownerUserId: expect.any(String) });
+  });
+
+  it("sends the launch id with the create and reports it with the executor", async () => {
+    const { sealant, requests } = scripted((_url, method) =>
+      method === "POST"
+        ? json(
+            {
+              workspaceId: "ws_1",
+              name: "t",
+              status: "queued",
+              registryId: "default",
+              repository: "r",
+              tag: "t",
+              runId: "run_1",
+              launchId: "launch_1",
+            },
+            202,
+          )
+        : json(details("ready", { runtime: { ...RUNTIME, launchId: "launch_1" } })),
+    );
+    const workspace = await sealant.workspaces.create({
+      repository: "github.com/acme/app",
+      harness: opencode(),
+      idempotencyKey: "launch_1",
+      launchId: "launch_1",
+    });
+    expect(requests[0]?.body).toMatchObject({ idempotencyKey: "launch_1", launchId: "launch_1" });
+    expect(workspace.launch).toMatchObject({ launchId: "launch_1" });
+    await expect(workspace.runtime()).resolves.toMatchObject({ launchId: "launch_1" });
+  });
+});

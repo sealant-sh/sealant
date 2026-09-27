@@ -10,11 +10,15 @@
  * stable surface and reject with `SealantNotImplementedError` so callers can compile and wire
  * against the final shape today.
  */
-import type { ConnectedAccountSummary } from "@sealant/api-contracts";
+import type {
+  ConnectedAccountSummary,
+  WorkspaceCreateState as WireWorkspaceCreateState,
+} from "@sealant/api-contracts";
 
 import {
   archiveConnectedAccountOp,
   archiveSshKeyOp,
+  cancelWorkspaceCreateOp,
   createAccessTokenOp,
   createConnectedAccountOp,
   createSshKeyOp,
@@ -23,6 +27,7 @@ import {
   getRunOp,
   getSetupStateOp,
   getUserOp,
+  getWorkspaceCreateOp,
   getWorkspaceOp,
   inferenceRespondOp,
   listConnectedAccountsOp,
@@ -50,10 +55,20 @@ import type {
   Run,
   SshKeysNamespace,
   Workspace,
+  WorkspaceCreateState,
   WorkspaceSshNamespace,
   SealantConfig,
   UsersNamespace,
 } from "./types.js";
+
+/** An idempotent create's state as the SDK reports it (an unknown wire state fails closed). */
+const toCreateState = (wire: WireWorkspaceCreateState): WorkspaceCreateState => ({
+  idempotencyKey: wire.idempotencyKey,
+  state: wire.state,
+  ...(wire.workspaceId === undefined ? {} : { workspaceId: wire.workspaceId }),
+  ...(wire.runId === undefined ? {} : { runId: wire.runId }),
+  ...(wire.launchId === undefined ? {} : { launchId: wire.launchId }),
+});
 
 const mapConnectedAccount = (wire: ConnectedAccountSummary): ConnectedAccount => ({
   connectedAccountId: wire.connectedAccountId,
@@ -110,6 +125,7 @@ export class Sealant {
         launch: {
           replayed: created.replayed === true,
           ...(created.runId === undefined ? {} : { runId: created.runId }),
+          ...(created.launchId === undefined ? {} : { launchId: created.launchId }),
           ...(created.runtime === undefined ? {} : { runtime: toRuntimeInfo(created.runtime) }),
         },
       });
@@ -160,6 +176,33 @@ export class Sealant {
         ? null
         : makeWorkspace(this.#ctx, { id: item.workspaceId, name: item.name, status: item.status });
     },
+
+    /**
+     * What became of the create with this idempotency key: `pending` (started, not committed),
+     * `found` (committed: `workspaceId`, `runId`, `launchId`), `cancelled`, or `none` (nothing has
+     * reached the control plane — as of now only; use `cancelCreate` for an answer that stays
+     * true).
+     */
+    createState: async (idempotencyKey: string): Promise<WorkspaceCreateState> =>
+      toCreateState(
+        await this.#runtime.run(
+          getWorkspaceCreateOp(idempotencyKey, this.#ctx.config.hostLocal.ownerUserId),
+        ),
+      ),
+
+    /**
+     * Make sure the create with this idempotency key never launches: a pending or unknown key is
+     * cancelled for good (a delayed original request with it is refused, `create-cancelled`). A
+     * create that already committed answers `found` — stop that workspace instead.
+     */
+    cancelCreate: async (idempotencyKey: string): Promise<WorkspaceCreateState> =>
+      toCreateState(
+        await this.#runtime.run(
+          cancelWorkspaceCreateOp(idempotencyKey, {
+            ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          }),
+        ),
+      ),
 
     list: async (options?: ListOptions): Promise<readonly Workspace[]> => {
       const response = await this.#runtime.run(

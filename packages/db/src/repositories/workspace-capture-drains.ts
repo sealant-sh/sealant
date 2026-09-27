@@ -134,6 +134,8 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly epoch: number;
     readonly captureN: number;
     readonly attestedBy: string;
+    /** The launch identity the attestation named (already matched to the run's). */
+    readonly launchId?: string;
   }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
   /**
    * Record that the run's executor is retained (its disk holds work not confirmed saved): the
@@ -328,6 +330,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               completionCaptureN: input.captureN,
               completionAttestedAt: new Date(),
               completionAttestedBy: input.attestedBy,
+              completionLaunchId: input.launchId ?? null,
             };
             const [row] = yield* db
               .insert(workspaceCaptureDrains)

@@ -292,6 +292,7 @@ export const buildCreateWorkspaceRequest = (
       ...(options.name === undefined ? {} : { name: options.name }),
       ...(options.ttl === undefined ? {} : { ttlSeconds: parseTtlSeconds(options.ttl) }),
       ...(options.idempotencyKey === undefined ? {} : { idempotencyKey: options.idempotencyKey }),
+      ...(options.launchId === undefined ? {} : { launchId: options.launchId }),
       spec,
       ...(secretEnv === undefined ? {} : { secretEnv }),
       // The capture credential is the one secret outside `secretEnv`: sealed and delivered the

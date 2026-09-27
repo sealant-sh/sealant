@@ -11,10 +11,12 @@ import { ProfileRepoLive } from "./repositories/profiles.js";
 import { RepositoryProfileRepoLive } from "./repositories/repository-profiles.js";
 import { RunRepoLive } from "./repositories/runs.js";
 import { SshKeyRepoLive } from "./repositories/ssh-keys.js";
+import { DatabaseTransactionLive } from "./repositories/transaction.js";
 import { UserRepoLive } from "./repositories/users.js";
 import { WorkspaceAttemptRepoLive } from "./repositories/workspace-attempts.js";
 import { WorkspaceBuildJobRepoLive } from "./repositories/workspace-build-jobs.js";
 import { WorkspaceCaptureDrainRepoLive } from "./repositories/workspace-capture-drains.js";
+import { WorkspaceCreateReservationRepoLive } from "./repositories/workspace-create-reservations.js";
 import { WorkspaceRuntimeInstanceRepoLive } from "./repositories/workspace-runtime-instances.js";
 import { WorkspaceSessionRepoLive } from "./repositories/workspace-sessions.js";
 import { WorkspaceRepoLive } from "./repositories/workspaces.js";
@@ -49,6 +51,8 @@ export const ControlPlaneDataAccessLive = Layer.mergeAll(
   WorkspaceAttemptRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   WorkspaceCaptureDrainRepoLive,
+  WorkspaceCreateReservationRepoLive,
+  DatabaseTransactionLive,
   WorkspaceBuildJobRepoLive,
   RunRepoLive,
   WorkspaceSessionRepoLive,

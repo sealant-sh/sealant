@@ -73,6 +73,7 @@ export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeIn
   reference: runtime.reference,
   status: runtime.status,
   ...(runtime.runId === undefined ? {} : { runId: runtime.runId }),
+  ...(runtime.launchId === undefined ? {} : { launchId: runtime.launchId }),
   deadline: runtime.deadline ?? null,
 });
 
@@ -216,6 +217,9 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
           epoch: drain.completion.epoch,
           captureN: drain.completion.captureN,
           attestedAt: drain.completion.attestedAt,
+          ...(drain.completion.launchId === undefined
+            ? {}
+            : { launchId: drain.completion.launchId }),
         },
       }),
 });
@@ -500,6 +504,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
                   captureN: options.completion.captureN,
                   epoch: options.completion.epoch,
                   executorId: options.completion.executorId,
+                  ...(options.completion.launchId === undefined
+                    ? {}
+                    : { launchId: options.completion.launchId }),
                 },
               }),
         }),

@@ -313,6 +313,22 @@ describe("workspace.stop({ completion }) and workspace.recover()", () => {
     });
   });
 
+  it("names the launch the seal is about (decision 5)", async () => {
+    const stub = makeStub(() => details({ status: "stopped" }));
+    await workspaceFor(stub.client).stop({
+      completion: { captureN: 41, epoch: 3, executorId: "microvm-1", launchId: "launch_1" },
+    });
+    expect(stub.stops).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: {
+          ownerUserId: expect.any(String),
+          completion: { captureN: 41, epoch: 3, executorId: "microvm-1", launchId: "launch_1" },
+        },
+      },
+    ]);
+  });
+
   it("asks the control plane to recover the retained executor", async () => {
     const stub = makeStub(() => details({ status: "stopped" }));
     await expect(workspaceFor(stub.client).recover()).resolves.toEqual({

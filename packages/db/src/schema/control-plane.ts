@@ -669,6 +669,13 @@ export const workspaceAttempts = pgTable(
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
     durationMs: integer("duration_ms"),
+    /**
+     * The caller's immutable identity for the ONE physical executor this attempt launches (the
+     * control plane that owns the capture store mints it before create, and binds the session's
+     * capture token and every seal the executor makes to it). A stop's completion attestation
+     * that names a launch must name this one. Null when the create named none.
+     */
+    launchId: text("launch_id"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -756,6 +763,46 @@ export const workspaces = pgTable(
     uniqueIndex("workspaces_latest_run_id_idx").on(table.latestRunId),
   ],
 );
+
+export const workspaceCreateReservationStateValues = ["pending", "created", "cancelled"] as const;
+
+export type WorkspaceCreateReservationState =
+  (typeof workspaceCreateReservationStateValues)[number];
+
+/**
+ * The durable record of an idempotent create, per owner and key: `pending` from the moment a
+ * create with the key starts until it commits (`created`, in the same transaction as the
+ * workspace, its attempt and its launch job), or `cancelled` — by the owner, who lost the create's
+ * answer and wants to be sure it never launches. A cancelled key refuses every later create with
+ * it, including a delayed delivery of the original request; a created key replays its workspace.
+ * Exactly one of `created` and `cancelled` wins: both transitions are fenced on `pending` (or an
+ * absent row).
+ */
+export const workspaceCreateReservations = pgTable(
+  "workspace_create_reservations",
+  {
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    state: text({ enum: workspaceCreateReservationStateValues }).notNull(),
+    /** The workspace the create made (once `created`). */
+    workspaceId: text("workspace_id"),
+    /** The launch identity the create named. */
+    launchId: text("launch_id"),
+    cancelledAt: timestamp("cancelled_at", { mode: "date", withTimezone: true }),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [primaryKey({ columns: [table.ownerUserId, table.idempotencyKey] })],
+);
+
+export type WorkspaceCreateReservation = typeof workspaceCreateReservations.$inferSelect;
 
 export const workspaceRunLinks = pgTable(
   "workspace_run_links",

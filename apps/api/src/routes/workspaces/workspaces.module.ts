@@ -21,6 +21,7 @@ import {
   WorkspaceUnauthorizedError,
   type CreateWorkspaceHeaders,
   type CreateWorkspaceRequest,
+  type CancelWorkspaceCreateRequest,
   type CreateWorkspaceResponse,
   type GitHubWorkspaceSourceSelection,
   type ListWorkspaceAttemptsQuery,
@@ -41,6 +42,7 @@ import {
   type RestartWorkspaceResponse,
   type StopWorkspaceRequest,
   type StopWorkspaceResponse,
+  type WorkspaceCreateState,
   type WorkspaceAttemptSummary,
   type WorkspaceCaptureDrain,
   type WorkspaceDetails,
@@ -69,6 +71,8 @@ import {
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceCaptureDrainRepo,
+  WorkspaceCreateReservationRepo,
+  DatabaseTransaction,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
@@ -1165,10 +1169,17 @@ const mapWorkspaceSummary = (
   runtimeInstance: WorkspaceRuntimeInstanceRecord,
   sshGatewayConfig: WorkspaceSshGatewayConfig | undefined,
 ): WorkspaceSummary => {
-  const runtime = resolveWorkspaceRuntime(runtimeInstance, {
+  const resolvedRuntime = resolveWorkspaceRuntime(runtimeInstance, {
     workspaceId: workspace.id,
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
   });
+  // The executor carries the launch identity its create named (recorded on its attempt).
+  const launchId =
+    attempt !== undefined && attempt.id === runtimeInstance?.runId ? attempt.launchId : null;
+  const runtime =
+    resolvedRuntime === undefined || launchId === null
+      ? resolvedRuntime
+      : { ...resolvedRuntime, launchId };
   const publishedImage = resolveWorkspacePublishedImage(latestJob);
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
   const updatedAt = latestDate(
@@ -1304,18 +1315,72 @@ const replayedWorkspaceResponse = (workspace: WorkspaceRecord) => {
 };
 
 /**
- * The owner's workspace an earlier create with this idempotency key made, as a replayed answer.
- * Keys are scoped to the owner: another owner's workspace is never returned. A workspace made
- * before keys were stored on it is found through its launch job, and only when the owner matches.
+ * Whether a workspace an idempotent create made finished its create: it names a latest run and
+ * that run has its launch job. A create commits the workspace, its attempt, the link, the
+ * snapshot and the job in one transaction, so only a workspace from before that (a create that
+ * died between its separate writes) can be half-made.
  */
-const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) => {
+const workspaceCreateFinished = (workspace: WorkspaceRecord) =>
+  Effect.gen(function* () {
+    const runId = workspace.latestRunId;
+    if (runId === null) {
+      return false;
+    }
+    const job = yield* withInternalError(
+      (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
+      "Failed to load the workspace build job.",
+    );
+    return job !== undefined;
+  });
+
+/**
+ * A replay finds the create committed. Its launch job may still be `queued` because the process
+ * died between the commit and the queue publish: publishing again is safe (the worker claims a
+ * job once) and is the only thing that moves it.
+ */
+const republishQueuedLaunch = (workspace: WorkspaceRecord) =>
+  Effect.gen(function* () {
+    const runId = workspace.latestRunId;
+    if (runId === null) {
+      return;
+    }
+    const job = yield* withInternalError(
+      (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
+      "Failed to load the workspace build job.",
+    );
+    if (job === undefined || job.status !== "queued") {
+      return;
+    }
+    const publisher = yield* WorkspaceBuildJobPublisherService;
+    yield* Effect.tryPromise(() => publisher.publishRequested({ jobId: job.id })).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Workspace ${workspace.id}: publishing its queued launch job ${job.id} again on a replayed create failed; the next replay retries.`,
+          cause,
+        ),
+      ),
+    );
+  });
+
+/**
+ * The owner's workspace an earlier create with this idempotency key made, as a replayed answer —
+ * or, when that create never finished (a half-made workspace from before creates were atomic),
+ * the workspace to finish (`resume`). Keys are scoped to the owner: another owner's workspace is
+ * never returned. A workspace made before keys were stored on it is found through its launch
+ * job, and only when the owner matches.
+ */
+const findIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) => {
   return Effect.gen(function* () {
     const byKey = yield* withInternalError(
       (yield* WorkspaceRepo).getWorkspaceByIdempotencyKey({ ownerUserId, idempotencyKey }),
       "Failed to load the workspace by idempotency key.",
     );
     if (byKey !== undefined) {
-      return yield* replayedWorkspaceResponse(byKey);
+      if (!(yield* workspaceCreateFinished(byKey))) {
+        return { resume: byKey } as const;
+      }
+      yield* republishQueuedLaunch(byKey);
+      return { replay: yield* replayedWorkspaceResponse(byKey) } as const;
     }
 
     const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
@@ -1335,9 +1400,27 @@ const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string, ownerUse
       return undefined;
     }
     const existingWorkspace = yield* ensureWorkspaceForAttempt(existingRun);
-    return yield* replayedWorkspaceResponse(existingWorkspace);
+    return { replay: yield* replayedWorkspaceResponse(existingWorkspace) } as const;
   });
 };
+
+/** The replayed answer of a committed create, or `undefined` when there is none (yet). */
+const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) =>
+  findIdempotentWorkspace(idempotencyKey, ownerUserId).pipe(
+    Effect.map((found) => (found !== undefined && "replay" in found ? found.replay : undefined)),
+  );
+
+/** The refusal of a create whose key the owner cancelled. */
+const createCancelledError = (idempotencyKey: string) =>
+  new WorkspaceConflictError({
+    message: `The create with idempotency key ${idempotencyKey} was cancelled; no create with that key launches. Create with a new key.`,
+    code: "create-cancelled",
+  });
+
+/** A create's key stopped being pending before its transaction committed. */
+class CreateReservationLost extends Error {
+  public override readonly name = "CreateReservationLost";
+}
 
 /**
  * Pure create-time gate for Kubernetes-only requests (cluster-env-sources design): cluster env
@@ -1431,13 +1514,41 @@ export const createWorkspace = (input: {
       });
     }
 
+    // An idempotent create: a committed one replays; a cancelled key refuses; a create from
+    // before creates were atomic that left its workspace half-made is finished (`resuming`). The
+    // key is reserved (`pending`) before anything is written, and committed with everything the
+    // create writes, in one transaction.
+    let resuming: WorkspaceRecord | undefined;
+    const reservations = yield* WorkspaceCreateReservationRepo;
     if (idempotencyKey !== undefined) {
-      const existing = yield* maybeReturnExistingIdempotentWorkspace(
-        idempotencyKey,
-        body.ownerUserId,
+      const found = yield* findIdempotentWorkspace(idempotencyKey, body.ownerUserId);
+      if (found !== undefined && "replay" in found) {
+        return found.replay;
+      }
+      resuming = found?.resume;
+      const reservation = yield* withInternalError(
+        reservations.reserve({
+          ownerUserId: body.ownerUserId,
+          idempotencyKey,
+          ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
+        }),
+        "Failed to reserve the create's idempotency key.",
       );
-      if (existing !== undefined) {
-        return existing;
+      if (reservation.state === "cancelled") {
+        return yield* createCancelledError(idempotencyKey);
+      }
+      if (reservation.state === "created") {
+        // Committed by a create that raced this one past the lookup above.
+        const committed = yield* maybeReturnExistingIdempotentWorkspace(
+          idempotencyKey,
+          body.ownerUserId,
+        );
+        if (committed !== undefined) {
+          return committed;
+        }
+        return yield* new WorkspaceConflictError({
+          message: `The create with idempotency key ${idempotencyKey} finished, and its workspace no longer exists.`,
+        });
       }
     }
 
@@ -1515,7 +1626,7 @@ export const createWorkspace = (input: {
       dotfilesSelection: body.dotfilesSelection,
     });
 
-    const workspaceId = yield* randomId;
+    const workspaceId = resuming?.id ?? (yield* randomId);
     const runId = yield* randomId;
     const jobId = yield* randomId;
 
@@ -1562,40 +1673,48 @@ export const createWorkspace = (input: {
     delete resolvedSpec.credentials;
 
     const workspaceName =
-      body.name === undefined
-        ? inferWorkspaceName({
-            repository: body.repository,
-            tag: body.tag,
-            spec: resolvedSpec,
-            fallbackId: workspaceId,
-          })
-        : sanitizeWorkspaceName(body.name);
+      resuming !== undefined
+        ? resolveStoredWorkspaceName(resuming)
+        : body.name === undefined
+          ? inferWorkspaceName({
+              repository: body.repository,
+              tag: body.tag,
+              spec: resolvedSpec,
+              fallbackId: workspaceId,
+            })
+          : sanitizeWorkspaceName(body.name);
 
     const workspaces = yield* WorkspaceRepo;
     const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
     const workspaceAttempts = yield* WorkspaceAttemptRepo;
+    const transaction = yield* DatabaseTransaction;
 
+    // Everything a create writes commits together, with its key's reservation: a create that
+    // dies part-way leaves nothing behind (its key stays `pending`, and a repeat of the create
+    // finishes it), never a workspace with no launch to replay forever.
     const persistenceResult = yield* Effect.result(
       Effect.gen(function* () {
         // TTL: per-create override wins; otherwise the install-wide default (if configured).
         const ttlSeconds = body.ttlSeconds ?? env.SEALANT_WORKSPACE_DEFAULT_TTL_SECONDS;
 
-        const workspace = yield* workspaces.createWorkspace({
-          id: workspaceId,
-          name: workspaceName,
-          ownerUserId: body.ownerUserId,
-          ...(body.sourceSelection === undefined
-            ? {}
-            : { repositoryId: sourceSelectionResult.repositoryId }),
-          requestedByUserId: body.ownerUserId,
-          status: "queued",
-          ...(ttlSeconds === undefined
-            ? {}
-            : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
-          // The workspace row is written first: a racing create with the same key fails here, on
-          // the owner-scoped unique index, before anything else of it exists.
-          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
-        });
+        const workspace =
+          resuming ??
+          (yield* workspaces.createWorkspace({
+            id: workspaceId,
+            name: workspaceName,
+            ownerUserId: body.ownerUserId,
+            ...(body.sourceSelection === undefined
+              ? {}
+              : { repositoryId: sourceSelectionResult.repositoryId }),
+            requestedByUserId: body.ownerUserId,
+            status: "queued",
+            ...(ttlSeconds === undefined
+              ? {}
+              : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
+            // The workspace row is written first: a racing create with the same key fails here,
+            // on the owner-scoped unique index, before anything else of it exists.
+            ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+          }));
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
           id: runId,
@@ -1605,6 +1724,7 @@ export const createWorkspace = (input: {
             : { repositoryId: sourceSelectionResult.repositoryId }),
           triggerType: "api",
           requestedByUserId: body.ownerUserId,
+          ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
         });
 
         yield* workspaces.linkWorkspaceAttempt({
@@ -1627,11 +1747,50 @@ export const createWorkspace = (input: {
           requestPayload: resolvedSpec,
           ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
         });
-      }),
+
+        // The commit point of an idempotent create: only while its key is still pending (not
+        // cancelled, not committed by another create). Otherwise nothing above commits.
+        if (idempotencyKey !== undefined) {
+          const committed = yield* reservations.markCreated({
+            ownerUserId: body.ownerUserId,
+            idempotencyKey,
+            workspaceId: workspace.id,
+          });
+          if (!committed) {
+            return yield* Effect.fail(
+              new CreateReservationLost(
+                `The create's idempotency key ${idempotencyKey} is no longer pending.`,
+              ),
+            );
+          }
+        }
+        if (resuming !== undefined) {
+          // A half-made workspace is finished: it is queued again, like a new one.
+          yield* workspaces.setWorkspaceStatus({ id: workspace.id, status: "queued" });
+        }
+      }).pipe(transaction.run),
     );
 
     if (Result.isFailure(persistenceResult)) {
       const persistenceError = persistenceResult.failure;
+
+      if (idempotencyKey !== undefined && persistenceError instanceof CreateReservationLost) {
+        // Cancelled, or committed by another create, while this one was writing.
+        const standing = yield* withInternalError(
+          reservations.get({ ownerUserId: body.ownerUserId, idempotencyKey }),
+          "Failed to read the create's idempotency key.",
+        );
+        if (standing?.state === "cancelled") {
+          return yield* createCancelledError(idempotencyKey);
+        }
+        const committed = yield* maybeReturnExistingIdempotentWorkspace(
+          idempotencyKey,
+          body.ownerUserId,
+        );
+        if (committed !== undefined) {
+          return committed;
+        }
+      }
 
       if (isForeignKeyConstraintError(persistenceError)) {
         return yield* new WorkspaceNotFoundError({
@@ -1707,6 +1866,7 @@ export const createWorkspace = (input: {
         tag: body.tag,
       }),
       runId,
+      ...(body.launchId === undefined ? {} : { launchId: body.launchId }),
     } satisfies CreateWorkspaceResponse;
   });
 };
@@ -1990,6 +2150,9 @@ export const mapWorkspaceCaptureDrain = (
             epoch: row.completionEpoch,
             captureN: row.completionCaptureN,
             attestedAt: row.completionAttestedAt.toISOString(),
+            ...(row.completionLaunchId === null || row.completionLaunchId === undefined
+              ? {}
+              : { launchId: row.completionLaunchId }),
           },
         }),
   };
@@ -2613,6 +2776,128 @@ const requireOwnedWorkspace = (workspaceId: string, ownerUserId: string) => {
 };
 
 /**
+ * Whether a completion attestation names THIS executor's launch (decision 5: a seal names the
+ * immutable launch identity of the one physical executor that made it, and never transfers). When
+ * the create named a launch (`launchId` on the attempt), the attestation must name the same one;
+ * one that names none, or another, is ignored. When the create named none, an attestation that
+ * names one cannot be matched to anything and is ignored too. Otherwise the executor match stands.
+ */
+export const attestationCoversLaunch = (
+  attestation: { readonly launchId?: string | undefined },
+  recordedLaunchId: string | null,
+  executorMatch: { readonly covers: true } | { readonly covers: false; readonly reason: string },
+): { readonly covers: true } | { readonly covers: false; readonly reason: string } => {
+  if (!executorMatch.covers) {
+    return executorMatch;
+  }
+  if (recordedLaunchId !== null && attestation.launchId === undefined) {
+    return {
+      covers: false,
+      reason: `the attestation names no launch, and this executor was launched as ${recordedLaunchId}`,
+    };
+  }
+  if (attestation.launchId !== undefined && attestation.launchId !== recordedLaunchId) {
+    return {
+      covers: false,
+      reason:
+        recordedLaunchId === null
+          ? `the attestation names launch ${attestation.launchId}, and this executor's create named none`
+          : `the attestation names launch ${attestation.launchId}, not this executor's launch ${recordedLaunchId}`,
+    };
+  }
+  return { covers: true };
+};
+
+/** The state of an idempotent create, by its key (see `workspaceCreateStateSchema`). */
+const workspaceCreateState = (ownerUserId: string, idempotencyKey: string) =>
+  Effect.gen(function* () {
+    const reservation = yield* withInternalError(
+      (yield* WorkspaceCreateReservationRepo).get({ ownerUserId, idempotencyKey }),
+      "Failed to read the create's idempotency key.",
+    );
+    if (reservation?.state === "cancelled") {
+      return { idempotencyKey, state: "cancelled" as const };
+    }
+    const workspace = yield* withInternalError(
+      (yield* WorkspaceRepo).getWorkspaceByIdempotencyKey({ ownerUserId, idempotencyKey }),
+      "Failed to load the workspace by idempotency key.",
+    );
+    if (workspace !== undefined) {
+      const finished = yield* workspaceCreateFinished(workspace);
+      const runId = workspace.latestRunId;
+      const attempt =
+        runId === null
+          ? undefined
+          : yield* withInternalError(
+              (yield* WorkspaceAttemptRepo).getAttemptById(runId),
+              "Failed to load the workspace attempt.",
+            );
+      return {
+        idempotencyKey,
+        state: finished ? ("found" as const) : ("pending" as const),
+        workspaceId: workspace.id,
+        ...(finished && runId !== null ? { runId } : {}),
+        ...(finished && attempt?.launchId !== null && attempt?.launchId !== undefined
+          ? { launchId: attempt.launchId }
+          : {}),
+      };
+    }
+    if (reservation === undefined) {
+      return { idempotencyKey, state: "none" as const };
+    }
+    // Pending (a create in flight, or one that died before it committed), or created whose
+    // workspace is gone: nothing launches from it now either way.
+    return {
+      idempotencyKey,
+      state: reservation.state === "pending" ? ("pending" as const) : ("none" as const),
+      ...(reservation.launchId === null ? {} : { launchId: reservation.launchId }),
+    };
+  });
+
+/** `GET /v1/workspaces/idempotency-keys/:idempotencyKey`: what became of an idempotent create. */
+export const getWorkspaceCreate = (input: {
+  readonly idempotencyKey: string;
+  readonly ownerUserId: string;
+}) =>
+  workspaceCreateState(input.ownerUserId, input.idempotencyKey).pipe(
+    Effect.map((state): WorkspaceCreateState => state),
+  );
+
+/**
+ * `POST /v1/workspaces/idempotency-keys/:idempotencyKey/cancel`: make sure the create with this
+ * key never commits. A pending or unknown key becomes `cancelled` for good (a delayed request
+ * with it is refused); a committed one answers `found`, and the caller stops that workspace.
+ */
+export const cancelWorkspaceCreate = (input: {
+  readonly idempotencyKey: string;
+  readonly payload: CancelWorkspaceCreateRequest;
+}) =>
+  Effect.gen(function* () {
+    const ownerUserId = input.payload.ownerUserId;
+    const idempotencyKey = input.idempotencyKey;
+    // A committed create stays committed: cancelling it would refuse its own replays.
+    const before = yield* workspaceCreateState(ownerUserId, idempotencyKey);
+    if (before.state === "found") {
+      return before satisfies WorkspaceCreateState;
+    }
+    const reservation = yield* withInternalError(
+      (yield* WorkspaceCreateReservationRepo).cancel({ ownerUserId, idempotencyKey }),
+      "Failed to cancel the create's idempotency key.",
+    );
+    if (reservation.state === "cancelled") {
+      yield* Effect.logInfo(
+        `Workspace create with idempotency key ${idempotencyKey} (owner ${ownerUserId}) cancelled; no create with it commits.`,
+      );
+      return { idempotencyKey, state: "cancelled" } satisfies WorkspaceCreateState;
+    }
+    // It committed between the read and the cancel.
+    return (yield* workspaceCreateState(
+      ownerUserId,
+      idempotencyKey,
+    )) satisfies WorkspaceCreateState;
+  });
+
+/**
  * Async stop (202): record the stop intent, then enqueue the teardown for the worker, which
  * removes the container via the runtime adapter and records the terminal "stopped" state.
  * Idempotent: stopping a workspace that is already stopped is a no-op 202.
@@ -2666,10 +2951,18 @@ export const stopWorkspace = (input: {
         "Failed to load workspace capture drain.",
       );
       const observedEpoch = existing?.lastStatus?.["epoch"];
-      const covers = attestationCoversExecutor(
+      const attempt = yield* withInternalError(
+        (yield* WorkspaceAttemptRepo).getAttemptById(latestRunId),
+        "Failed to load the workspace attempt.",
+      );
+      const covers = attestationCoversLaunch(
         attestation,
-        { runId: latestRunId, resourceId: instance.resourceId, reference: instance.reference },
-        typeof observedEpoch === "number" ? observedEpoch : undefined,
+        attempt?.launchId ?? null,
+        attestationCoversExecutor(
+          attestation,
+          { runId: latestRunId, resourceId: instance.resourceId, reference: instance.reference },
+          typeof observedEpoch === "number" ? observedEpoch : undefined,
+        ),
       );
       if (covers.covers) {
         yield* withInternalError(
@@ -2679,6 +2972,7 @@ export const stopWorkspace = (input: {
             epoch: attestation.epoch,
             captureN: attestation.captureN,
             attestedBy: input.payload.ownerUserId,
+            ...(attestation.launchId === undefined ? {} : { launchId: attestation.launchId }),
           }),
           "Failed to record the completion attestation.",
         );
