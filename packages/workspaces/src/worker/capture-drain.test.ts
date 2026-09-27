@@ -6,21 +6,24 @@
  * that answers without moving is kept; progress and the stall window carry across calls AND
  * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
-import { Effect } from "effect";
+import { Effect, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
+import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
   InMemoryCaptureDrainStore,
   blueprintSourceKind,
   captureDaemonAnswers,
   captureProgressed,
+  describeCaptureStatus,
   drainCaptureBeforeStop,
   drainPermitsStop,
   inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
   runIsCaptureSourced,
+  snapFailureDetail,
   DEFAULT_FINAL_FLUSH_GRACE_MS,
   finalFlushRequest,
   type CaptureDrainLedger,
@@ -117,6 +120,54 @@ describe("drainCaptureBeforeStop", () => {
       detail: "the daemon reports its final flush incomplete",
     });
     expect(drainPermitsStop(outcome)).toBe(false);
+  });
+
+  it("keeps a daemon whose snaps are failing, says so once, and names the error in the keep", async () => {
+    // The Docker end to end: a path past PATH_MAX stopped every snap of the session while the
+    // queue read pending 0. The status carries the error; the drain must not hide it.
+    const failing = captureStatus({
+      pending: 0,
+      registered: 4,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      lastSnapError: "File name too long (os error 36)",
+      snapFailingSinceUnixMs: Date.UTC(2026, 8, 27, 12),
+      snapsFailed: 12,
+    });
+    const errors: string[] = [];
+    const recorder = Logger.make(({ logLevel, message }) => {
+      if (logLevel === "Error") {
+        errors.push(Array.isArray(message) ? message.join(" ") : String(message));
+      }
+    });
+    const daemon = fakeCaptureDaemon([failing]);
+    const ledger = inMemoryCaptureDrainLedger();
+
+    const outcome = await Effect.runPromise(
+      drainCaptureBeforeStop({
+        runId: "run_1",
+        target: TARGET,
+        ledger,
+        settings: FAST,
+        budgetMs: 1_000,
+        label: "test",
+        runtimeState: Effect.succeed("running"),
+      }).pipe(Effect.provide(daemon.layer), Effect.provide(Logger.layer([recorder]))),
+    );
+
+    const snapFailure =
+      "snaps failing since 2026-09-27T12:00:00.000Z (12 failed): File name too long (os error 36)";
+    expect(outcome).toMatchObject({
+      kind: "unconfirmed",
+      detail: `the daemon reports its final flush incomplete (snapshot-failed) · ${snapFailure}`,
+    });
+    expect(drainPermitsStop(outcome)).toBe(false);
+    // Two FINAL flushes saw the same error: logged once as not captured, once as the keep.
+    expect(errors.filter((line) => line.includes("not captured · snaps failing"))).toHaveLength(1);
+    expect(errors.filter((line) => line.includes("not saved · not confirmed · kept"))).toHaveLength(
+      1,
+    );
+    expect(ledger.store.rows.get("run_1")?.observation?.detail).toContain(snapFailure);
   });
 
   it("flushes again when the queue empties after an incomplete flush, and then saves", async () => {
@@ -423,5 +474,62 @@ describe("finalFlushRequest", () => {
       deadlineMs: 18_000,
       graceMs: 18_000,
     });
+  });
+});
+
+describe("capture status past the pinned wire", () => {
+  const everything = captureStatus({
+    pending: 2,
+    pendingBulk: 1,
+    pendingBytes: 2048,
+    bulkBuilding: true,
+    complete: false,
+    incompleteReason: "unreadable",
+    unreadable: 5,
+    carried: 4,
+    unreadablePaths: [`tree/${"a".repeat(5000)}`, "tree/b", ".git/c", "harness/d"],
+    registerRefused: "missing-objects",
+    registerRefusedN: 9,
+    registerMissing: ["obj/ab12", "obj/cd34"],
+    registerRefusals: 2,
+    repairing: true,
+    lastSnapError: "File name too long (os error 36)",
+    snapsFailed: 3,
+  });
+
+  it("describes every field a newer daemon reports, clipping what it cannot bound", () => {
+    const line = describeCaptureStatus(everything);
+    for (const part of [
+      "pending 2",
+      "1 bulk pending",
+      "bulk building",
+      "2048 bytes to ship",
+      "final flush incomplete (unreadable)",
+      "snaps failing (3 failed): File name too long (os error 36)",
+      "unreadable 5 (4 carried forward): tree/aaaa",
+      "tree/b, .git/c, …",
+      "register refused missing-objects at n 9 (2 missing keys listed)",
+      "repairing",
+      "2 register refusals",
+    ]) {
+      expect(line).toContain(part);
+    }
+    // A path past PATH_MAX is clipped: one log line never carries it whole.
+    expect(line.length).toBeLessThan(1_000);
+  });
+
+  it("describes a pinned-wire status without any of them", () => {
+    const line = describeCaptureStatus(captureStatus({ pending: 1 }));
+    expect(line).toBe(
+      "pending 1 · staged 0 bytes · uploaded 0 bytes · registered 0 · completion not reported",
+    );
+    expect(snapFailureDetail(captureStatus())).toBeUndefined();
+  });
+
+  it("keeps every field through the ledger's stored status", () => {
+    const stored: unknown = JSON.parse(JSON.stringify(everything));
+    expect(captureStatusFromStored(stored)).toEqual(everything);
+    const pinned = captureStatus({ pending: 1 });
+    expect(captureStatusFromStored(JSON.parse(JSON.stringify(pinned)))).toEqual(pinned);
   });
 });

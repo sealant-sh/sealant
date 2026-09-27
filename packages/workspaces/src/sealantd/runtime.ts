@@ -225,6 +225,47 @@ export interface CaptureFlushReport {
    * `pending`, `internal`. Absent when complete, or from a daemon that predates it.
    */
   readonly incompleteReason?: string | undefined;
+  /**
+   * Paths the last snap of each class could not read, summed over both classes (sealantd
+   * `unreadable`). Never taken as deleted: an automatic snap carries the last captured content
+   * forward, a final snap fails instead.
+   */
+  readonly unreadable?: number | undefined;
+  /** Of `unreadable`, the paths whose last captured content was carried forward (`carried`). */
+  readonly carried?: number | undefined;
+  /**
+   * The first unreadable paths, virtual (`tree/<path>`, `.git/<path>`, `harness/<path>`), small
+   * class first (sealantd `unreadable_paths`, at most 20). Absent when none are reported.
+   */
+  readonly unreadablePaths?: readonly string[] | undefined;
+  /**
+   * A capture the registrar refused to register that the executor is working through
+   * (`missing-objects`, `unrestorable`; sealantd `register_refused`). Nothing is dropped: its
+   * objects are uploaded again and it is rebuilt from disk.
+   */
+  readonly registerRefused?: string | undefined;
+  /** That refused capture's chain position (`register_refused_n`). */
+  readonly registerRefusedN?: number | undefined;
+  /** The first keys the registrar named as missing (`register_missing`, at most 20). */
+  readonly registerMissing?: readonly string[] | undefined;
+  /** Register refusals the daemon has seen since it started (`register_refusals`). */
+  readonly registerRefusals?: number | undefined;
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  readonly repairing?: boolean | undefined;
+  /**
+   * A bulk build is in progress (`bulk_building`): its capture is not queued yet, so `pending`
+   * does not count it. A drain is not done while this is true.
+   */
+  readonly bulkBuilding?: boolean | undefined;
+  /**
+   * Why the last automatic snap failed, while snaps keep failing (sealantd `last_snap_error`).
+   * Present means the executor's newest work is NOT being captured, whatever `pending` says.
+   */
+  readonly lastSnapError?: string | undefined;
+  /** When snaps started failing, in Unix milliseconds (sealantd `snap_failing_since`). */
+  readonly snapFailingSinceUnixMs?: number | undefined;
+  /** Snaps that have failed in a row (sealantd `snaps_failed`). */
+  readonly snapsFailed?: number | undefined;
 }
 
 /**
@@ -276,28 +317,96 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
     const name = captureClassName(value);
     return name === undefined ? [] : [name];
   }),
-  // Fields a newer daemon reports. The pinned wire type does not declare them, so they are read
-  // structurally: a 0.18.2 message never carries them and they stay absent (complete = unknown).
+  // Fields a newer daemon reports (sealantd 13-25 and the snap-failure fields). The pinned wire
+  // type does not declare them, so they are read structurally: a 0.18.2 message never carries
+  // them and they stay absent (complete = unknown).
   ...optionalWireFields(report),
 });
 
 const wireCount = (value: unknown): number | undefined =>
   typeof value === "bigint" || typeof value === "number" ? Number(value) : undefined;
 
-const optionalWireFields = (
-  report: object,
-): Pick<CaptureFlushReport, "complete" | "pendingBytes" | "pendingBulk" | "incompleteReason"> => {
-  const complete = "complete" in report ? report.complete : undefined;
-  const incompleteReason = "incompleteReason" in report ? report.incompleteReason : undefined;
-  const pendingBytes = "pendingBytes" in report ? report.pendingBytes : undefined;
-  const pendingBulk = "pendingBulk" in report ? report.pendingBulk : undefined;
+const wireText = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const wireTexts = (value: unknown): readonly string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const texts = value.filter((item): item is string => typeof item === "string");
+  return texts.length === 0 ? undefined : texts;
+};
+
+/** The first key of `keys` that `report` carries, read structurally. */
+const wireField = (report: object, ...keys: readonly string[]): unknown => {
+  for (const key of keys) {
+    if (key in report) {
+      return Reflect.get(report, key);
+    }
+  }
+  return undefined;
+};
+
+type OptionalWireField =
+  | "complete"
+  | "pendingBytes"
+  | "pendingBulk"
+  | "incompleteReason"
+  | "unreadable"
+  | "carried"
+  | "unreadablePaths"
+  | "registerRefused"
+  | "registerRefusedN"
+  | "registerMissing"
+  | "registerRefusals"
+  | "repairing"
+  | "bulkBuilding"
+  | "lastSnapError"
+  | "snapFailingSinceUnixMs"
+  | "snapsFailed";
+
+/**
+ * Every CaptureStatusReport field past the pinned wire (sealantd 13–25, and the snap-failure
+ * fields), read structurally: a field the message does not carry stays absent, never a default.
+ * The snap-failure names are provisional (`last_snap_error`, `snap_failing_since`,
+ * `snaps_failed`): not in a sealantd proto yet, so `snapFailingSinceUnixMs` is also accepted.
+ */
+const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWireField> => {
+  const complete = wireField(report, "complete");
+  const repairing = wireField(report, "repairing");
+  const bulkBuilding = wireField(report, "bulkBuilding");
+  const pendingBytes = wireCount(wireField(report, "pendingBytes"));
+  const pendingBulk = wireCount(wireField(report, "pendingBulk"));
+  const unreadable = wireCount(wireField(report, "unreadable"));
+  const carried = wireCount(wireField(report, "carried"));
+  const registerRefusedN = wireCount(wireField(report, "registerRefusedN"));
+  const registerRefusals = wireCount(wireField(report, "registerRefusals"));
+  const snapFailingSinceUnixMs = wireCount(
+    wireField(report, "snapFailingSince", "snapFailingSinceUnixMs"),
+  );
+  const snapsFailed = wireCount(wireField(report, "snapsFailed"));
+  const incompleteReason = wireText(wireField(report, "incompleteReason"));
+  const registerRefused = wireText(wireField(report, "registerRefused"));
+  const lastSnapError = wireText(wireField(report, "lastSnapError"));
+  const unreadablePaths = wireTexts(wireField(report, "unreadablePaths"));
+  const registerMissing = wireTexts(wireField(report, "registerMissing"));
   return {
     ...(typeof complete === "boolean" ? { complete } : {}),
-    ...(wireCount(pendingBytes) === undefined ? {} : { pendingBytes: wireCount(pendingBytes) }),
-    ...(wireCount(pendingBulk) === undefined ? {} : { pendingBulk: wireCount(pendingBulk) }),
-    ...(typeof incompleteReason === "string" && incompleteReason.length > 0
-      ? { incompleteReason }
-      : {}),
+    ...(pendingBytes === undefined ? {} : { pendingBytes }),
+    ...(pendingBulk === undefined ? {} : { pendingBulk }),
+    ...(incompleteReason === undefined ? {} : { incompleteReason }),
+    ...(unreadable === undefined ? {} : { unreadable }),
+    ...(carried === undefined ? {} : { carried }),
+    ...(unreadablePaths === undefined ? {} : { unreadablePaths }),
+    ...(registerRefused === undefined ? {} : { registerRefused }),
+    ...(registerRefusedN === undefined ? {} : { registerRefusedN }),
+    ...(registerMissing === undefined ? {} : { registerMissing }),
+    ...(registerRefusals === undefined ? {} : { registerRefusals }),
+    ...(typeof repairing === "boolean" ? { repairing } : {}),
+    ...(typeof bulkBuilding === "boolean" ? { bulkBuilding } : {}),
+    ...(lastSnapError === undefined ? {} : { lastSnapError }),
+    ...(snapFailingSinceUnixMs === undefined ? {} : { snapFailingSinceUnixMs }),
+    ...(snapsFailed === undefined ? {} : { snapsFailed }),
   };
 };
 

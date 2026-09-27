@@ -451,6 +451,106 @@ describe("captureFlushReportFromWire", () => {
   });
 });
 
+describe("captureFlushReportFromWire past the pinned wire", () => {
+  const base = create(CaptureStatusReportSchema, {
+    epoch: 2n,
+    worktreeId: "wt_1",
+    pending: 0n,
+    stagedBytes: 0n,
+    uploadedObjects: 0n,
+    uploadedBytes: 0n,
+    registered: 5n,
+    fenced: false,
+    paused: false,
+  });
+
+  it("reads every field a newer daemon reports (sealantd 13-25 and the snap failure)", () => {
+    // What the typed message looks like once the pin moves: the pinned 0.18.2 type does not
+    // declare these, so they are read structurally.
+    const newer = {
+      ...base,
+      pendingBulk: 1n,
+      pendingBytes: 2048n,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 3n,
+      carried: 2n,
+      unreadablePaths: ["tree/a/deep", ".git/index.lock", "harness/x"],
+      registerRefused: "missing-objects",
+      registerRefusedN: 9n,
+      registerMissing: ["obj/ab12", "obj/cd34"],
+      registerRefusals: 4n,
+      repairing: true,
+      bulkBuilding: true,
+      lastSnapError: "File name too long (os error 36): tree/aaaa…",
+      snapFailingSince: 1_757_760_000_000n,
+      snapsFailed: 12n,
+    };
+    expect(captureFlushReportFromWire(newer)).toEqual({
+      epoch: 2,
+      worktreeId: "wt_1",
+      pending: 0,
+      stagedBytes: 0,
+      uploadedObjects: 0,
+      uploadedBytes: 0,
+      registered: 5,
+      fenced: false,
+      paused: false,
+      refused: [],
+      pendingBulk: 1,
+      pendingBytes: 2048,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 3,
+      carried: 2,
+      unreadablePaths: ["tree/a/deep", ".git/index.lock", "harness/x"],
+      registerRefused: "missing-objects",
+      registerRefusedN: 9,
+      registerMissing: ["obj/ab12", "obj/cd34"],
+      registerRefusals: 4,
+      repairing: true,
+      bulkBuilding: true,
+      lastSnapError: "File name too long (os error 36): tree/aaaa…",
+      snapFailingSinceUnixMs: 1_757_760_000_000,
+      snapsFailed: 12,
+    });
+  });
+
+  it("leaves every field the message does not carry absent, and empty text and lists absent", () => {
+    const report = captureFlushReportFromWire(base);
+    for (const key of [
+      "complete",
+      "pendingBulk",
+      "pendingBytes",
+      "incompleteReason",
+      "unreadable",
+      "carried",
+      "unreadablePaths",
+      "registerRefused",
+      "registerRefusedN",
+      "registerMissing",
+      "registerRefusals",
+      "repairing",
+      "bulkBuilding",
+      "lastSnapError",
+      "snapFailingSinceUnixMs",
+      "snapsFailed",
+    ]) {
+      expect(key in report).toBe(false);
+    }
+    // proto3 defaults for a string or a repeated field say nothing; they stay absent.
+    const blank = {
+      ...base,
+      incompleteReason: "",
+      registerRefused: "",
+      lastSnapError: "",
+      unreadablePaths: [],
+      registerMissing: [],
+    };
+    expect(captureFlushReportFromWire(blank)).toEqual(captureFlushReportFromWire(base));
+  });
+});
+
 describe("captureReplanReportFromWire", () => {
   it("maps the wire report's uint64 fields to numbers and keeps optional fields optional", () => {
     expect(

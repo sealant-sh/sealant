@@ -278,6 +278,45 @@ export interface WorkspaceCaptureStatus {
   readonly complete?: boolean;
   /** Why the last final flush is not complete, when the daemon says. */
   readonly incompleteReason?: string;
+  /**
+   * Paths the last snap of each class could not read, summed over both classes. Never taken as
+   * deleted: an automatic snap carries the last captured content forward, a final snap fails.
+   */
+  readonly unreadable?: number;
+  /** Of `unreadable`, the paths whose last captured content was carried forward. */
+  readonly carried?: number;
+  /**
+   * The first unreadable paths (at most 20), virtual: `tree/<path>`, `.git/<path>`,
+   * `harness/<path>`; small class first.
+   */
+  readonly unreadablePaths?: readonly string[];
+  /**
+   * A capture the registrar refused to register that the executor is working through
+   * (`missing-objects` or `unrestorable`). Nothing is dropped: it is rebuilt from disk.
+   */
+  readonly registerRefused?: string;
+  /** That refused capture's chain position. */
+  readonly registerRefusedN?: number;
+  /** The first keys (at most 20) the registrar named as missing. */
+  readonly registerMissing?: readonly string[];
+  /** Register refusals the daemon has seen since it started. */
+  readonly registerRefusals?: number;
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  readonly repairing?: boolean;
+  /**
+   * A bulk build is in progress: its capture is not queued yet, so `pending` does not count it.
+   * The executor's work is not all saved while this is true.
+   */
+  readonly bulkBuilding?: boolean;
+  /**
+   * Why the last automatic snap failed, while snaps keep failing. Present means the newest work
+   * is NOT being captured, whatever `pending` says.
+   */
+  readonly lastSnapError?: string;
+  /** When snaps started failing, in Unix milliseconds. */
+  readonly snapFailingSinceUnixMs?: number;
+  /** Snaps that have failed in a row. */
+  readonly snapsFailed?: number;
 }
 
 /**

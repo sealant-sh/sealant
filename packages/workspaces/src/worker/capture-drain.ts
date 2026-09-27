@@ -28,6 +28,11 @@
  *    or missing) — there is nothing left to save, so the stop proceeds (it only cleans up).
  *  - **busy**: another worker holds the run's drain; this call does nothing.
  *
+ * A daemon that reports its snaps failing (`lastSnapError`) is saving none of the executor's
+ * newest work, whatever `pending` says: the drain logs it as an error once per distinct error,
+ * and every keep it concludes names it. It never lets a stop proceed (a failing snap never
+ * reports the final flush complete).
+ *
  * The FINAL flush carries a deadline (`finalFlushDeadlineMs`, never more than the round trip's
  * own bound less a margin, so the daemon answers before the worker gives up on it) and a grace
  * (`finalFlushGraceMs`, SIGTERM to SIGKILL for managed processes, inside the deadline). A FINAL
@@ -373,9 +378,34 @@ export const captureProgressed = (
   next.registered > previous.registered ||
   (next.complete === true && previous.complete !== true);
 
-export const describeCaptureStatus = (status: CaptureFlushReport): string =>
-  [
+/** A daemon-supplied string cut for a log line: a path can be longer than PATH_MAX. */
+const clip = (text: string, max = 160): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+
+/**
+ * Snaps are failing (sealantd `last_snap_error`): the executor's newest work is not being
+ * captured, whatever `pending` says. `undefined` when the daemon reports no failing snap.
+ */
+export const snapFailureDetail = (status: CaptureFlushReport): string | undefined =>
+  status.lastSnapError === undefined
+    ? undefined
+    : [
+        `snaps failing${
+          status.snapFailingSinceUnixMs === undefined
+            ? ""
+            : ` since ${new Date(status.snapFailingSinceUnixMs).toISOString()}`
+        }${status.snapsFailed === undefined ? "" : ` (${String(status.snapsFailed)} failed)`}`,
+        clip(status.lastSnapError, 400),
+      ].join(": ");
+
+export const describeCaptureStatus = (status: CaptureFlushReport): string => {
+  const snapFailure = snapFailureDetail(status);
+  return [
     `pending ${String(status.pending)}`,
+    ...(status.pendingBulk === undefined || status.pendingBulk === 0
+      ? []
+      : [`${String(status.pendingBulk)} bulk pending`]),
+    ...(status.bulkBuilding === true ? ["bulk building"] : []),
     ...(status.pendingBytes === undefined ? [] : [`${String(status.pendingBytes)} bytes to ship`]),
     `staged ${String(status.stagedBytes)} bytes`,
     `uploaded ${String(status.uploadedBytes)} bytes`,
@@ -388,7 +418,44 @@ export const describeCaptureStatus = (status: CaptureFlushReport): string =>
     ...(status.fenced ? ["fenced"] : []),
     ...(status.paused ? ["paused"] : []),
     ...(status.refused.length === 0 ? [] : [`refused ${status.refused.join(", ")}`]),
+    ...(snapFailure === undefined ? [] : [snapFailure]),
+    ...(status.unreadable === undefined || status.unreadable === 0
+      ? []
+      : [
+          `unreadable ${String(status.unreadable)}${
+            status.carried === undefined ? "" : ` (${String(status.carried)} carried forward)`
+          }${
+            status.unreadablePaths === undefined
+              ? ""
+              : `: ${status.unreadablePaths
+                  .slice(0, 3)
+                  .map((path) => clip(path))
+                  .join(", ")}${status.unreadablePaths.length > 3 ? ", …" : ""}`
+          }`,
+        ]),
+    ...(status.registerRefused === undefined
+      ? []
+      : [
+          `register refused ${status.registerRefused}${
+            status.registerRefusedN === undefined ? "" : ` at n ${String(status.registerRefusedN)}`
+          }${
+            status.registerMissing === undefined
+              ? ""
+              : ` (${String(status.registerMissing.length)} missing keys listed)`
+          }`,
+        ]),
+    ...(status.repairing === true ? ["repairing"] : []),
+    ...(status.registerRefusals === undefined || status.registerRefusals === 0
+      ? []
+      : [`${String(status.registerRefusals)} register refusals`]),
   ].join(" · ");
+};
+
+/** The parts that are present, joined as one detail; `undefined` when none is. */
+const joinDetail = (...parts: ReadonlyArray<string | undefined>): string | undefined => {
+  const present = parts.filter((part): part is string => part !== undefined);
+  return present.length === 0 ? undefined : present.join(" · ");
+};
 
 type Sample =
   | { readonly kind: "status"; readonly status: CaptureFlushReport }
@@ -625,6 +692,15 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
           if (moved) {
             entry = { ...entry, lastProgressAt: now };
           }
+          const snapFailure = snapFailureDetail(status);
+          if (snapFailure !== undefined && entry.last?.lastSnapError !== status.lastSnapError) {
+            // Snaps are failing: whatever the queue says, the newest work on the executor is not
+            // being captured. Said once per distinct error; the drain goes on (only `complete`
+            // lets a stop proceed, and a failing snap never reports it).
+            yield* Effect.logError(
+              `${prefix}: not captured · ${snapFailure}. The executor's newest work is not being saved; the workspace is not stopped until the daemon reports a complete final flush.`,
+            );
+          }
           if (status.refused.length > 0) {
             // The registrar refused a class for the session's byte quota: nothing of it ships
             // until a new epoch or a re-plan, whatever `pending` says. Keep the executor.
@@ -639,7 +715,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
               kind: "stalled",
               status,
               stalledForMs: now - (entry.lastProgressAt ?? now),
-              detail: `refused ${status.refused.join(", ")}`,
+              detail: joinDetail(`refused ${status.refused.join(", ")}`, snapFailure),
             });
           }
           if (status.complete === true) {
@@ -654,12 +730,14 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
               command = "flush";
               continue;
             }
-            const detail =
+            const detail = [
               status.complete === false
                 ? `the daemon reports its final flush incomplete${
                     status.incompleteReason === undefined ? "" : ` (${status.incompleteReason})`
                   }`
-                : "the daemon does not report whether its final flush completed (sealantd predates capture.flush FINAL); an empty queue is not proof";
+                : "the daemon does not report whether its final flush completed (sealantd predates capture.flush FINAL); an empty queue is not proof",
+              ...(snapFailure === undefined ? [] : [snapFailure]),
+            ].join(" · ");
             if (!entry.keptLogged) {
               entry = { ...entry, keptLogged: true };
               yield* Effect.logError(
@@ -689,7 +767,10 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             kind: "stalled",
             status: entry.last,
             stalledForMs,
-            detail: refusedDetail,
+            detail: joinDetail(
+              refusedDetail,
+              entry.last === undefined ? undefined : snapFailureDetail(entry.last),
+            ),
           });
         }
       }

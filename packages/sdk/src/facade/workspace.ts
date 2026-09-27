@@ -101,7 +101,10 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   "claude-code": "claude",
 };
 
-/** Wire → public capture status; `refused` is empty from a control plane that predates it. */
+/**
+ * Wire → public capture status; `refused` is empty from a control plane that predates it, and
+ * every other field the control plane does not send stays absent.
+ */
 const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureStatus => ({
   epoch: status.epoch,
   worktreeId: status.worktreeId,
@@ -119,6 +122,20 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
   ...(status.pendingBulk === undefined ? {} : { pendingBulk: status.pendingBulk }),
   ...(status.complete === undefined ? {} : { complete: status.complete }),
   ...(status.incompleteReason === undefined ? {} : { incompleteReason: status.incompleteReason }),
+  ...(status.unreadable === undefined ? {} : { unreadable: status.unreadable }),
+  ...(status.carried === undefined ? {} : { carried: status.carried }),
+  ...(status.unreadablePaths === undefined ? {} : { unreadablePaths: status.unreadablePaths }),
+  ...(status.registerRefused === undefined ? {} : { registerRefused: status.registerRefused }),
+  ...(status.registerRefusedN === undefined ? {} : { registerRefusedN: status.registerRefusedN }),
+  ...(status.registerMissing === undefined ? {} : { registerMissing: status.registerMissing }),
+  ...(status.registerRefusals === undefined ? {} : { registerRefusals: status.registerRefusals }),
+  ...(status.repairing === undefined ? {} : { repairing: status.repairing }),
+  ...(status.bulkBuilding === undefined ? {} : { bulkBuilding: status.bulkBuilding }),
+  ...(status.lastSnapError === undefined ? {} : { lastSnapError: status.lastSnapError }),
+  ...(status.snapFailingSinceUnixMs === undefined
+    ? {}
+    : { snapFailingSinceUnixMs: status.snapFailingSinceUnixMs }),
+  ...(status.snapsFailed === undefined ? {} : { snapsFailed: status.snapsFailed }),
 });
 
 /** Wire → public drain observation. */

@@ -48,7 +48,7 @@ const REPORT: CaptureFlushReport = {
  * every flush request it is sent. The narrowing casts are test-only: each fake implements only
  * what the flush route reads.
  */
-const flushHarness = () => {
+const flushHarness = (report: CaptureFlushReport = REPORT) => {
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
   const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
   const spec = {
@@ -65,7 +65,7 @@ const flushHarness = () => {
   const daemon = {
     captureFlush: (request?: CaptureFlushRequest) => {
       flushRequests.push(request);
-      return Effect.succeed(REPORT);
+      return Effect.succeed(report);
     },
   } as unknown as SealantSession;
   const layer = Layer.mergeAll(
@@ -152,6 +152,53 @@ describe("workspace capture routes", () => {
       pendingBytes: 1024,
       pendingBulk: 1,
     });
+  });
+
+  it("answer flush and status with every field a newer daemon reports, and none it does not", () => {
+    const decode = Schema.decodeUnknownSync(workspaceCaptureStatusSchema);
+    const encode = Schema.encodeSync(workspaceCaptureStatusSchema);
+    const failing: CaptureFlushReport = {
+      ...REPORT,
+      pending: 0,
+      pendingBulk: 1,
+      pendingBytes: 2048,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 3,
+      carried: 2,
+      unreadablePaths: ["tree/a/deep", ".git/index.lock", "harness/x"],
+      registerRefused: "missing-objects",
+      registerRefusedN: 9,
+      registerMissing: ["obj/ab12"],
+      registerRefusals: 4,
+      repairing: true,
+      bulkBuilding: true,
+      lastSnapError: "File name too long (os error 36)",
+      snapFailingSinceUnixMs: 1_757_760_000_000,
+      snapsFailed: 12,
+    };
+    // The handler returns the session's report verbatim: the success schema neither drops nor
+    // rewrites any of it on the way out, and a client decodes it back whole.
+    expect(encode(failing)).toEqual(failing);
+    expect(decode(encode(failing))).toEqual(failing);
+    // A daemon on the pinned wire reports none of them: absent, never defaulted.
+    const pinned = decode(encode(REPORT));
+    expect(pinned).toEqual(REPORT);
+    expect("lastSnapError" in pinned).toBe(false);
+    expect("unreadable" in pinned).toBe(false);
+    expect("bulkBuilding" in pinned).toBe(false);
+  });
+
+  it("flush answers the daemon's snap failure to the caller", async () => {
+    const failing: CaptureFlushReport = {
+      ...REPORT,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      lastSnapError: "File name too long (os error 36)",
+      snapsFailed: 3,
+    };
+    const h = flushHarness(failing);
+    expect(await h.flush({ kind: "final" })).toEqual(failing);
   });
 
   it("answer replan with the session's replan report as-is", () => {

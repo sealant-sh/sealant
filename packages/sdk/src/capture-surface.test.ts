@@ -152,6 +152,53 @@ describe("workspace.capture", () => {
     expect("complete" in older).toBe(false);
   });
 
+  it("status() and flush() carry every field the daemon reports, snap failure included", async () => {
+    const failing: WorkspaceCaptureStatus = {
+      ...STATUS,
+      refused: [],
+      pendingBulk: 1,
+      pendingBytes: 2048,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 3,
+      carried: 2,
+      unreadablePaths: ["tree/a/deep", ".git/index.lock", "harness/x"],
+      registerRefused: "missing-objects",
+      registerRefusedN: 9,
+      registerMissing: ["obj/ab12"],
+      registerRefusals: 4,
+      repairing: true,
+      bulkBuilding: true,
+      lastSnapError: "File name too long (os error 36)",
+      snapFailingSinceUnixMs: 1_757_760_000_000,
+      snapsFailed: 12,
+    };
+    const { client } = makeStub({ status: () => failing, flush: () => failing });
+    const workspace = workspaceFor(client);
+    expect(await workspace.capture.status()).toEqual(failing);
+    expect(await workspace.capture.flush({ kind: "final" })).toEqual(failing);
+  });
+
+  it("status() leaves every field an older control plane does not send absent", async () => {
+    const status = await workspaceFor(makeStub({}).client).capture.status();
+    for (const key of [
+      "unreadable",
+      "carried",
+      "unreadablePaths",
+      "registerRefused",
+      "registerRefusedN",
+      "registerMissing",
+      "registerRefusals",
+      "repairing",
+      "bulkBuilding",
+      "lastSnapError",
+      "snapFailingSinceUnixMs",
+      "snapsFailed",
+    ]) {
+      expect(key in status).toBe(false);
+    }
+  });
+
   it("replan() posts the owner to the workspace's replan endpoint and maps the counts", async () => {
     const { client, calls } = makeStub({});
     const replanned = await workspaceFor(client).capture.replan();

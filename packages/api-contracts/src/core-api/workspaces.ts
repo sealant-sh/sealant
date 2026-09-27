@@ -216,8 +216,8 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
   refused: Schema.optional(Schema.Array(captureClassSchema)),
   /**
    * Bytes still to ship, and bulk captures still pending (sealantd's `pending_bytes` /
-   * `pending_bulk`). Reserved: absent until the daemon reports them; a drain is complete only
-   * when every reported one is zero.
+   * `pending_bulk`). Every field below `refused` is absent until the daemon reports it (the
+   * control plane's pinned sealantd wire predates them).
    */
   pendingBytes: Schema.optional(Schema.Number),
   pendingBulk: Schema.optional(Schema.Number),
@@ -233,6 +233,48 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    * `snapshot-failed`, `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`).
    */
   incompleteReason: Schema.optional(Schema.String),
+  /**
+   * Paths the last snap of each class could not read (listed, stat'ed or opened), summed over
+   * both classes. Never taken as deleted: an automatic snap carries a path's last captured
+   * content forward, a final snap fails instead.
+   */
+  unreadable: Schema.optional(Schema.Number),
+  /** Of `unreadable`, the paths whose last captured content was carried forward. */
+  carried: Schema.optional(Schema.Number),
+  /**
+   * The first unreadable paths (at most 20), virtual: `tree/<path>` under the worktree,
+   * `.git/<path>`, `harness/<path>`; small class first.
+   */
+  unreadablePaths: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * A capture the registrar refused to register that the executor is working through:
+   * `missing-objects` (an object it names is not in the store) or `unrestorable` (a section's
+   * tree would not restore). Nothing is dropped: its objects are uploaded again and it is
+   * rebuilt from disk in its place.
+   */
+  registerRefused: Schema.optional(Schema.String),
+  /** That refused capture's chain position. */
+  registerRefusedN: Schema.optional(Schema.Number),
+  /** The first keys (at most 20) the registrar named as missing. */
+  registerMissing: Schema.optional(Schema.Array(Schema.String)),
+  /** Register refusals the daemon has seen since it started. */
+  registerRefusals: Schema.optional(Schema.Number),
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  repairing: Schema.optional(Schema.Boolean),
+  /**
+   * A bulk build is in progress: its capture is not queued yet, so `pending` and `pendingBulk`
+   * do not count it (`pendingBytes` counts what it has staged). A drain is not done while true.
+   */
+  bulkBuilding: Schema.optional(Schema.Boolean),
+  /**
+   * Why the last automatic snap failed, while snaps keep failing. Present means the executor's
+   * newest work is NOT being captured, whatever `pending` says.
+   */
+  lastSnapError: Schema.optional(Schema.String),
+  /** When snaps started failing, in Unix milliseconds. */
+  snapFailingSinceUnixMs: Schema.optional(Schema.Number),
+  /** Snaps that have failed in a row. */
+  snapsFailed: Schema.optional(Schema.Number),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 

@@ -37,6 +37,18 @@ const storedStatusSchema = z.object({
   incompleteReason: z.string().optional(),
   pendingBytes: z.number().optional(),
   pendingBulk: z.number().optional(),
+  unreadable: z.number().optional(),
+  carried: z.number().optional(),
+  unreadablePaths: z.array(z.string()).optional(),
+  registerRefused: z.string().optional(),
+  registerRefusedN: z.number().optional(),
+  registerMissing: z.array(z.string()).optional(),
+  registerRefusals: z.number().optional(),
+  repairing: z.boolean().optional(),
+  bulkBuilding: z.boolean().optional(),
+  lastSnapError: z.string().optional(),
+  snapFailingSinceUnixMs: z.number().optional(),
+  snapsFailed: z.number().optional(),
 });
 
 /** A stored status back into a report; a row of an unknown shape reads as none. */
