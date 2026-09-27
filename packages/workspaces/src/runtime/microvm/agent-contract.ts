@@ -44,6 +44,13 @@ export const HOOK_ROUTE_PREFIX = "/aws/lambda-microvms/runtime/v1";
 export const AGENT_LAUNCH_ROUTE = "/sealant/launch";
 export const AGENT_HEALTH_ROUTE = "/sealant/health";
 export const AGENT_CONTROL_ROUTE = "/sealant/control";
+/**
+ * Recovery of a retained capture VM whose daemon ended while the VM runs on (sealantd exited 75
+ * after an incomplete final flush): the agent starts `sealantd boot` again ON THE VM'S OWN DISK in
+ * sealantd's recovery mode. Authorised by the control token. An agent without this route (an
+ * image built before it) answers 404, which the adapter reports as `unsupported`.
+ */
+export const AGENT_RECOVER_ROUTE = "/sealant/recover";
 
 /** In-VM paths; the same ones every other runtime family uses. */
 export const CONTROL_SOCKET_PATH = "/run/sealant/control.sock";
@@ -160,6 +167,34 @@ export const agentLaunchResponseSchema = z.strictObject({
 });
 
 export type AgentLaunchResponse = z.infer<typeof agentLaunchResponseSchema>;
+
+/** The recovery contract version (`/sealant/recover`). */
+export const AGENT_RECOVER_CONTRACT_VERSION = 1;
+
+/**
+ * `POST /sealant/recover`: restart sealantd on the VM's own disk in recovery mode
+ * (`SEALANT_RECOVERY=1`: resume its own staging, no restore, no dotfiles, no lifecycle step, no
+ * harness, admission closed). `secretEnvJson` is the recovery boot's secret env file: the capture
+ * token the executor was launched with (`{"SEALANT_CAPTURE_TOKEN": …}`), which the control plane
+ * kept sealed for exactly this.
+ */
+export const agentRecoverRequestSchema = z.strictObject({
+  version: z.literal(AGENT_RECOVER_CONTRACT_VERSION),
+  runId: z.string().trim().min(1),
+  secretEnvJson: z.string().min(1),
+});
+
+export type AgentRecoverRequest = z.infer<typeof agentRecoverRequestSchema>;
+
+/**
+ * `restarted`: sealantd had ended and was started again in recovery mode; `running`: it runs
+ * already (nothing was done).
+ */
+export const agentRecoverResponseSchema = z.strictObject({
+  outcome: z.enum(["restarted", "running"]),
+});
+
+export type AgentRecoverResponse = z.infer<typeof agentRecoverResponseSchema>;
 
 /** The most output a daemon exit reports (`agent.mjs` keeps the tail of sealantd's output). */
 export const DAEMON_EXIT_OUTPUT_MAX_CHARS = 4096;

@@ -148,6 +148,7 @@ export {
 export {
   attestationCoversExecutor,
   decideExecutorDeletion,
+  runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   type CompletionAttestation,
   type ExecutorDeletionBasis,

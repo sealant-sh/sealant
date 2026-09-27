@@ -17,8 +17,10 @@ import {
   AGENT_CONTROL_ROUTE,
   AGENT_HEALTH_ROUTE,
   AGENT_LAUNCH_ROUTE,
+  AGENT_RECOVER_ROUTE,
   agentHealthResponseSchema,
   agentLaunchResponseSchema,
+  agentRecoverResponseSchema,
   HOOK_ROUTE_PREFIX,
   launchSecretForRun,
   type AgentLaunchRequest,
@@ -53,6 +55,10 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
   const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
   fs.writeSync(2, secrets.SEALANT_CAPTURE_TOKEN + "\u20ac".repeat(2726));
   process.exit(6);
+} else if (process.env.FAKE_SEALANTD_EXIT75 === "1" && process.env.SEALANT_RECOVERY !== "1") {
+  // A final flush that did not complete: sealantd exits 75 and keeps its staging on the disk.
+  fs.writeSync(2, "Error: final capture incomplete; exiting with EX_TEMPFAIL\\n");
+  process.exit(75);
 } else if (process.env.FAKE_SEALANTD_CRASH === "1") {
   // Dies once the control socket is up, leaving the socket file behind, while a process it
   // started still holds its output pipes open (so the agent never sees them close).
@@ -764,6 +770,105 @@ describe("microvm agent", () => {
       expect((await call(fresh, "GET", AGENT_CONTROL_ROUTE)).status).toBe(426);
     } finally {
       await stopAgent(fresh);
+    }
+  });
+});
+
+describe("microvm agent · recovery of a daemon that exited on a live VM (review 3 #7)", () => {
+  const recoverBody = {
+    version: 1,
+    runId: "run-1",
+    secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_recovery_token" }),
+  };
+
+  it("starts sealantd again on its own disk in recovery mode with the kept capture token", async () => {
+    // Review 3 #7: the agent had no way to boot sealantd again, so a VM whose daemon exited 75
+    // kept its staging only until the platform's cap destroyed it.
+    const agent = await startAgent({ FAKE_SEALANTD_EXIT75: "1" });
+    try {
+      await hook(agent, "run", {
+        microvmId: "microvm-7",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      expect(
+        await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+          body: launchRequest,
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+      await waitFor(async () => {
+        const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+      });
+
+      // Only the control token may ask; the request names this VM's run and only the token.
+      expect(
+        await call(agent, "POST", AGENT_RECOVER_ROUTE, { body: recoverBody, bearer: "wrong" }),
+      ).toMatchObject({ status: 401 });
+      expect(
+        await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+          body: { ...recoverBody, runId: "run-2" },
+          bearer: "control-token",
+        }),
+      ).toMatchObject({ status: 400 });
+      expect(
+        await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+          body: { ...recoverBody, secretEnvJson: JSON.stringify({ OTHER: "x" }) },
+          bearer: "control-token",
+        }),
+      ).toMatchObject({ status: 400 });
+
+      const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+        body: recoverBody,
+        bearer: "control-token",
+      });
+      expect(recovered.status).toBe(200);
+      expect(agentRecoverResponseSchema.parse(recovered.body)).toEqual({ outcome: "restarted" });
+
+      await waitFor(async () => {
+        const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return health.status === 200;
+      });
+      const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
+        argv: string[];
+        env: Record<string, string>;
+      };
+      expect(record.argv).toEqual(["boot"]);
+      expect(record.env["SEALANT_RECOVERY"]).toBe("1");
+      expect(record.env["SEALANT_WORKSPACE_SOURCE"]).toBe("capture");
+      expect(record.env["SEALANT_DOTFILES_ARCHIVE_DIR"]).toBeUndefined();
+      const secretFile = record.env["SEALANT_SECRET_ENV_FILE"] ?? "";
+      expect(secretFile).toBe(path.join(agent.stateDir, "secrets", "recovery-env.json"));
+      expect(JSON.parse(await readFile(secretFile, "utf8"))).toEqual({
+        SEALANT_CAPTURE_TOKEN: "mst_recovery_token",
+      });
+      expect((await stat(secretFile)).mode & 0o777).toBe(0o600);
+
+      // It runs now: a second request changes nothing.
+      expect(
+        (
+          await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+            body: recoverBody,
+            bearer: "control-token",
+          })
+        ).body,
+      ).toEqual({ outcome: "running" });
+    } finally {
+      await stopAgent(agent);
+    }
+  });
+
+  it("refuses a recovery of a VM that was never launched", async () => {
+    const agent = await startAgent();
+    try {
+      expect(
+        await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+          body: recoverBody,
+          bearer: "control-token",
+        }),
+      ).toMatchObject({ status: 401 });
+    } finally {
+      await stopAgent(agent);
     }
   });
 });

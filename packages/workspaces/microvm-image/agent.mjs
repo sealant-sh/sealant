@@ -26,6 +26,12 @@
 //      proxy terminates TLS, so `GET /sealant/control` relays a plaintext WebSocket to the
 //      daemon's Unix control socket. Authorised by the deployment's control token, which
 //      arrived inside the launch push.
+//   4. Recovery. A capture VM whose sealantd exited (75: its final flush did not complete) while
+//      the VM runs on still holds its staging on the VM's disk, until the platform's cap ends
+//      the VM. `POST /sealant/recover` (control token) starts `sealantd boot` again on that disk
+//      in sealantd's recovery mode (`SEALANT_RECOVERY=1`: resume its own staging, no restore, no
+//      dotfiles, no lifecycle step, no harness, admission closed), with the capture token the
+//      control plane kept for it, so the control plane can drain it before the cap.
 //
 // One listener serves all three; the image registers the same port for hooks and the endpoint
 // targets it by default.
@@ -48,12 +54,16 @@ const HOOK_PREFIX = "/aws/lambda-microvms/runtime/v1";
 const LAUNCH_ROUTE = "/sealant/launch";
 const HEALTH_ROUTE = "/sealant/health";
 const CONTROL_ROUTE = "/sealant/control";
+const RECOVER_ROUTE = "/sealant/recover";
+const RECOVER_CONTRACT_VERSION = 1;
 
 const PORT = Number(process.env.SEALANT_MICROVM_AGENT_PORT ?? 8080);
 const CONTROL_SOCKET = process.env.SEALANT_CONTROL_SOCKET ?? "/run/sealant/control.sock";
 // Where launch material is written; overridable so the agent can be tested outside a VM.
 const STATE_DIR = process.env.SEALANT_MICROVM_AGENT_STATE_DIR ?? "/run/sealant";
 const SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "env.json");
+// The recovery boot's secret env: only the capture token, pushed with the recovery request.
+const RECOVERY_SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "recovery-env.json");
 const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
@@ -129,6 +139,11 @@ const state = {
   contractVersion: null,
   launchInProgress: false,
   launchAccepted: false,
+  /** The boot env the launch started sealantd with; a recovery boot starts from it. */
+  bootEnv: null,
+  /** sealantd was started again in recovery mode (no harness, so no guest service is needed). */
+  recovery: false,
+  recoveryInProgress: false,
   flushTimeoutMs: 50_000,
   /** The launch boots a capture source (`SEALANT_WORKSPACE_SOURCE=capture`): hooks flush it. */
   captureSourced: false,
@@ -691,9 +706,11 @@ const startDaemon = (bootEnv) => {
     keepDaemonOutput("stderr", chunk);
   });
   child.on("exit", (code, signal) => {
+    // A recovery starts another daemon: only the current one's exit is reported.
+    if (state.daemon !== child) return;
     state.daemonExited = true;
     const settle = () => {
-      if (state.daemonExit !== null) return;
+      if (state.daemon !== child || state.daemonExit !== null) return;
       state.daemonExit = { code, signal };
       log(`sealantd boot exited (code ${code}, signal ${signal})`);
     };
@@ -703,11 +720,14 @@ const startDaemon = (bootEnv) => {
     setTimeout(() => setImmediate(settle), DAEMON_OUTPUT_DRAIN_MS).unref();
   });
   child.on("error", () => {
+    if (state.daemon !== child) return;
     state.daemonExited = true;
     state.daemonExit = { code: null, signal: null };
     log("sealantd boot could not start");
   });
-  log(`launch: sealantd boot started for run ${state.runId}`);
+  log(
+    `${bootEnv.SEALANT_RECOVERY === "1" ? "recover" : "launch"}: sealantd boot started for run ${state.runId}${bootEnv.SEALANT_RECOVERY === "1" ? " in recovery mode" : ""}`,
+  );
 };
 
 const V2_LAUNCH_KEYS = new Set([
@@ -872,6 +892,7 @@ const handleLaunch = async (req, res) => {
   state.launchAccepted = true;
   state.launchInProgress = false;
 
+  state.bootEnv = { ...bootEnv };
   if (body.version === DOCKER_CONTRACT_VERSION) {
     const dockerBootEnv = { ...bootEnv, ...dockerEnvironment };
     state.dockerService = createDockerService({
@@ -884,6 +905,93 @@ const handleLaunch = async (req, res) => {
     startDaemon(bootEnv);
   }
   return json(res, 200, { outcome: "booting" });
+};
+
+/** The recovery request carries only the capture token for the recovery boot's secret env. */
+const recoverySecretEnvIsValid = (raw) => {
+  try {
+    const parsed = JSON.parse(raw);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.keys(parsed).length === 1 &&
+      typeof parsed.SEALANT_CAPTURE_TOKEN === "string" &&
+      parsed.SEALANT_CAPTURE_TOKEN.length > 0
+    );
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Start sealantd again ON THIS VM'S DISK in recovery mode, after it exited (sealantd exits 75
+ * when its final flush did not complete, keeping its staging here). The boot env is the launch's,
+ * with `SEALANT_RECOVERY=1` and a secret env holding only the capture token the control plane
+ * kept: no dotfiles, no lifecycle step, no harness, admission closed; it resumes its own staging
+ * without materializing over it, and ships when the control plane drains it.
+ *
+ * sealantd's recovery boot is asked for with `SEALANT_RECOVERY=1` (`BootConfig::recovery`,
+ * sealantd capture stack #100). If sealantd's invocation of it changes, change it here.
+ */
+const handleRecover = async (req, res) => {
+  if (!bearerMatches(req.headers.authorization, state.controlToken)) {
+    return message(res, 401, "control token does not match");
+  }
+  const body = JSON.parse((await readBody(req)) || "{}");
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    Array.isArray(body) ||
+    !hasOnlyKeys(body, new Set(["version", "runId", "secretEnvJson"])) ||
+    body.version !== RECOVER_CONTRACT_VERSION ||
+    body.runId !== state.runId ||
+    typeof body.secretEnvJson !== "string" ||
+    !recoverySecretEnvIsValid(body.secretEnvJson)
+  ) {
+    return message(res, 400, "recovery request does not match the sealant agent contract");
+  }
+  if (!state.launchAccepted || state.bootEnv === null) {
+    return message(res, 409, "this VM was never launched");
+  }
+  if (!state.captureSourced) {
+    return message(res, 400, "recovery applies to a capture-sourced workspace only");
+  }
+  if (state.recoveryInProgress) {
+    return message(res, 409, "a recovery is already starting");
+  }
+  if (!state.daemonExited) {
+    return json(res, 200, { outcome: "running" });
+  }
+  state.recoveryInProgress = true;
+  try {
+    await writePrivate(RECOVERY_SECRET_ENV_FILE, body.secretEnvJson, 0o600);
+    // The ended daemon's socket file may still be there; the recovered daemon binds a new one,
+    // and nothing may count the old one as ready.
+    await unlink(CONTROL_SOCKET).catch(() => {});
+  } catch (error) {
+    state.recoveryInProgress = false;
+    throw error;
+  }
+  const env = {
+    ...state.bootEnv,
+    SEALANT_RECOVERY: "1",
+    SEALANT_SECRET_ENV_FILE: RECOVERY_SECRET_ENV_FILE,
+  };
+  delete env.SEALANT_DOTFILES_ARCHIVE_DIR;
+  // The launch's redactions stay; the recovery token joins them.
+  const recoverySecrets = { ...JSON.parse(body.secretEnvJson) };
+  state.redactions.forEach((value, index) => {
+    recoverySecrets[`launch-${index}`] = value;
+  });
+  state.redactions = redactionsFor(state.controlToken, JSON.stringify(recoverySecrets));
+  state.recovery = true;
+  state.daemonExited = false;
+  state.daemonExit = null;
+  state.daemonOutput = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+  startDaemon(env);
+  state.recoveryInProgress = false;
+  return json(res, 200, { outcome: "restarted" });
 };
 
 const controlSocketReady = () => existsSync(CONTROL_SOCKET);
@@ -912,8 +1020,12 @@ const handleHealth = (req, res) => {
   }
   const docker = state.dockerService?.health() ?? { status: "starting" };
   const body = { version: DOCKER_CONTRACT_VERSION, ...common, services: { docker } };
+  // A recovery boot runs no harness: it needs no guest service to be ready.
   const healthy =
-    docker.status === "ready" && state.booted && common.controlSocket && !state.daemonExited;
+    (docker.status === "ready" || state.recovery) &&
+    state.booted &&
+    common.controlSocket &&
+    !state.daemonExited;
   return json(res, healthy ? 200 : 503, body);
 };
 
@@ -997,7 +1109,9 @@ const handleControlUpgrade = (req, socket, head) => {
   if (
     !state.booted ||
     !controlSocketReady() ||
-    (state.contractVersion === DOCKER_CONTRACT_VERSION && !state.dockerService?.isReady())
+    (state.contractVersion === DOCKER_CONTRACT_VERSION &&
+      !state.recovery &&
+      !state.dockerService?.isReady())
   ) {
     return refuse(503, "workspace control is not ready");
   }
@@ -1101,6 +1215,9 @@ const server = http.createServer((req, res) => {
     }
     if (req.method === "GET" && url === HEALTH_ROUTE) {
       return handleHealth(req, res);
+    }
+    if (req.method === "POST" && url === RECOVER_ROUTE) {
+      return handleRecover(req, res);
     }
     if (url === CONTROL_ROUTE) {
       return message(res, 426, "the control route only speaks WebSocket");

@@ -11,14 +11,17 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     owner discarded it, nothing of it is left), it is removed and the retention ends.
  *  2. **Recover.** Otherwise the runtime is asked to bring it back on its own disk
  *     (`RuntimeAdapter.recover`). Docker restarts the kept container (`docker start`): sealantd
- *     boots, resumes its own staging without materializing over it, and this sweep drains it at
- *     once — the FINAL flush closes admission and terminates every writer the reboot started
- *     (the container's lifecycle steps and foreground harness run again: sealantd has no boot
- *     mode without them yet), snapshots both classes and ships. Once the daemon reports the
+ *     boots in its recovery mode (resumes its own staging without materializing over it; no
+ *     dotfiles, no lifecycle step, no harness; admission closed), and this sweep drains it at
+ *     once — the FINAL flush snapshots both classes and ships. Once the daemon reports the
  *     final flush complete, the executor is removed and the retention ends. An executor is
  *     restarted only when its launch recorded a daemon with sealantd's recovery boot
  *     (`daemon_recovery_boot`, `daemon-recovery.ts`): an older daemon, or one of unknown build,
  *     would run its ordinary boot over the work its disk holds, so it is kept and reported.
+ *     A MicroVM whose daemon ended while the VM runs on (sealantd exited 75) keeps its disk until
+ *     the platform's cap: its agent starts sealantd again in recovery mode on that disk, handed
+ *     the kept capture token with the request, and it is drained the same way — the deadline
+ *     sweep makes that recovery due before the cap.
  *  3. **Cannot recover.** Kubernetes cannot restart an ended Pod, and its emptyDir lives only as
  *     long as the Pod object; a terminated MicroVM's disk is gone with it. Those are reported as
  *     such (`unsupported`, with what can still be done by hand) and stay retained — never
@@ -42,6 +45,7 @@ import { Effect, Layer } from "effect";
 import { z } from "zod";
 
 import {
+  runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   decideExecutorDeletion,
   type ExecutorDeletionBasis,
@@ -259,13 +263,18 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
       );
       return yield* retry(`not recoverable in place · ${why}`);
     }
+    // Docker's restart reads the token from the host directory it was created to read it from:
+    // staged there again. The MicroVM agent takes it with the recovery request instead.
+    const handsTokenOver = runtimeRecoveryTakesSecretEnv(adapter.id);
+    let recoverySecretEnv: Readonly<Record<string, string>> | undefined;
+    let restaged = false;
     if (restarts) {
       const token = yield* recoverCaptureToken(
         row.captureTokenSealed ?? null,
         options.credentialCipher,
       );
-      const restage = stager.restageSecretEnv;
-      if (token === undefined || restage === undefined) {
+      const restage = handsTokenOver ? undefined : stager.restageSecretEnv;
+      if (token === undefined || (!handsTokenOver && restage === undefined)) {
         const why =
           token === undefined
             ? row.captureTokenSealed === null || row.captureTokenSealed === undefined
@@ -279,8 +288,13 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         );
         return yield* retry(`not recoverable · no capture token · ${why}`);
       }
+      recoverySecretEnv = { [CAPTURE_TOKEN_SECRET_ENV_NAME]: token };
+    }
+    const restage = stager.restageSecretEnv;
+    if (restarts && !handsTokenOver && recoverySecretEnv !== undefined && restage !== undefined) {
+      const secretEnv = recoverySecretEnv;
       const staged = yield* Effect.tryPromise({
-        try: () => restage.call(stager, runId, { [CAPTURE_TOKEN_SECRET_ENV_NAME]: token }),
+        try: () => restage.call(stager, runId, secretEnv),
         catch: (error) => error,
       }).pipe(
         Effect.as(undefined),
@@ -294,6 +308,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         );
         return yield* retry(`staging the capture token failed: ${staged}`);
       }
+      restaged = true;
     }
     const recover = adapter.recover;
     const recovered:
@@ -309,6 +324,9 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
               recover.call(adapter, {
                 resourceId,
                 ...(reference === null ? {} : { reference }),
+                ...(handsTokenOver && recoverySecretEnv !== undefined
+                  ? { runId, secretEnv: recoverySecretEnv }
+                  : {}),
               }),
             catch: (error) => error,
           }).pipe(
@@ -332,7 +350,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         );
         return yield* retry(recovered.detail);
       case "failed":
-        if (restarts) {
+        if (restaged) {
           yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
             Effect.catchCause(() => Effect.void),
           );
@@ -369,7 +387,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         Effect.map((value) => (value === "unknown" ? ("running" as const) : value)),
       ),
     });
-    if (restarts) {
+    if (restaged) {
       // The daemon read its token at boot (its control socket answered before this drain).
       yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
         Effect.catchCause(() => Effect.void),

@@ -20,6 +20,7 @@ import type {
   RuntimeAdapterInspectResult,
   RuntimeAdapterRecoverResult,
 } from "../runtime/runtime-adapter.js";
+import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { EMPTY_CAPTURE_DRAIN_ENTRY, inMemoryCaptureDrainLedger } from "./capture-drain.js";
 import {
@@ -64,6 +65,7 @@ const harness = (input: {
   readonly captureTokenSealed?: string | null;
   /** What the launch recorded of the executor (its daemon build). */
   readonly instance?: Partial<WorkspaceRuntimeInstance>;
+  readonly targetOptions?: SealantTargetDerivationOptions;
 }) => {
   const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
@@ -152,6 +154,7 @@ const harness = (input: {
         now: () => NOW,
         credentialCipher,
         launchMaterialStager: stager,
+        ...(input.targetOptions === undefined ? {} : { targetOptions: input.targetOptions }),
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -370,5 +373,43 @@ describe("recoverRetainedExecutorsEffect · a daemon without the recovery boot (
       instance: { daemonImage: null, daemonRecoveryBoot: null },
     });
     expect((await h.run()).get("run_1")).toBe("released");
+  });
+});
+
+describe("recoverRetainedExecutorsEffect · a MicroVM whose daemon exited on a live VM (review 3 #7)", () => {
+  it("hands the agent the kept capture token, restarts the daemon on its disk and drains it", async () => {
+    // Review 3 #7: MicroVM recovery was `unsupported`, so the retained VM waited out its cap.
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const h = harness({
+      adapterId: "microvm",
+      inspect: { state: "exited", exitCode: 75 },
+      daemon,
+      instance: { endpoint: "wss://abc.lambda-microvm.eu-central-1.on.aws/sealant/control" },
+      targetOptions: {
+        controlBearerToken: "control-token",
+        microvmConnectMaterial: () => async () => ({}),
+      },
+    });
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.recover).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+      runId: "run_1",
+      secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" },
+    });
+    // Nothing is staged on the worker's host for a VM: the token went with the request.
+    expect(h.staged).toEqual([]);
+    expect(daemon.flushRequests).toContainEqual(expect.objectContaining({ kind: "final" }));
+  });
+
+  it("keeps a VM whose daemon lacks the recovery boot, and never asks its agent", async () => {
+    const h = harness({
+      adapterId: "microvm",
+      inspect: { state: "exited", exitCode: 75 },
+      instance: { daemonImage: "ghcr.io/sealant-sh/sealantd:0.18.2", daemonRecoveryBoot: false },
+    });
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.recover).not.toHaveBeenCalled();
   });
 });

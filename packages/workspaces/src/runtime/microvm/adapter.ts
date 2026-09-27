@@ -64,8 +64,11 @@ import {
   AGENT_CONTROL_ROUTE,
   AGENT_HEALTH_ROUTE,
   AGENT_LAUNCH_ROUTE,
+  AGENT_RECOVER_CONTRACT_VERSION,
+  AGENT_RECOVER_ROUTE,
   agentHealthResponseSchema,
   agentLaunchResponseSchema,
+  agentRecoverResponseSchema,
   CONTROL_SOCKET_PATH,
   DAEMON_EXIT_OUTPUT_MAX_CHARS,
   DOCKER_AGENT_CONTRACT_VERSION,
@@ -75,6 +78,7 @@ import {
   SECRET_ENV_FILE_PATH,
   type AgentHealthResponse,
   type AgentLaunchRequest,
+  type AgentRecoverRequest,
   type RunHookPayload,
 } from "./agent-contract.js";
 import type { MicrovmApi, MicrovmDescription, MicrovmRunInput } from "./api.js";
@@ -728,25 +732,92 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * Recovery of a retained capture VM is not possible here. A TERMINATED VM's disk is gone with
-   * it: nothing can be recovered, which is why the deadline sweep drains BEFORE the platform's
-   * cap and the terminate hook runs a FINAL flush — prevention is the only protection. A VM that
-   * still runs after its daemon exited keeps its disk, but the agent has no route to boot
-   * sealantd again on it; it stays retained (until its platform deadline ends it).
+   * Recover a retained capture VM whose daemon ended while the VM runs on (sealantd exited 75
+   * after an incomplete final flush): its disk still holds the staging. The agent starts sealantd
+   * again ON THAT DISK in recovery mode (`POST /sealant/recover`, `SEALANT_RECOVERY=1`: resume its
+   * own staging without materializing over it, no dotfiles, no lifecycle step, no harness,
+   * admission closed), handed the capture token the executor was launched with; the adapter waits
+   * for the daemon to answer and the caller drains it with a FINAL flush.
+   *
+   * A TERMINATED VM's disk is gone with it (`missing`): only the pre-deadline drain, and the
+   * pre-deadline recovery of a retained VM, protect it. An agent without the route (an image built
+   * before it) answers 404: `unsupported`, kept.
    */
   async recover(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult> {
-    const vm = await this.#api.getMicrovm(input.resourceId);
+    const microvmId = input.resourceId;
+    const vm = await this.#api.getMicrovm(microvmId);
     if (vm === undefined || isEnded(vm.state)) {
       return { outcome: "missing" };
     }
-    const state = await this.inspect({ resourceId: input.resourceId });
+    const state = await this.inspect({ resourceId: microvmId });
     if (state.state === "running") {
       return { outcome: "running" };
     }
-    return {
-      outcome: "unsupported",
-      detail: `MicroVM ${input.resourceId} is still up but its daemon ended; the agent cannot boot sealantd again, so its staged captures cannot be shipped from here. It is kept until its platform deadline ends it; a terminated VM's disk is gone, so only the pre-deadline drain protects it.`,
-    };
+    if (state.state === "missing") {
+      return { outcome: "missing" };
+    }
+    if (input.runId === undefined || input.secretEnv === undefined) {
+      return {
+        outcome: "unsupported",
+        detail: `MicroVM ${microvmId} is still up but its daemon ended, and this recovery carries no capture token to boot it with; it is kept.`,
+      };
+    }
+    const endpoint = vm.endpoint;
+    if (endpoint === undefined || endpoint.trim().length === 0) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `MicroVM ${microvmId} is RUNNING but has no inbound endpoint to reach its agent.`,
+      );
+    }
+    const host = endpointHost(endpoint);
+    const release = this.#tokens.hold(microvmId);
+    try {
+      const request: AgentRecoverRequest = {
+        version: AGENT_RECOVER_CONTRACT_VERSION,
+        runId: input.runId,
+        secretEnvJson: JSON.stringify(input.secretEnv),
+      };
+      let response: Response;
+      try {
+        response = await this.#fetch(`https://${host}${AGENT_RECOVER_ROUTE}`, {
+          method: "POST",
+          headers: {
+            ...(await this.#tokens.headers(microvmId)),
+            authorization: `Bearer ${this.#config.controlBearerToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(request),
+        });
+      } catch {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `Asking the agent of MicroVM ${microvmId} to restart sealantd in recovery mode failed: the endpoint request failed.`,
+        );
+      }
+      if (response.status === 404) {
+        return {
+          outcome: "unsupported",
+          detail: `MicroVM ${microvmId} is still up but its daemon ended, and the agent in its image has no recovery route (the image predates it), so sealantd cannot be started again on its disk. It is kept until its platform deadline ends it.`,
+        };
+      }
+      if (!response.ok) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `The agent of MicroVM ${microvmId} refused to restart sealantd in recovery mode (HTTP ${String(response.status)}).`,
+        );
+      }
+      const outcome = agentRecoverResponseSchema.parse(await response.json()).outcome;
+      if (outcome === "running") {
+        return { outcome: "running" };
+      }
+      await this.#awaitRecovered(host, microvmId, input.runId, [
+        this.#config.controlBearerToken,
+        ...Object.values(input.secretEnv),
+      ]);
+      return { outcome: "restarted" };
+    } finally {
+      release();
+    }
   }
 
   async inspect(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult> {
@@ -1080,6 +1151,54 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     throw createAdapterError(
       "adapter-unavailable",
       `sealantd in MicroVM ${microvmId} did not become ready within ${String(this.#config.readinessTimeoutMs)} ms.`,
+    );
+  }
+
+  /**
+   * Wait for the daemon a recovery restarted to answer: its agent reports it up with its control
+   * socket, and the control channel answers. A recovery boot that exits again fails the attempt
+   * (the executor stays retained; the next attempt follows the backoff).
+   */
+  async #awaitRecovered(
+    host: string,
+    microvmId: string,
+    runId: string,
+    redactions: readonly string[],
+  ): Promise<void> {
+    const deadline = this.#now() + this.#config.readinessTimeoutMs;
+    const target = this.#controlTarget(host, microvmId);
+    while (this.#now() <= deadline) {
+      try {
+        const health = await this.#readAgentHealth(host, microvmId);
+        if (health.daemonExit !== undefined) {
+          const failure = this.#guestFailure(health, false, redactions);
+          throw new MicrovmGuestFailure(
+            "sealantd",
+            `The recovery boot of sealantd in MicroVM ${microvmId} for run ${runId} exited: ${failure?.message ?? "no detail"}`,
+            {},
+          );
+        }
+        if (health.booted && health.controlSocket) {
+          await this.#control.health(target);
+          return;
+        }
+      } catch (error) {
+        if (error instanceof MicrovmGuestFailure) {
+          throw error;
+        }
+      }
+      const vm = await this.#api.getMicrovm(microvmId);
+      if (vm === undefined || isEnded(vm.state)) {
+        throw createAdapterError(
+          "adapter-unavailable",
+          `MicroVM ${microvmId} for run ${runId} ended before its recovered daemon answered: ${vm === undefined ? "gone" : describeEnded(vm)}.`,
+        );
+      }
+      await sleep(this.#pollIntervalMs);
+    }
+    throw createAdapterError(
+      "adapter-unavailable",
+      `sealantd restarted in recovery mode in MicroVM ${microvmId} did not answer within ${String(this.#config.readinessTimeoutMs)} ms.`,
     );
   }
 
