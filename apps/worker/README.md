@@ -60,6 +60,17 @@ and Kubernetes (a watch on the workspace Pods) additionally report exits as they
 whose container or Pod died on its own is recorded `failed` with its exit code and log tail, and its
 remains are removed — the same terminal state a container that dies during boot gets.
 
+No stop loses a capture-sourced workspace's unsaved work. Before the worker tears one down — a
+lifecycle stop, or the expired, stranded, superseded and orphaned reapers — it flushes the
+workspace's sealantd and polls its capture queue until it is empty
+(`WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS`). A queue still moving defers the stop to the reaper's
+next tick. A daemon that answers but whose queue does not move for
+`WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` keeps its workspace running and is logged
+`not saved · kept`. A daemon silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` counts as
+crashed, and the stop proceeds. The exit reconciler asks the daemon before it records an exit: a
+runtime whose daemon still answers is drained first. A MicroVM whose guest Docker failed while
+sealantd is up is reported, never terminated.
+
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.
 

@@ -178,6 +178,13 @@ export const kubernetesRuntimeConfigSchema = z.strictObject({
     .max(1024 * 1024)
     .default(768 * 1024),
   readinessTimeoutMs: z.number().int().min(1000).default(300_000),
+  /**
+   * The workspace Pod's `terminationGracePeriodSeconds`: how long a planned stop waits after
+   * SIGTERM before the kubelet kills it. sealantd flushes its capture queue on SIGTERM, and a
+   * capture-sourced workspace's unsaved work lives in that queue, so the default is generous
+   * (Kubernetes' own is 30 s). A fenced stop overrides it per delete.
+   */
+  terminationGracePeriodSeconds: z.number().int().min(1).default(120),
   /** Spread Pods across nodes; `k3s` defaults this off (single-node is common). */
   topologySpread: z.boolean().default(true),
   /** Pin workspace Pods to a node pool (e.g. `{ "sealant.sh/pool": "workspaces" }`). */
@@ -223,6 +230,7 @@ export interface KubernetesRuntimeEnvLike {
   readonly SEALANT_K8S_STAGING_LOGICAL_ROOT?: string | undefined;
   readonly SEALANT_K8S_STAGING_MOUNT_PATH?: string | undefined;
   readonly SEALANT_K8S_READINESS_TIMEOUT_MS?: number | undefined;
+  readonly SEALANT_K8S_TERMINATION_GRACE_SECONDS?: number | undefined;
   readonly SEALANT_K8S_TOPOLOGY_SPREAD?: boolean | undefined;
   readonly SEALANT_K8S_WORKSPACE_NODE_SELECTOR?: string | undefined;
   readonly SEALANT_K8S_KUBECONFIG?: string | undefined;
@@ -334,6 +342,9 @@ export const kubernetesRuntimeConfigFromEnv = (
     ...(env.SEALANT_K8S_READINESS_TIMEOUT_MS === undefined
       ? {}
       : { readinessTimeoutMs: env.SEALANT_K8S_READINESS_TIMEOUT_MS }),
+    ...(env.SEALANT_K8S_TERMINATION_GRACE_SECONDS === undefined
+      ? {}
+      : { terminationGracePeriodSeconds: env.SEALANT_K8S_TERMINATION_GRACE_SECONDS }),
     ...(env.SEALANT_K8S_TOPOLOGY_SPREAD === undefined
       ? {}
       : { topologySpread: env.SEALANT_K8S_TOPOLOGY_SPREAD }),

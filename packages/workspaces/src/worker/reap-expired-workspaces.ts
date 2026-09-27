@@ -14,7 +14,8 @@ import { Effect, Layer } from "effect";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
-import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
+import type { CaptureDrainSettings, CaptureDrainTracker } from "./capture-drain.js";
+import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process-workspace-stop.js";
 
 export interface ReapExpiredWorkspacesOptions {
   readonly db: DB;
@@ -29,9 +30,26 @@ export interface ReapExpiredWorkspacesOptions {
   readonly credentialCipher?: CredentialCipherService;
   /** How this worker reaches each runtime family (client TLS for Kubernetes). */
   readonly targetOptions?: SealantTargetDerivationOptions;
+  /**
+   * Drain capture-sourced workspaces before stopping them (no loss of work product). The tracker
+   * is the worker's, shared with every other stop path so a drain spans ticks and never runs
+   * twice at once. Absent = stop without draining (tests, callers that drain themselves).
+   */
+  readonly captureDrain?: {
+    readonly tracker: CaptureDrainTracker;
+    readonly settings: CaptureDrainSettings;
+    /** How long one tick may wait on one workspace's queue before moving on. */
+    readonly budgetMs?: number;
+  };
 }
 
 const DEFAULT_MAX_REAPS_PER_TICK = 5;
+/** One tick waits at most this long on one workspace's queue; the next tick picks it up again. */
+const DEFAULT_DRAIN_BUDGET_PER_TICK_MS = 60_000;
+
+/** Only a stop that did work counts against the per-tick budget: busy and kept cost a probe. */
+const countsAsReaped = (outcome: WorkspaceStopOutcome): boolean =>
+  outcome === "stopped" || outcome === "draining";
 
 /**
  * Workspace runtime reaper: the convergence net that guarantees no container outlives its
@@ -46,6 +64,10 @@ const DEFAULT_MAX_REAPS_PER_TICK = 5;
  *  - **orphaned** — the workspace row is gone entirely; the container is torn down directly with
  *    reason "failed" (there is no row left to settle).
  *
+ * Every one of those is platform-initiated, so with `captureDrain` a capture-sourced workspace is
+ * drained first and stopped only once its capture queue is empty (`capture-drain.ts`); a queue
+ * still moving is revisited next tick, a stalled one is kept (`not saved · kept`).
+ *
  * Best-effort per item: one failure never aborts the sweep. No leader election — the adapter stop
  * and both status writes are idempotent, so concurrent reapers are safe.
  */
@@ -54,6 +76,17 @@ export const reapExpiredWorkspaces = async (
 ): Promise<number> => {
   const { db, maxReapsPerTick, runtimeAdapters, credentialCipher, targetOptions } = options;
   const maxReaps = maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
+  const drainFor = (label: string) =>
+    options.captureDrain === undefined
+      ? {}
+      : {
+          captureDrain: {
+            tracker: options.captureDrain.tracker,
+            settings: options.captureDrain.settings,
+            budgetMs: options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS,
+            label,
+          },
+        };
 
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceRepoLive,
@@ -84,14 +117,15 @@ export const reapExpiredWorkspaces = async (
 
         if (workspace === undefined) {
           // Orphaned: live container, workspace row gone.
-          yield* processWorkspaceStopEffect({
+          const outcome = yield* processWorkspaceStopEffect({
             runId: instance.runId,
             stopReason: "failed",
             runtimeAdapters,
             ...(credentialCipher === undefined ? {} : { credentialCipher }),
             ...(targetOptions === undefined ? {} : { targetOptions }),
+            ...drainFor("orphan reaper"),
           });
-          return true;
+          return countsAsReaped(outcome);
         }
 
         const isCurrentRuntime = workspace.latestRunId === instance.runId;
@@ -103,7 +137,7 @@ export const reapExpiredWorkspaces = async (
           return false;
         }
 
-        yield* processWorkspaceStopEffect({
+        const outcome = yield* processWorkspaceStopEffect({
           // The workspace row only settles for its CURRENT runtime (the shared stop path guards
           // this too); a superseded instance must not stamp "stopped" onto a relaunching workspace.
           ...(isCurrentRuntime ? { workspaceId: workspace.id } : {}),
@@ -112,8 +146,11 @@ export const reapExpiredWorkspaces = async (
           runtimeAdapters,
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           ...(targetOptions === undefined ? {} : { targetOptions }),
+          ...drainFor(
+            expired ? "expiry reaper" : superseded ? "superseded reaper" : "stranded reaper",
+          ),
         });
-        return true;
+        return countsAsReaped(outcome);
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(

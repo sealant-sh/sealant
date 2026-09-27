@@ -7,7 +7,9 @@
  * only after the grace window.
  */
 import {
+  WorkspaceAttemptRepo,
   WorkspaceRuntimeInstanceRepo,
+  type WorkspaceAttemptRepoService,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
@@ -20,6 +22,9 @@ import type {
   RuntimeAdapterExitWatchInput,
   RuntimeAdapterInspectResult,
 } from "../runtime/runtime-adapter.js";
+import { SealantRuntime } from "../sealantd/runtime.js";
+import { captureStatus, fakeCaptureDaemon } from "./capture-daemon.fixture.js";
+import { CaptureDrainTracker } from "./capture-drain.js";
 import {
   reconcileRuntimeExits,
   reconcileRuntimeExitsEffect,
@@ -66,6 +71,7 @@ const runtimeInstance = (
   launchCredentialInjections: null,
   launchedAt: new Date("2026-09-01T00:00:00.000Z"),
   finishedAt: null,
+  runtimeDeadlineAt: null,
   createdAt: new Date("2026-09-01T00:00:00.000Z"),
   updatedAt: new Date("2026-09-01T00:00:00.000Z"),
   ...overrides,
@@ -74,13 +80,17 @@ const runtimeInstance = (
 interface Harness {
   readonly repo: WorkspaceRuntimeInstanceRepoService;
   readonly markExited: ReturnType<typeof vi.fn>;
-  readonly layer: Layer.Layer<WorkspaceRuntimeInstanceRepo>;
+  readonly layer: Layer.Layer<WorkspaceRuntimeInstanceRepo | WorkspaceAttemptRepo | SealantRuntime>;
 }
 
 const makeHarness = (input: {
   readonly instances: readonly WorkspaceRuntimeInstance[];
   /** What `markExited` answers; default = the updated row (the fence let the write through). */
   readonly exitedRow?: (runId: string) => WorkspaceRuntimeInstance | undefined;
+  /** The runs' stored blueprints name a capture source. */
+  readonly captureSourced?: boolean;
+  /** The daemon the drain dials; default = one that must never be dialled. */
+  readonly daemon?: Layer.Layer<SealantRuntime>;
 }): Harness => {
   const markExited = vi.fn((request: { runId: string; resourceId: string; errorMessage: string }) =>
     Effect.succeed(
@@ -97,7 +107,24 @@ const makeHarness = (input: {
     listRuntimeInstancesByRunIds: () => Effect.die("unused"),
     listRunningInstances: () => Effect.succeed(input.instances),
   };
-  return { repo, markExited, layer: Layer.succeed(WorkspaceRuntimeInstanceRepo, repo) };
+  const attempts = {
+    getAttemptSnapshotByRunId: () =>
+      Effect.succeed(
+        input.captureSourced === true
+          ? { blueprintPayload: { sources: { workspace: { kind: "capture" } } } }
+          : undefined,
+      ),
+  } as unknown as WorkspaceAttemptRepoService;
+  return {
+    repo,
+    markExited,
+    layer: Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, repo),
+      Layer.succeed(WorkspaceAttemptRepo, attempts),
+      input.daemon ??
+        Layer.succeed(SealantRuntime, { connect: () => Effect.die("daemon must not be dialled") }),
+    ),
+  };
 };
 
 const stubAdapter = (input: {
@@ -299,6 +326,113 @@ describe("reconcileRuntimeExitsEffect", () => {
 
     expect(recorded).toBe(1);
     expect(harness.markExited.mock.calls.map(([input]) => input.runId)).toEqual(["run_docker"]);
+  });
+});
+
+describe("reconcileRuntimeExitsEffect · drain before removal", () => {
+  const settings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 30,
+    unreachableWindowMs: 30,
+    requestTimeoutMs: 1_000,
+  };
+  const exited = new Map<string, RuntimeAdapterInspectResult>([
+    ["container-1", { state: "exited", exitCode: 1, detail: "reported dead" }],
+  ]);
+
+  it("records a capture-sourced exit at once when its daemon does not answer", async () => {
+    const daemon = fakeCaptureDaemon(["unreachable"]);
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const { adapter, stop } = stubAdapter({ inspections: exited });
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { tracker: new CaptureDrainTracker(), settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(1);
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a runtime reported ended whose daemon still answers, then records and removes it", async () => {
+    const daemon = fakeCaptureDaemon([
+      captureStatus({ pending: 2 }),
+      captureStatus({ pending: 2 }),
+      captureStatus({ pending: 0, uploadedBytes: 4 }),
+    ]);
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const { adapter, stop } = stubAdapter({ inspections: exited });
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { tracker: new CaptureDrainTracker(), settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(1);
+    expect(daemon.calls).toEqual(["status", "flush", "status"]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a runtime whose daemon answers but whose queue stalled untouched", async () => {
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon([captureStatus({ pending: 5 })]).layer,
+    });
+    const { adapter, stop } = stubAdapter({ inspections: exited });
+    const { stager, removeAll } = fakeStager();
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: stager,
+        captureDrain: { tracker: new CaptureDrainTracker(), settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(0);
+    expect(harness.markExited).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(removeAll).not.toHaveBeenCalled();
+  });
+
+  it("reports a running runtime with a failed guest service and never removes it", async () => {
+    const harness = makeHarness({ instances: [runtimeInstance({ adapter: "microvm" })] });
+    const { adapter, stop } = stubAdapter({
+      id: "microvm",
+      inspections: new Map([
+        [
+          "container-1",
+          { state: "running", detail: "Guest-local Docker failed in the MicroVM (exited)." },
+        ],
+      ]),
+    });
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(0);
+    expect(harness.markExited).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 });
 

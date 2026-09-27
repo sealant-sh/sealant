@@ -1495,6 +1495,47 @@ describe("DockerRuntimeAdapter", () => {
     });
   });
 
+  it("sends SIGTERM with the grace before removing, and kills outright on a fenced stop", async () => {
+    const calls: Array<readonly string[]> = [];
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      calls.push(args);
+      if (args[0] === "stop") {
+        // A container that exited already: `docker stop` complains, the removal still runs.
+        throw new Error("Error response from daemon: container is not running");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.stop({ resourceId: "container-id-123" });
+    expect(calls.filter((args) => args[0] === "stop" || args[0] === "rm")).toEqual([
+      ["stop", "-t", "120", "container-id-123"],
+      ["rm", "-f", "-v", "container-id-123"],
+    ]);
+
+    calls.length = 0;
+    await new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      stopGraceSeconds: 600,
+    }).stop({ resourceId: "container-id-123" });
+    expect(calls.find((args) => args[0] === "stop")).toEqual([
+      "stop",
+      "-t",
+      "600",
+      "container-id-123",
+    ]);
+
+    calls.length = 0;
+    await adapter.stop({ resourceId: "container-id-123", fence: true });
+    expect(calls.some((args) => args[0] === "stop")).toBe(false);
+  });
+
   it("treats an already-removed container as a successful (not-found) stop", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

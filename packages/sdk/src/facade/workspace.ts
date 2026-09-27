@@ -42,6 +42,11 @@ export interface WorkspaceInit {
   readonly status: WorkspaceStatus;
   /** Present when the handle came from `create()` (needed by `harness.run()`). */
   readonly harness?: Harness;
+  /**
+   * This handle created the workspace (`workspaces.create()`), so a readiness timeout on it is
+   * an abandoned launch the SDK owns: `ready()` stops the workspace before it throws.
+   */
+  readonly created?: boolean;
 }
 
 // Terminal statuses a workspace can never leave: ready()/events() fail fast (or end the stream)
@@ -175,6 +180,18 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
   };
 
+  /** Ask the control plane to stop the workspace; true once the request was accepted. */
+  const requestStop = async (): Promise<boolean> => {
+    try {
+      await ctx.runtime.run(
+        stopWorkspaceOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const workspace: Workspace = {
     id: init.id,
     name: init.name,
@@ -184,6 +201,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
       );
       return details.status;
+    },
+
+    runtimeDeadline: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.runtime?.deadline ?? null;
     },
 
     ready: async () => {
@@ -205,9 +229,20 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           );
         }
         if (Date.now() > deadline) {
-          throw new SealantError(`Timed out waiting for workspace ${init.id} to become ready.`, {
-            code: "workspace_ready_timeout",
-          });
+          // A workspace this handle created and nobody will ever use: stop it, so its runtime
+          // does not keep running (and billing) to the platform's lifetime cap. Best-effort: the
+          // timeout is what the caller must see, whatever the stop answers.
+          const stopped = init.created === true ? await requestStop() : undefined;
+          throw new SealantError(
+            `Timed out waiting for workspace ${init.id} to become ready.${
+              stopped === undefined
+                ? ""
+                : stopped
+                  ? " The workspace was stopped."
+                  : " Stopping it failed; stop it yourself."
+            }`,
+            { code: "workspace_ready_timeout" },
+          );
         }
         await delay(READY_POLL_INTERVAL_MS);
       }

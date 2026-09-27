@@ -117,7 +117,10 @@ const agentLaunchRequestFields = {
   runId: z.string().trim().min(1),
   /** Authenticates every later `/sealant/control` and `/sealant/health` request. */
   controlToken: z.string().trim().min(1),
-  /** Bound on `sealantctl capture flush` inside the suspend/terminate hooks. */
+  /**
+   * The agent's kill switch for a hung `sealantctl capture flush` inside the suspend/terminate
+   * hooks. Not the flush's budget: sealantd clamps a flush to its own 10 s shutdown grace.
+   */
   flushTimeoutMs: z.number().int().positive(),
   /** The `sealantd boot` process environment (non-secret boot facts AND launch-time env). */
   bootEnv: z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/), z.string()),

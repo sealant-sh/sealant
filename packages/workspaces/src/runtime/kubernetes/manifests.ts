@@ -582,7 +582,8 @@ export const buildPod = (build: BuildPodInput): V1Pod => {
         input.blueprint.runtime.kubernetes.serviceAccountName ?? config.workspaceServiceAccount,
       automountServiceAccountToken: false,
       enableServiceLinks: false,
-      terminationGracePeriodSeconds: 30,
+      // sealantd's SIGTERM flush ships the capture queue; the window is the operator's.
+      terminationGracePeriodSeconds: config.terminationGracePeriodSeconds,
       // Docker service: the whole Pod (workspace container included) runs in a user namespace so
       // the privileged sidecar is privileged over nothing the node cares about; the `docker`
       // name Mend dials for compose-published ports is this Pod's loopback.

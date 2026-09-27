@@ -9,6 +9,11 @@ export interface WorkspaceRuntimeDetails {
   readonly reference: string;
   readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
   readonly endpoint?: string;
+  /**
+   * ISO-8601 instant the runtime itself ends the executor (a Lambda MicroVM's maximum duration);
+   * null where the runtime imposes no lifetime.
+   */
+  readonly deadline: string | null;
 }
 
 export interface WorkspaceSshGatewayConfig {
@@ -119,6 +124,7 @@ export const resolveWorkspaceRuntime = (
     reference: runtimeInstance.reference,
     status: runtimeInstance.status,
     ...(endpoint === null || endpoint === undefined ? {} : { endpoint }),
+    deadline: runtimeInstance.runtimeDeadlineAt?.toISOString() ?? null,
   };
 };
 

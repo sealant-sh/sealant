@@ -518,6 +518,17 @@ export const workerRuntimeEnvSchema = z.object({
   // events`) and Kubernetes (a Pod watch) also report exits as they happen; this poll is the
   // convergence net behind those streams and the only mechanism for poll-only runtimes.
   WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  // Drain before stop (no loss of work product): before any platform-initiated stop of a
+  // capture-sourced workspace the worker flushes its daemon and polls the capture queue until it
+  // is empty. A daemon that answers but whose queue does not move for the stall window keeps its
+  // workspace (`not saved · kept`); one that does not answer for the unreachable window is treated
+  // as crashed and the stop proceeds.
+  WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS: z.coerce.number().int().positive().default(600000),
+  WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS: z.coerce.number().int().positive().default(300000),
+  // How long a planned Docker stop waits after SIGTERM (`docker stop -t`) before the kill, so
+  // sealantd's final capture flush can ship.
+  SEALANT_DOCKER_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(120),
   // Image retention: how often the worker deletes workspace images no live workspace launched from
   // and no retained plan still needs (plus stale build scratch under the OS temp dir). `false`
   // leaves the store alone for operators who manage images themselves.
@@ -567,6 +578,8 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_STAGING_LOGICAL_ROOT: z.string().trim().min(1).optional(),
   SEALANT_K8S_STAGING_MOUNT_PATH: z.string().trim().min(1).optional(),
   SEALANT_K8S_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).optional(),
+  /** Workspace Pod `terminationGracePeriodSeconds` (sealantd's SIGTERM capture flush); default 120. */
+  SEALANT_K8S_TERMINATION_GRACE_SECONDS: z.coerce.number().int().min(1).optional(),
   SEALANT_K8S_TOPOLOGY_SPREAD: z.stringbool().or(z.boolean()).optional(),
   /** JSON object of node labels workspace Pods must match. */
   SEALANT_K8S_WORKSPACE_NODE_SELECTOR: z.string().trim().min(1).optional(),

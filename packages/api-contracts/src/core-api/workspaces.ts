@@ -22,6 +22,13 @@ export const workspaceRuntimeSchema = Schema.Struct({
   reference: NonEmptyString,
   status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
   endpoint: Schema.optional(Schema.String),
+  /**
+   * ISO-8601 instant the runtime itself ends the executor, whatever anyone asks: a Lambda
+   * MicroVM's maximum duration from its start. `null` where the runtime imposes no lifetime
+   * (Docker, Kubernetes). A caller holding unsaved work on the executor drains before it. Absent
+   * only from control planes that predate it.
+   */
+  deadline: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type WorkspaceRuntime = typeof workspaceRuntimeSchema.Type;
 

@@ -134,6 +134,7 @@ const sealantOperationSchema = Schema.Literals([
   "closeForward",
   "bindMount",
   "captureFlush",
+  "captureStatus",
   "captureReplan",
 ]);
 
@@ -735,6 +736,12 @@ export interface SealantSession {
    */
   readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
   /**
+   * The daemon's capture status (`capture.status`) without flushing: what a drain polls between
+   * flushes to see the queue empty (`pending === 0`) or stop moving. Only answers on a
+   * capture-sourced workspace.
+   */
+  readonly captureStatus: () => Effect.Effect<CaptureFlushReport, SealantError>;
+  /**
    * Re-plan the capture (sealantd 0.15 `capture.replan`, the claim hook): the daemon asks the
    * session channel for its plan again with no worktree named, delta-materialises the answered
    * plan over what is on disk, rebases its staging identity onto the answered worktree and epoch,
@@ -990,6 +997,13 @@ const makeSession = (client: SealantClient): SealantSession => ({
         return captureFlushReportFromWire(result.value);
       }),
     ),
+  captureStatus: () =>
+    requestResult(
+      client,
+      "captureStatus",
+      { case: "captureStatus", value: {} },
+      "captureStatus",
+    ).pipe(Effect.map((value) => captureFlushReportFromWire(value as CaptureStatusReport))),
   captureReplan: () =>
     withSealantError(
       "captureReplan",

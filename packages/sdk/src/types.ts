@@ -513,7 +513,18 @@ export interface Workspace {
   readonly name: string;
   /** Current lifecycle status. */
   status(): Promise<WorkspaceStatus>;
-  /** Resolves once the workspace runtime is live and ready to accept a run. */
+  /**
+   * When the runtime itself ends this workspace's executor, whatever anyone asks: an ISO-8601
+   * instant (a Lambda MicroVM's maximum duration from its start), or `null` where the runtime
+   * imposes no lifetime (Docker, Kubernetes) or no runtime is launched yet. Work that exists only
+   * on the executor — a capture-sourced workspace's unsaved captures — must be drained before it.
+   */
+  runtimeDeadline(): Promise<string | null>;
+  /**
+   * Resolves once the workspace runtime is live and ready to accept a run. When the handle came
+   * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), the workspace
+   * is stopped before the error is thrown, so an abandoned launch never keeps running to its cap.
+   */
   ready(): Promise<this>;
   /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;

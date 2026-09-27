@@ -260,6 +260,28 @@ export const supportForMicrovm = (
 export const clientTokenForRun = (runId: string): string =>
   createHash("sha256").update(`sealant-microvm-run:${runId}`).digest("hex");
 
+/**
+ * When the platform ends a MicroVM: its start plus its maximum duration (suspended time
+ * included). The platform's own `startedAt` wins; without one, the instant the RunMicrovm request
+ * was sent stands in — for a VM that request started, never later than the true start, so the
+ * deadline errs early, the safe direction for a caller planning a drain before it. (A redelivered
+ * launch that adopts an older VM by client token relies on the platform reporting `startedAt`.)
+ */
+export const microvmDeadline = (
+  running: MicrovmDescription,
+  requested: MicrovmDescription,
+  requestedAtMs: number,
+  configuredMaxDurationSeconds: number,
+): string => {
+  const startedAtMs =
+    running.startedAt?.getTime() ?? requested.startedAt?.getTime() ?? requestedAtMs;
+  const maxDurationSeconds =
+    running.maximumDurationInSeconds ??
+    requested.maximumDurationInSeconds ??
+    configuredMaxDurationSeconds;
+  return new Date(startedAtMs + maxDurationSeconds * 1000).toISOString();
+};
+
 /** The RunMicrovm request for a run; pure, pinned by the golden test. */
 export const buildRunInput = (
   config: MicrovmRuntimeConfig,
@@ -584,6 +606,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         }
       : { version: AGENT_CONTRACT_VERSION, ...requestFields };
 
+    const requestedAt = this.#now();
     const vm = await this.#api.runMicrovm(
       buildRunInput(config, runId, launchSecret, {
         dockerService: dockerService ? "required" : "disabled",
@@ -618,6 +641,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         reference: microvmId,
         status: "ready",
         endpoint: `wss://${host}${AGENT_CONTROL_ROUTE}`,
+        deadline: microvmDeadline(running, vm, requestedAt, config.maxDurationSeconds),
       };
     } catch (error) {
       await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
@@ -654,22 +678,28 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       // The platform reports no exit code for a VM; the state reason is what it knows.
       return { state: "exited", detail: describeEnded(vm) };
     }
+    let serviceFailure: string | undefined;
     if (vm.state === "RUNNING" && vm.endpoint !== undefined && vm.endpoint.trim().length > 0) {
       const health = await this.#readAgentHealth(endpointHost(vm.endpoint), input.resourceId);
       const failure = this.#guestFailure(health, false, [this.#config.controlBearerToken]);
-      if (failure !== undefined) {
+      // Only the daemon's own exit ends the workspace. A guest Docker failure while sealantd is
+      // up leaves the executor, its captures and every session on it intact: terminating the VM
+      // for it would destroy unsaved work to punish a sidecar. It is reported, not acted on.
+      if (failure !== undefined && failure.phase !== "docker") {
         return {
           state: "exited",
           ...(failure.exitCode === undefined ? {} : { exitCode: failure.exitCode }),
           detail: failure.message,
         };
       }
+      serviceFailure = failure?.message;
     }
     const startedAt = vm.startedAt;
     const maxDurationSeconds = vm.maximumDurationInSeconds;
     return {
       state: "running",
       platformState: vm.state,
+      ...(serviceFailure === undefined ? {} : { detail: serviceFailure }),
       ...(startedAt === undefined ? {} : { startedAt: startedAt.toISOString() }),
       ...(maxDurationSeconds === undefined ? {} : { maxDurationSeconds }),
       ...(startedAt === undefined || maxDurationSeconds === undefined

@@ -11,6 +11,8 @@ import {
   consumeRunExecJobs,
   consumeWorkspaceBuildJobs,
   consumeWorkspaceLifecycleJobs,
+  CaptureDrainTracker,
+  DEFAULT_CAPTURE_DRAIN_SETTINGS,
   createKubernetesLaunchMaterialStager,
   createLiveKubernetesApi,
   createLiveKubernetesBuildApi,
@@ -44,6 +46,7 @@ import {
   sweepStaleBuildContexts,
   targetDerivationOptionsFromEnv,
   watchRuntimeExits,
+  type CaptureDrainSettings,
   type RegistryClient,
 } from "@sealant/workspaces";
 import { Effect } from "effect";
@@ -57,6 +60,9 @@ import {
 // Build scratch older than this is a leftover, never a build in flight.
 const STALE_BUILD_CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
 const IMAGE_RETENTION_BOOT_DELAY_MS = 30_000;
+// A lifecycle stop waits this long on a capture queue, inside the queue's 15-minute active
+// window; a drain that needs longer is finished by the reaper (the stop intent is durable).
+const LIFECYCLE_STOP_DRAIN_BUDGET_MS = 10 * 60 * 1000;
 
 const createDatabaseFromEnv = async (env: WorkerEnv): Promise<DB> => {
   return createSealantDB(env.DATABASE_URL);
@@ -244,6 +250,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(env.SEALANT_DOCKER_WORKSPACE_NETWORK === undefined
             ? {}
             : { workspaceNetwork: env.SEALANT_DOCKER_WORKSPACE_NETWORK }),
+          stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
         }),
       ];
 
@@ -271,6 +278,17 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     ...microvmRuntimes,
   ];
   const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
+
+  // Drain before stop (no loss of work product): one tracker per worker process, shared by every
+  // path that can tear a capture-sourced runtime down (lifecycle stop, reapers, exit reconciler),
+  // so a drain spans ticks and never runs twice at once.
+  const captureDrainTracker = new CaptureDrainTracker();
+  const captureDrainSettings: CaptureDrainSettings = {
+    ...DEFAULT_CAPTURE_DRAIN_SETTINGS,
+    pollIntervalMs: env.WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS,
+    stallWindowMs: env.WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS,
+    unreachableWindowMs: env.WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS,
+  };
 
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
@@ -333,7 +351,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     concurrency: env.WORKSPACE_BUILD_QUEUE_PREFETCH,
     onMessage: async ({ message }) => {
       try {
-        await processWorkspaceStop({
+        const outcome = await processWorkspaceStop({
           workspaceId: message.workspaceId,
           runId: message.runId,
           stopReason: message.stopReason,
@@ -343,7 +361,22 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           ...(credentialCipher === undefined ? {} : { credentialCipher }),
           targetOptions,
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+          captureDrain: {
+            tracker: captureDrainTracker,
+            settings: captureDrainSettings,
+            budgetMs: LIFECYCLE_STOP_DRAIN_BUDGET_MS,
+            label: "lifecycle stop",
+          },
         });
+        if (outcome !== "stopped") {
+          // The stop intent is durable (a stopped workspace is `stranded` to the reaper, a
+          // replaced run `superseded`): the reaper finishes the drain and the stop.
+          console.warn("Workspace stop deferred to the reaper: capture queue not yet empty", {
+            workspaceId: message.workspaceId,
+            runId: message.runId,
+            outcome,
+          });
+        }
       } catch (error) {
         console.error("Workspace stop failed", {
           error,
@@ -397,6 +430,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       runtimeAdapters,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
       targetOptions,
+      captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Workspace expiry reaper tick failed", { error });
     });
@@ -417,6 +451,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+      targetOptions,
+      captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Runtime exit reconciler tick failed", { error });
     });
@@ -431,6 +467,8 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     db,
     runtimeAdapters,
     ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
+    targetOptions,
+    captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
     onError: (error: unknown) => {
       console.error("Runtime exit watch failed; reconnecting", { error });
     },
