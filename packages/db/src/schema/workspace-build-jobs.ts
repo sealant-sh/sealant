@@ -156,6 +156,20 @@ export const workspaceRuntimeInstances = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+    /**
+     * The build of sealantd the executor boots: the released sealantd image its workspace image
+     * copied the daemon from (`COPY --from=<image> /usr/local/bin/sealantd`), recorded at launch.
+     * Null when the launch could not tell (no image plan), and on rows written before it existed.
+     */
+    daemonImage: text("daemon_image"),
+    /**
+     * Whether that daemon has sealantd's recovery boot (resume its own staging, no restore, no
+     * dotfiles, no lifecycle step, no harness, admission closed), as Core knew it at launch.
+     * Recovery restarts a retained executor on its own disk ONLY when this is `true`: a daemon
+     * without it would run its ordinary boot over the work the disk holds. Null = unknown, and
+     * unknown is not recoverable in place (kept, reported).
+     */
+    daemonRecoveryBoot: boolean("daemon_recovery_boot"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

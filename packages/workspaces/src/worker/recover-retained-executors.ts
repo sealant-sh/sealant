@@ -15,7 +15,10 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     once — the FINAL flush closes admission and terminates every writer the reboot started
  *     (the container's lifecycle steps and foreground harness run again: sealantd has no boot
  *     mode without them yet), snapshots both classes and ships. Once the daemon reports the
- *     final flush complete, the executor is removed and the retention ends.
+ *     final flush complete, the executor is removed and the retention ends. An executor is
+ *     restarted only when its launch recorded a daemon with sealantd's recovery boot
+ *     (`daemon_recovery_boot`, `daemon-recovery.ts`): an older daemon, or one of unknown build,
+ *     would run its ordinary boot over the work its disk holds, so it is kept and reported.
  *  3. **Cannot recover.** Kubernetes cannot restart an ended Pod, and its emptyDir lives only as
  *     long as the Pod object; a terminated MicroVM's disk is gone with it. Those are reported as
  *     such (`unsupported`, with what can still be done by hand) and stay retained — never
@@ -241,6 +244,21 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     // a token nothing is started — a boot without it would exit, not save.
     const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
     const restarts = state === "exited" && runtimeRestartsRetainedExecutors(adapter.id);
+    if (restarts && instance.daemonRecoveryBoot !== true) {
+      // A daemon without sealantd's recovery boot ignores the request for it and runs its
+      // ORDINARY boot: it restores the store's head over the staging and edits this disk holds,
+      // and runs the lifecycle steps and the harness again. Unknown is treated the same (fail
+      // closed). Nothing is started; the executor stays retained with its disk.
+      const build = instance.daemonImage ?? "a daemon build Core did not record";
+      const why =
+        instance.daemonRecoveryBoot === false
+          ? `its daemon (${build}) predates sealantd's recovery boot`
+          : `Core cannot tell whether its daemon (${build}) has sealantd's recovery boot`;
+      yield* (row.recoveryAttempts === 0 ? Effect.logError : Effect.logWarning)(
+        `${prefix}: not recoverable in place · ${why}. Restarting it would run its ordinary boot (restore, dotfiles, lifecycle steps, harness) over the work its disk holds, so it is kept and not started. Recover its disk by hand, or discard it.`,
+      );
+      return yield* retry(`not recoverable in place · ${why}`);
+    }
     if (restarts) {
       const token = yield* recoverCaptureToken(
         row.captureTokenSealed ?? null,

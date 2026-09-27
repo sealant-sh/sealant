@@ -1312,6 +1312,8 @@ describe("processWorkspaceBuildJobEffect", () => {
               sourceKind: "capture",
               launchOwner: expect.stringMatching(/^worker-test:job_retained:/),
               launchLeaseMs: expect.any(Number),
+              // No image plan here: the daemon's build, and so its recovery boot, is unknown.
+              daemonRecoveryBoot: null,
             },
             expect.objectContaining({
               status: "pending",
@@ -2160,4 +2162,67 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
     expect(last).not.toHaveProperty("finishedAt");
     expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_interrupted" });
   });
+});
+
+describe("the daemon build an executor boots, recorded at launch (review 3 #8)", () => {
+  const launchWithDaemon = (sealantdImage: string) => {
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_daemon",
+        runId: "run_daemon",
+        repository: "sealant/workspaces/demo",
+        tag: "capture",
+        requestPayload: createWorkspaceBuildSpec({ osFamily: "nix" }),
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const planWorkspaceSpec = vi.fn(() => ({
+      osFamily: "nix" as const,
+      imagePlan: {} as never,
+      containerfile: [
+        "FROM nixos/nix:2.24.9",
+        `COPY --chmod=755 --from=${sealantdImage} /usr/local/bin/sealantd /usr/local/bin/sealantd`,
+      ].join("\n"),
+      planHash: "plan-daemon",
+    }));
+    return Effect.gen(function* () {
+      yield* processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_daemon",
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          planWorkspaceSpec,
+        }),
+      );
+      return runtimeInstances.upsertRuntimeInstance.mock.calls[0]?.[0];
+    }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+  };
+
+  it.effect("records a released daemon older than the recovery boot as without it", () =>
+    Effect.gen(function* () {
+      expect(yield* launchWithDaemon("ghcr.io/sealant-sh/sealantd:0.18.2")).toMatchObject({
+        status: "pending",
+        daemonImage: "ghcr.io/sealant-sh/sealantd:0.18.2",
+        daemonRecoveryBoot: false,
+      });
+    }),
+  );
+
+  it.effect("records a released daemon with the recovery boot as with it", () =>
+    Effect.gen(function* () {
+      expect(yield* launchWithDaemon("ghcr.io/sealant-sh/sealantd:0.19.0")).toMatchObject({
+        daemonImage: "ghcr.io/sealant-sh/sealantd:0.19.0",
+        daemonRecoveryBoot: true,
+      });
+    }),
+  );
+
+  it.effect("records an undeclared development daemon as unknown", () =>
+    Effect.gen(function* () {
+      expect(yield* launchWithDaemon("sealantd-dev:local")).toMatchObject({
+        daemonImage: "sealantd-dev:local",
+        daemonRecoveryBoot: null,
+      });
+    }),
+  );
 });

@@ -46,6 +46,8 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   runtimeDeadlineAt: null,
   launchOwner: null,
   launchLeaseExpiresAt: null,
+  daemonImage: "ghcr.io/sealant-sh/sealantd:0.19.0",
+  daemonRecoveryBoot: true,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
   updatedAt: new Date(NOW - 60_000),
@@ -60,6 +62,8 @@ const harness = (input: {
   readonly attempts?: number;
   /** The sealed capture token kept at launch; `null` = none was kept. Default: one was. */
   readonly captureTokenSealed?: string | null;
+  /** What the launch recorded of the executor (its daemon build). */
+  readonly instance?: Partial<WorkspaceRuntimeInstance>;
 }) => {
   const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
@@ -88,7 +92,7 @@ const harness = (input: {
   );
   const instances = {
     getRuntimeInstanceByRunId: () =>
-      Effect.succeed(instance({ adapter: input.adapterId ?? "docker" })),
+      Effect.succeed(instance({ adapter: input.adapterId ?? "docker", ...input.instance })),
     markStopped,
   } as unknown as WorkspaceRuntimeInstanceRepoService;
   const stop = vi.fn(async (request: { resourceId: string }) => ({
@@ -326,5 +330,45 @@ describe("nextRecoveryDelayMs", () => {
     expect(nextRecoveryDelayMs(0, backoff)).toBe(60_000);
     expect(nextRecoveryDelayMs(3, backoff)).toBe(480_000);
     expect(nextRecoveryDelayMs(50, backoff)).toBe(3_600_000);
+  });
+});
+
+describe("recoverRetainedExecutorsEffect · a daemon without the recovery boot (review 3 #8)", () => {
+  it.each([
+    {
+      name: "predates it",
+      recorded: { daemonImage: "ghcr.io/sealant-sh/sealantd:0.18.2", daemonRecoveryBoot: false },
+      reason: "predates sealantd's recovery boot",
+    },
+    {
+      name: "is of an unknown build",
+      recorded: { daemonImage: null, daemonRecoveryBoot: null },
+      reason: "Core cannot tell whether its daemon",
+    },
+  ])("keeps an ended executor whose daemon $name, and never starts it", async (scenario) => {
+    // Review 3 #8: recovery copied the marker in and ran `docker start` whatever the image; a
+    // daemon without the recovery boot ran its ordinary boot over the unsaved work.
+    const h = harness({ inspect: { state: "exited", exitCode: 75 }, instance: scenario.recorded });
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.staged).toEqual([]);
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.attempts).toEqual([
+      expect.objectContaining({
+        runId: "run_1",
+        error: expect.stringContaining(scenario.reason),
+      }),
+    ]);
+  });
+
+  it("still drains a daemon that runs, whatever its build (nothing is restarted)", async () => {
+    const h = harness({
+      inspect: { state: "running" },
+      recover: async () => ({ outcome: "running" }),
+      daemon: fakeCaptureDaemon([savedStatus()]),
+      instance: { daemonImage: null, daemonRecoveryBoot: null },
+    });
+    expect((await h.run()).get("run_1")).toBe("released");
   });
 });

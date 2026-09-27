@@ -47,6 +47,8 @@ const runtimeInstance = (
   runtimeDeadlineAt: null,
   launchOwner: null,
   launchLeaseExpiresAt: null,
+  daemonImage: null,
+  daemonRecoveryBoot: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,
   createdAt: new Date("2026-07-01T00:00:00.000Z"),

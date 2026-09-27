@@ -39,6 +39,8 @@ const retainedRow: WorkspaceRuntimeInstance = {
   runtimeDeadlineAt: null,
   launchOwner: null,
   launchLeaseExpiresAt: null,
+  daemonImage: null,
+  daemonRecoveryBoot: null,
   sourceKind: "capture",
   createdAt: new Date("2026-09-27T00:00:00.000Z"),
   updatedAt: new Date("2026-09-27T00:00:00.000Z"),

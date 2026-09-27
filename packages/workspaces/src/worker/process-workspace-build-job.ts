@@ -38,6 +38,8 @@ import { RegistryNameError, type RegistryClient } from "../registry/index.js";
 import {
   LaunchRetainedError,
   launchHoldsCaptures,
+  sealantdHasRecoveryBoot,
+  sealantdImageOfContainerfile,
   selectRuntimeAdapter,
   type CredentialFileInjection,
   type PublishedImage,
@@ -502,7 +504,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
       );
 
-      return { publishedImage: reuse.publishedImage, spec };
+      return { publishedImage: reuse.publishedImage, spec, planned };
     }
 
     // Publish under plan-keyed coordinates — one repository per OS family, one tag per plan hash —
@@ -535,10 +537,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       })
       .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
 
-    return { publishedImage, spec };
+    return { publishedImage, spec, planned };
   });
 
-  const { publishedImage, spec } = yield* buildAndPublish.pipe(
+  const { publishedImage, spec, planned } = yield* buildAndPublish.pipe(
     Effect.tapError((error) => failureCleanup(error, true)),
   );
 
@@ -547,6 +549,12 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   // What the launch boots from, recorded with its first row: every stop path decides whether to
   // drain from it (a capture-sourced executor holds unsaved work).
   const sourceKind = spec.sources.workspace.kind;
+  // The daemon this executor boots, as the image plan copies it in, and whether it has sealantd's
+  // recovery boot: recovery restarts a retained executor in place only when it does (a daemon
+  // without it would run its ordinary boot over the work its disk holds). Unknown stays unknown.
+  const daemonImage =
+    planned === null ? undefined : sealantdImageOfContainerfile(planned.containerfile);
+  const daemonRecoveryBoot = sealantdHasRecoveryBoot(daemonImage);
   // Launch ownership: from the first `pending` row until the terminal launch write, the row names
   // this launch as its owner under a lease the heartbeat below renews. The build job is already
   // `succeeded`, so nothing else would ever look at this launch again if the worker died: a
@@ -568,6 +576,8 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           sourceKind,
           launchOwner,
           launchLeaseMs,
+          ...(daemonImage === undefined ? {} : { daemonImage }),
+          daemonRecoveryBoot,
         })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
       // Renew the ownership while the launch runs (the readiness wait can take minutes). Ends

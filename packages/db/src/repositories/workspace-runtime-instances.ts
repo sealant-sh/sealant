@@ -43,6 +43,10 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly fenceLaunchOwner?: string;
   /** The terminal launch write: launch ownership ends (`launch_owner` and its lease cleared). */
   readonly releaseLaunch?: boolean;
+  /** The sealantd image the executor's daemon came from; see the column. */
+  readonly daemonImage?: string;
+  /** Whether that daemon has sealantd's recovery boot; `null` = unknown. See the column. */
+  readonly daemonRecoveryBoot?: boolean | null;
 }
 
 /** The message of the invariant error a fenced upsert fails with once its launch was adopted. */
@@ -328,6 +332,10 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.releaseLaunch === true
                 ? { launchOwner: null, launchLeaseExpiresAt: null }
                 : {}),
+              ...(input.daemonImage === undefined ? {} : { daemonImage: input.daemonImage }),
+              ...(input.daemonRecoveryBoot === undefined
+                ? {}
+                : { daemonRecoveryBoot: input.daemonRecoveryBoot }),
             };
 
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
