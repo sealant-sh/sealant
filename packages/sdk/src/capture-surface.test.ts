@@ -169,6 +169,15 @@ describe("workspace.capture", () => {
       registerRefusals: 4,
       repairing: true,
       bulkBuilding: true,
+      snaps: [
+        {
+          class: "small",
+          snapsFailed: 12,
+          lastSnapError: "File name too long (os error 36)",
+          snapFailingSinceUnixMs: 1_757_760_000_000,
+        },
+        { class: "bulk", snapsFailed: 0 },
+      ],
       lastSnapError: "File name too long (os error 36)",
       snapFailingSinceUnixMs: 1_757_760_000_000,
       snapsFailed: 12,
@@ -191,6 +200,7 @@ describe("workspace.capture", () => {
       "registerRefusals",
       "repairing",
       "bulkBuilding",
+      "snaps",
       "lastSnapError",
       "snapFailingSinceUnixMs",
       "snapsFailed",

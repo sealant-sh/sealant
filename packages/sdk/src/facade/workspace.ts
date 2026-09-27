@@ -6,6 +6,7 @@
  */
 import type {
   WorkspaceCaptureDrain as WireWorkspaceCaptureDrain,
+  CaptureClassSnaps as WireCaptureClassSnaps,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
   WorkspaceDetails,
 } from "@sealant/api-contracts";
@@ -37,6 +38,7 @@ import type {
   WorkspaceForwardOptions,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
+  WorkspaceCaptureClassSnaps,
   WorkspaceCaptureStatus,
   WorkspaceStatus,
   WorkspaceStopOptions,
@@ -101,6 +103,16 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   "claude-code": "claude",
 };
 
+/** Wire → public snaps of one capture class. */
+const toClassSnaps = (snaps: WireCaptureClassSnaps): WorkspaceCaptureClassSnaps => ({
+  class: snaps.class,
+  snapsFailed: snaps.snapsFailed,
+  ...(snaps.lastSnapError === undefined ? {} : { lastSnapError: snaps.lastSnapError }),
+  ...(snaps.snapFailingSinceUnixMs === undefined
+    ? {}
+    : { snapFailingSinceUnixMs: snaps.snapFailingSinceUnixMs }),
+});
+
 /**
  * Wire → public capture status; `refused` is empty from a control plane that predates it, and
  * every other field the control plane does not send stays absent.
@@ -131,6 +143,7 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
   ...(status.registerRefusals === undefined ? {} : { registerRefusals: status.registerRefusals }),
   ...(status.repairing === undefined ? {} : { repairing: status.repairing }),
   ...(status.bulkBuilding === undefined ? {} : { bulkBuilding: status.bulkBuilding }),
+  ...(status.snaps === undefined ? {} : { snaps: status.snaps.map(toClassSnaps) }),
   ...(status.lastSnapError === undefined ? {} : { lastSnapError: status.lastSnapError }),
   ...(status.snapFailingSinceUnixMs === undefined
     ? {}

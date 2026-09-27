@@ -276,7 +276,11 @@ export interface WorkspaceCaptureStatus {
    * read absent as not complete.
    */
   readonly complete?: boolean;
-  /** Why the last final flush is not complete, when the daemon says. */
+  /**
+   * Why the last final flush is not complete, when the daemon says: `not-final`, `in-progress`,
+   * `processes-remain`, `sweep-unavailable`, `snapshot-failed`, `unreadable`, `fenced`,
+   * `conflict`, `deadline`, `ship-failed`, `pending`, `internal`.
+   */
   readonly incompleteReason?: string;
   /**
    * Paths the last snap of each class could not read, summed over both classes. Never taken as
@@ -309,14 +313,31 @@ export interface WorkspaceCaptureStatus {
    */
   readonly bulkBuilding?: boolean;
   /**
-   * Why the last automatic snap failed, while snaps keep failing. Present means the newest work
-   * is NOT being captured, whatever `pending` says.
+   * Each captured class's snaps: how many failed since the daemon started, and the last one's
+   * error while it fails. A snap that fails stages nothing: what changed since the last capture
+   * is on the executor's disk only.
+   */
+  readonly snaps?: readonly WorkspaceCaptureClassSnaps[];
+  /**
+   * From `snaps`: the error of the class that has been failing longest. Present means the newest
+   * work is NOT being captured, whatever `pending` says.
    */
   readonly lastSnapError?: string;
-  /** When snaps started failing, in Unix milliseconds. */
+  /** From `snaps`: when the earliest current run of failed snaps began (Unix ms). */
   readonly snapFailingSinceUnixMs?: number;
-  /** Snaps that have failed in a row. */
+  /** From `snaps`: failed snaps of every class since the daemon started. */
   readonly snapsFailed?: number;
+}
+
+/** One capture class's snaps, as `WorkspaceCaptureStatus.snaps` reports them. */
+export interface WorkspaceCaptureClassSnaps {
+  readonly class: "small" | "bulk";
+  /** Snaps of this class that failed since the daemon started. */
+  readonly snapsFailed: number;
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  readonly lastSnapError?: string;
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  readonly snapFailingSinceUnixMs?: number;
 }
 
 /**

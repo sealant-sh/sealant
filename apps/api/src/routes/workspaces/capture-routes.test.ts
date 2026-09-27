@@ -173,6 +173,15 @@ describe("workspace capture routes", () => {
       registerRefusals: 4,
       repairing: true,
       bulkBuilding: true,
+      snaps: [
+        {
+          class: "small",
+          snapsFailed: 12,
+          lastSnapError: "File name too long (os error 36)",
+          snapFailingSinceUnixMs: 1_757_760_000_000,
+        },
+        { class: "bulk", snapsFailed: 0 },
+      ],
       lastSnapError: "File name too long (os error 36)",
       snapFailingSinceUnixMs: 1_757_760_000_000,
       snapsFailed: 12,
@@ -184,6 +193,7 @@ describe("workspace capture routes", () => {
     // A daemon on the pinned wire reports none of them: absent, never defaulted.
     const pinned = decode(encode(REPORT));
     expect(pinned).toEqual(REPORT);
+    expect("snaps" in pinned).toBe(false);
     expect("lastSnapError" in pinned).toBe(false);
     expect("unreadable" in pinned).toBe(false);
     expect("bulkBuilding" in pinned).toBe(false);
@@ -194,11 +204,20 @@ describe("workspace capture routes", () => {
       ...REPORT,
       complete: false,
       incompleteReason: "snapshot-failed",
+      snaps: [
+        { class: "small", snapsFailed: 3, lastSnapError: "File name too long (os error 36)" },
+      ],
       lastSnapError: "File name too long (os error 36)",
       snapsFailed: 3,
     };
     const h = flushHarness(failing);
     expect(await h.flush({ kind: "final" })).toEqual(failing);
+  });
+
+  it("reject a snaps entry of an unknown class or without its failed count", () => {
+    const decode = Schema.decodeUnknownSync(workspaceCaptureStatusSchema);
+    expect(() => decode({ ...REPORT, snaps: [{ class: "medium", snapsFailed: 1 }] })).toThrow();
+    expect(() => decode({ ...REPORT, snaps: [{ class: "small" }] })).toThrow();
   });
 
   it("answer replan with the session's replan report as-is", () => {

@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   captureFlushReportFromWire,
+  snapFailureSummary,
   captureReplanReportFromWire,
   SealantControlError,
   SealantRuntime,
@@ -56,7 +57,9 @@ const daemonVersion = (() => {
   if (!hasBinary) {
     return null;
   }
-  const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], { encoding: "utf8" });
+  const printed = spawnSync(SEALANTD_BIN, ["--print-capabilities"], {
+    encoding: "utf8",
+  });
   const version = /"daemonVersion":\s*"(\d+)\.(\d+)\.(\d+)/.exec(printed.stdout);
   return version === null ? null : { major: Number(version[1]), minor: Number(version[2]) };
 })();
@@ -135,7 +138,11 @@ const LocalSocketTransportLive = Layer.succeed(SealantTransport, localSocketTran
 /** The runtime service wired to the local-socket test transport. */
 const TestLayer = SealantRuntimeLive.pipe(Layer.provide(LocalSocketTransportLive));
 
-const TARGET = { kind: "docker-exec" as const, containerId: "unused", socketPath: "unused" };
+const TARGET = {
+  kind: "docker-exec" as const,
+  containerId: "unused",
+  socketPath: "unused",
+};
 
 describe.skipIf(!hasBinary)("SealantRuntime service (local sealantd, docker-free)", () => {
   it("connect -> health round-trips a HEALTHY control channel", async () => {
@@ -482,9 +489,20 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       registerRefusals: 4n,
       repairing: true,
       bulkBuilding: true,
-      lastSnapError: "File name too long (os error 36): tree/aaaa…",
-      snapFailingSince: 1_757_760_000_000n,
-      snapsFailed: 12n,
+      snaps: [
+        {
+          class: CaptureClass.SMALL,
+          snapsFailed: 12n,
+          lastSnapError: "File name too long (os error 36): tree/aaaa…",
+          snapFailingSinceUnixMs: 1_757_760_000_000n,
+        },
+        { class: CaptureClass.BULK, snapsFailed: 1n },
+        {
+          class: CaptureClass.UNSPECIFIED,
+          snapsFailed: 5n,
+          lastSnapError: "unknown class",
+        },
+      ],
     };
     expect(captureFlushReportFromWire(newer)).toEqual({
       epoch: 2,
@@ -510,9 +528,20 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       registerRefusals: 4,
       repairing: true,
       bulkBuilding: true,
+      // Per class; an entry of an unknown class is dropped.
+      snaps: [
+        {
+          class: "small",
+          snapsFailed: 12,
+          lastSnapError: "File name too long (os error 36): tree/aaaa…",
+          snapFailingSinceUnixMs: 1_757_760_000_000,
+        },
+        { class: "bulk", snapsFailed: 1 },
+      ],
+      // Derived for consumers that read one error: the class failing longest, the sum.
       lastSnapError: "File name too long (os error 36): tree/aaaa…",
       snapFailingSinceUnixMs: 1_757_760_000_000,
-      snapsFailed: 12,
+      snapsFailed: 13,
     });
   });
 
@@ -532,6 +561,7 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       "registerRefusals",
       "repairing",
       "bulkBuilding",
+      "snaps",
       "lastSnapError",
       "snapFailingSinceUnixMs",
       "snapsFailed",
@@ -546,8 +576,63 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       lastSnapError: "",
       unreadablePaths: [],
       registerMissing: [],
+      snaps: [],
     };
     expect(captureFlushReportFromWire(blank)).toEqual(captureFlushReportFromWire(base));
+  });
+});
+
+describe("snapFailureSummary", () => {
+  it("names the class failing longest, the earliest start and the sum of failed snaps", () => {
+    expect(
+      snapFailureSummary([
+        {
+          class: "small",
+          snapsFailed: 2,
+          lastSnapError: "newer",
+          snapFailingSinceUnixMs: 2_000,
+        },
+        {
+          class: "bulk",
+          snapsFailed: 5,
+          lastSnapError: "older",
+          snapFailingSinceUnixMs: 1_000,
+        },
+      ]),
+    ).toEqual({
+      lastSnapError: "older",
+      snapFailingSinceUnixMs: 1_000,
+      snapsFailed: 7,
+    });
+    // A failing class without a start counts as the newest.
+    expect(
+      snapFailureSummary([
+        { class: "small", snapsFailed: 1, lastSnapError: "no start" },
+        {
+          class: "bulk",
+          snapsFailed: 1,
+          lastSnapError: "started",
+          snapFailingSinceUnixMs: 9,
+        },
+      ]),
+    ).toEqual({
+      lastSnapError: "started",
+      snapFailingSinceUnixMs: 9,
+      snapsFailed: 2,
+    });
+    expect(
+      snapFailureSummary([{ class: "small", snapsFailed: 1, lastSnapError: "no start" }]),
+    ).toEqual({ lastSnapError: "no start", snapsFailed: 1 });
+  });
+
+  it("derives no error while no class is failing, and nothing from absent snaps", () => {
+    expect(
+      snapFailureSummary([
+        { class: "small", snapsFailed: 3 },
+        { class: "bulk", snapsFailed: 0 },
+      ]),
+    ).toEqual({ snapsFailed: 3 });
+    expect(snapFailureSummary(undefined)).toEqual({});
   });
 });
 

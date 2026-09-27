@@ -46,6 +46,16 @@ const storedStatusSchema = z.object({
   registerRefusals: z.number().optional(),
   repairing: z.boolean().optional(),
   bulkBuilding: z.boolean().optional(),
+  snaps: z
+    .array(
+      z.object({
+        class: z.enum(["small", "bulk"]),
+        snapsFailed: z.number(),
+        lastSnapError: z.string().optional(),
+        snapFailingSinceUnixMs: z.number().optional(),
+      }),
+    )
+    .optional(),
   lastSnapError: z.string().optional(),
   snapFailingSinceUnixMs: z.number().optional(),
   snapsFailed: z.number().optional(),

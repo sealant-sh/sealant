@@ -194,6 +194,18 @@ export type GetWorkspaceCaptureStatusQuery = typeof getWorkspaceCaptureStatusQue
 export const captureClassSchema = Schema.Literals(["small", "bulk"]);
 export type CaptureClass = typeof captureClassSchema.Type;
 
+/** One capture class's snaps (sealantd `CaptureClassSnaps`). */
+export const captureClassSnapsSchema = Schema.Struct({
+  class: captureClassSchema,
+  /** Snaps of this class that failed since the daemon started. */
+  snapsFailed: Schema.Number,
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  lastSnapError: Schema.optional(Schema.String),
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  snapFailingSinceUnixMs: Schema.optional(Schema.Number),
+});
+export type CaptureClassSnaps = typeof captureClassSnapsSchema.Type;
+
 export const workspaceCaptureStatusSchema = Schema.Struct({
   epoch: Schema.Number,
   worktreeId: NonEmptyString,
@@ -229,8 +241,9 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    */
   complete: Schema.optional(Schema.Boolean),
   /**
-   * Why the last final flush is not complete (`not-final`, `processes-remain`,
-   * `snapshot-failed`, `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`).
+   * Why the last final flush is not complete (`not-final`, `in-progress`, `processes-remain`,
+   * `sweep-unavailable`, `snapshot-failed`, `unreadable`, `fenced`, `conflict`, `deadline`,
+   * `ship-failed`, `pending`, `internal`). A class whose last snap failed is `snapshot-failed`.
    */
   incompleteReason: Schema.optional(Schema.String),
   /**
@@ -267,13 +280,19 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    */
   bulkBuilding: Schema.optional(Schema.Boolean),
   /**
-   * Why the last automatic snap failed, while snaps keep failing. Present means the executor's
-   * newest work is NOT being captured, whatever `pending` says.
+   * Each captured class's snaps: how many failed since the daemon started, and the last one's
+   * error while it fails. A snap that fails stages nothing: what changed since the last capture
+   * is on the executor's disk only.
+   */
+  snaps: Schema.optional(Schema.Array(captureClassSnapsSchema)),
+  /**
+   * Derived from `snaps`: the error of the class that has been failing longest. Present means the
+   * executor's newest work is NOT being captured, whatever `pending` says.
    */
   lastSnapError: Schema.optional(Schema.String),
-  /** When snaps started failing, in Unix milliseconds. */
+  /** Derived from `snaps`: when the earliest current run of failed snaps began (Unix ms). */
   snapFailingSinceUnixMs: Schema.optional(Schema.Number),
-  /** Snaps that have failed in a row. */
+  /** Derived from `snaps`: failed snaps of every class since the daemon started. */
   snapsFailed: Schema.optional(Schema.Number),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;

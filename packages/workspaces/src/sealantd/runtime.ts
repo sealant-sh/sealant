@@ -221,8 +221,10 @@ export interface CaptureFlushReport {
   readonly pendingBulk?: number | undefined;
   /**
    * Why the last final flush is not complete (sealantd `incomplete_reason`): `not-final`,
-   * `processes-remain`, `snapshot-failed`, `fenced`, `conflict`, `deadline`, `ship-failed`,
-   * `pending`, `internal`. Absent when complete, or from a daemon that predates it.
+   * `in-progress`, `processes-remain`, `sweep-unavailable`, `snapshot-failed`, `unreadable`,
+   * `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`. A class whose last
+   * snap failed (`snaps`) is `snapshot-failed` too. Absent when complete, or from a daemon that
+   * predates it.
    */
   readonly incompleteReason?: string | undefined;
   /**
@@ -258,15 +260,72 @@ export interface CaptureFlushReport {
    */
   readonly bulkBuilding?: boolean | undefined;
   /**
-   * Why the last automatic snap failed, while snaps keep failing (sealantd `last_snap_error`).
-   * Present means the executor's newest work is NOT being captured, whatever `pending` says.
+   * Each captured class's snaps (sealantd `snaps`, `CaptureClassSnaps`): how many failed, and
+   * the last one's error while it fails. A snap that fails stages nothing: what changed since the
+   * last capture is on the executor's disk only. Absent from a daemon that predates it.
+   */
+  readonly snaps?: readonly CaptureClassSnaps[] | undefined;
+  /**
+   * Derived from `snaps` for consumers that read one error: the error of the class that has been
+   * failing longest. Present means the executor's newest work is NOT being captured, whatever
+   * `pending` says. Absent while no class's last snap failed.
    */
   readonly lastSnapError?: string | undefined;
-  /** When snaps started failing, in Unix milliseconds (sealantd `snap_failing_since`). */
+  /** Derived from `snaps`: when the earliest current run of failed snaps began (Unix ms). */
   readonly snapFailingSinceUnixMs?: number | undefined;
-  /** Snaps that have failed in a row (sealantd `snaps_failed`). */
+  /** Derived from `snaps`: failed snaps of every class since the daemon started. */
   readonly snapsFailed?: number | undefined;
 }
+
+/** One capture class's snaps (wire `CaptureClassSnaps`). */
+export interface CaptureClassSnaps {
+  readonly class: CaptureClassName;
+  /** Snaps of this class that failed since the daemon started. */
+  readonly snapsFailed: number;
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  readonly lastSnapError?: string | undefined;
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  readonly snapFailingSinceUnixMs?: number | undefined;
+}
+
+/**
+ * The flat snap-failure fields derived from `snaps`: the error of the class failing longest (a
+ * failing class that reports no start counts as the newest), the earliest start, and the sum of
+ * failed snaps. Absent `snaps` derives nothing. Exported for the drain and tests.
+ */
+export const snapFailureSummary = (
+  snaps: readonly CaptureClassSnaps[] | undefined,
+): Pick<CaptureFlushReport, "lastSnapError" | "snapFailingSinceUnixMs" | "snapsFailed"> => {
+  if (snaps === undefined) {
+    return {};
+  }
+  const snapsFailed = snaps.reduce((sum, entry) => sum + entry.snapsFailed, 0);
+  let longest: CaptureClassSnaps | undefined;
+  for (const entry of snaps) {
+    if (entry.lastSnapError === undefined) {
+      continue;
+    }
+    const since = entry.snapFailingSinceUnixMs ?? Number.POSITIVE_INFINITY;
+    const longestSince = longest?.snapFailingSinceUnixMs ?? Number.POSITIVE_INFINITY;
+    if (longest === undefined || since < longestSince) {
+      longest = entry;
+    }
+  }
+  const earliest = snaps.reduce<number | undefined>(
+    (min, entry) =>
+      entry.lastSnapError === undefined || entry.snapFailingSinceUnixMs === undefined
+        ? min
+        : min === undefined
+          ? entry.snapFailingSinceUnixMs
+          : Math.min(min, entry.snapFailingSinceUnixMs),
+    undefined,
+  );
+  return {
+    snapsFailed,
+    ...(longest?.lastSnapError === undefined ? {} : { lastSnapError: longest.lastSnapError }),
+    ...(earliest === undefined ? {} : { snapFailingSinceUnixMs: earliest }),
+  };
+};
 
 /**
  * What a `capture.flush` asks for. `final`: this executor is ending — the daemon stops admitting
@@ -317,7 +376,7 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
     const name = captureClassName(value);
     return name === undefined ? [] : [name];
   }),
-  // Fields a newer daemon reports (sealantd 13-25 and the snap-failure fields). The pinned wire
+  // Fields a newer daemon reports (sealantd 13-26). The pinned wire
   // type does not declare them, so they are read structurally: a 0.18.2 message never carries
   // them and they stay absent (complete = unknown).
   ...optionalWireFields(report),
@@ -337,15 +396,9 @@ const wireTexts = (value: unknown): readonly string[] | undefined => {
   return texts.length === 0 ? undefined : texts;
 };
 
-/** The first key of `keys` that `report` carries, read structurally. */
-const wireField = (report: object, ...keys: readonly string[]): unknown => {
-  for (const key of keys) {
-    if (key in report) {
-      return Reflect.get(report, key);
-    }
-  }
-  return undefined;
-};
+/** A field `report` carries, read structurally; `undefined` when it does not carry it. */
+const wireField = (report: object, key: string): unknown =>
+  key in report ? Reflect.get(report, key) : undefined;
 
 type OptionalWireField =
   | "complete"
@@ -361,15 +414,52 @@ type OptionalWireField =
   | "registerRefusals"
   | "repairing"
   | "bulkBuilding"
+  | "snaps"
   | "lastSnapError"
   | "snapFailingSinceUnixMs"
   | "snapsFailed";
 
+/** One wire `CaptureClassSnaps`, read structurally; `undefined` for an unknown class. */
+const wireClassSnaps = (value: unknown): CaptureClassSnaps | undefined => {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const classValue = wireField(value, "class");
+  const name =
+    classValue === WireCaptureClass.SMALL
+      ? "small"
+      : classValue === WireCaptureClass.BULK
+        ? "bulk"
+        : undefined;
+  if (name === undefined) {
+    return undefined;
+  }
+  const lastSnapError = wireText(wireField(value, "lastSnapError"));
+  const snapFailingSinceUnixMs = wireCount(wireField(value, "snapFailingSinceUnixMs"));
+  return {
+    class: name,
+    snapsFailed: wireCount(wireField(value, "snapsFailed")) ?? 0,
+    ...(lastSnapError === undefined ? {} : { lastSnapError }),
+    ...(snapFailingSinceUnixMs === undefined ? {} : { snapFailingSinceUnixMs }),
+  };
+};
+
+/** Wire `snaps` (26); absent when the message does not carry it or carries no known class. */
+const wireSnaps = (value: unknown): readonly CaptureClassSnaps[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const snaps = value.flatMap((item) => {
+    const entry = wireClassSnaps(item);
+    return entry === undefined ? [] : [entry];
+  });
+  return snaps.length === 0 ? undefined : snaps;
+};
+
 /**
- * Every CaptureStatusReport field past the pinned wire (sealantd 13–25, and the snap-failure
- * fields), read structurally: a field the message does not carry stays absent, never a default.
- * The snap-failure names are provisional (`last_snap_error`, `snap_failing_since`,
- * `snaps_failed`): not in a sealantd proto yet, so `snapFailingSinceUnixMs` is also accepted.
+ * Every CaptureStatusReport field past the pinned wire (sealantd 13–26), read structurally: a
+ * field the message does not carry stays absent, never a default. The flat snap-failure fields
+ * are derived from `snaps`.
  */
 const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWireField> => {
   const complete = wireField(report, "complete");
@@ -381,13 +471,9 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
   const carried = wireCount(wireField(report, "carried"));
   const registerRefusedN = wireCount(wireField(report, "registerRefusedN"));
   const registerRefusals = wireCount(wireField(report, "registerRefusals"));
-  const snapFailingSinceUnixMs = wireCount(
-    wireField(report, "snapFailingSince", "snapFailingSinceUnixMs"),
-  );
-  const snapsFailed = wireCount(wireField(report, "snapsFailed"));
+  const snaps = wireSnaps(wireField(report, "snaps"));
   const incompleteReason = wireText(wireField(report, "incompleteReason"));
   const registerRefused = wireText(wireField(report, "registerRefused"));
-  const lastSnapError = wireText(wireField(report, "lastSnapError"));
   const unreadablePaths = wireTexts(wireField(report, "unreadablePaths"));
   const registerMissing = wireTexts(wireField(report, "registerMissing"));
   return {
@@ -404,9 +490,8 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
     ...(registerRefusals === undefined ? {} : { registerRefusals }),
     ...(typeof repairing === "boolean" ? { repairing } : {}),
     ...(typeof bulkBuilding === "boolean" ? { bulkBuilding } : {}),
-    ...(lastSnapError === undefined ? {} : { lastSnapError }),
-    ...(snapFailingSinceUnixMs === undefined ? {} : { snapFailingSinceUnixMs }),
-    ...(snapsFailed === undefined ? {} : { snapsFailed }),
+    ...(snaps === undefined ? {} : { snaps }),
+    ...snapFailureSummary(snaps),
   };
 };
 

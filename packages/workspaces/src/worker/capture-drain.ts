@@ -28,8 +28,8 @@
  *    or missing) — there is nothing left to save, so the stop proceeds (it only cleans up).
  *  - **busy**: another worker holds the run's drain; this call does nothing.
  *
- * A daemon that reports its snaps failing (`lastSnapError`) is saving none of the executor's
- * newest work, whatever `pending` says: the drain logs it as an error once per distinct error,
+ * A daemon that reports a class's snaps failing (`snaps`) is saving none of that class's newest
+ * work, whatever `pending` says: the drain logs it as an error once per distinct error,
  * and every keep it concludes names it. It never lets a stop proceed (a failing snap never
  * reports the final flush complete).
  *
@@ -382,21 +382,33 @@ export const captureProgressed = (
 const clip = (text: string, max = 160): string =>
   text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 
+/** The failing classes' errors as one comparable key; `undefined` when no class is failing. */
+const snapFailureKey = (status: CaptureFlushReport | undefined): string | undefined => {
+  const failing = (status?.snaps ?? []).flatMap((entry) =>
+    entry.lastSnapError === undefined ? [] : [`${entry.class}: ${entry.lastSnapError}`],
+  );
+  return failing.length === 0 ? undefined : failing.join("\n");
+};
+
 /**
- * Snaps are failing (sealantd `last_snap_error`): the executor's newest work is not being
- * captured, whatever `pending` says. `undefined` when the daemon reports no failing snap.
+ * Snaps are failing (sealantd `snaps`, per class): the executor's newest work in that class is
+ * not being captured, whatever `pending` says. One part per failing class; `undefined` when the
+ * daemon reports no class failing.
  */
-export const snapFailureDetail = (status: CaptureFlushReport): string | undefined =>
-  status.lastSnapError === undefined
-    ? undefined
-    : [
-        `snaps failing${
-          status.snapFailingSinceUnixMs === undefined
-            ? ""
-            : ` since ${new Date(status.snapFailingSinceUnixMs).toISOString()}`
-        }${status.snapsFailed === undefined ? "" : ` (${String(status.snapsFailed)} failed)`}`,
-        clip(status.lastSnapError, 400),
-      ].join(": ");
+export const snapFailureDetail = (status: CaptureFlushReport): string | undefined => {
+  const parts = (status.snaps ?? []).flatMap((entry) =>
+    entry.lastSnapError === undefined
+      ? []
+      : [
+          `${entry.class} snaps failing${
+            entry.snapFailingSinceUnixMs === undefined
+              ? ""
+              : ` since ${new Date(entry.snapFailingSinceUnixMs).toISOString()}`
+          } (${String(entry.snapsFailed)} failed): ${clip(entry.lastSnapError, 400)}`,
+        ],
+  );
+  return parts.length === 0 ? undefined : parts.join(" · ");
+};
 
 export const describeCaptureStatus = (status: CaptureFlushReport): string => {
   const snapFailure = snapFailureDetail(status);
@@ -693,7 +705,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             entry = { ...entry, lastProgressAt: now };
           }
           const snapFailure = snapFailureDetail(status);
-          if (snapFailure !== undefined && entry.last?.lastSnapError !== status.lastSnapError) {
+          if (snapFailure !== undefined && snapFailureKey(entry.last) !== snapFailureKey(status)) {
             // Snaps are failing: whatever the queue says, the newest work on the executor is not
             // being captured. Said once per distinct error; the drain goes on (only `complete`
             // lets a stop proceed, and a failing snap never reports it).

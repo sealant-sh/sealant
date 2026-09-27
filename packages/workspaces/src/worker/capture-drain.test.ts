@@ -30,7 +30,10 @@ import {
   type CaptureDrainSettings,
 } from "./capture-drain.js";
 
-const TARGET: SealantTarget = { kind: "unix-socket", socketPath: "/run/sealant/control.sock" };
+const TARGET: SealantTarget = {
+  kind: "unix-socket",
+  socketPath: "/run/sealant/control.sock",
+};
 
 const FAST: CaptureDrainSettings = {
   pollIntervalMs: 1,
@@ -68,7 +71,10 @@ describe("drainCaptureBeforeStop", () => {
 
     const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
 
-    expect(outcome).toMatchObject({ kind: "drained", status: { pending: 0, complete: true } });
+    expect(outcome).toMatchObject({
+      kind: "drained",
+      status: { pending: 0, complete: true },
+    });
     expect(drainPermitsStop(outcome)).toBe(true);
     expect(daemon.calls).toEqual(["flush", "status", "status"]);
     // The deadline is the 1 s round trip less a tenth; the 30 s grace is capped at it.
@@ -100,7 +106,10 @@ describe("drainCaptureBeforeStop", () => {
 
     const outcome = await drain(daemon, ledger);
 
-    expect(outcome).toMatchObject({ kind: "unconfirmed", status: { pending: 0 } });
+    expect(outcome).toMatchObject({
+      kind: "unconfirmed",
+      status: { pending: 0 },
+    });
     expect(drainPermitsStop(outcome)).toBe(false);
     expect(daemon.calls).toEqual(["flush", "flush"]);
     expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
@@ -130,9 +139,15 @@ describe("drainCaptureBeforeStop", () => {
       registered: 4,
       complete: false,
       incompleteReason: "snapshot-failed",
-      lastSnapError: "File name too long (os error 36)",
-      snapFailingSinceUnixMs: Date.UTC(2026, 8, 27, 12),
-      snapsFailed: 12,
+      snaps: [
+        {
+          class: "small",
+          snapsFailed: 12,
+          lastSnapError: "File name too long (os error 36)",
+          snapFailingSinceUnixMs: Date.UTC(2026, 8, 27, 12),
+        },
+        { class: "bulk", snapsFailed: 0 },
+      ],
     });
     const errors: string[] = [];
     const recorder = Logger.make(({ logLevel, message }) => {
@@ -156,14 +171,16 @@ describe("drainCaptureBeforeStop", () => {
     );
 
     const snapFailure =
-      "snaps failing since 2026-09-27T12:00:00.000Z (12 failed): File name too long (os error 36)";
+      "small snaps failing since 2026-09-27T12:00:00.000Z (12 failed): File name too long (os error 36)";
     expect(outcome).toMatchObject({
       kind: "unconfirmed",
       detail: `the daemon reports its final flush incomplete (snapshot-failed) · ${snapFailure}`,
     });
     expect(drainPermitsStop(outcome)).toBe(false);
     // Two FINAL flushes saw the same error: logged once as not captured, once as the keep.
-    expect(errors.filter((line) => line.includes("not captured · snaps failing"))).toHaveLength(1);
+    expect(
+      errors.filter((line) => line.includes("not captured · small snaps failing")),
+    ).toHaveLength(1);
     expect(errors.filter((line) => line.includes("not saved · not confirmed · kept"))).toHaveLength(
       1,
     );
@@ -201,7 +218,10 @@ describe("drainCaptureBeforeStop", () => {
 
   it("keeps a workspace whose daemon refuses the capture commands", async () => {
     const outcome = await drain(fakeCaptureDaemon(["refused"]), inMemoryCaptureDrainLedger());
-    expect(outcome).toMatchObject({ kind: "stalled", detail: expect.stringMatching(/capture/) });
+    expect(outcome).toMatchObject({
+      kind: "stalled",
+      detail: expect.stringMatching(/capture/),
+    });
     expect(drainPermitsStop(outcome)).toBe(false);
   });
 
@@ -266,7 +286,11 @@ describe("drainCaptureBeforeStop", () => {
     const ledger = inMemoryCaptureDrainLedger();
     const first = await drain(
       fakeCaptureDaemon([
-        captureStatus({ pending: 2, complete: false, incompleteReason: "ship-failed" }),
+        captureStatus({
+          pending: 2,
+          complete: false,
+          incompleteReason: "ship-failed",
+        }),
       ]),
       ledger,
       1,
@@ -312,7 +336,10 @@ describe("drain ownership across workers", () => {
     const daemonA = fakeCaptureDaemon([...moving, savedStatus()]);
     const daemonB = fakeCaptureDaemon([savedStatus()]);
 
-    const inFlight = drain(daemonA, workerA, 5_000, { ...FAST, pollIntervalMs: 2 });
+    const inFlight = drain(daemonA, workerA, 5_000, {
+      ...FAST,
+      pollIntervalMs: 2,
+    });
     await new Promise((resolve) => setTimeout(resolve, 10));
     const second = await drain(daemonB, workerB);
 
@@ -342,8 +369,18 @@ describe("drain ownership across workers", () => {
   it("takes over a run whose worker died holding it, once the lease expires", async () => {
     let now = 1_000;
     const store = new InMemoryCaptureDrainStore();
-    const dead = inMemoryCaptureDrainLedger({ store, owner: "dead", leaseMs: 100, now: () => now });
-    const live = inMemoryCaptureDrainLedger({ store, owner: "live", leaseMs: 100, now: () => now });
+    const dead = inMemoryCaptureDrainLedger({
+      store,
+      owner: "dead",
+      leaseMs: 100,
+      now: () => now,
+    });
+    const live = inMemoryCaptureDrainLedger({
+      store,
+      owner: "live",
+      leaseMs: 100,
+      now: () => now,
+    });
 
     // The dead worker claimed and never released.
     expect(await Effect.runPromise(dead.claim("run_1"))).toBeDefined();
@@ -356,7 +393,12 @@ describe("drain ownership across workers", () => {
   it("gives the drain up when its claim was taken over mid-drain", async () => {
     let now = 1_000;
     const store = new InMemoryCaptureDrainStore();
-    const slow = inMemoryCaptureDrainLedger({ store, owner: "slow", leaseMs: 100, now: () => now });
+    const slow = inMemoryCaptureDrainLedger({
+      store,
+      owner: "slow",
+      leaseMs: 100,
+      now: () => now,
+    });
     const other = inMemoryCaptureDrainLedger({
       store,
       owner: "other",
@@ -410,10 +452,14 @@ describe("runIsCaptureSourced", () => {
 
   it("falls back to the attempt snapshot on a row that predates the column", async () => {
     expect(
-      await decide(null, { blueprintPayload: { sources: { workspace: { kind: "capture" } } } }),
+      await decide(null, {
+        blueprintPayload: { sources: { workspace: { kind: "capture" } } },
+      }),
     ).toBe(true);
     expect(
-      await decide(null, { blueprintPayload: { sources: { workspace: { kind: "github" } } } }),
+      await decide(null, {
+        blueprintPayload: { sources: { workspace: { kind: "github" } } },
+      }),
     ).toBe(false);
   });
 
@@ -425,14 +471,22 @@ describe("runIsCaptureSourced", () => {
 
 describe("helpers", () => {
   it("recognises a capture source in a stored blueprint of any vintage", () => {
-    expect(isCaptureSourcedBlueprint({ sources: { workspace: { kind: "capture" } } })).toBe(true);
+    expect(
+      isCaptureSourcedBlueprint({
+        sources: { workspace: { kind: "capture" } },
+      }),
+    ).toBe(true);
     expect(isCaptureSourcedBlueprint({ sources: { workspace: { kind: "github" } } })).toBe(false);
     expect(blueprintSourceKind({})).toBeUndefined();
     expect(blueprintSourceKind(null)).toBeUndefined();
   });
 
   it("counts fewer pending, more uploaded/registered, or a completed flush as progress", () => {
-    const base = captureStatus({ pending: 3, uploadedBytes: 10, registered: 1 });
+    const base = captureStatus({
+      pending: 3,
+      uploadedBytes: 10,
+      registered: 1,
+    });
     expect(captureProgressed(undefined, base)).toBe(true);
     expect(captureProgressed(base, { ...base, pending: 2 })).toBe(true);
     expect(captureProgressed(base, { ...base, uploadedBytes: 11 })).toBe(true);
@@ -493,8 +547,22 @@ describe("capture status past the pinned wire", () => {
     registerMissing: ["obj/ab12", "obj/cd34"],
     registerRefusals: 2,
     repairing: true,
-    lastSnapError: "File name too long (os error 36)",
-    snapsFailed: 3,
+    snaps: [
+      {
+        class: "small",
+        snapsFailed: 3,
+        lastSnapError: "File name too long (os error 36)",
+      },
+      {
+        class: "bulk",
+        snapsFailed: 1,
+        lastSnapError: "Permission denied",
+        snapFailingSinceUnixMs: 0,
+      },
+    ],
+    lastSnapError: "Permission denied",
+    snapFailingSinceUnixMs: 0,
+    snapsFailed: 4,
   });
 
   it("describes every field a newer daemon reports, clipping what it cannot bound", () => {
@@ -505,7 +573,8 @@ describe("capture status past the pinned wire", () => {
       "bulk building",
       "2048 bytes to ship",
       "final flush incomplete (unreadable)",
-      "snaps failing (3 failed): File name too long (os error 36)",
+      "small snaps failing (3 failed): File name too long (os error 36)",
+      "bulk snaps failing since 1970-01-01T00:00:00.000Z (1 failed): Permission denied",
       "unreadable 5 (4 carried forward): tree/aaaa",
       "tree/b, .git/c, …",
       "register refused missing-objects at n 9 (2 missing keys listed)",
