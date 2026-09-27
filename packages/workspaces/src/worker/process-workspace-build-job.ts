@@ -31,12 +31,16 @@ import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
 import { parsePublishedReference, planImageCoordinates } from "../images/index.js";
 import { RegistryNameError, type RegistryClient } from "../registry/index.js";
 import {
+  LaunchRetainedError,
+  launchHoldsCaptures,
   selectRuntimeAdapter,
   type CredentialFileInjection,
   type PublishedImage,
   type RegisteredRuntime,
   type RuntimeAdapter,
   type RuntimeAdapterId,
+  type RuntimeAdapterLaunchHooks,
+  type RuntimeLaunchIdentity,
   type WorkspaceCloneAuth,
 } from "../runtime/index.js";
 import {
@@ -110,6 +114,7 @@ const launchPublishedImage = async (input: {
   readonly workspaceId?: string;
   readonly principalId?: string;
   readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
+  readonly hooks?: RuntimeAdapterLaunchHooks;
 }) => {
   const selectedAdapter = selectRuntimeAdapter({
     blueprint: input.spec,
@@ -117,26 +122,31 @@ const launchPublishedImage = async (input: {
     defaultAdapterId: input.defaultRuntimeAdapterId,
   });
 
-  return selectedAdapter.adapter.launch({
-    blueprint: input.spec,
-    publishedImage: input.publishedImage,
-    ...(input.workspaceCloneAuth === undefined
-      ? {}
-      : { workspaceCloneAuth: input.workspaceCloneAuth }),
-    ...(input.platformEnv === undefined ? {} : { platformEnv: input.platformEnv }),
-    ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
-    ...(input.credentialFiles === undefined ? {} : { credentialFiles: [...input.credentialFiles] }),
-    ...(input.dotfilesArchiveDir === undefined
-      ? {}
-      : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
-    ...(input.secretEnvDir === undefined ? {} : { secretEnvDir: input.secretEnvDir }),
-    ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
-    // Deterministic per-run container name -> idempotent launch/adopt (#4).
-    ...(input.runId === undefined ? {} : { runId: input.runId }),
-    ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
-    ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
-    ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
-  });
+  return selectedAdapter.adapter.launch(
+    {
+      blueprint: input.spec,
+      publishedImage: input.publishedImage,
+      ...(input.workspaceCloneAuth === undefined
+        ? {}
+        : { workspaceCloneAuth: input.workspaceCloneAuth }),
+      ...(input.platformEnv === undefined ? {} : { platformEnv: input.platformEnv }),
+      ...(input.credentialEnv === undefined ? {} : { credentialEnv: input.credentialEnv }),
+      ...(input.credentialFiles === undefined
+        ? {}
+        : { credentialFiles: [...input.credentialFiles] }),
+      ...(input.dotfilesArchiveDir === undefined
+        ? {}
+        : { dotfilesArchiveDir: input.dotfilesArchiveDir }),
+      ...(input.secretEnvDir === undefined ? {} : { secretEnvDir: input.secretEnvDir }),
+      ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
+      // Deterministic per-run container name -> idempotent launch/adopt (#4).
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
+      ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
+      ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
+      ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
+    },
+    input.hooks,
+  );
 };
 
 // Staging of launch material (dotfiles archives, secret env) lives in
@@ -370,13 +380,28 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   const failureCleanup = (error: WorkspaceBuildJobProcessingError, markJobAsFailed: boolean) =>
     Effect.gen(function* () {
       if (job.runId !== null) {
+        // A capture-sourced launch that failed after readiness kept its executor: the row keeps
+        // its identity (and `LAUNCH_RETAINED_ERROR_CODE`) so the retained-launch sweep drains it
+        // before it is stopped. `finishedAt` stays unset — the executor is still running.
+        const retained =
+          error.cause instanceof LaunchRetainedError ? error.cause.identity : undefined;
         yield* runtimeInstances
           .upsertRuntimeInstance({
             runId: job.runId,
             status: "failed",
             ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
             errorMessage: error.message,
-            finishedAt: new Date(),
+            ...(retained === undefined
+              ? { finishedAt: new Date() }
+              : {
+                  adapter: retained.adapter,
+                  resourceId: retained.resourceId,
+                  reference: retained.reference,
+                  ...(retained.endpoint === undefined ? {} : { endpoint: retained.endpoint }),
+                  ...(retained.deadline === undefined
+                    ? {}
+                    : { runtimeDeadlineAt: new Date(retained.deadline) }),
+                }),
           })
           .pipe(swallowingFailure("failed runtime-instance update"));
       }
@@ -513,10 +538,13 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
 
   // Phase B: launch the runtime instance and record its state.
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
+  // What the launch boots from, recorded with its first row: every stop path decides whether to
+  // drain from it (a capture-sourced executor holds unsaved work).
+  const sourceKind = spec.sources.workspace.kind;
   const launchAndRecord = Effect.gen(function* () {
     if (job.runId !== null) {
       yield* runtimeInstances
-        .upsertRuntimeInstance({ runId: job.runId, status: "pending" })
+        .upsertRuntimeInstance({ runId: job.runId, status: "pending", sourceKind })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
     }
 
@@ -584,6 +612,26 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
+    const recordReadyIdentity =
+      (runId: string) =>
+      (identity: RuntimeLaunchIdentity): Promise<void> =>
+        Effect.runPromise(
+          runtimeInstances
+            .upsertRuntimeInstance({
+              runId,
+              status: "pending",
+              adapter: identity.adapter,
+              resourceId: identity.resourceId,
+              reference: identity.reference,
+              ...(identity.endpoint === undefined ? {} : { endpoint: identity.endpoint }),
+              ...(identity.deadline === undefined
+                ? {}
+                : { runtimeDeadlineAt: new Date(identity.deadline) }),
+              sourceKind,
+            })
+            .pipe(Effect.asVoid),
+        );
+
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
         launchPublishedImage({
@@ -609,6 +657,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(attemptIdentity?.ownerUserId === undefined
             ? {}
             : { principalId: attemptIdentity.ownerUserId }),
+          // Once the daemon answers, the executor's identity is on the row before any later
+          // launch step runs: a worker that dies after this leaves a runtime it can be found by.
+          hooks: job.runId === null ? {} : { onReady: recordReadyIdentity(job.runId) },
         }),
       catch: toWorkspaceBuildJobProcessingError,
     }).pipe(
@@ -621,9 +672,10 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     );
 
     if (job.runId !== null) {
+      const launchedRunId = job.runId;
       yield* runtimeInstances
         .upsertRuntimeInstance({
-          runId: job.runId,
+          runId: launchedRunId,
           status: runtimeLaunchResult.status,
           adapter: runtimeLaunchResult.adapter,
           resourceId: runtimeLaunchResult.resourceId,
@@ -636,8 +688,32 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(runtimeLaunchResult.deadline === undefined
             ? {}
             : { runtimeDeadlineAt: new Date(runtimeLaunchResult.deadline) }),
+          sourceKind,
         })
-        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+        .pipe(
+          // The executor is up; failing to record it must not get it removed. A capture-sourced
+          // one is recorded retained (drained, then stopped); anything else fails as before.
+          Effect.mapError((cause) =>
+            toWorkspaceBuildJobProcessingError(
+              launchHoldsCaptures(spec)
+                ? new LaunchRetainedError(
+                    {
+                      adapter: runtimeLaunchResult.adapter,
+                      resourceId: runtimeLaunchResult.resourceId,
+                      reference: runtimeLaunchResult.reference,
+                      ...(runtimeLaunchResult.endpoint === undefined
+                        ? {}
+                        : { endpoint: runtimeLaunchResult.endpoint }),
+                      ...(runtimeLaunchResult.deadline === undefined
+                        ? {}
+                        : { deadline: runtimeLaunchResult.deadline }),
+                    },
+                    cause,
+                  )
+                : cause,
+            ),
+          ),
+        );
     }
 
     if (job.runId !== null) {

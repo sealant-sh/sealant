@@ -26,9 +26,10 @@ import {
 import {
   drainCaptureBeforeStop,
   drainPermitsStop,
-  isCaptureSourcedBlueprint,
+  finalWasAnswered,
+  runIsCaptureSourced,
+  type CaptureDrainLedger,
   type CaptureDrainSettings,
-  type CaptureDrainTracker,
 } from "./capture-drain.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
@@ -38,7 +39,8 @@ import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js
  * caller that already drained, or a runtime with nothing to save).
  */
 export interface WorkspaceStopCaptureDrain {
-  readonly tracker: CaptureDrainTracker;
+  /** Durable drain ownership and progress, shared by every worker (`capture-drain-ledger.ts`). */
+  readonly ledger: CaptureDrainLedger;
   readonly settings: CaptureDrainSettings;
   /** How long this one call may wait on the queue before deferring the stop. */
   readonly budgetMs: number;
@@ -51,10 +53,11 @@ export interface WorkspaceStopCaptureDrain {
  *
  *  - `draining`: the capture queue is still moving; the next call (the reaper's next tick)
  *    continues the drain and stops once it is empty.
- *  - `kept`: the daemon answers but its queue stopped moving (`not saved · kept`), or the daemon
- *    is silent while the executor runs (`not saved · daemon silent · kept`); nothing stops it
- *    until the queue drains or the executor ends.
- *  - `busy`: another drain of the same run is in flight.
+ *  - `kept`: the daemon answers but its queue stopped moving (`not saved · kept`), the daemon
+ *    is silent while the executor runs (`not saved · daemon silent · kept`), or the queue is
+ *    empty but the daemon did not confirm its final flush complete (`not saved · not confirmed ·
+ *    kept`); nothing stops it until the work is confirmed saved or the executor ends.
+ *  - `busy`: another drain of the same run is in flight (this worker or another).
  */
 export type WorkspaceStopOutcome = "stopped" | "draining" | "kept" | "busy";
 
@@ -110,33 +113,44 @@ const swallowingFailure = (operation: string) =>
   sharedSwallowingFailure("Workspace stop", operation);
 
 /**
- * Whether the adapter already knows the runtime ended (exited or gone). Unknown — no `inspect`,
- * or a failed read — counts as still up, so the sync-back keeps its chance.
+ * What the adapter knows of the runtime: `running`, `exited` (ended, its disk may remain) or
+ * `missing`. Unknown — no `inspect`, or a failed read — counts as `running`, so the sync-back
+ * keeps its chance and nothing is taken for gone.
  */
-const runtimeAlreadyEnded = (adapter: RuntimeAdapter, resourceId: string) => {
+const runtimeState = (
+  adapter: RuntimeAdapter,
+  resourceId: string,
+): Effect.Effect<"running" | "exited" | "missing"> => {
   const inspect = adapter.inspect;
   if (inspect === undefined) {
-    return Effect.succeed(false);
+    return Effect.succeed("running");
   }
   return Effect.tryPromise(() => inspect.call(adapter, { resourceId })).pipe(
-    Effect.map((result) => result.state !== "running"),
+    Effect.map((result) => result.state),
     Effect.catchCause((cause) =>
       Effect.logWarning(
-        `Workspace stop: inspecting runtime ${resourceId} before the credential sync-back failed; syncing anyway.`,
+        `Workspace stop: inspecting runtime ${resourceId} failed; treating it as running.`,
         cause,
-      ).pipe(Effect.as(false)),
+      ).pipe(Effect.as("running" as const)),
     ),
   );
 };
 
 const stopOutcome = (outcome: WorkspaceStopOutcome): WorkspaceStopOutcome => outcome;
 
-/** Whether the run's stored blueprint names a capture source; a failed read aborts the stop. */
-const isCaptureSourcedRun = (runId: string) =>
+/**
+ * Whether the run is capture-sourced: the kind recorded on its runtime instance, else its attempt
+ * snapshot, else — nothing says — yes (fail closed; `runIsCaptureSourced`). A failed read aborts
+ * the stop.
+ */
+const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefined) =>
   Effect.gen(function* () {
     const attempts = yield* WorkspaceAttemptRepo;
-    const snapshot = yield* attempts.getAttemptSnapshotByRunId(runId);
-    return snapshot !== undefined && isCaptureSourcedBlueprint(snapshot.blueprintPayload);
+    return yield* runIsCaptureSourced({
+      runId,
+      sourceKind,
+      readSnapshotPayload: attempts.getAttemptSnapshotByRunId(runId),
+    });
   }).pipe(Effect.mapError(toWorkspaceStopProcessingError));
 
 /**
@@ -154,9 +168,10 @@ const isCaptureSourcedRun = (runId: string) =>
  * not stamp "stopped" onto a workspace that is already relaunching (the reaper treats a live
  * container on a stored-"stopped" workspace as stranded and would kill the fresh runtime).
  *
- * With `captureDrain`, a live capture-sourced runtime is drained first (`capture-drain.ts`): the
- * runtime is torn down only once its capture queue is empty, or once its daemon is silent AND the
- * runtime reports the executor ended (nothing left to save). Otherwise the call returns `draining` / `kept` and writes nothing —
+ * With `captureDrain`, a live capture-sourced runtime (or one whose source cannot be read) is
+ * drained first (`capture-drain.ts`): the runtime is torn down only once the daemon confirms its
+ * final flush complete, or once its daemon is silent AND the runtime reports the executor ended
+ * (nothing left to save). Otherwise the call returns `draining` / `kept` and writes nothing —
  * the reaper's next tick (a stored "stopped" workspace is `stranded` to it; a replaced run is
  * `superseded`) comes back and finishes the stop.
  */
@@ -199,21 +214,50 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       );
     }
 
+    const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
+    const state = yield* runtimeState(adapter, resourceId);
+    const ended = state !== "running";
+    const drain = options.captureDrain;
+    const captureSourced =
+      drain === undefined ? false : yield* isCaptureSourcedRun(options.runId, instance.sourceKind);
+    const drainedBefore =
+      drain === undefined || !captureSourced ? undefined : yield* drain.ledger.peek(options.runId);
+
+    // An executor that ended after a drain reached its daemon and was never told its work is
+    // saved exited on purpose with its staging on disk (sealantd exits 75 after an incomplete
+    // final flush). Removing the runtime would destroy the only copy: keep it.
+    if (
+      drain !== undefined &&
+      state === "exited" &&
+      drainedBefore !== undefined &&
+      finalWasAnswered(drainedBefore)
+    ) {
+      yield* Effect.logError(
+        `Workspace stop (${drain.label}): run ${options.runId} ended after a final flush that was not confirmed complete: not saved · executor exited · kept. Its disk keeps the staged captures; the runtime is left in place.`,
+      );
+      return stopOutcome("kept");
+    }
+
     // LAST CHANCE to read rotated session credentials out of the container: the official CLIs
     // refresh claude/codex session files in-place, and an interactive/PTY workspace may never run
-    // another exec job to sync them. Best-effort by construction (the helper never fails), and it
-    // must run BEFORE the adapter destroys the runtime. Any adapter whose instance this worker can
-    // address takes part; an unaddressable one (e.g. Kubernetes without client TLS) is skipped —
-    // and so is a runtime the adapter already reports ended: there is nothing left to read, and
-    // dialling a dead Pod's Service only burns the connect timeout, several times over.
-    const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
-    const ended = yield* runtimeAlreadyEnded(adapter, resourceId);
+    // another exec job to sync them. Best-effort by construction (the helper never fails). It
+    // runs BEFORE the drain: after a FINAL flush the daemon refuses exec for good, so a sync-back
+    // after it would read nothing — and so it is skipped once a drain has reached the daemon. An
+    // unaddressable runtime (e.g. Kubernetes without client TLS) is skipped, and so is one the
+    // adapter already reports ended: dialling a dead Pod's Service only burns the timeout.
+    if (target !== undefined && !ended && drainedBefore?.lastProgressAt === undefined) {
+      yield* syncBackWorkspaceCredentials({
+        attemptId: options.runId,
+        target,
+        launchCredentialInjections: instance.launchCredentialInjections ?? [],
+        credentialCipher: options.credentialCipher,
+      });
+    }
 
     // No loss of work product: a live capture-sourced runtime holds captures nowhere else until
-    // its queue is empty. Drain first; a queue still moving defers the stop, a stalled one keeps
-    // the workspace. Nothing below runs unless the drain permits it.
-    const drain = options.captureDrain;
-    if (drain !== undefined && !ended && (yield* isCaptureSourcedRun(options.runId))) {
+    // the daemon confirms them saved. Drain first; a queue still moving defers the stop, one that
+    // cannot be confirmed keeps the workspace. Nothing below runs unless the drain permits it.
+    if (drain !== undefined && !ended && captureSourced) {
       if (target === undefined) {
         // Nothing here can see the queue, and the runtime says the executor is up: keep it.
         yield* Effect.logError(
@@ -224,15 +268,17 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         const outcome = yield* drainCaptureBeforeStop({
           runId: options.runId,
           target,
-          tracker: drain.tracker,
+          ledger: drain.ledger,
           settings: drain.settings,
           budgetMs: drain.budgetMs,
           label: drain.label,
-          runtimeEnded: runtimeAlreadyEnded(adapter, resourceId),
+          runtimeState: runtimeState(adapter, resourceId),
         });
         if (!drainPermitsStop(outcome)) {
           return stopOutcome(
-            outcome.kind === "stalled" || outcome.kind === "silent"
+            outcome.kind === "stalled" ||
+              outcome.kind === "silent" ||
+              outcome.kind === "unconfirmed"
               ? "kept"
               : outcome.kind === "busy"
                 ? "busy"
@@ -240,15 +286,6 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           );
         }
       }
-    }
-
-    if (target !== undefined && !ended) {
-      yield* syncBackWorkspaceCredentials({
-        attemptId: options.runId,
-        target,
-        launchCredentialInjections: instance.launchCredentialInjections ?? [],
-        credentialCipher: options.credentialCipher,
-      });
     }
 
     yield* Effect.tryPromise({
@@ -274,7 +311,6 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     .pipe(Effect.mapError(toWorkspaceStopProcessingError));
 
   yield* settleWorkspaceRow;
-  options.captureDrain?.tracker.forget(options.runId);
   return stopOutcome("stopped");
 });
 

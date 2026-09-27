@@ -40,6 +40,11 @@ import {
 } from "../../sealantd/runtime.js";
 import { buildCredentialFileWriteScript } from "../credential-files.js";
 import { buildDotfilesArchiveManifest, hasDotfilesArchives } from "../launch-material.js";
+import {
+  completeReadyLaunch,
+  type RuntimeAdapterLaunchHooks,
+  type RuntimeLaunchIdentity,
+} from "../launch-retention.js";
 import { DOTFILES_ARCHIVE_MOUNT_PATH, collectMountIntents } from "../mount-intent.js";
 import {
   parseRuntimeAdapterLaunchInput,
@@ -416,6 +421,24 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     return out;
   }
 
+  /**
+   * Everything a launch of `runId` would have recorded about its Pod (names are deterministic):
+   * what lets a Pod whose runtime row was never written be recorded, drained and stopped.
+   */
+  launchIdentityFor(runId: string): RuntimeLaunchIdentity {
+    const names = workspaceResourceNames(runId);
+    return {
+      adapter: this.id,
+      resourceId: names.pod,
+      reference: names.pod,
+      endpoint: workspaceControlEndpoint(
+        names.service,
+        this.#config.namespace,
+        this.#config.controlPort,
+      ),
+    };
+  }
+
   /** Run ids only; see `listManagedWorkspaces`. */
   async listManagedRunIds(): Promise<readonly string[]> {
     return [...new Set((await this.listManagedWorkspaces()).map((entry) => entry.runId))];
@@ -563,7 +586,10 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     };
   }
 
-  async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
+  async launch(
+    input: RuntimeAdapterLaunchInput,
+    hooks?: RuntimeAdapterLaunchHooks,
+  ): Promise<RuntimeAdapterLaunchResult> {
     const parsed = parseRuntimeAdapterLaunchInput(input);
     const support = this.supports({ blueprint: parsed.blueprint });
     if (!support.supported) {
@@ -734,26 +760,35 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     try {
       await this.#awaitRunning(names.pod, runId);
       await this.#awaitHealthy(target, names.pod);
-      if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
-        await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
-      }
     } catch (error) {
       await this.#deleteAll(names).catch(() => undefined);
       throw error;
     }
 
-    // The daemon consumed env.json and the dotfiles at boot; nothing may still need the Secret.
-    if (launchSecret !== undefined) {
-      await this.#api.deleteSecret(names.launchSecret);
-    }
-
-    return {
-      adapter: this.id,
-      resourceId: names.pod,
-      reference: names.pod,
-      status: "ready",
-      endpoint,
-    };
+    // The daemon answers: a writer can run in the Pod from here. A capture-sourced launch that
+    // fails past this point keeps the Pod (`launch-retention.ts`); anything else is deleted.
+    return completeReadyLaunch({
+      blueprint: parsed.blueprint,
+      identity: { adapter: this.id, resourceId: names.pod, reference: names.pod, endpoint },
+      hooks,
+      steps: async () => {
+        if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
+          await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
+        }
+        // The daemon consumed env.json and the dotfiles at boot; nothing may still need the Secret.
+        if (launchSecret !== undefined) {
+          await this.#api.deleteSecret(names.launchSecret);
+        }
+        return {
+          adapter: this.id,
+          resourceId: names.pod,
+          reference: names.pod,
+          status: "ready" as const,
+          endpoint,
+        };
+      },
+      cleanup: () => this.#deleteAll(names),
+    });
   }
 
   async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {

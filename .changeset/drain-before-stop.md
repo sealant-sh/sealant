@@ -18,23 +18,18 @@ the registrar turned away for the session's byte quota. Non-empty `refused` mean
 being saved. The flush reply carries `refused` too. `pendingBytes` and `pendingBulk` are reserved
 and absent until sealantd reports them. The SDK reads a missing `refused` as nothing refused.
 
-`workspace.stop()` now resolves a `WorkspaceStopResult`. `{ state: "stopped" }` means the runtime is
-gone. If the runtime is still up after a minute and the workspace's capture queue answers, it
-resolves `{ state: "draining", capture }` instead of throwing: the server is shipping unsaved
-captures before it removes the runtime, and a queue that stops moving keeps the workspace running
-rather than lose its work. Follow it with `capture.status()`, or call `stop()` again, which is
-idempotent. `workspace_stop_timeout` is thrown only when neither a stop nor a drain can be observed.
-Callers that ignored the old `void` result are unaffected.
+`workspace.stop()` now resolves a `WorkspaceStopResult` (see the drain-ownership changeset for its
+states). Callers that ignored the old `void` result are unaffected.
 
-`workspace.ready()` on a handle `workspaces.create()` made stops the workspace before it throws
-`workspace_ready_timeout`, so a launch nobody will use no longer runs to the platform's lifetime
-cap. The error says whether the stop was accepted.
+`workspace.ready()` on a handle `workspaces.create()` made requests a stop before it throws
+`workspace_ready_timeout`, so a launch nobody will use does not run to the platform's lifetime cap.
+The error says whether the stop request was accepted.
 
 Server-side (the packages ride the release train): no platform-initiated stop loses a
-capture-sourced workspace's unsaved work. The worker flushes the workspace's sealantd and polls its
-capture queue until it is empty before a lifecycle stop, and before the expired, stranded,
-superseded and orphaned reapers tear a runtime down. A queue still moving defers the stop to the
-next sweep. The workspace is kept running, and every sweep asks again, when:
+capture-sourced workspace's unsaved work. The worker drains the workspace's sealantd before a
+lifecycle stop, and before the expired, stranded, superseded and orphaned reapers tear a runtime
+down (what counts as drained: see the drain-ownership changeset). A queue still moving defers the
+stop to the next sweep. The workspace is kept running, and every sweep asks again, when:
 
 - the daemon answers but its queue does not move for `WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` (10
   min), logged `not saved · kept`;
@@ -42,10 +37,10 @@ next sweep. The workspace is kept running, and every sweep asks again, when:
 - the daemon is silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` (5 min) while the runtime
   reports the executor running, logged `not saved · daemon silent · kept`.
 
-Only a runtime that reports the executor ended (exited or gone) lets a stop proceed without an empty
-queue: there is nothing left to save. The exit reconciler asks the daemon before it records an exit,
-and drains a runtime whose daemon still answers. A MicroVM whose guest Docker failed while sealantd
-is up is reported and no longer terminated. A MicroVM ended at its lifetime cap is logged as an
-error. Docker stops send SIGTERM first (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`,
-default 120 s), so sealantd's final flush runs. Kubernetes workspace Pods get
-`terminationGracePeriodSeconds` from `SEALANT_K8S_TERMINATION_GRACE_SECONDS` (default 120, was 30).
+A runtime that reports the executor gone lets a stop proceed without a confirmed drain: there is
+nothing left to save. The exit reconciler asks the daemon before it records an exit, and drains a
+runtime whose daemon still answers. A MicroVM whose guest Docker failed while sealantd is up is
+reported and no longer terminated. A MicroVM ended at its lifetime cap is logged as an error. Docker
+stops send SIGTERM first (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`, default 120 s), so
+sealantd's final flush runs. Kubernetes workspace Pods get `terminationGracePeriodSeconds` from
+`SEALANT_K8S_TERMINATION_GRACE_SECONDS` (default 120, was 30).

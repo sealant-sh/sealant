@@ -123,6 +123,19 @@ describe("workspace.capture", () => {
     });
   });
 
+  it("status() carries the daemon's account of its final flush, and leaves it absent when unreported", async () => {
+    const reported = makeStub({
+      status: () => ({ ...STATUS, complete: false, incompleteReason: "ship-failed" }),
+    });
+    expect(await workspaceFor(reported.client).capture.status()).toMatchObject({
+      complete: false,
+      incompleteReason: "ship-failed",
+    });
+    // A daemon that predates the field: absent, which a caller reads as not complete.
+    const older = await workspaceFor(makeStub({}).client).capture.status();
+    expect("complete" in older).toBe(false);
+  });
+
   it("replan() posts the owner to the workspace's replan endpoint and maps the counts", async () => {
     const { client, calls } = makeStub({});
     const replanned = await workspaceFor(client).capture.replan();

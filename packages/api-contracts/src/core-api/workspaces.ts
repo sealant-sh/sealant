@@ -203,6 +203,18 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    */
   pendingBytes: Schema.optional(Schema.Number),
   pendingBulk: Schema.optional(Schema.Number),
+  /**
+   * The daemon's own account of its last FINAL flush: true only when it quiesced every managed
+   * process, snapshotted both capture classes and registered everything. The only proof that an
+   * executor may go away; `pending === 0` alone is not. Absent until sealantd reports it (read
+   * absent as not complete).
+   */
+  complete: Schema.optional(Schema.Boolean),
+  /**
+   * Why the last final flush is not complete (`not-final`, `processes-remain`,
+   * `snapshot-failed`, `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`).
+   */
+  incompleteReason: Schema.optional(Schema.String),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
@@ -315,6 +327,31 @@ export const workspaceSummarySchema = Schema.Struct({
 });
 export type WorkspaceSummary = typeof workspaceSummarySchema.Type;
 
+/**
+ * What the control plane last OBSERVED of a capture-sourced workspace's drain — the FINAL flush
+ * and queue polling every platform stop runs before it removes the runtime. A stop request is
+ * not a stop: until the runtime is gone, this is what is happening.
+ *
+ *  - `draining`: the queue is still moving; the stop continues on the server.
+ *  - `kept`: nothing will stop the runtime — the work is not confirmed saved (the queue stalled,
+ *    a class was refused, the daemon is silent while the executor runs, or the daemon did not
+ *    report its final flush complete). `detail` says which.
+ *  - `saved`: the daemon reported its final flush complete; the runtime is being removed.
+ *  - `gone`: the daemon is silent and the runtime reports the executor ended.
+ *
+ * `preservationStartsAt` is when the control plane starts that drain on its own ahead of the
+ * runtime's deadline (`runtime.deadline`), once it has planned one.
+ */
+export const workspaceCaptureDrainSchema = Schema.Struct({
+  state: Schema.Literals(["draining", "kept", "saved", "gone"]),
+  detail: Schema.optional(Schema.String),
+  /** ISO-8601: when this was observed. */
+  observedAt: Schema.optional(Schema.String),
+  /** ISO-8601: when the deadline sweep starts (or started) the final drain. */
+  preservationStartsAt: Schema.optional(Schema.String),
+});
+export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
+
 export const workspaceDetailsSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
@@ -332,6 +369,11 @@ export const workspaceDetailsSchema = Schema.Struct({
   finishedAt: Schema.optional(Schema.String),
   expiresAt: Schema.optional(Schema.String),
   spec: Schema.optional(Schema.Unknown),
+  /**
+   * The current runtime's capture drain as last observed (see `workspaceCaptureDrainSchema`).
+   * Absent while no drain or preservation schedule exists, and from older control planes.
+   */
+  captureDrain: Schema.optional(workspaceCaptureDrainSchema),
 });
 export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
 

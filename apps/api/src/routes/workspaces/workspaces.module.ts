@@ -40,6 +40,7 @@ import {
   type StopWorkspaceRequest,
   type StopWorkspaceResponse,
   type WorkspaceAttemptSummary,
+  type WorkspaceCaptureDrain,
   type WorkspaceDetails,
   type WorkspaceEvent,
   type WorkspaceEventType,
@@ -65,9 +66,11 @@ import {
   RunRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
+  WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
+  type WorkspaceCaptureDrain as WorkspaceCaptureDrainRecord,
 } from "@sealant/db";
 import {
   GitHubSourceIntegrationService,
@@ -1782,8 +1785,12 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       workspaceRuntimeInstanceRepo.getRuntimeInstanceByRunId(workspace.latestRunId),
       "Failed to load workspace runtime instance.",
     );
+    const captureDrain = yield* withInternalError(
+      (yield* WorkspaceCaptureDrainRepo).getByRunId(workspace.latestRunId),
+      "Failed to load workspace capture drain.",
+    );
 
-    return mapWorkspaceDetails(
+    const details = mapWorkspaceDetails(
       workspace,
       attempt,
       latestJob,
@@ -1791,7 +1798,29 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       attemptSnapshot,
       sshGatewayConfig,
     );
+    const observed = mapWorkspaceCaptureDrain(captureDrain);
+    return observed === undefined ? details : { ...details, captureDrain: observed };
   });
+};
+
+/**
+ * The drain as last observed, for `WorkspaceDetails.captureDrain`: only what the worker
+ * recorded (a state it observed, a schedule it planned), never an inference from a stop request.
+ */
+export const mapWorkspaceCaptureDrain = (
+  row: WorkspaceCaptureDrainRecord | undefined,
+): WorkspaceCaptureDrain | undefined => {
+  if (row === undefined || row.state === null) {
+    return undefined;
+  }
+  return {
+    state: row.state,
+    ...(row.detail === null ? {} : { detail: row.detail }),
+    ...(row.observedAt === null ? {} : { observedAt: row.observedAt.toISOString() }),
+    ...(row.preservationStartsAt === null
+      ? {}
+      : { preservationStartsAt: row.preservationStartsAt.toISOString() }),
+  };
 };
 
 export const getWorkspaceSshTarget = (input: {

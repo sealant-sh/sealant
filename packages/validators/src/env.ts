@@ -527,6 +527,16 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS: z.coerce.number().int().positive().default(600000),
   WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS: z.coerce.number().int().positive().default(300000),
+  // How long one worker's claim on a run's drain lasts without renewal (every poll renews it). A
+  // worker that dies mid-drain loses the run to any worker's next sweep after this.
+  WORKSPACE_CAPTURE_DRAIN_LEASE_MS: z.coerce.number().int().positive().default(180000),
+  // Preservation before a runtime's own deadline (a Lambda MicroVM's maximum duration): the final
+  // drain and a planned stop start this long before the deadline, plus an estimate of the upload
+  // still to do (pending bytes over observed throughput) once the daemon reports it. The sweep
+  // samples throughput from `lead + watch` before the deadline, every sweep interval.
+  WORKSPACE_CAPTURE_DEADLINE_LEAD_MS: z.coerce.number().int().positive().default(900000),
+  WORKSPACE_CAPTURE_DEADLINE_WATCH_MS: z.coerce.number().int().positive().default(3600000),
+  WORKSPACE_CAPTURE_DEADLINE_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
   // How long a planned Docker stop waits after SIGTERM (`docker stop -t`) before the kill, so
   // sealantd's final capture flush can ship.
   SEALANT_DOCKER_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(120),

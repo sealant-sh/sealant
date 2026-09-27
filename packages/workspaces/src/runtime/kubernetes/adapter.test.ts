@@ -7,6 +7,7 @@ import type { V1Pod, V1PodStatus } from "@kubernetes/client-node";
 import { describe, expect, it, vi } from "vitest";
 
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
+import { LaunchRetainedError } from "../launch-retention.js";
 import type { RuntimeAdapterLaunchInput } from "../runtime-adapter.js";
 import { KubernetesRuntimeAdapter, supportForKubernetes, type ControlChannel } from "./adapter.js";
 import { kubernetesRuntimeConfigSchema, type KubernetesRuntimeConfig } from "./config.js";
@@ -230,6 +231,51 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(result.status).toBe("ready");
     expect(cluster.log.filter((line) => line === `delete pod ${names.pod}`).length).toBe(1);
     expect(cluster.pods.get(names.pod)?.status).toBeUndefined();
+  });
+
+  it("keeps a capture Pod whose credential write fails after the daemon answered", async () => {
+    const cluster = fakeCluster();
+    const channel = controlChannel();
+    channel.writeCredentialFiles.mockRejectedValueOnce(new Error("write exploded"));
+    const adapter = adapterFor(cluster, channel);
+    const onReady = vi.fn(async () => undefined);
+
+    const failure = await adapter
+      .launch(
+        {
+          ...cases.capture,
+          secretEnvDir: undefined,
+          credentialFiles: [{ path: "$HOME/.codex/auth.json", contentBase64: "e30=", mode: "600" }],
+        },
+        { onReady },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    const names = workspaceResourceNames(cases.capture.runId ?? "");
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      identity: {
+        adapter: "k8s",
+        resourceId: names.pod,
+        endpoint: `wss://${names.service}.ns.svc:7443/control`,
+      },
+    });
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(cluster.pods.has(names.pod)).toBe(true);
+    expect(cluster.log).not.toContain(`delete pod ${names.pod}`);
+  });
+
+  it("still deletes a git Pod whose credential write fails after readiness", async () => {
+    const cluster = fakeCluster();
+    const channel = controlChannel();
+    channel.writeCredentialFiles.mockRejectedValueOnce(new Error("write exploded"));
+    await expect(adapterFor(cluster, channel).launch(launchInput)).rejects.toThrow(
+      /write exploded/,
+    );
+    expect(cluster.pods.size).toBe(0);
   });
 
   it("fails readably when the Pod dies before readiness and cleans up", async () => {

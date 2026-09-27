@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   CredentialCipher,
   credentialCipherLayer,
@@ -11,7 +13,7 @@ import {
   consumeRunExecJobs,
   consumeWorkspaceBuildJobs,
   consumeWorkspaceLifecycleJobs,
-  CaptureDrainTracker,
+  databaseCaptureDrainLedger,
   DEFAULT_CAPTURE_DRAIN_SETTINGS,
   createKubernetesLaunchMaterialStager,
   createLiveKubernetesApi,
@@ -33,6 +35,7 @@ import {
   createS3MicrovmArtifactStore,
   microvmRuntimeConfigFromEnv,
   parseDockerVolumeMappings,
+  preserveBeforeDeadline,
   processWorkspaceBuildJob,
   processWorkspaceStop,
   reapExpiredWorkspaces,
@@ -279,16 +282,23 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   ];
   const runtimeAdapters = runtimes.map((runtime) => runtime.adapter);
 
-  // Drain before stop (no loss of work product): one tracker per worker process, shared by every
-  // path that can tear a capture-sourced runtime down (lifecycle stop, reapers, exit reconciler),
-  // so a drain spans ticks and never runs twice at once.
-  const captureDrainTracker = new CaptureDrainTracker();
+  // Drain before stop (no loss of work product): one durable ledger (`workspace_capture_drains`)
+  // shared by every path that can tear a capture-sourced runtime down (lifecycle stop, reapers,
+  // exit reconciler, deadline sweep) in every worker process, so a drain spans ticks and workers
+  // and never runs twice at once. The owner is this process: a restarted worker waits out its
+  // predecessor's lease rather than share a drain with it.
   const captureDrainSettings: CaptureDrainSettings = {
     ...DEFAULT_CAPTURE_DRAIN_SETTINGS,
     pollIntervalMs: env.WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS,
     stallWindowMs: env.WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS,
     unreachableWindowMs: env.WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS,
+    leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
   };
+  const captureDrainLedger = databaseCaptureDrainLedger({
+    db,
+    owner: `${env.WORKER_ID}:${String(process.pid)}:${randomUUID()}`,
+    leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
+  });
 
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
@@ -362,7 +372,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           targetOptions,
           ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
           captureDrain: {
-            tracker: captureDrainTracker,
+            ledger: captureDrainLedger,
             settings: captureDrainSettings,
             budgetMs: LIFECYCLE_STOP_DRAIN_BUDGET_MS,
             label: "lifecycle stop",
@@ -371,11 +381,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         if (outcome !== "stopped") {
           // The stop intent is durable (a stopped workspace is `stranded` to the reaper, a
           // replaced run `superseded`): the reaper finishes the drain and the stop.
-          console.warn("Workspace stop deferred to the reaper: capture queue not yet empty", {
-            workspaceId: message.workspaceId,
-            runId: message.runId,
-            outcome,
-          });
+          console.warn(
+            "Workspace stop deferred to the reaper: capture work not yet confirmed saved",
+            {
+              workspaceId: message.workspaceId,
+              runId: message.runId,
+              outcome,
+            },
+          );
         }
       } catch (error) {
         console.error("Workspace stop failed", {
@@ -430,7 +443,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       runtimeAdapters,
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
       targetOptions,
-      captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
+      captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Workspace expiry reaper tick failed", { error });
     });
@@ -440,6 +453,29 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     env.WORKSPACE_EXPIRY_REAPER_INTERVAL_MS,
   );
   expiryReaperTimer.unref();
+
+  // Deadline preservation: a runtime with its own lifetime (a MicroVM's maximum duration) gets
+  // its final drain and a planned stop early enough to finish before the platform ends it.
+  const runDeadlineSweepTick = (): void => {
+    preserveBeforeDeadline({
+      db,
+      runtimeAdapters,
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      targetOptions,
+      captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
+      deadline: {
+        leadMs: env.WORKSPACE_CAPTURE_DEADLINE_LEAD_MS,
+        watchWindowMs: env.WORKSPACE_CAPTURE_DEADLINE_WATCH_MS,
+      },
+    }).catch((error: unknown) => {
+      console.error("Workspace deadline preservation tick failed", { error });
+    });
+  };
+  const deadlineSweepTimer = setInterval(
+    runDeadlineSweepTick,
+    env.WORKSPACE_CAPTURE_DEADLINE_SWEEP_INTERVAL_MS,
+  );
+  deadlineSweepTimer.unref();
 
   // Exit reconciler: a runtime that dies on its own (`docker kill`, OOM, node loss) is recorded
   // `failed` with its exit code instead of staying `ready` until a client probes it. Docker
@@ -452,7 +488,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       runtimeAdapters,
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
       targetOptions,
-      captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
+      captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     }).catch((error: unknown) => {
       console.error("Runtime exit reconciler tick failed", { error });
     });
@@ -468,7 +504,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     runtimeAdapters,
     ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
     targetOptions,
-    captureDrain: { tracker: captureDrainTracker, settings: captureDrainSettings },
+    captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     onError: (error: unknown) => {
       console.error("Runtime exit watch failed; reconnecting", { error });
     },
@@ -535,6 +571,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     stop: async () => {
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
+      clearInterval(deadlineSweepTimer);
       clearInterval(exitReconcilerTimer);
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);

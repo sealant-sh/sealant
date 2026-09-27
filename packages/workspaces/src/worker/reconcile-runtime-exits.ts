@@ -26,12 +26,15 @@
  * the API's intent anchor (`stopped`, `queued`), not the reported status.
  *
  * **No loss of work product.** A capture-sourced runtime (sealantd ADR-0015) holds captures
- * nowhere else until its queue is empty. With `captureDrain`, before an exit is recorded the
- * reconciler asks the daemon one `capture.status`: a daemon that does not answer is the crash the
- * runtime reported, and the exit is recorded as before; a daemon that answers means the runtime is
- * not dead, so it is drained first (`capture-drain.ts`) and the exit recorded and the remains
- * removed only once the queue is empty. A queue still moving is revisited next sweep; a stalled
- * one is left untouched and logged `not saved · kept`. A runtime reported `running` with a
+ * nowhere else until the daemon confirms them saved. With `captureDrain`, before an exit is
+ * recorded the reconciler asks the daemon one `capture.status`: a daemon that does not answer is
+ * the crash the runtime reported, and the exit is recorded as before — unless a drain already
+ * reached that daemon and was never told its work is saved: then the executor exited on purpose
+ * with its staging on disk, and the exit is recorded but the remains are kept. A daemon that
+ * answers means the runtime is not dead, so it is drained first (`capture-drain.ts`) and the exit
+ * recorded and the remains removed only once its final flush is confirmed complete. A queue still
+ * moving is revisited next sweep; one that cannot be confirmed is left untouched (`not saved ·
+ * kept`). A runtime reported `running` with a
  * `detail` (a guest service failed, the executor survived) is reported, never removed.
  */
 import {
@@ -54,7 +57,7 @@ import type {
   RuntimeAdapterExitWatch,
   RuntimeAdapterInspectResult,
 } from "../runtime/runtime-adapter.js";
-import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
+import { SealantRuntimeControlLive, type SealantRuntime } from "../sealantd/runtime.js";
 import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
@@ -63,9 +66,10 @@ import {
   captureDaemonAnswers,
   drainCaptureBeforeStop,
   drainPermitsStop,
-  isCaptureSourcedBlueprint,
+  finalWasAnswered,
+  runIsCaptureSourced,
+  type CaptureDrainLedger,
   type CaptureDrainSettings,
-  type CaptureDrainTracker,
 } from "./capture-drain.js";
 
 export interface ReconcileRuntimeExitsEffectOptions {
@@ -81,7 +85,7 @@ export interface ReconcileRuntimeExitsEffectOptions {
    * removing it. Absent = record and remove at once (the pre-drain behaviour).
    */
   readonly captureDrain?: {
-    readonly tracker: CaptureDrainTracker;
+    readonly ledger: CaptureDrainLedger;
     readonly settings: CaptureDrainSettings;
     /** How long one sweep may wait on one runtime's queue before moving on. */
     readonly budgetMs?: number;
@@ -195,8 +199,8 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
 
-      const drained = yield* drainBeforeRecording(options, instance, adapter);
-      if (!drained) {
+      const verdict = yield* drainBeforeRecording(options, instance, adapter);
+      if (verdict === "leave") {
         continue;
       }
       yield* reportHardCap(instance, inspection);
@@ -228,6 +232,16 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         }; recorded failed.`,
       );
 
+      if (verdict === "record-keep-remains") {
+        // The executor ended after a drain reached its daemon and was never told its work is
+        // saved: its disk holds the staged captures (sealantd exits 75 after an incomplete final
+        // flush). The exit is recorded; the remains are NOT removed.
+        yield* Effect.logError(
+          `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended after a final flush that was not confirmed complete: not saved · executor exited · kept. Its remains are left in place; remove them only once its captures are recovered.`,
+        );
+        continue;
+      }
+
       // The remains: an exited container keeps its filesystem and any sidecar; a dead Pod keeps
       // its Service and Secrets. The adapter stop is idempotent (`not-found` = already gone).
       yield* Effect.tryPromise(() =>
@@ -239,7 +253,6 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       yield* Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
         swallowingFailure("removing staged launch material", instance.runId),
       );
-      options.captureDrain?.tracker.forget(instance.runId);
     }
   }
 
@@ -247,32 +260,47 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 });
 
 /**
- * Before an exit is recorded: whether the reconciler may go ahead. True for everything that is not
- * a capture-sourced runtime whose daemon still answers; for one that does, true only once its
- * capture queue drained. Never fails — a failed read of the blueprint leaves the instance alone
- * this sweep.
+ * Before an exit is recorded: `record` (go ahead: record and remove the remains), `leave` (touch
+ * nothing this sweep), or `record-keep-remains` (record the exit, keep the remains). Everything
+ * that is not a capture-sourced runtime is `record`. For a capture-sourced one (or one whose
+ * source cannot be read): a daemon that still answers is drained first, and `record` only once
+ * its work is confirmed saved; a daemon that does not answer is the crash the runtime reported
+ * (`record`) — unless a drain already reached it and was never told its work is saved, when the
+ * executor exited on purpose with its staging on disk (`record-keep-remains`, or `leave` while
+ * its runtime still reports it). Never fails — a failed read leaves the instance alone.
  */
 const drainBeforeRecording = (
   options: ReconcileRuntimeExitsEffectOptions,
   instance: WorkspaceRuntimeInstance,
   adapter: RuntimeAdapter,
-) =>
+): Effect.Effect<
+  "record" | "leave" | "record-keep-remains",
+  never,
+  WorkspaceAttemptRepo | SealantRuntime
+> =>
   Effect.gen(function* () {
     const drain = options.captureDrain;
     if (drain === undefined) {
-      return true;
+      return "record" as const;
     }
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
     if (target === undefined) {
-      return true;
+      return "record" as const;
     }
     const attempts = yield* WorkspaceAttemptRepo;
-    const snapshot = yield* attempts.getAttemptSnapshotByRunId(instance.runId);
-    if (snapshot === undefined || !isCaptureSourcedBlueprint(snapshot.blueprintPayload)) {
-      return true;
+    const captureSourced = yield* runIsCaptureSourced({
+      runId: instance.runId,
+      sourceKind: instance.sourceKind,
+      readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
+    });
+    if (!captureSourced) {
+      return "record" as const;
     }
     if (!(yield* captureDaemonAnswers(target, DAEMON_PROBE_TIMEOUT_MS))) {
-      return true;
+      const earlier = yield* drain.ledger.peek(instance.runId);
+      return earlier !== undefined && finalWasAnswered(earlier)
+        ? ("record-keep-remains" as const)
+        : ("record" as const);
     }
     yield* Effect.logWarning(
       `Runtime exit reconciler: ${adapter.id} reports run ${instance.runId} ended, but its sealantd still answers; draining its captures before anything is recorded or removed.`,
@@ -280,34 +308,34 @@ const drainBeforeRecording = (
     const outcome = yield* drainCaptureBeforeStop({
       runId: instance.runId,
       target,
-      tracker: drain.tracker,
+      ledger: drain.ledger,
       settings: drain.settings,
       budgetMs: drain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_SWEEP_MS,
       label: "exit reconciler",
-      runtimeEnded: runtimeReportsEnded(adapter, instance.resourceId ?? ""),
+      runtimeState: runtimeReportsState(adapter, instance.resourceId ?? ""),
     });
-    return drainPermitsStop(outcome);
+    return drainPermitsStop(outcome) ? ("record" as const) : ("leave" as const);
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(
         `Runtime exit reconciler: checking the capture queue of run ${instance.runId} failed; leaving it for the next sweep.`,
         cause,
-      ).pipe(Effect.as(false)),
+      ).pipe(Effect.as("leave" as const)),
     ),
   );
 
-/** A fresh `inspect`: true only on a positive exited/missing answer; unknown is false. */
-const runtimeReportsEnded = (
+/** A fresh `inspect`: exited or missing only on a positive answer; unknown is `running`. */
+const runtimeReportsState = (
   adapter: RuntimeAdapter,
   resourceId: string,
-): Effect.Effect<boolean> => {
+): Effect.Effect<"running" | "exited" | "missing"> => {
   const inspect = adapter.inspect;
   if (inspect === undefined) {
-    return Effect.succeed(false);
+    return Effect.succeed("running");
   }
   return Effect.tryPromise(() => inspect.call(adapter, { resourceId })).pipe(
-    Effect.map((result) => result.state !== "running"),
-    Effect.catchCause(() => Effect.succeed(false)),
+    Effect.map((result) => result.state),
+    Effect.catchCause(() => Effect.succeed("running" as const)),
   );
 };
 

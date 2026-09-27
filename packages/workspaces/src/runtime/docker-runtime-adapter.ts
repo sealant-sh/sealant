@@ -20,6 +20,11 @@ import {
   type ResolvedDockerVolumeMount,
 } from "./docker-volume-mounts.js";
 import {
+  LaunchRetainedError,
+  completeReadyLaunch,
+  type RuntimeAdapterLaunchHooks,
+} from "./launch-retention.js";
+import {
   bindRootMountPath,
   bindableMountsEnv,
   bindsEnv,
@@ -1561,7 +1566,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     });
   }
 
-  public async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
+  public async launch(
+    input: RuntimeAdapterLaunchInput,
+    hooks?: RuntimeAdapterLaunchHooks,
+  ): Promise<RuntimeAdapterLaunchResult> {
     const parsed = parseRuntimeAdapterLaunchInput(input);
     const support = this.supports({
       blueprint: parsed.blueprint,
@@ -1709,28 +1717,40 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         await this.awaitControlSocketReady(containerId, containerName);
       }
 
-      // Credential FILE injections happen only after the container is up (and, when verification is
-      // enabled, after the readiness wait): the write is a `docker exec` into the live container.
-      const credentialFiles = parsed.credentialFiles ?? [];
-      if (credentialFiles.length > 0) {
-        await this.writeCredentialFiles(containerId, containerName, credentialFiles);
-      }
-
       // The endpoint is the daemon control target used by every control-plane session, independent
       // of whether the workspace also allows SSH access. Persisting it is what lets API containers
       // without a Docker CLI connect through the bind-mounted host Unix socket.
       const endpoint = this.resolveControlEndpoint(containerId, containerName);
 
-      return parseRuntimeAdapterLaunchResult({
-        adapter: this.id,
-        resourceId: containerId,
-        reference: containerName,
-        // "ready" (not "running"): the readiness probe above proved the control socket accepts.
-        status: "ready",
-        endpoint,
+      // The daemon answers: from here a writer can run in the container. A capture-sourced
+      // launch that fails past this point keeps the container (`launch-retention.ts`).
+      return await completeReadyLaunch({
+        blueprint: parsed.blueprint,
+        identity: { adapter: this.id, resourceId: containerId, reference: containerName, endpoint },
+        hooks,
+        steps: async () => {
+          // Credential FILE injections happen only after the container is up (and, when
+          // verification is enabled, after the readiness wait): a `docker exec` into it.
+          const credentialFiles = parsed.credentialFiles ?? [];
+          if (credentialFiles.length > 0) {
+            await this.writeCredentialFiles(containerId, containerName, credentialFiles);
+          }
+          return parseRuntimeAdapterLaunchResult({
+            adapter: this.id,
+            resourceId: containerId,
+            reference: containerName,
+            // "ready" (not "running"): the readiness probe above proved the control socket accepts.
+            status: "ready",
+            endpoint,
+          });
+        },
+        // Not capture-sourced: the catch below removes what this launch created.
       });
     } catch (error) {
-      await this.cleanupFailedLaunch(containerName, acquisition, dockerService);
+      if (!(error instanceof LaunchRetainedError)) {
+        await this.cleanupFailedLaunch(containerName, acquisition, dockerService);
+      }
+      // A retained launch keeps the container (and its sidecar): it may hold the only copy of work.
       throw error;
     }
   }

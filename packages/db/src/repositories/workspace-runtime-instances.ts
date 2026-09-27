@@ -27,6 +27,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly finishedAt?: Date;
   /** The runtime's own lifetime deadline (MicroVM max duration); omit where it has none. */
   readonly runtimeDeadlineAt?: Date;
+  /** The blueprint's `sources.workspace.kind` (`capture`, `git`, …); see the column. */
+  readonly sourceKind?: string;
 }
 
 /** @deprecated Use WorkspaceRuntimeInstanceRepo + WorkspaceRuntimeInstanceRepoLive instead. */
@@ -43,6 +45,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
   "listRunningInstances",
+  "listRetainedLaunches",
   "markExited",
   "markStopped",
   "upsertRuntimeInstance",
@@ -111,6 +114,14 @@ export interface MarkWorkspaceRuntimeInstanceStoppedInput {
 /** `errorCode` written by `markExited`: the runtime ended without a stop request. */
 export const RUNTIME_EXITED_ERROR_CODE = "runtime-exited";
 
+/**
+ * `errorCode` of a launch that failed AFTER its capture-sourced runtime became ready (a writer
+ * could already have run): the runtime was kept, not removed, and its row carries the identity
+ * (`adapter`, `resourceId`, `reference`, `endpoint`) the retained-launch sweep drains it through
+ * before it is stopped. `markStopped` settles it like any other stop.
+ */
+export const LAUNCH_RETAINED_ERROR_CODE = "launch-retained";
+
 export interface MarkWorkspaceRuntimeInstanceExitedInput {
   readonly runId: string;
   /**
@@ -161,6 +172,14 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
+  /**
+   * Launches that failed after their capture-sourced runtime became ready and were kept
+   * (`failed` with `LAUNCH_RETAINED_ERROR_CODE`): each still holds a runtime to drain and stop.
+   */
+  readonly listRetainedLaunches: () => Effect.Effect<
+    readonly WorkspaceRuntimeInstance[],
+    WorkspaceRuntimeInstanceRepoError
+  >;
 }
 
 export class WorkspaceRuntimeInstanceRepo extends Context.Service<
@@ -194,6 +213,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.runtimeDeadlineAt === undefined
                 ? {}
                 : { runtimeDeadlineAt: input.runtimeDeadlineAt }),
+              ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
             };
 
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
@@ -351,6 +371,21 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             // "ready" = control channel accepting. The launch path no longer emits "running", so
             // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
             .where(eq(workspaceRuntimeInstances.status, "ready"))
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      listRetainedLaunches: () =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listRetainedLaunches",
+          db
+            .select()
+            .from(workspaceRuntimeInstances)
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.status, "failed"),
+                eq(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
+              ),
+            )
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;

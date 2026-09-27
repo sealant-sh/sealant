@@ -653,7 +653,11 @@ describe("microvm agent guest-local Docker", () => {
     });
     expect(await runV2(agent)).toMatchObject({ status: 200 });
     await writeFile(agent.readyFile, "ready");
-    expect(await launchV2(agent)).toMatchObject({ status: 200 });
+    // A capture-sourced launch: its hooks flush (a VM that boots no capture source has nothing to
+    // flush and answers without one).
+    expect(
+      await launchV2(agent, { bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture" } }),
+    ).toMatchObject({ status: 200 });
     await waitFor(async () => (await health(agent)).status === 200);
 
     const initialProbeCount = (await readLines(agent.probeRecord)).length;

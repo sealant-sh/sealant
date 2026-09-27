@@ -207,6 +207,50 @@ export interface CaptureFlushReport {
    * until the next epoch or `capture.replan`. Non-empty means work is NOT being saved.
    */
   readonly refused: readonly CaptureClassName[];
+  /**
+   * The agreed FINAL semantics (sealantd `capture.flush` kind FINAL): true only when the daemon
+   * quiesced every managed process, then snapshotted the small AND bulk classes, and registered
+   * everything. The ONLY proof a capture-sourced executor may go away: `pending === 0` alone is
+   * not (a daemon that never snapshotted bulk reports an empty queue). Absent from every daemon
+   * that predates the field, which a consumer reads as not complete.
+   */
+  readonly complete?: boolean | undefined;
+  /** Bytes staged on the executor that no upload has taken yet (sealantd `pending_bytes`). */
+  readonly pendingBytes?: number | undefined;
+  /** Of `pending`, the bulk captures still uploading (sealantd `pending_bulk`). */
+  readonly pendingBulk?: number | undefined;
+  /**
+   * Why the last final flush is not complete (sealantd `incomplete_reason`): `not-final`,
+   * `processes-remain`, `snapshot-failed`, `fenced`, `conflict`, `deadline`, `ship-failed`,
+   * `pending`, `internal`. Absent when complete, or from a daemon that predates it.
+   */
+  readonly incompleteReason?: string | undefined;
+}
+
+/**
+ * What a `capture.flush` asks for. `final`: this executor is ending — the daemon stops admitting
+ * processes, terminates and awaits every managed one, snapshots both classes, then ships until
+ * nothing is pending, and reports `complete`. `suspend`: today's meaning (checkpoint / handoff;
+ * processes keep running).
+ *
+ * After a final flush the daemon refuses exec, sessions, sftp, execution starts, binds and
+ * replans for good: the executor is never reused, and whatever must be read from it (credential
+ * sync-back) is read before.
+ *
+ * The pinned wire (`@sealant/runtime-protocol` 0.18.2) carries NO flush arguments: the request is
+ * sent as an empty message and the daemon runs its only flush, whatever `kind` says. The fields
+ * travel once the pin moves to the release with `CaptureFlushArgs { kind = 1, deadline_ms = 2,
+ * grace_ms = 3 }`.
+ */
+export interface CaptureFlushRequest {
+  readonly kind: "final" | "suspend";
+  /** How long the daemon may take (wire `deadline_ms`). */
+  readonly deadlineMs?: number;
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL (wire `grace_ms`),
+   * counted inside `deadlineMs`.
+   */
+  readonly graceMs?: number;
 }
 
 /** A capture class as the control plane names it (wire `CaptureClass`). */
@@ -232,7 +276,30 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
     const name = captureClassName(value);
     return name === undefined ? [] : [name];
   }),
+  // Fields a newer daemon reports. The pinned wire type does not declare them, so they are read
+  // structurally: a 0.18.2 message never carries them and they stay absent (complete = unknown).
+  ...optionalWireFields(report),
 });
+
+const wireCount = (value: unknown): number | undefined =>
+  typeof value === "bigint" || typeof value === "number" ? Number(value) : undefined;
+
+const optionalWireFields = (
+  report: object,
+): Pick<CaptureFlushReport, "complete" | "pendingBytes" | "pendingBulk" | "incompleteReason"> => {
+  const complete = "complete" in report ? report.complete : undefined;
+  const incompleteReason = "incompleteReason" in report ? report.incompleteReason : undefined;
+  const pendingBytes = "pendingBytes" in report ? report.pendingBytes : undefined;
+  const pendingBulk = "pendingBulk" in report ? report.pendingBulk : undefined;
+  return {
+    ...(typeof complete === "boolean" ? { complete } : {}),
+    ...(wireCount(pendingBytes) === undefined ? {} : { pendingBytes: wireCount(pendingBytes) }),
+    ...(wireCount(pendingBulk) === undefined ? {} : { pendingBulk: wireCount(pendingBulk) }),
+    ...(typeof incompleteReason === "string" && incompleteReason.length > 0
+      ? { incompleteReason }
+      : {}),
+  };
+};
 
 /**
  * The daemon's answer to `capture.replan` (wire `CaptureReplanned`), with JSON-safe numbers: the
@@ -746,11 +813,14 @@ export interface SealantSession {
    */
   readonly bindMount: (mountPath: string, subpath: string) => Effect.Effect<void, SealantError>;
   /**
-   * Final capture, then ship and register everything staged (sealantd ADR-0015 `capture.flush`,
-   * the suspend/terminate hook). Bounded by the daemon's shutdown grace; only answers on a
-   * capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
+   * Capture, then ship and register everything staged (sealantd ADR-0015 `capture.flush`, the
+   * suspend/terminate hook). `request.kind` says whether the executor is ending (`final`) or not
+   * (`suspend`, the default); see `CaptureFlushRequest` for what the pinned wire sends. Only
+   * answers on a capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
    */
-  readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
+  readonly captureFlush: (
+    request?: CaptureFlushRequest,
+  ) => Effect.Effect<CaptureFlushReport, SealantError>;
   /**
    * The daemon's capture status (`capture.status`) without flushing: what a drain polls between
    * flushes to see the queue empty (`pending === 0`) or stop moving. Only answers on a
@@ -993,7 +1063,9 @@ const makeSession = (client: SealantClient): SealantSession => ({
       "bindMount",
       Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
     ),
-  captureFlush: () =>
+  // `_request` is not on the pinned wire (0.18.2 `capture_flush` is `Empty`); when the pin moves
+  // to the release with `CaptureFlushArgs`, this sends `{ kind, deadlineMs }` in `value`.
+  captureFlush: (_request) =>
     withSealantError(
       "captureFlush",
       Effect.tryPromise(async () => {

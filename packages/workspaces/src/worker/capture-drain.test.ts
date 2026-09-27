@@ -1,21 +1,27 @@
 /**
  * The drain primitive every platform-initiated stop runs first. The properties that matter: a
- * stop proceeds only on an empty queue, or a daemon silent for the window on an executor the
- * runtime reports ended; a silent daemon on a running executor is kept; a queue still moving defers; a daemon that answers without moving is kept; progress and
- * the stall window carry across calls; overlapping drains of one run are refused.
+ * stop proceeds only when the daemon confirms its FINAL flush `complete`, or a daemon silent for
+ * the window on an executor the runtime reports ended; an empty queue without that confirmation
+ * is kept; a silent daemon on a running executor is kept; a queue still moving defers; a daemon
+ * that answers without moving is kept; progress and the stall window carry across calls AND
+ * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
-import { captureStatus, fakeCaptureDaemon } from "./capture-daemon.fixture.js";
+import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import {
-  CaptureDrainTracker,
+  InMemoryCaptureDrainStore,
+  blueprintSourceKind,
   captureDaemonAnswers,
   captureProgressed,
   drainCaptureBeforeStop,
   drainPermitsStop,
+  inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
+  runIsCaptureSourced,
+  type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
 
@@ -30,140 +36,282 @@ const FAST: CaptureDrainSettings = {
 
 const drain = (
   daemon: ReturnType<typeof fakeCaptureDaemon>,
-  tracker: CaptureDrainTracker,
+  ledger: CaptureDrainLedger,
   budgetMs = 1_000,
   settings: CaptureDrainSettings = FAST,
-  runtimeEnded = false,
+  runtimeState: "running" | "exited" | "missing" = "running",
 ) =>
   Effect.runPromise(
     drainCaptureBeforeStop({
       runId: "run_1",
       target: TARGET,
-      tracker,
+      ledger,
       settings,
       budgetMs,
       label: "test",
-      runtimeEnded: Effect.succeed(runtimeEnded),
+      runtimeState: Effect.succeed(runtimeState),
     }).pipe(Effect.provide(daemon.layer)),
   );
 
 describe("drainCaptureBeforeStop", () => {
-  it("flushes once, then polls status until the queue is empty", async () => {
+  it("sends a FINAL flush, then polls status until the daemon confirms the flush complete", async () => {
     const daemon = fakeCaptureDaemon([
       captureStatus({ pending: 3, uploadedBytes: 10 }),
       captureStatus({ pending: 2, uploadedBytes: 20 }),
-      captureStatus({ pending: 0, uploadedBytes: 30, registered: 3 }),
+      savedStatus({ uploadedBytes: 30, registered: 3 }),
     ]);
 
-    const outcome = await drain(daemon, new CaptureDrainTracker());
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
 
-    expect(outcome).toMatchObject({ kind: "drained", status: { pending: 0 } });
+    expect(outcome).toMatchObject({ kind: "drained", status: { pending: 0, complete: true } });
     expect(drainPermitsStop(outcome)).toBe(true);
     expect(daemon.calls).toEqual(["flush", "status", "status"]);
+    expect(daemon.flushRequests).toEqual([{ kind: "final", deadlineMs: FAST.requestTimeoutMs }]);
   });
 
-  it("returns drained at once when the queue is already empty", async () => {
-    const daemon = fakeCaptureDaemon([captureStatus()]);
-    const outcome = await drain(daemon, new CaptureDrainTracker());
+  it("returns drained at once when the final flush reports complete", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
     expect(outcome.kind).toBe("drained");
     expect(daemon.calls).toEqual(["flush"]);
+  });
+
+  it("keeps an empty queue whose daemon does not report completion (sealantd 0.18.2)", async () => {
+    // Every daemon up to the pinned 0.18.2: no `complete` field. Its empty queue can hide bulk
+    // it never snapshotted, so it is not taken as saved: one more FINAL flush, then kept.
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 0, registered: 4 })]);
+    const ledger = inMemoryCaptureDrainLedger();
+
+    const outcome = await drain(daemon, ledger);
+
+    expect(outcome).toMatchObject({ kind: "unconfirmed", status: { pending: 0 } });
+    expect(drainPermitsStop(outcome)).toBe(false);
+    expect(daemon.calls).toEqual(["flush", "flush"]);
+    expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
+    expect(ledger.store.rows.get("run_1")?.observation).toMatchObject({
+      state: "kept",
+      detail: expect.stringMatching(/^not saved · not confirmed/),
+    });
+  });
+
+  it("keeps an empty queue whose final flush the daemon reports incomplete", async () => {
+    const outcome = await drain(
+      fakeCaptureDaemon([captureStatus({ pending: 0, complete: false })]),
+      inMemoryCaptureDrainLedger(),
+    );
+    expect(outcome).toMatchObject({
+      kind: "unconfirmed",
+      detail: "the daemon reports its final flush incomplete",
+    });
+    expect(drainPermitsStop(outcome)).toBe(false);
+  });
+
+  it("flushes again when the queue empties after an incomplete flush, and then saves", async () => {
+    const daemon = fakeCaptureDaemon([
+      captureStatus({ pending: 2, complete: false }),
+      captureStatus({ pending: 0, complete: false, registered: 2 }),
+      savedStatus({ registered: 3 }),
+    ]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome.kind).toBe("drained");
+    expect(daemon.calls).toEqual(["flush", "status", "flush"]);
   });
 
   it("keeps a workspace whose daemon answers but whose queue does not move", async () => {
     const daemon = fakeCaptureDaemon([captureStatus({ pending: 4, uploadedBytes: 100 })]);
 
-    const outcome = await drain(daemon, new CaptureDrainTracker());
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
 
     expect(outcome).toMatchObject({ kind: "stalled", status: { pending: 4 } });
     expect(drainPermitsStop(outcome)).toBe(false);
   });
 
-  it("keeps a workspace whose registrar refused a capture class, even with an empty queue", async () => {
+  it("keeps a workspace whose registrar refused a capture class, even with a complete flush", async () => {
     const outcome = await drain(
-      fakeCaptureDaemon([captureStatus({ pending: 0, refused: ["bulk"] })]),
-      new CaptureDrainTracker(),
+      fakeCaptureDaemon([savedStatus({ refused: ["bulk"] })]),
+      inMemoryCaptureDrainLedger(),
     );
     expect(outcome).toMatchObject({ kind: "stalled", detail: "refused bulk" });
     expect(drainPermitsStop(outcome)).toBe(false);
   });
 
   it("keeps a workspace whose daemon refuses the capture commands", async () => {
-    const outcome = await drain(fakeCaptureDaemon(["refused"]), new CaptureDrainTracker());
+    const outcome = await drain(fakeCaptureDaemon(["refused"]), inMemoryCaptureDrainLedger());
     expect(outcome).toMatchObject({ kind: "stalled", detail: expect.stringMatching(/capture/) });
     expect(drainPermitsStop(outcome)).toBe(false);
   });
 
   it("defers while the queue is still moving and the budget is spent, carrying progress over", async () => {
-    const tracker = new CaptureDrainTracker();
+    const ledger = inMemoryCaptureDrainLedger();
     let uploaded = 0;
     const moving = Array.from({ length: 200 }, () => {
       uploaded += 100;
       return captureStatus({ pending: 5, uploadedBytes: uploaded });
     });
-    const first = await drain(fakeCaptureDaemon(moving), tracker, 5);
+    const first = await drain(fakeCaptureDaemon(moving), ledger, 5);
 
     expect(first.kind).toBe("pending");
     expect(drainPermitsStop(first)).toBe(false);
-    expect(tracker.runIds()).toEqual(["run_1"]);
+    expect(ledger.store.rows.get("run_1")?.observation?.state).toBe("draining");
 
-    // The next call (the reaper's next tick) finds it empty and lets the stop through.
-    const second = await drain(fakeCaptureDaemon([captureStatus({ pending: 0 })]), tracker);
+    // The next call (the reaper's next tick) finds it saved and lets the stop through.
+    const second = await drain(fakeCaptureDaemon([savedStatus()]), ledger);
     expect(second.kind).toBe("drained");
+    expect(ledger.store.rows.get("run_1")?.observation?.state).toBe("saved");
   });
 
   it("measures the stall window from the last progress, across calls", async () => {
-    const tracker = new CaptureDrainTracker();
+    const ledger = inMemoryCaptureDrainLedger();
     const stuck = captureStatus({ pending: 2, uploadedBytes: 50 });
     // First call: one answer, budget too short to see a stall.
-    expect((await drain(fakeCaptureDaemon([stuck]), tracker, 1)).kind).toBe("pending");
+    expect((await drain(fakeCaptureDaemon([stuck]), ledger, 1)).kind).toBe("pending");
     await new Promise((resolve) => setTimeout(resolve, 60));
     // Nothing moved since: the very first answer of the next call is already past the window.
     const daemon = fakeCaptureDaemon([stuck]);
-    expect((await drain(daemon, tracker, 1)).kind).toBe("stalled");
+    expect((await drain(daemon, ledger, 1)).kind).toBe("stalled");
     expect(daemon.calls).toEqual(["flush"]);
   });
 
   it("keeps a workspace whose daemon is silent while the runtime reports it running", async () => {
-    const tracker = new CaptureDrainTracker();
-    const outcome = await drain(fakeCaptureDaemon(["unreachable"]), tracker);
+    const ledger = inMemoryCaptureDrainLedger();
+    const outcome = await drain(fakeCaptureDaemon(["unreachable"]), ledger);
     expect(outcome.kind).toBe("silent");
     expect(drainPermitsStop(outcome)).toBe(false);
 
     // The next sweep asks again and, still silent past the window, answers at once.
     const daemon = fakeCaptureDaemon(["unreachable"]);
-    expect((await drain(daemon, tracker, 1_000)).kind).toBe("silent");
+    expect((await drain(daemon, ledger, 1_000)).kind).toBe("silent");
     expect(daemon.connect).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the stop through when the daemon is silent and the runtime reports the executor ended", async () => {
+  it("lets the stop through when the daemon never answered and the runtime reports the executor ended", async () => {
     const outcome = await drain(
       fakeCaptureDaemon(["unreachable"]),
-      new CaptureDrainTracker(),
+      inMemoryCaptureDrainLedger(),
       1_000,
       FAST,
-      true,
+      "exited",
     );
     expect(outcome.kind).toBe("gone");
     expect(drainPermitsStop(outcome)).toBe(true);
   });
 
+  it("keeps an executor that exited after answering a final flush it never confirmed complete", async () => {
+    // sealantd exits (75) after an incomplete final flush and keeps its staging on the disk. The
+    // container / Pod that ended still has that disk: removing it would destroy the only copy.
+    const ledger = inMemoryCaptureDrainLedger();
+    const first = await drain(
+      fakeCaptureDaemon([
+        captureStatus({ pending: 2, complete: false, incompleteReason: "ship-failed" }),
+      ]),
+      ledger,
+      1,
+    );
+    expect(first.kind).toBe("pending");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const exited = await drain(fakeCaptureDaemon(["unreachable"]), ledger, 1_000, FAST, "exited");
+    expect(exited).toMatchObject({
+      kind: "silent",
+      detail: expect.stringMatching(/not confirmed complete/),
+    });
+    expect(drainPermitsStop(exited)).toBe(false);
+
+    // Once the runtime reports nothing of it left, there is nothing to keep.
+    const missing = await drain(fakeCaptureDaemon(["unreachable"]), ledger, 1_000, FAST, "missing");
+    expect(missing.kind).toBe("gone");
+  });
+
   it("does not treat a short silence as a crash", async () => {
     const outcome = await drain(
-      fakeCaptureDaemon(["unreachable", "unreachable", captureStatus({ pending: 0 })]),
-      new CaptureDrainTracker(),
+      fakeCaptureDaemon(["unreachable", "unreachable", savedStatus()]),
+      inMemoryCaptureDrainLedger(),
       1_000,
       { ...FAST, unreachableWindowMs: 10_000 },
     );
     expect(outcome.kind).toBe("drained");
   });
+});
 
-  it("refuses a second drain of the same run while one is in flight", async () => {
-    const tracker = new CaptureDrainTracker();
-    expect(tracker.tryBegin("run_1")).toBe(true);
-    const outcome = await drain(fakeCaptureDaemon([captureStatus()]), tracker);
+describe("drain ownership across workers", () => {
+  it("refuses a second worker's drain of a run while the first worker drains it", async () => {
+    // Two workers = two ledgers over one store (one database). While worker A's drain is in
+    // flight, worker B's sweep of the same run must not drain (or stop) it too.
+    const store = new InMemoryCaptureDrainStore();
+    const workerA = inMemoryCaptureDrainLedger({ store, owner: "worker-a" });
+    const workerB = inMemoryCaptureDrainLedger({ store, owner: "worker-b" });
+    let uploaded = 0;
+    const moving = Array.from({ length: 50 }, () => {
+      uploaded += 10;
+      return captureStatus({ pending: 3, uploadedBytes: uploaded });
+    });
+    const daemonA = fakeCaptureDaemon([...moving, savedStatus()]);
+    const daemonB = fakeCaptureDaemon([savedStatus()]);
+
+    const inFlight = drain(daemonA, workerA, 5_000, { ...FAST, pollIntervalMs: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = await drain(daemonB, workerB);
+
+    expect(second.kind).toBe("busy");
+    expect(daemonB.connect).not.toHaveBeenCalled();
+    expect((await inFlight).kind).toBe("drained");
+    // Released: the next sweep of either worker may claim it.
+    expect((await drain(fakeCaptureDaemon([savedStatus()]), workerB)).kind).toBe("drained");
+  });
+
+  it("carries the stall window to the worker that picks the run up next", async () => {
+    const store = new InMemoryCaptureDrainStore();
+    const stuck = captureStatus({ pending: 2, uploadedBytes: 50 });
+    expect(
+      (await drain(fakeCaptureDaemon([stuck]), inMemoryCaptureDrainLedger({ store }), 1)).kind,
+    ).toBe("pending");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Another worker: nothing moved since the first worker's answer, so it is already stalled.
+    const outcome = await drain(
+      fakeCaptureDaemon([stuck]),
+      inMemoryCaptureDrainLedger({ store }),
+      1,
+    );
+    expect(outcome.kind).toBe("stalled");
+  });
+
+  it("takes over a run whose worker died holding it, once the lease expires", async () => {
+    let now = 1_000;
+    const store = new InMemoryCaptureDrainStore();
+    const dead = inMemoryCaptureDrainLedger({ store, owner: "dead", leaseMs: 100, now: () => now });
+    const live = inMemoryCaptureDrainLedger({ store, owner: "live", leaseMs: 100, now: () => now });
+
+    // The dead worker claimed and never released.
+    expect(await Effect.runPromise(dead.claim("run_1"))).toBeDefined();
+    expect((await drain(fakeCaptureDaemon([savedStatus()]), live)).kind).toBe("busy");
+
+    now += 101;
+    expect((await drain(fakeCaptureDaemon([savedStatus()]), live)).kind).toBe("drained");
+  });
+
+  it("gives the drain up when its claim was taken over mid-drain", async () => {
+    let now = 1_000;
+    const store = new InMemoryCaptureDrainStore();
+    const slow = inMemoryCaptureDrainLedger({ store, owner: "slow", leaseMs: 100, now: () => now });
+    const other = inMemoryCaptureDrainLedger({
+      store,
+      owner: "other",
+      leaseMs: 100,
+      now: () => now,
+    });
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 1, uploadedBytes: 1 })]);
+    // The slow worker's claim lapses before its first answer lands; another worker claims.
+    const connect = daemon.connect;
+    daemon.connect.mockImplementationOnce((...args: Parameters<typeof connect>) => {
+      now += 101;
+      void Effect.runSync(other.claim("run_1"));
+      return connect.getMockImplementation()?.(...args) ?? Effect.die("no implementation");
+    });
+
+    const outcome = await drain(daemon, slow);
+
     expect(outcome.kind).toBe("busy");
-    tracker.end("run_1");
-    expect((await drain(fakeCaptureDaemon([captureStatus()]), tracker)).kind).toBe("drained");
+    expect(store.rows.get("run_1")?.owner).toBe("other");
   });
 });
 
@@ -178,20 +326,54 @@ describe("captureDaemonAnswers", () => {
   });
 });
 
+const decide = (
+  sourceKind: string | null,
+  snapshot: { readonly blueprintPayload: unknown } | undefined,
+) =>
+  Effect.runPromise(
+    runIsCaptureSourced({
+      runId: "run_1",
+      sourceKind,
+      readSnapshotPayload: Effect.succeed(snapshot),
+    }),
+  );
+
+describe("runIsCaptureSourced", () => {
+  it("trusts the source kind recorded on the runtime instance", async () => {
+    expect(await decide("capture", undefined)).toBe(true);
+    expect(await decide("github", undefined)).toBe(false);
+  });
+
+  it("falls back to the attempt snapshot on a row that predates the column", async () => {
+    expect(
+      await decide(null, { blueprintPayload: { sources: { workspace: { kind: "capture" } } } }),
+    ).toBe(true);
+    expect(
+      await decide(null, { blueprintPayload: { sources: { workspace: { kind: "github" } } } }),
+    ).toBe(false);
+  });
+
+  it("fails closed: no recorded kind and no readable snapshot is capture-sourced", async () => {
+    expect(await decide(null, undefined)).toBe(true);
+    expect(await decide(null, { blueprintPayload: {} })).toBe(true);
+  });
+});
+
 describe("helpers", () => {
   it("recognises a capture source in a stored blueprint of any vintage", () => {
     expect(isCaptureSourcedBlueprint({ sources: { workspace: { kind: "capture" } } })).toBe(true);
     expect(isCaptureSourcedBlueprint({ sources: { workspace: { kind: "github" } } })).toBe(false);
-    expect(isCaptureSourcedBlueprint({})).toBe(false);
-    expect(isCaptureSourcedBlueprint(null)).toBe(false);
+    expect(blueprintSourceKind({})).toBeUndefined();
+    expect(blueprintSourceKind(null)).toBeUndefined();
   });
 
-  it("counts fewer pending or more uploaded/registered as progress, a new snapshot as none", () => {
+  it("counts fewer pending, more uploaded/registered, or a completed flush as progress", () => {
     const base = captureStatus({ pending: 3, uploadedBytes: 10, registered: 1 });
     expect(captureProgressed(undefined, base)).toBe(true);
     expect(captureProgressed(base, { ...base, pending: 2 })).toBe(true);
     expect(captureProgressed(base, { ...base, uploadedBytes: 11 })).toBe(true);
     expect(captureProgressed(base, { ...base, registered: 2 })).toBe(true);
+    expect(captureProgressed(base, { ...base, complete: true })).toBe(true);
     expect(captureProgressed(base, { ...base, pending: 4 })).toBe(false);
     expect(captureProgressed(base, base)).toBe(false);
   });
