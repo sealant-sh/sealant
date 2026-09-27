@@ -360,6 +360,44 @@ export interface WorkspaceCaptureDrain {
   readonly preservationStartsAt?: string;
   /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
   readonly discard?: { readonly requestedBy: string; readonly requestedAt: string };
+  /**
+   * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
+   * without a complete final flush, or its launch failed after it started). Recovery is attempted
+   * on a backoff; `recoverable` says whether its runtime can restart it on its own disk (Docker)
+   * or only report it (Kubernetes, MicroVM). `workspace.recover()` makes an attempt due now.
+   */
+  readonly retained?: {
+    readonly since: string;
+    readonly reason: string;
+    readonly recoverable: boolean;
+    readonly recoveryAttempts: number;
+    readonly nextRecoveryAt?: string;
+    readonly lastRecoveryError?: string;
+  };
+  /** The latest completion attestation the control plane accepted for this executor. */
+  readonly completion?: {
+    readonly executorId: string;
+    readonly epoch: number;
+    readonly captureN: number;
+    readonly attestedAt: string;
+  };
+}
+
+/**
+ * The caller's attestation that its capture store holds a SEALED final capture of the workspace's
+ * current executor (a FINAL flush that completed and was recorded durably by the store). See
+ * `WorkspaceStopOptions.completion`.
+ */
+export interface WorkspaceCompletionAttestation {
+  /** The sealed capture's chain position (`n`). */
+  readonly captureN: number;
+  /** The capture lease epoch the seal was made under. */
+  readonly epoch: number;
+  /**
+   * The executor the seal names: the runtime's `resourceId` as `workspace.details().runtime`
+   * reports it (its `reference`, or the run id, are accepted too).
+   */
+  readonly executorId: string;
 }
 
 /** Options for `workspace.stop()`. */
@@ -371,6 +409,32 @@ export interface WorkspaceStopOptions {
    * drain as `discarded`. Owner only; irreversible — what was not saved is lost.
    */
   readonly discardUnsaved?: boolean;
+  /**
+   * Attest that your capture store holds a sealed final capture of this workspace's current
+   * executor. It lets the control plane remove that executor's disk once it has ended even if it
+   * never read `complete: true` from it itself (a lost FINAL reply, a daemon that exited before a
+   * drain reached it). Accepted only when `executorId` names the current executor and `epoch` is
+   * not older than any the executor reported; otherwise ignored (`completion.outcome` on the
+   * result says which) and the executor is kept as before.
+   */
+  readonly completion?: WorkspaceCompletionAttestation;
+}
+
+/** What became of a `completion` attestation on `stop()`. */
+export interface WorkspaceStopCompletion {
+  readonly outcome: "accepted" | "ignored";
+  /** Why it was ignored. */
+  readonly detail?: string;
+}
+
+/**
+ * What `workspace.recover()` did: `requested` — the workspace's executor is retained and a
+ * recovery attempt is due now (`recoverable` says whether its runtime can restart it on its own
+ * disk; if not, it is reported and kept); `not-retained` — nothing is retained, nothing was done.
+ */
+export interface WorkspaceRecoverResult {
+  readonly state: "requested" | "not-retained";
+  readonly recoverable?: boolean;
 }
 
 /**
@@ -388,7 +452,7 @@ export interface WorkspaceStopOptions {
  * `drain` is the control plane's last observation; `capture` is the daemon's queue as read now,
  * when it answers. Call `stop()` again to check (it is idempotent), or follow `status()`.
  */
-export type WorkspaceStopResult =
+export type WorkspaceStopResult = (
   | { readonly state: "stopped" }
   | {
       readonly state: "requested";
@@ -399,7 +463,11 @@ export type WorkspaceStopResult =
       readonly state: "draining" | "kept";
       readonly drain: WorkspaceCaptureDrain;
       readonly capture?: WorkspaceCaptureStatus;
-    };
+    }
+) & {
+  /** What became of `options.completion`, when one was sent. */
+  readonly completion?: WorkspaceStopCompletion;
+};
 
 /** The daemon's answer to `workspace.capture.replan()` (sealantd 0.15 `capture.replan`). */
 export interface WorkspaceCaptureReplanned {
@@ -726,6 +794,13 @@ export interface Workspace {
    * `WorkspaceStopOptions`).
    */
   stop(options?: WorkspaceStopOptions): Promise<WorkspaceStopResult>;
+  /**
+   * Ask the control plane to recover this workspace's RETAINED executor now — one kept because
+   * its disk holds work not confirmed saved. Where the runtime can (Docker) it is restarted on
+   * its own disk, drained with a final flush, and only then removed; elsewhere it is reported and
+   * kept. Resolves once the request is recorded; follow `details().captureDrain`.
+   */
+  recover(): Promise<WorkspaceRecoverResult>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**

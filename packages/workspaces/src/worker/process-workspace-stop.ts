@@ -14,6 +14,11 @@ import {
 import { Effect, Layer } from "effect";
 
 import {
+  decideExecutorDeletion,
+  type ExecutorDeletionBasis,
+  type ExecutorRuntimeState,
+} from "../runtime/executor-preservation.js";
+import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
 } from "../runtime/launch-material.js";
@@ -24,11 +29,13 @@ import {
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
 import {
+  describeDeletionBasis,
   drainCaptureBeforeStop,
   drainPermitsStop,
-  finalWasAnswered,
+  recordedDeletionEvidence,
   runIsCaptureSourced,
   type CaptureDrainLedger,
+  type CaptureDrainRead,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
@@ -54,9 +61,11 @@ export interface WorkspaceStopCaptureDrain {
  *  - `draining`: the capture queue is still moving; the next call (the reaper's next tick)
  *    continues the drain and stops once it is empty.
  *  - `kept`: the daemon answers but its queue stopped moving (`not saved · kept`), the daemon
- *    is silent while the executor runs (`not saved · daemon silent · kept`), or the queue is
- *    empty but the daemon did not confirm its final flush complete (`not saved · not confirmed ·
- *    kept`); nothing stops it until the work is confirmed saved or the executor ends.
+ *    is silent while the executor runs (`not saved · daemon silent · kept`), the queue is empty
+ *    but the daemon did not confirm its final flush complete (`not saved · not confirmed ·
+ *    kept`), or the executor ENDED with its disk and nothing proves that disk saved (`not saved ·
+ *    executor exited · kept`: retained, and recovery is attempted). Nothing removes it until
+ *    the preservation policy (`executor-preservation.ts`) finds evidence it may go.
  *  - `busy`: another drain of the same run is in flight (this worker or another).
  */
 export type WorkspaceStopOutcome = "stopped" | "draining" | "kept" | "busy";
@@ -168,12 +177,15 @@ const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefine
  * not stamp "stopped" onto a workspace that is already relaunching (the reaper treats a live
  * container on a stored-"stopped" workspace as stranded and would kill the fresh runtime).
  *
- * With `captureDrain`, a live capture-sourced runtime (or one whose source cannot be read) is
- * drained first (`capture-drain.ts`): the runtime is torn down only once the daemon confirms its
- * final flush complete, or once its daemon is silent AND the runtime reports the executor ended
- * (nothing left to save). Otherwise the call returns `draining` / `kept` and writes nothing —
- * the reaper's next tick (a stored "stopped" workspace is `stranded` to it; a replaced run is
- * `superseded`) comes back and finishes the stop.
+ * With `captureDrain`, every removal of a capture-sourced runtime (or one whose source cannot be
+ * read) goes through the one preservation policy (`decideExecutorDeletion`): a live one is
+ * drained first (`capture-drain.ts`) and removed once the daemon confirms its final flush
+ * complete, or once its daemon is silent AND nothing of the executor is left; an ENDED one keeps
+ * its disk, and is removed only when Core observed its final flush complete, the control plane
+ * attested a sealed final capture of it (`completion` on the stop request), or the owner
+ * discarded it — otherwise it is retained (recorded, and recovery is attempted). Otherwise the
+ * call returns `draining` / `kept` and writes nothing — the reaper's next tick (a stored
+ * "stopped" workspace is `stranded` to it; a replaced run is `superseded`) comes back.
  */
 export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(function* (
   options: ProcessWorkspaceStopEffectOptions,
@@ -264,17 +276,25 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
 
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
     const state = yield* runtimeState(adapter, resourceId);
-    const ended = state !== "running";
     const drain = options.captureDrain;
-    const recorded = drain === undefined ? undefined : yield* drain.ledger.peek(options.runId);
+    const record: CaptureDrainRead =
+      drain === undefined
+        ? { readable: true, entry: undefined }
+        : yield* drain.ledger.read(options.runId);
+    const recorded = record.readable ? record.entry : undefined;
     const discard = recorded?.discardRequested;
 
     if (drain !== undefined && discard !== undefined) {
       // The owner discarded this run's unsaved captures (recorded, with who and when, by the
-      // API). Nothing is drained and nothing is kept: the runtime is terminated outright.
-      const detail = `unsaved captures discarded at the owner's request (by ${discard.by}, requested ${new Date(discard.atMs).toISOString()}); the runtime was terminated without a drain`;
-      yield* Effect.logError(`Workspace stop (${drain.label}): run ${options.runId}: ${detail}.`);
+      // API). Nothing is drained and nothing is kept: the runtime is terminated outright. What is
+      // logged before the adapter answers is the request; only its success is the termination.
+      const audit = `by ${discard.by}, requested ${new Date(discard.atMs).toISOString()}`;
+      yield* Effect.logWarning(
+        `Workspace stop (${drain.label}): run ${options.runId}: unsaved captures discard requested by the owner (${audit}); terminating the runtime without a drain.`,
+      );
       yield* stopRuntime({ adapter, resourceId, reference, fence: true, drain });
+      const detail = `unsaved captures discarded at the owner's request (${audit}); the runtime was terminated without a drain`;
+      yield* Effect.logError(`Workspace stop (${drain.label}): run ${options.runId}: ${detail}.`);
       yield* drain.ledger.observe(options.runId, { state: "discarded", detail });
       yield* finishStop;
       return stopOutcome("stopped");
@@ -283,20 +303,57 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     const captureSourced =
       drain === undefined ? false : yield* isCaptureSourcedRun(options.runId, instance.sourceKind);
     const drainedBefore = captureSourced ? recorded : undefined;
+    const recordedEvidence = recordedDeletionEvidence(record, {
+      runId: options.runId,
+      resourceId,
+      reference,
+    });
+    // The one preservation policy: may this executor (and its disk) be removed now?
+    const decide = (runtime: ExecutorRuntimeState, observedNow: boolean) =>
+      decideExecutorDeletion({
+        captureSourced,
+        runtime,
+        ...recordedEvidence,
+        observedComplete: observedNow || recordedEvidence.observedComplete,
+      });
 
-    // An executor that ended after a drain reached its daemon and was never told its work is
-    // saved exited on purpose with its staging on disk (sealantd exits 75 after an incomplete
-    // final flush). Removing the runtime would destroy the only copy: keep it.
-    if (
-      drain !== undefined &&
-      state === "exited" &&
-      drainedBefore !== undefined &&
-      finalWasAnswered(drainedBefore)
-    ) {
-      yield* Effect.logError(
-        `Workspace stop (${drain.label}): run ${options.runId} ended after a final flush that was not confirmed complete: not saved · executor exited · kept. Its disk keeps the staged captures; the runtime is left in place.`,
-      );
-      return stopOutcome("kept");
+    // Remove the runtime the policy let go; a capture-sourced one records how it went.
+    const removeRuntime = (basis: ExecutorDeletionBasis) =>
+      Effect.gen(function* () {
+        yield* stopRuntime({
+          adapter,
+          resourceId,
+          reference,
+          fence: false,
+          drain: captureSourced ? drain : undefined,
+        });
+        yield* finishStop;
+        if (drain !== undefined && captureSourced) {
+          yield* drain.ledger.observe(options.runId, {
+            state: "stopped",
+            detail: `the runtime was removed: ${describeDeletionBasis(basis)}`,
+          });
+        }
+        return stopOutcome("stopped");
+      });
+
+    if (state !== "running") {
+      // The executor ended (or is gone). An ended executor keeps its disk — a container's
+      // writable layer, a Failed Pod's emptyDir — and sealantd exits 75 with its staging there
+      // after an incomplete final flush, whether or not any drain of ours reached it first (a
+      // plain `docker stop`, its own shutdown FINAL, a lost reply). Only evidence lets it go.
+      const decision = decide(state, false);
+      if (!decision.delete) {
+        // Said once, when it is first retained; recovery reports every attempt after that.
+        if (drain !== undefined && recorded?.retained === undefined) {
+          yield* Effect.logError(
+            `Workspace stop (${drain.label}): run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}. Its disk keeps the staged captures; the runtime is left in place and recovery is attempted.`,
+          );
+          yield* drain.ledger.markRetained(options.runId, `executor exited · ${decision.reason}`);
+        }
+        return stopOutcome("kept");
+      }
+      return yield* removeRuntime(decision.basis);
     }
 
     // LAST CHANCE to read rotated session credentials out of the container: the official CLIs
@@ -304,9 +361,8 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     // another exec job to sync them. Best-effort by construction (the helper never fails). It
     // runs BEFORE the drain: after a FINAL flush the daemon refuses exec for good, so a sync-back
     // after it would read nothing — and so it is skipped once a drain has reached the daemon. An
-    // unaddressable runtime (e.g. Kubernetes without client TLS) is skipped, and so is one the
-    // adapter already reports ended: dialling a dead Pod's Service only burns the timeout.
-    if (target !== undefined && !ended && drainedBefore?.lastProgressAt === undefined) {
+    // unaddressable runtime (e.g. Kubernetes without client TLS) is skipped.
+    if (target !== undefined && drainedBefore?.lastProgressAt === undefined) {
       yield* syncBackWorkspaceCredentials({
         attemptId: options.runId,
         target,
@@ -315,55 +371,57 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       });
     }
 
+    if (drain === undefined || !captureSourced) {
+      const decision = decide("running", false);
+      return decision.delete ? yield* removeRuntime(decision.basis) : stopOutcome("kept");
+    }
+
     // No loss of work product: a live capture-sourced runtime holds captures nowhere else until
     // the daemon confirms them saved. Drain first; a queue still moving defers the stop, one that
     // cannot be confirmed keeps the workspace. Nothing below runs unless the drain permits it.
-    if (drain !== undefined && !ended && captureSourced) {
-      if (target === undefined) {
-        // Nothing here can see the queue, and the runtime says the executor is up: keep it.
-        yield* Effect.logError(
-          `Workspace stop (${drain.label}): run ${options.runId} is capture-sourced but this worker cannot reach its daemon (${adapterId}): not saved · kept. Configure the worker's control reach for this runtime.`,
-        );
-        return stopOutcome("kept");
-      } else {
-        const outcome = yield* drainCaptureBeforeStop({
-          runId: options.runId,
-          target,
-          ledger: drain.ledger,
-          settings: drain.settings,
-          budgetMs: drain.budgetMs,
-          label: drain.label,
-          runtimeState: runtimeState(adapter, resourceId),
-        });
-        if (!drainPermitsStop(outcome)) {
-          return stopOutcome(
-            outcome.kind === "stalled" ||
-              outcome.kind === "silent" ||
-              outcome.kind === "unconfirmed"
-              ? "kept"
-              : outcome.kind === "busy"
-                ? "busy"
-                : "draining",
-          );
+    if (target === undefined) {
+      // Nothing here can see the queue, and the runtime says the executor is up: keep it.
+      yield* Effect.logError(
+        `Workspace stop (${drain.label}): run ${options.runId} is capture-sourced but this worker cannot reach its daemon (${adapterId}): not saved · kept. Configure the worker's control reach for this runtime.`,
+      );
+      return stopOutcome("kept");
+    }
+    const outcome = yield* drainCaptureBeforeStop({
+      runId: options.runId,
+      target,
+      ledger: drain.ledger,
+      settings: drain.settings,
+      budgetMs: drain.budgetMs,
+      label: drain.label,
+      runtimeState: runtimeState(adapter, resourceId),
+    });
+    if (!drainPermitsStop(outcome)) {
+      if (outcome.kind === "silent") {
+        // Silent while the executor ended mid-drain: it is kept with its disk; record it.
+        const ended = yield* runtimeState(adapter, resourceId);
+        if (ended === "exited") {
+          yield* drain.ledger.markRetained(options.runId, `executor exited · ${outcome.detail}`);
         }
       }
+      return stopOutcome(
+        outcome.kind === "stalled" || outcome.kind === "silent" || outcome.kind === "unconfirmed"
+          ? "kept"
+          : outcome.kind === "busy"
+            ? "busy"
+            : "draining",
+      );
     }
-
-    yield* stopRuntime({
-      adapter,
-      resourceId,
-      reference,
-      fence: false,
-      drain: captureSourced ? drain : undefined,
-    });
-    yield* finishStop;
-    if (drain !== undefined && captureSourced) {
-      yield* drain.ledger.observe(options.runId, {
-        state: "stopped",
-        detail: "the runtime was removed after its drain let it go",
-      });
+    const decision = decide(
+      outcome.kind === "gone" ? "missing" : "running",
+      outcome.kind === "drained",
+    );
+    if (!decision.delete) {
+      yield* Effect.logError(
+        `Workspace stop (${drain.label}): run ${options.runId}: the drain ended (${outcome.kind}) but nothing lets the executor go: not saved · kept · ${decision.reason}.`,
+      );
+      return stopOutcome("kept");
     }
-    return stopOutcome("stopped");
+    return yield* removeRuntime(decision.basis);
   }
 
   // Already stopped, or never addressable: record the terminal state (idempotent) and settle.

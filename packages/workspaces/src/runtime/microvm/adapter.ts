@@ -36,8 +36,9 @@ import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
-  LaunchRetainedError,
   completeReadyLaunch,
+  failLaunch,
+  reportStartedLaunch,
   type RuntimeAdapterLaunchHooks,
 } from "../launch-retention.js";
 import {
@@ -51,6 +52,8 @@ import {
   type RuntimeAdapterInspectResult,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
+  type RuntimeAdapterRecoverInput,
+  type RuntimeAdapterRecoverResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
@@ -623,6 +626,11 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     );
     const microvmId = vm.microvmId;
     const release = this.#tokens.hold(microvmId);
+    // The agent starts sealantd only once it accepts the launch push. Until a push was sent, the
+    // guest positively ran no writer; from the first push on it may have (an accepted push whose
+    // answer was lost looks like a failure here), so a capture VM is retained from then on.
+    const push = { sent: false };
+    let endpointUrlForIdentity: string | undefined;
     try {
       const deadline = this.#now() + config.readinessTimeoutMs;
       const running = await this.#awaitRunning(microvmId, runId, deadline);
@@ -634,6 +642,15 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         );
       }
       const host = endpointHost(endpoint);
+      endpointUrlForIdentity = `wss://${host}${AGENT_CONTROL_ROUTE}`;
+      push.sent = true;
+      await reportStartedLaunch(hooks, {
+        adapter: this.id,
+        resourceId: microvmId,
+        reference: microvmId,
+        endpoint: endpointUrlForIdentity,
+        deadline: microvmDeadline(running, vm, requestedAt, config.maxDurationSeconds),
+      });
       await this.#pushLaunchMaterial(host, microvmId, runId, launchSecret, request, deadline);
       const target = this.#controlTarget(host, microvmId);
       await this.#awaitHealthy(target, host, microvmId, runId, dockerService, deadline, [
@@ -669,12 +686,25 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         },
       });
     } catch (error) {
-      if (!(error instanceof LaunchRetainedError)) {
-        await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
-        this.#tokens.forget(microvmId);
-      }
-      // A retained launch keeps the VM, and the endpoint tokens its drain dials with.
-      throw error;
+      // The one preservation policy decides; a retained launch keeps the VM, and the endpoint
+      // tokens its drain dials with.
+      return await failLaunch({
+        blueprint: parsed.blueprint,
+        identity: push.sent
+          ? {
+              adapter: this.id,
+              resourceId: microvmId,
+              reference: microvmId,
+              ...(endpointUrlForIdentity === undefined ? {} : { endpoint: endpointUrlForIdentity }),
+            }
+          : undefined,
+        runtime: "running",
+        error,
+        cleanup: async () => {
+          await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
+          this.#tokens.forget(microvmId);
+        },
+      });
     } finally {
       release();
     }
@@ -695,6 +725,28 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
     this.#tokens.forget(microvmId);
     return { adapter: this.id, resourceId: microvmId, outcome };
+  }
+
+  /**
+   * Recovery of a retained capture VM is not possible here. A TERMINATED VM's disk is gone with
+   * it: nothing can be recovered, which is why the deadline sweep drains BEFORE the platform's
+   * cap and the terminate hook runs a FINAL flush — prevention is the only protection. A VM that
+   * still runs after its daemon exited keeps its disk, but the agent has no route to boot
+   * sealantd again on it; it stays retained (until its platform deadline ends it).
+   */
+  async recover(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult> {
+    const vm = await this.#api.getMicrovm(input.resourceId);
+    if (vm === undefined || isEnded(vm.state)) {
+      return { outcome: "missing" };
+    }
+    const state = await this.inspect({ resourceId: input.resourceId });
+    if (state.state === "running") {
+      return { outcome: "running" };
+    }
+    return {
+      outcome: "unsupported",
+      detail: `MicroVM ${input.resourceId} is still up but its daemon ended; the agent cannot boot sealantd again, so its staged captures cannot be shipped from here. It is kept until its platform deadline ends it; a terminated VM's disk is gone, so only the pre-deadline drain protects it.`,
+    };
   }
 
   async inspect(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult> {

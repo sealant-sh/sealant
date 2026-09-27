@@ -24,8 +24,12 @@
  *    `not saved · refused · kept`. Nothing stops it; the next sweep re-checks.
  *  - **silent**: the daemon has not answered for the silent window while the runtime still
  *    reports the executor running — KEPT, logged `not saved · daemon silent · kept`.
- *  - **gone**: the daemon is silent AND the runtime positively reports the executor ended (exited
- *    or missing) — there is nothing left to save, so the stop proceeds (it only cleans up).
+ *  - **gone**: the daemon is silent AND the runtime positively reports nothing of the executor
+ *    left (`missing`) — there is no disk to keep, so the stop proceeds (it only cleans up). An
+ *    executor that EXITED keeps its disk, which holds whatever was not saved (sealantd exits 75
+ *    after an incomplete final flush, and a plain `docker stop` or a lost reply looks the same):
+ *    it is kept (`silent`), whatever this or any earlier drain saw, unless the preservation
+ *    policy (`executor-preservation.ts`) finds evidence it may go.
  *  - **busy**: another worker holds the run's drain; this call does nothing.
  *
  * A daemon that reports a class's snaps failing (`snaps`) is saving none of that class's newest
@@ -41,14 +45,20 @@
  * shipment move on, so a large upload converges over several polls rather than restarting.
  *
  * Progress and ownership are durable (`CaptureDrainLedger`; the worker's is the
- * `workspace_capture_drains` table): one worker drains a run at a time across every worker
- * process, a drain spanning many sweeps (or moving to another worker when its holder dies)
+ * `workspace_capture_drains` table): one drain of a run at a time — across every worker process,
+ * and within one (every claim carries its own token, so two sweeps of one worker never share a
+ * lease), a drain spanning many sweeps (or moving to another worker when its holder dies)
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
 import { Clock, Effect } from "effect";
 import { z } from "zod";
 
+import {
+  attestationCoversExecutor,
+  type ExecutorDeletionBasis,
+  type ExecutorIdentity,
+} from "../runtime/executor-preservation.js";
 import {
   SealantControlError,
   SealantRuntime,
@@ -133,7 +143,7 @@ export type CaptureDrainOutcome =
     }
   /** The daemon is silent but the runtime reports the executor running: kept. */
   | { readonly kind: "silent"; readonly silentForMs: number; readonly detail: string }
-  /** The daemon is silent and the runtime reports the executor ended: nothing left to save. */
+  /** The daemon is silent and the runtime reports nothing of the executor left: nothing to keep. */
   | { readonly kind: "gone"; readonly silentForMs: number; readonly detail: string }
   /** Another drain of the same run is in flight (another sweep or worker); do nothing this time. */
   | { readonly kind: "busy" };
@@ -157,6 +167,33 @@ export interface CaptureDrainEntry {
    * here: the API records it, every stop path honours it by terminating without a drain.
    */
   readonly discardRequested?: { readonly atMs: number; readonly by: string } | undefined;
+  /**
+   * The control plane's attestation, from a stop request, that its store holds a sealed FINAL of
+   * this run's executor (`executor-preservation.ts`); the preservation policy checks the
+   * executor id and epoch before it counts.
+   */
+  readonly completionAttested?:
+    | {
+        readonly executorId: string;
+        readonly epoch: number;
+        readonly captureN: number;
+        readonly atMs: number;
+        readonly by: string;
+      }
+    | undefined;
+  /**
+   * The executor is retained: kept because its disk holds work not confirmed saved. Recovery
+   * (`recover-retained-executors.ts`) retries on a backoff until it is saved, gone or discarded.
+   */
+  readonly retained?:
+    | {
+        readonly atMs: number;
+        readonly reason: string;
+        readonly recoveryAttempts: number;
+        readonly nextRecoveryAtMs: number | undefined;
+        readonly lastRecoveryError: string | undefined;
+      }
+    | undefined;
 }
 
 export const EMPTY_CAPTURE_DRAIN_ENTRY: CaptureDrainEntry = {
@@ -182,31 +219,56 @@ export interface CaptureDrainObservation {
   readonly detail: string | undefined;
 }
 
+/** One drain's hold on a run: its progress, and the token that is its lease. */
+export interface CaptureDrainClaim {
+  readonly entry: CaptureDrainEntry;
+  /** Unique per claim: two drains of one run never share a lease, not even within one worker. */
+  readonly token: string;
+}
+
+/**
+ * What a read of a run's drain record found: the entry (`undefined` when there is none), or that
+ * it could not be read — which is NOT "none": nothing in it (a completion, an attestation, a
+ * discard) is known, and the preservation policy keeps the executor.
+ */
+export type CaptureDrainRead =
+  | { readonly readable: true; readonly entry: CaptureDrainEntry | undefined }
+  | { readonly readable: false };
+
 /**
  * Where a drain's ownership and progress live. The worker's ledger is the database
  * (`databaseCaptureDrainLedger`): a claim is a lease on the run's `workspace_capture_drains` row,
- * so two workers never drain one run at once, and a lease whose worker died is taken over.
- * Methods never fail: a ledger that cannot be read answers `undefined` (busy — nothing is
- * stopped), one that cannot be written answers `false` (the claim is given up).
+ * so no two drains of one run ever overlap — across workers, and within one worker (each claim
+ * has its own token) — and a lease whose holder died is taken over once it expires. Methods
+ * never fail: a claim that cannot be made answers `undefined` (busy — nothing is stopped), a
+ * write that cannot be made answers `false` (the claim is given up), a record that cannot be read
+ * answers `{ readable: false }`.
  */
 export interface CaptureDrainLedger {
   /** Claim the run's drain for this call and load its progress; `undefined` when held elsewhere. */
-  readonly claim: (runId: string) => Effect.Effect<CaptureDrainEntry | undefined>;
+  readonly claim: (runId: string) => Effect.Effect<CaptureDrainClaim | undefined>;
   /** Persist progress (and the observation, when one was made) and renew the claim. */
   readonly save: (
     runId: string,
+    token: string,
     entry: CaptureDrainEntry,
     observation: CaptureDrainObservation | undefined,
   ) => Effect.Effect<boolean>;
   /** Give the claim up; progress and the observation stay. */
-  readonly release: (runId: string) => Effect.Effect<void>;
-  /** The run's recorded progress, without claiming it; `undefined` when none (or unreadable). */
-  readonly peek: (runId: string) => Effect.Effect<CaptureDrainEntry | undefined>;
+  readonly release: (runId: string, token: string) => Effect.Effect<void>;
+  /** The run's recorded progress, without claiming it. */
+  readonly read: (runId: string) => Effect.Effect<CaptureDrainRead>;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
-   * Best-effort: a failed write is logged.
+   * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
    */
   readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
+  /**
+   * Record that the run's executor is retained (kept: its disk holds work not confirmed saved),
+   * with why; recovery picks it up. Keeps the first instant. Best-effort: a failed write is
+   * logged loudly (the executor is kept either way).
+   */
+  readonly markRetained: (runId: string, reason: string) => Effect.Effect<void>;
 }
 
 /** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
@@ -223,6 +285,14 @@ export class InMemoryCaptureDrainStore {
 }
 
 let inMemoryOwnerSequence = 0;
+let inMemoryClaimSequence = 0;
+
+/** Whether an observation ends a retention: the executor was removed, or found gone. */
+export const observationEndsRetention = (state: CaptureDrainState): boolean =>
+  state === "stopped" || state === "discarded" || state === "gone";
+
+/** A lease holder for one claim: the ledger's owner plus a token unique to the claim. */
+export const claimLeaseOwner = (owner: string, token: string): string => `${owner}#${token}`;
 
 /**
  * An in-memory ledger with the database ledger's lease semantics (tests, single-process tools).
@@ -245,32 +315,32 @@ export const inMemoryCaptureDrainLedger = (
     store,
     claim: (runId) =>
       Effect.sync(() => {
+        inMemoryClaimSequence += 1;
+        const token = String(inMemoryClaimSequence);
+        const holder = claimLeaseOwner(owner, token);
         const row = store.rows.get(runId);
         if (row === undefined) {
           store.rows.set(runId, {
             entry: EMPTY_CAPTURE_DRAIN_ENTRY,
             observation: undefined,
-            owner,
+            owner: holder,
             expiresAt: now() + leaseMs,
           });
-          return EMPTY_CAPTURE_DRAIN_ENTRY;
+          return { entry: EMPTY_CAPTURE_DRAIN_ENTRY, token };
         }
         const free =
-          row.owner === undefined ||
-          row.owner === owner ||
-          row.expiresAt === undefined ||
-          row.expiresAt <= now();
+          row.owner === undefined || row.expiresAt === undefined || row.expiresAt <= now();
         if (!free) {
           return undefined;
         }
-        row.owner = owner;
+        row.owner = holder;
         row.expiresAt = now() + leaseMs;
-        return row.entry;
+        return { entry: row.entry, token };
       }),
-    save: (runId, entry, observation) =>
+    save: (runId, token, entry, observation) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
-        if (row === undefined || row.owner !== owner) {
+        if (row === undefined || row.owner !== claimLeaseOwner(owner, token)) {
           return false;
         }
         row.entry = entry;
@@ -278,15 +348,16 @@ export const inMemoryCaptureDrainLedger = (
         row.expiresAt = now() + leaseMs;
         return true;
       }),
-    release: (runId) =>
+    release: (runId, token) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
-        if (row !== undefined && row.owner === owner) {
+        if (row !== undefined && row.owner === claimLeaseOwner(owner, token)) {
           row.owner = undefined;
           row.expiresAt = undefined;
         }
       }),
-    peek: (runId) => Effect.sync(() => store.rows.get(runId)?.entry),
+    read: (runId) =>
+      Effect.sync(() => ({ readable: true as const, entry: store.rows.get(runId)?.entry })),
     observe: (runId, observation) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
@@ -299,7 +370,32 @@ export const inMemoryCaptureDrainLedger = (
           });
         } else {
           row.observation = observation;
+          if (observationEndsRetention(observation.state)) {
+            row.entry = { ...row.entry, retained: undefined };
+          }
         }
+      }),
+    markRetained: (runId, reason) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId) ?? {
+          entry: EMPTY_CAPTURE_DRAIN_ENTRY,
+          observation: undefined,
+          owner: undefined,
+          expiresAt: undefined,
+        };
+        const retained = row.entry.retained;
+        row.entry = {
+          ...row.entry,
+          retained: {
+            atMs: retained?.atMs ?? now(),
+            reason,
+            recoveryAttempts: retained?.recoveryAttempts ?? 0,
+            nextRecoveryAtMs: retained?.nextRecoveryAtMs ?? now(),
+            lastRecoveryError: retained?.lastRecoveryError,
+          },
+        };
+        row.observation = { state: "kept", detail: `not saved · retained · ${reason}` };
+        store.rows.set(runId, row);
       }),
   };
 };
@@ -357,14 +453,65 @@ export const runIsCaptureSourced = <E, R>(input: {
     return kind === "capture";
   });
 
+/** Whether Core itself read `complete: true` from the run's daemon (the drain's last status). */
+export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
+  entry?.last?.complete === true;
+
 /**
- * Whether a drain reached the daemon and was never told its work is saved: the daemon answered
- * (a FINAL flush opens every drain) and its last status is not `complete`. An executor that ends
- * after that has exited on purpose with its staging on disk (sealantd exits 75 after an
- * incomplete final flush), not crashed.
+ * Whether the control plane's recorded attestation covers THIS executor: it names the run's
+ * executor and is not for an epoch older than the executor last reported
+ * (`attestationCoversExecutor`). No attestation, or one about another executor, is `false`.
  */
-export const finalWasAnswered = (entry: CaptureDrainEntry): boolean =>
-  entry.lastProgressAt !== undefined && entry.last?.complete !== true;
+export const attestedCompleteFor = (
+  entry: CaptureDrainEntry | undefined,
+  executor: ExecutorIdentity,
+): boolean => {
+  const attested = entry?.completionAttested;
+  return (
+    attested !== undefined &&
+    attestationCoversExecutor(attested, executor, entry?.last?.epoch).covers
+  );
+};
+
+/** What the drain record says of an executor, for the preservation policy. */
+export const recordedDeletionEvidence = (
+  record: CaptureDrainRead,
+  executor: ExecutorIdentity,
+): {
+  readonly observedComplete: boolean;
+  readonly attestedComplete: boolean;
+  readonly discarded: boolean;
+  readonly ledgerUnreadable: boolean;
+} =>
+  record.readable
+    ? {
+        observedComplete: observedComplete(record.entry),
+        attestedComplete: attestedCompleteFor(record.entry, executor),
+        discarded: record.entry?.discardRequested !== undefined,
+        ledgerUnreadable: false,
+      }
+    : {
+        observedComplete: false,
+        attestedComplete: false,
+        discarded: false,
+        ledgerUnreadable: true,
+      };
+
+/** Why a deletion was allowed, as a status line. */
+export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
+  switch (basis) {
+    case "not-capture":
+      return "the executor holds no captures";
+    case "missing":
+      return "nothing of the executor was left";
+    case "observed-complete":
+      return "its daemon reported the final flush complete";
+    case "attested-complete":
+      return "the control plane attested a sealed final capture of this executor";
+    case "discarded":
+      return "the owner discarded its unsaved captures";
+  }
+};
 
 /** The queue moved: fewer pending, or more uploaded or registered, since the last answer. */
 export const captureProgressed = (
@@ -595,15 +742,16 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
   if (claimed === undefined) {
     return { kind: "busy" } satisfies CaptureDrainOutcome;
   }
+  const { token } = claimed;
   const prefix = `Capture drain (${label}) · run ${runId}`;
-  let entry: CaptureDrainEntry = claimed;
+  let entry: CaptureDrainEntry = claimed.entry;
   let lost = false;
 
   // Persist what this iteration learned (renewing the claim); a lost claim ends the call as
-  // `busy` — another worker owns the run now.
+  // `busy` — another drain owns the run now.
   const persist = (outcome: CaptureDrainOutcome | undefined) =>
     ledger
-      .save(runId, entry, outcome === undefined ? undefined : observationOf(outcome))
+      .save(runId, token, entry, outcome === undefined ? undefined : observationOf(outcome))
       .pipe(Effect.tap((kept) => Effect.sync(() => (lost = !kept))));
 
   const finish = (outcome: CaptureDrainOutcome) =>
@@ -641,12 +789,9 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
           const last =
             entry.last === undefined ? "" : ` Last status: ${describeCaptureStatus(entry.last)}.`;
           const runtimeState = yield* input.runtimeState;
-          if (
-            runtimeState === "missing" ||
-            (runtimeState === "exited" && !finalWasAnswered(entry))
-          ) {
+          if (runtimeState === "missing") {
             yield* Effect.logWarning(
-              `${prefix}: sealantd silent for ${seconds} s (${sample.detail}) and the runtime reports the executor ${runtimeState === "missing" ? "gone" : "ended"}; nothing left to save, the stop proceeds.${last}`,
+              `${prefix}: sealantd silent for ${seconds} s (${sample.detail}) and the runtime reports nothing of the executor left; there is no disk to keep, the stop proceeds.${last}`,
             );
             return yield* finish({
               kind: "gone",
@@ -655,11 +800,12 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             });
           }
           if (runtimeState === "exited") {
-            // The daemon answered this drain's FINAL flush, never confirmed it complete, and then
-            // the executor ended: a daemon whose final flush is incomplete exits (75) and keeps
-            // its staging on the executor's disk. That disk remains until the runtime is
-            // removed; removing it would destroy the only copy. Keep it.
-            const detail = `the executor ended after a final flush that was not confirmed complete; its disk keeps the staged captures (${sample.detail})`;
+            // The executor ended and its daemon is silent, never having confirmed a final flush
+            // complete: a daemon whose final flush is incomplete exits (75) and keeps its staging
+            // on the executor's disk — whether or not any drain reached it first (a plain
+            // `docker stop`, its own shutdown FINAL, a lost reply). That disk remains until the
+            // runtime is removed; removing it would destroy the only copy. Keep it.
+            const detail = `the executor ended without a final flush confirmed complete; its disk keeps the staged captures (${sample.detail})`;
             if (!entry.silentLogged) {
               entry = { ...entry, silentLogged: true };
               yield* Effect.logError(
@@ -796,5 +942,5 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
       }
       yield* Effect.sleep(settings.pollIntervalMs);
     }
-  }).pipe(Effect.ensuring(ledger.release(runId)));
+  }).pipe(Effect.ensuring(ledger.release(runId, token)));
 });

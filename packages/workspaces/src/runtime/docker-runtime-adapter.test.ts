@@ -1436,6 +1436,137 @@ describe("DockerRuntimeAdapter", () => {
     expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
   });
 
+  const captureLaunchInput = () =>
+    parseRuntimeAdapterLaunchInput({
+      ...createLaunchInput({
+        sources: {
+          workspace: {
+            kind: "capture",
+            endpoint: "https://mend.example.com/session/s1",
+            worktreeId: "wt_1",
+          },
+        },
+      }),
+      runId: "abc",
+    });
+
+  it("keeps an exited capture container on a redelivered launch instead of removing its disk", async () => {
+    // Review 2 #4: a stopped same-name container was `docker rm -f -v`'d and the launch retried;
+    // for a capture workspace that container's disk may hold the only copy of staged work.
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        throw new Error(
+          'Conflict. The container name "/sealant-run-abc" is already in use by another container',
+        );
+      }
+      if (args[0] === "inspect" && args.includes("{{.Id}}\t{{.State.Running}}")) {
+        return { stdout: "exited-container-id\tfalse\n", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const failure = await adapter.launch(captureLaunchInput()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      identity: { adapter: "docker", resourceId: "exited-container-id", reference: "sealant-abc" },
+    });
+    expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
+    expect(commandRunner.mock.calls.filter((call) => call[1]?.[0] === "run")).toHaveLength(1);
+  });
+
+  it("keeps a started capture container whose control socket never answers, and never adds --rm", async () => {
+    // Review 2 #5: sealantd boots and runs writers whether or not the readiness probe succeeds.
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "started-container-id\n", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        throw new Error("test: no socket yet");
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      readinessTimeoutMs: 50,
+      autoRemove: true,
+    });
+    const onStarted = vi.fn(async () => undefined);
+
+    const failure = await adapter.launch(captureLaunchInput(), { onStarted }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({ identity: { resourceId: "started-container-id" } });
+    expect(onStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ adapter: "docker", resourceId: "started-container-id" }),
+    );
+    expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
+    const runArgs = commandRunner.mock.calls.find((call) => call[1]?.[0] === "run")?.[1] ?? [];
+    expect(runArgs).not.toContain("--rm");
+  });
+
+  it("recovers a retained container by starting it on its own disk, and only an ended one", async () => {
+    const states: Record<string, string> = {
+      "exited-id": '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}',
+      "running-id": '{"Status":"running","Running":true,"ExitCode":0,"Error":""}',
+    };
+    const started: string[] = [];
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "inspect") {
+        const id = args.at(-1) ?? "";
+        const state = states[id];
+        if (state === undefined) {
+          throw new Error(`Error: No such container: ${id}`);
+        }
+        return { stdout: `${state}\n`, stderr: "" };
+      }
+      if (args[0] === "start") {
+        started.push(args[1] ?? "");
+        states[args[1] ?? ""] = '{"Status":"running","Running":true,"ExitCode":0,"Error":""}';
+        return { stdout: "", stderr: "" };
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      throw new Error(`unexpected docker ${args.join(" ")}`);
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    expect(await adapter.recover({ resourceId: "exited-id", reference: "sealant-x" })).toEqual({
+      outcome: "restarted",
+    });
+    expect(await adapter.recover({ resourceId: "running-id" })).toEqual({ outcome: "running" });
+    expect(await adapter.recover({ resourceId: "gone-id" })).toEqual({ outcome: "missing" });
+    expect(started).toEqual(["exited-id"]);
+    expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
+  });
+
   it("rejects credential file paths with shell metacharacters instead of interpolating them", async () => {
     const commandRunner = vi.fn<
       (

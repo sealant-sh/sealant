@@ -2,9 +2,12 @@
  * Kubernetes reconciliation after a worker restart or a lost message: every workspace Pod the
  * worker manages (by label) must correspond to a runtime instance that is still meant to run.
  *
- *  - A Pod whose row is `stopped` (the stop path drained it first) or `failed` (it exited, or
- *    its launch failed before the daemon answered) is torn down through the adapter's idempotent
- *    stop.
+ *  - A Pod whose row is `stopped` or `failed` is torn down through the adapter's idempotent stop
+ *    ONLY when the one preservation policy lets it go (`decideExecutorDeletion`): the run is not
+ *    capture-sourced, or Core observed its final flush complete, the control plane attested a
+ *    sealed final capture of it, or the owner discarded it. A capture Pod the exit reconciler
+ *    kept (`failed`, `runtime-exited`: its emptyDir holds the staged captures) — or whose source,
+ *    state or drain record cannot be read — is kept and recorded retained.
  *  - A Pod whose row is `failed` with `LAUNCH_RETAINED_ERROR_CODE` is left to the retained-launch
  *    sweep, which drains it before it stops it.
  *  - A Pod with NO row at all — the launch could not record it (the database failed after the
@@ -26,13 +29,28 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
+import {
+  decideExecutorDeletion,
+  type ExecutorRuntimeState,
+} from "../runtime/executor-preservation.js";
 import type { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
-import { blueprintSourceKind } from "./capture-drain.js";
+import {
+  blueprintSourceKind,
+  recordedDeletionEvidence,
+  runIsCaptureSourced,
+  type CaptureDrainLedger,
+  type CaptureDrainRead,
+} from "./capture-drain.js";
 
 export interface ReapOrphanedKubernetesResourcesOptions {
   readonly db: DB;
   readonly adapter: KubernetesRuntimeAdapter;
   readonly maxReapsPerTick?: number;
+  /**
+   * The drain ledger: what Core observed of each run's capture drain (a complete final flush,
+   * an attestation, a discard). Absent = nothing is known, so no capture Pod is removed.
+   */
+  readonly ledger?: CaptureDrainLedger;
 }
 
 const DEFAULT_MAX_REAPS_PER_TICK = 10;
@@ -61,6 +79,9 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
         if (wanted || retained) {
           continue;
         }
+        if (!(yield* podMayGo(options, instance, resourceId))) {
+          continue;
+        }
       } else {
         // No row: the launch never recorded this Pod. Stop it only when its snapshot proves it
         // holds no captures; otherwise record it retained, so it is drained before any stop.
@@ -85,6 +106,74 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
     return reaped;
   },
 );
+
+/**
+ * The one preservation policy, for a Pod whose row says it should not run: its source (the row,
+ * else the attempt snapshot; unreadable = capture), what the Pod is now, and the drain record.
+ * A retained Pod is recorded retained (so recovery reports it) and kept. Never fails: a failed
+ * read keeps the Pod.
+ */
+const podMayGo = (
+  options: Omit<ReapOrphanedKubernetesResourcesOptions, "db">,
+  instance: {
+    readonly runId: string;
+    readonly sourceKind: string | null;
+    readonly reference: string | null;
+  },
+  resourceId: string,
+) =>
+  Effect.gen(function* () {
+    const attempts = yield* WorkspaceAttemptRepo;
+    const captureSourced = yield* runIsCaptureSourced({
+      runId: instance.runId,
+      sourceKind: instance.sourceKind,
+      readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
+    });
+    if (!captureSourced) {
+      return true;
+    }
+    const inspect = options.adapter.inspect;
+    const runtime: ExecutorRuntimeState =
+      typeof inspect !== "function"
+        ? "unknown"
+        : yield* Effect.tryPromise(() => inspect.call(options.adapter, { resourceId })).pipe(
+            Effect.map((result) => result.state),
+            Effect.catchCause(() => Effect.succeed("unknown" as const)),
+          );
+    const record: CaptureDrainRead =
+      options.ledger === undefined
+        ? { readable: false }
+        : yield* options.ledger.read(instance.runId);
+    const decision = decideExecutorDeletion({
+      captureSourced,
+      runtime,
+      ...recordedDeletionEvidence(record, {
+        runId: instance.runId,
+        resourceId,
+        reference: instance.reference,
+      }),
+    });
+    if (decision.delete) {
+      return true;
+    }
+    if (!(record.readable && record.entry?.retained !== undefined)) {
+      yield* Effect.logError(
+        `Kubernetes reconciler: run ${instance.runId}'s Pod ${resourceId} is capture-sourced and its row says it should not run, but ${decision.reason}: not saved · kept. It is not deleted.`,
+      );
+      yield* (
+        options.ledger?.markRetained(instance.runId, `Pod ${resourceId} · ${decision.reason}`) ??
+          Effect.void
+      );
+    }
+    return false;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        `Kubernetes reconciler: deciding whether run ${instance.runId}'s Pod may go failed; it is kept this sweep.`,
+        cause,
+      ).pipe(Effect.as(false)),
+    ),
+  );
 
 /**
  * A managed Pod with no runtime row: `not-capture` when the attempt snapshot names a source that

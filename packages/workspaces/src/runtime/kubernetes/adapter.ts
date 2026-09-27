@@ -42,6 +42,9 @@ import { buildCredentialFileWriteScript } from "../credential-files.js";
 import { buildDotfilesArchiveManifest, hasDotfilesArchives } from "../launch-material.js";
 import {
   completeReadyLaunch,
+  failLaunch,
+  launchHoldsCaptures,
+  reportStartedLaunch,
   type RuntimeAdapterLaunchHooks,
   type RuntimeLaunchIdentity,
 } from "../launch-retention.js";
@@ -59,6 +62,8 @@ import {
   type RuntimeAdapterInspectResult,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
+  type RuntimeAdapterRecoverInput,
+  type RuntimeAdapterRecoverResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
@@ -371,6 +376,21 @@ const podEnd = (pod: V1Pod, nowMs: number): PodEnd | undefined => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * A launch found an ENDED Pod of the same run and was told to keep ended ones (a capture
+ * workspace: the Pod's emptyDir holds its staging until the Pod object is deleted). Nothing was
+ * deleted.
+ */
+class KubernetesEndedPodFound extends Error {
+  public override readonly name = "KubernetesEndedPodFound";
+
+  public constructor(podName: string, phase: string) {
+    super(
+      `Pod ${podName} of this run ended (${phase}) and its emptyDir may hold the only copy of staged captures; it is kept, not replaced.`,
+    );
+  }
+}
+
 export class KubernetesRuntimeAdapter implements RuntimeAdapter {
   readonly id: KubernetesAdapterId;
   readonly #config: KubernetesRuntimeConfig;
@@ -458,6 +478,29 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
    *   node that stopped answering, and is `exited` with that as its detail.
    * - Anything else (`Pending`, `Running`) is `running`, the phase as `platformState`.
    */
+  /**
+   * Recovery of a retained capture Pod. A Pod that ended cannot be restarted (`restartPolicy:
+   * Never`; a Pod's containers are never re-run once it is Failed or Succeeded), and its emptyDir
+   * lives only as long as the Pod object: no new Pod can mount it. So an ended capture Pod is
+   * `unsupported` here — it is KEPT (never deleted without evidence), and its staging can only be
+   * copied off the node by hand (`/var/lib/kubelet/pods/<pod uid>/volumes/kubernetes.io~empty-dir/`).
+   * Recovering it automatically needs a volume that outlives the Pod (a PVC per capture
+   * workspace), which this adapter does not provision today. A running Pod needs no recovery.
+   */
+  async recover(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult> {
+    const state = await this.inspect({ resourceId: input.resourceId });
+    if (state.state === "running") {
+      return { outcome: "running" };
+    }
+    if (state.state === "missing") {
+      return { outcome: "missing" };
+    }
+    return {
+      outcome: "unsupported",
+      detail: `Pod ${input.resourceId} ended and a Pod cannot be restarted; its emptyDir (the staged captures) stays on its node only while the Pod object is kept. It is kept. Copy the staging off the node by hand, or discard it explicitly; automatic recovery needs a capture volume that outlives the Pod (a PVC), which is not provisioned.`,
+    };
+  }
+
   async inspect(input: RuntimeAdapterInspectInput): Promise<RuntimeAdapterInspectResult> {
     const pods = await this.#listManagedPodsCoalesced();
     const pod = pods.find((candidate) => candidate.metadata?.name === input.resourceId);
@@ -742,12 +785,26 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
       await this.#ensureSecret(launchSecret, runId);
     }
     await this.#ensureService(service, runId);
-    const liveness = await this.#ensurePod(pod, runId);
-    if (liveness === "recreated" || liveness === "created" || liveness === "adopted") {
-      // fallthrough to readiness
+    const endpoint = workspaceControlEndpoint(names.service, config.namespace, config.controlPort);
+    const identity: RuntimeLaunchIdentity = {
+      adapter: this.id,
+      resourceId: names.pod,
+      reference: names.pod,
+      endpoint,
+    };
+    const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
+    try {
+      // A capture Pod that ended (a Failed Pod's emptyDir holds its staging) is never replaced.
+      await this.#ensurePod(pod, runId, { keepEnded: holdsCaptures });
+    } catch (error) {
+      return failLaunch({
+        blueprint: parsed.blueprint,
+        identity: error instanceof KubernetesEndedPodFound ? identity : undefined,
+        runtime: "exited",
+        error,
+      });
     }
 
-    const endpoint = workspaceControlEndpoint(names.service, config.namespace, config.controlPort);
     const target: SealantTarget = {
       kind: "websocket",
       url: endpoint,
@@ -757,19 +814,26 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
       },
     };
 
+    // The Pod exists: from here a capture Pod runs writers whether or not this worker's probe
+    // gets through (a control-network partition, a TLS fault). A capture-sourced launch that
+    // fails from now on keeps the Pod (`launch-retention.ts`); anything else is deleted.
     try {
+      await reportStartedLaunch(hooks, identity);
       await this.#awaitRunning(names.pod, runId);
       await this.#awaitHealthy(target, names.pod);
     } catch (error) {
-      await this.#deleteAll(names).catch(() => undefined);
-      throw error;
+      return failLaunch({
+        blueprint: parsed.blueprint,
+        identity,
+        runtime: "running",
+        error,
+        cleanup: () => this.#deleteAll(names),
+      });
     }
 
-    // The daemon answers: a writer can run in the Pod from here. A capture-sourced launch that
-    // fails past this point keeps the Pod (`launch-retention.ts`); anything else is deleted.
     return completeReadyLaunch({
       blueprint: parsed.blueprint,
-      identity: { adapter: this.id, resourceId: names.pod, reference: names.pod, endpoint },
+      identity,
       hooks,
       steps: async () => {
         if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
@@ -905,7 +969,14 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     }
   }
 
-  async #ensurePod(pod: V1Pod, runId: string): Promise<"created" | "adopted" | "recreated"> {
+  async #ensurePod(
+    pod: V1Pod,
+    runId: string,
+    options: {
+      /** Never delete an ended Pod of this run: throw `KubernetesEndedPodFound` (capture). */
+      readonly keepEnded: boolean;
+    },
+  ): Promise<"created" | "adopted" | "recreated"> {
     const name = pod.metadata?.name ?? "";
     const created = await this.#api.createPod(pod);
     if (created.outcome === "created") {
@@ -914,6 +985,9 @@ export class KubernetesRuntimeAdapter implements RuntimeAdapter {
     const existing = await this.#api.getPod(name);
     this.#assertOurs("Pod", existing?.metadata?.labels, runId);
     const phase = podPhase(existing);
+    if ((phase === "Failed" || phase === "Succeeded") && options.keepEnded) {
+      throw new KubernetesEndedPodFound(name, phase);
+    }
     if (phase === "Failed" || phase === "Succeeded") {
       // A dead Pod from an earlier attempt at this run: replace it (restartPolicy is Never).
       await this.#api.deletePod(name);

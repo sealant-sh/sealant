@@ -83,8 +83,11 @@ describe("reapOrphanedKubernetesResources", () => {
     const h = harness({
       rows: new Map([
         ["live", row("live", { status: "ready" })],
-        ["stopped", row("stopped", { status: "stopped" })],
-        ["exited", row("exited", { status: "failed", errorCode: "runtime-exited" })],
+        ["stopped", row("stopped", { status: "stopped", sourceKind: "git" })],
+        [
+          "exited",
+          row("exited", { status: "failed", errorCode: "runtime-exited", sourceKind: "git" }),
+        ],
         ["retained", row("retained", { status: "failed", errorCode: LAUNCH_RETAINED_ERROR_CODE })],
       ]),
       pods: ["live", "stopped", "exited", "retained"],
@@ -117,6 +120,23 @@ describe("reapOrphanedKubernetesResources", () => {
         endpoint: "wss://ws-unrecorded.sealant.svc:7443",
       }),
     ]);
+  });
+
+  it("keeps a failed capture Pod the exit reconciler retained (no completion evidence)", async () => {
+    // Review 2 #3: the exit reconciler records the exit (`failed`, `runtime-exited`) and keeps
+    // the Pod, whose emptyDir holds the staged captures; the orphan sweep must not delete it.
+    const h = harness({
+      rows: new Map([
+        [
+          "kept",
+          row("kept", { status: "failed", errorCode: "runtime-exited", sourceKind: "capture" }),
+        ],
+      ]),
+      pods: ["kept"],
+      snapshots: new Map([["kept", "capture"]]),
+    });
+    expect(await h.run()).toBe(0);
+    expect(h.stopped()).toEqual([]);
   });
 
   it("keeps a capture-sourced pod with no row when even recording it fails", async () => {

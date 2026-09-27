@@ -657,9 +657,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(attemptIdentity?.ownerUserId === undefined
             ? {}
             : { principalId: attemptIdentity.ownerUserId }),
-          // Once the daemon answers, the executor's identity is on the row before any later
-          // launch step runs: a worker that dies after this leaves a runtime it can be found by.
-          hooks: job.runId === null ? {} : { onReady: recordReadyIdentity(job.runId) },
+          // As soon as the executor exists — and again once its daemon answers — its identity is
+          // on the row before any later launch step runs: a worker that dies after this leaves a
+          // runtime it can be found by (a capture executor is retained from its start).
+          hooks:
+            job.runId === null
+              ? {}
+              : {
+                  onStarted: recordReadyIdentity(job.runId),
+                  onReady: recordReadyIdentity(job.runId),
+                },
         }),
       catch: toWorkspaceBuildJobProcessingError,
     }).pipe(

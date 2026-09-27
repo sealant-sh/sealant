@@ -1,8 +1,12 @@
 /**
  * The worker's capture drain ledger: ownership and progress of every drain in
  * `workspace_capture_drains`, so the exclusion and the stall/silence clocks hold across every
- * worker process and survive a worker restart (`capture-drain.ts`).
+ * worker process and survive a worker restart (`capture-drain.ts`). Each claim holds the lease
+ * under its own token (`<owner>#<uuid>`), so two drains of one run never overlap even inside one
+ * worker process, and neither can release the other's lease.
  */
+import { randomUUID } from "node:crypto";
+
 import {
   SealantDB,
   WorkspaceCaptureDrainRepo,
@@ -14,10 +18,11 @@ import { Effect, Layer } from "effect";
 import { z } from "zod";
 
 import type { CaptureFlushReport } from "../sealantd/runtime.js";
-import type {
-  CaptureDrainEntry,
-  CaptureDrainLedger,
-  CaptureDrainObservation,
+import {
+  claimLeaseOwner,
+  type CaptureDrainEntry,
+  type CaptureDrainLedger,
+  type CaptureDrainObservation,
 } from "./capture-drain.js";
 
 const storedStatusSchema = z.object({
@@ -81,6 +86,31 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
           by: row.discardRequestedBy ?? "unknown",
         },
       }),
+  ...(row.completionExecutorId === null ||
+  row.completionEpoch === null ||
+  row.completionCaptureN === null ||
+  row.completionAttestedAt === null
+    ? {}
+    : {
+        completionAttested: {
+          executorId: row.completionExecutorId,
+          epoch: row.completionEpoch,
+          captureN: row.completionCaptureN,
+          atMs: row.completionAttestedAt.getTime(),
+          by: row.completionAttestedBy ?? "unknown",
+        },
+      }),
+  ...(row.retainedAt === null
+    ? {}
+    : {
+        retained: {
+          atMs: row.retainedAt.getTime(),
+          reason: row.retainedReason ?? "not recorded",
+          recoveryAttempts: row.recoveryAttempts,
+          nextRecoveryAtMs: row.nextRecoveryAt?.getTime(),
+          lastRecoveryError: row.lastRecoveryError ?? undefined,
+        },
+      }),
 });
 
 const storedStatus = (status: CaptureFlushReport): Readonly<Record<string, unknown>> => ({
@@ -122,12 +152,13 @@ export const captureDrainLedgerFromRepo = (
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
+        const token = randomUUID();
         const row = yield* repo.claimLease({
           runId,
-          owner: options.owner,
+          owner: claimLeaseOwner(options.owner, token),
           leaseMs: options.leaseMs,
         });
-        return row === undefined ? undefined : entryFromRow(row);
+        return row === undefined ? undefined : { entry: entryFromRow(row), token };
       }),
     ).pipe(
       Effect.catchCause((cause) =>
@@ -138,13 +169,13 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  save: (runId, entry, observation: CaptureDrainObservation | undefined) =>
+  save: (runId, token, entry, observation: CaptureDrainObservation | undefined) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
         const row = yield* repo.recordProgress({
           runId,
-          owner: options.owner,
+          owner: claimLeaseOwner(options.owner, token),
           leaseMs: options.leaseMs,
           progress: {
             lastStatus: entry.last === undefined ? null : storedStatus(entry.last),
@@ -174,17 +205,36 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  peek: (runId) =>
+  read: (runId) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
         const row = yield* repo.getByRunId(runId);
-        return row === undefined ? undefined : entryFromRow(row);
+        return {
+          readable: true as const,
+          entry: row === undefined ? undefined : entryFromRow(row),
+        };
       }),
     ).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning(`Capture drain: reading run ${runId}'s drain failed.`, cause).pipe(
-          Effect.as(undefined),
+        Effect.logWarning(
+          `Capture drain: reading run ${runId}'s drain failed; nothing in it is known (no completion, attestation or discard counts).`,
+          cause,
+        ).pipe(Effect.as({ readable: false as const })),
+      ),
+    ),
+
+  markRetained: (runId, reason) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.markRetained({ runId, reason });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(
+          `Capture drain: recording run ${runId}'s executor as retained failed; it is kept regardless, but recovery will not find it until a later sweep records it.`,
+          cause,
         ),
       ),
     ),
@@ -208,11 +258,11 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  release: (runId) =>
+  release: (runId, token) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
-        yield* repo.releaseLease({ runId, owner: options.owner });
+        yield* repo.releaseLease({ runId, owner: claimLeaseOwner(options.owner, token) });
       }),
     ).pipe(
       Effect.catchCause((cause) =>

@@ -1,5 +1,6 @@
 import { runtimeAdapterIds, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
 import {
+  bigint,
   boolean,
   doublePrecision,
   index,
@@ -227,6 +228,30 @@ export const workspaceCaptureDrains = pgTable(
      */
     discardRequestedAt: timestamp("discard_requested_at", { mode: "date", withTimezone: true }),
     discardRequestedBy: text("discard_requested_by"),
+    /**
+     * The control plane's attestation, on a stop request, that its store holds a sealed FINAL of
+     * this run's executor: the executor it names (the run id, or the runtime's resource id or
+     * reference), the lease epoch and the sealed capture's chain position, when and by whom.
+     * Permission to delete the executor once it has ended (the preservation policy checks the
+     * id and the epoch); the latest attestation stands.
+     */
+    completionExecutorId: text("completion_executor_id"),
+    completionEpoch: bigint("completion_epoch", { mode: "number" }),
+    completionCaptureN: bigint("completion_capture_n", { mode: "number" }),
+    completionAttestedAt: timestamp("completion_attested_at", { mode: "date", withTimezone: true }),
+    completionAttestedBy: text("completion_attested_by"),
+    /**
+     * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
+     * without a complete final flush, or its launch failed after it started). Set once (the
+     * first instant stands) with why; cleared when the executor is finally removed (`stopped`,
+     * `discarded`) or found gone. Recovery retries on a backoff: `nextRecoveryAt`, how many
+     * attempts, and the last attempt's error.
+     */
+    retainedAt: timestamp("retained_at", { mode: "date", withTimezone: true }),
+    retainedReason: text("retained_reason"),
+    recoveryAttempts: integer("recovery_attempts").notNull().default(0),
+    nextRecoveryAt: timestamp("next_recovery_at", { mode: "date", withTimezone: true }),
+    lastRecoveryError: text("last_recovery_error"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -235,7 +260,10 @@ export const workspaceCaptureDrains = pgTable(
       .$defaultFn(() => new Date())
       .$onUpdate(() => new Date()),
   },
-  (table) => [index("workspace_capture_drains_state_idx").on(table.state)],
+  (table) => [
+    index("workspace_capture_drains_state_idx").on(table.state),
+    index("workspace_capture_drains_retained_idx").on(table.retainedAt, table.nextRecoveryAt),
+  ],
 );
 
 export type WorkspaceCaptureDrain = typeof workspaceCaptureDrains.$inferSelect;

@@ -26,6 +26,7 @@ import type {
   ListSessionsQuery,
   ListWorkspacesQuery,
   ReplanWorkspaceCaptureRequest,
+  RecoverWorkspaceRequest,
   RestartWorkspaceRequest,
   SessionInputRequest,
   SessionResizeRequest,
@@ -95,6 +96,11 @@ export const replanWorkspaceCaptureOp = (
 export const stopWorkspaceOp = (workspaceId: string, payload: StopWorkspaceRequest) =>
   Effect.flatMap(SealantApiClient, (client) =>
     client.workspaces.stopWorkspace({ params: { workspaceId }, payload }),
+  );
+
+export const recoverWorkspaceOp = (workspaceId: string, payload: RecoverWorkspaceRequest) =>
+  Effect.flatMap(SealantApiClient, (client) =>
+    client.workspaces.recoverWorkspace({ params: { workspaceId }, payload }),
   );
 
 export const restartWorkspaceOp = (workspaceId: string, payload: RestartWorkspaceRequest) =>

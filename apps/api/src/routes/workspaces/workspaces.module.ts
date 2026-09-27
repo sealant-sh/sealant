@@ -35,6 +35,8 @@ import {
   type ExecWorkspaceRequest,
   type ExpireWorkspaceRequest,
   type ExpireWorkspaceResponse,
+  type RecoverWorkspaceRequest,
+  type RecoverWorkspaceResponse,
   type RestartWorkspaceRequest,
   type RestartWorkspaceResponse,
   type StopWorkspaceRequest,
@@ -83,7 +85,9 @@ import {
   type NewWorkspace,
 } from "@sealant/validators";
 import {
+  attestationCoversExecutor,
   bindRootMountPath,
+  runtimeRestartsRetainedExecutors,
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   SealantRuntime,
@@ -1799,7 +1803,7 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       attemptSnapshot,
       sshGatewayConfig,
     );
-    const observed = mapWorkspaceCaptureDrain(captureDrain);
+    const observed = mapWorkspaceCaptureDrain(captureDrain, runtimeInstance?.adapter);
     return observed === undefined ? details : { ...details, captureDrain: observed };
   });
 };
@@ -1810,6 +1814,8 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
  */
 export const mapWorkspaceCaptureDrain = (
   row: WorkspaceCaptureDrainRecord | undefined,
+  /** The runtime adapter of the run's executor: whether a retained one can be restarted. */
+  adapter?: string | null,
 ): WorkspaceCaptureDrain | undefined => {
   if (row === undefined || row.state === null) {
     return undefined;
@@ -1827,6 +1833,39 @@ export const mapWorkspaceCaptureDrain = (
           discard: {
             requestedBy: row.discardRequestedBy,
             requestedAt: row.discardRequestedAt.toISOString(),
+          },
+        }),
+    ...(row.retainedAt === null || row.retainedAt === undefined
+      ? {}
+      : {
+          retained: {
+            since: row.retainedAt.toISOString(),
+            reason: row.retainedReason ?? "not recorded",
+            recoverable: runtimeRestartsRetainedExecutors(adapter),
+            recoveryAttempts: row.recoveryAttempts ?? 0,
+            ...(row.nextRecoveryAt === null || row.nextRecoveryAt === undefined
+              ? {}
+              : { nextRecoveryAt: row.nextRecoveryAt.toISOString() }),
+            ...(row.lastRecoveryError === null || row.lastRecoveryError === undefined
+              ? {}
+              : { lastRecoveryError: row.lastRecoveryError }),
+          },
+        }),
+    ...(row.completionExecutorId === null ||
+    row.completionExecutorId === undefined ||
+    row.completionEpoch === null ||
+    row.completionEpoch === undefined ||
+    row.completionCaptureN === null ||
+    row.completionCaptureN === undefined ||
+    row.completionAttestedAt === null ||
+    row.completionAttestedAt === undefined
+      ? {}
+      : {
+          completion: {
+            executorId: row.completionExecutorId,
+            epoch: row.completionEpoch,
+            captureN: row.completionCaptureN,
+            attestedAt: row.completionAttestedAt.toISOString(),
           },
         }),
   };
@@ -2461,10 +2500,12 @@ export const stopWorkspace = (input: {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
     const discard = input.payload.discardUnsaved === true;
+    const attestation = input.payload.completion;
 
-    // A discard is accepted on a workspace whose stop was already recorded: that is exactly the
-    // workspace a drain keeps running because its work is not confirmed saved.
-    if (workspace.status === "stopped" && !discard) {
+    // A discard, or a completion attestation, is accepted on a workspace whose stop was already
+    // recorded: that is exactly the workspace a drain keeps because its work is not confirmed
+    // saved (the stop is enqueued again so the worker reconsiders it at once).
+    if (workspace.status === "stopped" && !discard && attestation === undefined) {
       const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
       return response;
     }
@@ -2490,16 +2531,56 @@ export const stopWorkspace = (input: {
       });
     }
 
+    // The control plane that owns the capture store attests a sealed FINAL of the executor:
+    // recorded only when it names THIS executor and is not for an older epoch than the executor
+    // last reported, and then it lets that executor's disk go once it has ended.
+    let completion: StopWorkspaceResponse["completion"];
+    if (attestation !== undefined) {
+      const drains = yield* WorkspaceCaptureDrainRepo;
+      const existing = yield* withInternalError(
+        drains.getByRunId(latestRunId),
+        "Failed to load workspace capture drain.",
+      );
+      const observedEpoch = existing?.lastStatus?.["epoch"];
+      const covers = attestationCoversExecutor(
+        attestation,
+        { runId: latestRunId, resourceId: instance.resourceId, reference: instance.reference },
+        typeof observedEpoch === "number" ? observedEpoch : undefined,
+      );
+      if (covers.covers) {
+        yield* withInternalError(
+          drains.attestCompletion({
+            runId: latestRunId,
+            executorId: attestation.executorId,
+            epoch: attestation.epoch,
+            captureN: attestation.captureN,
+            attestedBy: input.payload.ownerUserId,
+          }),
+          "Failed to record the completion attestation.",
+        );
+        completion = { outcome: "accepted" };
+        yield* Effect.logInfo(
+          `Workspace ${workspace.id}: ${input.payload.ownerUserId} attested a sealed final capture of run ${latestRunId}'s executor ${attestation.executorId} (epoch ${String(attestation.epoch)}, capture ${String(attestation.captureN)}); recorded.`,
+        );
+      } else {
+        completion = { outcome: "ignored", detail: covers.reason };
+        yield* Effect.logWarning(
+          `Workspace ${workspace.id}: a completion attestation for run ${latestRunId} was ignored: ${covers.reason}. The executor is kept until its work is confirmed saved.`,
+        );
+      }
+    }
+
     if (discard) {
       // The audit, and the durable intent every stop path honours (the lifecycle stop, and the
-      // reaper that re-drives a lost one): the owner discarded this runtime's unsaved captures.
+      // reaper that re-drives a lost one): the owner asked to discard this runtime's unsaved
+      // captures. This is the request; the worker records the termination once it happened.
       const drains = yield* WorkspaceCaptureDrainRepo;
       yield* withInternalError(
         drains.requestDiscard({ runId: latestRunId, requestedBy: input.payload.ownerUserId }),
         "Failed to record the discard of the workspace's unsaved captures.",
       );
       yield* Effect.logWarning(
-        `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} discarded the unsaved captures of run ${latestRunId}; the runtime is terminated without a drain.`,
+        `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} requested that the unsaved captures of run ${latestRunId} be discarded (discard requested); the stop is enqueued, and the worker ends the runtime without a drain.`,
       );
     }
 
@@ -2532,6 +2613,55 @@ export const stopWorkspace = (input: {
     const response: StopWorkspaceResponse = {
       workspaceId: workspace.id,
       status: mapStoredWorkspaceStatus(workspace.status),
+      ...(completion === undefined ? {} : { completion }),
+    };
+    return response;
+  });
+};
+
+/**
+ * Async recover (202): make a recovery attempt of the workspace's RETAINED executor due now (its
+ * disk holds work not confirmed saved). The worker restarts it on its own disk where the runtime
+ * can (Docker), drains it with a FINAL flush and only then removes it; elsewhere it reports what
+ * can be done. Nothing retained for the current run = `not-retained`, nothing done.
+ */
+export const recoverWorkspace = (input: {
+  readonly workspaceId: string;
+  readonly payload: RecoverWorkspaceRequest;
+}) => {
+  return Effect.gen(function* () {
+    const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    const latestRunId = workspace.latestRunId;
+    if (latestRunId === null) {
+      return yield* new WorkspaceConflictError({
+        message: `Workspace ${input.workspaceId} has never launched a runtime.`,
+      });
+    }
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    const row = yield* withInternalError(
+      drains.requestRecovery(latestRunId),
+      "Failed to request the recovery of the workspace's retained executor.",
+    );
+    if (row === undefined) {
+      const response: RecoverWorkspaceResponse = {
+        workspaceId: workspace.id,
+        state: "not-retained",
+      };
+      return response;
+    }
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const instance = yield* withInternalError(
+      runtimeInstances.getRuntimeInstanceByRunId(latestRunId),
+      "Failed to load the workspace runtime.",
+    );
+    const recoverable = runtimeRestartsRetainedExecutors(instance?.adapter);
+    yield* Effect.logWarning(
+      `Workspace ${workspace.id}: ${input.payload.ownerUserId} asked to recover run ${latestRunId}'s retained executor (${instance?.adapter ?? "unknown runtime"}); a recovery attempt is due now${recoverable ? "" : " (this runtime cannot restart it; it is reported and kept)"}.`,
+    );
+    const response: RecoverWorkspaceResponse = {
+      workspaceId: workspace.id,
+      state: "requested",
+      recoverable,
     };
     return response;
   });

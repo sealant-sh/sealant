@@ -268,13 +268,27 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.connect).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the stop through when the daemon never answered and the runtime reports the executor ended", async () => {
+  it("keeps an executor that ended before any drain reached its daemon (its disk remains)", async () => {
+    // Review 2 #2: sealantd exits 75 with its staging on disk after its own shutdown FINAL
+    // fails, whether or not a drain of ours ever reached it.
     const outcome = await drain(
       fakeCaptureDaemon(["unreachable"]),
       inMemoryCaptureDrainLedger(),
       1_000,
       FAST,
       "exited",
+    );
+    expect(outcome.kind).toBe("silent");
+    expect(drainPermitsStop(outcome)).toBe(false);
+  });
+
+  it("lets the stop through when the daemon never answered and nothing of the executor is left", async () => {
+    const outcome = await drain(
+      fakeCaptureDaemon(["unreachable"]),
+      inMemoryCaptureDrainLedger(),
+      1_000,
+      FAST,
+      "missing",
     );
     expect(outcome.kind).toBe("gone");
     expect(drainPermitsStop(outcome)).toBe(true);
@@ -301,7 +315,7 @@ describe("drainCaptureBeforeStop", () => {
     const exited = await drain(fakeCaptureDaemon(["unreachable"]), ledger, 1_000, FAST, "exited");
     expect(exited).toMatchObject({
       kind: "silent",
-      detail: expect.stringMatching(/not confirmed complete/),
+      detail: expect.stringMatching(/without a final flush confirmed complete/),
     });
     expect(drainPermitsStop(exited)).toBe(false);
 
@@ -417,7 +431,19 @@ describe("drain ownership across workers", () => {
     const outcome = await drain(daemon, slow);
 
     expect(outcome.kind).toBe("busy");
-    expect(store.rows.get("run_1")?.owner).toBe("other");
+    expect(store.rows.get("run_1")?.owner).toMatch(/^other#/);
+  });
+});
+
+describe("drain ownership within one worker", () => {
+  it("admits one of two simultaneous claims on a run from the same worker process", async () => {
+    // Review 2 RISK: every stop path of a worker shares one lease owner, and the claim admitted
+    // an existing lease of the same owner, so two concurrent drains of one run both ran.
+    const ledger = inMemoryCaptureDrainLedger({ owner: "one-worker" });
+    const claims = await Effect.runPromise(
+      Effect.all([ledger.claim("run"), ledger.claim("run")], { concurrency: "unbounded" }),
+    );
+    expect(claims.filter((claim) => claim !== undefined)).toHaveLength(1);
   });
 });
 

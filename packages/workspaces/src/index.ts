@@ -21,4 +21,5 @@ export * from "./worker/reap-orphaned-kubernetes-resources.js";
 export * from "./worker/reap-stale-workspace-build-jobs.js";
 export * from "./worker/reap-workspace-images.js";
 export * from "./worker/reconcile-runtime-exits.js";
+export * from "./worker/recover-retained-executors.js";
 export * from "./git/working-tree-changes.js";

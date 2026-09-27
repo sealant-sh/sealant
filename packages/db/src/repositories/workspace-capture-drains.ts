@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -18,6 +18,11 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "recordSchedule",
   "recordObservation",
   "requestDiscard",
+  "attestCompletion",
+  "markRetained",
+  "listRetainedDue",
+  "recordRecoveryAttempt",
+  "requestRecovery",
 ]);
 
 type WorkspaceCaptureDrainRepoOperation = typeof workspaceCaptureDrainRepoOperationSchema.Type;
@@ -118,6 +123,43 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly runId: string;
     readonly requestedBy: string;
   }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Record the control plane's attestation that its store holds a sealed FINAL of the run's
+   * executor (the latest stands). Returns the row.
+   */
+  readonly attestCompletion: (input: {
+    readonly runId: string;
+    readonly executorId: string;
+    readonly epoch: number;
+    readonly captureN: number;
+    readonly attestedBy: string;
+  }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Record that the run's executor is retained (its disk holds work not confirmed saved): the
+   * first instant stands, the reason is the latest, and recovery is due at once if not scheduled.
+   * The observation reads `kept` with the reason.
+   */
+  readonly markRetained: (input: {
+    readonly runId: string;
+    readonly reason: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /** Retained executors whose next recovery attempt is due, the most overdue first. */
+  readonly listRetainedDue: (input: {
+    readonly limit: number;
+  }) => Effect.Effect<readonly WorkspaceCaptureDrain[], WorkspaceCaptureDrainRepoError>;
+  /** One recovery attempt happened: count it, keep its error (or clear it), schedule the next. */
+  readonly recordRecoveryAttempt: (input: {
+    readonly runId: string;
+    readonly error: string | null;
+    readonly nextRecoveryAt: Date;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Make a retained executor's recovery due now (the owner asked). Returns the row, or
+   * `undefined` when the run's executor is not retained.
+   */
+  readonly requestRecovery: (
+    runId: string,
+  ) => Effect.Effect<WorkspaceCaptureDrain | undefined, WorkspaceCaptureDrainRepoError>;
   /** Persist the deadline sweep's schedule and throughput sample; the lease is untouched. */
   readonly recordSchedule: (input: {
     readonly runId: string;
@@ -251,19 +293,134 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
       recordObservation: (input) =>
         withRepoError(
           "recordObservation",
-          db
-            .insert(workspaceCaptureDrains)
-            .values({
-              runId: input.runId,
+          Effect.gen(function* () {
+            // The executor was removed (or found gone): nothing is retained any more.
+            const endsRetention =
+              input.state === "stopped" || input.state === "discarded" || input.state === "gone";
+            const set = {
               state: input.state,
               detail: input.detail,
               observedAt: new Date(),
-            } satisfies NewWorkspaceCaptureDrain)
-            .onConflictDoUpdate({
-              target: workspaceCaptureDrains.runId,
-              set: { state: input.state, detail: input.detail, observedAt: new Date() },
+              ...(endsRetention ? { retainedAt: null, nextRecoveryAt: null } : {}),
+            };
+            yield* db
+              .insert(workspaceCaptureDrains)
+              .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
+              .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set });
+          }),
+        ),
+
+      attestCompletion: (input) =>
+        withRepoError(
+          "attestCompletion",
+          Effect.gen(function* () {
+            const columns = {
+              completionExecutorId: input.executorId,
+              completionEpoch: input.epoch,
+              completionCaptureN: input.captureN,
+              completionAttestedAt: new Date(),
+              completionAttestedBy: input.attestedBy,
+            };
+            const [row] = yield* db
+              .insert(workspaceCaptureDrains)
+              .values({ runId: input.runId, ...columns } satisfies NewWorkspaceCaptureDrain)
+              .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set: columns })
+              .returning();
+            if (row === undefined) {
+              return yield* Effect.fail(
+                new Error(
+                  `Recording the completion attestation of run ${input.runId} wrote no row.`,
+                ),
+              );
+            }
+            return row;
+          }),
+        ),
+
+      markRetained: (input) =>
+        withRepoError(
+          "markRetained",
+          Effect.gen(function* () {
+            const detail = `not saved · retained · ${input.reason}`;
+            yield* db
+              .insert(workspaceCaptureDrains)
+              .values({
+                runId: input.runId,
+                retainedAt: new Date(),
+                retainedReason: input.reason,
+                nextRecoveryAt: new Date(),
+                state: "kept",
+                detail,
+                observedAt: new Date(),
+              } satisfies NewWorkspaceCaptureDrain)
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set: {
+                  retainedAt: sql`coalesce(${workspaceCaptureDrains.retainedAt}, now())`,
+                  retainedReason: input.reason,
+                  nextRecoveryAt: sql`coalesce(${workspaceCaptureDrains.nextRecoveryAt}, now())`,
+                  state: "kept",
+                  detail,
+                  observedAt: new Date(),
+                },
+              });
+          }),
+        ),
+
+      listRetainedDue: (input) =>
+        withRepoError(
+          "listRetainedDue",
+          db
+            .select()
+            .from(workspaceCaptureDrains)
+            .where(
+              and(
+                isNotNull(workspaceCaptureDrains.retainedAt),
+                or(
+                  isNull(workspaceCaptureDrains.nextRecoveryAt),
+                  lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
+                ),
+              ),
+            )
+            .orderBy(asc(workspaceCaptureDrains.nextRecoveryAt))
+            .limit(Math.max(1, Math.round(input.limit))),
+        ),
+
+      recordRecoveryAttempt: (input) =>
+        withRepoError(
+          "recordRecoveryAttempt",
+          db
+            .update(workspaceCaptureDrains)
+            .set({
+              recoveryAttempts: sql`${workspaceCaptureDrains.recoveryAttempts} + 1`,
+              lastRecoveryError: input.error,
+              nextRecoveryAt: input.nextRecoveryAt,
             })
+            .where(
+              and(
+                eq(workspaceCaptureDrains.runId, input.runId),
+                isNotNull(workspaceCaptureDrains.retainedAt),
+              ),
+            )
             .pipe(Effect.asVoid),
+        ),
+
+      requestRecovery: (runId) =>
+        withRepoError(
+          "requestRecovery",
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .update(workspaceCaptureDrains)
+              .set({ nextRecoveryAt: sql`now()` })
+              .where(
+                and(
+                  eq(workspaceCaptureDrains.runId, runId),
+                  isNotNull(workspaceCaptureDrains.retainedAt),
+                ),
+              )
+              .returning();
+            return row;
+          }),
         ),
 
       requestDiscard: (input) =>

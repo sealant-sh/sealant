@@ -46,6 +46,7 @@ import {
   reapStaleWorkspaceBuildJobs,
   reapWorkspaceImages,
   reconcileRuntimeExits,
+  recoverRetainedExecutors,
   sweepStaleBuildContexts,
   targetDerivationOptionsFromEnv,
   watchRuntimeExits,
@@ -438,11 +439,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     // Kubernetes: objects that outlived their runtime instance row (worker crash, lost stop).
     const kubernetesAdapter = kubernetesAdapters[0];
     if (kubernetesAdapter !== undefined) {
-      reapOrphanedKubernetesResources({ db, adapter: kubernetesAdapter }).catch(
-        (error: unknown) => {
-          console.error("Kubernetes reconciler tick failed", { error });
-        },
-      );
+      // Through the one preservation policy: a capture Pod goes only with evidence it may.
+      reapOrphanedKubernetesResources({
+        db,
+        adapter: kubernetesAdapter,
+        ledger: captureDrainLedger,
+      }).catch((error: unknown) => {
+        console.error("Kubernetes reconciler tick failed", { error });
+      });
     }
     reapExpiredWorkspaces({
       db,
@@ -461,8 +465,14 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   expiryReaperTimer.unref();
 
   // Deadline preservation: a runtime with its own lifetime (a MicroVM's maximum duration) gets
-  // its final drain and a planned stop early enough to finish before the platform ends it.
+  // its final drain and a planned stop early enough to finish before the platform ends it. Every
+  // due runtime is driven every tick; a tick still driving drains is not overlapped by the next.
+  let deadlineSweepRunning = false;
   const runDeadlineSweepTick = (): void => {
+    if (deadlineSweepRunning) {
+      return;
+    }
+    deadlineSweepRunning = true;
     preserveBeforeDeadline({
       db,
       runtimeAdapters,
@@ -473,15 +483,47 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         leadMs: env.WORKSPACE_CAPTURE_DEADLINE_LEAD_MS,
         watchWindowMs: env.WORKSPACE_CAPTURE_DEADLINE_WATCH_MS,
       },
-    }).catch((error: unknown) => {
-      console.error("Workspace deadline preservation tick failed", { error });
-    });
+    })
+      .catch((error: unknown) => {
+        console.error("Workspace deadline preservation tick failed", { error });
+      })
+      .finally(() => {
+        deadlineSweepRunning = false;
+      });
   };
   const deadlineSweepTimer = setInterval(
     runDeadlineSweepTick,
     env.WORKSPACE_CAPTURE_DEADLINE_SWEEP_INTERVAL_MS,
   );
   deadlineSweepTimer.unref();
+
+  // Recovery of retained executors: a capture executor kept because its disk holds work not
+  // confirmed saved is restarted on its own disk where the runtime can (Docker), drained with a
+  // FINAL flush and only then removed; elsewhere it is reported and kept. Backoff per executor.
+  let recoverySweepRunning = false;
+  const runRecoverySweepTick = (): void => {
+    if (recoverySweepRunning) {
+      return;
+    }
+    recoverySweepRunning = true;
+    recoverRetainedExecutors({
+      db,
+      runtimeAdapters,
+      targetOptions,
+      captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
+    })
+      .catch((error: unknown) => {
+        console.error("Retained executor recovery tick failed", { error });
+      })
+      .finally(() => {
+        recoverySweepRunning = false;
+      });
+  };
+  const recoverySweepTimer = setInterval(
+    runRecoverySweepTick,
+    env.WORKSPACE_EXPIRY_REAPER_INTERVAL_MS,
+  );
+  recoverySweepTimer.unref();
 
   // Exit reconciler: a runtime that dies on its own (`docker kill`, OOM, node loss) is recorded
   // `failed` with its exit code instead of staying `ready` until a client probes it. Docker
@@ -578,6 +620,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       clearInterval(reaperTimer);
       clearInterval(expiryReaperTimer);
       clearInterval(deadlineSweepTimer);
+      clearInterval(recoverySweepTimer);
       clearInterval(exitReconcilerTimer);
       exitWatch.close();
       if (imageRetentionBootTimer !== undefined) clearTimeout(imageRetentionBootTimer);

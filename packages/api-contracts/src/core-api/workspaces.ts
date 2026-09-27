@@ -343,14 +343,65 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
    * still up (a kept one). Owner only.
    */
   discardUnsaved: Schema.optional(Schema.Boolean),
+  /**
+   * The caller's attestation that its capture store holds a SEALED final capture of this
+   * workspace's current executor: a FINAL flush that completed (every writer stopped, both
+   * classes snapshotted, everything registered) and was recorded durably by the store. It is
+   * permission to remove that executor's disk once it has ended, even when this control plane
+   * never read `complete: true` from it itself (the FINAL reply was lost, the daemon exited
+   * before a drain reached it). Accepted only when `executorId` names the current executor — the
+   * run id, or the runtime's `resourceId` / `reference` (`workspace.details().runtime`) — and
+   * `epoch` is not older than any the executor reported; otherwise ignored, and the executor is
+   * kept as before. Never a reason to skip the drain of a running executor.
+   */
+  completion: Schema.optional(
+    Schema.Struct({
+      /** The sealed capture's chain position (`n`). */
+      captureN: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      /** The capture lease epoch the seal was made under. */
+      epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      /** The executor the seal names: run id, or runtime `resourceId` / `reference`. */
+      executorId: NonEmptyString,
+    }),
+  ),
 });
 export type StopWorkspaceRequest = typeof stopWorkspaceRequestSchema.Type;
 
 export const stopWorkspaceResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   status: workspaceStatusSchema,
+  /**
+   * What became of a `completion` attestation on the request: `accepted` (recorded; it lets the
+   * executor's disk go once it has ended) or `ignored` (it does not name this executor, or is for
+   * an older epoch; `detail` says which). Absent when the request carried none.
+   */
+  completion: Schema.optional(
+    Schema.Struct({
+      outcome: Schema.Literals(["accepted", "ignored"]),
+      detail: Schema.optional(Schema.String),
+    }),
+  ),
 });
 export type StopWorkspaceResponse = typeof stopWorkspaceResponseSchema.Type;
+
+/** Owner-scoped: ask the control plane to recover the workspace's retained executor now. */
+export const recoverWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type RecoverWorkspaceRequest = typeof recoverWorkspaceRequestSchema.Type;
+
+/**
+ * `requested`: the workspace's executor is retained (its disk holds work not confirmed saved) and
+ * a recovery attempt is due now; `recoverable` says whether its runtime can restart it on its own
+ * disk (Docker) or only report it (Kubernetes, MicroVM). `not-retained`: nothing is retained for
+ * the workspace's current run; nothing was done.
+ */
+export const recoverWorkspaceResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  state: Schema.Literals(["requested", "not-retained"]),
+  recoverable: Schema.optional(Schema.Boolean),
+});
+export type RecoverWorkspaceResponse = typeof recoverWorkspaceResponseSchema.Type;
 
 export const restartWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
@@ -453,6 +504,32 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
   /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
   discard: Schema.optional(
     Schema.Struct({ requestedBy: NonEmptyString, requestedAt: Schema.String }),
+  ),
+  /**
+   * The executor is RETAINED: kept because its disk holds work not confirmed saved. `since` and
+   * `reason` say when and why; recovery is attempted on a backoff (`recoveryAttempts`,
+   * `nextRecoveryAt`, `lastRecoveryError`); `recoverable` says whether its runtime can restart it
+   * on its own disk (Docker) or only report it (Kubernetes, MicroVM). Absent when nothing is
+   * retained.
+   */
+  retained: Schema.optional(
+    Schema.Struct({
+      since: Schema.String,
+      reason: Schema.String,
+      recoverable: Schema.Boolean,
+      recoveryAttempts: Schema.Int,
+      nextRecoveryAt: Schema.optional(Schema.String),
+      lastRecoveryError: Schema.optional(Schema.String),
+    }),
+  ),
+  /** The latest `completion` attestation accepted for this executor (see `stop`). */
+  completion: Schema.optional(
+    Schema.Struct({
+      executorId: NonEmptyString,
+      epoch: Schema.Int,
+      captureN: Schema.Int,
+      attestedAt: Schema.String,
+    }),
   ),
 });
 export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
@@ -793,6 +870,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         // The workspace has never launched a runtime — nothing to stop yet.
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Async: 202 = a recovery attempt of the workspace's retained executor is due now; the worker
+    // restarts it on its own disk where the runtime can, drains it with a FINAL flush and only
+    // then removes it. Nothing retained = `not-retained`, nothing done.
+    HttpApiEndpoint.post("recoverWorkspace", "/:workspaceId/recover", {
+      params: workspaceIdParams,
+      payload: recoverWorkspaceRequestSchema,
+      success: recoverWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
     }),

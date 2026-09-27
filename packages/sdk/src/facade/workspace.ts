@@ -22,6 +22,7 @@ import {
   getWorkspaceOp,
   listSessionsOp,
   replanWorkspaceCaptureOp,
+  recoverWorkspaceOp,
   restartWorkspaceOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
@@ -163,6 +164,32 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
     ? {}
     : {
         discard: { requestedBy: drain.discard.requestedBy, requestedAt: drain.discard.requestedAt },
+      }),
+  ...(drain.retained === undefined
+    ? {}
+    : {
+        retained: {
+          since: drain.retained.since,
+          reason: drain.retained.reason,
+          recoverable: drain.retained.recoverable,
+          recoveryAttempts: drain.retained.recoveryAttempts,
+          ...(drain.retained.nextRecoveryAt === undefined
+            ? {}
+            : { nextRecoveryAt: drain.retained.nextRecoveryAt }),
+          ...(drain.retained.lastRecoveryError === undefined
+            ? {}
+            : { lastRecoveryError: drain.retained.lastRecoveryError }),
+        },
+      }),
+  ...(drain.completion === undefined
+    ? {}
+    : {
+        completion: {
+          executorId: drain.completion.executorId,
+          epoch: drain.completion.epoch,
+          captureN: drain.completion.captureN,
+          attestedAt: drain.completion.attestedAt,
+        },
       }),
 });
 
@@ -418,12 +445,32 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // a drain (a refused or abandoned drain answers too), so it never decides the state.
     stop: async (options?: WorkspaceStopOptions): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
-      await ctx.runtime.run(
+      const accepted = await ctx.runtime.run(
         stopWorkspaceOp(init.id, {
           ownerUserId,
           ...(options?.discardUnsaved === true ? { discardUnsaved: true } : {}),
+          ...(options?.completion === undefined
+            ? {}
+            : {
+                completion: {
+                  captureN: options.completion.captureN,
+                  epoch: options.completion.epoch,
+                  executorId: options.completion.executorId,
+                },
+              }),
         }),
       );
+      const completion =
+        accepted.completion === undefined
+          ? {}
+          : {
+              completion: {
+                outcome: accepted.completion.outcome,
+                ...(accepted.completion.detail === undefined
+                  ? {}
+                  : { detail: accepted.completion.detail }),
+              },
+            };
 
       const deadline = Date.now() + STOP_TIMEOUT_MS;
       for (;;) {
@@ -431,13 +478,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
         if (details.status === "stopped") {
-          return { state: "stopped" };
+          return { state: "stopped", ...completion };
         }
         if (Date.now() > deadline) {
           const drain =
             details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
           const capture = await readCaptureStatus().catch(() => undefined);
-          const extras = capture === undefined ? {} : { capture };
+          const extras = { ...(capture === undefined ? {} : { capture }), ...completion };
           if (drain !== undefined && (drain.state === "draining" || drain.state === "kept")) {
             return { state: drain.state, drain, ...extras };
           }
@@ -445,6 +492,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }
         await delay(STOP_POLL_INTERVAL_MS);
       }
+    },
+
+    // Recover makes a recovery attempt of a retained executor due now; the worker does the rest.
+    recover: async () => {
+      const answered = await ctx.runtime.run(
+        recoverWorkspaceOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+      );
+      return {
+        state: answered.state,
+        ...(answered.recoverable === undefined ? {} : { recoverable: answered.recoverable }),
+      };
     },
 
     // Restart drives a fresh launch (new attempt, new container, same resolved spec) and returns a
