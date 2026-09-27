@@ -158,7 +158,8 @@ const isCaptureSourcedRun = (runId: string, sourceKind: string | null | undefine
     return yield* runIsCaptureSourced({
       runId,
       sourceKind,
-      readSnapshotPayload: attempts.getAttemptSnapshotByRunId(runId),
+      // Read only when the runtime instance records no source kind.
+      readSnapshotPayload: Effect.suspend(() => attempts.getAttemptSnapshotByRunId(runId)),
     });
   }).pipe(Effect.mapError(toWorkspaceStopProcessingError));
 
@@ -277,10 +278,10 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
     const state = yield* runtimeState(adapter, resourceId);
     const drain = options.captureDrain;
+    // No drain ledger (a caller that passed no `captureDrain`) is NOT "no evidence needed": nothing
+    // of a completion, attestation or discard is known, exactly as an unreadable record.
     const record: CaptureDrainRead =
-      drain === undefined
-        ? { readable: true, entry: undefined }
-        : yield* drain.ledger.read(options.runId);
+      drain === undefined ? { readable: false } : yield* drain.ledger.read(options.runId);
     const recorded = record.readable ? record.entry : undefined;
     const discard = recorded?.discardRequested;
 
@@ -300,8 +301,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       return stopOutcome("stopped");
     }
 
-    const captureSourced =
-      drain === undefined ? false : yield* isCaptureSourcedRun(options.runId, instance.sourceKind);
+    // The source is read whether or not a drain was passed: an omitted `captureDrain` says nothing
+    // about the executor, so a capture-sourced or unknown one goes through the policy like any other.
+    const captureSourced = yield* isCaptureSourcedRun(options.runId, instance.sourceKind);
     const drainedBefore = captureSourced ? recorded : undefined;
     const recordedEvidence = recordedDeletionEvidence(record, {
       runId: options.runId,
@@ -345,7 +347,11 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       const decision = decide(state, false);
       if (!decision.delete) {
         // Said once, when it is first retained; recovery reports every attempt after that.
-        if (drain !== undefined && recorded?.retained === undefined) {
+        if (drain === undefined) {
+          yield* Effect.logError(
+            `Workspace stop: run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}; this stop has no capture drain record to find evidence in.`,
+          );
+        } else if (recorded?.retained === undefined) {
           yield* Effect.logError(
             `Workspace stop (${drain.label}): run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}. Its disk keeps the staged captures; the runtime is left in place and recovery is attempted.`,
           );
@@ -371,9 +377,16 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       });
     }
 
-    if (drain === undefined || !captureSourced) {
+    if (!captureSourced) {
       const decision = decide("running", false);
       return decision.delete ? yield* removeRuntime(decision.basis) : stopOutcome("kept");
+    }
+    if (drain === undefined) {
+      // Capture-sourced (or unknown) and running, with nothing here to drain it: kept.
+      yield* Effect.logError(
+        `Workspace stop: run ${options.runId} is capture-sourced (or its source is unknown) and this stop has no capture drain: not saved · kept. Only a stop that drains it may remove it.`,
+      );
+      return stopOutcome("kept");
     }
 
     // No loss of work product: a live capture-sourced runtime holds captures nowhere else until

@@ -40,7 +40,8 @@ Server-side (the packages ride the release train):
   whose source is unknown, goes only when the control plane observed its final flush complete, the
   caller attested a sealed final capture of it, the owner discarded it, or nothing of it is left. An
   exited executor with no such evidence is kept, whatever its exit code, and so is one whose drain
-  record cannot be read.
+  record cannot be read. A stop that passes no capture drain still reads the source, and keeps a
+  capture-sourced or unknown executor.
 - Retention starts when the executor is created, not when it answers readiness. A launch that fails
   after its container, Pod or MicroVM launch push exists keeps it. A redelivered launch that finds
   an ended executor of the same run keeps it instead of replacing it. A capture container is never
