@@ -32,8 +32,11 @@ server.listen(socketPath);
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
 `;
 
+// A sealantctl that offers `capture flush --final` and reports every flush complete.
 const FAKE_SEALANTCTL = `#!/bin/sh
+case "$*" in *--help*) printf '%s\\n' "Usage: sealantctl capture flush [--final]"; exit 0;; esac
 printf '%s\\n' "$*" >> "$FAKE_SEALANTCTL_LOG"
+printf '%s\\n' '{"pending":0,"complete":true}'
 exit 0
 `;
 
@@ -700,7 +703,7 @@ describe("microvm agent guest-local Docker", () => {
       body: { flush: { ok: true } },
     });
     expect((await readFile(agent.ctlLog, "utf8")).trim()).toBe(
-      `--socket ${path.join(agent.dir, "control.sock")} capture flush`,
+      `--socket ${path.join(agent.dir, "control.sock")} capture flush --final`,
     );
     expect(await readLines(agent.recordFile)).toHaveLength(1);
   });

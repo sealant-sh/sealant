@@ -73,6 +73,7 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
 `;
 
 const FAKE_SEALANTCTL = `#!/bin/sh
+case "$*" in *--help*) printf '%s\\n' "\${FAKE_SEALANTCTL_HELP:-Usage: sealantctl capture flush [OPTIONS]}"; exit 0;; esac
 printf '%s\\n' "$*" >> "$FAKE_SEALANTCTL_LOG"
 if [ -n "$FAKE_SEALANTCTL_SLEEP" ]; then sleep "$FAKE_SEALANTCTL_SLEEP"; fi
 if [ -n "$FAKE_SEALANTCTL_OUTPUT" ]; then printf '%s\\n' "$FAKE_SEALANTCTL_OUTPUT"; fi
@@ -513,11 +514,46 @@ describe("microvm agent", () => {
       await stopAgent(enabled);
     }
 
-    // Unset (every image today): terminate sends the flush a released sealantd accepts.
-    expect((await hook(agent, "terminate")).status).toBe(200);
+    // Unset, and this daemon's sealantctl has no `--final`: terminate sends the flush it
+    // accepts, but nothing can confirm the VM's captures saved, so the hook is not answered 200.
+    const terminate = await hook(agent, "terminate");
+    expect(terminate.status).toBe(500);
+    expect(terminate.body).toMatchObject({ flush: { ok: false, final: "unsupported" } });
     expect((await readFile(agent.ctlLog, "utf8")).trim().split("\n").at(-1)).toBe(
       `--socket ${agent.socketPath} capture flush`,
     );
+  });
+
+  it("asks for a final flush on terminate when the daemon's sealantctl offers it, unset by the image", async () => {
+    // Review 2 RISK: the image never set SEALANT_MICROVM_FINAL_FLUSH, so terminate always sent the
+    // ordinary flush. Unset now means: ask sealantctl whether it has `--final`, and use it.
+    const capable = await startAgent({
+      FAKE_SEALANTCTL_HELP:
+        "Usage: sealantctl capture flush [--final] [--deadline <MS>] [--grace <MS>]",
+      FAKE_SEALANTCTL_OUTPUT: '{"pending":0,"complete":true}',
+    });
+    try {
+      await hook(capable, "run", {
+        microvmId: "microvm-5",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      await call(capable, "POST", AGENT_LAUNCH_ROUTE, {
+        body: launchRequest,
+        bearer: launchSecret,
+      });
+      await waitFor(async () =>
+        stat(capable.socketPath).then(
+          () => true,
+          () => false,
+        ),
+      );
+      expect((await hook(capable, "terminate")).status).toBe(200);
+      expect((await readFile(capable.ctlLog, "utf8")).trim().split("\n").at(-1)).toBe(
+        `--socket ${capable.socketPath} capture flush --final`,
+      );
+    } finally {
+      await stopAgent(capable);
+    }
   });
 
   it("publishes launch material whole: a concurrent reader never sees a partial file", async () => {
