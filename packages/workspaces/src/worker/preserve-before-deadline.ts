@@ -25,12 +25,20 @@
  *     returns `draining` and is picked up again next tick; it never holds a slot another due
  *     runtime needs across ticks.
  *
+ * The candidates are every runtime with a deadline that may still hold work, not only `ready`
+ * ones: a retained launch (`failed`, `launch-retained`) is drained and stopped the same way; an
+ * executor whose daemon ended on a machine that still runs (sealantd exited 75 on a MicroVM) and
+ * was retained has its recovery made due now (the recovery sweep restarts its daemon on its own
+ * disk and drains it); a launch still in progress (`pending`, owned by its launching worker) is
+ * watched, and driven once its launch settles or is adopted as stranded.
+ *
  * A drain the daemon cannot confirm keeps the executor, as every drain does — the platform may
  * still end it at the deadline, which the exit reconciler then reports loudly.
  */
 import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepoLive,
+  LAUNCH_RETAINED_ERROR_CODE,
   SealantDB,
   WorkspaceAttemptRepo,
   WorkspaceAttemptRepoLive,
@@ -188,7 +196,10 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
 ) {
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
   const now = options.now ?? Date.now;
-  const capped = (yield* runtimeInstances.listRunningInstances()).filter(
+  // Every runtime with a deadline that may still hold work: `ready`, a launch in progress or
+  // stranded (`pending` with an executor), and a retained one (`failed` with an executor whose
+  // machine may still be up — a retained launch, or a daemon that exited on a VM that runs on).
+  const capped = (yield* runtimeInstances.listPreservationCandidates()).filter(
     (instance) => instance.runtimeDeadlineAt !== null,
   );
 
@@ -254,6 +265,14 @@ const planOne = (
 
     const drains = yield* WorkspaceCaptureDrainRepo;
     const row = yield* drains.getByRunId(instance.runId);
+    if (
+      instance.status === "failed" &&
+      instance.errorCode !== LAUNCH_RETAINED_ERROR_CODE &&
+      (row?.retainedAt === null || row?.retainedAt === undefined)
+    ) {
+      // Ended and not retained: nothing of it is waiting to be saved.
+      return undefined;
+    }
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
     const status =
       target === undefined ? undefined : yield* readCaptureStatus(target, STATUS_TIMEOUT_MS);
@@ -318,10 +337,34 @@ const planOne = (
     } satisfies DuePreservation;
   });
 
-/** Drive one due runtime's final drain and planned stop for this tick's budget. */
+/**
+ * Drive one due runtime for this tick's budget: its final drain and planned stop; for one whose
+ * daemon ended on a machine that runs on (a retained executor), its recovery, now — the recovery
+ * sweep restarts its daemon on its own disk and drains it; for a launch still in progress,
+ * nothing yet (its launching worker settles it within its readiness wait, or it is adopted).
+ */
 const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation) =>
   Effect.gen(function* () {
     const { instance } = plan;
+    if (instance.status === "pending") {
+      if (plan.firstStart) {
+        yield* Effect.logWarning(
+          `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} and its launch has not settled yet; it is driven as soon as its launch settles (ready, or adopted as a retained launch).`,
+        );
+      }
+      return false;
+    }
+    if (instance.status === "failed" && instance.errorCode !== LAUNCH_RETAINED_ERROR_CODE) {
+      const drains = yield* WorkspaceCaptureDrainRepo;
+      const due = yield* drains.requestRecovery(instance.runId);
+      if (due === undefined) {
+        return false;
+      }
+      yield* (plan.firstStart ? Effect.logError : Effect.logWarning)(
+        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery is due now (restart on its own disk, then a final drain).`,
+      );
+      return true;
+    }
     if (plan.firstStart) {
       yield* Effect.logWarning(
         `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline); starting its final drain and a planned stop now (lead ${String(Math.round(options.deadline.leadMs / 1000))} s + upload estimate ${String(Math.round(plan.estimateMs / 1000))} s).`,

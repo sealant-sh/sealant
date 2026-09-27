@@ -1,0 +1,2 @@
+ALTER TABLE "workspace_runtime_instances" ADD COLUMN "launch_owner" text;--> statement-breakpoint
+ALTER TABLE "workspace_runtime_instances" ADD COLUMN "launch_lease_expires_at" timestamp with time zone;

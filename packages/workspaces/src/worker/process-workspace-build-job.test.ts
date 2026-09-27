@@ -24,7 +24,7 @@ import {
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Fiber, Layer, Result } from "effect";
 import { vi } from "vitest";
 
 import {
@@ -66,6 +66,9 @@ const workspaceAttemptRepoStub = () => ({
 
 const workspaceRuntimeInstanceRepoStub = () => ({
   upsertRuntimeInstance: vi.fn((_input: unknown) => Effect.succeed({})),
+  renewLaunchLease: vi.fn((_input: { runId: string; owner: string; leaseMs: number }) =>
+    Effect.succeed(true),
+  ),
 });
 
 const githubInstallationRepoStub = (options: { status?: string } = {}) => ({
@@ -1303,8 +1306,19 @@ describe("processWorkspaceBuildJobEffect", () => {
           expect(error.errorCode).toBe(LAUNCH_RETAINED_ERROR_CODE);
           const writes = runtimeInstances.upsertRuntimeInstance.mock.calls.map(([input]) => input);
           expect(writes).toEqual([
-            { runId: "run_job_retained", status: "pending", sourceKind: "capture" },
-            expect.objectContaining({ status: "pending", ...identity, sourceKind: "capture" }),
+            {
+              runId: "run_job_retained",
+              status: "pending",
+              sourceKind: "capture",
+              launchOwner: expect.stringMatching(/^worker-test:job_retained:/),
+              launchLeaseMs: expect.any(Number),
+            },
+            expect.objectContaining({
+              status: "pending",
+              ...identity,
+              sourceKind: "capture",
+              fenceLaunchOwner: expect.stringMatching(/^worker-test:job_retained:/),
+            }),
             expect.objectContaining({
               runId: "run_job_retained",
               status: "failed",
@@ -1331,6 +1345,7 @@ describe("processWorkspaceBuildJobEffect", () => {
                 ? Effect.fail(new Error("connection terminated"))
                 : Effect.succeed({}),
           ),
+          renewLaunchLease: vi.fn(() => Effect.succeed(true)),
         };
         const runtimeAdapter = createRuntimeAdapterStub("docker", {
           launch: vi.fn(async () => ({ ...identity, status: "ready" as const })),
@@ -2074,5 +2089,75 @@ describe("processWorkspaceBuildJobEffect", () => {
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
       ),
     );
+  });
+});
+
+describe("a worker lost after its capture executor started (review 3 #6)", () => {
+  it("keeps the started executor as a retained launch when the worker is interrupted", async () => {
+    // Review 3 #6: the worker was interrupted after `onStarted` recorded the executor; the row
+    // stayed `pending` after the job succeeded, outside every preservation sweep.
+    const jobs = workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: "job_interrupted",
+        runId: "run_interrupted",
+        repository: "sealant/workspaces/demo",
+        tag: "capture",
+        requestPayload: {
+          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+          sources: {
+            workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+            inputs: [],
+            mounts: [],
+          },
+        },
+      }),
+    });
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    let signalStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const deadline = new Date(Date.now() + 5_000).toISOString();
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: async (_input, hooks) => {
+        await hooks?.onStarted?.({
+          adapter: "docker",
+          resourceId: "container-live",
+          reference: "sealant-live",
+          deadline,
+        });
+        signalStarted?.();
+        return new Promise(() => undefined);
+      },
+    });
+    const fiber = Effect.runFork(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_interrupted",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts }))),
+    );
+    await started;
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(jobs.markJobSucceeded).toHaveBeenCalledTimes(1);
+    expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run_interrupted",
+        status: "failed",
+        errorCode: LAUNCH_RETAINED_ERROR_CODE,
+        adapter: "docker",
+        resourceId: "container-live",
+        runtimeDeadlineAt: new Date(deadline),
+        releaseLaunch: true,
+      }),
+    );
+    const last = runtimeInstances.upsertRuntimeInstance.mock.calls.at(-1)?.[0];
+    // Still running: a retained launch has no finish instant.
+    expect(last).not.toHaveProperty("finishedAt");
+    expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_interrupted" });
   });
 });

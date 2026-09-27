@@ -44,6 +44,8 @@ const instance = (overrides: Partial<WorkspaceRuntimeInstance> = {}): WorkspaceR
   launchedAt: new Date(NOW - 60_000),
   finishedAt: null,
   runtimeDeadlineAt: null,
+  launchOwner: null,
+  launchLeaseExpiresAt: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60_000),
   updatedAt: new Date(NOW - 60_000),

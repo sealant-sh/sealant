@@ -1,11 +1,10 @@
 import type { RuntimeAdapterId } from "@sealant/validators";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
 import {
   workspaceRuntimeInstances,
-  type NewWorkspaceRuntimeInstance,
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
@@ -29,7 +28,32 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly runtimeDeadlineAt?: Date;
   /** The blueprint's `sources.workspace.kind` (`capture`, `git`, …); see the column. */
   readonly sourceKind?: string;
+  /**
+   * Take launch ownership for this worker (`launch_owner`) for `launchLeaseMs` of database time
+   * from now. Written with the launch's first `pending` row.
+   */
+  readonly launchOwner?: string;
+  readonly launchLeaseMs?: number;
+  /**
+   * Write only while `fenceLaunchOwner` still owns the launch: the row is `pending` and names it.
+   * A launch the stranded-launch sweep adopted (its ownership lapsed) is no longer the worker's
+   * to write, and the upsert fails with `WorkspaceRuntimeInstanceRepoInvariantError`
+   * (`LAUNCH_OWNERSHIP_LOST_MESSAGE`). The ownership lease is renewed by the same write.
+   */
+  readonly fenceLaunchOwner?: string;
+  /** The terminal launch write: launch ownership ends (`launch_owner` and its lease cleared). */
+  readonly releaseLaunch?: boolean;
 }
+
+/** The message of the invariant error a fenced upsert fails with once its launch was adopted. */
+export const LAUNCH_OWNERSHIP_LOST_MESSAGE =
+  "The launch is no longer this worker's: its ownership lapsed and the stranded-launch sweep adopted the executor.";
+
+/**
+ * How long a `pending` row that names an executor but no launch owner (written before launch
+ * ownership existed) must stand still before the stranded-launch sweep adopts it.
+ */
+export const DEFAULT_UNOWNED_LAUNCH_GRACE_MS = 15 * 60_000;
 
 /** @deprecated Use WorkspaceRuntimeInstanceRepo + WorkspaceRuntimeInstanceRepoLive instead. */
 export const createWorkspaceRuntimeInstanceRepository = (): never => {
@@ -46,6 +70,10 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "listRuntimeInstancesByRunIds",
   "listRunningInstances",
   "listRetainedLaunches",
+  "listStrandedLaunches",
+  "adoptStrandedLaunch",
+  "renewLaunchLease",
+  "listPreservationCandidates",
   "markExited",
   "markStopRequested",
   "markStopped",
@@ -191,7 +219,70 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
+  /**
+   * Launches whose executor started (`pending` with a `resource_id`) and whose launching worker
+   * is gone: its launch ownership lapsed, or — a row written before ownership existed — it names
+   * no owner and has not changed for `unownedGraceMs`. Nothing else will move them: their build
+   * job already succeeded, so no job reaper or redelivery reaches them.
+   */
+  readonly listStrandedLaunches: (input: {
+    readonly unownedGraceMs: number;
+  }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Adopt one stranded launch as retained: `failed` with `LAUNCH_RETAINED_ERROR_CODE`, the
+   * executor's identity kept and ownership cleared — only while it is still stranded (atomic: a
+   * worker that renewed its ownership in between, or another sweep that adopted it first, wins
+   * and this returns `undefined`).
+   */
+  readonly adoptStrandedLaunch: (input: {
+    readonly runId: string;
+    readonly errorMessage: string;
+    readonly unownedGraceMs: number;
+  }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /** Renew `owner`'s launch ownership of a `pending` row; `false` when it is no longer theirs. */
+  readonly renewLaunchLease: (input: {
+    readonly runId: string;
+    readonly owner: string;
+    readonly leaseMs: number;
+  }) => Effect.Effect<boolean, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Every runtime with its own lifetime deadline that may still hold work: `ready`, `pending`
+   * with an executor (a launch in progress or stranded), and `failed` with an executor whose
+   * deadline has not passed yet (a retained launch, or an executor whose daemon exited and was
+   * retained — its machine may still be up until the deadline ends it).
+   */
+  readonly listPreservationCandidates: () => Effect.Effect<
+    readonly WorkspaceRuntimeInstance[],
+    WorkspaceRuntimeInstanceRepoError
+  >;
 }
+
+/**
+ * A launch whose executor started and whose launching worker is gone (see
+ * `listStrandedLaunches`): `pending`, naming an executor, and its ownership lapsed — or, written
+ * before ownership existed, naming no owner and unchanged for `unownedGraceMs`.
+ */
+const stranded = (unownedGraceMs: number) =>
+  and(
+    eq(workspaceRuntimeInstances.status, "pending"),
+    isNotNull(workspaceRuntimeInstances.resourceId),
+    or(
+      and(
+        isNotNull(workspaceRuntimeInstances.launchOwner),
+        or(
+          isNull(workspaceRuntimeInstances.launchLeaseExpiresAt),
+          lte(workspaceRuntimeInstances.launchLeaseExpiresAt, sql`now()`),
+        ),
+      ),
+      and(
+        isNull(workspaceRuntimeInstances.launchOwner),
+        lte(
+          workspaceRuntimeInstances.updatedAt,
+          sql`now() - (${Math.max(0, Math.round(unownedGraceMs))} * interval '1 millisecond')`,
+        ),
+      ),
+    ),
+  );
 
 export class WorkspaceRuntimeInstanceRepo extends Context.Service<
   WorkspaceRuntimeInstanceRepo,
@@ -225,19 +316,54 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 ? {}
                 : { runtimeDeadlineAt: input.runtimeDeadlineAt }),
               ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
+              ...(input.launchOwner === undefined && input.fenceLaunchOwner === undefined
+                ? {}
+                : {
+                    launchOwner: input.launchOwner ?? input.fenceLaunchOwner,
+                    launchLeaseExpiresAt: sql`now() + (${Math.max(
+                      0,
+                      Math.round(input.launchLeaseMs ?? 0),
+                    )} * interval '1 millisecond')`,
+                  }),
+              ...(input.releaseLaunch === true
+                ? { launchOwner: null, launchLeaseExpiresAt: null }
+                : {}),
             };
 
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
             // interleaving after a newer launch already went "ready") must NOT clobber a live
             // "ready" instance — guard the conflict update so a "failed" write is skipped when ready.
             const guardAgainstReady = input.status === "failed";
+            // A launch write fenced on its owner lands only while the launch is still theirs.
+            const fence =
+              input.fenceLaunchOwner === undefined
+                ? undefined
+                : and(
+                    eq(workspaceRuntimeInstances.status, "pending"),
+                    eq(workspaceRuntimeInstances.launchOwner, input.fenceLaunchOwner),
+                  );
+
+            if (fence !== undefined) {
+              const [fenced] = yield* db
+                .update(workspaceRuntimeInstances)
+                .set(mutableColumns)
+                .where(and(eq(workspaceRuntimeInstances.runId, input.runId), fence))
+                .returning();
+              if (fenced !== undefined) {
+                return fenced;
+              }
+              return yield* new WorkspaceRuntimeInstanceRepoInvariantError({
+                operation: "upsertRuntimeInstance",
+                message: LAUNCH_OWNERSHIP_LOST_MESSAGE,
+              });
+            }
 
             const [runtimeInstance] = yield* db
               .insert(workspaceRuntimeInstances)
               .values({
                 runId: input.runId,
                 ...mutableColumns,
-              } satisfies NewWorkspaceRuntimeInstance)
+              })
               .onConflictDoUpdate({
                 target: workspaceRuntimeInstances.runId,
                 set: mutableColumns,
@@ -413,6 +539,84 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               and(
                 eq(workspaceRuntimeInstances.status, "failed"),
                 eq(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
+              ),
+            )
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      listStrandedLaunches: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listStrandedLaunches",
+          db
+            .select()
+            .from(workspaceRuntimeInstances)
+            .where(stranded(input.unownedGraceMs))
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      adoptStrandedLaunch: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "adoptStrandedLaunch",
+          Effect.gen(function* () {
+            const [adopted] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "failed",
+                errorCode: LAUNCH_RETAINED_ERROR_CODE,
+                errorMessage: input.errorMessage,
+                launchOwner: null,
+                launchLeaseExpiresAt: null,
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  stranded(input.unownedGraceMs),
+                ),
+              )
+              .returning();
+            return adopted;
+          }),
+        ),
+
+      renewLaunchLease: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "renewLaunchLease",
+          Effect.gen(function* () {
+            const renewed = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                launchLeaseExpiresAt: sql`now() + (${Math.max(0, Math.round(input.leaseMs))} * interval '1 millisecond')`,
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  eq(workspaceRuntimeInstances.status, "pending"),
+                  eq(workspaceRuntimeInstances.launchOwner, input.owner),
+                ),
+              )
+              .returning({ runId: workspaceRuntimeInstances.runId });
+            return renewed.length > 0;
+          }),
+        ),
+
+      listPreservationCandidates: () =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listPreservationCandidates",
+          db
+            .select()
+            .from(workspaceRuntimeInstances)
+            .where(
+              and(
+                isNotNull(workspaceRuntimeInstances.runtimeDeadlineAt),
+                isNotNull(workspaceRuntimeInstances.resourceId),
+                or(
+                  eq(workspaceRuntimeInstances.status, "ready"),
+                  eq(workspaceRuntimeInstances.status, "pending"),
+                  and(
+                    eq(workspaceRuntimeInstances.status, "failed"),
+                    gt(workspaceRuntimeInstances.runtimeDeadlineAt, sql`now()`),
+                  ),
+                ),
               ),
             )
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),

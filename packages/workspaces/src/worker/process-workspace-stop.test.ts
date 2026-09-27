@@ -45,6 +45,8 @@ const runtimeInstance = (
   launchedAt: new Date("2026-07-01T00:00:00.000Z"),
   finishedAt: null,
   runtimeDeadlineAt: null,
+  launchOwner: null,
+  launchLeaseExpiresAt: null,
   // Null = a row that predates the column: the stop path reads the attempt snapshot.
   sourceKind: null,
   createdAt: new Date("2026-07-01T00:00:00.000Z"),
@@ -141,6 +143,10 @@ const makeHarness = (input: {
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),
     listRunningInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
     listRetainedLaunches: () => Effect.succeed([]),
+    listStrandedLaunches: () => Effect.succeed([]),
+    adoptStrandedLaunch: () => Effect.succeed(undefined),
+    renewLaunchLease: () => Effect.succeed(false),
+    listPreservationCandidates: () => Effect.succeed([]),
     markStopRequested,
   });
 

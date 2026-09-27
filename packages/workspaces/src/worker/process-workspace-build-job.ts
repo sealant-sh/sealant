@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   CAPTURE_TOKEN_SECRET_ENV_NAME,
   formatWorkspaceEnvIssue,
@@ -27,7 +29,7 @@ import {
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
-import { Effect, Exit, Layer, Option } from "effect";
+import { Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
@@ -392,6 +394,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           .upsertRuntimeInstance({
             runId: job.runId,
             status: "failed",
+            releaseLaunch: true,
             ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
             errorMessage: error.message,
             ...(retained === undefined
@@ -544,11 +547,52 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   // What the launch boots from, recorded with its first row: every stop path decides whether to
   // drain from it (a capture-sourced executor holds unsaved work).
   const sourceKind = spec.sources.workspace.kind;
+  // Launch ownership: from the first `pending` row until the terminal launch write, the row names
+  // this launch as its owner under a lease the heartbeat below renews. The build job is already
+  // `succeeded`, so nothing else would ever look at this launch again if the worker died: a
+  // `pending` row whose ownership lapsed is adopted by the stranded-launch sweep as a retained
+  // launch (drained, preserved before its deadline, recovered, stopped). Every write the launch
+  // makes after this one is fenced on the ownership, so a launch that was adopted in between
+  // (a worker stalled past its lease) never writes over the adoption.
+  const launchOwner = `${options.workerId}:${job.id}:${randomUUID()}`;
+  const launchLeaseMs = Math.max(1_000, options.leaseDurationMs);
+  // The executor's identity once the adapter reported it (`onStarted` / `onReady`).
+  let startedIdentity: RuntimeLaunchIdentity | undefined;
   const launchAndRecord = Effect.gen(function* () {
     if (job.runId !== null) {
+      const runId = job.runId;
       yield* runtimeInstances
-        .upsertRuntimeInstance({ runId: job.runId, status: "pending", sourceKind })
+        .upsertRuntimeInstance({
+          runId,
+          status: "pending",
+          sourceKind,
+          launchOwner,
+          launchLeaseMs,
+        })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      // Renew the ownership while the launch runs (the readiness wait can take minutes). Ends
+      // with the launch; a lost renewal is logged, and the fenced writes below find out.
+      yield* Effect.forkScoped(
+        runtimeInstances
+          .renewLaunchLease({ runId, owner: launchOwner, leaseMs: launchLeaseMs })
+          .pipe(
+            Effect.flatMap((renewed) =>
+              renewed
+                ? Effect.void
+                : Effect.logWarning(
+                    `Launch of run ${runId}: its launch ownership was taken over (the stranded-launch sweep adopted it); this worker no longer records it.`,
+                  ),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Launch of run ${runId}: renewing its launch ownership failed.`,
+                cause,
+              ),
+            ),
+            Effect.repeat(Schedule.spaced(Math.max(250, Math.floor(launchLeaseMs / 3)))),
+            Effect.delay(Math.max(250, Math.floor(launchLeaseMs / 3))),
+          ),
+      );
     }
 
     // Labels only (workspace id, owner): lets Kubernetes resources be reconciled per workspace.
@@ -647,12 +691,15 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
 
     const recordReadyIdentity =
       (runId: string) =>
-      (identity: RuntimeLaunchIdentity): Promise<void> =>
-        Effect.runPromise(
+      (identity: RuntimeLaunchIdentity): Promise<void> => {
+        startedIdentity = identity;
+        return Effect.runPromise(
           runtimeInstances
             .upsertRuntimeInstance({
               runId,
               status: "pending",
+              fenceLaunchOwner: launchOwner,
+              launchLeaseMs,
               adapter: identity.adapter,
               resourceId: identity.resourceId,
               reference: identity.reference,
@@ -664,6 +711,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             })
             .pipe(Effect.asVoid),
         );
+      };
 
     const runtimeLaunchResult = yield* Effect.tryPromise({
       try: () =>
@@ -725,6 +773,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             : { endpoint: runtimeLaunchResult.endpoint }),
           launchCredentialInjections: resolvedCredentials.launchCredentialInjections,
           launchedAt: new Date(),
+          // The terminal launch write: only while the launch is still this worker's.
+          fenceLaunchOwner: launchOwner,
+          releaseLaunch: true,
           ...(runtimeLaunchResult.deadline === undefined
             ? {}
             : { runtimeDeadlineAt: new Date(runtimeLaunchResult.deadline) }),
@@ -763,7 +814,28 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     }
   });
 
-  yield* launchAndRecord.pipe(
+  // Interrupted after the executor started (a worker shutting down, a cancelled fiber): the
+  // executor is kept as a retained launch, as a failure after start would keep it. A worker that
+  // dies outright never gets here; its lapsed ownership leads the stranded-launch sweep to the
+  // same record.
+  const retainOnInterrupt = Effect.suspend(() => {
+    const identity = startedIdentity;
+    if (job.runId === null || identity === undefined) {
+      return Effect.void;
+    }
+    return failureCleanup(
+      toWorkspaceBuildJobProcessingError(
+        new LaunchRetainedError(
+          identity,
+          new Error("The worker launching it was interrupted before the launch finished."),
+        ),
+      ),
+      false,
+    );
+  });
+
+  yield* Effect.scoped(launchAndRecord).pipe(
+    Effect.onInterrupt(() => retainOnInterrupt),
     Effect.tapError((error) => failureCleanup(error, false)),
     // A successful boot has consumed only the secret file; stop owns the remaining dotfiles cleanup.
     // A failed/interrupted launch removes every staged artifact exactly once so retries restage from

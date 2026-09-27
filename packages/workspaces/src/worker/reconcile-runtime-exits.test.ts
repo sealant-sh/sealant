@@ -72,6 +72,8 @@ const runtimeInstance = (
   launchedAt: new Date("2026-09-01T00:00:00.000Z"),
   finishedAt: null,
   runtimeDeadlineAt: null,
+  launchOwner: null,
+  launchLeaseExpiresAt: null,
   sourceKind: null,
   createdAt: new Date("2026-09-01T00:00:00.000Z"),
   updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -114,6 +116,10 @@ const makeHarness = (input: {
     listRuntimeInstancesByRunIds: () => Effect.die("unused"),
     listRunningInstances: () => Effect.succeed(input.instances),
     listRetainedLaunches: () => Effect.succeed([]),
+    listStrandedLaunches: () => Effect.succeed([]),
+    adoptStrandedLaunch: () => Effect.succeed(undefined),
+    renewLaunchLease: () => Effect.succeed(false),
+    listPreservationCandidates: () => Effect.succeed([]),
     markStopRequested: () => Effect.void,
   };
   const attempts = {

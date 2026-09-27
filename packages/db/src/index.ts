@@ -134,6 +134,8 @@ export {
 } from "./repositories/workspace-capture-drains.js";
 
 export {
+  DEFAULT_UNOWNED_LAUNCH_GRACE_MS,
+  LAUNCH_OWNERSHIP_LOST_MESSAGE,
   LAUNCH_RETAINED_ERROR_CODE,
   RUNTIME_EXITED_ERROR_CODE,
   WorkspaceRuntimeInstanceRepo,

@@ -66,6 +66,7 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
+import { adoptStrandedLaunchesEffect } from "./adopt-stranded-launches.js";
 import {
   captureDaemonAnswers,
   drainCaptureBeforeStop,
@@ -141,6 +142,18 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 ) {
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
+
+  // Launches stranded by a lost worker after their executor started are observed here too: they
+  // are adopted as retained launches, and one that already ended is recorded retained.
+  yield* adoptStrandedLaunchesEffect({
+    runtimeAdapters: options.runtimeAdapters,
+    ...(options.resourceIds === undefined ? {} : { resourceIds: options.resourceIds }),
+    ...(options.captureDrain === undefined ? {} : { ledger: options.captureDrain.ledger }),
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Runtime exit reconciler: the stranded-launch sweep failed.", cause),
+    ),
+  );
 
   const wanted = options.resourceIds === undefined ? undefined : new Set(options.resourceIds);
   const live = (yield* runtimeInstances.listRunningInstances()).filter(

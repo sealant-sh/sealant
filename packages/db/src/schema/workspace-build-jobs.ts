@@ -142,6 +142,20 @@ export const workspaceRuntimeInstances = pgTable(
      * and treat a run whose source cannot be read as capture-sourced (fail closed).
      */
     sourceKind: text("source_kind"),
+    /**
+     * Launch ownership while the row is `pending`: the worker launching the executor and the
+     * instant its ownership lapses unless renewed. The launching worker renews it while it waits
+     * for readiness and clears it with the row's terminal launch write (`ready` or `failed`). A
+     * `pending` row that names an executor (`resource_id`) and whose ownership lapsed was left by
+     * a worker that died or was interrupted after the executor started: the stranded-launch
+     * sweep adopts it as a retained launch, so it is drained, preserved before its deadline and
+     * stopped like any other. Null on rows written before these columns existed.
+     */
+    launchOwner: text("launch_owner"),
+    launchLeaseExpiresAt: timestamp("launch_lease_expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
