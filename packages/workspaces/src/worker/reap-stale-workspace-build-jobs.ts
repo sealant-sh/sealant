@@ -5,6 +5,7 @@ import {
   WorkspaceAttemptRepoLive,
   WorkspaceBuildJobRepo,
   WorkspaceBuildJobRepoLive,
+  WorkspaceCaptureDrainRepoLive,
   WorkspaceRuntimeInstanceRepoLive,
   SealantDB,
 } from "@sealant/db";
@@ -54,6 +55,7 @@ export const reapStaleWorkspaceBuildJobs = async (
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,
+    WorkspaceCaptureDrainRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   const program = Effect.gen(function* () {

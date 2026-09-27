@@ -56,7 +56,10 @@ const harness = (input: {
   readonly recover?: () => Promise<RuntimeAdapterRecoverResult>;
   readonly daemon?: ReturnType<typeof fakeCaptureDaemon>;
   readonly attempts?: number;
+  /** The sealed capture token kept at launch; `null` = none was kept. Default: one was. */
+  readonly captureTokenSealed?: string | null;
 }) => {
+  const order: string[] = [];
   const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
   Effect.runSync(ledger.markRetained("run_1", "executor exited · exit 75"));
   const attempts: Array<{ runId: string; error: string | null; nextRecoveryAt: Date }> = [];
@@ -64,6 +67,8 @@ const harness = (input: {
     runId: "run_1",
     retainedAt: new Date(NOW - 1_000),
     recoveryAttempts: input.attempts ?? 0,
+    captureTokenSealed:
+      input.captureTokenSealed === undefined ? "sealed:token" : input.captureTokenSealed,
   } as WorkspaceCaptureDrain;
   const drains = {
     listRetainedDue: () => Effect.succeed([row]),
@@ -89,7 +94,29 @@ const harness = (input: {
     resourceId: request.resourceId,
     outcome: "stopped" as const,
   }));
-  const recover = vi.fn(input.recover ?? (async () => ({ outcome: "restarted" as const })));
+  const recover = vi.fn(async () => {
+    order.push("recover");
+    return (input.recover ?? (async () => ({ outcome: "restarted" as const })))();
+  });
+  const staged: Array<{ runId: string; secretEnv: Readonly<Record<string, string>> }> = [];
+  const stager = {
+    stage: () => Promise.reject(new Error("unused")),
+    removeSecretEnv: vi.fn(async () => {
+      order.push("remove-secret-env");
+    }),
+    removeAll: async () => undefined,
+    restageSecretEnv: vi.fn(async (runId: string, secretEnv: Readonly<Record<string, string>>) => {
+      order.push("restage");
+      staged.push({ runId, secretEnv });
+    }),
+  };
+  const credentialCipher = {
+    encrypt: () => Effect.die("unused"),
+    decrypt: (sealed: string) =>
+      sealed === "sealed:token"
+        ? Effect.succeed(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mend-capture-token" }))
+        : Effect.die("cannot unseal"),
+  };
   const adapter: RuntimeAdapter = {
     id: input.adapterId ?? "docker",
     supports: () => ({ supported: true }),
@@ -117,6 +144,8 @@ const harness = (input: {
         },
         backoff: { baseMs: 60_000, maxMs: 3_600_000 },
         now: () => NOW,
+        credentialCipher,
+        launchMaterialStager: stager,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -127,7 +156,7 @@ const harness = (input: {
         ),
       ),
     );
-  return { run, ledger, attempts, stop, recover, markStopped, daemon };
+  return { run, ledger, attempts, stop, recover, markStopped, daemon, staged, order };
 };
 
 describe("recoverRetainedExecutorsEffect", () => {
@@ -153,6 +182,38 @@ describe("recoverRetainedExecutorsEffect", () => {
       state: "stopped",
       detail: expect.stringContaining("final flush complete"),
     });
+  });
+
+  it("stages the launch's capture token again before the restart, and removes it after", async () => {
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      daemon: fakeCaptureDaemon([savedStatus()]),
+    });
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.staged).toEqual([
+      { runId: "run_1", secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" } },
+    ]);
+    expect(h.order).toEqual(["restage", "recover", "remove-secret-env"]);
+  });
+
+  it("never starts an executor whose capture token was not kept: not recoverable · no capture token", async () => {
+    // A restart boots with the environment it was created with; the token's file was removed
+    // once it was ready. A boot without the token would exit, not save: it is not started.
+    const h = harness({ inspect: { state: "exited", exitCode: 75 }, captureTokenSealed: null });
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.attempts[0]?.error).toMatch(/^not recoverable · no capture token/);
+  });
+
+  it("never starts an executor whose kept capture token cannot be unsealed", async () => {
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      captureTokenSealed: "sealed:under-another-key",
+    });
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.attempts[0]?.error).toContain("cannot be unsealed");
   });
 
   it("keeps a recovered executor whose final flush is still shipping and comes back soon", async () => {

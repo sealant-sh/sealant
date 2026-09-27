@@ -12,12 +12,14 @@ import {
   GitHubInstallationRepositoryCacheRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
+  WorkspaceCaptureDrainRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccountRepoService,
   type GitHubInstallationRepoService,
   type GitHubInstallationRepositoryCacheRepoService,
   type WorkspaceAttemptRepoService,
   type WorkspaceBuildJobRepoService,
+  type WorkspaceCaptureDrainRepoService,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
@@ -1387,6 +1389,7 @@ describe("processWorkspaceBuildJobEffect", () => {
     const installations = githubInstallationRepoStub();
     const installationRepositories = githubInstallationRepositoryCacheStub();
     let stagedContents: string | undefined;
+    const storedTokens: Array<{ runId: string; sealed: string }> = [];
     const runtimeAdapter = createRuntimeAdapterStub("docker", {
       launch: vi.fn(async (input) => {
         expect(input.blueprint.sources.workspace).toEqual({
@@ -1417,9 +1420,24 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
       expect(stagedContents).toBeDefined();
       expect(JSON.parse(stagedContents ?? "{}")).toEqual(sealed);
+      // Only the capture token is kept, sealed, for a later recovery of this executor.
+      expect(storedTokens).toEqual([
+        {
+          runId: "run_capture_token",
+          sealed: `sealed:${JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_1" })}`,
+        },
+      ]);
     }).pipe(
       Effect.provide(
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
+      ),
+      Effect.provide(
+        Layer.succeed(WorkspaceCaptureDrainRepo, {
+          storeCaptureToken: (input: { runId: string; sealed: string }) =>
+            Effect.sync(() => {
+              storedTokens.push(input);
+            }),
+        } as unknown as WorkspaceCaptureDrainRepoService),
       ),
     );
   });

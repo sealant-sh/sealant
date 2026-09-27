@@ -1532,6 +1532,7 @@ describe("DockerRuntimeAdapter", () => {
       "running-id": '{"Status":"running","Running":true,"ExitCode":0,"Error":""}',
     };
     const started: string[] = [];
+    const steps: string[] = [];
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
     >(async (_command, args) => {
@@ -1543,7 +1544,14 @@ describe("DockerRuntimeAdapter", () => {
         }
         return { stdout: `${state}\n`, stderr: "" };
       }
+      if (args[0] === "cp") {
+        // The marker file must exist on the worker side when docker cp reads it.
+        const { readFile: read } = await import("node:fs/promises");
+        steps.push(`cp ${await read(args[1] ?? "", "utf8").then(() => "marker")} ${args[2] ?? ""}`);
+        return { stdout: "", stderr: "" };
+      }
       if (args[0] === "start") {
+        steps.push(`start ${args[1] ?? ""}`);
         started.push(args[1] ?? "");
         states[args[1] ?? ""] = '{"Status":"running","Running":true,"ExitCode":0,"Error":""}';
         return { stdout: "", stderr: "" };
@@ -1564,6 +1572,8 @@ describe("DockerRuntimeAdapter", () => {
     expect(await adapter.recover({ resourceId: "running-id" })).toEqual({ outcome: "running" });
     expect(await adapter.recover({ resourceId: "gone-id" })).toEqual({ outcome: "missing" });
     expect(started).toEqual(["exited-id"]);
+    // The recovery boot is asked for by sealantd's marker, copied in before the start.
+    expect(steps).toEqual(["cp marker exited-id:/.sealantd-recovery", "start exited-id"]);
     expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
   });
 

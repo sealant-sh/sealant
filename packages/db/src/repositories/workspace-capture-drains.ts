@@ -23,6 +23,7 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "listRetainedDue",
   "recordRecoveryAttempt",
   "requestRecovery",
+  "storeCaptureToken",
 ]);
 
 type WorkspaceCaptureDrainRepoOperation = typeof workspaceCaptureDrainRepoOperationSchema.Type;
@@ -160,6 +161,11 @@ export interface WorkspaceCaptureDrainRepoService {
   readonly requestRecovery: (
     runId: string,
   ) => Effect.Effect<WorkspaceCaptureDrain | undefined, WorkspaceCaptureDrainRepoError>;
+  /** Keep the sealed capture token of the run's executor, for its recovery. */
+  readonly storeCaptureToken: (input: {
+    readonly runId: string;
+    readonly sealed: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /** Persist the deadline sweep's schedule and throughput sample; the lease is untouched. */
   readonly recordSchedule: (input: {
     readonly runId: string;
@@ -301,7 +307,9 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               state: input.state,
               detail: input.detail,
               observedAt: new Date(),
-              ...(endsRetention ? { retainedAt: null, nextRecoveryAt: null } : {}),
+              ...(endsRetention
+                ? { retainedAt: null, nextRecoveryAt: null, captureTokenSealed: null }
+                : {}),
             };
             yield* db
               .insert(workspaceCaptureDrains)
@@ -402,6 +410,22 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 isNotNull(workspaceCaptureDrains.retainedAt),
               ),
             )
+            .pipe(Effect.asVoid),
+        ),
+
+      storeCaptureToken: (input) =>
+        withRepoError(
+          "storeCaptureToken",
+          db
+            .insert(workspaceCaptureDrains)
+            .values({
+              runId: input.runId,
+              captureTokenSealed: input.sealed,
+            } satisfies NewWorkspaceCaptureDrain)
+            .onConflictDoUpdate({
+              target: workspaceCaptureDrains.runId,
+              set: { captureTokenSealed: input.sealed },
+            })
             .pipe(Effect.asVoid),
         ),
 

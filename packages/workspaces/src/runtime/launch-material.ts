@@ -73,6 +73,15 @@ export interface LaunchMaterialStager {
   readonly removeSecretEnv: (runId: string | null) => Promise<void>;
   /** Remove everything staged for the run (stop, failure). Idempotent. */
   readonly removeAll: (runId: string | null) => Promise<void>;
+  /**
+   * Stage the secret env again where the run's executor was created to read it (the same
+   * location `stage` used), so a retained executor restarted on its own disk boots with it.
+   * Absent where a restarted executor cannot read staged material (Kubernetes).
+   */
+  readonly restageSecretEnv?: (
+    runId: string,
+    secretEnv: Readonly<Record<string, string>>,
+  ) => Promise<void>;
 }
 
 /**
@@ -163,6 +172,9 @@ export const hostDirectoryLaunchMaterialStager: LaunchMaterialStager = {
     };
   },
   removeSecretEnv: removeStagedSecretEnv,
+  restageSecretEnv: async (runId, secretEnv) => {
+    await stageSecretEnv(secretEnv, runId);
+  },
   removeAll: async (runId) => {
     await removeStagedDotfilesArchives(runId);
     await removeStagedSecretEnv(runId);

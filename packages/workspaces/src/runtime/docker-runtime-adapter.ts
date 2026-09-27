@@ -1,7 +1,8 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
@@ -124,6 +125,12 @@ export type DockerEventStreamOpener = (input: {
   readonly onLine: (line: string) => void;
   readonly onEnd: (error: unknown) => void;
 }) => DockerEventStream;
+
+/**
+ * The file whose presence in a container's root makes sealantd boot in recovery mode (sealantd
+ * `BootConfig::recovery`): the root of the container's filesystem is outside every capture root.
+ */
+export const RECOVERY_MARKER_NAME = ".sealantd-recovery";
 
 interface DockerContainerAcquisition {
   readonly containerId: string;
@@ -1497,11 +1504,27 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     }
     if (state.status === "removing") return { outcome: "missing" };
     if (state.running) return { outcome: "running" };
+    // A kept container starts with the environment it was created with, so the recovery boot is
+    // asked for by a marker in its own filesystem (sealantd reads `/.sealantd-recovery`): no
+    // lifecycle step, no dotfiles, no harness, admission closed, its own staging resumed.
+    await this.writeRecoveryMarker(input.resourceId);
     await this.commandRunner("docker", ["start", input.resourceId]);
     if (this.verifyRunning) {
       await this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId);
     }
     return { outcome: "restarted" };
+  }
+
+  /** `docker cp` sealantd's recovery marker into the (stopped) container's root. */
+  private async writeRecoveryMarker(containerId: string): Promise<void> {
+    const directory = await mkdtemp(joinPath(tmpdir(), "sealant-recovery-"));
+    try {
+      const marker = joinPath(directory, RECOVERY_MARKER_NAME);
+      await writeFile(marker, "recovery\n", { encoding: "utf8", mode: 0o644 });
+      await this.commandRunner("docker", ["cp", marker, `${containerId}:/${RECOVERY_MARKER_NAME}`]);
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   /**

@@ -1,3 +1,5 @@
+import { CAPTURE_TOKEN_SECRET_ENV_NAME } from "@sealant/api-contracts/workspace-environment";
+import type { CredentialCipherService } from "@sealant/credentials";
 /**
  * Recovery of RETAINED executors: capture-sourced executors kept because their disk holds work
  * not confirmed saved (they ended without a complete final flush, or their launch failed after
@@ -34,12 +36,18 @@ import {
   type WorkspaceCaptureDrain,
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
+import { z } from "zod";
 
 import {
+  runtimeRestartsRetainedExecutors,
   decideExecutorDeletion,
   type ExecutorDeletionBasis,
   type ExecutorRuntimeState,
 } from "../runtime/executor-preservation.js";
+import {
+  hostDirectoryLaunchMaterialStager,
+  type LaunchMaterialStager,
+} from "../runtime/launch-material.js";
 import type { RuntimeAdapter, RuntimeAdapterRecoverResult } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import {
@@ -79,7 +87,38 @@ export interface RecoverRetainedExecutorsOptions {
   readonly maxPerTick?: number;
   readonly backoff?: RecoveryBackoff;
   readonly now?: () => number;
+  /**
+   * Unseals the capture token kept at launch (`capture_token_sealed`), which a restarted
+   * executor's boot needs again. Absent: no restart can be given its token, so none is started.
+   */
+  readonly credentialCipher?: CredentialCipherService;
+  /** Where the executor was created to read its secret env; defaults to host directories. */
+  readonly launchMaterialStager?: LaunchMaterialStager;
 }
+
+const sealedCaptureTokenSchema = z.object({ [CAPTURE_TOKEN_SECRET_ENV_NAME]: z.string().min(1) });
+
+/**
+ * The capture token the executor was launched with, unsealed; `undefined` when none was kept,
+ * the cipher is not configured, or it cannot be unsealed.
+ */
+const recoverCaptureToken = (
+  sealed: string | null,
+  cipher: CredentialCipherService | undefined,
+): Effect.Effect<string | undefined> =>
+  sealed === null || cipher === undefined
+    ? Effect.succeed(undefined)
+    : cipher.decrypt(sealed).pipe(
+        Effect.map((plaintext) => {
+          try {
+            const parsed = sealedCaptureTokenSchema.safeParse(JSON.parse(plaintext));
+            return parsed.success ? parsed.data[CAPTURE_TOKEN_SECRET_ENV_NAME] : undefined;
+          } catch {
+            return undefined;
+          }
+        }),
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      );
 
 const DEFAULT_MAX_PER_TICK = 10;
 const DEFAULT_DRAIN_BUDGET_MS = 60_000;
@@ -196,7 +235,48 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
       return yield* release(decision.basis);
     }
 
-    // 2. Recover it on its own disk.
+    // 2. Recover it on its own disk. A restart boots it with the environment it was created
+    // with, and its capture token was in the secret env file removed once it was ready: stage the
+    // same token again (Mend still honours it for the session) before anything starts it. Without
+    // a token nothing is started — a boot without it would exit, not save.
+    const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
+    const restarts = state === "exited" && runtimeRestartsRetainedExecutors(adapter.id);
+    if (restarts) {
+      const token = yield* recoverCaptureToken(
+        row.captureTokenSealed ?? null,
+        options.credentialCipher,
+      );
+      const restage = stager.restageSecretEnv;
+      if (token === undefined || restage === undefined) {
+        const why =
+          token === undefined
+            ? row.captureTokenSealed === null || row.captureTokenSealed === undefined
+              ? "no capture token was kept at launch"
+              : options.credentialCipher === undefined
+                ? "the worker has no credential cipher to unseal it"
+                : "the kept capture token cannot be unsealed"
+            : "this worker cannot stage launch material for it";
+        yield* (row.recoveryAttempts === 0 ? Effect.logError : Effect.logWarning)(
+          `${prefix}: not recoverable · no capture token · ${why}. The executor is kept and not started.`,
+        );
+        return yield* retry(`not recoverable · no capture token · ${why}`);
+      }
+      const staged = yield* Effect.tryPromise({
+        try: () => restage.call(stager, runId, { [CAPTURE_TOKEN_SECRET_ENV_NAME]: token }),
+        catch: (error) => error,
+      }).pipe(
+        Effect.as(undefined),
+        Effect.catch((error) =>
+          Effect.succeed(error instanceof Error ? error.message : String(error)),
+        ),
+      );
+      if (staged !== undefined) {
+        yield* Effect.logError(
+          `${prefix}: not saved · retained · staging its capture token again failed: ${staged}. It is kept and not started.`,
+        );
+        return yield* retry(`staging the capture token failed: ${staged}`);
+      }
+    }
     const recover = adapter.recover;
     const recovered:
       | RuntimeAdapterRecoverResult
@@ -234,6 +314,11 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         );
         return yield* retry(recovered.detail);
       case "failed":
+        if (restarts) {
+          yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
+            Effect.catchCause(() => Effect.void),
+          );
+        }
         yield* Effect.logError(
           `${prefix}: not saved · retained · recovering the executor failed (attempt ${String(row.recoveryAttempts + 1)}): ${recovered.detail}. It is kept; the next attempt follows the backoff.`,
         );
@@ -266,6 +351,12 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         Effect.map((value) => (value === "unknown" ? ("running" as const) : value)),
       ),
     });
+    if (restarts) {
+      // The daemon read its token at boot (its control socket answered before this drain).
+      yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
+        Effect.catchCause(() => Effect.void),
+      );
+    }
     if (outcome.kind === "drained") {
       return yield* release("observed-complete");
     }

@@ -252,6 +252,14 @@ export const workspaceCaptureDrains = pgTable(
     recoveryAttempts: integer("recovery_attempts").notNull().default(0),
     nextRecoveryAt: timestamp("next_recovery_at", { mode: "date", withTimezone: true }),
     lastRecoveryError: text("last_recovery_error"),
+    /**
+     * The capture token the executor was launched with (`SEALANT_CAPTURE_TOKEN`, the one Mend
+     * issued for the session), sealed with the credential cipher. The daemon reads it once at
+     * boot from its secret env file, which is removed once the executor is ready; recovering a
+     * retained executor restarts that boot, so the token is staged again from here. Cleared when
+     * the executor is finally removed or found gone.
+     */
+    captureTokenSealed: text("capture_token_sealed"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

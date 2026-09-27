@@ -510,6 +510,10 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       runtimeAdapters,
       targetOptions,
+      // A restarted executor boots again: its capture token is unsealed and staged where it
+      // was created to read it.
+      ...(credentialCipher === undefined ? {} : { credentialCipher }),
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
     })
       .catch((error: unknown) => {

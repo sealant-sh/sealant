@@ -198,6 +198,29 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.calls).toEqual(["flush", "status", "flush"]);
   });
 
+  it("asks for another FINAL while the daemon is sealing, and saves once the seal is acknowledged", async () => {
+    // sealantd reports `incomplete_reason: "sealing"` after a deadline-cut FINAL: nothing is
+    // pending, but the chain's seal is not acknowledged yet. Empty but unconfirmed: FINAL again.
+    const sealing = captureStatus({ pending: 0, complete: false, incompleteReason: "sealing" });
+    const daemon = fakeCaptureDaemon([sealing, savedStatus()]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome.kind).toBe("drained");
+    expect(daemon.calls).toEqual(["flush", "flush"]);
+    expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
+  });
+
+  it("never takes a sealing daemon as saved: kept, and the next sweep flushes again", async () => {
+    const sealing = captureStatus({ pending: 0, complete: false, incompleteReason: "sealing" });
+    const daemon = fakeCaptureDaemon([sealing]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome).toMatchObject({
+      kind: "unconfirmed",
+      detail: expect.stringContaining("final flush incomplete (sealing)"),
+    });
+    expect(drainPermitsStop(outcome)).toBe(false);
+    expect(daemon.calls).toEqual(["flush", "flush"]);
+  });
+
   it("keeps a workspace whose daemon answers but whose queue does not move", async () => {
     const daemon = fakeCaptureDaemon([captureStatus({ pending: 4, uploadedBytes: 100 })]);
 

@@ -66,16 +66,23 @@ Server-side (the packages ride the release train):
   created with `--rm`.
 - Retained executors are recorded and retried on a backoff (1 min doubling to 1 h). Docker restarts
   the kept container on its own disk (`docker start`), and a final flush follows at once. The
-  executor is removed only after that flush reports complete. The restart also runs the container's
-  lifecycle steps and foreground harness again; the final flush stops them. Kubernetes cannot
-  restart an ended Pod, and its emptyDir lasts only while the Pod object exists, so an ended capture
-  Pod is reported and kept. A terminated MicroVM's disk is gone, so only the pre-deadline drain
-  protects it.
+  executor is removed only after that flush reports complete. The restart boots sealantd in recovery
+  mode: the marker `/.sealantd-recovery` is `docker cp`'d into the stopped container first, so no
+  lifecycle step, dotfiles or harness runs and nothing is admitted. Its capture token, read once at
+  boot from a file removed after readiness, is kept sealed at launch (`capture_token_sealed`,
+  cleared when the executor goes) and staged again first. With no token kept, or none the worker can
+  unseal, the executor is not started and is reported `not recoverable · no capture token`.
+  Kubernetes cannot restart an ended Pod, and its emptyDir lasts only while the Pod object exists,
+  so an ended capture Pod is reported and kept. A terminated MicroVM's disk is gone, so only the
+  pre-deadline drain protects it.
 - The deadline sweep persists a plan for every runtime in its watch window before it drives any
   drain. It then drives every due runtime each tick, earliest deadline first, four at a time. The
   upload estimate counts bytes not yet uploaded, or everything staged when that is unreported. While
   bulk is being built it adds at least the staged size again, or 256 MiB. Until a rate has been
   observed it assumes 1 MiB/s.
+- `incomplete_reason: "sealing"` (nothing pending, the seal not yet acknowledged) is handled like
+  any empty queue without a complete final flush. The drain asks for FINAL again, never takes it as
+  saved, and keeps the executor until the daemon reports `complete`.
 - Two drains of one run never overlap, including within one worker: each claim holds the lease under
   its own token.
 - The idempotency key is stored on the workspace row, unique per owner, and that row is written

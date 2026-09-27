@@ -222,7 +222,8 @@ export interface CaptureFlushReport {
   /**
    * Why the last final flush is not complete (sealantd `incomplete_reason`): `not-final`,
    * `in-progress`, `processes-remain`, `sweep-unavailable`, `snapshot-failed`, `unreadable`,
-   * `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`. A class whose last
+   * `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `sealing` (nothing pending, the
+   * chain's seal not yet acknowledged: ask for FINAL again), `internal`. A class whose last
    * snap failed (`snaps`) is `snapshot-failed` too. Absent when complete, or from a daemon that
    * predates it.
    */
