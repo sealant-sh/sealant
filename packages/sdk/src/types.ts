@@ -288,12 +288,29 @@ export interface WorkspaceCaptureStatus {
  * is silent and the runtime reports the executor ended.
  */
 export interface WorkspaceCaptureDrain {
-  readonly state: "draining" | "kept" | "saved" | "gone";
+  /**
+   * Also `stop-failed` (removing the runtime failed; retried), `stopped` (removed after its
+   * drain), `discarded` (the owner discarded the unsaved captures; terminated without a drain).
+   */
+  readonly state: "draining" | "kept" | "saved" | "gone" | "stop-failed" | "stopped" | "discarded";
   readonly detail?: string;
   /** ISO-8601: when it was observed. */
   readonly observedAt?: string;
   /** ISO-8601: when the control plane starts (or started) the drain ahead of the deadline. */
   readonly preservationStartsAt?: string;
+  /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
+  readonly discard?: { readonly requestedBy: string; readonly requestedAt: string };
+}
+
+/** Options for `workspace.stop()`. */
+export interface WorkspaceStopOptions {
+  /**
+   * End the workspace WITHOUT saving its unsaved captures: no drain, the runtime is terminated
+   * at once. The only way to end a capture-sourced workspace the control plane keeps because its
+   * work cannot be confirmed saved. Recorded (who, when) and reported on the workspace's capture
+   * drain as `discarded`. Owner only; irreversible — what was not saved is lost.
+   */
+  readonly discardUnsaved?: boolean;
 }
 
 /**
@@ -623,8 +640,10 @@ export interface Workspace {
    * minutes; if the runtime is still up after a minute, resolves with what was observed instead:
    * `draining`, `kept` (the workspace keeps running because its work is not confirmed saved), or
    * `requested` (accepted, nothing more observed yet). Never reports a stop it did not observe.
+   * `{ discardUnsaved: true }` ends it without saving its unsaved captures (see
+   * `WorkspaceStopOptions`).
    */
-  stop(): Promise<WorkspaceStopResult>;
+  stop(options?: WorkspaceStopOptions): Promise<WorkspaceStopResult>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**

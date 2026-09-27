@@ -22,6 +22,7 @@ import {
 import {
   LaunchRetainedError,
   completeReadyLaunch,
+  launchHoldsCaptures,
   type RuntimeAdapterLaunchHooks,
 } from "./launch-retention.js";
 import {
@@ -203,10 +204,19 @@ export interface DockerRuntimeAdapterOptions {
    * generous. Defaults to 120 s. A fenced stop skips it.
    */
   readonly stopGraceSeconds?: number;
+  /**
+   * The same window for a capture-sourced workspace (`SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS`):
+   * its daemon's final flush ships until everything is registered, bulk included, so it gets far
+   * longer. Defaults to 3600 s.
+   */
+  readonly captureStopGraceSeconds?: number;
 }
 
 /** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
 export const DEFAULT_DOCKER_STOP_GRACE_SECONDS = 120;
+
+/** The planned-stop window of a capture-sourced workspace container. */
+export const DEFAULT_DOCKER_CAPTURE_STOP_GRACE_SECONDS = 3600;
 
 /**
  * Docker's own grammar for a network name (`docker network create`): the value lands in argv, so
@@ -702,6 +712,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private readonly eventStreamOpener: DockerEventStreamOpener;
 
   private readonly stopGraceSeconds: number;
+  private readonly captureStopGraceSeconds: number;
 
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
@@ -717,6 +728,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.dockerServiceImage = options.dockerServiceImage ?? DEFAULT_DOCKER_SERVICE_IMAGE;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
     this.stopGraceSeconds = options.stopGraceSeconds ?? DEFAULT_DOCKER_STOP_GRACE_SECONDS;
+    this.captureStopGraceSeconds =
+      options.captureStopGraceSeconds ?? DEFAULT_DOCKER_CAPTURE_STOP_GRACE_SECONDS;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
@@ -1038,6 +1051,22 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           state.error.length > 0 ? `, error: ${state.error}` : ""
         }).${logs === undefined ? "" : ` Logs:\n${logs}`}`,
       );
+    }
+  }
+
+  /** The container's configured StopTimeout in seconds; `undefined` when unset or unreadable. */
+  private async containerStopTimeout(containerId: string): Promise<number | undefined> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Config.StopTimeout}}",
+        containerId,
+      ]);
+      const seconds = Number.parseInt(result.stdout.trim(), 10);
+      return Number.isInteger(seconds) && seconds > 0 ? seconds : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -1516,13 +1545,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
             .catch(() => undefined);
 
     if (parsed.fence !== true) {
-      // SIGTERM, then up to the grace for sealantd to flush and exit. Its failure is not the
-      // stop's: a container already gone or already stopped is settled by the removal below,
-      // which also surfaces a daemon that cannot be reached.
+      // SIGTERM, then up to the grace for sealantd to flush and exit: the container's own
+      // StopTimeout (set at create, longer for a capture-sourced workspace), or the configured
+      // grace for a container created before it was set. Its failure is not the stop's: a
+      // container already gone or already stopped is settled by the removal below, which also
+      // surfaces a daemon that cannot be reached.
+      const graceSeconds = await this.containerStopTimeout(parsed.resourceId);
       await this.commandRunner("docker", [
         "stop",
         "-t",
-        String(this.stopGraceSeconds),
+        String(Math.max(graceSeconds ?? 0, this.stopGraceSeconds)),
         parsed.resourceId,
       ]).catch(() => undefined);
     }
@@ -1671,6 +1703,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         parsed.blueprint.runtime.ociRuntime,
         "--name",
         containerName,
+        // The container's own StopTimeout: a plain `docker stop` (an operator, a host restart,
+        // Docker Desktop quitting) gives sealantd this long after SIGTERM, not Docker's 10 s — a
+        // SIGKILL mid-flush loses whatever was not yet shipped. The daemon's own
+        // `shutdown-timeout` still bounds a daemon shutdown.
+        "--stop-timeout",
+        String(
+          launchHoldsCaptures(parsed.blueprint)
+            ? this.captureStopGraceSeconds
+            : this.stopGraceSeconds,
+        ),
         // Caller/project env comes FIRST among all `-e` emissions — see `userEnvArgs`.
         ...userEnvArgs(parsed),
         // Networks: the per-workspace sidecar network first (it carries the `docker` alias the

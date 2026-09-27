@@ -1,3 +1,7 @@
+import {
+  splitWorkingTreeChanges,
+  workingTreeChangesScript,
+} from "@sealant/workspaces/git/working-tree-changes";
 import { z } from "zod";
 
 /*
@@ -138,15 +142,12 @@ export const finalizeInteractiveRun = async (input: {
   let changedFiles: FileChange[] = [];
   if (input.captureOutput !== undefined) {
     try {
-      diff = await input.captureOutput(
-        "git add -A >/dev/null 2>&1; git --no-pager diff --cached 2>/dev/null",
-        REPO_WORKDIR,
+      // Staged in a throwaway index: the user's own index is never written by the recording.
+      const captured = splitWorkingTreeChanges(
+        await input.captureOutput(workingTreeChangesScript(), REPO_WORKDIR),
       );
-      const names = await input.captureOutput(
-        "git --no-pager diff --cached --name-status 2>/dev/null",
-        REPO_WORKDIR,
-      );
-      changedFiles = parseNameStatus(names);
+      diff = captured.diff;
+      changedFiles = parseNameStatus(captured.nameStatus);
     } catch {
       // Diff capture is best-effort (the daemon may already be gone); the run still completes.
       diff = "";

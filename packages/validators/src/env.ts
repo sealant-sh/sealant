@@ -540,6 +540,9 @@ export const workerRuntimeEnvSchema = z.object({
   // How long a planned Docker stop waits after SIGTERM (`docker stop -t`) before the kill, so
   // sealantd's final capture flush can ship.
   SEALANT_DOCKER_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(120),
+  // The same for a capture-sourced workspace container, set as its StopTimeout at create so a
+  // plain `docker stop` (operator, host restart) also waits: its final flush ships until complete.
+  SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS: z.coerce.number().int().min(1).default(3600),
   // Image retention: how often the worker deletes workspace images no live workspace launched from
   // and no retained plan still needs (plus stale build scratch under the OS temp dir). `false`
   // leaves the store alone for operators who manage images themselves.
@@ -591,6 +594,7 @@ export const kubernetesRuntimeEnvSchema = z.object({
   SEALANT_K8S_READINESS_TIMEOUT_MS: z.coerce.number().int().min(1000).optional(),
   /** Workspace Pod `terminationGracePeriodSeconds` (sealantd's SIGTERM capture flush); default 120. */
   SEALANT_K8S_TERMINATION_GRACE_SECONDS: z.coerce.number().int().min(1).optional(),
+  SEALANT_K8S_CAPTURE_TERMINATION_GRACE_SECONDS: z.coerce.number().int().min(1).optional(),
   SEALANT_K8S_TOPOLOGY_SPREAD: z.stringbool().or(z.boolean()).optional(),
   /** JSON object of node labels workspace Pods must match. */
   SEALANT_K8S_WORKSPACE_NODE_SELECTOR: z.string().trim().min(1).optional(),

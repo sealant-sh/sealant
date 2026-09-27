@@ -72,6 +72,7 @@ const sweep = async (daemon: ReturnType<typeof fakeCaptureDaemon>) => {
       listRetainedLaunches: () => Effect.succeed([retainedRow]),
       getRuntimeInstanceByRunId: () => Effect.succeed(retainedRow),
       markStopped,
+      markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceRepo, { setWorkspaceStatus } as unknown as WorkspaceRepoService),
     Layer.succeed(WorkspaceAttemptRepo, {

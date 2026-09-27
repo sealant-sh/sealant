@@ -255,6 +255,15 @@ export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 // mismatch yields a uniform 404 (existence is not leaked).
 export const stopWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /**
+   * End the workspace WITHOUT saving its unsaved captures. A capture-sourced workspace is
+   * otherwise drained before it stops, and kept running for as long as its work cannot be
+   * confirmed saved; this is the owner's explicit way out. The request is recorded (who, when)
+   * and every stop path honours it: the runtime is terminated at once, and the workspace's
+   * `captureDrain` reads `discarded`. Accepted on a workspace already stopped whose runtime is
+   * still up (a kept one). Owner only.
+   */
+  discardUnsaved: Schema.optional(Schema.Boolean),
 });
 export type StopWorkspaceRequest = typeof stopWorkspaceRequestSchema.Type;
 
@@ -338,17 +347,34 @@ export type WorkspaceSummary = typeof workspaceSummarySchema.Type;
  *    report its final flush complete). `detail` says which.
  *  - `saved`: the daemon reported its final flush complete; the runtime is being removed.
  *  - `gone`: the daemon is silent and the runtime reports the executor ended.
+ *  - `stop-failed`: the drain let the stop through but removing the runtime failed (`detail`
+ *    has the error); the control plane retries the stop.
+ *  - `stopped`: the runtime was removed after its drain let it go.
+ *  - `discarded`: the owner discarded the unsaved captures (`stop({ discardUnsaved: true })`);
+ *    the runtime was terminated without a drain. `discard` records who asked, and when.
  *
  * `preservationStartsAt` is when the control plane starts that drain on its own ahead of the
  * runtime's deadline (`runtime.deadline`), once it has planned one.
  */
 export const workspaceCaptureDrainSchema = Schema.Struct({
-  state: Schema.Literals(["draining", "kept", "saved", "gone"]),
+  state: Schema.Literals([
+    "draining",
+    "kept",
+    "saved",
+    "gone",
+    "stop-failed",
+    "stopped",
+    "discarded",
+  ]),
   detail: Schema.optional(Schema.String),
   /** ISO-8601: when this was observed. */
   observedAt: Schema.optional(Schema.String),
   /** ISO-8601: when the deadline sweep starts (or started) the final drain. */
   preservationStartsAt: Schema.optional(Schema.String),
+  /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
+  discard: Schema.optional(
+    Schema.Struct({ requestedBy: NonEmptyString, requestedAt: Schema.String }),
+  ),
 });
 export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
 

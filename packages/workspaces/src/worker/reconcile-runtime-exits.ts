@@ -149,6 +149,25 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     return 0;
   }
 
+  // The remains: an exited container keeps its filesystem and any sidecar; a dead Pod keeps its
+  // Service and Secrets. The adapter stop is idempotent (`not-found` = already gone).
+  const removeRemains = (
+    adapter: RuntimeAdapter,
+    instance: WorkspaceRuntimeInstance,
+    resourceId: string,
+  ) =>
+    Effect.gen(function* () {
+      yield* Effect.tryPromise(() =>
+        adapter.stop({
+          resourceId,
+          ...(instance.reference === null ? {} : { reference: instance.reference }),
+        }),
+      ).pipe(swallowingFailure("removing the exited runtime", instance.runId));
+      yield* Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
+        swallowingFailure("removing staged launch material", instance.runId),
+      );
+    });
+
   let recorded = 0;
   for (const adapter of options.runtimeAdapters) {
     const inspect = adapter.inspect;
@@ -203,6 +222,31 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       if (verdict === "leave") {
         continue;
       }
+      if (instance.stopReason !== null && verdict === "record") {
+        // A stop is under way for this run (`markStopRequested`): the exit is that planned stop
+        // completing, not a crash. Record it stopped with the stop's reason; the stop path's own
+        // `markStopped` is idempotent.
+        const settled = yield* runtimeInstances
+          .markStopped({ runId: instance.runId, stopReason: instance.stopReason })
+          .pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Runtime exit reconciler: recording the planned stop of run ${instance.runId} failed.`,
+                cause,
+              ).pipe(Effect.as(false)),
+            ),
+          );
+        if (settled) {
+          recorded += 1;
+          yield* Effect.logInfo(
+            `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended by its planned stop (${instance.stopReason}); recorded stopped.`,
+          );
+          // The remains, as below; the stop path may be removing them already (idempotent).
+          yield* removeRemains(adapter, instance, resourceId);
+        }
+        continue;
+      }
       yield* reportHardCap(instance, inspection);
 
       const exited = yield* runtimeInstances
@@ -242,17 +286,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
 
-      // The remains: an exited container keeps its filesystem and any sidecar; a dead Pod keeps
-      // its Service and Secrets. The adapter stop is idempotent (`not-found` = already gone).
-      yield* Effect.tryPromise(() =>
-        adapter.stop({
-          resourceId,
-          ...(instance.reference === null ? {} : { reference: instance.reference }),
-        }),
-      ).pipe(swallowingFailure("removing the exited runtime", instance.runId));
-      yield* Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
-        swallowingFailure("removing staged launch material", instance.runId),
-      );
+      yield* removeRemains(adapter, instance, resourceId);
     }
   }
 
@@ -281,6 +315,10 @@ const drainBeforeRecording = (
   Effect.gen(function* () {
     const drain = options.captureDrain;
     if (drain === undefined) {
+      return "record" as const;
+    }
+    // The owner discarded this run's unsaved captures: nothing is kept for them.
+    if ((yield* drain.ledger.peek(instance.runId))?.discardRequested !== undefined) {
       return "record" as const;
     }
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});

@@ -51,6 +51,14 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   unreachableSince: row.unreachableSince?.getTime(),
   keptLogged: row.keptLogged,
   silentLogged: row.silentLogged,
+  ...(row.discardRequestedAt === null
+    ? {}
+    : {
+        discardRequested: {
+          atMs: row.discardRequestedAt.getTime(),
+          by: row.discardRequestedBy ?? "unknown",
+        },
+      }),
 });
 
 const storedStatus = (status: CaptureFlushReport): Readonly<Record<string, unknown>> => ({
@@ -155,6 +163,25 @@ export const captureDrainLedgerFromRepo = (
       Effect.catchCause((cause) =>
         Effect.logWarning(`Capture drain: reading run ${runId}'s drain failed.`, cause).pipe(
           Effect.as(undefined),
+        ),
+      ),
+    ),
+
+  observe: (runId, observation) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.recordObservation({
+          runId,
+          state: observation.state,
+          detail: observation.detail ?? null,
+        });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: recording "${observation.state}" for run ${runId} failed.`,
+          cause,
         ),
       ),
     ),

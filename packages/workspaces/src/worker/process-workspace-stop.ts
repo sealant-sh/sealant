@@ -192,6 +192,54 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     yield* workspaces.setWorkspaceStatus({ id: options.workspaceId, status: "stopped" });
   }).pipe(swallowingFailure("workspace-status update"));
 
+  // Record that this stop is under way, then remove the runtime. From the first write on, an
+  // exit the runtime reports is this planned stop completing (the exit reconciler records it
+  // stopped, never failed). A failure is recorded on the drain (`stop-failed`, with the error)
+  // before it propagates; the stop intent is durable, so the next sweep retries it.
+  const stopRuntime = (input: {
+    readonly adapter: RuntimeAdapter;
+    readonly resourceId: string;
+    readonly reference: string | null;
+    readonly fence: boolean;
+    readonly drain: WorkspaceStopCaptureDrain | undefined;
+  }) =>
+    Effect.gen(function* () {
+      yield* runtimeInstances.markStopRequested({
+        runId: options.runId,
+        stopReason: options.stopReason,
+      });
+      yield* Effect.tryPromise({
+        try: () =>
+          input.adapter.stop({
+            resourceId: input.resourceId,
+            ...(input.reference === null ? {} : { reference: input.reference }),
+            ...(input.fence ? { fence: true } : {}),
+          }),
+        catch: toWorkspaceStopProcessingError,
+      });
+      yield* runtimeInstances.markStopped({ runId: options.runId, stopReason: options.stopReason });
+    }).pipe(
+      Effect.mapError(toWorkspaceStopProcessingError),
+      Effect.tapError((error) =>
+        input.drain === undefined
+          ? Effect.void
+          : input.drain.ledger.observe(options.runId, {
+              state: "stop-failed",
+              detail: `removing the runtime failed: ${error.message}; every sweep retries the stop`,
+            }),
+      ),
+    );
+
+  // After the runtime is gone and recorded stopped: drop worker-staged launch material
+  // (best-effort — a directory the container re-owned must not fail a stop that already
+  // happened: that failure used to strand the row), settle the workspace row.
+  const finishStop = Effect.gen(function* () {
+    yield* Effect.tryPromise(() =>
+      (options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager).removeAll(options.runId),
+    ).pipe(swallowingFailure("launch-material removal"));
+    yield* settleWorkspaceRow;
+  });
+
   const instance = yield* runtimeInstances
     .getRuntimeInstanceByRunId(options.runId)
     .pipe(Effect.mapError(toWorkspaceStopProcessingError));
@@ -218,10 +266,23 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     const state = yield* runtimeState(adapter, resourceId);
     const ended = state !== "running";
     const drain = options.captureDrain;
+    const recorded = drain === undefined ? undefined : yield* drain.ledger.peek(options.runId);
+    const discard = recorded?.discardRequested;
+
+    if (drain !== undefined && discard !== undefined) {
+      // The owner discarded this run's unsaved captures (recorded, with who and when, by the
+      // API). Nothing is drained and nothing is kept: the runtime is terminated outright.
+      const detail = `unsaved captures discarded at the owner's request (by ${discard.by}, requested ${new Date(discard.atMs).toISOString()}); the runtime was terminated without a drain`;
+      yield* Effect.logError(`Workspace stop (${drain.label}): run ${options.runId}: ${detail}.`);
+      yield* stopRuntime({ adapter, resourceId, reference, fence: true, drain });
+      yield* drain.ledger.observe(options.runId, { state: "discarded", detail });
+      yield* finishStop;
+      return stopOutcome("stopped");
+    }
+
     const captureSourced =
       drain === undefined ? false : yield* isCaptureSourcedRun(options.runId, instance.sourceKind);
-    const drainedBefore =
-      drain === undefined || !captureSourced ? undefined : yield* drain.ledger.peek(options.runId);
+    const drainedBefore = captureSourced ? recorded : undefined;
 
     // An executor that ended after a drain reached its daemon and was never told its work is
     // saved exited on purpose with its staging on disk (sealantd exits 75 after an incomplete
@@ -288,29 +349,28 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
       }
     }
 
-    yield* Effect.tryPromise({
-      try: () =>
-        adapter.stop({
-          resourceId,
-          ...(reference === null ? {} : { reference }),
-        }),
-      catch: toWorkspaceStopProcessingError,
+    yield* stopRuntime({
+      adapter,
+      resourceId,
+      reference,
+      fence: false,
+      drain: captureSourced ? drain : undefined,
     });
+    yield* finishStop;
+    if (drain !== undefined && captureSourced) {
+      yield* drain.ledger.observe(options.runId, {
+        state: "stopped",
+        detail: "the runtime was removed after its drain let it go",
+      });
+    }
+    return stopOutcome("stopped");
   }
 
-  // Best-effort: remove every piece of worker-staged launch material for this run (dotfiles
-  // archives, and a secret env file a launch that died before readiness may have left behind).
-  // Paths are deterministic per run; a relaunch re-stages from the job payload, so removal is
-  // always safe.
-  yield* Effect.promise(() =>
-    (options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager).removeAll(options.runId),
-  );
-
+  // Already stopped, or never addressable: record the terminal state (idempotent) and settle.
   yield* runtimeInstances
     .markStopped({ runId: options.runId, stopReason: options.stopReason })
     .pipe(Effect.mapError(toWorkspaceStopProcessingError));
-
-  yield* settleWorkspaceRow;
+  yield* finishStop;
   return stopOutcome("stopped");
 });
 

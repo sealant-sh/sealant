@@ -1,0 +1,2 @@
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "discard_requested_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "discard_requested_by" text;

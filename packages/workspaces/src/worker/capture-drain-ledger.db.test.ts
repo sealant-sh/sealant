@@ -8,8 +8,18 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { createSealantDB, user, workspaceAttempts, type DB } from "@sealant/db";
-import { Effect } from "effect";
+import {
+  createSealantDB,
+  SealantDB,
+  user,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
+  workspaceAttempts,
+  WorkspaceRuntimeInstanceRepo,
+  WorkspaceRuntimeInstanceRepoLive,
+  type DB,
+} from "@sealant/db";
+import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
@@ -129,5 +139,53 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         ),
       ),
     ).toBe(false);
+  });
+
+  it("fences an exit behind a stop under way, so the planned stop settles stopped", async () => {
+    const runId = await newRun();
+    const layer = Layer.mergeAll(
+      WorkspaceRuntimeInstanceRepoLive,
+      WorkspaceCaptureDrainRepoLive,
+    ).pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const instances = yield* WorkspaceRuntimeInstanceRepo;
+        yield* instances.upsertRuntimeInstance({
+          runId,
+          status: "ready",
+          adapter: "docker",
+          resourceId: "container-1",
+          reference: "sealant-x",
+        });
+        yield* instances.markStopRequested({ runId, stopReason: "user" });
+        const exited = yield* instances.markExited({
+          runId,
+          resourceId: "container-1",
+          errorMessage: "exited",
+        });
+        const stopped = yield* instances.markStopped({ runId, stopReason: "user" });
+        return { exited, stopped };
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(result.exited).toBeUndefined();
+    expect(result.stopped).toMatchObject({ status: "stopped", stopReason: "user" });
+  });
+
+  it("keeps the first discard request as the audit, and reads it back through the ledger", async () => {
+    const runId = await newRun();
+    const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const [first, second] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const drains = yield* WorkspaceCaptureDrainRepo;
+        const a = yield* drains.requestDiscard({ runId, requestedBy: "user_owner" });
+        const b = yield* drains.requestDiscard({ runId, requestedBy: "someone_else" });
+        return [a, b] as const;
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(first.discardRequestedBy).toBe("user_owner");
+    expect(second.discardRequestedBy).toBe("user_owner");
+    expect(second.discardRequestedAt?.getTime()).toBe(first.discardRequestedAt?.getTime());
+    const entry = await Effect.runPromise(worker(dbB, "worker-b").peek(runId));
+    expect(entry?.discardRequested?.by).toBe("user_owner");
   });
 });

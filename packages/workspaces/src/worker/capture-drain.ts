@@ -106,6 +106,11 @@ export interface CaptureDrainEntry {
   readonly keptLogged: boolean;
   /** Likewise for a silent daemon on a running executor. */
   readonly silentLogged: boolean;
+  /**
+   * The owner asked to discard this run's unsaved captures (the audit: when, and who). Read-only
+   * here: the API records it, every stop path honours it by terminating without a drain.
+   */
+  readonly discardRequested?: { readonly atMs: number; readonly by: string } | undefined;
 }
 
 export const EMPTY_CAPTURE_DRAIN_ENTRY: CaptureDrainEntry = {
@@ -117,7 +122,14 @@ export const EMPTY_CAPTURE_DRAIN_ENTRY: CaptureDrainEntry = {
 };
 
 /** What the last observation concluded, for the API (`workspace_capture_drains.state`). */
-export type CaptureDrainState = "draining" | "kept" | "saved" | "gone";
+export type CaptureDrainState =
+  | "draining"
+  | "kept"
+  | "saved"
+  | "gone"
+  | "stop-failed"
+  | "stopped"
+  | "discarded";
 
 export interface CaptureDrainObservation {
   readonly state: CaptureDrainState;
@@ -144,6 +156,11 @@ export interface CaptureDrainLedger {
   readonly release: (runId: string) => Effect.Effect<void>;
   /** The run's recorded progress, without claiming it; `undefined` when none (or unreadable). */
   readonly peek: (runId: string) => Effect.Effect<CaptureDrainEntry | undefined>;
+  /**
+   * Record an observation outside a drain (what the stop that followed it did); no claim needed.
+   * Best-effort: a failed write is logged.
+   */
+  readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
 }
 
 /** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
@@ -224,6 +241,20 @@ export const inMemoryCaptureDrainLedger = (
         }
       }),
     peek: (runId) => Effect.sync(() => store.rows.get(runId)?.entry),
+    observe: (runId, observation) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row === undefined) {
+          store.rows.set(runId, {
+            entry: EMPTY_CAPTURE_DRAIN_ENTRY,
+            observation,
+            owner: undefined,
+            expiresAt: undefined,
+          });
+        } else {
+          row.observation = observation;
+        }
+      }),
   };
 };
 

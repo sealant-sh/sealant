@@ -81,6 +81,7 @@ const runtimeInstance = (
 interface Harness {
   readonly repo: WorkspaceRuntimeInstanceRepoService;
   readonly markExited: ReturnType<typeof vi.fn>;
+  readonly markStopped: ReturnType<typeof vi.fn>;
   readonly layer: Layer.Layer<WorkspaceRuntimeInstanceRepo | WorkspaceAttemptRepo | SealantRuntime>;
 }
 
@@ -102,14 +103,18 @@ const makeHarness = (input: {
         : input.exitedRow(request.runId),
     ),
   );
+  const markStopped = vi.fn((request: { runId: string; stopReason: string }) =>
+    Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
+  );
   const repo: WorkspaceRuntimeInstanceRepoService = {
     upsertRuntimeInstance: () => Effect.die("unused"),
     markExited,
-    markStopped: () => Effect.die("unused"),
+    markStopped,
     getRuntimeInstanceByRunId: () => Effect.die("unused"),
     listRuntimeInstancesByRunIds: () => Effect.die("unused"),
     listRunningInstances: () => Effect.succeed(input.instances),
     listRetainedLaunches: () => Effect.succeed([]),
+    markStopRequested: () => Effect.void,
   };
   const attempts = {
     getAttemptSnapshotByRunId: () =>
@@ -128,6 +133,7 @@ const makeHarness = (input: {
   return {
     repo,
     markExited,
+    markStopped,
     layer: Layer.mergeAll(
       Layer.succeed(WorkspaceRuntimeInstanceRepo, repo),
       Layer.succeed(WorkspaceAttemptRepo, attempts),
@@ -446,6 +452,42 @@ describe("reconcileRuntimeExitsEffect · drain before removal", () => {
     expect(recorded).toBe(0);
     expect(harness.markExited).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("records a planned stop's exit as stopped, never failed", async () => {
+    // End to end: a lifecycle stop drained (saved), asked Docker to stop, and the exit event
+    // reached the reconciler first — which recorded the planned stop `failed`.
+    const ledger = inMemoryCaptureDrainLedger();
+    ledger.store.rows.set("run_1", {
+      entry: {
+        lastProgressAt: Date.now() - 1_000,
+        last: captureStatus({ pending: 0, complete: true }),
+        unreachableSince: undefined,
+        keptLogged: false,
+        silentLogged: false,
+      },
+      observation: { state: "saved", detail: "final flush complete" },
+      owner: undefined,
+      expiresAt: undefined,
+    });
+    const harness = makeHarness({
+      instances: [runtimeInstance({ stopReason: "user" })],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const { adapter } = stubAdapter({ inspections: exited });
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(1);
+    expect(harness.markExited).not.toHaveBeenCalled();
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_1", stopReason: "user" });
   });
 
   it("records the exit but keeps the remains of an executor that ended after an unconfirmed final flush", async () => {

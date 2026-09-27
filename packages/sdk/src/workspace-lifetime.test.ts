@@ -208,4 +208,34 @@ describe("workspace.stop()", () => {
     const plain = makeStub(() => details({ status: "ready" }));
     await expect(stopWith(plain)).resolves.toEqual({ result: { state: "requested" } });
   });
+
+  it("asks the control plane to discard unsaved captures only when told to, and reports what it did", async () => {
+    const discarded = {
+      state: "discarded" as const,
+      detail: "unsaved captures discarded at the owner's request",
+      discard: { requestedBy: "local", requestedAt: "2026-09-27T12:00:00.000Z" },
+    };
+    let reads = 0;
+    const stub = makeStub(() =>
+      (reads += 1) < 3
+        ? details({ status: "ready", captureDrain: discarded })
+        : details({ status: "stopped", captureDrain: discarded }),
+    );
+    vi.useFakeTimers();
+    const outcome = workspaceFor(stub.client).stop({ discardUnsaved: true });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(outcome).resolves.toEqual({ state: "stopped" });
+    expect(stub.stops).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: expect.any(String), discardUnsaved: true },
+      },
+    ]);
+
+    const plain = makeStub(() => details({ status: "stopped" }));
+    await workspaceFor(plain.client).stop();
+    expect(plain.stops).toEqual([
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: expect.any(String) } },
+    ]);
+  });
 });

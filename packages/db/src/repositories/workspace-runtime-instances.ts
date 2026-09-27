@@ -1,5 +1,5 @@
 import type { RuntimeAdapterId } from "@sealant/validators";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -47,6 +47,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "listRunningInstances",
   "listRetainedLaunches",
   "markExited",
+  "markStopRequested",
   "markStopped",
   "upsertRuntimeInstance",
 ]);
@@ -141,12 +142,22 @@ export interface WorkspaceRuntimeInstanceRepoService {
   /**
    * Terminal write for a runtime that ended on its own: `ready` becomes `failed` with
    * `RUNTIME_EXITED_ERROR_CODE` and the observed detail. Fenced: only a `ready` instance on the
-   * observed resource changes, so a stop that already settled the row (`markStopped`) or a
-   * relaunch that replaced the resource wins, and the call returns `undefined`.
+   * observed resource with no stop under way (`markStopRequested`) changes, so a stop — settled
+   * or in progress — or a relaunch that replaced the resource wins, and the call returns
+   * `undefined`.
    */
   readonly markExited: (
     input: MarkWorkspaceRuntimeInstanceExitedInput,
   ) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * A stop is under way: record its reason while the runtime is still up, before the runtime is
+   * asked to go. From here an exit the runtime reports is the planned stop completing, never a
+   * crash — `markExited` is fenced on it. Only a row not yet stopped and with no reason changes.
+   */
+  readonly markStopRequested: (input: {
+    readonly runId: string;
+    readonly stopReason: WorkspaceRuntimeInstanceStopReason;
+  }) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
   /**
    * Terminal stop write. Idempotent: an already-stopped instance is returned unchanged (the first
    * stopReason wins), so a user stop racing the TTL reaper records exactly one outcome.
@@ -276,12 +287,30 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                   eq(workspaceRuntimeInstances.runId, input.runId),
                   eq(workspaceRuntimeInstances.status, "ready"),
                   eq(workspaceRuntimeInstances.resourceId, input.resourceId),
+                  // A stop under way owns the exit: it settles the row `stopped`.
+                  isNull(workspaceRuntimeInstances.stopReason),
                 ),
               )
               .returning();
 
             return updated;
           }),
+        ),
+
+      markStopRequested: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markStopRequested",
+          db
+            .update(workspaceRuntimeInstances)
+            .set({ stopReason: input.stopReason })
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.runId, input.runId),
+                ne(workspaceRuntimeInstances.status, "stopped"),
+                isNull(workspaceRuntimeInstances.stopReason),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
 
       markStopped: (input) =>

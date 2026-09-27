@@ -16,6 +16,8 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "getByRunId",
   "listByRunIds",
   "recordSchedule",
+  "recordObservation",
+  "requestDiscard",
 ]);
 
 type WorkspaceCaptureDrainRepoOperation = typeof workspaceCaptureDrainRepoOperationSchema.Type;
@@ -99,6 +101,23 @@ export interface WorkspaceCaptureDrainRepoService {
   readonly listByRunIds: (
     runIds: readonly string[],
   ) => Effect.Effect<ReadonlyMap<string, WorkspaceCaptureDrain>, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Record an observation outside a drain (the stop that followed it failed or finished, or a
+   * discard ended the runtime); the lease is untouched.
+   */
+  readonly recordObservation: (input: {
+    readonly runId: string;
+    readonly state: WorkspaceCaptureDrainState;
+    readonly detail: string | null;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Record the owner's request to discard the run's unsaved captures (the audit): the first
+   * request's instant and requester stand. Returns the row.
+   */
+  readonly requestDiscard: (input: {
+    readonly runId: string;
+    readonly requestedBy: string;
+  }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
   /** Persist the deadline sweep's schedule and throughput sample; the lease is untouched. */
   readonly recordSchedule: (input: {
     readonly runId: string;
@@ -226,6 +245,57 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               .from(workspaceCaptureDrains)
               .where(inArray(workspaceCaptureDrains.runId, [...runIds]));
             return new Map(rows.map((row: WorkspaceCaptureDrain) => [row.runId, row] as const));
+          }),
+        ),
+
+      recordObservation: (input) =>
+        withRepoError(
+          "recordObservation",
+          db
+            .insert(workspaceCaptureDrains)
+            .values({
+              runId: input.runId,
+              state: input.state,
+              detail: input.detail,
+              observedAt: new Date(),
+            } satisfies NewWorkspaceCaptureDrain)
+            .onConflictDoUpdate({
+              target: workspaceCaptureDrains.runId,
+              set: { state: input.state, detail: input.detail, observedAt: new Date() },
+            })
+            .pipe(Effect.asVoid),
+        ),
+
+      requestDiscard: (input) =>
+        withRepoError(
+          "requestDiscard",
+          Effect.gen(function* () {
+            yield* db
+              .insert(workspaceCaptureDrains)
+              .values({
+                runId: input.runId,
+                discardRequestedAt: new Date(),
+                discardRequestedBy: input.requestedBy,
+              } satisfies NewWorkspaceCaptureDrain)
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                // The first request stands: the audit never moves.
+                set: {
+                  discardRequestedAt: sql`coalesce(${workspaceCaptureDrains.discardRequestedAt}, now())`,
+                  discardRequestedBy: sql`coalesce(${workspaceCaptureDrains.discardRequestedBy}, ${input.requestedBy})`,
+                },
+              });
+            const [row] = yield* db
+              .select()
+              .from(workspaceCaptureDrains)
+              .where(eq(workspaceCaptureDrains.runId, input.runId))
+              .limit(1);
+            if (row === undefined) {
+              return yield* Effect.fail(
+                new Error(`Recording the discard of run ${input.runId} wrote no row.`),
+              );
+            }
+            return row;
           }),
         ),
 

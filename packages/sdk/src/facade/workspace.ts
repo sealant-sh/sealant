@@ -39,6 +39,7 @@ import type {
   WorkspaceCaptureDrain,
   WorkspaceCaptureStatus,
   WorkspaceStatus,
+  WorkspaceStopOptions,
   WorkspaceStopResult,
 } from "../types.js";
 import type { SdkContext } from "./context.js";
@@ -128,6 +129,11 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
   ...(drain.preservationStartsAt === undefined
     ? {}
     : { preservationStartsAt: drain.preservationStartsAt }),
+  ...(drain.discard === undefined
+    ? {}
+    : {
+        discard: { requestedBy: drain.discard.requestedBy, requestedAt: drain.discard.requestedAt },
+      }),
 });
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
@@ -375,9 +381,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // what the control plane last OBSERVED of the drain (`captureDrain`: draining or kept), and
     // otherwise that the stop was requested. A reachable capture queue is not an observation of
     // a drain (a refused or abandoned drain answers too), so it never decides the state.
-    stop: async (): Promise<WorkspaceStopResult> => {
+    stop: async (options?: WorkspaceStopOptions): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
-      await ctx.runtime.run(stopWorkspaceOp(init.id, { ownerUserId }));
+      await ctx.runtime.run(
+        stopWorkspaceOp(init.id, {
+          ownerUserId,
+          ...(options?.discardUnsaved === true ? { discardUnsaved: true } : {}),
+        }),
+      );
 
       const deadline = Date.now() + STOP_TIMEOUT_MS;
       for (;;) {

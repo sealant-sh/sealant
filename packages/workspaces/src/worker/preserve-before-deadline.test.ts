@@ -92,6 +92,7 @@ const sweep = async (input: {
       listRunningInstances: () => Effect.succeed([row]),
       getRuntimeInstanceByRunId: () => Effect.succeed(row),
       markStopped,
+      markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceByAttemptId: () => Effect.succeed(workspace),

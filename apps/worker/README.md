@@ -82,7 +82,17 @@ time across every worker process (`WORKSPACE_CAPTURE_DRAIN_LEASE_MS`), and the l
 what `GET /v1/workspaces/:id` reports as `captureDrain`. A capture-sourced launch that fails after
 its executor became ready keeps the executor (`launch-retained`) and is drained before it is
 stopped. A runtime with its own deadline (a MicroVM's maximum duration) gets its final drain and a
-planned stop `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` (plus an upload estimate) before the deadline.
+planned stop `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` (plus an upload estimate) before the deadline. A
+stop records that it is under way before it asks the runtime to go, so the exit reconciler records
+the resulting exit as the planned stop, not a failure; a stop that fails after its drain is recorded
+`stop-failed` on the drain and retried by the reaper. An owner's `stop({ discardUnsaved: true })` is
+recorded (who, when) and every stop path honours it: the runtime is terminated without a drain and
+the drain reads `discarded`.
+
+Docker workspace containers carry their own stop timeout (`--stop-timeout`:
+`SEALANT_DOCKER_STOP_GRACE_SECONDS`, or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` for a capture
+workspace), so any `docker stop` waits for sealantd's final flush; raise the Docker daemon's
+`shutdown-timeout` on hosts that run capture workspaces, or a daemon shutdown still cuts it off.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

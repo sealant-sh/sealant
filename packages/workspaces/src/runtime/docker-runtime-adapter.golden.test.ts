@@ -65,6 +65,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runc",
         "--name",
         "sealant-run-golden-1",
+        "--stop-timeout",
+        "120",
         "--add-host",
         "host.docker.internal:host-gateway",
         "-w",
@@ -128,6 +130,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runsc",
         "--name",
         "sealant-run-golden-2",
+        "--stop-timeout",
+        "120",
         "-e",
         "EDITOR=vim",
         "--add-host",
@@ -189,6 +193,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runc",
         "--name",
         "sealant-run-golden-4",
+        "--stop-timeout",
+        "3600",
         "--add-host",
         "host.docker.internal:host-gateway",
         "-w",
@@ -259,6 +265,8 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "runc",
         "--name",
         "sealant-run-golden-3",
+        "--stop-timeout",
+        "120",
         "--network",
         "sealant-run-golden-3-network",
         "--add-host",
@@ -297,13 +305,15 @@ describe("DockerRuntimeAdapter golden argv", () => {
     await adapter.launch(cases.capture);
 
     const run = calls.find((call) => call[0] === "run");
-    expect(run?.slice(0, 10)).toEqual([
+    expect(run?.slice(0, 12)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       "sealant-run-golden-4",
+      "--stop-timeout",
+      "3600",
       "--network",
       "mend_default",
       "--add-host",
@@ -331,13 +341,15 @@ describe("DockerRuntimeAdapter golden argv", () => {
       "docker",
       "-e",
     ]);
-    expect(runs[1]?.slice(0, 16)).toEqual([
+    expect(runs[1]?.slice(0, 18)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       "sealant-run-golden-3",
+      "--stop-timeout",
+      "120",
       "--network",
       "sealant-run-golden-3-network",
       "--network",

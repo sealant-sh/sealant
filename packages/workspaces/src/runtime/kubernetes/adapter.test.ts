@@ -233,6 +233,27 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(cluster.pods.get(names.pod)?.status).toBeUndefined();
   });
 
+  it("gives a capture Pod a far longer termination grace than any other", async () => {
+    // The final flush ships until everything is registered, bulk included: a kubelet SIGKILL at
+    // the default grace would cut it off mid-upload.
+    const capture = fakeCluster();
+    const captured = await adapterFor(capture, controlChannel()).launch({
+      ...cases.capture,
+      secretEnvDir: undefined,
+    });
+    expect(capture.pods.get(captured.resourceId)?.spec?.terminationGracePeriodSeconds).toBe(3600);
+
+    const plain = fakeCluster();
+    const launched = await adapterFor(plain, controlChannel()).launch(launchInput);
+    expect(plain.pods.get(launched.resourceId)?.spec?.terminationGracePeriodSeconds).toBe(120);
+
+    const tuned = fakeCluster();
+    const tunedResult = await adapterFor(tuned, controlChannel(), {
+      captureTerminationGracePeriodSeconds: 900,
+    }).launch({ ...cases.capture, secretEnvDir: undefined });
+    expect(tuned.pods.get(tunedResult.resourceId)?.spec?.terminationGracePeriodSeconds).toBe(900);
+  });
+
   it("keeps a capture Pod whose credential write fails after the daemon answered", async () => {
     const cluster = fakeCluster();
     const channel = controlChannel();

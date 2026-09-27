@@ -79,6 +79,7 @@ const stubAdapter = (
 
 interface Harness {
   readonly markStopped: ReturnType<typeof vi.fn>;
+  readonly markStopRequested: ReturnType<typeof vi.fn>;
   readonly setWorkspaceStatus: ReturnType<typeof vi.fn>;
   readonly getAttemptSnapshotByRunId: ReturnType<typeof vi.fn>;
   readonly layer: Layer.Layer<
@@ -105,6 +106,7 @@ const makeHarness = (input: {
     Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
   );
   const setWorkspaceStatus = vi.fn(() => Effect.succeed(input.workspace ?? null));
+  const markStopRequested = vi.fn((_request: { runId: string; stopReason: string }) => Effect.void);
 
   const workspaceRepoLayer = Layer.succeed(WorkspaceRepo, {
     createWorkspace: () => Effect.die("unused"),
@@ -132,6 +134,7 @@ const makeHarness = (input: {
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),
     listRunningInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
     listRetainedLaunches: () => Effect.succeed([]),
+    markStopRequested,
   });
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
@@ -158,6 +161,7 @@ const makeHarness = (input: {
 
   return {
     markStopped,
+    markStopRequested,
     setWorkspaceStatus,
     getAttemptSnapshotByRunId,
     layer: Layer.mergeAll(
@@ -766,5 +770,140 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     expect(outcome).toBe("kept");
     expect(secondStop).not.toHaveBeenCalled();
     expect(second.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("records the stop under way before the runtime is asked to go", async () => {
+    const order: string[] = [];
+    const harness = makeHarness({ workspace: workspaceRow(), instance: runtimeInstance() });
+    harness.markStopRequested.mockImplementation(() =>
+      Effect.sync(() => {
+        order.push("stop-requested");
+      }),
+    );
+    const stop = vi.fn(async () => {
+      order.push("adapter-stop");
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(order).toEqual(["stop-requested", "adapter-stop"]);
+    expect(harness.markStopRequested).toHaveBeenCalledWith({
+      runId: "run_old",
+      stopReason: "user",
+    });
+  });
+
+  it("completes a stop whose launch-material cleanup fails (a directory the container re-owned)", async () => {
+    // End to end: rmdir of the secret-env staging dir failed with EPERM after the container was
+    // removed, the stop threw, and the row was never recorded stopped.
+    const harness = makeHarness({ workspace: workspaceRow(), instance: runtimeInstance() });
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stopped())],
+        launchMaterialStager: {
+          stage: async () => ({}),
+          removeSecretEnv: async () => undefined,
+          removeAll: async () => {
+            throw Object.assign(new Error("EPERM: operation not permitted, rmdir"), {
+              code: "EPERM",
+            });
+          },
+        },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(outcome).toBe("stopped");
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+  });
+
+  it("records a failed stop on the drain, and the retry that succeeds replaces it", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon([savedStatus()]).layer,
+    });
+    const run = (stop: RuntimeAdapter["stop"]) =>
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [stubAdapter(stop)],
+          captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "lifecycle stop" },
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+    await expect(
+      run(async () => {
+        throw new Error("removal of container is already in progress");
+      }),
+    ).rejects.toThrow(/already in progress/);
+    expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
+      state: "stop-failed",
+      detail: expect.stringMatching(/already in progress.*retries/),
+    });
+    expect(harness.markStopped).not.toHaveBeenCalled();
+
+    expect(await run(stopped())).toBe("stopped");
+    expect(ledger.store.rows.get("run_old")?.observation?.state).toBe("stopped");
+  });
+
+  it("terminates a run whose owner discarded its unsaved captures, without a drain, and records it", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    ledger.store.rows.set("run_old", {
+      entry: {
+        lastProgressAt: undefined,
+        last: undefined,
+        unreachableSince: undefined,
+        keptLogged: false,
+        silentLogged: false,
+        discardRequested: { atMs: Date.parse("2026-09-27T12:00:00.000Z"), by: "user_1" },
+      },
+      observation: { state: "kept", detail: "not saved · not confirmed" },
+      owner: undefined,
+      expiresAt: undefined,
+    });
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 5 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow({ status: "stopped" }),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+        captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "stranded reaper" },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.connect).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-old",
+      fence: true,
+    });
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
+      state: "discarded",
+      detail: expect.stringContaining("by user_1"),
+    });
   });
 });

@@ -163,8 +163,21 @@ export const workspaceRuntimeInstances = pgTable(
  *    silent while the executor runs, or the final flush did not report `complete`.
  *  - `saved`: the daemon reported the final flush complete; the stop proceeds.
  *  - `gone`: the daemon is silent and the runtime reports the executor ended; nothing to save.
+ *  - `stop-failed`: the drain let the stop through, but removing the runtime (or recording it)
+ *    failed; `detail` carries the error, and the next sweep retries the stop.
+ *  - `stopped`: the runtime was removed after the drain let it go.
+ *  - `discarded`: the owner discarded the unsaved captures; the runtime was terminated without a
+ *    drain (`discardRequestedAt` / `discardRequestedBy` record who asked, and when).
  */
-export const workspaceCaptureDrainStateValues = ["draining", "kept", "saved", "gone"] as const;
+export const workspaceCaptureDrainStateValues = [
+  "draining",
+  "kept",
+  "saved",
+  "gone",
+  "stop-failed",
+  "stopped",
+  "discarded",
+] as const;
 
 export type WorkspaceCaptureDrainState = (typeof workspaceCaptureDrainStateValues)[number];
 
@@ -208,6 +221,12 @@ export const workspaceCaptureDrains = pgTable(
     /** The `uploadedBytes` sample and its instant that the next throughput reading diffs from. */
     uploadSampleBytes: doublePrecision("upload_sample_bytes"),
     uploadSampledAt: timestamp("upload_sampled_at", { mode: "date", withTimezone: true }),
+    /**
+     * The audit of a discard: when the owner asked to end this runtime without saving its
+     * unsaved captures, and who asked. Set once, never cleared; every stop path honours it.
+     */
+    discardRequestedAt: timestamp("discard_requested_at", { mode: "date", withTimezone: true }),
+    discardRequestedBy: text("discard_requested_by"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

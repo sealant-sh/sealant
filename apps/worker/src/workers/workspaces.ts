@@ -254,6 +254,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
             ? {}
             : { workspaceNetwork: env.SEALANT_DOCKER_WORKSPACE_NETWORK }),
           stopGraceSeconds: env.SEALANT_DOCKER_STOP_GRACE_SECONDS,
+          captureStopGraceSeconds: env.SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS,
         }),
       ];
 

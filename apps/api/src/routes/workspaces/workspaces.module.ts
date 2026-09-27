@@ -1820,6 +1820,14 @@ export const mapWorkspaceCaptureDrain = (
     ...(row.preservationStartsAt === null
       ? {}
       : { preservationStartsAt: row.preservationStartsAt.toISOString() }),
+    ...(row.discardRequestedAt === null || row.discardRequestedBy === null
+      ? {}
+      : {
+          discard: {
+            requestedBy: row.discardRequestedBy,
+            requestedAt: row.discardRequestedAt.toISOString(),
+          },
+        }),
   };
 };
 
@@ -2443,8 +2451,11 @@ export const stopWorkspace = (input: {
 }) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    const discard = input.payload.discardUnsaved === true;
 
-    if (workspace.status === "stopped") {
+    // A discard is accepted on a workspace whose stop was already recorded: that is exactly the
+    // workspace a drain keeps running because its work is not confirmed saved.
+    if (workspace.status === "stopped" && !discard) {
       const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
       return response;
     }
@@ -2468,6 +2479,19 @@ export const stopWorkspace = (input: {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
       });
+    }
+
+    if (discard) {
+      // The audit, and the durable intent every stop path honours (the lifecycle stop, and the
+      // reaper that re-drives a lost one): the owner discarded this runtime's unsaved captures.
+      const drains = yield* WorkspaceCaptureDrainRepo;
+      yield* withInternalError(
+        drains.requestDiscard({ runId: latestRunId, requestedBy: input.payload.ownerUserId }),
+        "Failed to record the discard of the workspace's unsaved captures.",
+      );
+      yield* Effect.logWarning(
+        `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} discarded the unsaved captures of run ${latestRunId}; the runtime is terminated without a drain.`,
+      );
     }
 
     // Durable stop intent BEFORE the enqueue: the stored "stopped" status is the reaper's
