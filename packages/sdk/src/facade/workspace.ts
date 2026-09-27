@@ -318,10 +318,15 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     capture: {
-      flush: async () =>
+      flush: async (options = {}) =>
         toCaptureStatus(
           await ctx.runtime.run(
-            flushWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+            flushWorkspaceCaptureOp(init.id, {
+              ownerUserId: ctx.config.hostLocal.ownerUserId,
+              ...(options.kind === undefined ? {} : { kind: options.kind }),
+              ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
+              ...(options.graceMs === undefined ? {} : { graceMs: options.graceMs }),
+            }),
           ),
         ),
       status: () => readCaptureStatus(),

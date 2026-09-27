@@ -152,15 +152,33 @@ export const workspaceBindsSchema = Schema.Struct({
 });
 export type WorkspaceBinds = typeof workspaceBindsSchema.Type;
 
+/** Which flush sealantd runs: `final` (the executor is ending) or `suspend` (a checkpoint). */
+export const workspaceCaptureFlushKindSchema = Schema.Literals(["final", "suspend"]);
+export type WorkspaceCaptureFlushKind = typeof workspaceCaptureFlushKindSchema.Type;
+
 /**
- * Flush a capture-sourced workspace's captures (sealantd ADR-0015 `capture.flush`): a final
- * capture, then everything staged is shipped and registered on the session channel. Synchronous
- * over the daemon's control connection, bounded by the daemon's grace window. The reply is the
- * daemon's capture status; `pending === 0 && !fenced` is what a caller gates on before letting
- * the executor go away.
+ * Flush a capture-sourced workspace's captures (sealantd ADR-0015 `capture.flush`): a capture,
+ * then everything staged is shipped and registered on the session channel. Synchronous over the
+ * daemon's control connection, bounded by `deadlineMs`. The reply is the daemon's capture status.
+ *
+ * `kind: "final"` says the executor is ending: the daemon stops its managed processes (SIGTERM,
+ * then SIGKILL after `graceMs`), snapshots both capture classes, ships, and reports `complete`.
+ * Only `complete === true` means the executor's work is saved. After a final flush the daemon
+ * refuses new work for good. A final flush that runs past its deadline answers `complete: false`
+ * and keeps shipping in the daemon, so later status reads and repeated finals converge.
+ * `kind: "suspend"` (the default) is a checkpoint: the executor keeps running.
  */
 export const flushWorkspaceCaptureRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /** `final` or `suspend` (the default). */
+  kind: Schema.optional(workspaceCaptureFlushKindSchema),
+  /** How long the daemon may take before it answers, in milliseconds. Absent: its own default. */
+  deadlineMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL, in milliseconds,
+   * counted inside `deadlineMs`. Absent: the daemon's default.
+   */
+  graceMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type FlushWorkspaceCaptureRequest = typeof flushWorkspaceCaptureRequestSchema.Type;
 

@@ -363,14 +363,36 @@ export interface WorkspaceCaptureReplanned {
   readonly unchanged: boolean;
 }
 
+/** Options for `workspace.capture.flush()`: which flush the daemon runs, and its bounds. */
+export interface WorkspaceCaptureFlushOptions {
+  /**
+   * `final`: the executor is ending. The daemon stops its managed processes, snapshots both
+   * capture classes, ships, reports `complete`, and refuses new work from then on. `suspend`
+   * (the default): a checkpoint; the executor keeps running.
+   */
+  readonly kind?: "final" | "suspend";
+  /**
+   * How long the daemon may take before it answers, in milliseconds (a positive integer). A final
+   * flush past its deadline answers `complete: false` and keeps shipping in the daemon, so later
+   * `status()` reads and repeated final flushes converge. Absent: the daemon's default.
+   */
+  readonly deadlineMs?: number;
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL, in milliseconds (a
+   * positive integer), counted inside `deadlineMs`. Absent: the daemon's default.
+   */
+  readonly graceMs?: number;
+}
+
 /** Capture operations of a capture-sourced workspace. */
 export interface WorkspaceCapture {
   /**
-   * Final capture, then ship and register everything staged. Synchronous: resolves once the
-   * daemon has flushed (bounded by its grace window). Gate an executor's retirement on
-   * `pending === 0 && !fenced`. Refused on workspaces that are not capture-sourced.
+   * Capture, then ship and register everything staged. Synchronous: resolves once the daemon has
+   * flushed, bounded by `options.deadlineMs`. Pass `{ kind: "final" }` before letting the
+   * executor go away, and gate its retirement on `complete === true`. Refused on workspaces that
+   * are not capture-sourced.
    */
-  flush(): Promise<WorkspaceCaptureStatus>;
+  flush(options?: WorkspaceCaptureFlushOptions): Promise<WorkspaceCaptureStatus>;
   /**
    * The daemon's capture queue as it stands, nothing flushed: `pending` captures not yet saved,
    * `headN` / `registered` what the session channel holds, `refused` what the quota turned away.

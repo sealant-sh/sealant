@@ -28,6 +28,13 @@
  *    or missing) — there is nothing left to save, so the stop proceeds (it only cleans up).
  *  - **busy**: another worker holds the run's drain; this call does nothing.
  *
+ * The FINAL flush carries a deadline (`finalFlushDeadlineMs`, never more than the round trip's
+ * own bound less a margin, so the daemon answers before the worker gives up on it) and a grace
+ * (`finalFlushGraceMs`, SIGTERM to SIGKILL for managed processes, inside the deadline). A FINAL
+ * past its deadline answers `complete: false` and keeps shipping in the daemon (sealantd #102):
+ * the status polls that follow, the second flush and the next sweep's flush all see the same
+ * shipment move on, so a large upload converges over several polls rather than restarting.
+ *
  * Progress and ownership are durable (`CaptureDrainLedger`; the worker's is the
  * `workspace_capture_drains` table): one worker drains a run at a time across every worker
  * process, a drain spanning many sweeps (or moving to another worker when its holder dies)
@@ -41,6 +48,7 @@ import {
   SealantControlError,
   SealantRuntime,
   type CaptureFlushReport,
+  type CaptureFlushRequest,
   type SealantTarget,
 } from "../sealantd/runtime.js";
 
@@ -57,6 +65,17 @@ export interface CaptureDrainSettings {
   /** Bound on one flush or status round trip (the daemon bounds its own flush; this is a net). */
   readonly requestTimeoutMs: number;
   /**
+   * The FINAL flush's deadline sent to the daemon (wire `deadline_ms`). Capped at
+   * `requestTimeoutMs` less a margin so the daemon answers inside the round trip; absent, the
+   * cap itself. A FINAL past it answers incomplete and keeps shipping (sealantd #102).
+   */
+  readonly finalFlushDeadlineMs?: number;
+  /**
+   * The FINAL flush's SIGTERM → SIGKILL grace for managed processes (wire `grace_ms`), counted
+   * inside the deadline and capped at it. Absent: `DEFAULT_FINAL_FLUSH_GRACE_MS`.
+   */
+  readonly finalFlushGraceMs?: number;
+  /**
    * How long a worker's claim on a run's drain lasts without renewal (every poll renews it). A
    * worker that dies mid-drain loses the run to the next sweep of any worker after this.
    */
@@ -72,6 +91,28 @@ export const DEFAULT_CAPTURE_DRAIN_SETTINGS: CaptureDrainSettings = {
 };
 
 const DEFAULT_LEASE_MS = 3 * 60_000;
+
+/** Managed processes get this long between SIGTERM and SIGKILL when a drain's FINAL runs. */
+export const DEFAULT_FINAL_FLUSH_GRACE_MS = 30_000;
+
+/** Headroom between the daemon's deadline and the worker's round-trip bound: 5 s, or a tenth. */
+const finalFlushDeadlineMargin = (requestTimeoutMs: number): number =>
+  Math.min(5_000, Math.floor(requestTimeoutMs / 10));
+
+/**
+ * The FINAL flush a drain sends: `kind: "final"`, a deadline inside the round trip's own bound
+ * (`requestTimeoutMs` less a margin, or `finalFlushDeadlineMs` when lower) and a grace inside
+ * that deadline.
+ */
+export const finalFlushRequest = (settings: CaptureDrainSettings): CaptureFlushRequest => {
+  const cap = Math.max(
+    1,
+    settings.requestTimeoutMs - finalFlushDeadlineMargin(settings.requestTimeoutMs),
+  );
+  const deadlineMs = Math.min(settings.finalFlushDeadlineMs ?? cap, cap);
+  const graceMs = Math.min(settings.finalFlushGraceMs ?? DEFAULT_FINAL_FLUSH_GRACE_MS, deadlineMs);
+  return { kind: "final", deadlineMs, graceMs };
+};
 
 /** What one drain call concluded; only `drained` and `gone` let a stop proceed. */
 export type CaptureDrainOutcome =
@@ -355,20 +396,22 @@ type Sample =
   | { readonly kind: "refused"; readonly detail: string }
   | { readonly kind: "unreachable"; readonly detail: string };
 
+/**
+ * One round trip: `{ flush }` sends that request (every drain ends the executor, so a drain's is
+ * FINAL: quiesce, snapshot both classes, ship, report `complete`); a `status` reads the queue.
+ */
 const sampleCapture = (
   target: SealantTarget,
-  command: "flush" | "status",
+  command: { readonly flush: CaptureFlushRequest } | "status",
   timeoutMs: number,
 ): Effect.Effect<Sample, never, SealantRuntime> =>
   Effect.scoped(
     Effect.gen(function* () {
       const runtime = yield* SealantRuntime;
       const daemon = yield* runtime.connect(target);
-      // Every drain ends the executor: the flush is FINAL (quiesce, snapshot both classes, ship,
-      // report `complete`). The daemon gets the round trip's own bound as its deadline.
-      return yield* command === "flush"
-        ? daemon.captureFlush({ kind: "final", deadlineMs: timeoutMs })
-        : daemon.captureStatus();
+      return yield* command === "status"
+        ? daemon.captureStatus()
+        : daemon.captureFlush(command.flush);
     }),
   ).pipe(
     Effect.timeout(timeoutMs),
@@ -379,7 +422,10 @@ const sampleCapture = (
           ? { kind: "refused", detail: error.message }
           : {
               kind: "unreachable",
-              detail: error instanceof Error ? error.message : `capture ${command} timed out`,
+              detail:
+                error instanceof Error
+                  ? error.message
+                  : `capture ${command === "status" ? "status" : "flush"} timed out`,
             },
       ),
     ),
@@ -499,7 +545,11 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
       if (command === "flush") {
         flushesLeft -= 1;
       }
-      const sample = yield* sampleCapture(input.target, command, settings.requestTimeoutMs);
+      const sample = yield* sampleCapture(
+        input.target,
+        command === "flush" ? { flush: finalFlushRequest(settings) } : "status",
+        settings.requestTimeoutMs,
+      );
       const now = yield* Clock.currentTimeMillis;
       let refusedDetail: string | undefined;
 

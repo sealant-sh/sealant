@@ -21,6 +21,8 @@ import {
   inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
   runIsCaptureSourced,
+  DEFAULT_FINAL_FLUSH_GRACE_MS,
+  finalFlushRequest,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
@@ -66,7 +68,18 @@ describe("drainCaptureBeforeStop", () => {
     expect(outcome).toMatchObject({ kind: "drained", status: { pending: 0, complete: true } });
     expect(drainPermitsStop(outcome)).toBe(true);
     expect(daemon.calls).toEqual(["flush", "status", "status"]);
-    expect(daemon.flushRequests).toEqual([{ kind: "final", deadlineMs: FAST.requestTimeoutMs }]);
+    // The deadline is the 1 s round trip less a tenth; the 30 s grace is capped at it.
+    expect(daemon.flushRequests).toEqual([{ kind: "final", deadlineMs: 900, graceMs: 900 }]);
+  });
+
+  it("sends the configured deadline and grace with the FINAL flush", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    await drain(daemon, inMemoryCaptureDrainLedger(), 1_000, {
+      ...FAST,
+      finalFlushDeadlineMs: 600,
+      finalFlushGraceMs: 250,
+    });
+    expect(daemon.flushRequests).toEqual([{ kind: "final", deadlineMs: 600, graceMs: 250 }]);
   });
 
   it("returns drained at once when the final flush reports complete", async () => {
@@ -376,5 +389,39 @@ describe("helpers", () => {
     expect(captureProgressed(base, { ...base, complete: true })).toBe(true);
     expect(captureProgressed(base, { ...base, pending: 4 })).toBe(false);
     expect(captureProgressed(base, base)).toBe(false);
+  });
+});
+
+describe("finalFlushRequest", () => {
+  const settings = (overrides: Partial<CaptureDrainSettings> = {}): CaptureDrainSettings => ({
+    ...FAST,
+    requestTimeoutMs: 60_000,
+    ...overrides,
+  });
+
+  it("asks for FINAL with the round trip's bound less 5 s and a 30 s grace by default", () => {
+    expect(finalFlushRequest(settings())).toEqual({
+      kind: "final",
+      deadlineMs: 55_000,
+      graceMs: DEFAULT_FINAL_FLUSH_GRACE_MS,
+    });
+    expect(DEFAULT_FINAL_FLUSH_GRACE_MS).toBe(30_000);
+  });
+
+  it("takes a lower configured deadline and grace as they are", () => {
+    expect(
+      finalFlushRequest(settings({ finalFlushDeadlineMs: 20_000, finalFlushGraceMs: 5_000 })),
+    ).toEqual({ kind: "final", deadlineMs: 20_000, graceMs: 5_000 });
+  });
+
+  it("never lets the deadline reach the round trip's bound, nor the grace pass the deadline", () => {
+    expect(
+      finalFlushRequest(settings({ finalFlushDeadlineMs: 120_000, finalFlushGraceMs: 90_000 })),
+    ).toEqual({ kind: "final", deadlineMs: 55_000, graceMs: 55_000 });
+    expect(finalFlushRequest(settings({ requestTimeoutMs: 20_000 }))).toEqual({
+      kind: "final",
+      deadlineMs: 18_000,
+      graceMs: 18_000,
+    });
   });
 });

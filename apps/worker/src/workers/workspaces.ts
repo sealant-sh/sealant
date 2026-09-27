@@ -293,6 +293,11 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     pollIntervalMs: env.WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS,
     stallWindowMs: env.WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS,
     unreachableWindowMs: env.WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS,
+    requestTimeoutMs: env.WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS,
+    ...(env.WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS === undefined
+      ? {}
+      : { finalFlushDeadlineMs: env.WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS }),
+    finalFlushGraceMs: env.WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS,
     leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
   };
   const captureDrainLedger = databaseCaptureDrainLedger({

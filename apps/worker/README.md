@@ -72,10 +72,15 @@ reaper's next tick. A daemon that answers but whose queue does not move for
 silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` keeps its workspace too
 (`not saved · daemon silent · kept`) while the runtime reports the executor running; a runtime that
 reports the executor gone lets the stop proceed, and one that exited after a final flush it never
-confirmed is left in place (its disk holds the staged captures). A run whose source cannot be read
-is treated as capture-sourced. The exit reconciler asks the daemon before it records an exit: a
-runtime whose daemon still answers is drained first. A MicroVM whose guest Docker failed while
-sealantd is up is reported, never terminated.
+confirmed is left in place (its disk holds the staged captures). The FINAL flush asks the daemon to
+answer within `WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS`, never more than the round trip's bound
+(`WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS`) less a margin, and gives managed processes
+`WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS` between SIGTERM and SIGKILL. A FINAL past its deadline
+answers incomplete and keeps shipping in the daemon, so the polls that follow and the next sweep's
+flush converge on one upload. A run whose source cannot be read is treated as capture-sourced. The
+exit reconciler asks the daemon before it records an exit: a runtime whose daemon still answers is
+drained first. A MicroVM whose guest Docker failed while sealantd is up is reported, never
+terminated.
 
 Drain ownership and progress live in `workspace_capture_drains`: one worker drains a workspace at a
 time across every worker process (`WORKSPACE_CAPTURE_DRAIN_LEASE_MS`), and the last observation is

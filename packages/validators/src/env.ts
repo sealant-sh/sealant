@@ -527,6 +527,15 @@ export const workerRuntimeEnvSchema = z.object({
   WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS: z.coerce.number().int().positive().default(600000),
   WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS: z.coerce.number().int().positive().default(300000),
+  // Bound on one flush or status round trip to the daemon. The FINAL flush's deadline sent to the
+  // daemon is capped at this less a margin (5 s, or a tenth), so the daemon answers first; set
+  // WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS to ask for less. A FINAL past its deadline answers
+  // incomplete and keeps shipping in the daemon (sealantd #102), so the polls that follow and the
+  // next sweep's flush converge on one upload. The grace is SIGTERM → SIGKILL for the daemon's
+  // managed processes, counted inside the deadline.
+  WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS: z.coerce.number().int().positive().optional(),
+  WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS: z.coerce.number().int().positive().default(30000),
   // How long one worker's claim on a run's drain lasts without renewal (every poll renews it). A
   // worker that dies mid-drain loses the run to any worker's next sweep after this.
   WORKSPACE_CAPTURE_DRAIN_LEASE_MS: z.coerce.number().int().positive().default(180000),

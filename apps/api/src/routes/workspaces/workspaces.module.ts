@@ -87,6 +87,7 @@ import {
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   SealantRuntime,
+  type CaptureFlushRequest,
   type SealantError,
   type SealantSession,
   resolveWorkspaceError,
@@ -2313,8 +2314,9 @@ export const bindWorkspace = (input: {
 };
 
 /**
- * Flush captures (sealantd ADR-0015): a final capture, then ship and register everything staged.
+ * Flush captures (sealantd ADR-0015): a capture, then ship and register everything staged.
  * Synchronous over the daemon's control connection; the reply is the daemon's capture status.
+ * The caller's `kind` (default `suspend`), `deadlineMs` and `graceMs` go to the daemon as asked.
  */
 export const flushWorkspaceCapture = (input: {
   readonly workspaceId: string;
@@ -2322,8 +2324,15 @@ export const flushWorkspaceCapture = (input: {
 }) =>
   withCaptureDaemon(
     { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
-    (daemon) => daemon.captureFlush(),
+    (daemon) => daemon.captureFlush(captureFlushRequestOf(input.payload)),
   );
+
+/** The flush request → the daemon's: `suspend` unless the caller asked for `final`. */
+const captureFlushRequestOf = (payload: FlushWorkspaceCaptureRequest): CaptureFlushRequest => ({
+  kind: payload.kind ?? "suspend",
+  ...(payload.deadlineMs === undefined ? {} : { deadlineMs: payload.deadlineMs }),
+  ...(payload.graceMs === undefined ? {} : { graceMs: payload.graceMs }),
+});
 
 /**
  * Capture status (sealantd `capture.status`): the daemon's queue as it stands, nothing flushed.

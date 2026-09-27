@@ -1,11 +1,105 @@
 import {
   WorkspacesGroup,
+  flushWorkspaceCaptureRequestSchema,
   workspaceCaptureReplannedSchema,
   workspaceCaptureStatusSchema,
+  type FlushWorkspaceCaptureRequest,
 } from "@sealant/api-contracts";
-import type { CaptureFlushReport, CaptureReplanReport } from "@sealant/workspaces";
-import { Schema } from "effect";
+import {
+  WorkspaceAttemptRepo,
+  WorkspaceBuildJobRepo,
+  WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
+  type Workspace,
+  type WorkspaceAttemptRepoService,
+  type WorkspaceAttemptSnapshot,
+  type WorkspaceBuildJobRepoService,
+  type WorkspaceRepoService,
+  type WorkspaceRuntimeInstance,
+  type WorkspaceRuntimeInstanceRepoService,
+} from "@sealant/db";
+import {
+  SealantRuntime,
+  type CaptureFlushReport,
+  type CaptureFlushRequest,
+  type CaptureReplanReport,
+  type SealantSession,
+} from "@sealant/workspaces";
+import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
+
+import { flushWorkspaceCapture } from "./workspaces.module.js";
+
+const REPORT: CaptureFlushReport = {
+  epoch: 3,
+  worktreeId: "wt_1",
+  pending: 0,
+  stagedBytes: 0,
+  uploadedObjects: 2,
+  uploadedBytes: 4096,
+  registered: 2,
+  fenced: false,
+  paused: false,
+  refused: [],
+};
+
+/**
+ * A capture-sourced workspace with a ready runtime, over fake repositories, whose daemon records
+ * every flush request it is sent. The narrowing casts are test-only: each fake implements only
+ * what the flush route reads.
+ */
+const flushHarness = () => {
+  const flushRequests: Array<CaptureFlushRequest | undefined> = [];
+  const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
+  const spec = {
+    sources: {
+      workspace: {
+        kind: "capture",
+        endpoint: "https://mend.example.com/session/s1",
+        worktreeId: "wt_1",
+        harnessHome: "/home/sealant/.claude",
+      },
+    },
+    harness: { id: "claude-code" },
+  };
+  const daemon = {
+    captureFlush: (request?: CaptureFlushRequest) => {
+      flushRequests.push(request);
+      return Effect.succeed(REPORT);
+    },
+  } as unknown as SealantSession;
+  const layer = Layer.mergeAll(
+    Layer.succeed(WorkspaceRepo, {
+      getWorkspaceById: () => Effect.succeed(workspace),
+    } as unknown as WorkspaceRepoService),
+    Layer.succeed(WorkspaceAttemptRepo, {
+      getAttemptSnapshotByRunId: () =>
+        Effect.succeed({ resolvedSpecPayload: spec } as unknown as WorkspaceAttemptSnapshot),
+    } as unknown as WorkspaceAttemptRepoService),
+    Layer.succeed(WorkspaceBuildJobRepo, {
+      getLatestJobByRunId: () => Effect.succeed(undefined),
+    } as unknown as WorkspaceBuildJobRepoService),
+    Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+      getRuntimeInstanceByRunId: () =>
+        Effect.succeed({
+          runId: "run_1",
+          status: "ready",
+          adapter: "docker",
+          endpoint: "unix:///run/sealant/ws_1.sock",
+          resourceId: "container_1",
+        } as WorkspaceRuntimeInstance),
+    } as unknown as WorkspaceRuntimeInstanceRepoService),
+    Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) }),
+  );
+  const flush = (payload: Omit<FlushWorkspaceCaptureRequest, "ownerUserId">) =>
+    Effect.runPromise(
+      flushWorkspaceCapture({
+        workspaceId: "ws_1",
+        payload: { ownerUserId: "usr_owner", ...payload },
+      }).pipe(Effect.provide(layer)),
+    );
+  return { flush, flushRequests };
+};
 
 /**
  * Route pins for the synchronous capture commands (sealantd ADR-0015 `capture.flush`, 0.15
@@ -76,5 +170,39 @@ describe("workspace capture routes", () => {
     const full: CaptureReplanReport = { ...minimal, headN: 7, headCaptureId: "cap_7" };
     expect(decode(full)).toEqual(full);
     expect(() => decode({ ...minimal, worktreeId: "" })).toThrow();
+  });
+});
+
+describe("workspace capture flush request", () => {
+  const decode = Schema.decodeUnknownSync(flushWorkspaceCaptureRequestSchema);
+
+  it("accepts the owner alone, and a kind, deadline and grace", () => {
+    expect(decode({ ownerUserId: "usr_1" })).toEqual({ ownerUserId: "usr_1" });
+    expect(
+      decode({ ownerUserId: "usr_1", kind: "final", deadlineMs: 55_000, graceMs: 30_000 }),
+    ).toEqual({ ownerUserId: "usr_1", kind: "final", deadlineMs: 55_000, graceMs: 30_000 });
+    expect(decode({ ownerUserId: "usr_1", kind: "suspend" })).toMatchObject({ kind: "suspend" });
+  });
+
+  it("rejects an unknown kind and a deadline or grace that is not a positive integer", () => {
+    expect(() => decode({ ownerUserId: "usr_1", kind: "terminate" })).toThrow();
+    for (const bad of [0, -1, 1.5, "60000"]) {
+      expect(() => decode({ ownerUserId: "usr_1", deadlineMs: bad })).toThrow();
+      expect(() => decode({ ownerUserId: "usr_1", graceMs: bad })).toThrow();
+    }
+  });
+
+  it("forwards kind, deadline and grace to the daemon, and asks for suspend by default", async () => {
+    const h = flushHarness();
+    expect(await h.flush({ kind: "final", deadlineMs: 55_000, graceMs: 30_000 })).toEqual(REPORT);
+    await h.flush({ kind: "final" });
+    await h.flush({});
+    await h.flush({ deadlineMs: 10_000 });
+    expect(h.flushRequests).toEqual([
+      { kind: "final", deadlineMs: 55_000, graceMs: 30_000 },
+      { kind: "final" },
+      { kind: "suspend" },
+      { kind: "suspend", deadlineMs: 10_000 },
+    ]);
   });
 });

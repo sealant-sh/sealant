@@ -97,6 +97,22 @@ describe("workspace.capture", () => {
     expect("pendingBytes" in status).toBe(false);
   });
 
+  it("flush(options) forwards kind, deadline and grace as given", async () => {
+    const { client, calls } = makeStub({});
+    const workspace = workspaceFor(client);
+    await workspace.capture.flush({ kind: "final", deadlineMs: 55_000, graceMs: 30_000 });
+    await workspace.capture.flush({ kind: "suspend" });
+    await workspace.capture.flush({});
+    expect(calls.flush).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: "usr_local", kind: "final", deadlineMs: 55_000, graceMs: 30_000 },
+      },
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local", kind: "suspend" } },
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local" } },
+    ]);
+  });
+
   it("status() reads the queue from the workspace's capture endpoint without flushing", async () => {
     const { client, calls } = makeStub({
       status: () => ({
