@@ -100,7 +100,7 @@ import {
   resolveWorkspaceStatus,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
-import { type Context, Effect, Result } from "effect";
+import { Cause, type Context, Effect, Result } from "effect";
 import { z } from "zod";
 
 import { resolveWorkspaceSshGatewayConfig } from "../../lib/workspace-ssh-gateway.js";
@@ -196,12 +196,48 @@ const errorIncludes = (error: unknown, token: string): boolean => {
   return false;
 };
 
-const isForeignKeyConstraintError = (error: unknown): boolean => {
-  return errorIncludes(error, "FOREIGN KEY constraint failed");
+/**
+ * Every error the chain holds: each `cause`, and each failure and defect of an Effect `Cause` on
+ * the way (a Drizzle query error carries the driver's error inside one).
+ */
+const errorChain = (error: unknown, depth = 0): readonly unknown[] => {
+  if (depth > 12 || typeof error !== "object" || error === null) {
+    return [error];
+  }
+  const nested: unknown[] = [];
+  if (Cause.isCause(error)) {
+    for (const reason of error.reasons) {
+      if (Cause.isFailReason(reason)) nested.push(reason.error);
+      if (Cause.isDieReason(reason)) nested.push(reason.defect);
+    }
+  } else if (isObjectWithCause(error)) {
+    nested.push(error.cause);
+  }
+  return [error, ...nested.flatMap((next) => errorChain(next, depth + 1))];
 };
 
-const isUniqueConstraintError = (error: unknown): boolean => {
-  return errorIncludes(error, "UNIQUE constraint failed");
+/** Whether a Postgres error with this SQLSTATE is anywhere in the cause chain. */
+const errorHasSqlState = (error: unknown, code: string): boolean =>
+  errorChain(error).some(
+    (entry) =>
+      typeof entry === "object" && entry !== null && "code" in entry && entry.code === code,
+  );
+
+const isForeignKeyConstraintError = (error: unknown): boolean => {
+  return (
+    errorHasSqlState(error, "23503") ||
+    errorIncludes(error, "FOREIGN KEY constraint failed") ||
+    errorIncludes(error, "violates foreign key constraint")
+  );
+};
+
+/** A unique index refused the write: Postgres `23505`, or SQLite's wording. */
+export const isUniqueConstraintError = (error: unknown): boolean => {
+  return (
+    errorHasSqlState(error, "23505") ||
+    errorIncludes(error, "UNIQUE constraint failed") ||
+    errorIncludes(error, "duplicate key value violates unique constraint")
+  );
 };
 
 const parseWorkspaceSpec = (spec: unknown) => {
@@ -1217,40 +1253,89 @@ const acceptedWorkspaceResponse = (
   };
 };
 
-const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string) => {
+/**
+ * The answer to a create that repeats an earlier one's idempotency key: that workspace, as it is
+ * now — its status, its latest run, and its executor once one exists — marked `replayed`.
+ */
+const replayedWorkspaceResponse = (workspace: WorkspaceRecord) => {
   return Effect.gen(function* () {
+    const runId = workspace.latestRunId ?? undefined;
+    const attempt =
+      runId === undefined
+        ? undefined
+        : yield* withInternalError(
+            (yield* WorkspaceAttemptRepo).getAttemptById(runId),
+            "Failed to load the workspace attempt.",
+          );
+    const latestJob =
+      runId === undefined
+        ? undefined
+        : yield* withInternalError(
+            (yield* WorkspaceBuildJobRepo).getLatestJobByRunId(runId),
+            "Failed to load the workspace build job.",
+          );
+    const runtimeInstance =
+      runId === undefined
+        ? undefined
+        : yield* withInternalError(
+            (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(runId),
+            "Failed to load the workspace runtime.",
+          );
+    const summary = mapWorkspaceSummary(
+      workspace,
+      attempt,
+      latestJob,
+      runtimeInstance,
+      resolveWorkspaceSshGatewayConfig(),
+    );
+    const response: CreateWorkspaceResponse = {
+      workspaceId: workspace.id,
+      name: summary.name,
+      status: summary.status,
+      registryId: latestJob?.registryId ?? env.REGISTRY_NAME,
+      repository: latestJob?.repository ?? summary.repository ?? workspace.id,
+      tag: latestJob?.tag ?? summary.tag ?? "latest",
+      ...(runId === undefined ? {} : { runId }),
+      ...(summary.runtime === undefined ? {} : { runtime: summary.runtime }),
+      replayed: true,
+    };
+    return response;
+  });
+};
+
+/**
+ * The owner's workspace an earlier create with this idempotency key made, as a replayed answer.
+ * Keys are scoped to the owner: another owner's workspace is never returned. A workspace made
+ * before keys were stored on it is found through its launch job, and only when the owner matches.
+ */
+const maybeReturnExistingIdempotentWorkspace = (idempotencyKey: string, ownerUserId: string) => {
+  return Effect.gen(function* () {
+    const byKey = yield* withInternalError(
+      (yield* WorkspaceRepo).getWorkspaceByIdempotencyKey({ ownerUserId, idempotencyKey }),
+      "Failed to load the workspace by idempotency key.",
+    );
+    if (byKey !== undefined) {
+      return yield* replayedWorkspaceResponse(byKey);
+    }
+
     const workspaceBuildJobs = yield* WorkspaceBuildJobRepo;
     const workspaceAttempts = yield* WorkspaceAttemptRepo;
-
     const existingJob = yield* withInternalError(
       workspaceBuildJobs.getJobByIdempotencyKey(idempotencyKey),
       "Failed to load existing workspace build job by idempotency key.",
     );
-
     if (existingJob === undefined || existingJob.runId === null) {
       return undefined;
     }
-
     const existingRun = yield* withInternalError(
       workspaceAttempts.getAttemptById(existingJob.runId),
       "Failed to load existing workspace attempt.",
     );
-
-    if (existingRun === undefined) {
+    if (existingRun === undefined || existingRun.ownerUserId !== ownerUserId) {
       return undefined;
     }
-
     const existingWorkspace = yield* ensureWorkspaceForAttempt(existingRun);
-
-    return acceptedWorkspaceResponse(
-      existingWorkspace.id,
-      resolveStoredWorkspaceName(existingWorkspace),
-      {
-        registryId: existingJob.registryId,
-        repository: existingJob.repository,
-        tag: existingJob.tag,
-      },
-    );
+    return yield* replayedWorkspaceResponse(existingWorkspace);
   });
 };
 
@@ -1338,7 +1423,7 @@ export const createWorkspace = (input: {
 }) => {
   return Effect.gen(function* () {
     const body = input.payload;
-    const idempotencyKey = readIdempotencyKey(input.headers);
+    const idempotencyKey = body.idempotencyKey ?? readIdempotencyKey(input.headers);
 
     if (body.registryId !== env.REGISTRY_NAME) {
       return yield* new WorkspaceNotFoundError({
@@ -1347,7 +1432,10 @@ export const createWorkspace = (input: {
     }
 
     if (idempotencyKey !== undefined) {
-      const existing = yield* maybeReturnExistingIdempotentWorkspace(idempotencyKey);
+      const existing = yield* maybeReturnExistingIdempotentWorkspace(
+        idempotencyKey,
+        body.ownerUserId,
+      );
       if (existing !== undefined) {
         return existing;
       }
@@ -1504,6 +1592,9 @@ export const createWorkspace = (input: {
           ...(ttlSeconds === undefined
             ? {}
             : { expiresAt: new Date(Date.now() + ttlSeconds * 1000) }),
+          // The workspace row is written first: a racing create with the same key fails here, on
+          // the owner-scoped unique index, before anything else of it exists.
+          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         });
 
         const attempt = yield* workspaceAttempts.createQueuedAttempt({
@@ -1535,7 +1626,6 @@ export const createWorkspace = (input: {
           tag: body.tag,
           requestPayload: resolvedSpec,
           ...(secretEnvSealed === undefined ? {} : { secretEnvSealed }),
-          ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         });
       }),
     );
@@ -1550,7 +1640,10 @@ export const createWorkspace = (input: {
       }
 
       if (idempotencyKey !== undefined && isUniqueConstraintError(persistenceError)) {
-        const existing = yield* maybeReturnExistingIdempotentWorkspace(idempotencyKey);
+        const existing = yield* maybeReturnExistingIdempotentWorkspace(
+          idempotencyKey,
+          body.ownerUserId,
+        );
 
         if (existing !== undefined) {
           return existing;
@@ -1607,11 +1700,14 @@ export const createWorkspace = (input: {
       ),
     );
 
-    return acceptedWorkspaceResponse(workspaceId, workspaceName, {
-      registryId: body.registryId,
-      repository: body.repository,
-      tag: body.tag,
-    });
+    return {
+      ...acceptedWorkspaceResponse(workspaceId, workspaceName, {
+        registryId: body.registryId,
+        repository: body.repository,
+        tag: body.tag,
+      }),
+      runId,
+    } satisfies CreateWorkspaceResponse;
   });
 };
 
@@ -1657,13 +1753,25 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
     const effectiveWorkspaceLimit =
       query.status === undefined ? workspaceLimit : Math.min(workspaceLimit * 4, 100);
 
-    const workspaces = yield* withInternalError(
-      (yield* WorkspaceRepo).listWorkspaces({
-        ownerUserId: query.ownerUserId,
-        limit: effectiveWorkspaceLimit,
-      }),
-      "Failed to list workspaces.",
-    );
+    // By idempotency key: the owner's one workspace a create with that key made, or none.
+    const workspaces =
+      query.idempotencyKey === undefined
+        ? yield* withInternalError(
+            (yield* WorkspaceRepo).listWorkspaces({
+              ownerUserId: query.ownerUserId,
+              limit: effectiveWorkspaceLimit,
+            }),
+            "Failed to list workspaces.",
+          )
+        : yield* withInternalError(
+            (yield* WorkspaceRepo)
+              .getWorkspaceByIdempotencyKey({
+                ownerUserId: query.ownerUserId,
+                idempotencyKey: query.idempotencyKey,
+              })
+              .pipe(Effect.map((workspace) => (workspace === undefined ? [] : [workspace]))),
+            "Failed to find the workspace by idempotency key.",
+          );
 
     const latestRunIds = workspaces.flatMap((workspace) => {
       return workspace.latestRunId === null ? [] : [workspace.latestRunId];
@@ -1803,7 +1911,7 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       attemptSnapshot,
       sshGatewayConfig,
     );
-    const observed = mapWorkspaceCaptureDrain(captureDrain, runtimeInstance?.adapter);
+    const observed = mapWorkspaceCaptureDrain(captureDrain, runtimeInstance);
     return observed === undefined ? details : { ...details, captureDrain: observed };
   });
 };
@@ -1814,13 +1922,29 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
  */
 export const mapWorkspaceCaptureDrain = (
   row: WorkspaceCaptureDrainRecord | undefined,
-  /** The runtime adapter of the run's executor: whether a retained one can be restarted. */
-  adapter?: string | null,
+  /** The run's executor: who the observation is about, and whether it can be restarted. */
+  executor?: {
+    readonly runId: string;
+    readonly adapter: string | null;
+    readonly resourceId: string | null;
+    readonly reference: string | null;
+  },
 ): WorkspaceCaptureDrain | undefined => {
   if (row === undefined || row.state === null) {
     return undefined;
   }
+  const adapter = executor?.adapter;
   return {
+    ...(executor === undefined || executor.adapter === null || executor.resourceId === null
+      ? {}
+      : {
+          executor: {
+            runId: executor.runId,
+            adapter: executor.adapter,
+            resourceId: executor.resourceId,
+            ...(executor.reference === null ? {} : { reference: executor.reference }),
+          },
+        }),
     state: row.state,
     ...(row.detail === null ? {} : { detail: row.detail }),
     ...(row.observedAt === null ? {} : { observedAt: row.observedAt.toISOString() }),

@@ -216,6 +216,37 @@ describe("workspace.stop()", () => {
     await expect(stopWith(stub)).resolves.toEqual({ result: { state: "kept", drain } });
   });
 
+  it("names the executor a kept drain is about, as the id a completion attestation uses", async () => {
+    const stub = makeStub(() =>
+      details({
+        status: "ready",
+        captureDrain: {
+          state: "kept",
+          detail: "not saved · retained · executor exited",
+          executor: {
+            runId: "run_1",
+            adapter: "docker",
+            resourceId: "container-1",
+            reference: "sealant-run_1",
+          },
+        },
+      }),
+    );
+    await expect(stopWith(stub)).resolves.toMatchObject({
+      result: {
+        state: "kept",
+        drain: {
+          executor: {
+            runId: "run_1",
+            kind: "docker",
+            resourceId: "container-1",
+            reference: "sealant-run_1",
+          },
+        },
+      },
+    });
+  });
+
   it("reports the stop requested, never stopped, while termination is not observed", async () => {
     const saved = { state: "saved" as const, detail: "final flush complete" };
     const stub = makeStub(() => details({ status: "ready", captureDrain: saved }));

@@ -18,6 +18,10 @@ export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
 export const workspaceRuntimeSchema = Schema.Struct({
   adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare", "microvm"]),
+  /**
+   * The executor's identity on its runtime: the Docker container id, the Pod name, the MicroVM
+   * id. This is the id a caller records at launch and names in a stop's `completion`.
+   */
   resourceId: NonEmptyString,
   reference: NonEmptyString,
   status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
@@ -29,6 +33,8 @@ export const workspaceRuntimeSchema = Schema.Struct({
    * only from control planes that predate it.
    */
   deadline: Schema.optional(Schema.NullOr(Schema.String)),
+  /** The run (launch attempt) this executor belongs to. Absent from older control planes. */
+  runId: Schema.optional(NonEmptyString),
 });
 export type WorkspaceRuntime = typeof workspaceRuntimeSchema.Type;
 
@@ -98,6 +104,14 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
   // applies. The reaper stops the workspace once the TTL elapses.
   ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * Makes the create idempotent for this owner: a repeated create with the same key returns the
+   * workspace the first one made (`replayed: true`) instead of creating another, so a caller that
+   * lost the answer (a crash, a timeout) can repeat it or look the workspace up
+   * (`GET /v1/workspaces?idempotencyKey=`). Scoped to `ownerUserId`. The `idempotency-key` header
+   * means the same; this field wins when both are sent.
+   */
+  idempotencyKey: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceRequest = typeof createWorkspaceRequestSchema.Type;
 
@@ -444,6 +458,15 @@ export const createWorkspaceResponseSchema = Schema.Struct({
   registryId: NonEmptyString,
   repository: NonEmptyString,
   tag: NonEmptyString,
+  /** The launch attempt this create started (or, replayed, the workspace's latest). */
+  runId: Schema.optional(NonEmptyString),
+  /**
+   * The executor, once one exists: on a fresh create there is none yet (the launch is
+   * asynchronous); a replayed create carries the workspace's current one.
+   */
+  runtime: Schema.optional(workspaceRuntimeSchema),
+  /** `true` when an earlier create with the same `idempotencyKey` made this workspace. */
+  replayed: Schema.optional(Schema.Boolean),
 });
 export type CreateWorkspaceResponse = typeof createWorkspaceResponseSchema.Type;
 
@@ -522,6 +545,18 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       lastRecoveryError: Schema.optional(Schema.String),
     }),
   ),
+  /**
+   * The executor this observation is about: the run and its runtime identity (`resourceId` is
+   * the id a stop's `completion` names).
+   */
+  executor: Schema.optional(
+    Schema.Struct({
+      runId: NonEmptyString,
+      adapter: NonEmptyString,
+      resourceId: NonEmptyString,
+      reference: Schema.optional(NonEmptyString),
+    }),
+  ),
   /** The latest `completion` attestation accepted for this executor (see `stop`). */
   completion: Schema.optional(
     Schema.Struct({
@@ -572,6 +607,8 @@ export const listWorkspacesQuerySchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   status: Schema.optional(workspaceStatusSchema),
   limit: Schema.optional(NonEmptyString),
+  /** Only the owner's workspace created with this `idempotencyKey` (none or one item). */
+  idempotencyKey: Schema.optional(NonEmptyString),
 });
 export type ListWorkspacesQuery = typeof listWorkspacesQuerySchema.Type;
 

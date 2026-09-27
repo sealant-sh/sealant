@@ -261,9 +261,10 @@ describe("recoverWorkspace", () => {
           completionCaptureN: 41,
           completionAttestedAt: now,
         } as WorkspaceCaptureDrain,
-        "k8s",
+        { runId: "run_1", adapter: "k8s", resourceId: "ws-run-1", reference: "ws-run-1" },
       ),
     ).toMatchObject({
+      executor: { runId: "run_1", adapter: "k8s", resourceId: "ws-run-1", reference: "ws-run-1" },
       retained: {
         since: now.toISOString(),
         reason: "executor exited",

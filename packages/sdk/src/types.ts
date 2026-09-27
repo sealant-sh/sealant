@@ -374,6 +374,13 @@ export interface WorkspaceCaptureDrain {
     readonly nextRecoveryAt?: string;
     readonly lastRecoveryError?: string;
   };
+  /** The executor this observation is about (`resourceId` is what `completion` names). */
+  readonly executor?: {
+    readonly runId: string;
+    readonly kind: string;
+    readonly resourceId: string;
+    readonly reference?: string;
+  };
   /** The latest completion attestation the control plane accepted for this executor. */
   readonly completion?: {
     readonly executorId: string;
@@ -714,6 +721,44 @@ export interface CreateOptions {
    * (if the install configures one).
    */
   readonly ttl?: string;
+  /**
+   * Makes `create()` idempotent for this client's owner: a repeated create with the same key
+   * returns the workspace the first one made (`workspace.launch?.replayed` is `true`) instead of
+   * creating another. A caller that lost a create's answer (a crash, a timeout) repeats it, or
+   * finds the workspace with `workspaces.findByIdempotencyKey(key)`.
+   */
+  readonly idempotencyKey?: string;
+}
+
+/**
+ * The executor a workspace runs on, as the control plane recorded it. `resourceId` is the id to
+ * record at launch and to name in `stop({ completion })`.
+ */
+export interface WorkspaceRuntimeInfo {
+  /** The runtime family: `docker`, `k8s`, `k3s`, `cloudflare` or `microvm`. */
+  readonly kind: "docker" | "k8s" | "k3s" | "cloudflare" | "microvm";
+  /** The executor's id on its runtime: the container id, the Pod name, the MicroVM id. */
+  readonly resourceId: string;
+  /** The runtime's name for it (container name, Pod name, MicroVM id). */
+  readonly reference: string;
+  readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
+  /** The run (launch attempt) the executor belongs to, when the control plane reports it. */
+  readonly runId?: string;
+  /** ISO-8601 instant the runtime ends it on its own; `null` where there is no such cap. */
+  readonly deadline: string | null;
+}
+
+/** What a handle knows of the launch that made it (`workspaces.create()`). */
+export interface WorkspaceLaunch {
+  /** The launch attempt the create started (a replayed create: the workspace's latest). */
+  readonly runId?: string;
+  /**
+   * The executor: known on a replayed create when one exists, and filled in when `ready()`
+   * resolves (the executor that became ready).
+   */
+  readonly runtime?: WorkspaceRuntimeInfo;
+  /** An earlier create with the same `idempotencyKey` made this workspace. */
+  readonly replayed: boolean;
 }
 
 export interface ListOptions {
@@ -757,6 +802,16 @@ export interface Workspace {
    * on the executor — a capture-sourced workspace's unsaved captures — must be drained before it.
    */
   runtimeDeadline(): Promise<string | null>;
+  /**
+   * The workspace's current executor, read now: its runtime kind, `resourceId`, `reference`,
+   * run and deadline. `null` while no runtime is launched yet.
+   */
+  runtime(): Promise<WorkspaceRuntimeInfo | null>;
+  /**
+   * What this handle knows of the launch that made it (from `workspaces.create()`), including the
+   * executor `ready()` saw become ready. `undefined` on handles from `get()` / `list()`.
+   */
+  readonly launch: WorkspaceLaunch | undefined;
   /**
    * Resolves once the workspace runtime is live and ready to accept a run. When the handle came
    * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), a stop is

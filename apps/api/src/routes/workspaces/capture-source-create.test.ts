@@ -8,6 +8,8 @@ import {
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
+  WorkspaceRepoUnexpectedError,
+  WorkspaceRuntimeInstanceRepo,
   type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
@@ -15,6 +17,7 @@ import {
   type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
+  type WorkspaceRuntimeInstance,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -69,29 +72,70 @@ interface RecordingState {
   job?: NewWorkspace;
   sealedPlaintext?: string;
   publishedJobId?: string;
+  /** The owner's workspace an earlier create with the key made (found by key). */
+  existingByKey?: Workspace;
+  /** The first lookup misses and the insert loses a race on the owner/key unique index. */
+  raceOnCreate?: boolean;
+  /** Keys the workspace rows were written with. */
+  createdKeys?: Array<string | undefined>;
+  runtime?: WorkspaceRuntimeInstance;
 }
 
 const makeRecordingLayer = (
   state: RecordingState,
   packageStandardizer: PackageStandardizer = { resolvePackage: () => Effect.die("unused") },
 ) => {
+  let lookups = 0;
   const workspaceRepo: WorkspaceRepoService = {
     createWorkspace: (input) =>
-      Effect.succeed<Workspace>({
-        id: input.id,
-        name: input.name,
-        ownerUserId: input.ownerUserId,
-        repositoryId: input.repositoryId ?? null,
-        repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
-        profileRevisionId: input.profileRevisionId ?? null,
-        requestedByUserId: input.requestedByUserId ?? null,
-        status: input.status ?? "queued",
-        latestRunId: null,
-        expiresAt: input.expiresAt ?? null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        binds: [],
+      state.raceOnCreate === true
+        ? Effect.fail(
+            // What the live repo fails with when Postgres refuses the insert (SQLSTATE 23505).
+            new WorkspaceRepoUnexpectedError({
+              operation: "createWorkspace",
+              message: "insert into workspaces failed",
+              cause: Object.assign(
+                new Error(
+                  'duplicate key value violates unique constraint "workspaces_owner_idempotency_key_idx"',
+                ),
+                { code: "23505" },
+              ),
+            }),
+          )
+        : Effect.sync(() => {
+            (state.createdKeys ??= []).push(input.idempotencyKey);
+          }).pipe(
+            Effect.andThen(
+              Effect.succeed<Workspace>({
+                id: input.id,
+                name: input.name,
+                ownerUserId: input.ownerUserId,
+                repositoryId: input.repositoryId ?? null,
+                repositoryProfileRevisionId: input.repositoryProfileRevisionId ?? null,
+                profileRevisionId: input.profileRevisionId ?? null,
+                requestedByUserId: input.requestedByUserId ?? null,
+                status: input.status ?? "queued",
+                latestRunId: null,
+                expiresAt: input.expiresAt ?? null,
+                createdAt: now,
+                updatedAt: now,
+                archivedAt: null,
+                binds: [],
+                idempotencyKey: input.idempotencyKey ?? null,
+              }),
+            ),
+          ),
+    getWorkspaceByIdempotencyKey: (input) =>
+      Effect.sync(() => {
+        lookups += 1;
+        const existing = state.existingByKey;
+        // A racing create: the first lookup misses, the one after the refused insert finds it.
+        if (state.raceOnCreate === true && lookups === 1) return undefined;
+        return existing !== undefined &&
+          existing.ownerUserId === input.ownerUserId &&
+          existing.idempotencyKey === input.idempotencyKey
+          ? existing
+          : undefined;
       }),
     getWorkspaceByAttemptId: () => Effect.die("unused"),
     getWorkspaceById: () => Effect.die("unused"),
@@ -132,7 +176,7 @@ const makeRecordingLayer = (
         createdAt: now,
         updatedAt: now,
       }),
-    getAttemptById: () => Effect.die("unused"),
+    getAttemptById: () => Effect.succeed(undefined),
     getAttemptSnapshotByRunId: () => Effect.die("unused"),
     setAttemptSnapshot: (input) => {
       state.snapshot = input.specPayload;
@@ -186,8 +230,8 @@ const makeRecordingLayer = (
       });
     },
     getJobById: () => Effect.die("unused"),
-    getJobByIdempotencyKey: () => Effect.die("unused"),
-    getLatestJobByRunId: () => Effect.die("unused"),
+    getJobByIdempotencyKey: () => Effect.succeed(undefined),
+    getLatestJobByRunId: () => Effect.succeed(undefined),
     getLatestSucceededJobByPlanHash: () => Effect.die("unused"),
     listLatestJobsByRunIds: () => Effect.die("unused"),
     listJobsByStatus: () => Effect.die("unused"),
@@ -213,6 +257,9 @@ const makeRecordingLayer = (
     Layer.succeed(WorkspaceRepo, workspaceRepo),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
+    Layer.mock(WorkspaceRuntimeInstanceRepo, {
+      getRuntimeInstanceByRunId: () => Effect.succeed(state.runtime),
+    }),
     Layer.succeed(PackageStandardizerService, packageStandardizer),
     Layer.succeed(CredentialCipher, {
       encrypt: (plaintext) => {
@@ -424,5 +471,101 @@ describe("createWorkspace package ids", () => {
         expect(state.job).toBeUndefined();
       }).pipe(Effect.provide(makeRecordingLayer(state))),
     );
+  });
+});
+
+describe("createWorkspace · idempotency key", () => {
+  const existing = (): Workspace => ({
+    id: "ws_first",
+    name: "capture-session",
+    ownerUserId: "usr_capture",
+    repositoryId: null,
+    repositoryProfileRevisionId: null,
+    profileRevisionId: null,
+    requestedByUserId: "usr_capture",
+    status: "queued",
+    latestRunId: "run_first",
+    expiresAt: null,
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    binds: [],
+    idempotencyKey: "mend-exec-7",
+  });
+  const runtime = (): WorkspaceRuntimeInstance => ({
+    runId: "run_first",
+    status: "ready",
+    adapter: "docker",
+    resourceId: "container-first",
+    reference: "sealant-run_first",
+    endpoint: null,
+    errorCode: null,
+    errorMessage: null,
+    stopReason: null,
+    launchCredentialInjections: null,
+    launchedAt: now,
+    finishedAt: null,
+    runtimeDeadlineAt: null,
+    sourceKind: "capture",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  it("stores the key on the new workspace and answers with the run it started", async () => {
+    const state: RecordingState = {};
+    const response = await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), idempotencyKey: "mend-exec-7" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(state.createdKeys).toEqual(["mend-exec-7"]);
+    expect(response.runId).toBeTypeOf("string");
+    expect(response.replayed).toBeUndefined();
+  });
+
+  it("returns the workspace an earlier create with the same key made, with its executor, and creates nothing", async () => {
+    const state: RecordingState = { existingByKey: existing(), runtime: runtime() };
+    const response = await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), idempotencyKey: "mend-exec-7" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(response).toMatchObject({
+      workspaceId: "ws_first",
+      replayed: true,
+      runId: "run_first",
+      runtime: { adapter: "docker", resourceId: "container-first", runId: "run_first" },
+    });
+    expect(state.createdKeys).toBeUndefined();
+    expect(state.publishedJobId).toBeUndefined();
+    expect(state.sealedPlaintext).toBeUndefined();
+  });
+
+  it("never returns another owner's workspace for the same key", async () => {
+    const state: RecordingState = {
+      existingByKey: { ...existing(), ownerUserId: "someone_else" },
+    };
+    const response = await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), idempotencyKey: "mend-exec-7" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(response.workspaceId).not.toBe("ws_first");
+    expect(state.createdKeys).toEqual(["mend-exec-7"]);
+  });
+
+  it("answers a create that lost the race on the owner/key index with the winner's workspace", async () => {
+    const state: RecordingState = { existingByKey: existing(), raceOnCreate: true };
+    const response = await Effect.runPromise(
+      createWorkspace({
+        payload: { ...capturePayload("/workspace/harness-home"), idempotencyKey: "mend-exec-7" },
+        headers: {},
+      }).pipe(Effect.provide(makeRecordingLayer(state))),
+    );
+    expect(response).toMatchObject({ workspaceId: "ws_first", replayed: true });
+    expect(state.publishedJobId).toBeUndefined();
   });
 });

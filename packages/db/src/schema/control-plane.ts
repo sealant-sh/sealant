@@ -740,8 +740,13 @@ export const workspaces = pgTable(
       .$type<readonly { readonly mountPath: string; readonly subpath: string }[]>()
       .notNull()
       .default([]),
+    // The caller's idempotency key for the create that made this workspace: a repeated create of
+    // the same owner with the same key returns this workspace instead of making another, and the
+    // owner can look it up by the key after losing the create's answer. Unique per owner.
+    idempotencyKey: text("idempotency_key"),
   },
   (table) => [
+    uniqueIndex("workspaces_owner_idempotency_key_idx").on(table.ownerUserId, table.idempotencyKey),
     index("workspaces_owner_user_id_status_created_at_idx").on(
       table.ownerUserId,
       table.status,

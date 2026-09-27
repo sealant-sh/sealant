@@ -32,6 +32,24 @@ when nothing is kept.
   `reason`, `recoverable`, `recoveryAttempts`, `nextRecoveryAt` and `lastRecoveryError`.
 - `completion`: the latest accepted attestation.
 
+A caller can record the executor it launched and find it again:
+
+- `workspace.runtime()` reads the current executor:
+  `{ kind, resourceId, reference, status, runId?, deadline }`, or `null` before one is launched.
+  `WorkspaceRuntime` on the wire gains `runId`.
+- `workspace.launch` is what a handle from `workspaces.create()` knows of its launch:
+  `{ runId?, runtime?, replayed }`. `runtime` is the executor `ready()` saw become ready, or, on a
+  replayed create, the one that already exists. The create answer (`POST /v1/workspaces`) gains
+  `runId`, `runtime` and `replayed`.
+- `captureDrain.executor` names the executor an observation is about: `runId`, `resourceId`,
+  `reference`, and the runtime (`adapter` on the wire, `kind` in the SDK).
+- `workspaces.create({ idempotencyKey })` (the `idempotencyKey` body field, or the `idempotency-key`
+  header) is idempotent per owner. A repeated create with the same key answers with the first
+  workspace, `replayed: true`, and creates nothing. Another owner's workspace is never returned for
+  the same key.
+- `workspaces.findByIdempotencyKey(key)` (`GET /v1/workspaces?idempotencyKey=`) finds that workspace
+  after a lost answer, or returns `null`.
+
 Server-side (the packages ride the release train):
 
 - Every path that can remove an executor or its disk now asks one preservation policy first: the
@@ -60,6 +78,10 @@ Server-side (the packages ride the release train):
   observed it assumes 1 MiB/s.
 - Two drains of one run never overlap, including within one worker: each claim holds the lease under
   its own token.
+- The idempotency key is stored on the workspace row, unique per owner, and that row is written
+  first. A racing create with the same key fails its insert and answers with the winner. A unique
+  violation from Postgres (`23505`) is now recognised; before, only SQLite's wording was, so on
+  Postgres a race failed with an internal error.
 - A discard is logged as requested before the runtime is ended. It is logged as terminated only
   after the runtime adapter confirms it.
 - The MicroVM terminate hook sends `--final` whenever the image's sealantctl offers it

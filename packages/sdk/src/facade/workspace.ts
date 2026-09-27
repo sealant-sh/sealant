@@ -5,6 +5,7 @@
  * lifecycle verbs are typed now and reject until their endpoints land (Phase 3).
  */
 import type {
+  WorkspaceRuntime as WireWorkspaceRuntime,
   WorkspaceCaptureDrain as WireWorkspaceCaptureDrain,
   CaptureClassSnaps as WireCaptureClassSnaps,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
@@ -36,6 +37,8 @@ import type {
   Workspace,
   WorkspaceEvent,
   WorkspaceForward,
+  WorkspaceLaunch,
+  WorkspaceRuntimeInfo,
   WorkspaceForwardOptions,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
@@ -59,7 +62,19 @@ export interface WorkspaceInit {
    * an abandoned launch the SDK owns: `ready()` stops the workspace before it throws.
    */
   readonly created?: boolean;
+  /** What the create answered of the launch (run, executor when known, replayed). */
+  readonly launch?: WorkspaceLaunch;
 }
+
+/** The wire runtime as the SDK reports it. */
+export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeInfo => ({
+  kind: runtime.adapter,
+  resourceId: runtime.resourceId,
+  reference: runtime.reference,
+  status: runtime.status,
+  ...(runtime.runId === undefined ? {} : { runId: runtime.runId }),
+  deadline: runtime.deadline ?? null,
+});
 
 // Terminal statuses a workspace can never leave: ready()/events() fail fast (or end the stream)
 // on these instead of polling out their deadline. "stopped" is terminal too — a TTL expiry or a
@@ -155,6 +170,18 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
 /** Wire → public drain observation. */
 const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain => ({
   state: drain.state,
+  ...(drain.executor === undefined
+    ? {}
+    : {
+        executor: {
+          runId: drain.executor.runId,
+          kind: drain.executor.adapter,
+          resourceId: drain.executor.resourceId,
+          ...(drain.executor.reference === undefined
+            ? {}
+            : { reference: drain.executor.reference }),
+        },
+      }),
   ...(drain.detail === undefined ? {} : { detail: drain.detail }),
   ...(drain.observedAt === undefined ? {} : { observedAt: drain.observedAt }),
   ...(drain.preservationStartsAt === undefined
@@ -300,9 +327,23 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     }
   };
 
+  // What the handle knows of its launch; `ready()` adds the executor it saw become ready.
+  let launch: WorkspaceLaunch | undefined = init.launch;
+
   const workspace: Workspace = {
     id: init.id,
     name: init.name,
+
+    get launch() {
+      return launch;
+    },
+
+    runtime: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.runtime === undefined ? null : toRuntimeInfo(details.runtime);
+    },
 
     status: async () => {
       const details: WorkspaceDetails = await ctx.runtime.run(
@@ -328,6 +369,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         // in-workspace daemon's control socket is accepting (readiness probe in the launch path).
         // This is honest: when ready() resolves, harness.run() can connect without racing the socket.
         if (details.status === "ready") {
+          if (launch !== undefined && details.runtime !== undefined) {
+            launch = { ...launch, runtime: toRuntimeInfo(details.runtime) };
+          }
           return workspace;
         }
         if (FAILED_STATUSES.has(details.status)) {
