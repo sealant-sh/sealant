@@ -51,8 +51,9 @@ export interface WorkspaceStopCaptureDrain {
  *
  *  - `draining`: the capture queue is still moving; the next call (the reaper's next tick)
  *    continues the drain and stops once it is empty.
- *  - `kept`: the daemon answers but its queue stopped moving — `not saved · kept`; nothing stops
- *    it until the queue drains.
+ *  - `kept`: the daemon answers but its queue stopped moving (`not saved · kept`), or the daemon
+ *    is silent while the executor runs (`not saved · daemon silent · kept`); nothing stops it
+ *    until the queue drains or the executor ends.
  *  - `busy`: another drain of the same run is in flight.
  */
 export type WorkspaceStopOutcome = "stopped" | "draining" | "kept" | "busy";
@@ -154,8 +155,8 @@ const isCaptureSourcedRun = (runId: string) =>
  * container on a stored-"stopped" workspace as stranded and would kill the fresh runtime).
  *
  * With `captureDrain`, a live capture-sourced runtime is drained first (`capture-drain.ts`): the
- * runtime is torn down only once its capture queue is empty, or once its daemon has been silent
- * for the unreachable window. Otherwise the call returns `draining` / `kept` and writes nothing —
+ * runtime is torn down only once its capture queue is empty, or once its daemon is silent AND the
+ * runtime reports the executor ended (nothing left to save). Otherwise the call returns `draining` / `kept` and writes nothing —
  * the reaper's next tick (a stored "stopped" workspace is `stranded` to it; a replaced run is
  * `superseded`) comes back and finishes the stop.
  */
@@ -214,9 +215,11 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     const drain = options.captureDrain;
     if (drain !== undefined && !ended && (yield* isCaptureSourcedRun(options.runId))) {
       if (target === undefined) {
+        // Nothing here can see the queue, and the runtime says the executor is up: keep it.
         yield* Effect.logError(
-          `Workspace stop (${drain.label}): run ${options.runId} is capture-sourced but this worker cannot reach its daemon (${adapterId}); stopping WITHOUT a capture drain.`,
+          `Workspace stop (${drain.label}): run ${options.runId} is capture-sourced but this worker cannot reach its daemon (${adapterId}): not saved · kept. Configure the worker's control reach for this runtime.`,
         );
+        return stopOutcome("kept");
       } else {
         const outcome = yield* drainCaptureBeforeStop({
           runId: options.runId,
@@ -225,10 +228,15 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           settings: drain.settings,
           budgetMs: drain.budgetMs,
           label: drain.label,
+          runtimeEnded: runtimeAlreadyEnded(adapter, resourceId),
         });
         if (!drainPermitsStop(outcome)) {
           return stopOutcome(
-            outcome.kind === "stalled" ? "kept" : outcome.kind === "busy" ? "busy" : "draining",
+            outcome.kind === "stalled" || outcome.kind === "silent"
+              ? "kept"
+              : outcome.kind === "busy"
+                ? "busy"
+                : "draining",
           );
         }
       }

@@ -1,7 +1,7 @@
 /**
  * The drain primitive every platform-initiated stop runs first. The properties that matter: a
- * stop proceeds only on an empty queue or a daemon that has been silent for the unreachable
- * window; a queue still moving defers; a daemon that answers without moving is kept; progress and
+ * stop proceeds only on an empty queue, or a daemon silent for the window on an executor the
+ * runtime reports ended; a silent daemon on a running executor is kept; a queue still moving defers; a daemon that answers without moving is kept; progress and
  * the stall window carry across calls; overlapping drains of one run are refused.
  */
 import { Effect } from "effect";
@@ -33,6 +33,7 @@ const drain = (
   tracker: CaptureDrainTracker,
   budgetMs = 1_000,
   settings: CaptureDrainSettings = FAST,
+  runtimeEnded = false,
 ) =>
   Effect.runPromise(
     drainCaptureBeforeStop({
@@ -42,6 +43,7 @@ const drain = (
       settings,
       budgetMs,
       label: "test",
+      runtimeEnded: Effect.succeed(runtimeEnded),
     }).pipe(Effect.provide(daemon.layer)),
   );
 
@@ -73,6 +75,15 @@ describe("drainCaptureBeforeStop", () => {
     const outcome = await drain(daemon, new CaptureDrainTracker());
 
     expect(outcome).toMatchObject({ kind: "stalled", status: { pending: 4 } });
+    expect(drainPermitsStop(outcome)).toBe(false);
+  });
+
+  it("keeps a workspace whose registrar refused a capture class, even with an empty queue", async () => {
+    const outcome = await drain(
+      fakeCaptureDaemon([captureStatus({ pending: 0, refused: ["bulk"] })]),
+      new CaptureDrainTracker(),
+    );
+    expect(outcome).toMatchObject({ kind: "stalled", detail: "refused bulk" });
     expect(drainPermitsStop(outcome)).toBe(false);
   });
 
@@ -112,9 +123,27 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.calls).toEqual(["flush"]);
   });
 
-  it("lets the stop through once the daemon stays silent for the unreachable window", async () => {
-    const outcome = await drain(fakeCaptureDaemon(["unreachable"]), new CaptureDrainTracker());
-    expect(outcome.kind).toBe("unreachable");
+  it("keeps a workspace whose daemon is silent while the runtime reports it running", async () => {
+    const tracker = new CaptureDrainTracker();
+    const outcome = await drain(fakeCaptureDaemon(["unreachable"]), tracker);
+    expect(outcome.kind).toBe("silent");
+    expect(drainPermitsStop(outcome)).toBe(false);
+
+    // The next sweep asks again and, still silent past the window, answers at once.
+    const daemon = fakeCaptureDaemon(["unreachable"]);
+    expect((await drain(daemon, tracker, 1_000)).kind).toBe("silent");
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the stop through when the daemon is silent and the runtime reports the executor ended", async () => {
+    const outcome = await drain(
+      fakeCaptureDaemon(["unreachable"]),
+      new CaptureDrainTracker(),
+      1_000,
+      FAST,
+      true,
+    );
+    expect(outcome.kind).toBe("gone");
     expect(drainPermitsStop(outcome)).toBe(true);
   });
 

@@ -470,7 +470,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     expect(harness.markStopped).not.toHaveBeenCalled();
   });
 
-  it("stops a runtime whose daemon stayed silent for the unreachable window", async () => {
+  it("keeps a runtime whose daemon is silent while the runtime reports it running", async () => {
     const harness = makeHarness({
       workspace: workspaceRow(),
       instance: runtimeInstance(),
@@ -478,19 +478,72 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
     const stop = stopped();
+    const inspect = vi.fn(async () => ({ state: "running" as const }));
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
         workspaceId: "ws_1",
         runId: "run_old",
         stopReason: "expired",
-        runtimeAdapters: [stubAdapter(stop)],
+        runtimeAdapters: [stubAdapter(stop, inspect)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("stops once the daemon is silent and the runtime reports the executor gone", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = stopped();
+    // Running when the stop starts; gone by the time the silence is judged.
+    const inspect = vi
+      .fn<NonNullable<RuntimeAdapter["inspect"]>>()
+      .mockResolvedValueOnce({ state: "running" })
+      .mockResolvedValue({ state: "missing" });
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop, inspect)],
         ...drainOptions(),
       }).pipe(Effect.provide(harness.layer)),
     );
 
     expect(outcome).toBe("stopped");
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a capture-sourced runtime this worker cannot address", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ adapter: "microvm", endpoint: null }),
+      captureSourced: true,
+    });
+    const stop = stopped();
+    const adapter = { ...stubAdapter(stop), id: "microvm" as const };
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [adapter],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
   });
 
   it("never dials the daemon for a workspace that is not capture-sourced", async () => {

@@ -8,6 +8,7 @@ import {
   expireWorkspace,
   flushWorkspaceCapture,
   getWorkspace,
+  getWorkspaceCaptureStatus,
   getWorkspaceSshTarget,
   listWorkspaceAttempts,
   listWorkspaceEvents,
@@ -45,6 +46,12 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
         flushWorkspaceCapture({
           workspaceId: params.workspaceId,
           payload,
+        }),
+      )
+      .handle("getWorkspaceCaptureStatus", ({ params, query }) =>
+        getWorkspaceCaptureStatus({
+          workspaceId: params.workspaceId,
+          query,
         }),
       )
       .handle("replanWorkspaceCapture", ({ params, payload }) =>

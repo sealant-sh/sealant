@@ -521,8 +521,9 @@ export const workerRuntimeEnvSchema = z.object({
   // Drain before stop (no loss of work product): before any platform-initiated stop of a
   // capture-sourced workspace the worker flushes its daemon and polls the capture queue until it
   // is empty. A daemon that answers but whose queue does not move for the stall window keeps its
-  // workspace (`not saved · kept`); one that does not answer for the unreachable window is treated
-  // as crashed and the stop proceeds.
+  // workspace (`not saved · kept`). One that does not answer for the unreachable window keeps it
+  // too (`not saved · daemon silent · kept`) while the runtime reports the executor running; only
+  // a runtime that reports the executor ended lets the stop proceed.
   WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS: z.coerce.number().int().positive().default(600000),
   WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS: z.coerce.number().int().positive().default(300000),

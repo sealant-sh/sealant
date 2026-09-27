@@ -164,10 +164,24 @@ export const flushWorkspaceCaptureRequestSchema = Schema.Struct({
 });
 export type FlushWorkspaceCaptureRequest = typeof flushWorkspaceCaptureRequestSchema.Type;
 
+/**
+ * Read a capture-sourced workspace's capture status (sealantd `capture.status`) without flushing:
+ * what a drain polls to show `saving · N left` and to know when the executor may go away.
+ */
+export const getWorkspaceCaptureStatusQuerySchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type GetWorkspaceCaptureStatusQuery = typeof getWorkspaceCaptureStatusQuerySchema.Type;
+
+export const captureClassSchema = Schema.Literals(["small", "bulk"]);
+export type CaptureClass = typeof captureClassSchema.Type;
+
 export const workspaceCaptureStatusSchema = Schema.Struct({
   epoch: Schema.Number,
   worktreeId: NonEmptyString,
+  /** The newest capture the session channel has registered for this worktree. */
   headN: Schema.optional(Schema.Number),
+  /** Captures staged on the executor and not yet registered: the unsaved queue. */
   pending: Schema.Number,
   stagedBytes: Schema.Number,
   uploadedObjects: Schema.Number,
@@ -176,6 +190,19 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
   fenced: Schema.Boolean,
   paused: Schema.Boolean,
   lastSnapUnixMs: Schema.optional(Schema.Number),
+  /**
+   * Capture classes the registrar refused for the session's byte quota: nothing of these ships
+   * until the next epoch or re-plan, whatever `pending` says. Non-empty means work is NOT being
+   * saved. Absent from control planes that predate it.
+   */
+  refused: Schema.optional(Schema.Array(captureClassSchema)),
+  /**
+   * Bytes still to ship, and bulk captures still pending (sealantd's `pending_bytes` /
+   * `pending_bulk`). Reserved: absent until the daemon reports them; a drain is complete only
+   * when every reported one is zero.
+   */
+  pendingBytes: Schema.optional(Schema.Number),
+  pendingBulk: Schema.optional(Schema.Number),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
@@ -552,6 +579,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceBadRequestError,
         WorkspaceNotFoundError,
         // No live runtime to flush (never launched, mid-launch, or the daemon refused).
+        WorkspaceConflictError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Synchronous: one `capture.status` round trip over the control connection; flushes nothing.
+    HttpApiEndpoint.get("getWorkspaceCaptureStatus", "/:workspaceId/capture", {
+      params: workspaceIdParams,
+      query: getWorkspaceCaptureStatusQuerySchema,
+      success: workspaceCaptureStatusSchema,
+      error: [
+        // Not a capture-sourced workspace.
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        // No live runtime to ask (never launched, mid-launch, gone, or the daemon refused).
         WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],

@@ -30,6 +30,7 @@ import {
   type Channel,
 } from "@sealant/runtime-client";
 import {
+  CaptureClass as WireCaptureClass,
   SessionMode as WireSessionMode,
   type Capabilities,
   type CaptureReplanned,
@@ -201,7 +202,18 @@ export interface CaptureFlushReport {
   readonly fenced: boolean;
   readonly paused: boolean;
   readonly lastSnapUnixMs?: number | undefined;
+  /**
+   * Capture classes the registrar refused for the session's byte quota: nothing of these ships
+   * until the next epoch or `capture.replan`. Non-empty means work is NOT being saved.
+   */
+  readonly refused: readonly CaptureClassName[];
 }
+
+/** A capture class as the control plane names it (wire `CaptureClass`). */
+export type CaptureClassName = "small" | "bulk";
+
+const captureClassName = (value: WireCaptureClass): CaptureClassName | undefined =>
+  value === WireCaptureClass.SMALL ? "small" : value === WireCaptureClass.BULK ? "bulk" : undefined;
 
 /** Wire → report: uint64 fields arrive as bigint and become JSON-safe numbers. Exported for tests. */
 export const captureFlushReportFromWire = (report: CaptureStatusReport): CaptureFlushReport => ({
@@ -216,6 +228,10 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
   fenced: report.fenced,
   paused: report.paused,
   ...(report.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: Number(report.lastSnapUnixMs) }),
+  refused: report.refused.flatMap((value) => {
+    const name = captureClassName(value);
+    return name === undefined ? [] : [name];
+  }),
 });
 
 /**

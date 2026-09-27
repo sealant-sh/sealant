@@ -4,12 +4,16 @@
  * server-side execution paths (filled in by the run-execution module). `harness.session()` and the
  * lifecycle verbs are typed now and reject until their endpoints land (Phase 3).
  */
-import type { WorkspaceDetails } from "@sealant/api-contracts";
+import type {
+  WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
+  WorkspaceDetails,
+} from "@sealant/api-contracts";
 
 import { execWorkspace } from "../effect/exec-workspace.js";
 import {
   bindWorkspaceOp,
   flushWorkspaceCaptureOp,
+  getWorkspaceCaptureStatusOp,
   createSessionOp,
   expireWorkspaceOp,
   getSessionOp,
@@ -31,7 +35,9 @@ import type {
   WorkspaceForward,
   WorkspaceForwardOptions,
   WorkspaceSessions,
+  WorkspaceCaptureStatus,
   WorkspaceStatus,
+  WorkspaceStopResult,
 } from "../types.js";
 import type { SdkContext } from "./context.js";
 import { makeInteractiveSession } from "./session.js";
@@ -91,6 +97,24 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   codex: "codex",
   "claude-code": "claude",
 };
+
+/** Wire → public capture status; `refused` is empty from a control plane that predates it. */
+const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureStatus => ({
+  epoch: status.epoch,
+  worktreeId: status.worktreeId,
+  ...(status.headN === undefined ? {} : { headN: status.headN }),
+  pending: status.pending,
+  stagedBytes: status.stagedBytes,
+  uploadedObjects: status.uploadedObjects,
+  uploadedBytes: status.uploadedBytes,
+  registered: status.registered,
+  fenced: status.fenced,
+  paused: status.paused,
+  ...(status.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: status.lastSnapUnixMs }),
+  refused: status.refused ?? [],
+  ...(status.pendingBytes === undefined ? {} : { pendingBytes: status.pendingBytes }),
+  ...(status.pendingBulk === undefined ? {} : { pendingBulk: status.pendingBulk }),
+});
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
   const openSession = async (
@@ -180,6 +204,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
   };
 
+  const readCaptureStatus = async (): Promise<WorkspaceCaptureStatus> =>
+    toCaptureStatus(
+      await ctx.runtime.run(
+        getWorkspaceCaptureStatusOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+      ),
+    );
+
   /** Ask the control plane to stop the workspace; true once the request was accepted. */
   const requestStop = async (): Promise<boolean> => {
     try {
@@ -266,24 +297,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     capture: {
-      flush: async () => {
-        const status = await ctx.runtime.run(
-          flushWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
-        );
-        return {
-          epoch: status.epoch,
-          worktreeId: status.worktreeId,
-          ...(status.headN === undefined ? {} : { headN: status.headN }),
-          pending: status.pending,
-          stagedBytes: status.stagedBytes,
-          uploadedObjects: status.uploadedObjects,
-          uploadedBytes: status.uploadedBytes,
-          registered: status.registered,
-          fenced: status.fenced,
-          paused: status.paused,
-          ...(status.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: status.lastSnapUnixMs }),
-        };
-      },
+      flush: async () =>
+        toCaptureStatus(
+          await ctx.runtime.run(
+            flushWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+          ),
+        ),
+      status: () => readCaptureStatus(),
       replan: async () => {
         const result = await ctx.runtime.run(
           replanWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
@@ -334,10 +354,11 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
       return iterate();
     },
 
-    // BLOCKING stop: the control plane accepts the stop (202) and the worker tears the container
-    // down; resolve only once the workspace reports the terminal "stopped" status, so callers can
-    // trust the container is gone when this settles.
-    stop: async () => {
+    // BLOCKING stop: the control plane accepts the stop (202) and the worker tears the runtime
+    // down — after draining a capture-sourced workspace's unsaved captures, which can take
+    // minutes. Resolves "stopped" once the workspace reports it; past the wait, a capture queue
+    // that still answers means the server is draining, which is reported, never thrown.
+    stop: async (): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
       await ctx.runtime.run(stopWorkspaceOp(init.id, { ownerUserId }));
 
@@ -347,9 +368,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
         if (details.status === "stopped") {
-          return;
+          return { state: "stopped" };
         }
         if (Date.now() > deadline) {
+          const capture = await readCaptureStatus().catch(() => undefined);
+          if (capture !== undefined) {
+            return { state: "draining", capture };
+          }
           throw new SealantError(`Timed out waiting for workspace ${init.id} to stop.`, {
             code: "workspace_stop_timeout",
           });

@@ -4,7 +4,7 @@
  * `create()` made stops the workspace so no abandoned runtime keeps running to its cap. Driven
  * against a stub contract client (no live API).
  */
-import type { WorkspaceDetails } from "@sealant/api-contracts";
+import type { WorkspaceCaptureStatus, WorkspaceDetails } from "@sealant/api-contracts";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -25,10 +25,20 @@ const details = (overrides: Partial<WorkspaceDetails> = {}): WorkspaceDetails =>
 });
 
 // The derived `ControlPlaneClient` surface is far wider; the narrowing cast is test-only.
-const makeStub = (read: () => WorkspaceDetails) => {
+const makeStub = (
+  read: () => WorkspaceDetails,
+  capture?: () => WorkspaceCaptureStatus | undefined,
+) => {
   const stops: unknown[] = [];
   const workspaces = {
     getWorkspace: () => Effect.sync(read),
+    getWorkspaceCaptureStatus: () =>
+      Effect.suspend(() => {
+        const status = capture?.();
+        return status === undefined
+          ? Effect.fail(new Error("not a capture-sourced workspace"))
+          : Effect.succeed(status);
+      }),
     stopWorkspace: (request: unknown) => {
       stops.push(request);
       return Effect.succeed({ workspaceId: "ws_1", status: "stopped" });
@@ -110,5 +120,59 @@ describe("workspace.ready() timeout", () => {
     const { error, stops } = await timeOut({});
     expect(error).toMatchObject({ code: "workspace_ready_timeout" });
     expect(stops).toEqual([]);
+  });
+});
+
+describe("workspace.stop()", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const CAPTURE: WorkspaceCaptureStatus = {
+    epoch: 1,
+    worktreeId: "wt_1",
+    pending: 12,
+    stagedBytes: 4096,
+    uploadedObjects: 3,
+    uploadedBytes: 2048,
+    registered: 30,
+    fenced: false,
+    paused: false,
+    refused: [],
+  };
+
+  const stopWith = async (stub: ReturnType<typeof makeStub>) => {
+    vi.useFakeTimers();
+    const outcome = workspaceFor(stub.client)
+      .stop()
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    await vi.advanceTimersByTimeAsync(61_000);
+    return outcome;
+  };
+
+  it("resolves stopped once the runtime is gone", async () => {
+    let reads = 0;
+    const stub = makeStub(() => details({ status: (reads += 1) < 3 ? "ready" : "stopped" }));
+    await expect(stopWith(stub)).resolves.toEqual({ result: { state: "stopped" } });
+    expect(stub.stops).toHaveLength(1);
+  });
+
+  it("reports a server-side drain instead of throwing when the runtime outlives the wait", async () => {
+    const stub = makeStub(
+      () => details({ status: "ready" }),
+      () => CAPTURE,
+    );
+    await expect(stopWith(stub)).resolves.toEqual({
+      result: { state: "draining", capture: { ...CAPTURE } },
+    });
+  });
+
+  it("throws workspace_stop_timeout only when no drain can be observed", async () => {
+    const stub = makeStub(() => details({ status: "ready" }));
+    const outcome = await stopWith(stub);
+    expect(outcome).toMatchObject({ error: { code: "workspace_stop_timeout" } });
   });
 });

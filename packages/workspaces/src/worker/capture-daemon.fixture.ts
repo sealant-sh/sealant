@@ -26,6 +26,7 @@ export const captureStatus = (overrides: Partial<CaptureFlushReport> = {}): Capt
   registered: 0,
   fenced: false,
   paused: false,
+  refused: [],
   ...overrides,
 });
 

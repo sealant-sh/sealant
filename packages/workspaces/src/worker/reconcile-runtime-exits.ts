@@ -195,7 +195,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
 
-      const drained = yield* drainBeforeRecording(options, instance, adapter.id);
+      const drained = yield* drainBeforeRecording(options, instance, adapter);
       if (!drained) {
         continue;
       }
@@ -255,7 +255,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 const drainBeforeRecording = (
   options: ReconcileRuntimeExitsEffectOptions,
   instance: WorkspaceRuntimeInstance,
-  adapterId: string,
+  adapter: RuntimeAdapter,
 ) =>
   Effect.gen(function* () {
     const drain = options.captureDrain;
@@ -275,7 +275,7 @@ const drainBeforeRecording = (
       return true;
     }
     yield* Effect.logWarning(
-      `Runtime exit reconciler: ${adapterId} reports run ${instance.runId} ended, but its sealantd still answers; draining its captures before anything is recorded or removed.`,
+      `Runtime exit reconciler: ${adapter.id} reports run ${instance.runId} ended, but its sealantd still answers; draining its captures before anything is recorded or removed.`,
     );
     const outcome = yield* drainCaptureBeforeStop({
       runId: instance.runId,
@@ -284,6 +284,7 @@ const drainBeforeRecording = (
       settings: drain.settings,
       budgetMs: drain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_SWEEP_MS,
       label: "exit reconciler",
+      runtimeEnded: runtimeReportsEnded(adapter, instance.resourceId ?? ""),
     });
     return drainPermitsStop(outcome);
   }).pipe(
@@ -294,6 +295,21 @@ const drainBeforeRecording = (
       ).pipe(Effect.as(false)),
     ),
   );
+
+/** A fresh `inspect`: true only on a positive exited/missing answer; unknown is false. */
+const runtimeReportsEnded = (
+  adapter: RuntimeAdapter,
+  resourceId: string,
+): Effect.Effect<boolean> => {
+  const inspect = adapter.inspect;
+  if (inspect === undefined) {
+    return Effect.succeed(false);
+  }
+  return Effect.tryPromise(() => inspect.call(adapter, { resourceId })).pipe(
+    Effect.map((result) => result.state !== "running"),
+    Effect.catchCause(() => Effect.succeed(false)),
+  );
+};
 
 /** Log, loudly, a capped runtime the platform ended at its deadline. */
 const reportHardCap = (instance: WorkspaceRuntimeInstance, end: RuntimeEnd) => {

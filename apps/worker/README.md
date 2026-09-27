@@ -66,10 +66,12 @@ workspace's sealantd and polls its capture queue until it is empty
 (`WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS`). A queue still moving defers the stop to the reaper's
 next tick. A daemon that answers but whose queue does not move for
 `WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` keeps its workspace running and is logged
-`not saved · kept`. A daemon silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` counts as
-crashed, and the stop proceeds. The exit reconciler asks the daemon before it records an exit: a
-runtime whose daemon still answers is drained first. A MicroVM whose guest Docker failed while
-sealantd is up is reported, never terminated.
+`not saved · kept`. A daemon silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` keeps its
+workspace too (`not saved · daemon silent · kept`) while the runtime reports the executor running,
+and every sweep asks again; only a runtime that reports the executor ended lets the stop proceed.
+The exit reconciler asks the daemon before it records an exit: a runtime whose daemon still answers
+is drained first. A MicroVM whose guest Docker failed while sealantd is up is reported, never
+terminated.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

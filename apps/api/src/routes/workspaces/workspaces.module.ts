@@ -4,6 +4,7 @@ import { posix } from "node:path";
 import {
   type BindWorkspaceRequest,
   type FlushWorkspaceCaptureRequest,
+  type GetWorkspaceCaptureStatusQuery,
   type ReplanWorkspaceCaptureRequest,
   WorkspaceBadGatewayError,
   isOciRepository,
@@ -2285,6 +2286,19 @@ export const flushWorkspaceCapture = (input: {
   withCaptureDaemon(
     { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
     (daemon) => daemon.captureFlush(),
+  );
+
+/**
+ * Capture status (sealantd `capture.status`): the daemon's queue as it stands, nothing flushed.
+ * Synchronous over the daemon's control connection; what a drain polls between flushes.
+ */
+export const getWorkspaceCaptureStatus = (input: {
+  readonly workspaceId: string;
+  readonly query: GetWorkspaceCaptureStatusQuery;
+}) =>
+  withCaptureDaemon(
+    { workspaceId: input.workspaceId, ownerUserId: input.query.ownerUserId, verb: "read" },
+    (daemon) => daemon.captureStatus(),
   );
 
 /**

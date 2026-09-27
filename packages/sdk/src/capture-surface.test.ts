@@ -38,18 +38,24 @@ const REPLANNED: WorkspaceCaptureReplanned = {
 
 interface StubCalls {
   flush: unknown[];
+  status: unknown[];
   replan: unknown[];
 }
 
 interface StubHandlers {
   readonly flush?: () => WorkspaceCaptureStatus;
+  readonly status?: () => WorkspaceCaptureStatus;
   readonly replan?: () => WorkspaceCaptureReplanned;
 }
 
 // The derived `ControlPlaneClient` surface is far wider; the narrowing cast is test-only.
 const makeStub = (handlers: StubHandlers): { client: ControlPlaneClient; calls: StubCalls } => {
-  const calls: StubCalls = { flush: [], replan: [] };
+  const calls: StubCalls = { flush: [], status: [], replan: [] };
   const workspaces = {
+    getWorkspaceCaptureStatus: (request: unknown) => {
+      calls.status.push(request);
+      return Effect.sync(() => (handlers.status ?? (() => STATUS))());
+    },
     flushWorkspaceCapture: (request: unknown) => {
       calls.flush.push(request);
       return Effect.sync(() => (handlers.flush ?? (() => STATUS))());
@@ -85,8 +91,36 @@ describe("workspace.capture", () => {
     expect(calls.flush).toEqual([
       { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local" } },
     ]);
-    expect(status).toEqual(STATUS);
+    // An older control plane sends no `refused`: the SDK reads it as nothing refused.
+    expect(status).toEqual({ ...STATUS, refused: [] });
     expect("headN" in status).toBe(false);
+    expect("pendingBytes" in status).toBe(false);
+  });
+
+  it("status() reads the queue from the workspace's capture endpoint without flushing", async () => {
+    const { client, calls } = makeStub({
+      status: () => ({
+        ...STATUS,
+        headN: 12,
+        pending: 4,
+        refused: ["bulk"],
+        pendingBytes: 1_048_576,
+        pendingBulk: 1,
+      }),
+    });
+    const status = await workspaceFor(client).capture.status();
+    expect(calls.status).toEqual([
+      { params: { workspaceId: "ws_1" }, query: { ownerUserId: "usr_local" } },
+    ]);
+    expect(calls.flush).toEqual([]);
+    expect(status).toMatchObject({
+      headN: 12,
+      pending: 4,
+      registered: 2,
+      refused: ["bulk"],
+      pendingBytes: 1_048_576,
+      pendingBulk: 1,
+    });
   });
 
   it("replan() posts the owner to the workspace's replan endpoint and maps the counts", async () => {
