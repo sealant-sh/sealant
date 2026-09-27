@@ -22,6 +22,7 @@ import {
   drainPermitsStop,
   inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
+  recordedDeletionEvidence,
   runIsCaptureSourced,
   snapFailureDetail,
   DEFAULT_FINAL_FLUSH_GRACE_MS,
@@ -219,6 +220,38 @@ describe("drainCaptureBeforeStop", () => {
     });
     expect(drainPermitsStop(outcome)).toBe(false);
     expect(daemon.calls).toEqual(["flush", "flush"]);
+  });
+
+  it("asks for FINAL again when the disk changed after a complete final flush (sealantd `changed`)", async () => {
+    // Complete means current: a change after the final flush's snap makes sealantd answer
+    // `complete: false, incomplete_reason: "changed"`. Not saved: FINAL again, which snaps again.
+    const changed = captureStatus({ pending: 0, complete: false, incompleteReason: "changed" });
+    const daemon = fakeCaptureDaemon([changed, savedStatus()]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome.kind).toBe("drained");
+    expect(daemon.calls).toEqual(["flush", "flush"]);
+    expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
+  });
+
+  it("no longer counts a complete flush the disk changed after as evidence", async () => {
+    // An earlier drain read `complete`; the disk changed since, and the next read says so. The
+    // ledger's evidence follows the newest read: the executor may not go on the old one.
+    const ledger = inMemoryCaptureDrainLedger();
+    expect((await drain(fakeCaptureDaemon([savedStatus()]), ledger)).kind).toBe("drained");
+    const executor = { runId: "run_1", resourceId: "container-1", reference: null };
+    expect(recordedDeletionEvidence(Effect.runSync(ledger.read("run_1")), executor)).toMatchObject({
+      observedComplete: true,
+    });
+    const changed = captureStatus({ pending: 0, complete: false, incompleteReason: "changed" });
+    const outcome = await drain(fakeCaptureDaemon([changed]), ledger);
+    expect(outcome).toMatchObject({
+      kind: "unconfirmed",
+      detail: expect.stringContaining("final flush incomplete (changed)"),
+    });
+    expect(drainPermitsStop(outcome)).toBe(false);
+    expect(recordedDeletionEvidence(Effect.runSync(ledger.read("run_1")), executor)).toMatchObject({
+      observedComplete: false,
+    });
   });
 
   it("keeps a workspace whose daemon answers but whose queue does not move", async () => {

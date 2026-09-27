@@ -173,10 +173,11 @@ export const AGENT_RECOVER_CONTRACT_VERSION = 1;
 
 /**
  * `POST /sealant/recover`: restart sealantd on the VM's own disk in recovery mode
- * (`SEALANT_RECOVERY=1`: resume its own staging, no restore, no dotfiles, no lifecycle step, no
- * harness, admission closed). `secretEnvJson` is the recovery boot's secret env file: the capture
- * token the executor was launched with (`{"SEALANT_CAPTURE_TOKEN": …}`), which the control plane
- * kept sealed for exactly this.
+ * (`sealantd boot --recovery`, after every process the dead daemon left was killed: resume its
+ * own staging, no restore, no dotfiles, no lifecycle step, no harness, admission closed).
+ * `secretEnvJson` is the capture token the executor was launched with
+ * (`{"SEALANT_CAPTURE_TOKEN": …}`), which the control plane kept sealed for exactly this; the agent
+ * writes it into the first boot's secret env file, which the recovery boot reads.
  */
 export const agentRecoverRequestSchema = z.strictObject({
   version: z.literal(AGENT_RECOVER_CONTRACT_VERSION),

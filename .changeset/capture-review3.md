@@ -35,8 +35,12 @@ Server-side (the packages ride the release train):
   an executor whose daemon exited on a machine that still runs has its recovery made due before the
   cap.
 - A MicroVM whose sealantd exited while the VM runs on is recovered on its own disk: the agent
-  (`POST /sealant/recover`) starts sealantd again in recovery mode with the capture token kept at
-  launch, and the recovery drains it. An image whose agent predates the route is reported and kept.
+  (`POST /sealant/recover`) kills every process the dead daemon left, then starts
+  `sealantd boot --recovery` with the first boot's environment and its secret env file holding the
+  capture token kept at launch, and the recovery drains it. An image whose agent predates the route,
+  or a disk the recovery boot refuses (an older daemon's), is reported and kept.
+- `incomplete_reason: "changed"` (the disk changed after the final flush) is not saved: the drain
+  asks for FINAL again, and a complete flush read before it is no longer evidence.
 - Recovery restarts an executor in place only when its launch recorded a daemon with sealantd's
   recovery boot (released sealantd 0.19.0 or later, or an image listed in
   `SEALANT_SEALANTD_RECOVERY_BOOT_IMAGES`). Any other, or unknown, is kept and reported

@@ -734,10 +734,13 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   /**
    * Recover a retained capture VM whose daemon ended while the VM runs on (sealantd exited 75
    * after an incomplete final flush): its disk still holds the staging. The agent starts sealantd
-   * again ON THAT DISK in recovery mode (`POST /sealant/recover`, `SEALANT_RECOVERY=1`: resume its
-   * own staging without materializing over it, no dotfiles, no lifecycle step, no harness,
-   * admission closed), handed the capture token the executor was launched with; the adapter waits
-   * for the daemon to answer and the caller drains it with a FINAL flush.
+   * again ON THAT DISK in recovery mode (`POST /sealant/recover`: every process the dead daemon
+   * left is killed, then `sealantd boot --recovery` resumes its own staging without materializing
+   * over it, runs no dotfiles, lifecycle step or harness, and admits nothing), handed the capture
+   * token the executor was launched with; the adapter waits for the daemon to answer and the
+   * caller drains it with a FINAL flush. A recovery boot that exits (75: another daemon holds the
+   * disk, or the disk is not the head's continuation — an older daemon's disk is refused) fails
+   * the attempt with its reason; the VM stays retained and is reported.
    *
    * A TERMINATED VM's disk is gone with it (`missing`): only the pre-deadline drain, and the
    * pre-deadline recovery of a retained VM, protect it. An agent without the route (an image built

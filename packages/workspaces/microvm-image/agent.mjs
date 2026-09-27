@@ -28,17 +28,18 @@
 //      arrived inside the launch push.
 //   4. Recovery. A capture VM whose sealantd exited (75: its final flush did not complete) while
 //      the VM runs on still holds its staging on the VM's disk, until the platform's cap ends
-//      the VM. `POST /sealant/recover` (control token) starts `sealantd boot` again on that disk
-//      in sealantd's recovery mode (`SEALANT_RECOVERY=1`: resume its own staging, no restore, no
-//      dotfiles, no lifecycle step, no harness, admission closed), with the capture token the
-//      control plane kept for it, so the control plane can drain it before the cap.
+//      the VM. `POST /sealant/recover` (control token) kills every process the dead daemon left
+//      (sealantd is not PID 1 here: its writers outlive it), then starts `sealantd boot
+//      --recovery` on that disk (resume its own staging, no restore, no dotfiles, no lifecycle
+//      step, no harness, nothing admitted), with the first boot's environment and its secret env
+//      file holding the capture token, so the control plane can drain it before the cap.
 //
 // One listener serves all three; the image registers the same port for hooks and the endpoint
 // targets it by default.
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -62,8 +63,8 @@ const CONTROL_SOCKET = process.env.SEALANT_CONTROL_SOCKET ?? "/run/sealant/contr
 // Where launch material is written; overridable so the agent can be tested outside a VM.
 const STATE_DIR = process.env.SEALANT_MICROVM_AGENT_STATE_DIR ?? "/run/sealant";
 const SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "env.json");
-// The recovery boot's secret env: only the capture token, pushed with the recovery request.
-const RECOVERY_SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "recovery-env.json");
+// How long a recovery waits for the processes the dead daemon left to be gone after SIGKILL.
+const LEFTOVER_KILL_TIMEOUT_MS = 5_000;
 const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
@@ -686,10 +687,10 @@ const reportedDaemonOutput = () => {
     .trim();
 };
 
-const startDaemon = (bootEnv) => {
+const startDaemon = (bootEnv, args = ["boot"]) => {
   const env = { ...process.env, ...bootEnv, SEALANT_CONTROL_SOCKET: CONTROL_SOCKET };
   if (state.contractVersion === DOCKER_CONTRACT_VERSION) Object.assign(env, dockerEnvironment);
-  const child = spawn(SEALANTD, ["boot"], {
+  const child = spawn(SEALANTD, args, {
     detached: true,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -725,8 +726,9 @@ const startDaemon = (bootEnv) => {
     state.daemonExit = { code: null, signal: null };
     log("sealantd boot could not start");
   });
+  const recovery = args.includes("--recovery");
   log(
-    `${bootEnv.SEALANT_RECOVERY === "1" ? "recover" : "launch"}: sealantd boot started for run ${state.runId}${bootEnv.SEALANT_RECOVERY === "1" ? " in recovery mode" : ""}`,
+    `${recovery ? "recover" : "launch"}: sealantd boot started for run ${state.runId}${recovery ? " in recovery mode" : ""}`,
   );
 };
 
@@ -924,15 +926,138 @@ const recoverySecretEnvIsValid = (raw) => {
   }
 };
 
+/** Every process in the VM: pid → parent, process group, session, state and argv[0]. */
+const readProcessTable = async () => {
+  const names = await readdir("/proc").catch(() => null);
+  if (names === null) return null;
+  const table = new Map();
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    const stat = await readFile(`/proc/${name}/stat`, "utf8").catch(() => null);
+    if (stat === null) continue;
+    // The command name is in parentheses and may hold spaces: the fields follow the last one.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const cmdline = await readFile(`/proc/${name}/cmdline`, "utf8").catch(() => "");
+    table.set(Number(name), {
+      state: fields[0],
+      ppid: Number(fields[1]),
+      pgrp: Number(fields[2]),
+      sid: Number(fields[3]),
+      argv0: cmdline.split("\0")[0] ?? "",
+    });
+  }
+  return table;
+};
+
+/** The agent's own helpers, which are not the daemon's: Docker, its probes, hook flushes. */
+const agentHelper = (argv0) =>
+  [DOCKERD, DOCKER, SEALANTCTL].some(
+    (helper) => argv0 === helper || path.basename(argv0) === path.basename(helper),
+  );
+
+/**
+ * The processes the dead daemon left: its process group and session (it was started detached),
+ * and — the agent being PID 1, every orphan is re-parented to it — every descendant of the agent
+ * that is not one of the agent's own helpers (and their descendants). Zombies are not counted:
+ * they hold no files and write nothing.
+ */
+const daemonLeftovers = (table, daemonPid) => {
+  const children = new Map();
+  for (const [pid, entry] of table) {
+    const siblings = children.get(entry.ppid) ?? [];
+    siblings.push(pid);
+    children.set(entry.ppid, siblings);
+  }
+  const subtree = (root) => {
+    const out = new Set();
+    const stack = [root];
+    while (stack.length > 0) {
+      const pid = stack.pop();
+      if (out.has(pid)) continue;
+      out.add(pid);
+      stack.push(...(children.get(pid) ?? []));
+    }
+    return out;
+  };
+  const keep = new Set([process.pid]);
+  for (const pid of children.get(process.pid) ?? []) {
+    if (agentHelper(table.get(pid)?.argv0 ?? "")) {
+      for (const helper of subtree(pid)) keep.add(helper);
+    }
+  }
+  // A live process with the dead daemon's pid means its group and session are gone and the
+  // number was reused (the kernel never hands out a pid still in use as a group or session id):
+  // nothing matches it then.
+  const groupAlive = daemonPid !== undefined && !table.has(daemonPid);
+  const leftovers = new Set();
+  for (const [pid, entry] of table) {
+    if (keep.has(pid) || entry.state === "Z") continue;
+    if (groupAlive && (entry.pgrp === daemonPid || entry.sid === daemonPid)) {
+      leftovers.add(pid);
+    }
+  }
+  for (const pid of subtree(process.pid)) {
+    if (!keep.has(pid) && table.get(pid)?.state !== "Z") leftovers.add(pid);
+  }
+  return leftovers;
+};
+
+/**
+ * Kill every process the dead daemon left, and wait until none remains: on a MicroVM sealantd is
+ * not PID 1, so its managed processes (the harness, anything it started) outlive it and would go
+ * on writing beside the recovery. `true` once none remains.
+ */
+const killDaemonLeftovers = async (daemonPid) => {
+  const deadline = Date.now() + LEFTOVER_KILL_TIMEOUT_MS;
+  for (;;) {
+    const table = await readProcessTable();
+    if (table === null) {
+      // No process table to read: the daemon's process group is all that can be named.
+      if (daemonPid === undefined) return true;
+      try {
+        process.kill(-daemonPid, "SIGKILL");
+        process.kill(-daemonPid, 0);
+      } catch (error) {
+        if (error.code === "ESRCH") return true;
+      }
+    } else {
+      const leftovers = daemonLeftovers(table, daemonPid);
+      if (leftovers.size === 0) return true;
+      for (const pid of leftovers) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Gone already.
+        }
+      }
+    }
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+};
+
+/** The first boot's secret env with the capture token the control plane kept for the recovery. */
+const recoverySecretEnvJson = async (requestJson) => {
+  const kept = await readFile(SECRET_ENV_FILE, "utf8")
+    .then((raw) => JSON.parse(raw))
+    .catch(() => ({}));
+  const base = typeof kept === "object" && kept !== null && !Array.isArray(kept) ? kept : {};
+  return JSON.stringify({ ...base, ...JSON.parse(requestJson) });
+};
+
 /**
  * Start sealantd again ON THIS VM'S DISK in recovery mode, after it exited (sealantd exits 75
- * when its final flush did not complete, keeping its staging here). The boot env is the launch's,
- * with `SEALANT_RECOVERY=1` and a secret env holding only the capture token the control plane
- * kept: no dotfiles, no lifecycle step, no harness, admission closed; it resumes its own staging
- * without materializing over it, and ships when the control plane drains it.
+ * when its final flush did not complete, keeping its staging here):
  *
- * sealantd's recovery boot is asked for with `SEALANT_RECOVERY=1` (`BootConfig::recovery`,
- * sealantd capture stack #100). If sealantd's invocation of it changes, change it here.
+ *  1. every process the dead daemon left is killed, and none may remain (else 503: nothing is
+ *     started beside a writer);
+ *  2. `sealantd boot --recovery` starts with the first boot's environment; its secret env file
+ *     stays the first boot's (`SEALANT_SECRET_ENV_FILE`), holding the capture token the control
+ *     plane kept for this. It runs no dotfiles, no lifecycle step and no harness, admits nothing,
+ *     resumes its own staging without materializing over it, and ships when the control plane
+ *     drains it. It exits 0 once its final flush is complete and sealed, and 75 for anything else
+ *     (another daemon holds the disk, or the disk is not the head's continuation — a disk an older
+ *     daemon materialized is refused, and kept).
  */
 const handleRecover = async (req, res) => {
   if (!bearerMatches(req.headers.authorization, state.controlToken)) {
@@ -965,33 +1090,26 @@ const handleRecover = async (req, res) => {
   }
   state.recoveryInProgress = true;
   try {
-    await writePrivate(RECOVERY_SECRET_ENV_FILE, body.secretEnvJson, 0o600);
-    // The ended daemon's socket file may still be there; the recovered daemon binds a new one,
-    // and nothing may count the old one as ready.
+    if (!(await killDaemonLeftovers(state.daemon?.pid))) {
+      log("recover: processes the ended sealantd left are still running; nothing started");
+      return message(res, 503, "processes the ended daemon left are still running");
+    }
+    const secretEnvJson = await recoverySecretEnvJson(body.secretEnvJson);
+    await writePrivate(SECRET_ENV_FILE, secretEnvJson, 0o600);
+    // The ended daemon's socket file may still be there; nothing may count it as ready.
     await unlink(CONTROL_SOCKET).catch(() => {});
-  } catch (error) {
+    const env = { ...state.bootEnv, SEALANT_SECRET_ENV_FILE: SECRET_ENV_FILE };
+    delete env.SEALANT_DOTFILES_ARCHIVE_DIR;
+    state.redactions = redactionsFor(state.controlToken, secretEnvJson);
+    state.recovery = true;
+    state.daemonExited = false;
+    state.daemonExit = null;
+    state.daemonOutput = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    startDaemon(env, ["boot", "--recovery"]);
+    return json(res, 200, { outcome: "restarted" });
+  } finally {
     state.recoveryInProgress = false;
-    throw error;
   }
-  const env = {
-    ...state.bootEnv,
-    SEALANT_RECOVERY: "1",
-    SEALANT_SECRET_ENV_FILE: RECOVERY_SECRET_ENV_FILE,
-  };
-  delete env.SEALANT_DOTFILES_ARCHIVE_DIR;
-  // The launch's redactions stay; the recovery token joins them.
-  const recoverySecrets = { ...JSON.parse(body.secretEnvJson) };
-  state.redactions.forEach((value, index) => {
-    recoverySecrets[`launch-${index}`] = value;
-  });
-  state.redactions = redactionsFor(state.controlToken, JSON.stringify(recoverySecrets));
-  state.recovery = true;
-  state.daemonExited = false;
-  state.daemonExit = null;
-  state.daemonOutput = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
-  startDaemon(env);
-  state.recoveryInProgress = false;
-  return json(res, 200, { outcome: "restarted" });
 };
 
 const controlSocketReady = () => existsSync(CONTROL_SOCKET);

@@ -55,8 +55,12 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
   const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
   fs.writeSync(2, secrets.SEALANT_CAPTURE_TOKEN + "\u20ac".repeat(2726));
   process.exit(6);
-} else if (process.env.FAKE_SEALANTD_EXIT75 === "1" && process.env.SEALANT_RECOVERY !== "1") {
-  // A final flush that did not complete: sealantd exits 75 and keeps its staging on the disk.
+} else if (process.env.FAKE_SEALANTD_EXIT75 === "1" && !process.argv.includes("--recovery")) {
+  // A final flush that did not complete: sealantd exits 75 and keeps its staging on the disk,
+  // leaving a writer it started behind (same process group; nothing reaps it).
+  const writer = require("node:child_process").spawn("sleep", ["30"], { stdio: "ignore" });
+  fs.writeFileSync(record + ".writer", String(writer.pid));
+  writer.unref();
   fs.writeSync(2, "Error: final capture incomplete; exiting with EX_TEMPFAIL\\n");
   process.exit(75);
 } else if (process.env.FAKE_SEALANTD_CRASH === "1") {
@@ -833,16 +837,29 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
         argv: string[];
         env: Record<string, string>;
       };
-      expect(record.argv).toEqual(["boot"]);
-      expect(record.env["SEALANT_RECOVERY"]).toBe("1");
+      // `sealantd boot --recovery` with the first boot's environment.
+      expect(record.argv).toEqual(["boot", "--recovery"]);
       expect(record.env["SEALANT_WORKSPACE_SOURCE"]).toBe("capture");
+      expect(record.env["SEALANT_CAPTURE_ENDPOINT"]).toBe("https://mend.example.com/session/s1");
       expect(record.env["SEALANT_DOTFILES_ARCHIVE_DIR"]).toBeUndefined();
+      // Its secret env file is the first boot's, holding the capture token kept for it.
       const secretFile = record.env["SEALANT_SECRET_ENV_FILE"] ?? "";
-      expect(secretFile).toBe(path.join(agent.stateDir, "secrets", "recovery-env.json"));
+      expect(secretFile).toBe(path.join(agent.stateDir, "secrets", "env.json"));
       expect(JSON.parse(await readFile(secretFile, "utf8"))).toEqual({
         SEALANT_CAPTURE_TOKEN: "mst_recovery_token",
       });
       expect((await stat(secretFile)).mode & 0o777).toBe(0o600);
+      // The writer the dead daemon left was killed before anything started.
+      const writer = Number(await readFile(`${agent.recordFile}.writer`, "utf8"));
+      expect(writer).toBeGreaterThan(0);
+      await waitFor(async () => {
+        try {
+          process.kill(writer, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
 
       // It runs now: a second request changes nothing.
       expect(

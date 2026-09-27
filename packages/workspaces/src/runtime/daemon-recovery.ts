@@ -2,9 +2,10 @@
  * Whether an executor's daemon can be restarted IN RECOVERY MODE on its own disk (review 3 #8).
  *
  * Recovery restarts a retained executor — one that ended with work its daemon never confirmed
- * saved — and asks sealantd for its recovery boot (`SEALANT_RECOVERY=1`, or the `/.sealantd-recovery`
- * marker): resume its own staging without materializing over it, no dotfiles, no lifecycle step,
- * no harness, admission closed. A daemon built before that boot existed ignores the request and
+ * saved — and asks sealantd for its recovery boot (`sealantd boot --recovery` on a MicroVM, the
+ * `/.sealantd-recovery` marker in a restarted container): resume its own staging without
+ * materializing over it, no dotfiles, no lifecycle step, no harness, admission closed. A daemon
+ * built before that boot existed ignores the request and
  * runs its ORDINARY boot: it restores the store's head over captures it staged and never shipped
  * and edits it never snapped, and runs the lifecycle steps and the harness again. Restarting such
  * an executor destroys exactly the work it was kept for.
