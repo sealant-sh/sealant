@@ -1638,7 +1638,9 @@ describe("TerminateMicrovm through the live SDK client (review 10 #3)", () => {
       expect(local.accepted()).toBe(1);
       // Its outcome is unknown: still issued and exclusionary — nothing observed or recovered.
       expect(ledger.store.rows.get("run-terminate")?.deletion?.state).toBe("deleting-issued");
-      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate"))).toBe("deleting");
+      expect(
+        await Effect.runPromise(ledger.admitRecovery("run-terminate", { token: "no-claim" })),
+      ).toBe("deleting");
       expect(await Effect.runPromise(ledger.openObservation("run-terminate", 1_000))).toBe(
         undefined,
       );
@@ -1654,7 +1656,12 @@ describe("TerminateMicrovm through the live SDK client (review 10 #3)", () => {
       expect(Exit.isFailure(exit)).toBe(true);
       expect(local.deletes).toEqual([409]);
       expect(ledger.store.rows.get("run-terminate")?.deletion).toBeUndefined();
-      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate"))).toBe("admitted");
+      await Effect.runPromise(ledger.markRetained("run-terminate", "test"));
+      const claim = await Effect.runPromise(ledger.claimRecovery("run-terminate", 60_000));
+      if (claim === undefined) throw new Error("not claimed");
+      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate", claim))).toBe(
+        "admitted",
+      );
     } finally {
       await local.close();
     }

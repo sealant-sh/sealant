@@ -30,6 +30,9 @@ import {
 } from "./capture-drain.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
+/** A recovery ticket that holds no claim: admission answers only what excludes a recovery. */
+const NO_CLAIM = { token: "no-recovery-claim" };
+
 const runtimeInstance = (
   overrides: Partial<WorkspaceRuntimeInstance> = {},
 ): WorkspaceRuntimeInstance => ({
@@ -1552,7 +1555,7 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(admittedDuringRemoval).toEqual([false]);
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
-    expect(await Effect.runPromise(ledger.admitRecovery("run_old"))).toBe("deleted");
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleted");
   });
 
   it("gives the removal up when the runtime refused it, so observations resume", async () => {
@@ -1585,7 +1588,7 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     await expect(stopWith(ledger, harness, stop)).rejects.toThrow("socket hang up");
     expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleting-issued");
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
-    expect(await Effect.runPromise(ledger.admitRecovery("run_old"))).toBe("deleting");
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old", NO_CLAIM))).toBe("deleting");
   });
 });
 

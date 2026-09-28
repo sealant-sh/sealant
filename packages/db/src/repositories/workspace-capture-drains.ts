@@ -197,15 +197,19 @@ export interface WorkspaceCaptureDrainRepoService {
    * on what is current. `held`: another deleter's removal is live — or was issued and its issuer
    * still holds it. `unresolved`: a removal was issued and its issuer's hold lapsed; nobody knows
    * whether the runtime carried it out until it is inspected (`reconcileIssuedDeletion`).
-   * `deleted`: it was removed.
+   * `recovering`: a recovery attempt holds the executor (a live recovery claim, `claimRecovery`)
+   * and `recoveryToken` is not that claim's: nothing but that attempt removes it until the claim
+   * is released or lapses (review 10 residual 2). `deleted`: it was removed.
    */
   readonly authorizeDeletion: (input: {
     readonly runId: string;
     readonly evidenceVersion: number;
     readonly token: string;
     readonly leaseMs: number;
+    /** The recovery claim the deleter holds, when the deleter is that recovery attempt. */
+    readonly recoveryToken?: string | undefined;
   }) => Effect.Effect<
-    "authorized" | "changed" | "held" | "unresolved" | "deleted",
+    "authorized" | "changed" | "held" | "unresolved" | "recovering" | "deleted",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -293,14 +297,22 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * May recovery start the run's executor? `deleting`: a live removal holds it, or one was issued
-   * (`deleting-issued`, whatever its hold: only inspecting the runtime settles it); `deleted`: it
-   * was removed. A removal not yet issued whose hold lapsed is voided (and the evidence version
-   * bumped, so its deleter decides again) and recovery is `admitted`.
+   * May the recovery attempt holding claim `recoveryToken` start the run's executor? `deleting`: a
+   * live removal holds it, or one was issued (`deleting-issued`, whatever its hold: only
+   * inspecting the runtime settles it); `deleted`: it was removed; `unclaimed`: `recoveryToken`
+   * does not hold a live recovery claim (it lapsed, or another attempt holds it) — nothing may be
+   * started under it (review 10 residual 2: admission is only ever given under the claim that
+   * keeps every other deleter off, `authorizeDeletion`). A removal not yet issued whose hold
+   * lapsed is voided (and the evidence version bumped, so its deleter decides again) and recovery
+   * is `admitted`.
    */
   readonly admitRecovery: (input: {
     readonly runId: string;
-  }) => Effect.Effect<"admitted" | "deleting" | "deleted", WorkspaceCaptureDrainRepoError>;
+    readonly recoveryToken: string;
+  }) => Effect.Effect<
+    "admitted" | "deleting" | "deleted" | "unclaimed",
+    WorkspaceCaptureDrainRepoError
+  >;
   /**
    * Record the owner's request to discard the run's unsaved captures (the audit): the first
    * request's instant and requester stand. Returns the row.
@@ -409,6 +421,12 @@ const deletionColumns = {
   deletionToken: workspaceCaptureDrains.deletionToken,
   deletionEvidenceVersion: workspaceCaptureDrains.deletionEvidenceVersion,
   deletionLive: sql<boolean>`coalesce(${workspaceCaptureDrains.deletionExpiresAt} > now(), false)`,
+};
+
+/** The run's recovery claim, with whether it is still live (database clock). */
+const recoveryClaimColumns = {
+  recoveryLeaseToken: workspaceCaptureDrains.recoveryLeaseToken,
+  recoveryLive: sql<boolean>`coalesce(${workspaceCaptureDrains.recoveryLeaseUntil} > now(), false)`,
 };
 
 /** The removal state, the evidence version and the fences (select under the row lock). */
@@ -731,6 +749,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   evidenceVersion: workspaceCaptureDrains.evidenceVersion,
                   observationFences: workspaceCaptureDrains.observationFences,
                   ...deletionColumns,
+                  ...recoveryClaimColumns,
                 })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
@@ -745,6 +764,14 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 // Issued: never re-authorized over. Its issuer still holds it, or nobody knows
                 // whether the runtime carried it out until it is inspected (review 8 #7).
                 return current.deletionLive ? ("held" as const) : ("unresolved" as const);
+              }
+              if (
+                current.recoveryLive &&
+                current.recoveryLeaseToken !== (input.recoveryToken ?? null)
+              ) {
+                // A recovery attempt was admitted under its live claim: only that attempt removes
+                // the executor until the claim ends (review 10 residual 2).
+                return "recovering" as const;
               }
               if (
                 current.deletionState === "deleting" &&
@@ -984,18 +1011,31 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           db.transaction((tx) =>
             Effect.gen(function* () {
               const [current] = yield* tx
-                .select(deletionColumns)
+                .select({ ...deletionColumns, ...recoveryClaimColumns })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
-              if (current === undefined || current.deletionState === null) {
-                return "admitted" as const;
-              }
-              if (current.deletionState === "deleted") {
+              if (current?.deletionState === "deleted") {
                 return "deleted" as const;
               }
-              if (current.deletionState === "deleting-issued" || current.deletionLive) {
+              if (
+                current !== undefined &&
+                (current.deletionState === "deleting-issued" ||
+                  (current.deletionState === "deleting" && current.deletionLive))
+              ) {
                 return "deleting" as const;
+              }
+              // Admitted only under the live claim that keeps every other deleter off
+              // (`authorizeDeletion`): what it starts, no one else removes until it ends.
+              if (
+                current === undefined ||
+                !current.recoveryLive ||
+                current.recoveryLeaseToken !== input.recoveryToken
+              ) {
+                return "unclaimed" as const;
+              }
+              if (current.deletionState === null) {
+                return "admitted" as const;
               }
               // Its deleter's hold lapsed before it issued anything: voided, and its deleter
               // decides again.

@@ -35,6 +35,9 @@ import {
 } from "./capture-drain.js";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
+/** A recovery ticket that holds no claim: admission answers only what excludes a recovery. */
+const NO_CLAIM = { token: "no-recovery-claim" };
+
 const TARGET: SealantTarget = { kind: "unix-socket", socketPath: "/run/sealant/control.sock" };
 
 const worker = (db: DB, owner: string, leaseMs = 60_000): CaptureDrainLedger =>
@@ -375,7 +378,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     // Another deleter: the removal is held.
     expect((await Effect.runPromise(b.authorizeDeletion(runId, version))).kind).toBe("held");
     // Recovery does not start it under the removal.
-    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
     // Held and untouched: the deleter's re-check passes.
     expect(await Effect.runPromise(a.confirmDeletion(runId, authorization.ticket))).toBe(true);
     // A status received anyway (asked without a fence): recorded, and the removal is voided.
@@ -407,7 +410,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(await Effect.runPromise(a.confirmDeletion(runId, authorization.ticket))).toBe(true);
     await Effect.runPromise(a.completeDeletion(runId, authorization.ticket));
     expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
-    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleted");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleted");
     const again = await Effect.runPromise(b.read(runId));
     const current = again.readable ? (again.entry?.evidenceVersion ?? -1) : -1;
     expect((await Effect.runPromise(b.authorizeDeletion(runId, current))).kind).toBe("deleted");
@@ -457,7 +460,14 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     );
     expect(await lapsingRemoval()).toBe("authorized");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(await repo((drains) => drains.admitRecovery({ runId }))).toBe("admitted");
+    await repo((drains) => drains.markRetained({ runId, reason: "test" }));
+    const recoveryToken = randomUUID();
+    expect(
+      await repo((drains) =>
+        drains.claimRecovery({ runId, token: recoveryToken, leaseMs: 60_000 }),
+      ),
+    ).toBe(true);
+    expect(await repo((drains) => drains.admitRecovery({ runId, recoveryToken }))).toBe("admitted");
     expect((await repo((drains) => drains.getByRunId(runId)))?.deletionState).toBeNull();
   });
 
@@ -509,7 +519,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     await new Promise((resolve) => setTimeout(resolve, 400));
     // Past the hold, the runtime call still out: nothing is admitted.
     expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
-    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
     expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).not.toBe(
       "authorized",
     );
@@ -517,7 +527,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(await deleting).toMatchObject({ removed: true });
     const after = await Effect.runPromise(b.read(runId));
     expect(after.readable && after.entry?.last?.headN).toBe(7);
-    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleted");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleted");
   });
 
   it("settles an issued removal whose issuer died from what the runtime says (review 8 #7)", async () => {
@@ -572,7 +582,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         drains.openObservation({ runId: gone.runId, token: randomUUID(), ttlMs: 1_000 }),
       ),
     ).toEqual({ refused: "deleting" });
-    expect(await repo((drains) => drains.admitRecovery({ runId: gone.runId }))).toBe("deleting");
+    expect(
+      await repo((drains) =>
+        drains.admitRecovery({ runId: gone.runId, recoveryToken: "no-claim" }),
+      ),
+    ).toBe("deleting");
     const goneRow = await repo((drains) => drains.getByRunId(gone.runId));
     expect(
       await repo((drains) =>
@@ -624,7 +638,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
       ),
     ).toEqual({ refused: "deleting" });
-    expect(await repo((drains) => drains.admitRecovery({ runId: changed.runId }))).toBe("deleting");
+    expect(
+      await repo((drains) =>
+        drains.admitRecovery({ runId: changed.runId, recoveryToken: "no-claim" }),
+      ),
+    ).toBe("deleting");
     // Past the runtime's bound on the request since it was issued: it can no longer act; given
     // up, and observations resume.
     expect(await reconcile(changed.runId, "present", 10)).toBe("released");
@@ -660,7 +678,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(Exit.isFailure(exit)).toBe(true);
     const after = await Effect.runPromise(ledger.read(runId));
     expect(after.readable && after.entry?.removalIssued).toBe(true);
-    expect(await Effect.runPromise(ledger.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(ledger.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
     expect(await Effect.runPromise(ledger.openObservation(runId, 1_000))).toBeUndefined();
     // Its hold ended with the call: settled from the runtime at once.
     expect((await Effect.runPromise(ledger.reconcileIssuedDeletion(runId, "gone"))).kind).toBe(
@@ -939,9 +957,42 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(after.readable && after.entry?.removalIssued).toBe(true);
     expect(after.readable && after.entry?.last?.headN).toBe(8);
     expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
-    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
     expect(
       await Effect.runPromise(a.reconcileIssuedDeletion(runId, "present", 60 * 60_000)),
     ).toEqual({ kind: "outstanding" });
+  });
+
+  // Review 10 residual 2: on two workers, a recovery admitted under its live claim keeps the other
+  // worker's removal off until the claim ends; the attempt removes under its own claim.
+  it("refuses another worker's removal while an admitted recovery holds its claim (review 10 residual 2)", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "recovery-a");
+    const b = worker(dbB, "deleter-b");
+    await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+    expect(await Effect.runPromise(a.markRetained(runId, "test"))).toBe(true);
+    const lapsing = await Effect.runPromise(a.claimRecovery(runId, 1));
+    if (lapsing === undefined) throw new Error("not claimed");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await Effect.runPromise(a.admitRecovery(runId, lapsing))).toBe("unclaimed");
+    const claim = await Effect.runPromise(a.claimRecovery(runId, 60_000));
+    if (claim === undefined) throw new Error("not claimed");
+    expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("unclaimed");
+    expect(await Effect.runPromise(a.admitRecovery(runId, claim))).toBe("admitted");
+    const version = async () => {
+      const read = await Effect.runPromise(b.read(runId));
+      return read.readable ? (read.entry?.evidenceVersion ?? 0) : -1;
+    };
+    expect(await Effect.runPromise(b.authorizeDeletion(runId, await version()))).toEqual({
+      kind: "recovering",
+    });
+    const own = await Effect.runPromise(a.authorizeDeletion(runId, await version(), claim));
+    expect(own.kind).toBe("authorized");
+    if (own.kind !== "authorized") throw new Error(own.kind);
+    await Effect.runPromise(a.releaseDeletion(runId, own.ticket));
+    await Effect.runPromise(a.releaseRecovery(runId, claim));
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).toBe(
+      "authorized",
+    );
   });
 });
