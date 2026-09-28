@@ -277,6 +277,20 @@ export interface CaptureDrainLedger {
   readonly markRetained: (runId: string, reason: string) => Effect.Effect<void>;
 }
 
+/**
+ * The ledger, with `onRetained` called after every executor it records retained: the worker
+ * starts a recovery sweep at once rather than on its next tick, so a retained executor's first
+ * recovery attempt follows its exit within seconds.
+ */
+export const notifyingRetention = (
+  ledger: CaptureDrainLedger,
+  onRetained: (runId: string) => void,
+): CaptureDrainLedger => ({
+  ...ledger,
+  markRetained: (runId, reason) =>
+    ledger.markRetained(runId, reason).pipe(Effect.tap(() => Effect.sync(() => onRetained(runId)))),
+});
+
 /** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
 export class InMemoryCaptureDrainStore {
   readonly rows = new Map<

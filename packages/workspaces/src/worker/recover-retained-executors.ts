@@ -76,8 +76,14 @@ export interface RecoveryBackoff {
   readonly maxMs: number;
 }
 
+/**
+ * The first attempt runs as soon as the executor is retained (the worker starts a sweep when it
+ * records one); a failed attempt is retried after 10 s, then 20 s, 40 s, … up to an hour. A
+ * recovery that races a control plane still letting go of the session (a boot refused its plan)
+ * gets its next chance within seconds, not minutes.
+ */
 export const DEFAULT_RECOVERY_BACKOFF: RecoveryBackoff = {
-  baseMs: 60_000,
+  baseMs: 10_000,
   maxMs: 60 * 60_000,
 };
 
@@ -92,6 +98,11 @@ export interface RecoverRetainedExecutorsOptions {
   };
   /** Retained executors handled per sweep, the most overdue first. Default 10. */
   readonly maxPerTick?: number;
+  /**
+   * Only these runs: the executors just recorded retained, recovered at once rather than behind
+   * whatever else is due. Absent: every due retention.
+   */
+  readonly runIds?: readonly string[];
   readonly backoff?: RecoveryBackoff;
   readonly now?: () => number;
   /**
@@ -151,8 +162,12 @@ export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutor
   options: RecoverRetainedExecutorsOptions,
 ) {
   const drains = yield* WorkspaceCaptureDrainRepo;
+  if (options.runIds !== undefined && options.runIds.length === 0) {
+    return new Map<string, RecoveryOutcome>();
+  }
   const due = yield* drains.listRetainedDue({
     limit: options.maxPerTick ?? DEFAULT_MAX_PER_TICK,
+    ...(options.runIds === undefined ? {} : { runIds: options.runIds }),
   });
   const outcomes = new Map<string, RecoveryOutcome>();
   for (const row of due) {

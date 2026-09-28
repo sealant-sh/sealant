@@ -518,6 +518,10 @@ export const workerRuntimeEnvSchema = z.object({
   // events`) and Kubernetes (a Pod watch) also report exits as they happen; this poll is the
   // convergence net behind those streams and the only mechanism for poll-only runtimes.
   WORKSPACE_RUNTIME_EXIT_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  // How often the worker looks for retained executors whose next recovery attempt is due (one
+  // indexed query). A newly retained executor is also recovered at once, and an owner's
+  // `recover` makes its attempt due now: this bounds how long either waits.
+  WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   // Drain before stop (no loss of work product): before any platform-initiated stop of a
   // capture-sourced workspace the worker flushes its daemon and polls the capture queue until it
   // is empty. A daemon that answers but whose queue does not move for the stall window keeps its

@@ -2,7 +2,14 @@ import type { ReactNode } from "react";
 
 import { WorkspacePage } from "@/components/app/workspace-page";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
+type WorkspaceStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stopped"
+  | "retained";
 
 interface WorkspaceDetail {
   readonly workspaceId: string;
@@ -129,6 +136,8 @@ function statusPresentation(status: WorkspaceStatus): {
         dotClassName: "border-[1.5px] border-input bg-transparent",
         textClassName: "text-ink-2",
         label: "Stopped",
-      };
+      }; // Ended with work not confirmed saved: kept with its disk while the platform recovers it.
+    case "retained":
+      return { dotClassName: "bg-warning-dot", textClassName: "text-warning", label: "Retained" };
   }
 }
