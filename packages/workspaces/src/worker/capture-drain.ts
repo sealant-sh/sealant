@@ -1672,6 +1672,11 @@ export const describeCaptureStatus = (status: CaptureFlushReport): string => {
     ...(status.paused ? ["paused"] : []),
     ...(status.refused.length === 0 ? [] : [`refused ${status.refused.join(", ")}`]),
     ...(snapFailure === undefined ? [] : [snapFailure]),
+    ...(status.overdue === undefined
+      ? []
+      : [
+          `overdue: ${clip(status.overdue.step)} running ${String(Math.round(status.overdue.runningMs / 1000))} s (bound ${String(Math.round(status.overdue.boundMs / 1000))} s)`,
+        ]),
     ...(status.unreadable === undefined || status.unreadable === 0
       ? []
       : [

@@ -229,6 +229,20 @@ describe("workspace capture routes", () => {
       lastSnapError: "File name too long (os error 36)",
       snapFailingSinceUnixMs: 1_757_760_000_000,
       snapsFailed: 12,
+      origin: {
+        epoch: 3,
+        launch: "launch-1",
+        bootId: "boot-1",
+        bootGeneration: 1,
+        observation: 12,
+        headN: 7,
+      },
+      overdue: {
+        step: "small snap › git cat-file --batch-check",
+        startedUnixMs: 1_757_760_000_000,
+        runningMs: 95_000,
+        boundMs: 60_000,
+      },
     };
     // The handler returns the session's report verbatim: the success schema neither drops nor
     // rewrites any of it on the way out, and a client decodes it back whole.

@@ -224,6 +224,12 @@ describe("workspace.capture", () => {
         observation: 12,
         headN: 41,
       },
+      overdue: {
+        step: "small snap › git cat-file --batch-check",
+        startedUnixMs: 1_757_760_000_000,
+        runningMs: 95_000,
+        boundMs: 60_000,
+      },
     };
     expect(Object.keys(full).toSorted()).toEqual(
       Object.keys(workspaceCaptureStatusSchema.fields).toSorted(),
@@ -249,6 +255,8 @@ describe("workspace.capture", () => {
       "lastSnapError",
       "snapFailingSinceUnixMs",
       "snapsFailed",
+      "origin",
+      "overdue",
     ]) {
       expect(key in status).toBe(false);
     }
