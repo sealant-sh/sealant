@@ -1,11 +1,13 @@
 export {
   credentialFileInjectionSchema,
+  isRemovalRefusal,
   parseRuntimeAdapterInspectResult,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   publishedImageSchema,
+  removalRefused,
   runtimeAdapterBlueprintSchema,
   runtimeAdapterExitEventSchema,
   runtimeAdapterIdSchema,

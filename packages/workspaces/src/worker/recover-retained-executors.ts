@@ -300,6 +300,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
       ledger,
       runId,
       runtime: state,
+      removalFenceMs: adapter.removalFenceMs,
       decide: (record) =>
         decideExecutorDeletion({
           captureSourced: true,
@@ -512,6 +513,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         ledger,
         runId,
         runtime: "running",
+        removalFenceMs: adapter.removalFenceMs,
         decide: (record) => {
           const evidence = recordedDeletionEvidence(record, executor);
           return decideExecutorDeletion({

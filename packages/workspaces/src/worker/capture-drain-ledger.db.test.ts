@@ -554,9 +554,15 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     };
     const state = async (runId: string) =>
       (await repo((drains) => drains.getByRunId(runId)))?.deletionState;
-    const reconcile = (runId: string, runtime: "gone" | "present") =>
+    const reconcile = (runId: string, runtime: "gone" | "present", fenceMs?: number) =>
       repo((drains) =>
-        drains.reconcileIssuedDeletion({ runId, runtime, token: randomUUID(), leaseMs: 60_000 }),
+        drains.reconcileIssuedDeletion({
+          runId,
+          runtime,
+          token: randomUUID(),
+          leaseMs: 60_000,
+          ...(fenceMs === undefined ? {} : { fenceMs }),
+        }),
       );
 
     // Lapsed and issued: still exclusionary.
@@ -607,13 +613,59 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       ),
     );
     expect(await state(changed.runId)).toBe("deleting-issued");
-    expect(await reconcile(changed.runId, "present")).toBe("released");
+    // Review 9 #5: present proves only that the request has not finished. It stays issued and
+    // exclusionary while the request may still act — with no bound from the runtime, or before
+    // the runtime's bound has passed since it was issued.
+    expect(await reconcile(changed.runId, "present")).toBe("outstanding");
+    expect(await reconcile(changed.runId, "present", 60 * 60_000)).toBe("outstanding");
+    expect(await state(changed.runId)).toBe("deleting-issued");
+    expect(
+      await repo((drains) =>
+        drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
+      ),
+    ).toEqual({ refused: "deleting" });
+    expect(await repo((drains) => drains.admitRecovery({ runId: changed.runId }))).toBe("deleting");
+    // Past the runtime's bound on the request since it was issued: it can no longer act; given
+    // up, and observations resume.
+    expect(await reconcile(changed.runId, "present", 10)).toBe("released");
     expect(await state(changed.runId)).toBeNull();
     expect(
       await repo((drains) =>
         drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
       ),
     ).toHaveProperty("openedAt");
+  });
+
+  it("keeps a removal issued when its runtime call failed with an outcome nobody knows (review 9 #5)", async () => {
+    const runId = await newRun();
+    const ledger = worker(dbA, "review9-deletion");
+    await Effect.runPromise(ledger.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+    const read = await Effect.runPromise(ledger.read(runId));
+    const authorized = await Effect.runPromise(
+      ledger.authorizeDeletion(runId, read.readable ? (read.entry?.evidenceVersion ?? 0) : -1),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    const exit = await Effect.runPromise(
+      removeUnderDeletion({
+        ledger,
+        runId,
+        ticket: authorized.ticket,
+        remove: Effect.tryPromise(async () => {
+          throw new Error("socket closed after TerminateMicrovm was sent");
+        }),
+      }).pipe(Effect.exit),
+    );
+    expect(exit._tag).toBe("Failure");
+    const after = await Effect.runPromise(ledger.read(runId));
+    expect(after.readable && after.entry?.removalIssued).toBe(true);
+    expect(await Effect.runPromise(ledger.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(ledger.openObservation(runId, 1_000))).toBeUndefined();
+    // Its hold ended with the call: settled from the runtime at once.
+    expect((await Effect.runPromise(ledger.reconcileIssuedDeletion(runId, "gone"))).kind).toBe(
+      "deleted",
+    );
   });
 
   it("keeps an unsaved answer no later one covers, so a delayed older answer cannot revive a seal (review 9 #4)", async () => {

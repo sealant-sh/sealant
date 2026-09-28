@@ -9,6 +9,7 @@
 import { Effect, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
+import { removalRefused } from "../runtime/runtime-adapter.js";
 import type { CaptureFlushReport, SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
@@ -1234,27 +1235,195 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     expect(state()).toBe("deleted");
   });
 
-  it("gives it up, loudly, when the evidence changed since it was authorized", async () => {
-    const { ledger, state } = await lapsedIssue();
-    // A status recorded anyway (asked without a fence) is kept as evidence, and no longer voids
-    // an issued removal: it stays until the runtime says.
-    await run(
+  /** A status recorded anyway (asked without a fence): kept as evidence, voiding nothing issued. */
+  const changeEvidence = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>) =>
+    run(
       ledger.recordStatus(
         "run_issued",
         captureStatus({ complete: false, incompleteReason: "snapshot-failed", headN: 8 }),
         0,
       ),
     );
+
+  // Review 9 #5 (decision 27): the runtime still having the executor proves only that the
+  // earlier request has not finished. With the evidence changed it may not be issued again, and
+  // it is not given up either: it stays issued, and the executor is kept.
+  it("keeps it issued while the request may still act, though the evidence changed since it was authorized (review 9 #5)", async () => {
+    const { ledger, state, advance } = await lapsedIssue();
+    await changeEvidence(ledger);
+    expect(state()).toBe("deleting-issued");
+    const settled = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: keepRunning,
+      }),
+    );
+    expect(settled.decision.delete).toBe(false);
+    expect(settled.heldElsewhere).toBe(true);
     expect(state()).toBe("deleting-issued");
     expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
+    expect(await run(ledger.admitRecovery("run_issued"))).toBe("deleting");
+    // A runtime that gives no bound on a removal request: never given up while it has the
+    // executor, however long.
+    advance(24 * 60 * 60_000);
+    const unbounded = await run(
+      authorizedDeletion({ ledger, runId: "run_issued", runtime: "exited", decide: keepRunning }),
+    );
+    expect(unbounded.heldElsewhere).toBe(true);
+    expect(state()).toBe("deleting-issued");
+  });
+
+  it("gives it up once the runtime's bound on the request has passed since it was issued (review 9 #5)", async () => {
+    const { ledger, state, advance } = await lapsedIssue();
+    await changeEvidence(ledger);
+    // Issued at 0; the hold lapsed at 121 s. The bound (20 min) has not passed yet.
+    const early = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: keepRunning,
+      }),
+    );
+    expect(early.heldElsewhere).toBe(true);
+    advance(20 * 60_000);
     const settled = await run(
-      authorizedDeletion({ ledger, runId: "run_issued", runtime: "running", decide: keepRunning }),
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: keepRunning,
+      }),
     );
     expect(settled.decision.delete).toBe(false);
     expect(settled.heldElsewhere).toBeUndefined();
     expect(state()).toBeUndefined();
     // Decided again on what is current: observations resume.
     expect(await run(ledger.openObservation("run_issued", 1_000))).toBeDefined();
+  });
+
+  // Review 9 #5: a runtime call that failed after the provider may have accepted it (a lost
+  // reply) is not a refusal: the provider may still act on it.
+  it("keeps a removal issued when its runtime call fails with an outcome nobody knows (review 9 #5)", async () => {
+    let clock = 0;
+    const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+    await run(ledger.recordStatus("run_lost", savedStatus({ headN: 7 }), clock));
+    const authorized = await run(
+      ledger.authorizeDeletion("run_lost", await versionOf(ledger, "run_lost")),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    const exit = await Effect.runPromise(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_lost",
+        ticket: authorized.ticket,
+        remove: Effect.tryPromise(async () => {
+          throw new Error("socket closed after the request was sent");
+        }),
+      }).pipe(Effect.exit),
+    );
+    expect(exit._tag).toBe("Failure");
+    const row = ledger.store.rows.get("run_lost");
+    expect(row?.deletion?.state).toBe("deleting-issued");
+    expect(await run(ledger.admitRecovery("run_lost"))).toBe("deleting");
+    expect(await run(ledger.openObservation("run_lost", 1_000))).toBeUndefined();
+    // Its hold ended with the call: it is settled from the runtime at once, not 120 s later.
+    clock += 1;
+    const settled = await run(
+      authorizedDeletion({ ledger, runId: "run_lost", runtime: "missing", decide: keepRunning }),
+    );
+    expect(settled.decision.delete).toBe(false);
+    expect(row?.deletion?.state).toBe("deleted");
+  });
+
+  it("gives a removal up when the runtime definitively refused it (review 9 #5)", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    await run(ledger.recordStatus("run_refused", savedStatus({ headN: 7 }), 0));
+    const authorized = await run(
+      ledger.authorizeDeletion("run_refused", await versionOf(ledger, "run_refused")),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    const exit = await Effect.runPromise(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_refused",
+        ticket: authorized.ticket,
+        remove: Effect.tryPromise(async () => {
+          throw removalRefused(new Error("ConflictException: the MicroVM is SUSPENDING"));
+        }),
+      }).pipe(Effect.exit),
+    );
+    expect(exit._tag).toBe("Failure");
+    expect(ledger.store.rows.get("run_refused")?.deletion).toBeUndefined();
+    expect(await run(ledger.admitRecovery("run_refused"))).toBe("admitted");
+  });
+
+  // The review's second case: a removal still running past its hold, fresh unsaved evidence
+  // recorded without a fence, the runtime reporting the executor present. Nothing reopens before
+  // the provider finishes.
+  it("admits nothing while a removal whose evidence changed is still with the provider (review 9 #5)", async () => {
+    let clock = 0;
+    const base = inMemoryCaptureDrainLedger({ now: () => clock });
+    const ledger: CaptureDrainLedger = { ...base, confirmDeletion: () => Effect.succeed(false) };
+    await run(ledger.recordStatus("run_slow", savedStatus({ headN: 7 }), clock));
+    const authorized = await run(
+      ledger.authorizeDeletion("run_slow", await versionOf(base, "run_slow")),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    let finish!: () => void;
+    let began!: () => void;
+    const started = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const pending = run(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_slow",
+        ticket: authorized.ticket,
+        remove: Effect.promise(() => {
+          began();
+          return new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        }),
+      }),
+    );
+    await started;
+    clock = 121_000;
+    await run(
+      ledger.recordStatus(
+        "run_slow",
+        captureStatus({ complete: false, incompleteReason: "snapshot-failed", headN: 8 }),
+        clock,
+      ),
+    );
+    const decision = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_slow",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: () => ({ delete: false, reason: "new evidence" }),
+      }),
+    );
+    expect(decision.heldElsewhere).toBe(true);
+    expect(base.store.rows.get("run_slow")?.deletion?.state).toBe("deleting-issued");
+    expect(await run(ledger.admitRecovery("run_slow"))).toBe("deleting");
+    expect(await run(ledger.openObservation("run_slow", 1_000))).toBeUndefined();
+    finish();
+    expect(await pending).toMatchObject({ removed: true });
+    expect(base.store.rows.get("run_slow")?.deletion?.state).toBe("deleted");
   });
 
   it("keeps it issued while its issuer holds it, or while the runtime cannot say", async () => {

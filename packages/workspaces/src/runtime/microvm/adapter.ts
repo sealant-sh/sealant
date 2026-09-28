@@ -47,6 +47,7 @@ import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterStopInput,
   parseRuntimeAdapterSupportInput,
+  removalRefused,
   type RuntimeAdapter,
   type RuntimeAdapterExitWatch,
   type RuntimeAdapterExitWatchInput,
@@ -83,7 +84,12 @@ import {
   type AgentRecoverRequest,
   type RunHookPayload,
 } from "./agent-contract.js";
-import type { MicrovmApi, MicrovmDescription, MicrovmRunInput } from "./api.js";
+import {
+  isServiceRefusal,
+  type MicrovmApi,
+  type MicrovmDescription,
+  type MicrovmRunInput,
+} from "./api.js";
 import type { MicrovmRuntimeConfig } from "./config.js";
 import { MicrovmEndpointTokens } from "./endpoint-tokens.js";
 import { parseMicrovmImageReference } from "./image-reference.js";
@@ -105,8 +111,24 @@ export interface MicrovmRuntimeAdapterOptions {
 const POLL_INTERVAL_MS = 1000;
 const RUN_HOOK_PAYLOAD_MAX_BYTES = 4_096;
 
+/** The bound on the stop's read of the VM before it asks for the termination (review 9 #5). */
+export const MICROVM_STOP_READ_BOUND_MS = 30_000;
+/** The bound on TerminateMicrovm, retries included: nothing of it is signed after this. */
+export const MICROVM_TERMINATE_BOUND_MS = 60_000;
+/**
+ * How long a TerminateMicrovm issued for a removal can still act (review 9 #5, decision 27):
+ * every request of it is signed within the two bounds above of the removal being issued, and AWS
+ * accepts a SigV4-signed request only within 15 minutes of its signing time (5 for most
+ * services). Past this, a VM the platform still has was not terminated by it and never will be.
+ */
+export const MICROVM_REMOVAL_FENCE_MS =
+  MICROVM_STOP_READ_BOUND_MS + MICROVM_TERMINATE_BOUND_MS + 15 * 60_000 + 3 * 60_000;
+
 const createAdapterError = (code: string, message: string): Error & { code: string } =>
   Object.assign(new Error(message), { code });
+
+const describeError = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /** Docker client selection belongs to the guest service; launch material cannot redirect it. */
 const MICROVM_DOCKER_RESERVED_ENV_NAMES = [
@@ -524,6 +546,7 @@ const describeEnded = (vm: MicrovmDescription): string =>
 
 export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   readonly id = "microvm" as const;
+  readonly removalFenceMs = MICROVM_REMOVAL_FENCE_MS;
 
   readonly #config: MicrovmRuntimeConfig;
   readonly #api: MicrovmApi;
@@ -743,12 +766,45 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
   async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
     const parsed = parseRuntimeAdapterStopInput(input);
     const microvmId = parsed.resourceId;
-    const existing = await this.#api.getMicrovm(microvmId);
+    // Both calls are bounded, so nothing of this removal is signed (and can act) past
+    // `removalFenceMs` of it being issued. A failure before TerminateMicrovm was sent, or the
+    // service's own refusal of it, is definitive (`removalRefused`); any other failure of it is
+    // an outcome nobody knows (review 9 #5).
+    let existing: MicrovmDescription | undefined;
+    try {
+      existing = await this.#api.getMicrovm(microvmId, {
+        signal: AbortSignal.timeout(MICROVM_STOP_READ_BOUND_MS),
+      });
+    } catch (error) {
+      throw removalRefused(
+        Object.assign(
+          createAdapterError(
+            "adapter-unavailable",
+            `Reading MicroVM ${microvmId} before terminating it failed; nothing was asked of the platform: ${describeError(error)}`,
+          ),
+          { cause: error },
+        ),
+      );
+    }
     // The stop that INITIATES teardown reports "stopped"; any later one "not-found" (a
     // TERMINATING VM is one the platform is already tearing down). TerminateMicrovm is
     // idempotent on the platform, so the call below is safe either way.
     const alreadyEnded = existing === undefined || isEnded(existing.state);
-    const terminated = await this.#api.terminateMicrovm(microvmId);
+    let terminated: "terminated" | "not-found";
+    try {
+      terminated = await this.#api.terminateMicrovm(microvmId, {
+        signal: AbortSignal.timeout(MICROVM_TERMINATE_BOUND_MS),
+      });
+    } catch (error) {
+      const failure = Object.assign(
+        createAdapterError(
+          "adapter-unavailable",
+          `TerminateMicrovm for ${microvmId} failed: ${describeError(error)}`,
+        ),
+        { cause: error },
+      );
+      throw isServiceRefusal(error) ? removalRefused(failure) : failure;
+    }
     const outcome = alreadyEnded || terminated === "not-found" ? "not-found" : "stopped";
     if (parsed.fence === true) {
       await this.#awaitTerminated(microvmId);

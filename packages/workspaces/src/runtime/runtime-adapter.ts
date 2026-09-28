@@ -343,8 +343,44 @@ export const nothingToSaveDetail = (output: string | undefined): string => {
   );
 };
 
+/**
+ * Mark an error from a removal call (`stop`) as the runtime's DEFINITIVE refusal (review 9 #5,
+ * decision 27): the provider answered and did not act, or nothing was sent to it at all. Only
+ * such a failure gives up a removal that was issued (`removeUnderDeletion`); any other failure —
+ * a transport error after the request may have gone out, a timeout, an abort — is an outcome
+ * nobody knows, and the removal stays issued and exclusionary until the runtime is inspected.
+ */
+export const removalRefused = <T extends Error>(error: T): T & { readonly removalRefused: true } =>
+  Object.assign(error, { removalRefused: true as const });
+
+/** Whether an error (or any error it was caused by) is the runtime's definitive refusal. */
+export const isRemovalRefusal = (error: unknown): boolean => {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null) {
+      return false;
+    }
+    if ("removalRefused" in current && current.removalRefused === true) {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
+};
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
+  /**
+   * Optional: the provider's own bound on a removal request (review 9 #5, decision 27): once this
+   * long has passed since a removal was issued, nothing that removal sent can still act on the
+   * runtime (the provider rejects the request or has settled it), so an executor the runtime still
+   * has was not removed by it and never will be. An issued removal whose outcome is unknown and
+   * whose evidence changed since is given up only past it. Absent: the runtime gives no such
+   * bound, and such a removal stays issued (the executor kept, nothing observed or recovered)
+   * until the runtime no longer has the executor or the evidence it was authorized on stands
+   * again.
+   */
+  readonly removalFenceMs?: number;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
   /**

@@ -14,13 +14,19 @@ import type { SealantTarget } from "../../sealantd/runtime.js";
 import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
 import { LaunchRetainedError } from "../launch-retention.js";
-import type { CredentialFileInjection, PublishedImage } from "../runtime-adapter.js";
+import {
+  isRemovalRefusal,
+  type CredentialFileInjection,
+  type PublishedImage,
+} from "../runtime-adapter.js";
 import {
   buildRunInput,
   microvmDeadline,
   clientTokenForRun,
   endpointHost,
   microvmBootEnv,
+  MICROVM_STOP_READ_BOUND_MS,
+  MICROVM_TERMINATE_BOUND_MS,
   MicrovmRuntimeAdapter,
   supportForMicrovm,
 } from "./adapter.js";
@@ -1092,6 +1098,59 @@ describe("MicrovmRuntimeAdapter.stop", () => {
     await adapter.launch(captureLaunch);
     await expect(adapter.stop({ resourceId: "microvm-1", fence: true })).rejects.toThrow(
       /still TERMINATING .* the fence is not confirmed/,
+    );
+  });
+
+  // Review 9 #5 (decision 27): only the platform's own refusal, or a failure before anything
+  // was sent, is definitive; a TerminateMicrovm that failed any other way may have been taken.
+  it("tells a refused termination from one whose outcome nobody knows (review 9 #5)", async () => {
+    const serviceError = (status: number) =>
+      Object.assign(new Error(status === 409 ? "ConflictException" : "InternalFailure"), {
+        $metadata: { httpStatusCode: status },
+      });
+    const failing = (failure: { readonly get?: Error; readonly terminate?: Error }) => {
+      const api = new FakeMicrovmApi();
+      const signals: (AbortSignal | undefined)[] = [];
+      const adapter = new MicrovmRuntimeAdapter({
+        config,
+        api: {
+          ...api,
+          getMicrovm: (id, options) => {
+            signals.push(options?.signal);
+            return failure.get === undefined ? api.getMicrovm(id) : Promise.reject(failure.get);
+          },
+          terminateMicrovm: (id, options) => {
+            signals.push(options?.signal);
+            return failure.terminate === undefined
+              ? api.terminateMicrovm(id)
+              : Promise.reject(failure.terminate);
+          },
+        },
+        pollIntervalMs: 1,
+      });
+      return { adapter, signals };
+    };
+    const outcome = (adapter: MicrovmRuntimeAdapter) =>
+      adapter.stop({ resourceId: "microvm-1" }).then(
+        () => "stopped",
+        (error: unknown) => (isRemovalRefusal(error) ? "refused" : "unknown"),
+      );
+    // The service answered and did not act.
+    expect(await outcome(failing({ terminate: serviceError(409) }).adapter)).toBe("refused");
+    // Nothing was sent: the read before it failed.
+    expect(await outcome(failing({ get: new Error("socket hang up") }).adapter)).toBe("refused");
+    // A lost reply, a server fault, an abort: the platform may have taken it.
+    expect(await outcome(failing({ terminate: new Error("socket hang up") }).adapter)).toBe(
+      "unknown",
+    );
+    expect(await outcome(failing({ terminate: serviceError(500) }).adapter)).toBe("unknown");
+    // Every call of the stop is bounded (nothing of it is signed past the adapter's fence).
+    const bounded = failing({});
+    expect(await outcome(bounded.adapter)).toBe("stopped");
+    expect(bounded.signals).toHaveLength(2);
+    expect(bounded.signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    expect(bounded.adapter.removalFenceMs).toBeGreaterThanOrEqual(
+      MICROVM_STOP_READ_BOUND_MS + MICROVM_TERMINATE_BOUND_MS + 15 * 60_000,
     );
   });
 });

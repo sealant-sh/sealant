@@ -41,6 +41,7 @@ import {
   nothingToSaveDetail,
   SEALANTD_EXIT_NOTHING_TO_SAVE,
   parseRuntimeAdapterLaunchInput,
+  removalRefused,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterStopInput,
   parseRuntimeAdapterStopResult,
@@ -476,6 +477,16 @@ const isNoSuchContainerError = (error: unknown): boolean => {
  * and the exit reconciler removing the same ended container): not a failure of the stop, which
  * waits for that removal instead.
  */
+/** The Docker CLI relayed the daemon's own error answer (the request was answered, not lost). */
+const isDaemonErrorResponse = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /error response from daemon/i.test(text);
+};
+
 const isRemovalInProgressError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
     return false;
@@ -1850,6 +1861,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       await this.commandRunner("docker", ["rm", "-f", "-v", parsed.resourceId]);
     } catch (error) {
       let gone = isNoSuchContainerError(error);
+      let present = false;
       if (!gone) {
         // The error prose didn't identify a missing container. Check structurally before failing
         // so idempotency doesn't hinge on docker's error copy: a follow-up inspect that itself
@@ -1857,21 +1869,29 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         // exists) or fails differently (daemon unreachable) means the rm failure is real.
         try {
           await this.inspectContainerState(parsed.resourceId);
+          present = true;
         } catch (inspectError) {
           gone = isNoSuchContainerError(inspectError);
         }
       }
-      if (!gone && isRemovalInProgressError(error)) {
+      const inProgress = isRemovalInProgressError(error);
+      if (!gone && inProgress) {
         // Another removal of this container is under way: wait for it rather than fail a stop
         // that is completing (and record `stop-failed` for it).
         gone = await this.awaitContainerGone(parsed.resourceId, CONCURRENT_REMOVAL_WAIT_MS);
       }
       if (!gone) {
         const message = error instanceof Error ? error.message : "Unknown docker rm error.";
-        throw createAdapterError(
+        const failure = createAdapterError(
           "adapter-unavailable",
           `Failed to remove workspace container '${parsed.reference ?? parsed.resourceId}': ${message}`,
         );
+        // The daemon answered the removal with an error and the container is still there, with
+        // no removal of it under way: definitively not removed (review 9 #5). Any other failure
+        // (the CLI lost the daemon mid-request) is an outcome nobody knows.
+        throw present && !inProgress && isDaemonErrorResponse(error)
+          ? removalRefused(failure)
+          : failure;
       }
       outcome = "not-found";
     }

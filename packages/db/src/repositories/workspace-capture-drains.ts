@@ -34,6 +34,7 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "reconcileIssuedDeletion",
   "completeDeletion",
   "releaseDeletion",
+  "lapseIssuedDeletion",
   "admitRecovery",
 ]);
 
@@ -231,21 +232,29 @@ export interface WorkspaceCaptureDrainRepoService {
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
   /**
    * Settle an issued removal whose issuer's hold lapsed, from what the runtime says of the
-   * executor now (review 8 #7). `gone`: it was carried out — `deleted`. `present`: it failed or
-   * never reached the runtime. While the evidence it was authorized on is still the current version
-   * with no observation in flight, that authorization stands: it is taken over by `token` (fresh
-   * hold, still `deleting-issued`) and issued again (`reissue`). Otherwise the evidence changed
-   * since: the removal is given up (`released`, the evidence version bumped) and decided again on
-   * what is current. `held`: its issuer holds it again (or someone took it over); `none`: nothing
-   * issued is left to settle; `deleted` also when it was recorded removed meanwhile.
+   * executor now (review 8 #7). `gone`: it was carried out — `deleted`. `present`: not carried
+   * out YET — it failed, never reached the runtime, or is still on its way (review 9 #5: presence
+   * proves only that it has not finished). While the evidence it was authorized on is still the
+   * current version with no observation in flight, that authorization stands: it is taken over by
+   * `token` (fresh hold, still `deleting-issued`) and issued again (`reissue`). Otherwise the
+   * evidence changed since, and the executor must be kept — but the earlier request may still
+   * act, so the removal stays issued and exclusionary (`outstanding`: nothing is observed or
+   * recovered) until the runtime's own bound on a removal request (`fenceMs`, the adapter's
+   * `removalFenceMs`) has passed since it was last issued; only then is it given up (`released`,
+   * the evidence version bumped) and decided again on what is current. No `fenceMs`: the runtime
+   * gives no such bound, and it stays `outstanding` until the runtime no longer has the executor
+   * or the evidence stands again. `held`: its issuer holds it again (or someone took it over);
+   * `none`: nothing issued is left to settle; `deleted` also when it was recorded removed
+   * meanwhile.
    */
   readonly reconcileIssuedDeletion: (input: {
     readonly runId: string;
     readonly runtime: "gone" | "present";
     readonly token: string;
     readonly leaseMs: number;
+    readonly fenceMs?: number | undefined;
   }) => Effect.Effect<
-    "deleted" | "reissue" | "released" | "held" | "none",
+    "deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -257,8 +266,22 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly runId: string;
     readonly token: string;
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
-  /** Give a held removal up (its runtime call failed, or it was not made): observations resume. */
+  /**
+   * Give a held removal up: it was not made, or the runtime definitively refused it (it answered
+   * and did not act). Observations resume. Never for a call whose outcome is unknown
+   * (`lapseIssuedDeletion`).
+   */
   readonly releaseDeletion: (input: {
+    readonly runId: string;
+    readonly token: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /**
+   * The runtime call of the issued removal `token` holds ended with an outcome nobody knows (a
+   * transport error after the request may have gone out; review 9 #5): it stays `deleting-issued`
+   * and exclusionary, its hold ends now, and whoever finds it settles it from the runtime
+   * (`reconcileIssuedDeletion`).
+   */
+  readonly lapseIssuedDeletion: (input: {
     readonly runId: string;
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
@@ -351,6 +374,7 @@ const NO_DELETION = {
   deletionEvidenceVersion: null,
   deletionAuthorizedAt: null,
   deletionExpiresAt: null,
+  deletionIssuedAt: null,
 } as const;
 
 /** The removal state under the row lock, with whether its hold is still live (database clock). */
@@ -774,6 +798,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .set({
                   deletionState: "deleting-issued",
                   deletionExpiresAt: leaseExpiry(input.leaseMs),
+                  deletionIssuedAt: sql`now()`,
                 })
                 .where(eq(workspaceCaptureDrains.runId, input.runId));
               return true;
@@ -786,8 +811,17 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "reconcileIssuedDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
+              const fenceMs = input.fenceMs;
               const [current] = yield* tx
-                .select(lockedDeletionColumns)
+                .select({
+                  ...lockedDeletionColumns,
+                  // The runtime's bound on a removal request has passed since it was last
+                  // issued: nothing that request sent can still act (review 9 #5).
+                  fenced:
+                    fenceMs === undefined
+                      ? sql<boolean>`false`
+                      : sql<boolean>`coalesce(${workspaceCaptureDrains.deletionIssuedAt} + (${Math.max(0, Math.round(fenceMs))} * interval '1 millisecond') <= now(), false)`,
+                })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
@@ -821,6 +855,11 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   })
                   .where(eq(workspaceCaptureDrains.runId, input.runId));
                 return "reissue" as const;
+              }
+              if (!current.fenced) {
+                // The evidence changed, so it may not be issued again; but the request already
+                // sent may still act, so it stays issued: nothing observed, nothing recovered.
+                return "outstanding" as const;
               }
               yield* tx
                 .update(workspaceCaptureDrains)
@@ -873,6 +912,22 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               and(
                 eq(workspaceCaptureDrains.runId, input.runId),
                 inArray(workspaceCaptureDrains.deletionState, ["deleting", "deleting-issued"]),
+                eq(workspaceCaptureDrains.deletionToken, input.token),
+              ),
+            )
+            .pipe(Effect.asVoid),
+        ),
+
+      lapseIssuedDeletion: (input) =>
+        withRepoError(
+          "lapseIssuedDeletion",
+          db
+            .update(workspaceCaptureDrains)
+            .set({ deletionExpiresAt: sql`now()` })
+            .where(
+              and(
+                eq(workspaceCaptureDrains.runId, input.runId),
+                eq(workspaceCaptureDrains.deletionState, "deleting-issued"),
                 eq(workspaceCaptureDrains.deletionToken, input.token),
               ),
             )

@@ -420,6 +420,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             ledger: drain?.ledger,
             runId: options.runId,
             runtime,
+            removalFenceMs: adapter.removalFenceMs,
             decide: (current) => {
               const evidence = recordedDeletionEvidence(current, executor);
               return decideExecutorDeletion({
