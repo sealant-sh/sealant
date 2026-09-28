@@ -270,6 +270,28 @@ export type CaptureDrainRead =
   | { readonly readable: true; readonly entry: CaptureDrainEntry | undefined }
   | { readonly readable: false };
 
+/** A held removal of an executor (decision 21): the token its `deleting` transition is owned by. */
+export interface DeletionTicket {
+  readonly token: string;
+}
+
+/**
+ * What authorizing a removal found: `authorized` (held by `ticket`), `changed` (the evidence
+ * moved or is unresolved: decide again), `held` (another deleter's removal is live), `deleted`
+ * (it was removed already).
+ */
+export type DeletionAuthorization =
+  | { readonly kind: "authorized"; readonly ticket: DeletionTicket }
+  | { readonly kind: "changed" }
+  | { readonly kind: "held" }
+  | { readonly kind: "deleted" };
+
+/** How long a removal's hold lasts without renewal; its deleter renews it while it removes. */
+export const DELETION_HOLD_MS = 120_000;
+
+/** How often a deleter renews its hold while the runtime call runs. */
+const DELETION_RENEW_EVERY_MS = 30_000;
+
 /**
  * Where a drain's ownership and progress live. The worker's ledger is the database
  * (`databaseCaptureDrainLedger`): a claim is a lease on the run's `workspace_capture_drains` row,
@@ -298,7 +320,8 @@ export interface CaptureDrainLedger {
    * until it is resolved — `recordStatus` with its answer, `closeObservation` when none was
    * received — nothing on record is known to be current and no deletion rests on it. Lapses
    * `ttlMs` after it was opened; a lapsed fence still counts until an observation opened after it
-   * lapsed is recorded. `undefined` when it cannot be opened: then nothing may be asked.
+   * lapsed is recorded. `undefined` when it cannot be opened: then nothing may be asked — also
+   * while the executor's removal is held, and once it was removed (decision 21).
    */
   readonly openObservation: (
     runId: string,
@@ -320,11 +343,35 @@ export interface CaptureDrainLedger {
     fence?: CaptureObservationFence,
   ) => Effect.Effect<boolean>;
   /**
-   * Authorize a deletion decided on evidence version `evidenceVersion` (decision 18): only while
-   * it is still current and no observation is in flight, serialized with every ingestion.
-   * `false` on any change, and when it cannot be checked.
+   * Authorize a deletion decided on evidence version `evidenceVersion` (decision 18) and take it
+   * as an owned durable transition (review 7 #5, decision 21): only while the version is still
+   * current, no observation is in flight and no other deleter's removal is live — then the
+   * executor is `deleting`, held by the answered ticket: no observation is admitted and no
+   * recovery starts it until the ticket is completed or released (or its hold lapses), and a
+   * status recorded anyway voids it. `changed` on any change, and when it cannot be checked.
    */
-  readonly authorizeDeletion: (runId: string, evidenceVersion: number) => Effect.Effect<boolean>;
+  readonly authorizeDeletion: (
+    runId: string,
+    evidenceVersion: number,
+  ) => Effect.Effect<DeletionAuthorization>;
+  /**
+   * Right before the runtime call that removes the executor (decision 21): the ticket still holds
+   * the removal, nothing voided it and the evidence it was authorized on is still current.
+   * Renews the hold. `false` (and when it cannot be checked): decide again.
+   */
+  readonly confirmDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
+  /** The runtime removed the executor: `deleted` for good. Best-effort: a failed write is logged. */
+  readonly completeDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
+  /** Give a held removal up (its runtime call failed or was not made). Best-effort. */
+  readonly releaseDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
+  /**
+   * May recovery start the run's executor (decision 21)? `deleting`: a live removal holds it;
+   * `deleted`: it was removed; `unknown`: it cannot be checked (nothing is started). A removal
+   * whose hold lapsed is voided and recovery `admitted`.
+   */
+  readonly admitRecovery: (
+    runId: string,
+  ) => Effect.Effect<"admitted" | "deleting" | "deleted" | "unknown">;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
    * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
@@ -394,6 +441,15 @@ export interface InMemoryCaptureDrainRow {
   >;
   /** When the status on record was recorded, in the store's own order. */
   recordedTick?: number;
+  /** The executor's removal (decision 21), as `deletion_*` holds it. */
+  deletion?:
+    | {
+        readonly state: "deleting" | "deleted";
+        readonly token: string;
+        readonly evidenceVersion: number;
+        readonly expiresAtMs: number;
+      }
+    | undefined;
 }
 
 /**
@@ -525,6 +581,13 @@ export const inMemoryCaptureDrainLedger = (
     openObservation: (runId, ttlMs) =>
       Effect.sync(() => {
         const row = rowOf(runId);
+        if (row.deletion !== undefined) {
+          if (row.deletion.state === "deleted" || row.deletion.expiresAtMs > now()) {
+            return undefined;
+          }
+          // Its deleter's hold lapsed: voided by what it admits.
+          row.deletion = undefined;
+        }
         inMemoryClaimSequence += 1;
         const token = `observation-${String(inMemoryClaimSequence)}`;
         const openedAtMs = now();
@@ -563,6 +626,10 @@ export const inMemoryCaptureDrainLedger = (
           row.entry = { ...row.entry, last: status, lastAtMs: atMs, lastUnreadable: false };
           row.recordedTick = nextTick();
         }
+        if (row.deletion?.state === "deleting") {
+          // Received evidence outranks a removal decided before it: voided.
+          row.deletion = undefined;
+        }
         if (fence !== undefined) {
           fences.delete(fence.token);
           if (opened !== undefined) {
@@ -577,11 +644,79 @@ export const inMemoryCaptureDrainLedger = (
         return true;
       }),
     authorizeDeletion: (runId, evidenceVersion) =>
+      Effect.sync((): DeletionAuthorization => {
+        const row = store.rows.get(runId);
+        if (row?.deletion?.state === "deleted") {
+          return { kind: "deleted" };
+        }
+        if (row?.deletion !== undefined && row.deletion.expiresAtMs > now()) {
+          return { kind: "held" };
+        }
+        if ((row?.entry.evidenceVersion ?? 0) !== evidenceVersion || (row?.fences?.size ?? 0) > 0) {
+          return { kind: "changed" };
+        }
+        const held = rowOf(runId);
+        inMemoryClaimSequence += 1;
+        const token = `deletion-${String(inMemoryClaimSequence)}`;
+        held.deletion = {
+          state: "deleting",
+          token,
+          evidenceVersion,
+          expiresAtMs: now() + DELETION_HOLD_MS,
+        };
+        return { kind: "authorized", ticket: { token } };
+      }),
+    confirmDeletion: (runId, ticket) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
-        return (
-          (row?.entry.evidenceVersion ?? 0) === evidenceVersion && (row?.fences?.size ?? 0) === 0
-        );
+        const deletion = row?.deletion;
+        if (
+          row === undefined ||
+          deletion === undefined ||
+          deletion.state !== "deleting" ||
+          deletion.token !== ticket.token ||
+          deletion.evidenceVersion !== (row.entry.evidenceVersion ?? 0) ||
+          (row.fences?.size ?? 0) > 0
+        ) {
+          return false;
+        }
+        row.deletion = { ...deletion, expiresAtMs: now() + DELETION_HOLD_MS };
+        return true;
+      }),
+    completeDeletion: (runId, ticket) =>
+      Effect.sync(() => {
+        const row = rowOf(runId);
+        row.deletion = {
+          state: "deleted",
+          token: ticket.token,
+          evidenceVersion: row.entry.evidenceVersion ?? 0,
+          expiresAtMs: Number.POSITIVE_INFINITY,
+        };
+        bump(row);
+      }),
+    releaseDeletion: (runId, ticket) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row?.deletion?.state === "deleting" && row.deletion.token === ticket.token) {
+          row.deletion = undefined;
+        }
+      }),
+    admitRecovery: (runId) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        const deletion = row?.deletion;
+        if (row === undefined || deletion === undefined) {
+          return "admitted" as const;
+        }
+        if (deletion.state === "deleted") {
+          return "deleted" as const;
+        }
+        if (deletion.expiresAtMs > now()) {
+          return "deleting" as const;
+        }
+        row.deletion = undefined;
+        bump(row);
+        return "admitted" as const;
       }),
     observe: (runId, observation) =>
       Effect.sync(() => {
@@ -770,19 +905,21 @@ const IN_FLIGHT_OBSERVATION_WAIT_MS = 200;
  * it was decided on is still current and no observation is in flight — a compare-and-set
  * serialized with every ingestion of evidence about the executor. Changed meanwhile, or an
  * observation in flight (waited on briefly): decided again on what is current (at most
- * `DELETION_AUTHORIZATION_ATTEMPTS` times, then kept). Call it
- * AFTER the last await that learned anything about the executor (its runtime state, a drain),
- * immediately before removing it. Without a ledger nothing is known: `decide` sees an
- * unreadable record.
+ * `DELETION_AUTHORIZATION_ATTEMPTS` times, then kept).
+ *
+ * The authorization is an owned durable transition, not a reusable answer (review 7 #5,
+ * decision 21): the executor is `deleting`, held by the answered `ticket`, and from then on no
+ * observation of it is admitted, no recovery starts it, and a status recorded anyway voids the
+ * removal. The caller removes the runtime through `removeUnderDeletion` with that ticket, which
+ * re-checks it right before the runtime call and records `deleted` after. `held`: another
+ * deleter's removal is live — nothing is decided here (kept for now, never marked retained).
+ * Without a ledger nothing is known: `decide` sees an unreadable record.
  */
 export const authorizedDeletion = (input: {
   readonly ledger: CaptureDrainLedger | undefined;
   readonly runId: string;
   readonly decide: (record: CaptureDrainRead) => ExecutorDeletionDecision;
-}): Effect.Effect<{
-  readonly decision: ExecutorDeletionDecision;
-  readonly record: CaptureDrainRead;
-}> =>
+}): Effect.Effect<AuthorizedDeletion> =>
   Effect.gen(function* () {
     const { ledger, runId } = input;
     let record: CaptureDrainRead = { readable: false };
@@ -800,16 +937,31 @@ export const authorizedDeletion = (input: {
         return { decision, record };
       }
       const version = record.readable ? (record.entry?.evidenceVersion ?? 0) : undefined;
-      if (
-        ledger !== undefined &&
-        version !== undefined &&
-        (yield* ledger.authorizeDeletion(runId, version))
-      ) {
-        return { decision, record };
+      const authorization: DeletionAuthorization =
+        ledger === undefined || version === undefined
+          ? { kind: "changed" }
+          : yield* ledger.authorizeDeletion(runId, version);
+      switch (authorization.kind) {
+        case "authorized":
+          return { decision, record, ticket: authorization.ticket };
+        case "deleted":
+          // Removed already, on evidence nothing could revoke after it was authorized: the
+          // runtime call is repeated (idempotent) with nothing held.
+          return { decision, record };
+        case "held":
+          return {
+            decision: {
+              delete: false,
+              reason: "another path holds the removal of this executor right now",
+            },
+            record,
+            heldElsewhere: true,
+          };
+        case "changed":
+          yield* Effect.logWarning(
+            `Capture drain · run ${runId}: the evidence about its executor changed while its removal was decided; deciding again on what is current.`,
+          );
       }
-      yield* Effect.logWarning(
-        `Capture drain · run ${runId}: the evidence about its executor changed while its removal was decided; deciding again on what is current.`,
-      );
     }
     return {
       decision: {
@@ -818,6 +970,122 @@ export const authorizedDeletion = (input: {
           "the evidence about the executor kept changing while its removal was decided (an observation in flight or newly recorded)",
       },
       record,
+    };
+  });
+
+/** A decision `authorizedDeletion` made, with the ticket holding the removal it authorized. */
+export interface AuthorizedDeletion {
+  readonly decision: ExecutorDeletionDecision;
+  readonly record: CaptureDrainRead;
+  /** Holds the removal (decision 21); absent when it rests on no evidence, or was done already. */
+  readonly ticket?: DeletionTicket | undefined;
+  /** Another deleter's removal is live: nothing was decided (not a retention). */
+  readonly heldElsewhere?: boolean | undefined;
+}
+
+/**
+ * Run the runtime call that removes an executor under the ticket that holds its removal
+ * (decision 21): re-checked RIGHT BEFORE the call (still held, nothing voided it, the evidence it
+ * was authorized on still current), the hold renewed while the call runs, `deleted` recorded
+ * after it succeeded, and the hold given up when it failed. `voided`: nothing was called — decide
+ * again. No ticket (a removal resting on no recorded evidence, or one done already): just the
+ * call.
+ */
+export const removeUnderDeletion = <A, E, R>(input: {
+  readonly ledger: CaptureDrainLedger | undefined;
+  readonly runId: string;
+  readonly ticket: DeletionTicket | undefined;
+  readonly remove: Effect.Effect<A, E, R>;
+}): Effect.Effect<
+  { readonly removed: true; readonly value: A } | { readonly removed: false },
+  E,
+  R
+> =>
+  Effect.gen(function* () {
+    const { ledger, runId, ticket } = input;
+    if (ledger === undefined || ticket === undefined) {
+      const value = yield* input.remove;
+      return { removed: true as const, value };
+    }
+    if (!(yield* ledger.confirmDeletion(runId, ticket))) {
+      yield* Effect.logWarning(
+        `Capture drain · run ${runId}: the removal of its executor was voided before the runtime was asked to remove it (newer evidence, or its hold lapsed); deciding again on what is current.`,
+      );
+      return { removed: false as const };
+    }
+    const renew = ledger
+      .confirmDeletion(runId, ticket)
+      .pipe(Effect.delay(DELETION_RENEW_EVERY_MS), Effect.repeat({ while: (held) => held }));
+    const value = yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.forkScoped(renew);
+        return yield* input.remove;
+      }),
+    ).pipe(
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit)
+          ? ledger.completeDeletion(runId, ticket)
+          : ledger.releaseDeletion(runId, ticket),
+      ),
+    );
+    return { removed: true as const, value };
+  });
+
+/**
+ * The whole owned removal of an executor (decision 21): decide and authorize on the evidence as
+ * it stands (`authorizedDeletion`), then remove under the ticket (`removeUnderDeletion`); a
+ * removal voided before its runtime call is decided again on what is current (at most
+ * `DELETION_AUTHORIZATION_ATTEMPTS` times, then kept). `kept`: the last decision, and whether
+ * another deleter held it.
+ */
+export const deleteOnEvidence = <A, E, R>(input: {
+  readonly ledger: CaptureDrainLedger | undefined;
+  readonly runId: string;
+  readonly decide: (record: CaptureDrainRead) => ExecutorDeletionDecision;
+  readonly remove: (basis: ExecutorDeletionBasis) => Effect.Effect<A, E, R>;
+}): Effect.Effect<
+  | { readonly kind: "removed"; readonly basis: ExecutorDeletionBasis; readonly value: A }
+  | {
+      readonly kind: "kept";
+      readonly decision: Extract<ExecutorDeletionDecision, { readonly delete: false }>;
+      readonly record: CaptureDrainRead;
+      readonly heldElsewhere: boolean;
+    },
+  E,
+  R
+> =>
+  Effect.gen(function* () {
+    let last: AuthorizedDeletion | undefined;
+    for (let attempt = 0; attempt < DELETION_AUTHORIZATION_ATTEMPTS; attempt += 1) {
+      const authorized = yield* authorizedDeletion(input);
+      last = authorized;
+      const { decision } = authorized;
+      if (!decision.delete) {
+        return {
+          kind: "kept" as const,
+          decision,
+          record: authorized.record,
+          heldElsewhere: authorized.heldElsewhere === true,
+        };
+      }
+      const removal = yield* removeUnderDeletion({
+        ledger: input.ledger,
+        runId: input.runId,
+        ticket: authorized.ticket,
+        remove: input.remove(decision.basis),
+      });
+      if (removal.removed) {
+        return { kind: "removed" as const, basis: decision.basis, value: removal.value };
+      }
+    }
+    return {
+      kind: "kept" as const,
+      decision: {
+        delete: false as const,
+        reason: "its removal was voided by newer evidence each time it was about to be made",
+      },
+      record: last?.record ?? { readable: false },
+      heldElsewhere: false,
     };
   });
 
@@ -1338,6 +1606,12 @@ export interface DrainCaptureInput {
    * runtime) and releases it itself. Absent: the drain claims the run and releases it on return.
    */
   readonly claim?: CaptureDrainClaim;
+  /**
+   * The executor already answered a FINAL (an earlier call of this drain): this call polls its
+   * status first instead of asking for another FINAL (review 7 #6). A FINAL is still asked when
+   * the queue empties without the daemon confirming.
+   */
+  readonly opensWithStatus?: boolean;
 }
 
 const observationOf = (outcome: CaptureDrainOutcome): CaptureDrainObservation | undefined => {
@@ -1434,7 +1708,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
 
   return yield* Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
-    let command: "flush" | "status" = "flush";
+    let command: "flush" | "status" = input.opensWithStatus === true ? "status" : "flush";
     // One FINAL flush opens every call; one more is allowed when the queue empties without the
     // daemon confirming (a daemon that finished shipping after an incomplete flush snapshots
     // again). Past that, the next sweep asks again.

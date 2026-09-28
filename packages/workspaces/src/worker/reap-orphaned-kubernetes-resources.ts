@@ -40,9 +40,11 @@ import {
   describeDeletionBasis,
   recordedDeletionEvidence,
   authorizedDeletion,
+  removeUnderDeletion,
   runIsCaptureSourced,
   type CaptureDrainLedger,
   type CaptureDrainRead,
+  type DeletionTicket,
 } from "./capture-drain.js";
 
 export interface ReapOrphanedKubernetesResourcesOptions {
@@ -75,8 +77,10 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
         break;
       }
       const instance = known.get(runId);
-      // A capture Pod the policy let go ends its drain record once it is removed (below).
+      // A capture Pod the policy let go ends its drain record once it is removed (below), under
+      // the ticket holding a removal authorized on recorded evidence (decision 21).
       let captureRemoval: ExecutorDeletionBasis | undefined;
+      let ticket: DeletionTicket | undefined;
       if (instance !== undefined) {
         const wanted = instance.status !== "stopped" && instance.status !== "failed";
         const retained =
@@ -88,7 +92,8 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
         if (mayGo === false) {
           continue;
         }
-        captureRemoval = mayGo === "not-capture" ? undefined : mayGo;
+        captureRemoval = mayGo === "not-capture" ? undefined : mayGo.basis;
+        ticket = mayGo === "not-capture" ? undefined : mayGo.ticket;
       } else {
         // No row: the launch never recorded this Pod. Stop it only when its snapshot proves it
         // holds no captures; otherwise record it retained, so it is drained before any stop.
@@ -97,8 +102,13 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
           continue;
         }
       }
-      const ok = yield* Effect.tryPromise(() => options.adapter.stop({ resourceId })).pipe(
-        Effect.as(true),
+      const ok = yield* removeUnderDeletion({
+        ledger: options.ledger,
+        runId,
+        ticket,
+        remove: Effect.tryPromise(() => options.adapter.stop({ resourceId })),
+      }).pipe(
+        Effect.map((removal) => removal.removed),
         Effect.catchCause((cause) =>
           Effect.logWarning(
             `Kubernetes reconciler: removing orphaned resources for run ${runId} failed.`,
@@ -157,7 +167,7 @@ const podMayGo = (
           );
     // Decided on the evidence as it stands after the inspection, and authorized against it
     // (decision 18): a newer observation recorded meanwhile, or one in flight, keeps the Pod.
-    const { decision, record } = yield* authorizedDeletion({
+    const { decision, record, ticket, heldElsewhere } = yield* authorizedDeletion({
       ledger: options.ledger,
       runId: instance.runId,
       decide: (current: CaptureDrainRead) =>
@@ -172,7 +182,11 @@ const podMayGo = (
         }),
     });
     if (decision.delete) {
-      return decision.basis;
+      return { basis: decision.basis, ticket };
+    }
+    if (heldElsewhere === true) {
+      // Another path is removing it right now: kept here, not a retention.
+      return false as const;
     }
     if (!(record.readable && record.entry?.retained !== undefined)) {
       yield* Effect.logError(

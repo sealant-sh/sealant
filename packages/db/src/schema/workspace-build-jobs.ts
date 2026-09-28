@@ -267,6 +267,20 @@ export const workspaceCaptureDrains = pgTable(
       .$type<Readonly<Record<string, { readonly openedAt: string; readonly expiresAt: string }>>>()
       .notNull()
       .default({}),
+    /**
+     * The removal of this executor, as an owned durable transition (review 7 #5, decision 21).
+     * `deleting`: a deleter authorized it on evidence version `deletionEvidenceVersion` (the
+     * compare-and-set) and holds it under `deletionToken` until `deletionExpiresAt` (renewed while
+     * it removes the runtime). While it is held, no observation of the executor is admitted and no
+     * recovery starts it; a status recorded anyway voids it, and so does anything admitted once it
+     * lapsed — the deleter re-checks right before the runtime call and decides again.
+     * `deleted`: the runtime was removed; nothing is observed or recovered again. Null: none.
+     */
+    deletionState: text("deletion_state", { enum: ["deleting", "deleted"] }),
+    deletionToken: text("deletion_token"),
+    deletionEvidenceVersion: bigint("deletion_evidence_version", { mode: "number" }),
+    deletionAuthorizedAt: timestamp("deletion_authorized_at", { mode: "date", withTimezone: true }),
+    deletionExpiresAt: timestamp("deletion_expires_at", { mode: "date", withTimezone: true }),
     lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
     unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
     keptLogged: boolean("kept_logged").notNull().default(false),

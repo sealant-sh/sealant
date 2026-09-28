@@ -23,10 +23,18 @@
  *    sampled (bounded concurrency; the wait and the read together bounded by the time left before
  *    its latest possible start) and its schedule — the start, the throughput — persisted in
  *    `workspace_capture_drains`.
- *  - **Drives** go through the shared stop path (`processWorkspaceStopEffect`, label `deadline
- *    preservation`) with bounded concurrency and a per-runtime budget, granted most urgent first.
- *    Every due runtime gets its turn every tick: a drain still pending only returns `draining` and
- *    is picked up again next tick; it never holds a slot another due runtime needs across ticks.
+ *  - **Every due FINAL is sent first** (review 7 #6). A due runtime whose executor has not
+ *    answered a FINAL yet goes through the shared stop path (`processWorkspaceStopEffect`, label
+ *    `deadline preservation`) for that one FINAL round trip only, under its own wide permit
+ *    (`initiateConcurrency`), the most urgent first. Waiting for that permit and the round trip
+ *    are bounded by the runtime's remaining lifetime. Polling another executor never holds it.
+ *  - **Then the started drains are polled** — status first, never a second FINAL — with bounded
+ *    concurrency (`drainConcurrency`) and a budget, and the whole sweep ends by the drain budget
+ *    after it began, so a later tick (and the runtimes that become due then) never waits on it.
+ *    A drain still pending returns `draining` and is picked up again next tick.
+ *  - **The queue is in the plan.** A runtime's start is moved earlier by the FINAL round trips
+ *    ahead of it: its rank among the runtimes still to be sent one, over the permits, times the
+ *    round trip's bound.
  *
  * The candidates are every runtime with a deadline that may still hold work, not only `ready`
  * ones: a retained launch (`failed`, `launch-retained`) is drained and stopped the same way; an
@@ -72,7 +80,7 @@ import {
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
-import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
+import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process-workspace-stop.js";
 
 export interface CaptureDeadlineSettings {
   /** Fixed lead: the final drain starts at least this long before the deadline. */
@@ -172,12 +180,22 @@ export interface PreserveBeforeDeadlineOptions {
     readonly budgetMs?: number;
   };
   readonly deadline: CaptureDeadlineSettings;
-  /** How many due runtimes are driven at once. Every due runtime is driven every tick. Default 4. */
+  /**
+   * How many started drains are polled (and stopped once complete) at once. Default 4. It never
+   * delays a first FINAL: those have their own permits (`initiateConcurrency`).
+   */
   readonly drainConcurrency?: number;
+  /**
+   * How many due runtimes are sent their first FINAL at once (one round trip each, bounded by the
+   * drain's request timeout). Default 32. The plan counts the round trips queued ahead of a
+   * runtime into its start.
+   */
+  readonly initiateConcurrency?: number;
   readonly now?: () => number;
 }
 
 const DEFAULT_DRAIN_CONCURRENCY = 4;
+const DEFAULT_INITIATE_CONCURRENCY = 32;
 const PLAN_CONCURRENCY = 16;
 const DEFAULT_DRAIN_BUDGET_PER_TICK_MS = 60_000;
 const STATUS_TIMEOUT_MS = 15_000;
@@ -190,6 +208,8 @@ interface DuePreservation {
   readonly estimateMs: number;
   /** The start was reached only now (the first tick that drives it): say so. */
   readonly firstStart: boolean;
+  /** How much earlier its start was moved for the FINAL round trips queued ahead of it. */
+  readonly queueAheadMs: number;
 }
 
 /**
@@ -234,12 +254,38 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
     // The most urgent first: every permit below is granted in this order.
     .toSorted((a, b) => a.latestStartMs - b.latestStartMs || a.deadlineMs - b.deadlineMs);
 
+  // The FINAL round trips queued ahead of each runtime still to be sent one are in its plan:
+  // its rank among them, over the permits, times the round trip's bound (review 7 #6).
+  const initiateConcurrency = Math.max(
+    1,
+    options.initiateConcurrency ?? DEFAULT_INITIATE_CONCURRENCY,
+  );
+  const roundTripMs = Math.max(0, options.captureDrain.settings.requestTimeoutMs);
+  let unstartedRank = 0;
+  const queued = prepared.map((candidate) => {
+    if (candidate.finalAnswered) {
+      return candidate;
+    }
+    const queueAheadMs = Math.floor(unstartedRank / initiateConcurrency) * roundTripMs;
+    unstartedRank += 1;
+    const latestStartMs = Math.min(
+      candidate.latestStartMs,
+      candidate.deadlineMs - options.deadline.leadMs - queueAheadMs,
+    );
+    return { ...candidate, queueAheadMs, latestStartMs, dueByRecord: latestStartMs <= now() };
+  });
+
+  const budgetMs = options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS;
+  // The sweep ends by then: polling started drains never holds the next tick (and the runtimes
+  // that become due in it) back.
+  const sweepEndsAtMs = now() + budgetMs;
   const samplers = yield* Semaphore.make(PLAN_CONCURRENCY);
+  const initiations = yield* Semaphore.make(initiateConcurrency);
   const drives = yield* Semaphore.make(
     Math.max(1, options.drainConcurrency ?? DEFAULT_DRAIN_CONCURRENCY),
   );
   const driven = yield* Effect.forEach(
-    prepared,
+    queued,
     (candidate) =>
       Effect.gen(function* () {
         // Due by its record: driven now; its drain's FINAL reads the queue itself. Otherwise
@@ -256,16 +302,75 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
         if (plan === undefined) {
           return false;
         }
-        return yield* drives.withPermit(
-          driveOne(options, plan).pipe(
+        const guarded = <E, R>(effect: Effect.Effect<DriveOutcome, E, R>) =>
+          effect.pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning(
                 `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
                 cause,
-              ).pipe(Effect.as(false)),
+              ).pipe(Effect.as("not-driven" as const)),
             ),
-          ),
-        );
+          );
+
+        // 1. Its first FINAL, before anything polls anything: one round trip, under its own
+        // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
+        // one round trip, so a runtime at its deadline is still asked once).
+        let outcome: DriveOutcome = "draining";
+        if (!candidate.finalAnswered) {
+          const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
+          outcome = yield* initiations
+            .withPermit(guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false })))
+            .pipe(
+              Effect.timeoutOrElse({
+                duration: lifetimeLeftMs,
+                orElse: () =>
+                  Effect.logError(
+                    `Deadline preservation: run ${plan.instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()}; its final flush could not be sent before then (every FINAL permit was held): not saved · the platform may end it with its work.`,
+                  ).pipe(Effect.as("not-driven" as const)),
+              }),
+            );
+          if (outcome !== "draining") {
+            return countsAsDriven(outcome);
+          }
+        }
+
+        // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
+        // complete, under the drive permits, for no longer than the sweep lasts. A runtime just
+        // sent its first FINAL is polled as what that made it (a launch taken from its worker
+        // is a retained launch now), and its start is not announced twice.
+        const leftMs = sweepEndsAtMs - now();
+        if (leftMs <= 0) {
+          return countsAsDriven(outcome);
+        }
+        const current = candidate.finalAnswered
+          ? plan.instance
+          : yield* runtimeInstances.getRuntimeInstanceByRunId(plan.instance.runId);
+        if (current === undefined) {
+          return countsAsDriven(outcome);
+        }
+        const polling: DuePreservation = candidate.finalAnswered
+          ? plan
+          : { ...plan, instance: current, firstStart: false };
+        const polled = yield* drives
+          .withPermit(
+            Effect.suspend(() => {
+              const remainingMs = sweepEndsAtMs - now();
+              return remainingMs <= 0
+                ? Effect.succeed<DriveOutcome>("draining")
+                : guarded(
+                    driveOne(options, polling, { budgetMs: remainingMs, opensWithStatus: true }),
+                  );
+            }),
+          )
+          .pipe(
+            // The drain's own budget ends with the sweep; the bound adds the one round trip it
+            // may be in when its budget runs out.
+            Effect.timeoutOrElse({
+              duration: leftMs + roundTripMs,
+              orElse: () => Effect.succeed<DriveOutcome>("draining"),
+            }),
+          );
+        return countsAsDriven(polled);
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -279,6 +384,13 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
   return driven.filter(Boolean).length;
 });
 
+/** What driving a due runtime did: a stop's outcome, its recovery made due, or nothing. */
+type DriveOutcome = WorkspaceStopOutcome | "recovery-due" | "not-driven";
+
+/** Whether an outcome counts as driven (a stop removed it or goes on draining; recovery due). */
+const countsAsDriven = (outcome: DriveOutcome): boolean =>
+  outcome === "stopped" || outcome === "draining" || outcome === "recovery-due";
+
 /** A candidate in its watch window, as its records describe it before any daemon is asked. */
 interface PreparedPreservation {
   readonly instance: WorkspaceRuntimeInstance;
@@ -288,6 +400,13 @@ interface PreparedPreservation {
   readonly latestStartMs: number;
   /** Its start has been reached already: it is driven without a status sample first. */
   readonly dueByRecord: boolean;
+  /**
+   * Its executor answered a FINAL already (a drain of it recorded an answer): its drain is
+   * started, and it is only polled — its first FINAL is never queued behind anything again.
+   */
+  readonly finalAnswered: boolean;
+  /** How much earlier its start is for the FINAL round trips queued ahead of it (set in order). */
+  readonly queueAheadMs: number;
 }
 
 /** Whether a runtime is in its watch window and holds work that may need saving; no daemon call. */
@@ -337,6 +456,9 @@ const prepareOne = (
       deadlineMs,
       latestStartMs,
       dueByRecord: latestStartMs <= now(),
+      // Every drain opens with a FINAL, and its first answer starts its progress clock.
+      finalAnswered: row?.lastProgressAt !== null && row?.lastProgressAt !== undefined,
+      queueAheadMs: 0,
     } satisfies PreparedPreservation;
   });
 
@@ -396,7 +518,8 @@ const planOne = (
           });
     const plan = planPreservationStart({
       deadlineMs,
-      leadMs: settings.leadMs,
+      // The FINAL round trips queued ahead of it count like lead (review 7 #6).
+      leadMs: settings.leadMs + candidate.queueAheadMs,
       pendingBytes: status?.pendingBytes,
       stagedBytes: status?.stagedBytes,
       bulkBuilding: status?.bulkBuilding,
@@ -437,6 +560,7 @@ const planOne = (
       startsAtMs,
       estimateMs: plan.estimateMs,
       firstStart: recordedStartMs === undefined || recordedStartMs > sampledAtMs,
+      queueAheadMs: candidate.queueAheadMs,
     } satisfies DuePreservation;
   });
 
@@ -446,7 +570,16 @@ const planOne = (
  * sweep restarts its daemon on its own disk and drains it; for a launch still in progress, the
  * launch is taken from its worker and its executor drained like a retained launch.
  */
-const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation) =>
+const driveOne = (
+  options: PreserveBeforeDeadlineOptions,
+  plan: DuePreservation,
+  drive: {
+    /** How long its drain may poll: 0 = the one FINAL round trip only. */
+    readonly budgetMs: number;
+    /** Its drain is started (its FINAL was answered): it opens with a status read. */
+    readonly opensWithStatus: boolean;
+  },
+) =>
   Effect.gen(function* () {
     const { instance } = plan;
     if (instance.status === "pending") {
@@ -462,7 +595,7 @@ const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation)
       });
       if (preempted === undefined) {
         // It settled in between: the next tick drives it as what it became.
-        return false;
+        return "not-driven" as const;
       }
       yield* (yield* WorkspaceAttemptRepo)
         .markAttemptFailed({ id: instance.runId })
@@ -482,21 +615,21 @@ const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation)
       const drains = yield* WorkspaceCaptureDrainRepo;
       const due = yield* drains.requestRecovery(instance.runId);
       if (due === undefined) {
-        return false;
+        return "not-driven" as const;
       }
       yield* (plan.firstStart ? Effect.logError : Effect.logWarning)(
         `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery is due now (restart on its own disk, then a final drain).`,
       );
-      return true;
+      return "recovery-due" as const;
     }
     if (plan.firstStart && instance.status !== "pending") {
       yield* Effect.logWarning(
-        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline); starting its final drain and a planned stop now (lead ${String(Math.round(options.deadline.leadMs / 1000))} s + upload estimate ${String(Math.round(plan.estimateMs / 1000))} s).`,
+        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline); starting its final drain and a planned stop now (lead ${String(Math.round(options.deadline.leadMs / 1000))} s + upload estimate ${String(Math.round(plan.estimateMs / 1000))} s${plan.queueAheadMs > 0 ? ` + ${String(Math.round(plan.queueAheadMs / 1000))} s of FINAL round trips queued ahead of it` : ""}).`,
       );
     }
     const workspaces = yield* WorkspaceRepo;
     const workspace = yield* workspaces.getWorkspaceByAttemptId(instance.runId);
-    const outcome = yield* processWorkspaceStopEffect({
+    return yield* processWorkspaceStopEffect({
       ...(workspace !== undefined && workspace.latestRunId === instance.runId
         ? { workspaceId: workspace.id }
         : {}),
@@ -510,11 +643,11 @@ const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation)
       captureDrain: {
         ledger: options.captureDrain.ledger,
         settings: options.captureDrain.settings,
-        budgetMs: options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS,
+        budgetMs: drive.budgetMs,
         label: "deadline preservation",
+        ...(drive.opensWithStatus ? { opensWithStatus: true } : {}),
       },
     });
-    return outcome === "stopped" || outcome === "draining";
   });
 
 export interface PreserveBeforeDeadlineRunOptions extends PreserveBeforeDeadlineOptions {

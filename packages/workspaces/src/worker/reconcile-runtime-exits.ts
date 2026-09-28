@@ -90,8 +90,10 @@ import {
   probeCaptureDaemon,
   ledgerObservationRecorder,
   authorizedDeletion,
+  removeUnderDeletion,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
+  type DeletionTicket,
 } from "./capture-drain.js";
 
 export interface ReconcileRuntimeExitsEffectOptions {
@@ -188,6 +190,9 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
   // A capture executor removed here ends its drain record the way every other removal does
   // (`stopped`, with why it could go): its retention ends, and the sealed capture token kept for
   // its recovery is cleared — nothing can recover an executor that is gone.
+  // A removal authorized on recorded evidence runs under its ticket (decision 21): re-checked
+  // right before the runtime call; voided (newer evidence arrived), nothing is removed and the
+  // unsettled sweep looks at it again.
   const removeRemains = (
     adapter: RuntimeAdapter,
     instance: WorkspaceRuntimeInstance,
@@ -195,13 +200,18 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     removal: RemovalBasis,
   ) =>
     Effect.gen(function* () {
-      const removed = yield* Effect.tryPromise(() =>
-        adapter.stop({
-          resourceId,
-          ...(instance.reference === null ? {} : { reference: instance.reference }),
-        }),
-      ).pipe(
-        Effect.as(true),
+      const removed = yield* removeUnderDeletion({
+        ledger: options.captureDrain?.ledger,
+        runId: instance.runId,
+        ticket: removal.ticket,
+        remove: Effect.tryPromise(() =>
+          adapter.stop({
+            resourceId,
+            ...(instance.reference === null ? {} : { reference: instance.reference }),
+          }),
+        ),
+      }).pipe(
+        Effect.map((outcome) => outcome.removed),
         Effect.catchCause((cause) =>
           Effect.logWarning(
             `Runtime exit reconciler: removing the exited runtime for run ${instance.runId} failed.`,
@@ -274,6 +284,15 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       if (decided.verdict === "leave") {
         continue;
       }
+      // A removal held for remains that end up not removed (the terminal write failed) is given
+      // up, so observations of the executor resume.
+      const giveUpRemoval = (() => {
+        const ticket = decided.verdict === "record" ? decided.removal.ticket : undefined;
+        const ledger = options.captureDrain?.ledger;
+        return ticket === undefined || ledger === undefined
+          ? Effect.void
+          : ledger.releaseDeletion(instance.runId, ticket);
+      })();
       const verdict = decided.verdict;
       // A kept executor's retention and its terminal write land together or not at all
       // (`withRetention`): a terminal row with no retention is an executor no sweep looks at
@@ -315,6 +334,8 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
             // The remains, as below; the stop path may be removing them already (idempotent).
             yield* removeRemains(adapter, instance, resourceId, decided.removal);
           }
+        } else {
+          yield* giveUpRemoval;
         }
         continue;
       }
@@ -340,6 +361,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       );
       if (exited === undefined) {
         // Fenced out: a stop settled the row first, or a relaunch replaced the resource.
+        yield* giveUpRemoval;
         continue;
       }
       recorded += 1;
@@ -472,7 +494,7 @@ const settleUnsettledExecutors = (
         const inspection = yield* Effect.tryPromise(() => inspect.call(adapter, { resourceId }));
         // Only a drain lets a RUNNING executor go: the policy weighs recorded evidence only for
         // one that ended — as it stands after the inspection, authorized against it.
-        const { decision } = yield* authorizedDeletion({
+        const { decision, ticket, heldElsewhere } = yield* authorizedDeletion({
           ledger,
           runId,
           decide: (record) =>
@@ -497,7 +519,12 @@ const settleUnsettledExecutors = (
           yield* removeRemains(adapter, instance, resourceId, {
             captureSourced: true,
             basis: decision.basis,
+            ticket,
           });
+          return;
+        }
+        if (heldElsewhere === true) {
+          // Another path is removing it right now: not a retention.
           return;
         }
         const reason =
@@ -597,10 +624,16 @@ const drainBeforeRecording = (
           });
         },
       }).pipe(
-        Effect.map(({ decision }) =>
+        Effect.map(({ decision, ticket, heldElsewhere }) =>
           decision.delete
-            ? { verdict: "record" as const, removal: { captureSourced, basis: decision.basis } }
-            : { verdict: "record-keep-remains" as const, reason: decision.reason },
+            ? {
+                verdict: "record" as const,
+                removal: { captureSourced, basis: decision.basis, ticket },
+              }
+            : heldElsewhere === true
+              ? // Another path is removing it right now: nothing is recorded this sweep.
+                { verdict: "leave" as const }
+              : { verdict: "record-keep-remains" as const, reason: decision.reason },
         ),
       );
     if (!captureSourced) {
@@ -660,6 +693,8 @@ const drainBeforeRecording = (
 interface RemovalBasis {
   readonly captureSourced: boolean;
   readonly basis: ExecutorDeletionBasis;
+  /** Holds a removal authorized on recorded evidence (decision 21). */
+  readonly ticket?: DeletionTicket | undefined;
 }
 
 const NOT_CAPTURE: RemovalBasis = { captureSourced: false, basis: "not-capture" };

@@ -2748,11 +2748,19 @@ const apiObservationRecorder = (runId: string) =>
     return {
       open: Effect.gen(function* () {
         const token = randomUUID();
-        yield* drains.openObservation({
+        const opened = yield* drains.openObservation({
           runId,
           token,
           ttlMs: API_CAPTURE_ROUND_TRIP_MS + OBSERVATION_FENCE_MARGIN_MS,
         });
+        if ("refused" in opened) {
+          // Its removal was authorized on the evidence as it stood (decision 21): nothing
+          // asked after that is admitted.
+          yield* Effect.logWarning(
+            `Capture observation of run ${runId} refused: its executor ${opened.refused === "deleting" ? "is being removed" : "was removed"}; nothing is asked of its daemon.`,
+          );
+          return undefined;
+        }
         return { token };
       }).pipe(
         Effect.catchCause((cause) =>

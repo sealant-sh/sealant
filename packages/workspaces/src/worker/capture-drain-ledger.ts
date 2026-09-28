@@ -21,9 +21,11 @@ import { z } from "zod";
 import type { CaptureFlushReport } from "../sealantd/runtime.js";
 import {
   claimLeaseOwner,
+  DELETION_HOLD_MS,
   type CaptureDrainEntry,
   type CaptureDrainLedger,
   type CaptureDrainObservation,
+  type DeletionAuthorization,
 } from "./capture-drain.js";
 
 const storedStatusSchema = z.object({
@@ -250,7 +252,15 @@ export const captureDrainLedgerFromRepo = (
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
         const token = randomUUID();
-        yield* repo.openObservation({ runId, token, ttlMs });
+        const opened = yield* repo.openObservation({ runId, token, ttlMs });
+        if ("refused" in opened) {
+          yield* Effect.logInfo(
+            opened.refused === "deleting"
+              ? `Capture drain: run ${runId}'s executor is being removed on the evidence its removal was authorized on; nothing more is asked of its daemon.`
+              : `Capture drain: run ${runId}'s executor was removed; nothing is asked of its daemon.`,
+          );
+          return undefined;
+        }
         return { token };
       }),
     ).pipe(
@@ -302,14 +312,92 @@ export const captureDrainLedgerFromRepo = (
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
-        return yield* repo.authorizeDeletion({ runId, evidenceVersion });
+        const token = randomUUID();
+        const outcome = yield* repo.authorizeDeletion({
+          runId,
+          evidenceVersion,
+          token,
+          leaseMs: DELETION_HOLD_MS,
+        });
+        return outcome === "authorized"
+          ? ({ kind: "authorized", ticket: { token } } satisfies DeletionAuthorization)
+          : ({ kind: outcome } satisfies DeletionAuthorization);
       }),
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(
           `Capture drain: authorizing the removal of run ${runId}'s executor failed; it is not removed.`,
           cause,
+        ).pipe(Effect.as({ kind: "changed" } satisfies DeletionAuthorization)),
+      ),
+    ),
+
+  confirmDeletion: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        return yield* repo.confirmDeletion({
+          runId,
+          token: ticket.token,
+          leaseMs: DELETION_HOLD_MS,
+        });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: re-checking the removal of run ${runId}'s executor failed; it is not removed now.`,
+          cause,
         ).pipe(Effect.as(false)),
+      ),
+    ),
+
+  completeDeletion: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        const held = yield* repo.completeDeletion({ runId, token: ticket.token });
+        if (!held) {
+          yield* Effect.logError(
+            `Capture drain: run ${runId}'s executor was removed after its removal's hold was lost (it lapsed and was voided); recorded deleted.`,
+          );
+        }
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(
+          `Capture drain: recording that run ${runId}'s executor was removed failed; its removal stays held until the hold lapses.`,
+          cause,
+        ),
+      ),
+    ),
+
+  releaseDeletion: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.releaseDeletion({ runId, token: ticket.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: giving up the removal of run ${runId}'s executor failed; it lapses on its own.`,
+          cause,
+        ),
+      ),
+    ),
+
+  admitRecovery: (runId) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        return yield* repo.admitRecovery({ runId });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: checking whether run ${runId}'s executor is being removed failed; it is not started.`,
+          cause,
+        ).pipe(Effect.as("unknown" as const)),
       ),
     ),
 

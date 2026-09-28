@@ -18,6 +18,7 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
+  type WorkspaceCaptureDrainRepoService,
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -322,24 +323,139 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       return read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
     };
     const decidedOn = await version();
+    const authorize = async () =>
+      (await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).kind;
     // Evidence changes after the decision was made: refused.
     await Effect.runPromise(ledger.recordStatus(runId, savedStatus(), Date.now()));
-    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, decidedOn))).toBe(false);
-    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(true);
+    expect((await Effect.runPromise(ledger.authorizeDeletion(runId, decidedOn))).kind).toBe(
+      "changed",
+    );
+    const held = await Effect.runPromise(ledger.authorizeDeletion(runId, await version()));
+    expect(held.kind).toBe("authorized");
+    // Given up (its runtime call was not made): observations are admitted again.
+    if (held.kind === "authorized") {
+      await Effect.runPromise(ledger.releaseDeletion(runId, held.ticket));
+    }
 
     // An observation that lapses at once, and is never resolved (its worker died).
     const lapsed = await Effect.runPromise(ledger.openObservation(runId, 0));
     expect(lapsed).toBeDefined();
-    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(false);
+    expect(await authorize()).toBe("changed");
     await new Promise((resolve) => setTimeout(resolve, 20));
     // A later observation, opened after it lapsed and recorded, resolves it.
     const later = await Effect.runPromise(ledger.openObservation(runId, 60_000));
-    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(false);
+    expect(await authorize()).toBe("changed");
     expect(
       await Effect.runPromise(ledger.recordStatus(runId, savedStatus(), Date.now(), later)),
     ).toBe(true);
     const read = await Effect.runPromise(ledger.read(runId));
     expect(read.readable ? read.entry?.observationsInFlight : -1).toBe(0);
-    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(true);
+    expect(await authorize()).toBe("authorized");
+  });
+
+  // Review 7 #5 (decision 21): authorizing a removal returned a boolean and committed, and an
+  // observation opened after it was admitted and became current while the deleter went on to the
+  // runtime call. The authorization now takes the removal as an owned durable transition.
+  it("admits no observation once a removal is authorized; a status recorded anyway voids it", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "worker-a");
+    const b = worker(dbB, "worker-b");
+    await Effect.runPromise(a.recordStatus(runId, savedStatus(), Date.now() - 1_000));
+    const read = await Effect.runPromise(a.read(runId));
+    const version = read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
+    const authorization = await Effect.runPromise(a.authorizeDeletion(runId, version));
+    expect(authorization.kind).toBe("authorized");
+    if (authorization.kind !== "authorized") {
+      return;
+    }
+    // Another worker's observation, asked after the authorization: refused, nothing is asked.
+    expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
+    // Another deleter: the removal is held.
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, version))).kind).toBe("held");
+    // Recovery does not start it under the removal.
+    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    // Held and untouched: the deleter's re-check passes.
+    expect(await Effect.runPromise(a.confirmDeletion(runId, authorization.ticket))).toBe(true);
+    // A status received anyway (asked without a fence): recorded, and the removal is voided.
+    await Effect.runPromise(
+      b.recordStatus(
+        runId,
+        captureStatus({ complete: false, incompleteReason: "snapshot-failed", headN: 8 }),
+        Date.now(),
+      ),
+    );
+    expect(await Effect.runPromise(a.confirmDeletion(runId, authorization.ticket))).toBe(false);
+    const after = await Effect.runPromise(a.read(runId));
+    expect(after.readable && after.entry?.last?.complete).toBe(false);
+    // Voided: observations are admitted again.
+    expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeDefined();
+  });
+
+  it("admits nothing once the removal completed: no observation, no recovery, no second removal", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "worker-a");
+    const b = worker(dbB, "worker-b");
+    await Effect.runPromise(a.recordStatus(runId, savedStatus(), Date.now() - 1_000));
+    const read = await Effect.runPromise(a.read(runId));
+    const version = read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
+    const authorization = await Effect.runPromise(a.authorizeDeletion(runId, version));
+    if (authorization.kind !== "authorized") {
+      throw new Error(`expected an authorized removal, got ${authorization.kind}`);
+    }
+    expect(await Effect.runPromise(a.confirmDeletion(runId, authorization.ticket))).toBe(true);
+    await Effect.runPromise(a.completeDeletion(runId, authorization.ticket));
+    expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleted");
+    const again = await Effect.runPromise(b.read(runId));
+    const current = again.readable ? (again.entry?.evidenceVersion ?? -1) : -1;
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, current))).kind).toBe("deleted");
+  });
+
+  it("voids a removal whose hold lapsed (its deleter died) by what it admits", async () => {
+    const runId = await newRun();
+    const repo = <A, E>(use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+    const deleter = randomUUID();
+    const lapsingRemoval = async () => {
+      const row = await repo((drains) => drains.getByRunId(runId));
+      return repo((drains) =>
+        drains.authorizeDeletion({
+          runId,
+          evidenceVersion: row?.evidenceVersion ?? 0,
+          token: deleter,
+          leaseMs: 1,
+        }),
+      );
+    };
+    await repo((drains) => drains.recordObservation({ runId, state: "kept", detail: null }));
+    expect(await lapsingRemoval()).toBe("authorized");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Lapsed: an observation is admitted and voids it; its deleter's re-check fails.
+    expect(
+      await repo((drains) => drains.openObservation({ runId, token: randomUUID(), ttlMs: 60_000 })),
+    ).toHaveProperty("openedAt");
+    expect(
+      await repo((drains) => drains.confirmDeletion({ runId, token: deleter, leaseMs: 1 })),
+    ).toBe(false);
+    // Recovery admission voids a lapsed removal too.
+    const fenceless = await repo((drains) => drains.getByRunId(runId));
+    await repo((drains) =>
+      drains.closeObservation({
+        runId,
+        token: Object.keys(fenceless?.observationFences ?? {})[0] ?? "",
+      }),
+    );
+    expect(await lapsingRemoval()).toBe("authorized");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await repo((drains) => drains.admitRecovery({ runId }))).toBe("admitted");
+    expect((await repo((drains) => drains.getByRunId(runId)))?.deletionState).toBeNull();
   });
 });
