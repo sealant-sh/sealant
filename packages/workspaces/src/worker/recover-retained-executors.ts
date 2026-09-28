@@ -73,9 +73,11 @@ import {
   describeDeletionBasis,
   drainCaptureBeforeStop,
   recordedDeletionEvidence,
+  removeUnderDeletion,
   authorizedDeletion,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
+  type DeletionTicket,
 } from "./capture-drain.js";
 
 export interface RecoveryBackoff {
@@ -227,12 +229,26 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     const stopReason = instance.stopReason ?? "failed";
 
     // Remove it and end the retention: only ever on a basis the policy (or the daemon's own
-    // nothing-to-save answer) gave. `said`: the daemon's words, kept with the record.
-    const release = (basis: ExecutorDeletionBasis, said?: string) =>
+    // nothing-to-save answer) gave, under the ticket holding a removal authorized on recorded
+    // evidence (decision 21: re-checked right before the runtime call, `deleted` after). `said`:
+    // the daemon's words, kept with the record. Voided before the call (newer evidence): nothing
+    // is removed and it is looked at again soon.
+    const release = (basis: ExecutorDeletionBasis, ticket?: DeletionTicket, said?: string) =>
       Effect.gen(function* () {
-        yield* Effect.tryPromise(() =>
-          adapter.stop({ resourceId, ...(reference === null ? {} : { reference }) }),
-        );
+        const removal = yield* removeUnderDeletion({
+          ledger,
+          runId,
+          ticket,
+          remove: Effect.tryPromise(() =>
+            adapter.stop({ resourceId, ...(reference === null ? {} : { reference }) }),
+          ),
+        });
+        if (!removal.removed) {
+          return yield* retry(
+            "its removal was voided by newer evidence before it was made",
+            backoff.baseMs,
+          );
+        }
         yield* runtimeInstances.markStopped({ runId, stopReason });
         const detail = `the retained executor was removed: ${describeDeletionBasis(basis)}${
           said === undefined ? "" : ` (${said})`
@@ -280,7 +296,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     // Weighed on the evidence as it stands after the inspection and the parking, and authorized
     // against it (decision 18): an observation recorded meanwhile, or one in flight, is weighed,
     // never raced (review 6 #3).
-    const { decision } = yield* authorizedDeletion({
+    const first = yield* authorizedDeletion({
       ledger,
       runId,
       decide: (record) =>
@@ -290,6 +306,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
           ...recordedDeletionEvidence(record, executor),
         }),
     });
+    const { decision } = first;
     if (decision.delete) {
       if (decision.basis === "missing") {
         const detail = `the runtime no longer knows the retained executor (${instance.adapter} ${resourceId}); whatever it held that was not saved is lost`;
@@ -297,7 +314,28 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         yield* ledger.observe(runId, { state: "gone", detail });
         return "lost" as const;
       }
-      return yield* release(decision.basis);
+      return yield* release(decision.basis, first.ticket);
+    }
+    if (first.heldElsewhere === true) {
+      return yield* retry("another path is removing the executor right now", backoff.baseMs);
+    }
+
+    // Recovery admission honours a removal (decision 21): an executor whose removal another
+    // path holds is not started under it, and one that was removed is not recovered at all.
+    const admission = yield* ledger.admitRecovery(runId);
+    if (admission === "deleted") {
+      const detail = `the retained executor was removed by another path (${instance.adapter} ${resourceId}), on the evidence its removal was authorized on`;
+      yield* Effect.logWarning(`${prefix}: ${detail}; its retention ends.`);
+      yield* ledger.observe(runId, { state: "stopped", detail });
+      return "released" as const;
+    }
+    if (admission !== "admitted") {
+      return yield* retry(
+        admission === "deleting"
+          ? "another path is removing the executor right now"
+          : "whether another path is removing the executor cannot be read",
+        backoff.baseMs,
+      );
     }
 
     // 2. Recover it on its own disk. A restart boots it with the environment it was created
@@ -409,7 +447,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         yield* Effect.logWarning(
           `${prefix}: nothing to save · the recovery boot of ${instance.adapter} ${resourceId} found no materialized capture (${recovered.detail}); no user code ran on it. Removing it.`,
         );
-        return yield* release("nothing-to-save", recovered.detail);
+        return yield* release("nothing-to-save", undefined, recovered.detail);
       }
       case "missing": {
         const detail = `the runtime no longer knows the retained executor (${instance.adapter} ${resourceId}); whatever it held that was not saved is lost`;
@@ -483,7 +521,10 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
         },
       });
       if (drained.decision.delete) {
-        return yield* release(drained.decision.basis);
+        return yield* release(drained.decision.basis, drained.ticket);
+      }
+      if (drained.heldElsewhere === true) {
+        return yield* retry("another path is removing the executor right now", backoff.baseMs);
       }
       yield* Effect.logError(
         `${prefix}: not saved · retained · its final flush read complete, but ${drained.decision.reason}.`,

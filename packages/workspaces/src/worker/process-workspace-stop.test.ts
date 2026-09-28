@@ -1399,3 +1399,123 @@ describe("an ended executor's removal is decided on current evidence (review 6 #
     expect(stop).toHaveBeenCalledOnce();
   });
 });
+
+/** A newer failure from the same executor, after the complete at head 7. */
+const newerFailure = () =>
+  captureStatus({
+    epoch: 3,
+    headN: 8,
+    complete: false,
+    incompleteReason: "snapshot-failed",
+    unreadable: 1,
+  });
+
+/** A ledger holding the executor's complete at head 7. */
+const seededWithComplete = async () => {
+  const ledger = inMemoryCaptureDrainLedger();
+  await Effect.runPromise(
+    ledger.recordStatus("run_old", savedStatus({ epoch: 3, headN: 7 }), Date.now() - 1_000),
+  );
+  return ledger;
+};
+
+// Review 7 #5 (decision 21): authorizing the removal returned a reusable boolean and committed;
+// an observation opened after it — while the stop awaited `markStopRequested` — recorded a newer
+// failure, and the stop removed the executor on the complete it had decided on. The removal is
+// now an owned durable transition: from its authorization no observation is admitted, a status
+// recorded anyway voids it, the stop re-checks it right before the runtime call (deciding again
+// when it was voided) and records it `deleted` after.
+describe("an ended executor's removal is an owned transition (review 7 #5)", () => {
+  const settings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 100,
+    unreachableWindowMs: 100,
+    requestTimeoutMs: 100,
+  };
+  const stager = {
+    stage: async () => ({}),
+    removeSecretEnv: async () => undefined,
+    removeAll: async () => undefined,
+  };
+  const stopWith = (
+    ledger: ReturnType<typeof inMemoryCaptureDrainLedger>,
+    harness: ReturnType<typeof makeHarness>,
+    stop: RuntimeAdapter["stop"],
+  ) =>
+    Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [
+          stubAdapter(stop, async () => ({ state: "exited" as const, exitCode: 75 })),
+        ],
+        captureDrain: { ledger, settings, budgetMs: 1, label: "review 7 #5" },
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+  it("keeps it when a failure arrives after authorization, while markStopRequested is awaited", async () => {
+    const ledger = await seededWithComplete();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const admitted: boolean[] = [];
+    // The reviewer's interleaving: another path opens an observation after the removal was
+    // authorized and records what it received, while the stop awaits its own write.
+    harness.markStopRequested.mockImplementation(() =>
+      Effect.gen(function* () {
+        const fence = yield* ledger.openObservation("run_old", 1_000);
+        admitted.push(fence !== undefined);
+        yield* ledger.recordStatus("run_old", newerFailure(), Date.now(), fence);
+      }),
+    );
+    const stop = removedStop();
+    const outcome = await stopWith(ledger, harness, stop);
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(admitted).toEqual([false]);
+    const row = ledger.store.rows.get("run_old");
+    expect(row?.entry.last).toMatchObject({ complete: false, headN: 8 });
+    expect(row?.entry.retained).toBeDefined();
+    expect(row?.deletion).toBeUndefined();
+  });
+
+  it("admits no observation while it removes the runtime, and none once it was removed", async () => {
+    const ledger = await seededWithComplete();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const admittedDuringRemoval: boolean[] = [];
+    const stop = vi.fn(async () => {
+      const fence = await Effect.runPromise(ledger.openObservation("run_old", 1_000));
+      admittedDuringRemoval.push(fence !== undefined);
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+    expect(await stopWith(ledger, harness, stop)).toBe("stopped");
+    expect(stop).toHaveBeenCalledOnce();
+    expect(admittedDuringRemoval).toEqual([false]);
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
+    expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old"))).toBe("deleted");
+  });
+
+  it("gives the removal up when the runtime call fails, so observations resume", async () => {
+    const ledger = await seededWithComplete();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = vi.fn(async (): Promise<never> => {
+      throw new Error("docker rm failed");
+    });
+    await expect(stopWith(ledger, harness, stop)).rejects.toThrow("docker rm failed");
+    expect(ledger.store.rows.get("run_old")?.deletion).toBeUndefined();
+    expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeDefined();
+  });
+});

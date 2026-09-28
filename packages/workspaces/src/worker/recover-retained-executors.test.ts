@@ -501,6 +501,78 @@ describe("recoverRetainedExecutorsEffect", () => {
   });
 });
 
+// Review 7 #5 (decision 21): recovery admission honours a removal another path holds or made.
+describe("recoverRetainedExecutorsEffect · an executor whose removal is held (review 7 #5)", () => {
+  it("never starts an executor whose removal another path holds, and comes back soon", async () => {
+    const h = harness({ inspect: { state: "exited", exitCode: 75 } });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.deletion = {
+      state: "deleting",
+      token: "another-deleter",
+      evidenceVersion: row.entry.evidenceVersion ?? 0,
+      expiresAtMs: NOW + 60_000,
+    };
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.stop).not.toHaveBeenCalled();
+    expect(h.attempts.at(-1)).toMatchObject({
+      error: "another path is removing the executor right now",
+      nextRecoveryAt: new Date(NOW + 60_000),
+    });
+  });
+
+  it("never starts an executor another path removed, and ends its retention", async () => {
+    const h = harness({ inspect: { state: "exited", exitCode: 75 } });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.deletion = {
+      state: "deleted",
+      token: "another-deleter",
+      evidenceVersion: row.entry.evidenceVersion ?? 0,
+      expiresAtMs: Number.POSITIVE_INFINITY,
+    };
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.recover).not.toHaveBeenCalled();
+    expect(h.ledger.store.rows.get("run_1")?.entry.retained).toBeUndefined();
+  });
+
+  it("starts an executor whose removal's hold lapsed (its deleter died), voiding it", async () => {
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      recover: async () => ({ outcome: "unsupported", detail: "cannot restart" }),
+    });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.deletion = {
+      state: "deleting",
+      token: "a-dead-deleter",
+      evidenceVersion: row.entry.evidenceVersion ?? 0,
+      expiresAtMs: NOW - 1,
+    };
+
+    await h.run();
+    expect(h.recover).toHaveBeenCalledOnce();
+    expect(h.ledger.store.rows.get("run_1")?.deletion).toBeUndefined();
+  });
+
+  it("removes a released executor under its own ticket and records it deleted", async () => {
+    const h = harness({ inspect: { state: "exited", exitCode: 75 } });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.entry = {
+      ...row.entry,
+      completionAttested: { executorId: "container-1", epoch: 2, captureN: 17, atMs: NOW, by: "u" },
+    };
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.stop).toHaveBeenCalledOnce();
+    expect(h.ledger.store.rows.get("run_1")?.deletion?.state).toBe("deleted");
+  });
+});
+
 describe("nextRecoveryDelayMs", () => {
   it("doubles from the base and stops at the maximum", () => {
     const backoff = { baseMs: 60_000, maxMs: 3_600_000 };

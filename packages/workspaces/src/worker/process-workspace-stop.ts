@@ -34,12 +34,15 @@ import {
   drainCaptureBeforeStop,
   drainPermitsStop,
   recordedDeletionEvidence,
+  removeUnderDeletion,
   runIsCaptureSourced,
   DEFAULT_CAPTURE_DRAIN_LEASE_MS,
+  type AuthorizedDeletion,
   type CaptureDrainClaim,
   type CaptureDrainLedger,
   type CaptureDrainRead,
   type CaptureDrainSettings,
+  type DeletionTicket,
 } from "./capture-drain.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
@@ -150,6 +153,9 @@ const runtimeState = (
 
 const stopOutcome = (outcome: WorkspaceStopOutcome): WorkspaceStopOutcome => outcome;
 
+/** How often a removal voided before its runtime call is decided again before it is kept. */
+const REMOVAL_DECISION_ATTEMPTS = 3;
+
 /**
  * Whether the run is capture-sourced: the kind recorded on its runtime instance, else its attempt
  * snapshot, else — nothing says — yes (fail closed; `runIsCaptureSourced`). A failed read aborts
@@ -242,7 +248,10 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
   // Record that this stop is under way, then remove the runtime. From the first write on, an
   // exit the runtime reports is this planned stop completing (the exit reconciler records it
   // stopped, never failed). A failure is recorded on the drain (`stop-failed`, with the error)
-  // before it propagates; the stop intent is durable, so the next sweep retries it.
+  // before it propagates; the stop intent is durable, so the next sweep retries it. A removal
+  // authorized on recorded evidence runs under its ticket (decision 21): re-checked right before
+  // the runtime call — `voided` when newer evidence arrived since it was authorized (nothing is
+  // removed; the caller decides again) — and recorded `deleted` once the runtime removed it.
   const stopRuntime = (input: {
     readonly adapter: RuntimeAdapter;
     readonly resourceId: string;
@@ -251,22 +260,33 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     readonly drain: WorkspaceStopCaptureDrain | undefined;
     /** The run's drain claim this stop holds: renewed while the runtime is being removed. */
     readonly claim?: CaptureDrainClaim | undefined;
+    /** Holds the removal it was authorized on (decision 21); absent when it rests on none. */
+    readonly ticket?: DeletionTicket | undefined;
   }) =>
     Effect.gen(function* () {
       yield* runtimeInstances.markStopRequested({
         runId: options.runId,
         stopReason: options.stopReason,
       });
-      yield* Effect.tryPromise({
-        try: () =>
-          input.adapter.stop({
-            resourceId: input.resourceId,
-            ...(input.reference === null ? {} : { reference: input.reference }),
-            ...(input.fence ? { fence: true } : {}),
-          }),
-        catch: toWorkspaceStopProcessingError,
-      }).pipe(keepingClaim(input.claim));
+      const removal = yield* removeUnderDeletion({
+        ledger: options.captureDrain?.ledger,
+        runId: options.runId,
+        ticket: input.ticket,
+        remove: Effect.tryPromise({
+          try: () =>
+            input.adapter.stop({
+              resourceId: input.resourceId,
+              ...(input.reference === null ? {} : { reference: input.reference }),
+              ...(input.fence ? { fence: true } : {}),
+            }),
+          catch: toWorkspaceStopProcessingError,
+        }).pipe(keepingClaim(input.claim)),
+      });
+      if (!removal.removed) {
+        return "voided" as const;
+      }
       yield* runtimeInstances.markStopped({ runId: options.runId, stopReason: options.stopReason });
+      return "stopped" as const;
     }).pipe(
       Effect.mapError(toWorkspaceStopProcessingError),
       Effect.tapError((error) =>
@@ -390,17 +410,23 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             },
           });
 
-        // Remove the runtime the policy let go; a capture-sourced one records how it went.
-        const removeRuntime = (basis: ExecutorDeletionBasis) =>
+        // Remove the runtime the policy let go, under the ticket that holds its removal; a
+        // capture-sourced one records how it went. `voided`: newer evidence arrived after the
+        // removal was authorized, and nothing was removed.
+        const removeRuntime = (basis: ExecutorDeletionBasis, ticket: DeletionTicket | undefined) =>
           Effect.gen(function* () {
-            yield* stopRuntime({
+            const stopped = yield* stopRuntime({
               adapter,
               resourceId,
               reference,
               fence: false,
               drain: captureSourced ? drain : undefined,
               claim,
+              ticket,
             });
+            if (stopped === "voided") {
+              return "voided" as const;
+            }
             yield* finishStop;
             if (drain !== undefined && captureSourced) {
               yield* drain.ledger.observe(options.runId, {
@@ -411,30 +437,61 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             return stopOutcome("stopped");
           });
 
+        // Decide, authorize and remove (decision 21): a removal voided before its runtime call
+        // is decided again on the evidence as it now stands, never carried out on the old one.
+        const decideAndRemove = (runtime: ExecutorRuntimeState, drainedNow: boolean) =>
+          Effect.gen(function* () {
+            let last: AuthorizedDeletion | undefined;
+            for (let attempt = 0; attempt < REMOVAL_DECISION_ATTEMPTS; attempt += 1) {
+              const decided = yield* decide(runtime, drainedNow);
+              last = decided;
+              if (!decided.decision.delete) {
+                return {
+                  removed: false as const,
+                  reason: decided.decision.reason,
+                  record: decided.record,
+                  heldElsewhere: decided.heldElsewhere === true,
+                };
+              }
+              const outcome = yield* removeRuntime(decided.decision.basis, decided.ticket);
+              if (outcome !== "voided") {
+                return { removed: true as const, outcome };
+              }
+            }
+            return {
+              removed: false as const,
+              reason: "its removal was voided by newer evidence each time it was about to be made",
+              record: last?.record ?? { readable: false as const },
+              heldElsewhere: false,
+            };
+          });
+
         if (state !== "running") {
           // The executor ended (or is gone). An ended executor keeps its disk — a container's
           // writable layer, a Failed Pod's emptyDir — and sealantd exits 75 with its staging there
           // after an incomplete final flush, whether or not any drain of ours reached it first (a
           // plain `docker stop`, its own shutdown FINAL, a lost reply). Only evidence lets it go.
-          const { decision, record: current } = yield* decide(state, false);
-          if (!decision.delete) {
-            // Said once, when it is first retained; recovery reports every attempt after that.
-            if (drain === undefined) {
-              yield* Effect.logError(
-                `Workspace stop: run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}; this stop has no capture drain record to find evidence in.`,
-              );
-            } else if (!current.readable || current.entry?.retained === undefined) {
-              yield* Effect.logError(
-                `Workspace stop (${drain.label}): run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}. Its disk keeps the staged captures; the runtime is left in place and recovery is attempted.`,
-              );
-              yield* drain.ledger.markRetained(
-                options.runId,
-                `executor exited · ${decision.reason}`,
-              );
-            }
-            return stopOutcome("kept");
+          const ended = yield* decideAndRemove(state, false);
+          if (ended.removed) {
+            return ended.outcome;
           }
-          return yield* removeRuntime(decision.basis);
+          if (ended.heldElsewhere) {
+            // Another path is removing it right now on its own authorization.
+            return stopOutcome("busy");
+          }
+          const current = ended.record;
+          // Said once, when it is first retained; recovery reports every attempt after that.
+          if (drain === undefined) {
+            yield* Effect.logError(
+              `Workspace stop: run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${ended.reason}; this stop has no capture drain record to find evidence in.`,
+            );
+          } else if (!current.readable || current.entry?.retained === undefined) {
+            yield* Effect.logError(
+              `Workspace stop (${drain.label}): run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${ended.reason}. Its disk keeps the staged captures; the runtime is left in place and recovery is attempted.`,
+            );
+            yield* drain.ledger.markRetained(options.runId, `executor exited · ${ended.reason}`);
+          }
+          return stopOutcome("kept");
         }
 
         // LAST CHANCE to read rotated session credentials out of the container: the official CLIs
@@ -453,8 +510,8 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         }
 
         if (!captureSourced) {
-          const { decision } = yield* decide("running", false);
-          return decision.delete ? yield* removeRuntime(decision.basis) : stopOutcome("kept");
+          const running = yield* decideAndRemove("running", false);
+          return running.removed ? running.outcome : stopOutcome("kept");
         }
         if (drain === undefined) {
           // Capture-sourced (or unknown) and running, with nothing here to drain it: kept.
@@ -506,17 +563,20 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
                 : "draining",
           );
         }
-        const { decision } = yield* decide(
+        const drained = yield* decideAndRemove(
           outcome.kind === "gone" ? "missing" : "running",
           outcome.kind === "drained",
         );
-        if (!decision.delete) {
-          yield* Effect.logError(
-            `Workspace stop (${drain.label}): run ${options.runId}: the drain ended (${outcome.kind}) but nothing lets the executor go: not saved · kept · ${decision.reason}.`,
-          );
-          return stopOutcome("kept");
+        if (drained.removed) {
+          return drained.outcome;
         }
-        return yield* removeRuntime(decision.basis);
+        if (drained.heldElsewhere) {
+          return stopOutcome("busy");
+        }
+        yield* Effect.logError(
+          `Workspace stop (${drain.label}): run ${options.runId}: the drain ended (${outcome.kind}) but nothing lets the executor go: not saved · kept · ${drained.reason}.`,
+        );
+        return stopOutcome("kept");
       }),
     );
   }

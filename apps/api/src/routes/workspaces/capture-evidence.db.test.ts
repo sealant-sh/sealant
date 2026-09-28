@@ -267,6 +267,38 @@ describe.skipIf(DATABASE_URL === undefined)(
       });
     }
 
+    // Review 7 #5 (decision 21): once a deleter holds the executor's removal, the public routes
+    // ask its daemon nothing — no observation is admitted after the authorization.
+    for (const route of ["flush", "status"] as const) {
+      it(`asks nothing through the ${route} route while the executor's removal is held`, async () => {
+        const { runId, workspaceId, run, drains, calls } = await setup();
+        expect(await seedSaved(drains, runId, Date.now() - 60_000)).toBe(true);
+        const ledger = databaseCaptureDrainLedger({ db, owner: "evidence-test", leaseMs: 60_000 });
+        const record = await Effect.runPromise(ledger.read(runId));
+        const authorization = await Effect.runPromise(
+          ledger.authorizeDeletion(
+            runId,
+            record.readable ? (record.entry?.evidenceVersion ?? 0) : -1,
+          ),
+        );
+        expect(authorization.kind).toBe("authorized");
+        await expect(
+          run(
+            route === "flush"
+              ? flushWorkspaceCapture({
+                  workspaceId,
+                  payload: { ownerUserId: owner, kind: "final" },
+                })
+              : getWorkspaceCaptureStatus({ workspaceId, query: { ownerUserId: owner } }),
+          ),
+        ).rejects.toBeDefined();
+        expect(calls).toEqual([]);
+        const row = await drains((repo) => repo.getByRunId(runId));
+        expect(row?.lastStatus).toMatchObject({ complete: true });
+        expect(row?.deletionState).toBe("deleting");
+      });
+    }
+
     it("never lets a delayed older complete roll back a newer not-saved observation", async () => {
       const { runId, workspaceId, run, drains } = await setup();
       // A complete asked for BEFORE the relayed not-saved answer, recorded after it: nothing
@@ -399,7 +431,7 @@ describe.skipIf(DATABASE_URL === undefined)(
             record.readable ? (record.entry?.evidenceVersion ?? 0) : -1,
           ),
         ),
-      ).toBe(false);
+      ).toMatchObject({ kind: "changed" });
     });
 
     // Review 6 #4: a FINAL relay reads its lost answer again and receives "not saved"; the FINAL
