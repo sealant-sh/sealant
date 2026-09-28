@@ -1649,6 +1649,55 @@ describe("TerminateMicrovm through the live SDK client (review 10 #3)", () => {
     }
   });
 
+  it("a refusal of a request issued again settles only that request: the earlier one keeps the removal (review 11 #3)", async () => {
+    const local = await endpoint(["lost", 409]);
+    try {
+      const { ledger, exit } = await removeWith(local.adapter);
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(local.deletes).toEqual(["lost"]);
+      // Its hold lapsed, the evidence unchanged: taken over and issued again, from a new call.
+      const repeat = await Effect.runPromise(
+        ledger.reconcileIssuedDeletion("run-terminate", "present", local.adapter.removalFenceMs),
+      );
+      if (repeat.kind !== "reissue") throw new Error(repeat.kind);
+      const second = await Effect.runPromise(
+        removeUnderDeletion({
+          ledger,
+          runId: "run-terminate",
+          ticket: repeat.ticket,
+          remove: Effect.tryPromise({
+            try: () => local.adapter.stop({ resourceId: "microvm-1" }),
+            catch: (error) => error,
+          }),
+        }).pipe(Effect.exit),
+      );
+      // The second call's only request was refused: definitive for that request alone.
+      expect(Exit.isFailure(second)).toBe(true);
+      expect(local.deletes).toEqual(["lost", 409]);
+      expect(local.accepted()).toBe(1);
+      const deletion = ledger.store.rows.get("run-terminate")?.deletion;
+      expect(deletion?.state).toBe("deleting-issued");
+      expect(deletion?.requests?.map((request) => request.outcome)).toEqual(["unknown", "refused"]);
+      // The first request's outcome is still unknown: exclusionary — nothing is recovered or
+      // observed while it may act.
+      await Effect.runPromise(ledger.markRetained("run-terminate", "still pending"));
+      const claim = await Effect.runPromise(ledger.claimRecovery("run-terminate", 60_000));
+      if (claim === undefined) throw new Error("not claimed");
+      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate", claim))).toBe(
+        "deleting",
+      );
+      expect(await Effect.runPromise(ledger.openObservation("run-terminate", 1_000))).toBe(
+        undefined,
+      );
+      // Settled from the runtime: once it no longer has the VM, the removal is done.
+      expect(
+        await Effect.runPromise(ledger.reconcileIssuedDeletion("run-terminate", "gone")),
+      ).toEqual({ kind: "deleted" });
+    } finally {
+      await local.close();
+    }
+  });
+
   it("a refusal of the call's only request is definitive: the removal is given up", async () => {
     const local = await endpoint([409]);
     try {

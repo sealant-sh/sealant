@@ -78,6 +78,14 @@ const storedStatusSchema = z.object({
       headN: z.number().optional(),
     })
     .optional(),
+  overdue: z
+    .object({
+      step: z.string().min(1),
+      startedUnixMs: z.number(),
+      runningMs: z.number(),
+      boundMs: z.number(),
+    })
+    .optional(),
 });
 
 /** A stored status back into a report; a row of an unknown shape reads as none. */

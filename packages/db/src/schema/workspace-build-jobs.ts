@@ -210,6 +210,14 @@ export const workspaceCaptureDrainStateValues = [
 
 export type WorkspaceCaptureDrainState = (typeof workspaceCaptureDrainStateValues)[number];
 
+/** One request a removal sent to the runtime, with its own outcome (`deletion_requests`). */
+export interface WorkspaceCaptureDeletionRequest {
+  readonly id: string;
+  /** Microseconds since the epoch, the database's clock. */
+  readonly issuedAt: number;
+  readonly outcome: "unknown" | "refused" | "done";
+}
+
 /**
  * One row per run whose capture queue a worker drained or is draining, or whose runtime deadline
  * scheduled a preservation. It is the durable half of `capture-drain.ts`:
@@ -314,6 +322,20 @@ export const workspaceCaptureDrains = pgTable(
      * `removalFenceMs`) has passed since this instant: before that, the request may still act.
      */
     deletionIssuedAt: timestamp("deletion_issued_at", { mode: "date", withTimezone: true }),
+    /**
+     * Every request the runtime was sent for the current removal, in the order sent, each with its
+     * own outcome (review 11 #3, decision 34): `id` is the token that sent it, `issuedAt` when (the
+     * database's clock, microseconds since the epoch), `outcome` `unknown` until it is known —
+     * `refused` (the runtime definitively did not act on it) or `done` (it removed the executor).
+     * A refusal settles only its own request: while any request's outcome is `unknown` the removal
+     * stays issued and exclusionary, until the runtime no longer has the executor or the runtime's
+     * bound on every such request has passed since it was sent. Empty while nothing was sent; a
+     * request sent by a writer from before this record is added for it by the table's trigger.
+     */
+    deletionRequests: jsonb("deletion_requests")
+      .$type<readonly WorkspaceCaptureDeletionRequest[]>()
+      .notNull()
+      .default([]),
     lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
     unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
     keptLogged: boolean("kept_logged").notNull().default(false),

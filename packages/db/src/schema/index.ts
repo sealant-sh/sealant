@@ -26,6 +26,7 @@ export {
   type NewWorkspaceCaptureDrain,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
+  type WorkspaceCaptureDeletionRequest,
   workspaceCaptureDrains,
   workspaceCaptureDrainStateValues,
   workspaceRuntimeInstances,

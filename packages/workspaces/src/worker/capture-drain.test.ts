@@ -1064,6 +1064,13 @@ describe("capture status past the pinned wire", () => {
     lastSnapError: "Permission denied",
     snapFailingSinceUnixMs: 0,
     snapsFailed: 4,
+    origin: { epoch: 1, launch: "launch-1", bootId: "boot-1", bootGeneration: 1, observation: 7 },
+    overdue: {
+      step: "small snap › git cat-file --batch-check",
+      startedUnixMs: 1_757_760_000_000,
+      runningMs: 95_000,
+      boundMs: 60_000,
+    },
   });
 
   it("describes every field a newer daemon reports, clipping what it cannot bound", () => {
@@ -1081,6 +1088,7 @@ describe("capture status past the pinned wire", () => {
       "register refused missing-objects at n 9 (2 missing keys listed)",
       "repairing",
       "2 register refusals",
+      "overdue: small snap › git cat-file --batch-check running 95 s (bound 60 s)",
     ]) {
       expect(line).toContain(part);
     }

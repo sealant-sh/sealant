@@ -289,6 +289,25 @@ export interface CaptureFlushReport {
    * evidence nothing else orders fails closed.
    */
   readonly origin?: ExecutorOrigin | undefined;
+  /**
+   * A capture step running past its bound (sealantd `overdue`, 31): what is running, since when,
+   * for how long and against which bound. Present only while a step is past its bound; absent
+   * from a daemon that predates it. Reported so a stuck capture is visible while it is stuck; it
+   * is not a verdict — the step's own limit kills it and the snap fails (`snaps`).
+   */
+  readonly overdue?: CaptureOverdue | undefined;
+}
+
+/** A capture step past its bound (wire `CaptureOverdue`). */
+export interface CaptureOverdue {
+  /** What is running, outermost first, `›`-separated (`small snap › git cat-file --batch-check`). */
+  readonly step: string;
+  /** When it started, Unix ms (display only: evidence is ordered by `origin`). */
+  readonly startedUnixMs: number;
+  /** How long it had been running when the answer was computed, ms. */
+  readonly runningMs: number;
+  /** How long it is expected to take at most, ms. */
+  readonly boundMs: number;
 }
 
 /** One capture class's snaps (wire `CaptureClassSnaps`). */
@@ -390,7 +409,9 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
     const name = captureClassName(value);
     return name === undefined ? [] : [name];
   }),
-  // Fields a newer daemon reports (sealantd 13-26). The pinned wire
+  // Fields a newer daemon reports (sealantd 13-31, the origin stamp and `overdue` included). One
+  // structural reader for every path (status, flush, a lost FINAL read again): a typed helper that
+  // names fields one by one drops what it forgets (review 11: origin). The pinned wire
   // type does not declare them, so they are read structurally: a 0.18.2 message never carries
   // them and they stay absent (complete = unknown).
   ...optionalWireFields(report),
@@ -432,7 +453,8 @@ type OptionalWireField =
   | "lastSnapError"
   | "snapFailingSinceUnixMs"
   | "snapsFailed"
-  | "origin";
+  | "origin"
+  | "overdue";
 
 /** One wire `CaptureClassSnaps`, read structurally; `undefined` for an unknown class. */
 const wireClassSnaps = (value: unknown): CaptureClassSnaps | undefined => {
@@ -472,7 +494,7 @@ const wireSnaps = (value: unknown): readonly CaptureClassSnaps[] | undefined => 
 };
 
 /**
- * Every CaptureStatusReport field past the pinned wire (sealantd 13–26), read structurally: a
+ * Every CaptureStatusReport field past the pinned wire (sealantd 13–31), read structurally: a
  * field the message does not carry stays absent, never a default. The flat snap-failure fields
  * are derived from `snaps`.
  */
@@ -508,7 +530,31 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
     ...(snaps === undefined ? {} : { snaps }),
     ...snapFailureSummary(snaps),
     ...wireOrigin(report),
+    ...wireOverdue(wireField(report, "overdue")),
   };
+};
+
+/**
+ * Wire `overdue` (31): a capture step past its bound. Every field or none: a message that names
+ * no step, or lacks any figure, reports nothing overdue.
+ */
+const wireOverdue = (value: unknown): Pick<CaptureFlushReport, "overdue"> => {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+  const step = wireText(wireField(value, "step"));
+  const startedUnixMs = wireCount(wireField(value, "startedUnixMs"));
+  const runningMs = wireCount(wireField(value, "runningMs"));
+  const boundMs = wireCount(wireField(value, "boundMs"));
+  if (
+    step === undefined ||
+    startedUnixMs === undefined ||
+    runningMs === undefined ||
+    boundMs === undefined
+  ) {
+    return {};
+  }
+  return { overdue: { step, startedUnixMs, runningMs, boundMs } };
 };
 
 /**

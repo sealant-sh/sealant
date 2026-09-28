@@ -170,6 +170,16 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
     : { snapFailingSinceUnixMs: status.snapFailingSinceUnixMs }),
   ...(status.snapsFailed === undefined ? {} : { snapsFailed: status.snapsFailed }),
   ...(status.origin === undefined ? {} : { origin: toCaptureOrigin(status.origin) }),
+  ...(status.overdue === undefined
+    ? {}
+    : {
+        overdue: {
+          step: status.overdue.step,
+          startedUnixMs: status.overdue.startedUnixMs,
+          runningMs: status.overdue.runningMs,
+          boundMs: status.overdue.boundMs,
+        },
+      }),
 });
 
 /** Wire → public executor-origin position. */

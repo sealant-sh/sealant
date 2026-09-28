@@ -569,6 +569,68 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
     });
   });
 
+  // sealantd 31: a capture step past its bound, forwarded with every other field past the pin —
+  // the origin stamp (27–30) included — by the one structural reader every path uses.
+  it("reads a step past its bound beside the origin stamp and every other newer field", () => {
+    const overdue = {
+      step: "small snap › git cat-file --batch-check",
+      startedUnixMs: 1_757_760_000_000n,
+      runningMs: 95_000n,
+      boundMs: 60_000n,
+    };
+    const newest = {
+      ...base,
+      headN: 7n,
+      complete: false,
+      incompleteReason: "in-progress",
+      pendingBytes: 0n,
+      pendingBulk: 0n,
+      launch: "launch-1",
+      bootId: "boot-1",
+      bootGeneration: 2n,
+      observation: 41n,
+      overdue,
+    };
+    expect(captureFlushReportFromWire(newest)).toEqual({
+      epoch: 2,
+      worktreeId: "wt_1",
+      headN: 7,
+      pending: 0,
+      stagedBytes: 0,
+      uploadedObjects: 0,
+      uploadedBytes: 0,
+      registered: 5,
+      fenced: false,
+      paused: false,
+      refused: [],
+      complete: false,
+      incompleteReason: "in-progress",
+      pendingBytes: 0,
+      pendingBulk: 0,
+      origin: {
+        epoch: 2,
+        launch: "launch-1",
+        bootId: "boot-1",
+        bootGeneration: 2,
+        observation: 41,
+        headN: 7,
+      },
+      overdue: {
+        step: "small snap › git cat-file --batch-check",
+        startedUnixMs: 1_757_760_000_000,
+        runningMs: 95_000,
+        boundMs: 60_000,
+      },
+    });
+    // Nothing past its bound, or a report missing a figure: nothing overdue is reported.
+    expect("overdue" in captureFlushReportFromWire(base)).toBe(false);
+    const { boundMs: _boundMs, ...partial } = overdue;
+    const unbounded = { ...base, overdue: partial };
+    expect("overdue" in captureFlushReportFromWire(unbounded)).toBe(false);
+    const unnamed = { ...base, overdue: { ...overdue, step: "" } };
+    expect("overdue" in captureFlushReportFromWire(unnamed)).toBe(false);
+  });
+
   it("leaves every field the message does not carry absent, and empty text and lists absent", () => {
     const report = captureFlushReportFromWire(base);
     for (const key of [
@@ -589,6 +651,7 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       "lastSnapError",
       "snapFailingSinceUnixMs",
       "snapsFailed",
+      "overdue",
     ]) {
       expect(key in report).toBe(false);
     }

@@ -258,6 +258,19 @@ export const captureExecutorOriginSchema = Schema.Struct({
 });
 export type CaptureExecutorOrigin = typeof captureExecutorOriginSchema.Type;
 
+/**
+ * A capture step running past its bound (sealantd `CaptureOverdue`): what is running, outermost
+ * first and `›`-separated (`small snap › git cat-file --batch-check`), when it started (Unix ms,
+ * display only), how long it had been running when the answer was made, and its bound (ms).
+ */
+export const captureOverdueSchema = Schema.Struct({
+  step: NonEmptyString,
+  startedUnixMs: Schema.Number,
+  runningMs: Schema.Number,
+  boundMs: Schema.Number,
+});
+export type CaptureOverdue = typeof captureOverdueSchema.Type;
+
 export const workspaceCaptureStatusSchema = Schema.Struct({
   epoch: Schema.Number,
   worktreeId: NonEmptyString,
@@ -351,6 +364,12 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
    * the stamp: such answers cannot be ordered by position.
    */
   origin: Schema.optional(captureExecutorOriginSchema),
+  /**
+   * A capture step past its bound, while one is: the executor's capture is stuck there now. Not a
+   * verdict: the step's own limit ends it and the snap fails (`snaps`). Absent while nothing is
+   * past its bound, and from a daemon or control plane that predates it.
+   */
+  overdue: Schema.optional(captureOverdueSchema),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 

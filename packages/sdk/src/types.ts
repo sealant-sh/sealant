@@ -349,6 +349,24 @@ export interface WorkspaceCaptureStatus {
    * control plane) that predates it; such answers cannot be ordered by position.
    */
   readonly origin?: WorkspaceCaptureOrigin;
+  /**
+   * A capture step running past its bound, while one is: the executor's capture is stuck there
+   * now. Not a verdict — the step's own limit ends it and the snap fails (`snaps`). Absent while
+   * nothing is past its bound, and from a daemon or control plane that predates it.
+   */
+  readonly overdue?: WorkspaceCaptureOverdue;
+}
+
+/** A capture step past its bound (`WorkspaceCaptureStatus.overdue`). */
+export interface WorkspaceCaptureOverdue {
+  /** What is running, outermost first, `›`-separated: `small snap › git cat-file --batch-check`. */
+  readonly step: string;
+  /** When it started, Unix ms (display only: order evidence by `origin`). */
+  readonly startedUnixMs: number;
+  /** How long it had been running when the answer was made, ms. */
+  readonly runningMs: number;
+  /** How long it is expected to take at most, ms. */
+  readonly boundMs: number;
 }
 
 /**
