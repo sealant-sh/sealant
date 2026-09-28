@@ -90,6 +90,7 @@ import {
 } from "@sealant/validators";
 import {
   attestationCoversExecutor,
+  observedCaptureFromStored,
   bindRootMountPath,
   runtimeRestartsRetainedExecutors,
   UnknownWorkspacePackageError,
@@ -2196,6 +2197,9 @@ export const mapWorkspaceCaptureDrain = (
             ...(row.completionLaunchId === null || row.completionLaunchId === undefined
               ? {}
               : { launchId: row.completionLaunchId }),
+            ...(row.completionSealedAt === null || row.completionSealedAt === undefined
+              ? {}
+              : { sealedAt: row.completionSealedAt.toISOString() }),
           },
         }),
   };
@@ -2992,8 +2996,10 @@ export const stopWorkspace = (input: {
     }
 
     // The control plane that owns the capture store attests a sealed FINAL of the executor:
-    // recorded only when it names THIS executor and is not for an older epoch than the executor
-    // last reported, and then it lets that executor's disk go once it has ended.
+    // recorded only when it names THIS executor and nothing Core observed from it contradicts it
+    // (an older epoch, a later capture, or a report that its work is not saved made after the
+    // seal: received evidence beats stored evidence), and then it lets that executor's disk go
+    // once it has ended.
     let completion: StopWorkspaceResponse["completion"];
     if (attestation !== undefined) {
       const drains = yield* WorkspaceCaptureDrainRepo;
@@ -3001,20 +3007,31 @@ export const stopWorkspace = (input: {
         drains.getByRunId(latestRunId),
         "Failed to load workspace capture drain.",
       );
-      const observedEpoch = existing?.lastStatus?.["epoch"];
       const attempt = yield* withInternalError(
         (yield* WorkspaceAttemptRepo).getAttemptById(latestRunId),
         "Failed to load the workspace attempt.",
       );
-      const covers = attestationCoversLaunch(
-        attestation,
-        attempt?.launchId ?? null,
-        attestationCoversExecutor(
-          attestation,
-          { runId: latestRunId, resourceId: instance.resourceId, reference: instance.reference },
-          typeof observedEpoch === "number" ? observedEpoch : undefined,
-        ),
-      );
+      const sealedAtMs =
+        attestation.sealedAt === undefined ? undefined : Date.parse(attestation.sealedAt);
+      const covers =
+        sealedAtMs !== undefined && Number.isNaN(sealedAtMs)
+          ? {
+              covers: false as const,
+              reason: `the attestation's seal time (${attestation.sealedAt ?? ""}) is not a time`,
+            }
+          : attestationCoversLaunch(
+              attestation,
+              attempt?.launchId ?? null,
+              attestationCoversExecutor(
+                { ...attestation, sealedAtMs },
+                {
+                  runId: latestRunId,
+                  resourceId: instance.resourceId,
+                  reference: instance.reference,
+                },
+                observedCaptureFromStored(existing?.lastStatus, existing?.lastStatusAt?.getTime()),
+              ),
+            );
       if (covers.covers) {
         yield* withInternalError(
           drains.attestCompletion({
@@ -3024,6 +3041,7 @@ export const stopWorkspace = (input: {
             captureN: attestation.captureN,
             attestedBy: input.payload.ownerUserId,
             ...(attestation.launchId === undefined ? {} : { launchId: attestation.launchId }),
+            ...(sealedAtMs === undefined ? {} : { sealedAt: new Date(sealedAtMs) }),
           }),
           "Failed to record the completion attestation.",
         );

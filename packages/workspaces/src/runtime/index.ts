@@ -146,8 +146,10 @@ export {
 } from "./launch-retention.js";
 
 export {
+  ATTESTATION_CLOCK_SKEW_MS,
   attestationCoversExecutor,
   decideExecutorDeletion,
+  observedCaptureFromStored,
   runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   type CompletionAttestation,
@@ -156,6 +158,7 @@ export {
   type ExecutorDeletionEvidence,
   type ExecutorIdentity,
   type ExecutorRuntimeState,
+  type ObservedCapture,
 } from "./executor-preservation.js";
 
 export {

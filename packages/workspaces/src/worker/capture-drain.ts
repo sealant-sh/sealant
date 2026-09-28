@@ -62,6 +62,7 @@ import {
   attestationCoversExecutor,
   type ExecutorDeletionBasis,
   type ExecutorIdentity,
+  type ObservedCapture,
 } from "../runtime/executor-preservation.js";
 import {
   SealantControlError,
@@ -163,6 +164,13 @@ export interface CaptureDrainEntry {
   /** When the daemon last answered with movement (or first answered at all). */
   readonly lastProgressAt: number | undefined;
   readonly last: CaptureFlushReport | undefined;
+  /** When `last` was read (this worker's clock; the database's once stored). */
+  readonly lastAtMs?: number | undefined;
+  /**
+   * A status is on record but cannot be read (`last` is then absent): Core observed something it
+   * cannot weigh, so no attestation may be taken over it.
+   */
+  readonly lastUnreadable?: boolean | undefined;
   readonly unreachableSince: number | undefined;
   /** The keep was already logged; the next log line is the one that says it moved again. */
   readonly keptLogged: boolean;
@@ -183,6 +191,8 @@ export interface CaptureDrainEntry {
         readonly executorId: string;
         readonly epoch: number;
         readonly captureN: number;
+        /** When the attesting store recorded the seal, when the attestation said. */
+        readonly sealedAtMs?: number | undefined;
         readonly atMs: number;
         readonly by: string;
       }
@@ -515,10 +525,32 @@ export const reportsComplete = (status: CaptureFlushReport | undefined): boolean
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
   reportsComplete(entry?.last);
 
+/** Core's own latest observation of the run's daemon, as the preservation policy weighs it. */
+export const observedCaptureOf = (
+  entry: CaptureDrainEntry | undefined,
+): ObservedCapture | undefined => {
+  const last = entry?.last;
+  if (last === undefined && entry?.lastUnreadable === true) {
+    return { readable: false };
+  }
+  return last === undefined
+    ? undefined
+    : {
+        readable: true,
+        epoch: last.epoch,
+        ...(last.headN === undefined ? {} : { headN: last.headN }),
+        complete: reportsComplete(last),
+        ...(last.incompleteReason === undefined ? {} : { incompleteReason: last.incompleteReason }),
+        ...(entry?.lastAtMs === undefined ? {} : { atMs: entry.lastAtMs }),
+      };
+};
+
 /**
- * Whether the control plane's recorded attestation covers THIS executor: it names the run's
- * executor and is not for an epoch older than the executor last reported
- * (`attestationCoversExecutor`). No attestation, or one about another executor, is `false`.
+ * Whether the control plane's recorded attestation covers THIS executor, weighed at the moment
+ * it is consumed: it names the run's executor, and nothing Core observed from it — before or
+ * after the attestation was accepted — contradicts it (`attestationCoversExecutor`: an older
+ * epoch, a later capture, or an observation that the work is not saved made after the seal).
+ * No attestation, or one about another executor, is `false`.
  */
 export const attestedCompleteFor = (
   entry: CaptureDrainEntry | undefined,
@@ -527,7 +559,7 @@ export const attestedCompleteFor = (
   const attested = entry?.completionAttested;
   return (
     attested !== undefined &&
-    attestationCoversExecutor(attested, executor, entry?.last?.epoch).covers
+    attestationCoversExecutor(attested, executor, observedCaptureOf(entry)).covers
   );
 };
 
@@ -939,7 +971,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             // The registrar refused a class for the session's byte quota: nothing of it ships
             // until a new epoch or a re-plan, whatever `pending` says. Keep the executor.
             const firstKeep = !entry.keptLogged;
-            entry = { ...entry, last: status, keptLogged: true };
+            entry = { ...entry, last: status, lastAtMs: now, keptLogged: true };
             if (firstKeep) {
               yield* Effect.logError(
                 `${prefix}: not saved · refused · kept · ${describeCaptureStatus(status)}. The registrar refused these captures for the session's byte quota; the workspace is left running.`,
@@ -954,11 +986,11 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
           }
           if (reportsComplete(status)) {
             yield* Effect.logInfo(`${prefix}: saved · ${describeCaptureStatus(status)}`);
-            entry = { ...entry, last: status, keptLogged: false };
+            entry = { ...entry, last: status, lastAtMs: now, keptLogged: false };
             return yield* finish({ kind: "drained", status });
           }
           if (status.pending === 0) {
-            entry = { ...entry, last: status };
+            entry = { ...entry, last: status, lastAtMs: now };
             if (flushesLeft > 0) {
               // Empty but unconfirmed: one more FINAL flush in this call.
               command = "flush";
@@ -984,7 +1016,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             yield* Effect.logInfo(`${prefix}: saving · ${describeCaptureStatus(status)}`);
             entry = { ...entry, keptLogged: false };
           }
-          entry = { ...entry, last: status };
+          entry = { ...entry, last: status, lastAtMs: now };
         }
 
         const stalledForMs = now - (entry.lastProgressAt ?? now);

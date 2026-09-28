@@ -461,14 +461,12 @@ const settleUnsettledExecutors = (
           resourceId,
           reference: instance.reference,
         });
+        // Only a drain lets a RUNNING executor go: the policy weighs recorded evidence only for
+        // one that ended.
         const decision = decideExecutorDeletion({
           captureSourced: true,
           runtime: inspection.state,
           ...evidence,
-          // Only a drain lets a RUNNING executor go: recorded evidence is not enough for one.
-          ...(inspection.state === "running"
-            ? { observedComplete: false, attestedComplete: false }
-            : {}),
         });
         if (decision.delete && decision.basis === "missing") {
           yield* ledger.observe(runId, {

@@ -222,6 +222,9 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
           ...(drain.completion.launchId === undefined
             ? {}
             : { launchId: drain.completion.launchId }),
+          ...(drain.completion.sealedAt === undefined
+            ? {}
+            : { sealedAt: drain.completion.sealedAt }),
         },
       }),
 });
@@ -509,6 +512,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
                   ...(options.completion.launchId === undefined
                     ? {}
                     : { launchId: options.completion.launchId }),
+                  ...(options.completion.sealedAt === undefined
+                    ? {}
+                    : { sealedAt: options.completion.sealedAt }),
                 },
               }),
         }),

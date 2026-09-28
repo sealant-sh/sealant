@@ -407,6 +407,8 @@ export interface WorkspaceCaptureDrain {
     readonly attestedAt: string;
     /** The launch identity the attestation named. */
     readonly launchId?: string;
+    /** When the store recorded the seal, when the attestation said. */
+    readonly sealedAt?: string;
   };
 }
 
@@ -431,6 +433,12 @@ export interface WorkspaceCompletionAttestation {
    * ignored. A seal never transfers to another executor.
    */
   readonly launchId?: string;
+  /**
+   * When the store recorded the seal (ISO 8601). The control plane weighs the seal against its
+   * own observations of the executor: a report that the work is not saved, made after the seal,
+   * revokes it (review 4 #1). Without it, any such report at or past `captureN` does.
+   */
+  readonly sealedAt?: string;
 }
 
 /** Options for `workspace.stop()`. */

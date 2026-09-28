@@ -359,6 +359,68 @@ describe("recoverRetainedExecutorsEffect", () => {
     expect(h.stop).not.toHaveBeenCalled();
   });
 
+  it("never removes a RUNNING retained executor on recorded evidence: it drains it first (review 4 #1)", async () => {
+    // A seal of capture 41 is on record; Core's newer observation says the FINAL failed to
+    // snapshot. The executor still runs: the stale seal must not delete it without a drain.
+    const failed = captureStatus({
+      epoch: 3,
+      headN: 41,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 1,
+    });
+    const h = harness({
+      inspect: { state: "running" },
+      recover: async () => ({ outcome: "running" }),
+      daemon: fakeCaptureDaemon([failed]),
+    });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.entry = {
+      ...row.entry,
+      last: failed,
+      lastAtMs: NOW,
+      completionAttested: {
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+        sealedAtMs: NOW - 3_600_000,
+        atMs: NOW,
+        by: "user_1",
+      },
+    };
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.daemon.connect).toHaveBeenCalled();
+    expect(h.daemon.flushRequests[0]).toMatchObject({ kind: "final" });
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
+  it("removes a running retained executor once a drain of it reads the final flush complete", async () => {
+    const h = harness({
+      inspect: { state: "running" },
+      recover: async () => ({ outcome: "running" }),
+      daemon: fakeCaptureDaemon([savedStatus({ epoch: 3, headN: 42 })]),
+    });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    // Even an attestation that would cover it is not what lets a running executor go.
+    row.entry = {
+      ...row.entry,
+      completionAttested: {
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+        atMs: NOW,
+        by: "user_1",
+      },
+    };
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.daemon.flushRequests[0]).toMatchObject({ kind: "final" });
+    expect(h.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("says loudly when a retained executor is gone, and ends the retention", async () => {
     const h = harness({ inspect: { state: "missing" } });
 

@@ -975,8 +975,10 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
   };
 
   it("removes an exited capture executor the control plane attested complete for THIS executor", async () => {
+    // Core's last observation was made while the head was still short of the sealed capture:
+    // the seal came after it (a FINAL whose answer was lost).
     const ledger = withEntry({
-      last: captureStatus({ epoch: 3, pending: 1, complete: false }),
+      last: captureStatus({ epoch: 3, headN: 40, pending: 1, complete: false }),
       completionAttested: {
         executorId: "container-1",
         epoch: 3,
@@ -992,6 +994,42 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       state: "stopped",
       detail: expect.stringContaining("attested a sealed final capture"),
     });
+  });
+
+  it("keeps an exited executor whose seal Core's own later observation contradicts (review 4 #1)", async () => {
+    // Capture 41 was sealed; later the disk changed and the FINAL could not snapshot it
+    // (`snapshot-failed`, no newer capture registered: the head is still 41). Core read that
+    // failed answer after the seal: a received failure is not overridden by an older seal.
+    const sealedAtMs = Date.now() - 120_000;
+    for (const variant of [
+      { headN: 41, lastAtMs: sealedAtMs + 30_000, sealedAtMs },
+      // No seal time: the seal cannot be shown to follow an incomplete observation at its head.
+      { headN: 41, lastAtMs: sealedAtMs - 600_000, sealedAtMs: undefined },
+      // A later capture than the sealed one exists: the seal does not cover it.
+      { headN: 42, lastAtMs: sealedAtMs - 600_000, sealedAtMs },
+    ]) {
+      const ledger = withEntry({
+        last: captureStatus({
+          epoch: 3,
+          headN: variant.headN,
+          complete: false,
+          incompleteReason: "snapshot-failed",
+          unreadable: 1,
+        }),
+        lastAtMs: variant.lastAtMs,
+        completionAttested: {
+          executorId: "container-1",
+          epoch: 3,
+          captureN: 41,
+          ...(variant.sealedAtMs === undefined ? {} : { sealedAtMs: variant.sealedAtMs }),
+          atMs: Date.now(),
+          by: "user_1",
+        },
+      });
+      const { outcome, stop } = await exitedStop(ledger);
+      expect(outcome).toBe("kept");
+      expect(stop).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps an exited executor whose attestation names another executor or an older epoch", async () => {

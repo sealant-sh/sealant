@@ -236,6 +236,11 @@ export const workspaceCaptureDrains = pgTable(
     detail: text(),
     /** The daemon's last capture status, as the worker read it (JSON-safe numbers). */
     lastStatus: jsonb("last_status").$type<Readonly<Record<string, unknown>>>(),
+    /**
+     * When the worker read `last_status` (the database's clock). An attestation is weighed
+     * against it: an observation that the work is not saved, made after a seal, revokes that seal.
+     */
+    lastStatusAt: timestamp("last_status_at", { mode: "date", withTimezone: true }),
     lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
     unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
     keptLogged: boolean("kept_logged").notNull().default(false),
@@ -270,6 +275,8 @@ export const workspaceCaptureDrains = pgTable(
     completionAttestedBy: text("completion_attested_by"),
     /** The launch identity the attestation named, when it named one (it matched the run's). */
     completionLaunchId: text("completion_launch_id"),
+    /** When the attesting store recorded the seal (its clock), when the attestation said. */
+    completionSealedAt: timestamp("completion_sealed_at", { mode: "date", withTimezone: true }),
     /**
      * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
      * without a complete final flush, or its launch failed after it started). Set once (the

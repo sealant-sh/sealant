@@ -1,0 +1,2 @@
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "last_status_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "completion_sealed_at" timestamp with time zone;

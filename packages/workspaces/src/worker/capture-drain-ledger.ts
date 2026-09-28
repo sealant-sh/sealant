@@ -75,6 +75,8 @@ export const captureStatusFromStored = (stored: unknown): CaptureFlushReport | u
 const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   lastProgressAt: row.lastProgressAt?.getTime(),
   last: captureStatusFromStored(row.lastStatus),
+  lastAtMs: row.lastStatusAt?.getTime(),
+  lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
   unreachableSince: row.unreachableSince?.getTime(),
   keptLogged: row.keptLogged,
   silentLogged: row.silentLogged,
@@ -96,6 +98,7 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
           executorId: row.completionExecutorId,
           epoch: row.completionEpoch,
           captureN: row.completionCaptureN,
+          sealedAtMs: row.completionSealedAt?.getTime(),
           atMs: row.completionAttestedAt.getTime(),
           by: row.completionAttestedBy ?? "unknown",
         },
@@ -179,6 +182,7 @@ export const captureDrainLedgerFromRepo = (
           leaseMs: options.leaseMs,
           progress: {
             lastStatus: entry.last === undefined ? null : storedStatus(entry.last),
+            lastStatusAt: entry.lastAtMs === undefined ? null : new Date(entry.lastAtMs),
             lastProgressAt:
               entry.lastProgressAt === undefined ? null : new Date(entry.lastProgressAt),
             unreachableSince:

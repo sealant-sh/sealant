@@ -384,8 +384,14 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
    * never read `complete: true` from it itself (the FINAL reply was lost, the daemon exited
    * before a drain reached it). Accepted only when `executorId` names the current executor — the
    * run id, or the runtime's `resourceId` / `reference` (`workspace.details().runtime`) — and
-   * `epoch` is not older than any the executor reported; otherwise ignored, and the executor is
-   * kept as before. Never a reason to skip the drain of a running executor.
+   * nothing the control plane observed from the executor contradicts it: an older `epoch` than
+   * the executor reported, a capture past `captureN`, or — in the same epoch — a report that its
+   * work is NOT saved (incomplete, changed, unreadable, a failed snapshot) that did not come
+   * before the seal (`sealedAt`; without it, any such report at or past `captureN` counts
+   * against the seal). Otherwise ignored, and the executor is kept as before. Weighed again
+   * when it is used: a later report that the work is not saved revokes it. A seal stands in for
+   * a lost FINAL answer, never for a received one that said the work is not saved. Never a
+   * reason to skip the drain of a running executor.
    */
   completion: Schema.optional(
     Schema.Struct({
@@ -401,6 +407,12 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
        * launch, is ignored (a seal never transfers between executors).
        */
       launchId: Schema.optional(NonEmptyString),
+      /**
+       * When the store recorded the seal (ISO 8601). Orders the seal against the control
+       * plane's own observations of the executor; an attestation without it is taken only while
+       * nothing the control plane observed since it could contradict it.
+       */
+      sealedAt: Schema.optional(NonEmptyString),
     }),
   ),
 });
@@ -626,6 +638,8 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       captureN: Schema.Int,
       attestedAt: Schema.String,
       launchId: Schema.optional(NonEmptyString),
+      /** When the store recorded the seal, when the attestation said. */
+      sealedAt: Schema.optional(Schema.String),
     }),
   ),
 });
