@@ -105,10 +105,13 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
       }),
     );
 
-  const reconcile = (adapter: RuntimeAdapter) =>
+  // Scoped to this test's executors: the database is shared with the other suites, which run
+  // at the same time, and an unscoped sweep would adopt (or settle) their rows under them.
+  const reconcile = (adapter: RuntimeAdapter, resourceIds: readonly string[]) =>
     run(
       reconcileRuntimeExitsEffect({
         runtimeAdapters: [adapter],
+        resourceIds,
         captureDrain: {
           ledger: databaseCaptureDrainLedger({ db, owner: "db-test", leaseMs: 60_000 }),
           settings: {
@@ -182,7 +185,10 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
     );
     expect(pastGrace).toEqual([legacy]);
 
-    await reconcile(adapterReporting({ [`c-${ended}`]: { state: "exited", exitCode: 75 } }));
+    await reconcile(
+      adapterReporting({ [`c-${ended}`]: { state: "exited", exitCode: 75 } }),
+      [lost, ended, live, legacy].map((id) => `c-${id}`),
+    );
 
     const state = await run(
       Effect.gen(function* () {
@@ -225,7 +231,7 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
       resourceId: `c-${runId}`,
       deadline: new Date(Date.now() + 3_600_000),
     });
-    await reconcile(adapterReporting({}));
+    await reconcile(adapterReporting({}), [`c-${runId}`]);
 
     const late = await run(
       Effect.gen(function* () {
