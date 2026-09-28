@@ -196,6 +196,7 @@ interface RecordedRequest {
   readonly method: string | undefined;
   readonly headers: Record<string, string>;
   readonly body: unknown;
+  readonly signal?: AbortSignal | null | undefined;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -220,6 +221,7 @@ const fakeEndpoint = (
       method: init?.method,
       headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      signal: init?.signal,
     };
     const isHealth = request.url.endsWith(AGENT_HEALTH_ROUTE);
     const recorded = isHealth ? healthRequests : requests;
@@ -1434,6 +1436,9 @@ describe("MicrovmRuntimeAdapter.recover (review 3 #7)", () => {
       headers: expect.objectContaining({ authorization: "Bearer control-token" }),
       body: { version: 1, runId: "run-golden-4", secretEnvJson: JSON.stringify(token) },
     });
+    // Bounded (review 9 #8): an agent that never answers fails the attempt, never the sweep.
+    expect(recoverRequest?.signal).toBeInstanceOf(AbortSignal);
+    expect(endpoint.healthRequests.at(-1)?.signal).toBeInstanceOf(AbortSignal);
     // It waited for the recovered daemon to answer before the caller drains it.
     expect(control.healthTargets.length).toBe(launchHealthChecks + 1);
     expect(api.vms.get("microvm-1")?.state).toBe("RUNNING");

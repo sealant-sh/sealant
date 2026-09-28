@@ -817,4 +817,69 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(saved.entry?.unsaved ?? []).toEqual([]);
     expect(observedComplete(saved.entry)).toBe(true);
   });
+
+  it("lists the soonest-ending retained executor first and holds one recovery attempt per executor (review 9 #8)", async () => {
+    const layer = Layer.mergeAll(
+      WorkspaceCaptureDrainRepoLive,
+      WorkspaceRuntimeInstanceRepoLive,
+    ).pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const run = <A, E>(
+      effect: Effect.Effect<A, E, WorkspaceCaptureDrainRepo | WorkspaceRuntimeInstanceRepo>,
+    ) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
+    const older = await newRun();
+    const urgent = await newRun();
+    const ledgerA = worker(dbA, "recovery-a");
+    const ledgerB = worker(dbB, "recovery-b");
+    // Retained in backoff order: the older one first, its runtime ending in an hour; the urgent
+    // one's in a minute.
+    for (const [runId, endsInMs] of [
+      [older, 60 * 60_000],
+      [urgent, 60_000],
+    ] as const) {
+      await run(
+        Effect.gen(function* () {
+          yield* (yield* WorkspaceRuntimeInstanceRepo).upsertRuntimeInstance({
+            runId,
+            status: "failed",
+            adapter: "microvm",
+            resourceId: runId,
+            reference: runId,
+            runtimeDeadlineAt: new Date(Date.now() + endsInMs),
+            sourceKind: "capture",
+          });
+        }),
+      );
+      await Effect.runPromise(ledgerA.markRetained(runId, "executor exited · exit 75"));
+    }
+    const listed = async () =>
+      (
+        await run(
+          Effect.gen(function* () {
+            return yield* (yield* WorkspaceCaptureDrainRepo).listRetainedDue({
+              limit: 1_000,
+              runIds: [older, urgent],
+            });
+          }),
+        )
+      ).map((row) => row.runId);
+    expect(await listed()).toEqual([urgent, older]);
+    // One attempt at a time, across workers: the second claim is refused, and a claimed executor
+    // is not listed due.
+    const claim = await Effect.runPromise(ledgerA.claimRecovery(urgent, 60_000));
+    expect(claim).toBeDefined();
+    expect(await Effect.runPromise(ledgerB.claimRecovery(urgent, 60_000))).toBeUndefined();
+    expect(await listed()).toEqual([older]);
+    if (claim === undefined) {
+      throw new Error("not claimed");
+    }
+    // Another worker's release does nothing; the holder's frees it.
+    await Effect.runPromise(ledgerB.releaseRecovery(urgent, { token: "not-the-holder" }));
+    expect(await Effect.runPromise(ledgerB.claimRecovery(urgent, 60_000))).toBeUndefined();
+    await Effect.runPromise(ledgerA.releaseRecovery(urgent, claim));
+    expect(await listed()).toEqual([urgent, older]);
+    // A claim whose holder died lapses and is taken over.
+    expect(await Effect.runPromise(ledgerA.claimRecovery(older, 1))).toBeDefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await Effect.runPromise(ledgerB.claimRecovery(older, 60_000))).toBeDefined();
+  });
 });

@@ -436,7 +436,14 @@ describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () 
 });
 
 describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 #6, #7)", () => {
-  const sweepRows = async (rows: readonly WorkspaceRuntimeInstance[], retained: boolean) => {
+  const sweepRows = async (
+    rows: readonly WorkspaceRuntimeInstance[],
+    retained: boolean,
+    recovery?: {
+      readonly recover: NonNullable<RuntimeAdapter["recover"]>;
+      readonly ledger: CaptureDrainLedger;
+    },
+  ) => {
     const requestRecovery = vi.fn((runId: string) =>
       Effect.succeed(
         retained ? ({ runId, retainedAt: new Date(NOW) } as WorkspaceCaptureDrain) : undefined,
@@ -454,7 +461,9 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
         throw new Error("unused");
       },
       stop,
-      inspect: async () => ({ state: "running" }),
+      inspect: async () =>
+        recovery === undefined ? { state: "running" } : { state: "exited", exitCode: 75 },
+      ...(recovery === undefined ? {} : { recover: recovery.recover }),
     };
     const layer = Layer.mergeAll(
       Layer.succeed(WorkspaceRuntimeInstanceRepo, {
@@ -462,6 +471,7 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
         getRuntimeInstanceByRunId: (runId: string) =>
           Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
         markStopRequested: () => Effect.void,
+        markStopped: () => Effect.void,
       } as unknown as WorkspaceRuntimeInstanceRepoService),
       Layer.succeed(WorkspaceRepo, {
         getWorkspaceByAttemptId: () => Effect.succeed(undefined),
@@ -478,14 +488,31 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
         recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
         recordStatus: () => Effect.succeed(true),
         requestRecovery,
+        listRetainedDue: (request: { readonly runIds?: readonly string[] }) =>
+          Effect.succeed(
+            (request.runIds ?? []).map(
+              (runId) =>
+                ({
+                  runId,
+                  retainedAt: new Date(NOW - MIN),
+                  recoveryAttempts: 0,
+                  captureTokenSealed: "sealed",
+                }) as WorkspaceCaptureDrain,
+            ),
+          ),
+        recordRecoveryAttempt: () => Effect.void,
       } as unknown as WorkspaceCaptureDrainRepoService),
       fakeCaptureDaemon(["unreachable"]).layer,
     );
     const driven = await Effect.runPromise(
       preserveBeforeDeadlineEffect({
         runtimeAdapters: [adapter],
+        credentialCipher: {
+          encrypt: () => Effect.die("unused"),
+          decrypt: () => Effect.succeed(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "token" })),
+        },
         captureDrain: {
-          ledger: inMemoryCaptureDrainLedger(),
+          ledger: recovery?.ledger ?? inMemoryCaptureDrainLedger(),
           settings: {
             pollIntervalMs: 1,
             stallWindowMs: 30,
@@ -513,6 +540,30 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
     expect(driven).toBe(1);
     expect(requestRecovery).toHaveBeenCalledWith("run_vm");
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  // Review 9 #8: making the recovery due left it behind a recovery sweep that may be busy with
+  // another executor until after this one's cap. The deadline path starts it itself, under the
+  // executor's recovery claim.
+  it("starts the retained executor's recovery itself, under its recovery claim (review 9 #8)", async () => {
+    const exited: WorkspaceRuntimeInstance = {
+      ...instance(5 * MIN),
+      status: "failed",
+      errorCode: "runtime-exited",
+      finishedAt: new Date(NOW - MIN),
+      daemonRecoveryBoot: true,
+    };
+    const ledger = inMemoryCaptureDrainLedger({ now: () => NOW });
+    Effect.runSync(ledger.markRetained("run_vm", "executor exited · exit 75"));
+    const recover = vi.fn(async () => ({ outcome: "unsupported" as const, detail: "kept" }));
+    const { driven, requestRecovery } = await sweepRows([exited], true, { recover, ledger });
+    expect(driven).toBe(1);
+    expect(requestRecovery).toHaveBeenCalledWith("run_vm");
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledOnce());
+    // Its claim was released once the attempt ended.
+    await vi.waitFor(async () =>
+      expect(await Effect.runPromise(ledger.claimRecovery("run_vm", 1_000))).toBeDefined(),
+    );
   });
 
   it("leaves an ended executor that nothing retains alone", async () => {

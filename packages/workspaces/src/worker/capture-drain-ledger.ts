@@ -471,6 +471,38 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
+  claimRecovery: (runId, leaseMs) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        const token = randomUUID();
+        const claimed = yield* repo.claimRecovery({ runId, token, leaseMs });
+        return claimed ? { token } : undefined;
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Executor recovery: claiming the recovery of run ${runId}'s retained executor failed; nothing is started this time.`,
+          cause,
+        ).pipe(Effect.as(undefined)),
+      ),
+    ),
+
+  releaseRecovery: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.releaseRecovery({ runId, token: ticket.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Executor recovery: releasing the recovery of run ${runId}'s retained executor failed; it lapses on its own.`,
+          cause,
+        ),
+      ),
+    ),
+
   admitRecovery: (runId) =>
     run(
       Effect.gen(function* () {

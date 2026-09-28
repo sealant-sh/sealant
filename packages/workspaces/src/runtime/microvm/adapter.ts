@@ -121,6 +121,15 @@ export const MICROVM_TERMINATE_BOUND_MS = 60_000;
  * accepts a SigV4-signed request only within 15 minutes of its signing time (5 for most
  * services). Past this, a VM the platform still has was not terminated by it and never will be.
  */
+/**
+ * The bound on the agent's recovery request (review 9 #8): the agent kills what the dead daemon
+ * left and starts sealantd in recovery mode, then answers; one that does not answer in time is a
+ * failed attempt, never a recovery sweep stalled on one VM while another reaches its cap.
+ */
+export const MICROVM_AGENT_RECOVER_BOUND_MS = 90_000;
+/** The bound on one agent health read (inspect, readiness). */
+export const MICROVM_AGENT_HEALTH_BOUND_MS = 20_000;
+
 export const MICROVM_REMOVAL_FENCE_MS =
   MICROVM_STOP_READ_BOUND_MS + MICROVM_TERMINATE_BOUND_MS + 15 * 60_000 + 3 * 60_000;
 
@@ -830,7 +839,9 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
    */
   async recover(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult> {
     const microvmId = input.resourceId;
-    const vm = await this.#api.getMicrovm(microvmId);
+    const vm = await this.#api.getMicrovm(microvmId, {
+      signal: AbortSignal.timeout(MICROVM_STOP_READ_BOUND_MS),
+    });
     if (vm === undefined || isEnded(vm.state)) {
       return { outcome: "missing" };
     }
@@ -866,6 +877,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       try {
         response = await this.#fetch(`https://${host}${AGENT_RECOVER_ROUTE}`, {
           method: "POST",
+          signal: AbortSignal.timeout(MICROVM_AGENT_RECOVER_BOUND_MS),
           headers: {
             ...(await this.#tokens.headers(microvmId)),
             authorization: `Bearer ${this.#config.controlBearerToken}`,
@@ -1125,6 +1137,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     try {
       response = await this.#fetch(`https://${host}${AGENT_HEALTH_ROUTE}`, {
         method: "GET",
+        signal: AbortSignal.timeout(MICROVM_AGENT_HEALTH_BOUND_MS),
         headers: {
           ...(await this.#tokens.headers(microvmId)),
           authorization: `Bearer ${this.#config.controlBearerToken}`,

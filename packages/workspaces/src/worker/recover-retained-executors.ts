@@ -39,6 +39,13 @@ import type { CredentialCipherService } from "@sealant/credentials";
  * backoff (`workspace_capture_drains.next_recovery_at`); the owner can make one due now
  * (`POST /v1/workspaces/:id/recover`). Best-effort per executor: one failure never aborts the
  * sweep.
+ *
+ * Attempts are independent (review 9 #8): each due executor gets its own, dispatched at once in
+ * the order its runtime ends (its platform deadline, the soonest first), up to `maxConcurrent`
+ * together; every runtime operation of an attempt is bounded (`RecoveryBounds`), and so is the
+ * attempt. One attempt per executor at a time, across workers and paths
+ * (`CaptureDrainLedger.claimRecovery`): the deadline sweep starts an urgent one itself under the
+ * same claim rather than waiting behind a sweep already running.
  */
 import {
   SealantDB,
@@ -98,6 +105,38 @@ export const DEFAULT_RECOVERY_BACKOFF: RecoveryBackoff = {
   maxMs: 60 * 60_000,
 };
 
+/**
+ * How long each runtime operation of one recovery attempt may take, and the attempt as a whole
+ * (review 9 #8). One past its bound is a failed operation (the attempt is retried on the backoff),
+ * never a stalled sweep.
+ */
+export interface RecoveryBounds {
+  readonly inspectMs: number;
+  readonly parkMs: number;
+  readonly restageMs: number;
+  /** The runtime's restart of the executor on its own disk (MicroVM: the agent's request). */
+  readonly recoverMs: number;
+  /** The removal of an executor the policy let go. */
+  readonly removeMs: number;
+  /** The whole attempt, its drain included. */
+  readonly attemptMs: number;
+}
+
+export const DEFAULT_RECOVERY_BOUNDS: RecoveryBounds = {
+  inspectMs: 30_000,
+  parkMs: 60_000,
+  restageMs: 30_000,
+  recoverMs: 2 * 60_000,
+  removeMs: 5 * 60_000,
+  attemptMs: 12 * 60_000,
+};
+
+/** How much longer than its attempt's bound an executor's recovery claim is held. */
+const RECOVERY_CLAIM_MARGIN_MS = 3 * 60_000;
+
+/** How many recovery attempts one sweep runs at once. */
+const DEFAULT_MAX_CONCURRENT = 8;
+
 export interface RecoverRetainedExecutorsOptions {
   readonly runtimeAdapters: readonly RuntimeAdapter[];
   readonly targetOptions?: SealantTargetDerivationOptions;
@@ -115,6 +154,10 @@ export interface RecoverRetainedExecutorsOptions {
    */
   readonly runIds?: readonly string[];
   readonly backoff?: RecoveryBackoff;
+  /** Bounds on each operation of an attempt, and on the attempt (`DEFAULT_RECOVERY_BOUNDS`). */
+  readonly bounds?: Partial<RecoveryBounds>;
+  /** How many attempts run at once, the soonest-ending runtime first. Default 8. */
+  readonly maxConcurrent?: number;
   readonly now?: () => number;
   /**
    * Unseals the capture token kept at launch (`capture_token_sealed`), which a restarted
@@ -176,26 +219,110 @@ export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutor
   if (options.runIds !== undefined && options.runIds.length === 0) {
     return new Map<string, RecoveryOutcome>();
   }
+  const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
   const due = yield* drains.listRetainedDue({
     limit: options.maxPerTick ?? DEFAULT_MAX_PER_TICK,
     ...(options.runIds === undefined ? {} : { runIds: options.runIds }),
   });
+  // The runtime that ends soonest first (review 9 #8): its platform deadline, as the launch
+  // recorded it; none recorded, after every one that has one.
+  const deadlines = yield* Effect.forEach(
+    due,
+    (row) =>
+      runtimeInstances.getRuntimeInstanceByRunId(row.runId).pipe(
+        Effect.map((instance) => instance?.runtimeDeadlineAt?.getTime()),
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      ),
+    { concurrency: 8 },
+  );
+  const ordered = due
+    .map((row, index) => ({ row, deadlineMs: deadlines[index] ?? Number.POSITIVE_INFINITY }))
+    .sort((a, b) => a.deadlineMs - b.deadlineMs);
   const outcomes = new Map<string, RecoveryOutcome>();
-  for (const row of due) {
-    const outcome = yield* recoverOne(options, row).pipe(
+  // Independent attempts: one that stalls holds only its own slot, never another executor's.
+  yield* Effect.forEach(
+    ordered,
+    ({ row }) =>
+      recoveryAttempt(options, row).pipe(
+        Effect.tap((outcome) => Effect.sync(() => outcomes.set(row.runId, outcome))),
+      ),
+    { concurrency: Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT), discard: true },
+  );
+  return outcomes;
+});
+
+/**
+ * One recovery attempt of one retained executor, under its recovery claim (one attempt per
+ * executor at a time, across workers and paths) and bounded as a whole (review 9 #8). An attempt
+ * another path holds is left to it (`retained`).
+ */
+const recoveryAttempt = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCaptureDrain) =>
+  Effect.gen(function* () {
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    const { ledger } = options.captureDrain;
+    const bounds = { ...DEFAULT_RECOVERY_BOUNDS, ...options.bounds };
+    const now = options.now ?? Date.now;
+    const backoff = options.backoff ?? DEFAULT_RECOVERY_BACKOFF;
+    const claim = yield* ledger.claimRecovery(
+      row.runId,
+      bounds.attemptMs + RECOVERY_CLAIM_MARGIN_MS,
+    );
+    if (claim === undefined) {
+      yield* Effect.logInfo(
+        `Executor recovery · run ${row.runId}: another recovery of its retained executor is under way (or it is no longer retained); left to it.`,
+      );
+      return "retained" as const;
+    }
+    const failed = (error: string) =>
+      drains
+        .recordRecoveryAttempt({
+          runId: row.runId,
+          error,
+          nextRecoveryAt: new Date(now() + nextRecoveryDelayMs(row.recoveryAttempts, backoff)),
+        })
+        .pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.as("retained" as const),
+        );
+    return yield* recoverOne(options, row, bounds).pipe(
+      Effect.timeoutOrElse({
+        duration: bounds.attemptMs,
+        orElse: () =>
+          Effect.logError(
+            `Executor recovery · run ${row.runId}: not saved · retained · the recovery attempt did not finish within ${String(Math.round(bounds.attemptMs / 1000))} s; it is kept and the next attempt follows the backoff.`,
+          ).pipe(Effect.andThen(failed("the recovery attempt did not finish in time"))),
+      }),
       Effect.catchCause((cause) =>
         Effect.logError(
           `Executor recovery: run ${row.runId}'s retained executor could not be handled this sweep; it stays retained.`,
           cause,
-        ).pipe(Effect.as("retained" as const)),
+        ).pipe(Effect.andThen(failed("the recovery attempt failed"))),
       ),
+      Effect.ensuring(ledger.releaseRecovery(row.runId, claim)),
     );
-    outcomes.set(row.runId, outcome);
-  }
-  return outcomes;
-});
+  });
 
-const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCaptureDrain) =>
+/** A runtime call of a recovery attempt, bounded (review 9 #8): past it, it failed. */
+const boundedCall = <A>(
+  call: () => Promise<A>,
+  boundMs: number,
+  what: string,
+): Effect.Effect<A, unknown> =>
+  Effect.tryPromise({ try: call, catch: (error) => error }).pipe(
+    Effect.timeoutOrElse({
+      duration: boundMs,
+      orElse: () =>
+        Effect.fail(
+          new Error(`${what} did not answer within ${String(Math.round(boundMs / 1000))} s`),
+        ),
+    }),
+  );
+
+const recoverOne = (
+  options: RecoverRetainedExecutorsOptions,
+  row: WorkspaceCaptureDrain,
+  bounds: RecoveryBounds,
+) =>
   Effect.gen(function* () {
     const drains = yield* WorkspaceCaptureDrainRepo;
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
@@ -239,8 +366,10 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
           ledger,
           runId,
           ticket,
-          remove: Effect.tryPromise(() =>
-            adapter.stop({ resourceId, ...(reference === null ? {} : { reference }) }),
+          remove: boundedCall(
+            () => adapter.stop({ resourceId, ...(reference === null ? {} : { reference }) }),
+            bounds.removeMs,
+            "the runtime's removal of the executor",
           ),
         });
         if (!removal.removed) {
@@ -262,7 +391,11 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     const runtimeNow: Effect.Effect<ExecutorRuntimeState> =
       inspect === undefined
         ? Effect.succeed("unknown")
-        : Effect.tryPromise(() => inspect.call(adapter, { resourceId })).pipe(
+        : boundedCall(
+            () => inspect.call(adapter, { resourceId }),
+            bounds.inspectMs,
+            "the runtime's inspection",
+          ).pipe(
             Effect.map((result) => result.state),
             Effect.catchCause(() => Effect.succeed("unknown" as const)),
           );
@@ -275,8 +408,10 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     // boot runs no user code, so nothing it does needs them. Best-effort.
     const park = adapter.parkRetained;
     if (state === "exited" && park !== undefined) {
-      yield* Effect.tryPromise(() =>
-        park.call(adapter, { resourceId, ...(reference === null ? {} : { reference }) }),
+      yield* boundedCall(
+        () => park.call(adapter, { resourceId, ...(reference === null ? {} : { reference }) }),
+        bounds.parkMs,
+        "stopping what runs beside the executor",
       ).pipe(
         Effect.flatMap((parked) =>
           parked.stopped.length === 0
@@ -391,10 +526,11 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     const restage = stager.restageSecretEnv;
     if (restarts && !handsTokenOver && recoverySecretEnv !== undefined && restage !== undefined) {
       const secretEnv = recoverySecretEnv;
-      const staged = yield* Effect.tryPromise({
-        try: () => restage.call(stager, runId, secretEnv),
-        catch: (error) => error,
-      }).pipe(
+      const staged = yield* boundedCall(
+        () => restage.call(stager, runId, secretEnv),
+        bounds.restageMs,
+        "staging the capture token",
+      ).pipe(
         Effect.as(undefined),
         Effect.catch((error) =>
           Effect.succeed(error instanceof Error ? error.message : String(error)),
@@ -417,8 +553,8 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
             outcome: "unsupported",
             detail: `the ${adapter.id} runtime cannot restart an ended executor on its own disk`,
           }
-        : yield* Effect.tryPromise({
-            try: () =>
+        : yield* boundedCall(
+            () =>
               recover.call(adapter, {
                 resourceId,
                 ...(reference === null ? {} : { reference }),
@@ -426,8 +562,9 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
                   ? { runId, secretEnv: recoverySecretEnv }
                   : {}),
               }),
-            catch: (error) => error,
-          }).pipe(
+            bounds.recoverMs,
+            "the runtime's restart of the executor",
+          ).pipe(
             Effect.catch((error) =>
               Effect.succeed({
                 outcome: "failed" as const,

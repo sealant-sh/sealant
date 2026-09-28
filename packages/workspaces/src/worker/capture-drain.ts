@@ -294,6 +294,11 @@ export type CaptureDrainRead =
   | { readonly readable: true; readonly entry: CaptureDrainEntry | undefined }
   | { readonly readable: false };
 
+/** One recovery attempt's hold on a retained executor (review 9 #8). */
+export interface RecoveryTicket {
+  readonly token: string;
+}
+
 /** A held removal of an executor (decision 21): the token its `deleting` transition is owned by. */
 export interface DeletionTicket {
   readonly token: string;
@@ -449,6 +454,19 @@ export interface CaptureDrainLedger {
     runId: string,
   ) => Effect.Effect<"admitted" | "deleting" | "deleted" | "unknown">;
   /**
+   * Take the recovery of the run's retained executor for one attempt (review 9 #8): one attempt
+   * per executor at a time, across workers and paths (the recovery sweep, the deadline sweep's
+   * urgent recovery), for `leaseMs` (longer than the attempt's own bound; taken over once it
+   * lapses). The ticket releases it (`releaseRecovery`). `undefined`: another attempt holds it,
+   * it is not retained, or the claim could not be made — nothing is started.
+   */
+  readonly claimRecovery: (
+    runId: string,
+    leaseMs: number,
+  ) => Effect.Effect<RecoveryTicket | undefined>;
+  /** The attempt ended: its claim is released. Best-effort: otherwise it lapses on its own. */
+  readonly releaseRecovery: (runId: string, ticket: RecoveryTicket) => Effect.Effect<void>;
+  /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
    * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
    */
@@ -519,6 +537,8 @@ export interface InMemoryCaptureDrainRow {
   recordedTick?: number;
   /** The unsaved answers no later one covers, with when each was recorded (the store's tick). */
   unsaved?: UnsavedObservation<CaptureFlushReport>[];
+  /** Who is recovering the retained executor, until when (`recovery_lease_*`, review 9 #8). */
+  recoveryLease?: { readonly token: string; readonly untilMs: number } | undefined;
   /** The executor's removal (decision 21), as `deletion_*` holds it. */
   deletion?:
     | {
@@ -889,6 +909,27 @@ export const inMemoryCaptureDrainLedger = (
         row.deletion = undefined;
         bump(row);
         return "admitted" as const;
+      }),
+    claimRecovery: (runId, leaseMs) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row === undefined || row.entry.retained === undefined) {
+          return undefined;
+        }
+        if (row.recoveryLease !== undefined && row.recoveryLease.untilMs > now()) {
+          return undefined;
+        }
+        inMemoryClaimSequence += 1;
+        const token = `recovery-${String(inMemoryClaimSequence)}`;
+        row.recoveryLease = { token, untilMs: now() + leaseMs };
+        return { token };
+      }),
+    releaseRecovery: (runId, ticket) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row?.recoveryLease?.token === ticket.token) {
+          row.recoveryLease = undefined;
+        }
       }),
     observe: (runId, observation) =>
       Effect.sync(() => {

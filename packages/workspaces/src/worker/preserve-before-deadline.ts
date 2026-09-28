@@ -72,6 +72,7 @@ import {
 } from "@sealant/db";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Semaphore } from "effect";
 
+import type { LaunchMaterialStager } from "../runtime/launch-material.js";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type CaptureFlushReport } from "../sealantd/runtime.js";
 import {
@@ -90,6 +91,10 @@ import {
   type WorkspaceStopOutcome,
   type WorkspaceStopPhase,
 } from "./process-workspace-stop.js";
+import {
+  recoverRetainedExecutorsEffect,
+  type RecoveryBounds,
+} from "./recover-retained-executors.js";
 
 export interface CaptureDeadlineSettings {
   /** Fixed lead: the final drain starts at least this long before the deadline. */
@@ -200,6 +205,13 @@ export interface PreserveBeforeDeadlineOptions {
    * runtime into its start.
    */
   readonly initiateConcurrency?: number;
+  /**
+   * Where a retained Docker executor was created to read its secret env, for the urgent recovery
+   * this sweep starts itself (review 9 #8); defaults to host directories.
+   */
+  readonly launchMaterialStager?: LaunchMaterialStager;
+  /** Bounds on the urgent recovery's operations (`DEFAULT_RECOVERY_BOUNDS`). */
+  readonly recoveryBounds?: Partial<RecoveryBounds>;
   readonly now?: () => number;
 }
 
@@ -824,7 +836,36 @@ const driveOne = (
         return "not-driven" as const;
       }
       yield* (plan.firstStart ? Effect.logError : Effect.logWarning)(
-        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery is due now (restart on its own disk, then a final drain).`,
+        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery starts now (restart on its own disk, then a final drain).`,
+      );
+      // Started here, not left due behind a recovery sweep that may be busy with another executor
+      // (review 9 #8): its own attempt, under the same per-executor claim as the sweep's (one
+      // already under way is left to it), in its own fiber — it holds no permit of this sweep.
+      yield* Effect.forkDetach(
+        recoverRetainedExecutorsEffect({
+          runtimeAdapters: options.runtimeAdapters,
+          ...(options.targetOptions === undefined ? {} : { targetOptions: options.targetOptions }),
+          captureDrain: {
+            ledger: options.captureDrain.ledger,
+            settings: options.captureDrain.settings,
+          },
+          ...(options.credentialCipher === undefined
+            ? {}
+            : { credentialCipher: options.credentialCipher }),
+          ...(options.launchMaterialStager === undefined
+            ? {}
+            : { launchMaterialStager: options.launchMaterialStager }),
+          ...(options.recoveryBounds === undefined ? {} : { bounds: options.recoveryBounds }),
+          runIds: [instance.runId],
+          ...(options.now === undefined ? {} : { now: options.now }),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Deadline preservation: run ${instance.runId}'s urgent recovery could not be started; the recovery sweep takes it (it is due).`,
+              cause,
+            ),
+          ),
+        ),
       );
       return "recovery-due" as const;
     }

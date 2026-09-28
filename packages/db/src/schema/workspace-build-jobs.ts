@@ -365,6 +365,15 @@ export const workspaceCaptureDrains = pgTable(
     nextRecoveryAt: timestamp("next_recovery_at", { mode: "date", withTimezone: true }),
     lastRecoveryError: text("last_recovery_error"),
     /**
+     * Who is recovering the retained executor right now (review 9 #8): one recovery attempt per
+     * executor at a time, across every worker and path (the recovery sweep, the deadline sweep's
+     * urgent recovery). Held by `recoveryLeaseToken` until `recoveryLeaseUntil` (the database's
+     * clock), longer than the attempt's own bound; released when the attempt ends, and taken
+     * over once it lapses (its worker died). A leased executor is not listed due.
+     */
+    recoveryLeaseToken: text("recovery_lease_token"),
+    recoveryLeaseUntil: timestamp("recovery_lease_until", { mode: "date", withTimezone: true }),
+    /**
      * The capture token the executor was launched with (`SEALANT_CAPTURE_TOKEN`, the one Mend
      * issued for the session), sealed with the credential cipher. The daemon reads it once at
      * boot from its secret env file, which is removed once the executor is ready; recovering a

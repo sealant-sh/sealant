@@ -1,0 +1,2 @@
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "recovery_lease_token" text;--> statement-breakpoint
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "recovery_lease_until" timestamp with time zone;

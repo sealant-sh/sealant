@@ -5,6 +5,7 @@ import { nextUnsavedObservations, statusSupersedes } from "../capture-evidence-o
 import { SealantDB } from "../client.js";
 import {
   workspaceCaptureDrains,
+  workspaceRuntimeInstances,
   type NewWorkspaceCaptureDrain,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
@@ -24,6 +25,8 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "markRetained",
   "listRetainedDue",
   "recordRecoveryAttempt",
+  "claimRecovery",
+  "releaseRecovery",
   "requestRecovery",
   "storeCaptureToken",
   "openObservation",
@@ -328,12 +331,31 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly runId: string;
     readonly reason: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
-  /** Retained executors whose next recovery attempt is due, the most overdue first. */
+  /**
+   * Retained executors whose next recovery attempt is due and that nobody is recovering now (no
+   * live recovery lease): the one whose runtime ends soonest first (its platform deadline, review
+   * 9 #8), then the most overdue.
+   */
   readonly listRetainedDue: (input: {
     readonly limit: number;
     /** Only these runs (executors just recorded retained); absent = every due retention. */
     readonly runIds?: readonly string[];
   }) => Effect.Effect<readonly WorkspaceCaptureDrain[], WorkspaceCaptureDrainRepoError>;
+  /**
+   * Take the recovery of the run's retained executor for one attempt (review 9 #8): held by
+   * `token` for `leaseMs` of database time, when nobody holds it (or its holder's lease lapsed).
+   * `false`: another attempt is under way (or it is not retained).
+   */
+  readonly claimRecovery: (input: {
+    readonly runId: string;
+    readonly token: string;
+    readonly leaseMs: number;
+  }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
+  /** The attempt `token` held ended: its lease is released (fenced on the token). */
+  readonly releaseRecovery: (input: {
+    readonly runId: string;
+    readonly token: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /** One recovery attempt happened: count it, keep its error (or clear it), schedule the next. */
   readonly recordRecoveryAttempt: (input: {
     readonly runId: string;
@@ -1037,8 +1059,12 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
         withRepoError(
           "listRetainedDue",
           db
-            .select()
+            .select({ drain: workspaceCaptureDrains })
             .from(workspaceCaptureDrains)
+            .leftJoin(
+              workspaceRuntimeInstances,
+              eq(workspaceRuntimeInstances.runId, workspaceCaptureDrains.runId),
+            )
             .where(
               and(
                 isNotNull(workspaceCaptureDrains.retainedAt),
@@ -1046,13 +1072,67 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
                 ),
+                or(
+                  isNull(workspaceCaptureDrains.recoveryLeaseUntil),
+                  lte(workspaceCaptureDrains.recoveryLeaseUntil, sql`now()`),
+                ),
                 ...(input.runIds === undefined
                   ? []
                   : [inArray(workspaceCaptureDrains.runId, [...input.runIds])]),
               ),
             )
-            .orderBy(asc(workspaceCaptureDrains.nextRecoveryAt))
-            .limit(Math.max(1, Math.round(input.limit))),
+            // The runtime that ends soonest first, whatever its backoff said (review 9 #8).
+            .orderBy(
+              sql`${workspaceRuntimeInstances.runtimeDeadlineAt} ASC NULLS LAST`,
+              asc(workspaceCaptureDrains.nextRecoveryAt),
+            )
+            .limit(Math.max(1, Math.round(input.limit)))
+            .pipe(
+              Effect.map((rows: readonly { readonly drain: WorkspaceCaptureDrain }[]) =>
+                rows.map((row) => row.drain),
+              ),
+            ),
+        ),
+
+      claimRecovery: (input) =>
+        withRepoError(
+          "claimRecovery",
+          Effect.gen(function* () {
+            const [row] = yield* db
+              .update(workspaceCaptureDrains)
+              .set({
+                recoveryLeaseToken: input.token,
+                recoveryLeaseUntil: leaseExpiry(input.leaseMs),
+              })
+              .where(
+                and(
+                  eq(workspaceCaptureDrains.runId, input.runId),
+                  isNotNull(workspaceCaptureDrains.retainedAt),
+                  or(
+                    isNull(workspaceCaptureDrains.recoveryLeaseUntil),
+                    lte(workspaceCaptureDrains.recoveryLeaseUntil, sql`now()`),
+                    eq(workspaceCaptureDrains.recoveryLeaseToken, input.token),
+                  ),
+                ),
+              )
+              .returning({ runId: workspaceCaptureDrains.runId });
+            return row !== undefined;
+          }),
+        ),
+
+      releaseRecovery: (input) =>
+        withRepoError(
+          "releaseRecovery",
+          db
+            .update(workspaceCaptureDrains)
+            .set({ recoveryLeaseToken: null, recoveryLeaseUntil: null })
+            .where(
+              and(
+                eq(workspaceCaptureDrains.runId, input.runId),
+                eq(workspaceCaptureDrains.recoveryLeaseToken, input.token),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
 
       recordRecoveryAttempt: (input) =>
