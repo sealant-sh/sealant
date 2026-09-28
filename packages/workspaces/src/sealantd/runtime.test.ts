@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
 import {
+  CaptureClass,
   CaptureReplannedSchema,
   CaptureStatusReportSchema,
   create,
@@ -421,6 +422,7 @@ describe("captureFlushReportFromWire", () => {
       registered: 2,
       fenced: false,
       paused: false,
+      refused: [],
     });
     expect(
       captureFlushReportFromWire(
@@ -436,9 +438,16 @@ describe("captureFlushReportFromWire", () => {
           fenced: true,
           paused: true,
           lastSnapUnixMs: 1_757_760_000_000n,
+          refused: [CaptureClass.BULK, CaptureClass.UNSPECIFIED, CaptureClass.SMALL],
         }),
       ),
-    ).toMatchObject({ headN: 7, fenced: true, paused: true, lastSnapUnixMs: 1_757_760_000_000 });
+    ).toMatchObject({
+      headN: 7,
+      fenced: true,
+      paused: true,
+      lastSnapUnixMs: 1_757_760_000_000,
+      refused: ["bulk", "small"],
+    });
   });
 });
 

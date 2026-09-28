@@ -104,6 +104,7 @@ export class Sealant {
         name: created.name,
         status: created.status,
         harness: options.harness,
+        created: true,
       });
       if (options.wait === false) {
         return workspace;

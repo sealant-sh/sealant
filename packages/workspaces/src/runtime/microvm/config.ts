@@ -123,7 +123,13 @@ export const microvmRuntimeConfigSchema = z
     endpointTokenTtlMinutes: z.number().int().min(1).max(MICROVM_ENDPOINT_TOKEN_MAX_MINUTES),
     /** A token this close to expiry is re-minted before use. */
     endpointTokenRefreshMarginMs: z.number().int().positive(),
-    /** Delivered to the agent; must leave the hook time to answer after the flush. */
+    /**
+     * Delivered to the agent: its kill switch for a `sealantctl capture flush` that hangs inside
+     * the suspend/terminate hook; must leave the hook time to answer after it. It does NOT give
+     * the flush more time — sealantd clamps every flush to its own shutdown grace (10 s, not
+     * configurable at boot) and returns within it, drained or not. A drain that needs longer
+     * happens before the VM is terminated (the worker's drain-before-stop), not in the hook.
+     */
     flushTimeoutMs: z
       .number()
       .int()

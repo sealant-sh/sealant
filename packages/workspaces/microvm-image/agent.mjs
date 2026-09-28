@@ -9,9 +9,14 @@
 //   1. Lifecycle hooks. Lambda POSTs `/aws/lambda-microvms/runtime/v1/<hook>` to the image's
 //      hook port: `ready`/`validate` at image build, `run` when a VM starts (with the RunMicrovm
 //      payload), `resume`, and `suspend`/`terminate` before the VM is checkpointed or ends. The
-//      last two run `sealantctl capture flush` so no captured work is lost, bounded by the flush
-//      timeout the launch delivered (the platform's own hook timeout is at most 60 s; what it
-//      does when a hook overruns is undocumented).
+//      last two run `sealantctl capture flush`. What bounds that flush is sealantd, not this
+//      agent: the daemon clamps every `capture.flush` to its own shutdown grace (10 s today,
+//      not configurable at boot) and returns within it whatever the queue holds. The flush
+//      timeout the launch delivers (`flushTimeoutMs`, 50 s by default) is only this agent's kill
+//      switch for a sealantctl that hangs; it does NOT buy the flush more time. So the hook
+//      cannot promise an empty queue — the control plane drains BEFORE it terminates a VM, and
+//      this hook is the last net. (The platform's own hook timeout is at most 60 s; what it does
+//      when a hook overruns is undocumented.)
 //   2. Launch material. RunMicrovm takes no environment and no secrets, so the control plane
 //      pushes boot env, the secret env file and dotfiles to `POST /sealant/launch` over the VM's
 //      authenticated endpoint, and only then does `sealantd boot` start. The push is authorised
@@ -52,6 +57,11 @@ const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
 const DOCKER_CAPABLE = process.env.SEALANT_MICROVM_DOCKER_CAPABLE === "1";
+// Prepared, not shipped: sealantd's `capture.flush {kind: final}` (`sealantctl capture flush
+// --final`) snapshots bulk too and waits for the queue instead of returning once small captures
+// are registered. No released sealantd accepts the flag, so the image does not set this; the
+// terminate hook passes `--final` only when it is `1`.
+const FINAL_FLUSH = process.env.SEALANT_MICROVM_FINAL_FLUSH === "1";
 const DOCKERD = process.env.SEALANT_MICROVM_DOCKERD ?? "/usr/local/bin/dockerd";
 const DOCKER = process.env.SEALANT_MICROVM_DOCKER ?? "/usr/local/bin/docker";
 const DOCKER_SOCKET = process.env.SEALANT_MICROVM_DOCKER_SOCKET ?? "/run/docker/docker.sock";
@@ -362,10 +372,22 @@ const handleImageValidation = (res) => {
 // Lifecycle hooks
 // --------------------------------------------------------------------------------------------
 
-/** `sealantctl capture flush`, bounded; never throws — the hook reports what happened. */
-const flushCaptures = async () => {
+/**
+ * `sealantctl capture flush`, bounded; never throws — the hook reports what happened. sealantd
+ * returns within its shutdown grace (10 s) on its own; `state.flushTimeoutMs` only kills a
+ * sealantctl that hangs. `kind` is the hook's intent: `final` (terminate) adds `--final` once
+ * the image enables it (`SEALANT_MICROVM_FINAL_FLUSH`).
+ */
+const flushCaptures = async (kind) => {
   const startedAt = Date.now();
-  const child = spawn(SEALANTCTL, ["--socket", CONTROL_SOCKET, "capture", "flush"], {
+  const args = [
+    "--socket",
+    CONTROL_SOCKET,
+    "capture",
+    "flush",
+    ...(kind === "final" && FINAL_FLUSH ? ["--final"] : []),
+  ];
+  const child = spawn(SEALANTCTL, args, {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -460,7 +482,7 @@ const handleHook = async (hook, req, res) => {
       if (!state.booted) {
         return json(res, 200, { status: "ok", hook, flush: "not-booted" });
       }
-      const flush = await flushCaptures();
+      const flush = await flushCaptures(hook === "terminate" ? "final" : "suspend");
       log(`${hook}: capture flush ${flush.ok ? "ok" : "FAILED"} ${JSON.stringify(flush)}`);
       // Always 200: the platform's behaviour on a non-200 suspend/terminate is undocumented,
       // and a refused hook cannot recover a failed flush anyway. The report is the evidence.

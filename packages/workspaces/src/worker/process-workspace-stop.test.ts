@@ -19,6 +19,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntime } from "../sealantd/runtime.js";
+import { captureStatus, fakeCaptureDaemon } from "./capture-daemon.fixture.js";
+import { CaptureDrainTracker, type CaptureDrainSettings } from "./capture-drain.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 const runtimeInstance = (
@@ -36,6 +38,7 @@ const runtimeInstance = (
   launchCredentialInjections: null,
   launchedAt: new Date("2026-07-01T00:00:00.000Z"),
   finishedAt: null,
+  runtimeDeadlineAt: null,
   createdAt: new Date("2026-07-01T00:00:00.000Z"),
   updatedAt: new Date("2026-07-01T00:00:00.000Z"),
   ...overrides,
@@ -88,6 +91,10 @@ interface Harness {
 const makeHarness = (input: {
   readonly workspace: Workspace | undefined;
   readonly instance: WorkspaceRuntimeInstance | undefined;
+  /** The run's stored blueprint names a capture source. */
+  readonly captureSourced?: boolean;
+  /** The daemon the drain talks to; default = one that must never be dialled. */
+  readonly daemon?: Layer.Layer<SealantRuntime>;
 }): Harness => {
   const markStopped = vi.fn((request: { runId: string }) =>
     Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
@@ -118,7 +125,13 @@ const makeHarness = (input: {
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
   // returning undefined makes it a logged no-op without touching accounts or the exec bridge.
-  const getAttemptSnapshotByRunId = vi.fn((_runId: string) => Effect.succeed(undefined));
+  const getAttemptSnapshotByRunId = vi.fn((_runId: string) =>
+    Effect.succeed(
+      input.captureSourced === true
+        ? { blueprintPayload: { sources: { workspace: { kind: "capture" } } } }
+        : undefined,
+    ),
+  );
   const attemptRepoLayer = Layer.succeed(WorkspaceAttemptRepo, {
     getAttemptSnapshotByRunId,
   } as unknown as WorkspaceAttemptRepoService);
@@ -126,9 +139,11 @@ const makeHarness = (input: {
     ConnectedAccountRepo,
     {} as ConnectedAccountRepoService,
   );
-  const sealantRuntimeLayer = Layer.succeed(SealantRuntime, {
-    connect: () => Effect.die("exec bridge unused in stop tests"),
-  });
+  const sealantRuntimeLayer =
+    input.daemon ??
+    Layer.succeed(SealantRuntime, {
+      connect: () => Effect.die("exec bridge unused in stop tests"),
+    });
 
   return {
     markStopped,
@@ -346,5 +361,237 @@ describe("processWorkspaceStopEffect", () => {
     );
 
     expect(order).toEqual(["sync-back", "adapter-stop"]);
+  });
+});
+
+const stopped = () =>
+  vi.fn(async () => ({
+    adapter: "docker" as const,
+    resourceId: "container-1",
+    outcome: "stopped" as const,
+  }));
+
+describe("processWorkspaceStopEffect · drain before stop", () => {
+  const FAST: CaptureDrainSettings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 30,
+    unreachableWindowMs: 30,
+    requestTimeoutMs: 1_000,
+  };
+  const drainOptions = (tracker = new CaptureDrainTracker()) => ({
+    captureDrain: { tracker, settings: FAST, budgetMs: 1_000, label: "test reaper" },
+  });
+
+  it("drains a capture-sourced runtime to an empty queue, then stops it", async () => {
+    const daemon = fakeCaptureDaemon([
+      captureStatus({ pending: 2, uploadedBytes: 5 }),
+      captureStatus({ pending: 0, uploadedBytes: 9 }),
+    ]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.calls.slice(0, 2)).toEqual(["flush", "status"]);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "expired" });
+  });
+
+  it("keeps a runtime whose daemon answers but whose queue stalled: no stop, no writes", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: fakeCaptureDaemon([captureStatus({ pending: 7, uploadedBytes: 1 })]).layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(harness.setWorkspaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("defers the stop while the queue is still moving and the budget is spent", async () => {
+    let uploaded = 0;
+    const moving = Array.from({ length: 100 }, () => {
+      uploaded += 1;
+      return captureStatus({ pending: 3, uploadedBytes: uploaded });
+    });
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(moving).layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+        captureDrain: {
+          tracker: new CaptureDrainTracker(),
+          settings: FAST,
+          budgetMs: 3,
+          label: "lifecycle stop",
+        },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("draining");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("keeps a runtime whose daemon is silent while the runtime reports it running", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = stopped();
+    const inspect = vi.fn(async () => ({ state: "running" as const }));
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop, inspect)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("stops once the daemon is silent and the runtime reports the executor gone", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = stopped();
+    // Running when the stop starts; gone by the time the silence is judged.
+    const inspect = vi
+      .fn<NonNullable<RuntimeAdapter["inspect"]>>()
+      .mockResolvedValueOnce({ state: "running" })
+      .mockResolvedValue({ state: "missing" });
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop, inspect)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a capture-sourced runtime this worker cannot address", async () => {
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ adapter: "microvm", endpoint: null }),
+      captureSourced: true,
+    });
+    const stop = stopped();
+    const adapter = { ...stubAdapter(stop), id: "microvm" as const };
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [adapter],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("never dials the daemon for a workspace that is not capture-sourced", async () => {
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 9 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: false,
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.calls).toEqual([]);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the drain for a runtime the adapter already reports ended", async () => {
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 9 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop, async () => ({ state: "missing" as const }))],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.calls).toEqual([]);
   });
 });

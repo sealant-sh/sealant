@@ -14,6 +14,12 @@ import { describe, expect, it } from "vitest";
  * fields included.
  */
 describe("workspace capture routes", () => {
+  it("mount status as a GET on the workspace's capture path", () => {
+    const status = WorkspacesGroup.endpoints["getWorkspaceCaptureStatus"];
+    expect(status?.method).toBe("GET");
+    expect(status?.path).toBe("/:workspaceId/capture");
+  });
+
   it("mount flush and replan as POSTs under the workspace's capture path", () => {
     const flush = WorkspacesGroup.endpoints["flushWorkspaceCapture"];
     const replan = WorkspacesGroup.endpoints["replanWorkspaceCapture"];
@@ -23,7 +29,7 @@ describe("workspace capture routes", () => {
     expect(replan?.path).toBe("/:workspaceId/capture/replan");
   });
 
-  it("answer flush with the session's capture status as-is", () => {
+  it("answer flush and status with the session's capture status as-is", () => {
     const decode = Schema.decodeUnknownSync(workspaceCaptureStatusSchema);
     const minimal: CaptureFlushReport = {
       epoch: 3,
@@ -35,10 +41,23 @@ describe("workspace capture routes", () => {
       registered: 2,
       fenced: false,
       paused: false,
+      refused: [],
     };
     expect(decode(minimal)).toEqual(minimal);
-    const full: CaptureFlushReport = { ...minimal, headN: 7, lastSnapUnixMs: 1_757_760_000_000 };
+    const full: CaptureFlushReport = {
+      ...minimal,
+      headN: 7,
+      lastSnapUnixMs: 1_757_760_000_000,
+      refused: ["bulk"],
+    };
     expect(decode(full)).toEqual(full);
+    // An older control plane answers without `refused`; the reserved byte counts decode when set.
+    const { refused: _refused, ...older } = minimal;
+    expect(decode(older)).toEqual(older);
+    expect(decode({ ...minimal, pendingBytes: 1024, pendingBulk: 1 })).toMatchObject({
+      pendingBytes: 1024,
+      pendingBulk: 1,
+    });
   });
 
   it("answer replan with the session's replan report as-is", () => {

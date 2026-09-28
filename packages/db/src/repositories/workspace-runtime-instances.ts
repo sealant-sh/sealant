@@ -25,6 +25,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly launchCredentialInjections?: readonly WorkspaceLaunchCredentialInjection[];
   readonly launchedAt?: Date;
   readonly finishedAt?: Date;
+  /** The runtime's own lifetime deadline (MicroVM max duration); omit where it has none. */
+  readonly runtimeDeadlineAt?: Date;
 }
 
 /** @deprecated Use WorkspaceRuntimeInstanceRepo + WorkspaceRuntimeInstanceRepoLive instead. */
@@ -189,6 +191,9 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                 : { launchCredentialInjections: [...input.launchCredentialInjections] }),
               ...(input.launchedAt === undefined ? {} : { launchedAt: input.launchedAt }),
               ...(input.finishedAt === undefined ? {} : { finishedAt: input.finishedAt }),
+              ...(input.runtimeDeadlineAt === undefined
+                ? {}
+                : { runtimeDeadlineAt: input.runtimeDeadlineAt }),
             };
 
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper

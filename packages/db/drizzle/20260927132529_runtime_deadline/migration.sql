@@ -1,0 +1,1 @@
+ALTER TABLE "workspace_runtime_instances" ADD COLUMN "runtime_deadline_at" timestamp with time zone;

@@ -16,6 +16,7 @@ import type { ControlChannel } from "../kubernetes/adapter.js";
 import type { CredentialFileInjection, PublishedImage } from "../runtime-adapter.js";
 import {
   buildRunInput,
+  microvmDeadline,
   clientTokenForRun,
   endpointHost,
   microvmBootEnv,
@@ -503,6 +504,8 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       reference: "microvm-1",
       status: "ready",
       endpoint: `wss://${ENDPOINT}/sealant/control`,
+      // The platform's start plus the cap: what a caller plans its drain before.
+      deadline: "2026-09-13T18:00:00.000Z",
     });
     expect(api.runs).toEqual([
       buildRunInput(config, "run-golden-4", launchSecret, {
@@ -923,6 +926,34 @@ describe("MicrovmRuntimeAdapter.stop", () => {
   });
 });
 
+const described = (overrides: Partial<MicrovmDescription> = {}): MicrovmDescription => ({
+  microvmId: "microvm-1",
+  state: "RUNNING",
+  ...overrides,
+});
+
+describe("microvmDeadline", () => {
+  it("is the platform's start plus its maximum duration", () => {
+    expect(
+      microvmDeadline(
+        described({
+          startedAt: new Date("2026-09-13T10:00:00.000Z"),
+          maximumDurationInSeconds: 3600,
+        }),
+        described(),
+        Date.parse("2026-09-13T09:59:00.000Z"),
+        28_800,
+      ),
+    ).toBe("2026-09-13T11:00:00.000Z");
+  });
+
+  it("falls back to the request instant and the configured cap, erring early", () => {
+    expect(
+      microvmDeadline(described(), described(), Date.parse("2026-09-13T10:00:00.000Z"), 3600),
+    ).toBe("2026-09-13T11:00:00.000Z");
+  });
+});
+
 describe("MicrovmRuntimeAdapter.inspect", () => {
   it("maps platform states onto running (with the deadline), exited (with the reason) and missing", async () => {
     const api = new FakeMicrovmApi();
@@ -955,7 +986,7 @@ describe("MicrovmRuntimeAdapter.inspect", () => {
     });
   });
 
-  it("reports a Docker service lost after readiness as an exited runtime", async () => {
+  it("reports a Docker service lost after readiness on a running runtime, never as an exit", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint(
       [json(200, { outcome: "booting" })],
@@ -986,9 +1017,10 @@ describe("MicrovmRuntimeAdapter.inspect", () => {
     const adapter = build(api, endpoint, fakeControl(), dockerConfig);
     const launched = await adapter.launch(cases.dind);
 
-    await expect(adapter.inspect({ resourceId: launched.resourceId })).resolves.toEqual({
-      state: "exited",
-      exitCode: 2,
+    // sealantd is up and the work on the VM is intact: the failure is reported, not acted on.
+    await expect(adapter.inspect({ resourceId: launched.resourceId })).resolves.toMatchObject({
+      state: "running",
+      platformState: "RUNNING",
       detail: "Guest-local Docker failed in the MicroVM (exited; code 2, signal null).",
     });
   });

@@ -124,6 +124,13 @@ export const workspaceRuntimeInstances = pgTable(
     stopReason: text("stop_reason", { enum: workspaceRuntimeInstanceStopReasonValues }),
     launchedAt: timestamp("launched_at", { mode: "date", withTimezone: true }),
     finishedAt: timestamp("finished_at", { mode: "date", withTimezone: true }),
+    /**
+     * The instant the runtime itself ends the executor, whatever anyone asks (a Lambda MicroVM's
+     * maximum duration, counted from its start). Null where the runtime imposes no lifetime, and
+     * on rows launched before this column existed. A caller holding unsaved work on the executor
+     * plans its drain before this.
+     */
+    runtimeDeadlineAt: timestamp("runtime_deadline_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),

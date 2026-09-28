@@ -30,6 +30,7 @@ const runtimeInstance = (
   launchCredentialInjections: null,
   launchedAt: new Date("2026-06-21T00:00:00.000Z"),
   finishedAt: null,
+  runtimeDeadlineAt: null,
   createdAt: new Date("2026-06-21T00:00:00.000Z"),
   updatedAt: new Date("2026-06-21T00:00:00.000Z"),
   ...overrides,

@@ -191,7 +191,17 @@ export interface DockerRuntimeAdapterOptions {
   readonly workspaceNetwork?: string;
   /** Test seam for `watchExits`: how a `docker events` stream is opened. */
   readonly eventStreamOpener?: DockerEventStreamOpener;
+  /**
+   * How long a planned stop waits after SIGTERM before Docker kills the container
+   * (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`). sealantd flushes its capture queue
+   * on SIGTERM; a capture-sourced workspace's unsaved work lives in that queue, so the window is
+   * generous. Defaults to 120 s. A fenced stop skips it.
+   */
+  readonly stopGraceSeconds?: number;
 }
+
+/** `docker stop -t` for a planned stop: long enough for sealantd's SIGTERM flush to ship. */
+export const DEFAULT_DOCKER_STOP_GRACE_SECONDS = 120;
 
 /**
  * Docker's own grammar for a network name (`docker network create`): the value lands in argv, so
@@ -686,6 +696,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   private readonly eventStreamOpener: DockerEventStreamOpener;
 
+  private readonly stopGraceSeconds: number;
+
   public constructor(options: DockerRuntimeAdapterOptions = {}) {
     const dockerSocketPath = options.dockerSocketPath ?? "/var/run/docker.sock";
 
@@ -699,6 +711,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     this.verifyRunning = options.verifyRunning ?? true;
     this.dockerServiceImage = options.dockerServiceImage ?? DEFAULT_DOCKER_SERVICE_IMAGE;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
+    this.stopGraceSeconds = options.stopGraceSeconds ?? DEFAULT_DOCKER_STOP_GRACE_SECONDS;
     this.controlSocketHostDir = options.controlSocketHostDir;
     this.mountAllowedStoreRoots = options.mountAllowedStoreRoots;
     this.volumeMappings = options.volumeMappings;
@@ -1468,8 +1481,10 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
   /**
    * Stop a workspace container. Workspaces are ephemeral, so stop = remove (`docker rm -f`) —
-   * there is no resumable container state to keep. Idempotent: a container that is already gone
-   * reports `not-found`, which callers treat as success. Any other failure (daemon unreachable,
+   * there is no resumable container state to keep. A planned stop sends SIGTERM first
+   * (`docker stop -t <grace>`) so sealantd's final capture flush runs before anything is killed;
+   * a fenced stop kills outright. Idempotent: a container that is already gone reports
+   * `not-found`, which callers treat as success. Any other failure (daemon unreachable,
    * permission) surfaces — reporting "stopped" while the container is still alive would leak it.
    */
   public async stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult> {
@@ -1494,6 +1509,18 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           ])
             .then((result) => result.stdout.trim() || undefined)
             .catch(() => undefined);
+
+    if (parsed.fence !== true) {
+      // SIGTERM, then up to the grace for sealantd to flush and exit. Its failure is not the
+      // stop's: a container already gone or already stopped is settled by the removal below,
+      // which also surfaces a daemon that cannot be reached.
+      await this.commandRunner("docker", [
+        "stop",
+        "-t",
+        String(this.stopGraceSeconds),
+        parsed.resourceId,
+      ]).catch(() => undefined);
+    }
 
     try {
       // `-v` takes the container's anonymous volumes with it: the dind sidecar declares one for

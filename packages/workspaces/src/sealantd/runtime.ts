@@ -30,6 +30,7 @@ import {
   type Channel,
 } from "@sealant/runtime-client";
 import {
+  CaptureClass as WireCaptureClass,
   SessionMode as WireSessionMode,
   type Capabilities,
   type CaptureReplanned,
@@ -134,6 +135,7 @@ const sealantOperationSchema = Schema.Literals([
   "closeForward",
   "bindMount",
   "captureFlush",
+  "captureStatus",
   "captureReplan",
 ]);
 
@@ -200,7 +202,18 @@ export interface CaptureFlushReport {
   readonly fenced: boolean;
   readonly paused: boolean;
   readonly lastSnapUnixMs?: number | undefined;
+  /**
+   * Capture classes the registrar refused for the session's byte quota: nothing of these ships
+   * until the next epoch or `capture.replan`. Non-empty means work is NOT being saved.
+   */
+  readonly refused: readonly CaptureClassName[];
 }
+
+/** A capture class as the control plane names it (wire `CaptureClass`). */
+export type CaptureClassName = "small" | "bulk";
+
+const captureClassName = (value: WireCaptureClass): CaptureClassName | undefined =>
+  value === WireCaptureClass.SMALL ? "small" : value === WireCaptureClass.BULK ? "bulk" : undefined;
 
 /** Wire → report: uint64 fields arrive as bigint and become JSON-safe numbers. Exported for tests. */
 export const captureFlushReportFromWire = (report: CaptureStatusReport): CaptureFlushReport => ({
@@ -215,6 +228,10 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
   fenced: report.fenced,
   paused: report.paused,
   ...(report.lastSnapUnixMs === undefined ? {} : { lastSnapUnixMs: Number(report.lastSnapUnixMs) }),
+  refused: report.refused.flatMap((value) => {
+    const name = captureClassName(value);
+    return name === undefined ? [] : [name];
+  }),
 });
 
 /**
@@ -735,6 +752,12 @@ export interface SealantSession {
    */
   readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
   /**
+   * The daemon's capture status (`capture.status`) without flushing: what a drain polls between
+   * flushes to see the queue empty (`pending === 0`) or stop moving. Only answers on a
+   * capture-sourced workspace.
+   */
+  readonly captureStatus: () => Effect.Effect<CaptureFlushReport, SealantError>;
+  /**
    * Re-plan the capture (sealantd 0.15 `capture.replan`, the claim hook): the daemon asks the
    * session channel for its plan again with no worktree named, delta-materialises the answered
    * plan over what is on disk, rebases its staging identity onto the answered worktree and epoch,
@@ -990,6 +1013,13 @@ const makeSession = (client: SealantClient): SealantSession => ({
         return captureFlushReportFromWire(result.value);
       }),
     ),
+  captureStatus: () =>
+    requestResult(
+      client,
+      "captureStatus",
+      { case: "captureStatus", value: {} },
+      "captureStatus",
+    ).pipe(Effect.map((value) => captureFlushReportFromWire(value as CaptureStatusReport))),
   captureReplan: () =>
     withSealantError(
       "captureReplan",

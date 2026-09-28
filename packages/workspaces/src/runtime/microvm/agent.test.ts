@@ -377,6 +377,41 @@ describe("microvm agent", () => {
     }
   });
 
+  it("asks for a final flush on terminate only once the image enables it", async () => {
+    const enabled = await startAgent({ SEALANT_MICROVM_FINAL_FLUSH: "1" });
+    try {
+      await hook(enabled, "run", {
+        microvmId: "microvm-3",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      await call(enabled, "POST", AGENT_LAUNCH_ROUTE, {
+        body: launchRequest,
+        bearer: launchSecret,
+      });
+      // The hooks flush only once the daemon has booted.
+      await waitFor(async () =>
+        stat(enabled.socketPath).then(
+          () => true,
+          () => false,
+        ),
+      );
+      expect((await hook(enabled, "suspend")).status).toBe(200);
+      expect((await hook(enabled, "terminate")).status).toBe(200);
+      expect((await readFile(enabled.ctlLog, "utf8")).trim().split("\n")).toEqual([
+        `--socket ${enabled.socketPath} capture flush`,
+        `--socket ${enabled.socketPath} capture flush --final`,
+      ]);
+    } finally {
+      await stopAgent(enabled);
+    }
+
+    // Unset (every image today): terminate sends the flush a released sealantd accepts.
+    expect((await hook(agent, "terminate")).status).toBe(200);
+    expect((await readFile(agent.ctlLog, "utf8")).trim().split("\n").at(-1)).toBe(
+      `--socket ${agent.socketPath} capture flush`,
+    );
+  });
+
   it("publishes launch material whole: a concurrent reader never sees a partial file", async () => {
     // Launch material is written while `sealantd boot` (and anything else in the VM) may already
     // be opening it. Each file must appear all-at-once. The payload is deliberately many pages:

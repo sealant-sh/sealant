@@ -2,6 +2,7 @@ import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepoLive,
   SealantDB,
+  WorkspaceAttemptRepo,
   WorkspaceAttemptRepoLive,
   WorkspaceRepo,
   WorkspaceRepoLive,
@@ -22,8 +23,40 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
+import {
+  drainCaptureBeforeStop,
+  drainPermitsStop,
+  isCaptureSourcedBlueprint,
+  type CaptureDrainSettings,
+  type CaptureDrainTracker,
+} from "./capture-drain.js";
 import { swallowingFailure as sharedSwallowingFailure } from "./errors.js";
 import { syncBackWorkspaceCredentials } from "./harness-credentials-sync-back.js";
+
+/**
+ * Drain-before-stop for capture-sourced workspaces (`capture-drain.ts`). Absent = no drain (a
+ * caller that already drained, or a runtime with nothing to save).
+ */
+export interface WorkspaceStopCaptureDrain {
+  readonly tracker: CaptureDrainTracker;
+  readonly settings: CaptureDrainSettings;
+  /** How long this one call may wait on the queue before deferring the stop. */
+  readonly budgetMs: number;
+  /** Who is stopping, for the log lines ("expiry reaper", "lifecycle stop"). */
+  readonly label: string;
+}
+
+/**
+ * What one stop call did. Only `stopped` tore the runtime down; the others left it running:
+ *
+ *  - `draining`: the capture queue is still moving; the next call (the reaper's next tick)
+ *    continues the drain and stops once it is empty.
+ *  - `kept`: the daemon answers but its queue stopped moving (`not saved · kept`), or the daemon
+ *    is silent while the executor runs (`not saved · daemon silent · kept`); nothing stops it
+ *    until the queue drains or the executor ends.
+ *  - `busy`: another drain of the same run is in flight.
+ */
+export type WorkspaceStopOutcome = "stopped" | "draining" | "kept" | "busy";
 
 export interface ProcessWorkspaceStopEffectOptions {
   /**
@@ -47,6 +80,8 @@ export interface ProcessWorkspaceStopEffectOptions {
   readonly targetOptions?: SealantTargetDerivationOptions;
   /** Where this worker staged launch material; defaults to host directories (Docker). */
   readonly launchMaterialStager?: LaunchMaterialStager;
+  /** Drain a capture-sourced workspace's queue before the runtime goes away. */
+  readonly captureDrain?: WorkspaceStopCaptureDrain;
 }
 
 export interface ProcessWorkspaceStopOptions extends ProcessWorkspaceStopEffectOptions {
@@ -94,6 +129,16 @@ const runtimeAlreadyEnded = (adapter: RuntimeAdapter, resourceId: string) => {
   );
 };
 
+const stopOutcome = (outcome: WorkspaceStopOutcome): WorkspaceStopOutcome => outcome;
+
+/** Whether the run's stored blueprint names a capture source; a failed read aborts the stop. */
+const isCaptureSourcedRun = (runId: string) =>
+  Effect.gen(function* () {
+    const attempts = yield* WorkspaceAttemptRepo;
+    const snapshot = yield* attempts.getAttemptSnapshotByRunId(runId);
+    return snapshot !== undefined && isCaptureSourcedBlueprint(snapshot.blueprintPayload);
+  }).pipe(Effect.mapError(toWorkspaceStopProcessingError));
+
 /**
  * Stop one workspace runtime: remove the container via the runtime adapter, then record the
  * terminal state (`markStopped` on the instance + workspace stored status "stopped").
@@ -108,6 +153,12 @@ const runtimeAlreadyEnded = (adapter: RuntimeAdapter, resourceId: string) => {
  * `latestRunId`. A restart supersedes the old runtime with a new attempt — its stop half must
  * not stamp "stopped" onto a workspace that is already relaunching (the reaper treats a live
  * container on a stored-"stopped" workspace as stranded and would kill the fresh runtime).
+ *
+ * With `captureDrain`, a live capture-sourced runtime is drained first (`capture-drain.ts`): the
+ * runtime is torn down only once its capture queue is empty, or once its daemon is silent AND the
+ * runtime reports the executor ended (nothing left to save). Otherwise the call returns `draining` / `kept` and writes nothing —
+ * the reaper's next tick (a stored "stopped" workspace is `stranded` to it; a replaced run is
+ * `superseded`) comes back and finishes the stop.
  */
 export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(function* (
   options: ProcessWorkspaceStopEffectOptions,
@@ -134,7 +185,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     // Nothing was ever launched for this run; still settle the workspace row (guarded above) so a
     // stop requested against a stranded workspace converges instead of looping through the DLQ.
     yield* settleWorkspaceRow;
-    return;
+    return stopOutcome("stopped");
   }
 
   const { adapter: adapterId, resourceId, reference } = instance;
@@ -157,6 +208,40 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     // dialling a dead Pod's Service only burns the connect timeout, several times over.
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
     const ended = yield* runtimeAlreadyEnded(adapter, resourceId);
+
+    // No loss of work product: a live capture-sourced runtime holds captures nowhere else until
+    // its queue is empty. Drain first; a queue still moving defers the stop, a stalled one keeps
+    // the workspace. Nothing below runs unless the drain permits it.
+    const drain = options.captureDrain;
+    if (drain !== undefined && !ended && (yield* isCaptureSourcedRun(options.runId))) {
+      if (target === undefined) {
+        // Nothing here can see the queue, and the runtime says the executor is up: keep it.
+        yield* Effect.logError(
+          `Workspace stop (${drain.label}): run ${options.runId} is capture-sourced but this worker cannot reach its daemon (${adapterId}): not saved · kept. Configure the worker's control reach for this runtime.`,
+        );
+        return stopOutcome("kept");
+      } else {
+        const outcome = yield* drainCaptureBeforeStop({
+          runId: options.runId,
+          target,
+          tracker: drain.tracker,
+          settings: drain.settings,
+          budgetMs: drain.budgetMs,
+          label: drain.label,
+          runtimeEnded: runtimeAlreadyEnded(adapter, resourceId),
+        });
+        if (!drainPermitsStop(outcome)) {
+          return stopOutcome(
+            outcome.kind === "stalled" || outcome.kind === "silent"
+              ? "kept"
+              : outcome.kind === "busy"
+                ? "busy"
+                : "draining",
+          );
+        }
+      }
+    }
+
     if (target !== undefined && !ended) {
       yield* syncBackWorkspaceCredentials({
         attemptId: options.runId,
@@ -189,9 +274,13 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     .pipe(Effect.mapError(toWorkspaceStopProcessingError));
 
   yield* settleWorkspaceRow;
+  options.captureDrain?.tracker.forget(options.runId);
+  return stopOutcome("stopped");
 });
 
-export const processWorkspaceStop = async (options: ProcessWorkspaceStopOptions): Promise<void> => {
+export const processWorkspaceStop = async (
+  options: ProcessWorkspaceStopOptions,
+): Promise<WorkspaceStopOutcome> => {
   const { db, ...effectOptions } = options;
 
   const dataAccessLayer = Layer.mergeAll(
@@ -203,7 +292,7 @@ export const processWorkspaceStop = async (options: ProcessWorkspaceStopOptions)
     ConnectedAccountRepoLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
-  await Effect.runPromise(
+  return Effect.runPromise(
     processWorkspaceStopEffect(effectOptions).pipe(
       Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
     ),

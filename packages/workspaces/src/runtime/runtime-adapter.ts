@@ -118,6 +118,13 @@ export const runtimeAdapterLaunchResultSchema = z.strictObject({
   reference: z.string().trim().min(1),
   status: z.enum(["pending", "running", "ready"]),
   endpoint: z.string().trim().min(1).optional(),
+  /**
+   * ISO-8601 instant the runtime itself ends this executor, whatever anyone asks (a Lambda
+   * MicroVM's maximum duration from its start). Absent where the runtime imposes no lifetime.
+   * Recorded on the runtime instance and reported on the workspace, so a caller holding unsaved
+   * work can drain before it.
+   */
+  deadline: z.string().datetime({ offset: true }).optional(),
 });
 
 // Workspaces are ephemeral (built fresh from a published image), so stop = remove: there is no
@@ -151,7 +158,9 @@ export const runtimeAdapterStopResultSchema = z.strictObject({
  *   instants and `maxDurationSeconds` the platform cap they derive from — all optional, present
  *   only where the runtime imposes a lifetime (a MicroVM ends at `startedAt + maxDuration`,
  *   suspended time included). `platformState` is the runtime's own word for the state (for logs
- *   and evidence; never branch on it — a suspended VM is still `running` here).
+ *   and evidence; never branch on it — a suspended VM is still `running` here). `detail` reports
+ *   a guest service that failed while the executor itself survived (a MicroVM's guest Docker):
+ *   reported, never a reason to end the executor — its daemon, and the work on it, are intact.
  * - `exited`: the executor ended. `exitCode` where the runtime reports one (a container), `detail`
  *   the runtime's reason text when it has one.
  * - `missing`: the runtime no longer knows the resource at all.
@@ -162,6 +171,7 @@ const runtimeAdapterRunningSchema = z.strictObject({
   deadline: z.string().datetime({ offset: true }).optional(),
   maxDurationSeconds: z.number().int().positive().optional(),
   platformState: z.string().trim().min(1).optional(),
+  detail: z.string().trim().min(1).optional(),
 });
 
 const runtimeAdapterEndedSchema = z.discriminatedUnion("state", [

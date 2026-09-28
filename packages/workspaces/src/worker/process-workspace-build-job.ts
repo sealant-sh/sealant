@@ -633,6 +633,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             : { endpoint: runtimeLaunchResult.endpoint }),
           launchCredentialInjections: resolvedCredentials.launchCredentialInjections,
           launchedAt: new Date(),
+          ...(runtimeLaunchResult.deadline === undefined
+            ? {}
+            : { runtimeDeadlineAt: new Date(runtimeLaunchResult.deadline) }),
         })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
     }

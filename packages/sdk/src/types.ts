@@ -259,7 +259,28 @@ export interface WorkspaceCaptureStatus {
   /** The harness is paused (lease lost); see the daemon's lease semantics. */
   readonly paused: boolean;
   readonly lastSnapUnixMs?: number;
+  /**
+   * Capture classes the registrar refused for the session's byte quota: nothing of these ships
+   * until the next epoch or re-plan, whatever `pending` says. Non-empty means work is NOT being
+   * saved. Empty when the control plane predates the field.
+   */
+  readonly refused: readonly ("small" | "bulk")[];
+  /** Bytes still to ship; present once the daemon reports it. */
+  readonly pendingBytes?: number;
+  /** Bulk captures (dependency trees, build output) still pending; present once reported. */
+  readonly pendingBulk?: number;
 }
+
+/**
+ * What `workspace.stop()` observed. `stopped`: the runtime is gone. `draining`: the stop is
+ * accepted, and the control plane is shipping the workspace's unsaved captures before it removes
+ * the runtime (capture-sourced workspaces only); `capture` is the queue as last read. A drain can
+ * take minutes, and a queue that stops moving keeps the workspace running rather than lose its
+ * work. Follow it with `capture.status()` or `status()`, or call `stop()` again: it is idempotent.
+ */
+export type WorkspaceStopResult =
+  | { readonly state: "stopped" }
+  | { readonly state: "draining"; readonly capture: WorkspaceCaptureStatus };
 
 /** The daemon's answer to `workspace.capture.replan()` (sealantd 0.15 `capture.replan`). */
 export interface WorkspaceCaptureReplanned {
@@ -291,6 +312,13 @@ export interface WorkspaceCapture {
    * `pending === 0 && !fenced`. Refused on workspaces that are not capture-sourced.
    */
   flush(): Promise<WorkspaceCaptureStatus>;
+  /**
+   * The daemon's capture queue as it stands, nothing flushed: `pending` captures not yet saved,
+   * `headN` / `registered` what the session channel holds, `refused` what the quota turned away.
+   * What a drain polls to show `saving · N left`. Refused on workspaces that are not
+   * capture-sourced, and when no runtime answers.
+   */
+  status(): Promise<WorkspaceCaptureStatus>;
   /**
    * Re-plan: the daemon asks the session channel for its plan again with no worktree named,
    * delta-materialises the answer over what is on disk, and captures under the answered worktree
@@ -513,7 +541,18 @@ export interface Workspace {
   readonly name: string;
   /** Current lifecycle status. */
   status(): Promise<WorkspaceStatus>;
-  /** Resolves once the workspace runtime is live and ready to accept a run. */
+  /**
+   * When the runtime itself ends this workspace's executor, whatever anyone asks: an ISO-8601
+   * instant (a Lambda MicroVM's maximum duration from its start), or `null` where the runtime
+   * imposes no lifetime (Docker, Kubernetes) or no runtime is launched yet. Work that exists only
+   * on the executor — a capture-sourced workspace's unsaved captures — must be drained before it.
+   */
+  runtimeDeadline(): Promise<string | null>;
+  /**
+   * Resolves once the workspace runtime is live and ready to accept a run. When the handle came
+   * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), the workspace
+   * is stopped before the error is thrown, so an abandoned launch never keeps running to its cap.
+   */
   ready(): Promise<this>;
   /** Run a harness in this workspace. */
   readonly harness: HarnessRunner;
@@ -534,8 +573,15 @@ export interface Workspace {
   readonly sessions: WorkspaceSessions;
   /** Lifecycle events as an async stream. */
   events(): AsyncIterable<WorkspaceEvent>;
-  /** Stop the workspace: remove its container and settle it in the terminal "stopped" status. */
-  stop(): Promise<void>;
+  /**
+   * Stop the workspace: remove its runtime and settle it in the terminal "stopped" status.
+   * Resolves `{ state: "stopped" }` once the runtime is gone. A capture-sourced workspace is
+   * drained first (its unsaved captures shipped); if the runtime is still up after a minute and
+   * its capture queue answers, resolves `{ state: "draining", capture }` instead of failing —
+   * the stop continues on the server. Throws `workspace_stop_timeout` only when neither can be
+   * observed.
+   */
+  stop(): Promise<WorkspaceStopResult>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**
