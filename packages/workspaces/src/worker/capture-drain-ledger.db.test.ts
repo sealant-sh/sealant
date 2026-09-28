@@ -25,7 +25,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
-import { drainCaptureBeforeStop, type CaptureDrainLedger } from "./capture-drain.js";
+import {
+  attestedCompleteFor,
+  drainCaptureBeforeStop,
+  type CaptureDrainLedger,
+} from "./capture-drain.js";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
 const TARGET: SealantTarget = { kind: "unix-socket", socketPath: "/run/sealant/control.sock" };
@@ -275,5 +279,34 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       captureN: 41,
       by: "user_owner",
     });
+  });
+
+  it("keeps when each status was read and when a seal was made, and weighs them at consumption (review 4 #1)", async () => {
+    const runId = await newRun();
+    const sealedAt = new Date(Date.now() - 60 * 60_000);
+    const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* (yield* WorkspaceCaptureDrainRepo).attestCompletion({
+          runId,
+          executorId: "container-1",
+          epoch: 1,
+          captureN: 0,
+          attestedBy: "user_owner",
+          sealedAt,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    // A drain reads the daemon AFTER the seal: its FINAL could not snapshot a changed path.
+    await drain(runId, worker(dbA, "worker-a"), [
+      captureStatus({ headN: 0, complete: false, incompleteReason: "snapshot-failed" }),
+    ]);
+    const read = await Effect.runPromise(worker(dbB, "worker-b").read(runId));
+    const entry = read.readable ? read.entry : undefined;
+    expect(entry?.completionAttested?.sealedAtMs).toBe(sealedAt.getTime());
+    expect(entry?.lastAtMs).toBeGreaterThan(sealedAt.getTime());
+    expect(attestedCompleteFor(entry, { runId, resourceId: "container-1", reference: null })).toBe(
+      false,
+    );
   });
 });

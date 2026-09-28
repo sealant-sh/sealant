@@ -24,7 +24,7 @@ import {
 } from "@sealant/db";
 import type { GitHubSourceIntegration } from "@sealant/source-integrations";
 import type { NewWorkspace, WorkspaceBuild } from "@sealant/validators";
-import { Effect, Fiber, Layer, Result } from "effect";
+import { Effect, Exit, Fiber, Layer, Result } from "effect";
 import { vi } from "vitest";
 
 import {
@@ -2165,6 +2165,135 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
     expect(last).not.toHaveProperty("finishedAt");
     expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_interrupted" });
   });
+});
+
+describe("a launch never waits past its runtime's preservation start (review 4 #6)", () => {
+  const captureJob = (jobId: string, runId: string) =>
+    workspaceBuildJobRepoStub({
+      claimJobById: () => ({
+        id: jobId,
+        runId,
+        repository: "sealant/workspaces/demo",
+        tag: "capture",
+        requestPayload: {
+          ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+          sources: {
+            workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+            inputs: [],
+            mounts: [],
+          },
+        },
+      }),
+    });
+  /** An executor that starts (its deadline reported) and whose readiness never comes. */
+  const neverReady = (deadline: string) =>
+    createRuntimeAdapterStub("docker", {
+      launch: async (_input, hooks) => {
+        await hooks?.onStarted?.({
+          adapter: "docker",
+          resourceId: "container-slow",
+          reference: "sealant-slow",
+          deadline,
+        });
+        return new Promise(() => undefined);
+      },
+    });
+
+  it("stops waiting for readiness at the preservation start and keeps the executor as a retained launch", async () => {
+    // A 120 s MicroVM lifetime with a 300 s readiness timeout: the launch used to wait past its
+    // own cap, the row `pending` and outside every drain.
+    const jobs = captureJob("job_slow", "run_slow");
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const leadMs = 60_000;
+    const deadline = new Date(Date.now() + leadMs + 300).toISOString();
+    const startedAt = Date.now();
+    const exit = await Effect.runPromise(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_slow",
+          runtimeAdapters: [neverReady(deadline)],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          preservationLeadMs: leadMs,
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "run_slow",
+        status: "failed",
+        errorCode: LAUNCH_RETAINED_ERROR_CODE,
+        resourceId: "container-slow",
+        runtimeDeadlineAt: new Date(deadline),
+        errorMessage: expect.stringContaining("preservation starts"),
+      }),
+    );
+    expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_slow" });
+  });
+
+  it("hands the adapter the launch the create named, for the executor's boot env", async () => {
+    const jobs = captureJob("job_named", "run_named");
+    const attempts = {
+      ...workspaceAttemptRepoStub(),
+      getAttemptById: vi.fn((id: string) =>
+        Effect.succeed({ id, ownerUserId: "user_1", launchId: "launch-named" }),
+      ),
+    };
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const launched: Array<{ launchId?: string | undefined }> = [];
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: async (input) => {
+        launched.push(input);
+        return {
+          adapter: "docker",
+          resourceId: "container-named",
+          reference: "sealant-named",
+          status: "ready",
+        };
+      },
+    });
+    await Effect.runPromise(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_named",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
+    );
+    expect(launched.map((input) => input.launchId)).toEqual(["launch-named"]);
+  });
+
+  it("stops waiting once its launch ownership was taken over (preempted by the deadline sweep)", async () => {
+    const jobs = captureJob("job_preempted", "run_preempted");
+    const attempts = workspaceAttemptRepoStub();
+    const runtimeInstances = {
+      ...workspaceRuntimeInstanceRepoStub(),
+      renewLaunchLease: vi.fn(() => Effect.succeed(false)),
+    };
+    const exit = await Effect.runPromise(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_preempted",
+          runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          launchLeaseMs: 1_000,
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(runtimeInstances.renewLaunchLease).toHaveBeenCalled();
+    expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        errorCode: LAUNCH_RETAINED_ERROR_CODE,
+        resourceId: "container-slow",
+        errorMessage: expect.stringContaining("ownership was taken over"),
+      }),
+    );
+  }, 15_000);
 });
 
 describe("the daemon build an executor boots, recorded at launch (review 3 #8)", () => {

@@ -105,10 +105,13 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
       }),
     );
 
-  const reconcile = (adapter: RuntimeAdapter) =>
+  // Scoped to this test's executors: the database is shared with the other suites, which run
+  // at the same time, and an unscoped sweep would adopt (or settle) their rows under them.
+  const reconcile = (adapter: RuntimeAdapter, resourceIds: readonly string[]) =>
     run(
       reconcileRuntimeExitsEffect({
         runtimeAdapters: [adapter],
+        resourceIds,
         captureDrain: {
           ledger: databaseCaptureDrainLedger({ db, owner: "db-test", leaseMs: 60_000 }),
           settings: {
@@ -182,7 +185,10 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
     );
     expect(pastGrace).toEqual([legacy]);
 
-    await reconcile(adapterReporting({ [`c-${ended}`]: { state: "exited", exitCode: 75 } }));
+    await reconcile(
+      adapterReporting({ [`c-${ended}`]: { state: "exited", exitCode: 75 } }),
+      [lost, ended, live, legacy].map((id) => `c-${id}`),
+    );
 
     const state = await run(
       Effect.gen(function* () {
@@ -225,7 +231,7 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
       resourceId: `c-${runId}`,
       deadline: new Date(Date.now() + 3_600_000),
     });
-    await reconcile(adapterReporting({}));
+    await reconcile(adapterReporting({}), [`c-${runId}`]);
 
     const late = await run(
       Effect.gen(function* () {
@@ -252,5 +258,59 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
     expect(late.renewed).toBe(false);
     expect(late.ready.message).toBe(LAUNCH_OWNERSHIP_LOST_MESSAGE);
     expect(late.row).toMatchObject({ status: "failed", errorCode: LAUNCH_RETAINED_ERROR_CODE });
+  });
+
+  it("preempts a launch whose worker still holds its lease, and fences that worker (review 4 #6)", async () => {
+    const runId = await newRun();
+    await startLaunch({
+      runId,
+      owner: "live-worker",
+      leaseMs: 10 * 60_000,
+      resourceId: `c-${runId}`,
+      deadline: new Date(Date.now() + 60_000),
+    });
+    const outcome = await run(
+      Effect.gen(function* () {
+        const instances = yield* WorkspaceRuntimeInstanceRepo;
+        const preempted = yield* instances.preemptLaunch({
+          runId,
+          errorMessage: "preservation start reached",
+        });
+        const again = yield* instances.preemptLaunch({ runId, errorMessage: "twice" });
+        const renewed = yield* instances.renewLaunchLease({
+          runId,
+          owner: "live-worker",
+          leaseMs: 60_000,
+        });
+        const ready = yield* instances
+          .upsertRuntimeInstance({
+            runId,
+            status: "ready",
+            fenceLaunchOwner: "live-worker",
+            releaseLaunch: true,
+            adapter: "docker",
+            resourceId: `c-${runId}`,
+            reference: `c-${runId}`,
+          })
+          .pipe(Effect.flip);
+        return {
+          preempted,
+          again,
+          renewed,
+          ready,
+          row: yield* instances.getRuntimeInstanceByRunId(runId),
+        };
+      }),
+    );
+    expect(outcome.preempted).toMatchObject({
+      status: "failed",
+      errorCode: LAUNCH_RETAINED_ERROR_CODE,
+      launchOwner: null,
+      resourceId: `c-${runId}`,
+    });
+    expect(outcome.again).toBeUndefined();
+    expect(outcome.renewed).toBe(false);
+    expect(outcome.ready.message).toBe(LAUNCH_OWNERSHIP_LOST_MESSAGE);
+    expect(outcome.row).toMatchObject({ status: "failed", errorCode: LAUNCH_RETAINED_ERROR_CODE });
   });
 });

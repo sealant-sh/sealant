@@ -20,6 +20,7 @@ import {
 } from "@sealant/db";
 import {
   SealantRuntime,
+  SealantUnexpectedError,
   type CaptureFlushReport,
   type CaptureFlushRequest,
   type CaptureReplanReport,
@@ -48,8 +49,15 @@ const REPORT: CaptureFlushReport = {
  * every flush request it is sent. The narrowing casts are test-only: each fake implements only
  * what the flush route reads.
  */
-const flushHarness = (report: CaptureFlushReport = REPORT) => {
+const flushHarness = (
+  report: CaptureFlushReport = REPORT,
+  options: {
+    /** The first flush's connection closes before its answer (a FINAL's sweep killed the relay). */
+    readonly firstFlushClosed?: boolean;
+  } = {},
+) => {
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
+  const calls: string[] = [];
   const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
   const spec = {
     sources: {
@@ -65,6 +73,20 @@ const flushHarness = (report: CaptureFlushReport = REPORT) => {
   const daemon = {
     captureFlush: (request?: CaptureFlushRequest) => {
       flushRequests.push(request);
+      calls.push("flush");
+      if (options.firstFlushClosed === true && calls.length === 1) {
+        return Effect.fail(
+          new SealantUnexpectedError({
+            operation: "captureFlush",
+            message: "connection closed",
+            cause: new Error("connection closed"),
+          }),
+        );
+      }
+      return Effect.succeed(report);
+    },
+    captureStatus: () => {
+      calls.push("status");
       return Effect.succeed(report);
     },
   } as unknown as SealantSession;
@@ -98,7 +120,7 @@ const flushHarness = (report: CaptureFlushReport = REPORT) => {
         payload: { ownerUserId: "usr_owner", ...payload },
       }).pipe(Effect.provide(layer)),
     );
-  return { flush, flushRequests };
+  return { flush, flushRequests, calls };
 };
 
 /**
@@ -270,5 +292,14 @@ describe("workspace capture flush request", () => {
       { kind: "suspend" },
       { kind: "suspend", deadlineMs: 10_000 },
     ]);
+  });
+
+  it("answers a FINAL whose connection closed under it with the status read again (e2e 6)", async () => {
+    // e2e 6: the FINAL's sweep killed the `docker exec … socat` bridge that carried it, and every
+    // stop answered `refused: connection closed`. The daemon had concluded; its status says so.
+    const saved: CaptureFlushReport = { ...REPORT, complete: true };
+    const h = flushHarness(saved, { firstFlushClosed: true });
+    expect(await h.flush({ kind: "final" })).toEqual(saved);
+    expect(h.calls).toEqual(["flush", "status"]);
   });
 });

@@ -359,6 +359,102 @@ describe("recoverRetainedExecutorsEffect", () => {
     expect(h.stop).not.toHaveBeenCalled();
   });
 
+  it("never removes a RUNNING retained executor on recorded evidence: it drains it first (review 4 #1)", async () => {
+    // A seal of capture 41 is on record; Core's newer observation says the FINAL failed to
+    // snapshot. The executor still runs: the stale seal must not delete it without a drain.
+    const failed = captureStatus({
+      epoch: 3,
+      headN: 41,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 1,
+    });
+    const h = harness({
+      inspect: { state: "running" },
+      recover: async () => ({ outcome: "running" }),
+      daemon: fakeCaptureDaemon([failed]),
+    });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.entry = {
+      ...row.entry,
+      last: failed,
+      lastAtMs: NOW,
+      completionAttested: {
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+        sealedAtMs: NOW - 3_600_000,
+        atMs: NOW,
+        by: "user_1",
+      },
+    };
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.daemon.connect).toHaveBeenCalled();
+    expect(h.daemon.flushRequests[0]).toMatchObject({ kind: "final" });
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
+  it("removes a running retained executor once a drain of it reads the final flush complete", async () => {
+    const h = harness({
+      inspect: { state: "running" },
+      recover: async () => ({ outcome: "running" }),
+      daemon: fakeCaptureDaemon([savedStatus({ epoch: 3, headN: 42 })]),
+    });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    // Even an attestation that would cover it is not what lets a running executor go.
+    row.entry = {
+      ...row.entry,
+      completionAttested: {
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+        atMs: NOW,
+        by: "user_1",
+      },
+    };
+
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.daemon.flushRequests[0]).toMatchObject({ kind: "final" });
+    expect(h.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes an executor whose recovery boot found nothing to save, and records why (e2e 6)", async () => {
+    // e2e 6: an executor that died at its first plan request never materialized; every recovery
+    // boot refused it ("not this executor's continuation", exit 75) and it was kept forever.
+    // sealantd now says so (exit 76): nothing ran on it, so nothing is lost by removing it.
+    const said = "sealantd boot: nothing to save: never materialized (/workspace/repo)";
+    const h = harness({
+      inspect: { state: "exited", exitCode: 1 },
+      recover: async () => ({ outcome: "nothing-to-save", detail: said }),
+    });
+    expect((await h.run()).get("run_1")).toBe("released");
+    expect(h.stop).toHaveBeenCalledTimes(1);
+    expect(h.ledger.store.rows.get("run_1")?.observation).toEqual({
+      state: "stopped",
+      detail: expect.stringContaining(said),
+    });
+    expect(h.ledger.store.rows.get("run_1")?.observation?.detail).toContain(
+      "never materialized a capture, so no user code ran on it",
+    );
+    expect(h.ledger.store.rows.get("run_1")?.entry.retained).toBeUndefined();
+  });
+
+  it("keeps an executor whose recovery boot exits 75: not saved", async () => {
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      recover: async () => {
+        throw new Error(
+          "Workspace container 'sealant-run-1' exited during boot before its control socket was ready (status: exited, exitCode: 75).",
+        );
+      },
+    });
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
   it("says loudly when a retained executor is gone, and ends the retention", async () => {
     const h = harness({ inspect: { state: "missing" } });
 

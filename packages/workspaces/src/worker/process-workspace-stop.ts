@@ -378,7 +378,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             captureSourced,
             runtime,
             ...recordedEvidence,
-            observedComplete: observedNow || recordedEvidence.observedComplete,
+            drainedNow: observedNow,
           });
 
         // Remove the runtime the policy let go; a capture-sourced one records how it went.

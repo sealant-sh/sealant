@@ -28,9 +28,10 @@
 //      arrived inside the launch push.
 //   4. Recovery. A capture VM whose sealantd exited (75: its final flush did not complete) while
 //      the VM runs on still holds its staging on the VM's disk, until the platform's cap ends
-//      the VM. `POST /sealant/recover` (control token) kills every process the dead daemon left
-//      (sealantd is not PID 1 here: its writers outlive it), then starts `sealantd boot
-//      --recovery` on that disk (resume its own staging, no restore, no dotfiles, no lifecycle
+//      the VM. `POST /sealant/recover` (control token) stops the guest Docker service and kills
+//      every process on the VM this agent did not start itself (sealantd is not PID 1 here: its
+//      writers outlive it; what the agent started is recorded by pid and start time, never
+//      recognised by name), then starts `sealantd boot --recovery` on that disk (resume its own staging, no restore, no dotfiles, no lifecycle
 //      step, no harness, nothing admitted), with the first boot's environment and its secret env
 //      file holding the capture token, so the control plane can drain it before the cap.
 //
@@ -38,7 +39,7 @@
 // targets it by default.
 import { spawn } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
@@ -63,8 +64,18 @@ const CONTROL_SOCKET = process.env.SEALANT_CONTROL_SOCKET ?? "/run/sealant/contr
 // Where launch material is written; overridable so the agent can be tested outside a VM.
 const STATE_DIR = process.env.SEALANT_MICROVM_AGENT_STATE_DIR ?? "/run/sealant";
 const SECRET_ENV_FILE = path.join(STATE_DIR, "secrets", "env.json");
+// The processes this agent started that sealantd's final sweep must spare (`SEALANT_SWEEP_EXEMPT_FILE`
+// in sealantd's environment). sealantd is not PID 1 on a MicroVM, so it sweeps the whole VM for
+// writers and spares only what is listed here — each by pid AND start time, never by name.
+const SWEEP_EXEMPT_FILE = path.join(STATE_DIR, "sweep-exempt.json");
+const SWEEP_EXEMPT_VERSION = 1;
 // How long a recovery waits for the processes the dead daemon left to be gone after SIGKILL.
 const LEFTOVER_KILL_TIMEOUT_MS = 5_000;
+// sealantd's recovery boot exits 76 (EXIT_NOTHING_TO_SAVE) when the executor never materialized a
+// capture: nothing ran on it, so there is nothing to save. The recovery route waits this long for
+// the boot to settle (its control socket, or that exit) so it can say which.
+const EXIT_NOTHING_TO_SAVE = 76;
+const RECOVERY_SETTLE_MS = Number(process.env.SEALANT_MICROVM_RECOVERY_SETTLE_MS ?? 15_000);
 const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
@@ -162,10 +173,81 @@ const state = {
   redactions: [],
   dockerService: null,
   hookChildren: new Set(),
+  /**
+   * Every process this agent started and that still runs: pid → role (`sealantctl`, `dockerd`,
+   * `docker-probe`, `sealantd`) and its start time (`/proc/<pid>/stat` field 22, clock ticks
+   * since boot). Ownership is this record — a pid the agent spawned, still carrying the start
+   * time it had then — and nothing else: a process named `docker` that the agent never started
+   * is a user process like any other.
+   */
+  helpers: new Map(),
 };
 
 const log = (line) => {
   console.log(`${new Date().toISOString()} agent: ${line}`);
+};
+
+/** A process's start time (`/proc/<pid>/stat` field 22), or `null` when it cannot be read. */
+const processStartTime = (pid) => {
+  try {
+    const stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
+    // The command name is in parentheses and may hold spaces: the fields follow the last one.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * What sealantd's final sweep spares, written for it (`SWEEP_EXEMPT_FILE`, atomically): this
+ * agent, and every helper it started that still runs, each by pid and start time. `sealantd`
+ * itself is not listed (it spares itself). A dockerd is spared, its descendants are not: they
+ * are the workspace's containers, writers like any other when the executor ends.
+ */
+const writeSweepExemptFile = () => {
+  const exempt = [
+    {
+      pid: process.pid,
+      startTime: processStartTime(process.pid),
+      role: "agent",
+      descendants: false,
+    },
+    ...[...state.helpers.entries()]
+      .filter(([, helper]) => helper.role !== "sealantd" && helper.startTime !== null)
+      .map(([pid, helper]) => ({
+        pid,
+        startTime: helper.startTime,
+        role: helper.role,
+        descendants: helper.descendants,
+      })),
+  ];
+  try {
+    const temp = `${SWEEP_EXEMPT_FILE}.${String(process.pid)}.tmp`;
+    writeFileSync(temp, `${JSON.stringify({ version: SWEEP_EXEMPT_VERSION, exempt })}\n`, {
+      mode: 0o600,
+    });
+    renameSync(temp, SWEEP_EXEMPT_FILE);
+  } catch (error) {
+    log(`sweep exempt list could not be written: ${error.message}`);
+  }
+};
+
+/**
+ * Record a process this agent started (its pid and start time) until it exits. `descendants`:
+ * its children are spared with it (when their ancestry through live processes reaches it). No
+ * helper sets it today: whatever runs under a helper — even under the agent's own sealantctl, the
+ * control peer — is swept like any other writer (decision 4: no control-peer exemption).
+ */
+const trackHelper = (child, role, { descendants = false } = {}) => {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  state.helpers.set(pid, { role, startTime: processStartTime(pid), descendants });
+  child.once("exit", () => {
+    if (state.helpers.get(pid)?.role === role) state.helpers.delete(pid);
+    writeSweepExemptFile();
+  });
+  writeSweepExemptFile();
 };
 
 const json = (res, status, body) => {
@@ -365,6 +447,7 @@ const startDockerImageValidation = () => {
   imageValidation.phase = "pending";
   imageValidation.dockerService = createDockerService({
     ...DOCKER_SERVICE_OPTIONS,
+    onSpawn: (child, role) => trackHelper(child, role),
     onReady: () => {},
     onStateChange: (health) => {
       if (health.status === "ready" || health.status === "failed") {
@@ -412,6 +495,7 @@ const finalFlushSupported = () => {
         const child = spawn(SEALANTCTL, ["capture", "flush", "--help"], {
           stdio: ["ignore", "pipe", "pipe"],
         });
+        trackHelper(child, "sealantctl");
         let output = "";
         const collect = (chunk) => {
           output = (output + chunk.toString("utf8")).slice(-16384);
@@ -452,6 +536,7 @@ const flushCaptures = async (kind) => {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  trackHelper(child, "sealantctl");
   state.hookChildren.add(child);
   let output = "";
   const collect = (chunk) => {
@@ -688,13 +773,22 @@ const reportedDaemonOutput = () => {
 };
 
 const startDaemon = (bootEnv, args = ["boot"]) => {
-  const env = { ...process.env, ...bootEnv, SEALANT_CONTROL_SOCKET: CONTROL_SOCKET };
+  const env = {
+    ...process.env,
+    ...bootEnv,
+    SEALANT_CONTROL_SOCKET: CONTROL_SOCKET,
+    // sealantd is not PID 1 here: its final sweep covers the whole VM and spares exactly what
+    // this list names (this agent and its own helpers, by pid and start time).
+    SEALANT_SWEEP_EXEMPT_FILE: SWEEP_EXEMPT_FILE,
+  };
   if (state.contractVersion === DOCKER_CONTRACT_VERSION) Object.assign(env, dockerEnvironment);
+  writeSweepExemptFile();
   const child = spawn(SEALANTD, args, {
     detached: true,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  trackHelper(child, "sealantd");
   state.booted = true;
   state.daemon = child;
   // The console (the VM's log group) still receives every byte; the agent keeps a tail as well.
@@ -899,6 +993,7 @@ const handleLaunch = async (req, res) => {
     const dockerBootEnv = { ...bootEnv, ...dockerEnvironment };
     state.dockerService = createDockerService({
       ...DOCKER_SERVICE_OPTIONS,
+      onSpawn: (child, role) => trackHelper(child, role),
       onReady: () => startDaemon(dockerBootEnv),
       onStateChange: (dockerHealth) => log(`docker: ${dockerHealth.status}`),
     });
@@ -943,25 +1038,56 @@ const readProcessTable = async () => {
       ppid: Number(fields[1]),
       pgrp: Number(fields[2]),
       sid: Number(fields[3]),
+      startTime: fields[19] ?? null,
       argv0: cmdline.split("\0")[0] ?? "",
     });
   }
   return table;
 };
 
-/** The agent's own helpers, which are not the daemon's: Docker, its probes, hook flushes. */
-const agentHelper = (argv0) =>
-  [DOCKERD, DOCKER, SEALANTCTL].some(
-    (helper) => argv0 === helper || path.basename(argv0) === path.basename(helper),
-  );
+/**
+ * The processes a recovery spares: this agent, and the helpers it started that still run AS
+ * THEY WERE STARTED (the pid carries the start time it had then; a pid the kernel handed to
+ * another process since is not the helper), with — for a helper whose children are its own —
+ * those children whose every ancestor up to it is alive. `roles` narrows the helpers spared.
+ * Never by name: a user process whose argv[0] is `docker` or `sealantctl` is not a helper.
+ */
+const sparedProcesses = (table, roles) => {
+  const spared = new Set([process.pid]);
+  const helpers = new Map();
+  for (const [pid, helper] of state.helpers) {
+    if (!roles.has(helper.role)) continue;
+    const entry = table.get(pid);
+    if (entry === undefined || helper.startTime === null || entry.startTime !== helper.startTime) {
+      continue;
+    }
+    spared.add(pid);
+    if (helper.descendants) helpers.set(pid, entry.startTime);
+  }
+  if (helpers.size === 0) return spared;
+  for (const [pid, entry] of table) {
+    let at = entry;
+    // Bounded: a table read while processes come and go can hold a cycle.
+    for (let hops = 0; at !== undefined && hops <= table.size; hops += 1) {
+      const root = helpers.get(at.ppid);
+      if (root !== undefined) {
+        // A descendant starts after its ancestor; an older process is a reused pid's.
+        if (Number(entry.startTime) >= Number(root)) spared.add(pid);
+        break;
+      }
+      at = table.get(at.ppid);
+    }
+  }
+  return spared;
+};
 
 /**
  * The processes the dead daemon left: its process group and session (it was started detached),
  * and — the agent being PID 1, every orphan is re-parented to it — every descendant of the agent
- * that is not one of the agent's own helpers (and their descendants). Zombies are not counted:
- * they hold no files and write nothing.
+ * that this agent did not start itself (`sparedProcesses`). Zombies are not counted: they hold
+ * no files and write nothing.
  */
-const daemonLeftovers = (table, daemonPid) => {
+const daemonLeftovers = (table, daemonPid, spared) => {
   const children = new Map();
   for (const [pid, entry] of table) {
     const siblings = children.get(entry.ppid) ?? [];
@@ -979,28 +1105,29 @@ const daemonLeftovers = (table, daemonPid) => {
     }
     return out;
   };
-  const keep = new Set([process.pid]);
-  for (const pid of children.get(process.pid) ?? []) {
-    if (agentHelper(table.get(pid)?.argv0 ?? "")) {
-      for (const helper of subtree(pid)) keep.add(helper);
-    }
-  }
   // A live process with the dead daemon's pid means its group and session are gone and the
   // number was reused (the kernel never hands out a pid still in use as a group or session id):
   // nothing matches it then.
   const groupAlive = daemonPid !== undefined && !table.has(daemonPid);
   const leftovers = new Set();
   for (const [pid, entry] of table) {
-    if (keep.has(pid) || entry.state === "Z") continue;
+    if (spared.has(pid) || entry.state === "Z") continue;
     if (groupAlive && (entry.pgrp === daemonPid || entry.sid === daemonPid)) {
       leftovers.add(pid);
     }
   }
   for (const pid of subtree(process.pid)) {
-    if (!keep.has(pid) && table.get(pid)?.state !== "Z") leftovers.add(pid);
+    if (!spared.has(pid) && table.get(pid)?.state !== "Z") leftovers.add(pid);
   }
   return leftovers;
 };
+
+/**
+ * What a recovery spares: only the agent's own `sealantctl` itself (a terminate or suspend hook's
+ * flush may be in flight), never what runs under it. Docker is stopped before a recovery (its containers are the workspace's
+ * writers, and a recovery boot runs no user code), so neither dockerd nor its probes are spared.
+ */
+const RECOVERY_SPARED_ROLES = new Set(["sealantctl"]);
 
 /**
  * Kill every process the dead daemon left, and wait until none remains: on a MicroVM sealantd is
@@ -1012,16 +1139,22 @@ const killDaemonLeftovers = async (daemonPid) => {
   for (;;) {
     const table = await readProcessTable();
     if (table === null) {
-      // No process table to read: the daemon's process group is all that can be named.
-      if (daemonPid === undefined) return true;
-      try {
-        process.kill(-daemonPid, "SIGKILL");
-        process.kill(-daemonPid, 0);
-      } catch (error) {
-        if (error.code === "ESRCH") return true;
+      // No process table to read: nothing can prove every other process is gone, so nothing
+      // is started. The daemon's process group is still killed.
+      if (daemonPid !== undefined) {
+        try {
+          process.kill(-daemonPid, "SIGKILL");
+        } catch {
+          // Gone already.
+        }
       }
+      return false;
     } else {
-      const leftovers = daemonLeftovers(table, daemonPid);
+      const leftovers = daemonLeftovers(
+        table,
+        daemonPid,
+        sparedProcesses(table, RECOVERY_SPARED_ROLES),
+      );
       if (leftovers.size === 0) return true;
       for (const pid of leftovers) {
         try {
@@ -1049,8 +1182,11 @@ const recoverySecretEnvJson = async (requestJson) => {
  * Start sealantd again ON THIS VM'S DISK in recovery mode, after it exited (sealantd exits 75
  * when its final flush did not complete, keeping its staging here):
  *
- *  1. every process the dead daemon left is killed, and none may remain (else 503: nothing is
- *     started beside a writer);
+ *  1. the guest Docker service is stopped (its containers are the workspace's writers), then
+ *     every other process on the VM is killed except this agent and the `sealantctl` it started
+ *     itself (recorded by pid and start time when it spawned them; never recognised by name), and
+ *     none may remain (else 503: nothing is started beside a writer; an unreadable process table
+ *     proves nothing and is a 503 too);
  *  2. `sealantd boot --recovery` starts with the first boot's environment; its secret env file
  *     stays the first boot's (`SEALANT_SECRET_ENV_FILE`), holding the capture token the control
  *     plane kept for this. It runs no dotfiles, no lifecycle step and no harness, admits nothing,
@@ -1090,6 +1226,13 @@ const handleRecover = async (req, res) => {
   }
   state.recoveryInProgress = true;
   try {
+    // Docker goes first: its containers are the workspace's writers (a recovery boot runs no
+    // user code and needs no guest service), and a dockerd left running would start them again.
+    const docker = await state.dockerService?.stop();
+    if (docker !== undefined && docker.ok === false && docker.killed !== true) {
+      log("recover: the guest Docker service did not stop; nothing started");
+      return message(res, 503, "the guest Docker service did not stop");
+    }
     if (!(await killDaemonLeftovers(state.daemon?.pid))) {
       log("recover: processes the ended sealantd left are still running; nothing started");
       return message(res, 503, "processes the ended daemon left are still running");
@@ -1106,6 +1249,23 @@ const handleRecover = async (req, res) => {
     state.daemonExit = null;
     state.daemonOutput = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
     startDaemon(env, ["boot", "--recovery"]);
+    // Wait for the boot to settle: it answers on its control socket, or it exits. Exit 76 is the
+    // daemon's word that there is nothing to save (it never materialized); it is reported as such
+    // and nothing else is. Any other exit, or a boot still starting, answers `restarted` and the
+    // control plane reads the daemon's health as before.
+    const settleBy = Date.now() + RECOVERY_SETTLE_MS;
+    while (Date.now() < settleBy && !controlSocketReady() && state.daemonExit === null) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (state.daemonExit !== null && state.daemonExit.code === EXIT_NOTHING_TO_SAVE) {
+      const report = daemonExitReport();
+      const line = /sealantd boot: nothing to save[^\n]*/.exec(report.output ?? "")?.[0];
+      log(`recover: sealantd found nothing to save (${line ?? "exit 76"})`);
+      return json(res, 200, {
+        outcome: "nothing-to-save",
+        detail: line ?? "sealantd boot: nothing to save (exit 76)",
+      });
+    }
     return json(res, 200, { outcome: "restarted" });
   } finally {
     state.recoveryInProgress = false;

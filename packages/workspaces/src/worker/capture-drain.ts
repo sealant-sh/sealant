@@ -55,19 +55,22 @@
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Result } from "effect";
 import { z } from "zod";
 
 import {
   attestationCoversExecutor,
   type ExecutorDeletionBasis,
   type ExecutorIdentity,
+  type ObservedCapture,
 } from "../runtime/executor-preservation.js";
 import {
   SealantControlError,
   SealantRuntime,
   type CaptureFlushReport,
   type CaptureFlushRequest,
+  type SealantError,
+  type SealantSession,
   type SealantTarget,
 } from "../sealantd/runtime.js";
 
@@ -163,6 +166,13 @@ export interface CaptureDrainEntry {
   /** When the daemon last answered with movement (or first answered at all). */
   readonly lastProgressAt: number | undefined;
   readonly last: CaptureFlushReport | undefined;
+  /** When `last` was read (this worker's clock; the database's once stored). */
+  readonly lastAtMs?: number | undefined;
+  /**
+   * A status is on record but cannot be read (`last` is then absent): Core observed something it
+   * cannot weigh, so no attestation may be taken over it.
+   */
+  readonly lastUnreadable?: boolean | undefined;
   readonly unreachableSince: number | undefined;
   /** The keep was already logged; the next log line is the one that says it moved again. */
   readonly keptLogged: boolean;
@@ -183,6 +193,8 @@ export interface CaptureDrainEntry {
         readonly executorId: string;
         readonly epoch: number;
         readonly captureN: number;
+        /** When the attesting store recorded the seal, when the attestation said. */
+        readonly sealedAtMs?: number | undefined;
         readonly atMs: number;
         readonly by: string;
       }
@@ -271,10 +283,30 @@ export interface CaptureDrainLedger {
   readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
   /**
    * Record that the run's executor is retained (kept: its disk holds work not confirmed saved),
-   * with why; recovery picks it up. Keeps the first instant. Best-effort: a failed write is
-   * logged loudly (the executor is kept either way).
+   * with why; recovery picks it up. Keeps the first instant. Answers whether it was recorded: a
+   * failed write is logged loudly and answers `false` — the executor is kept either way, but only
+   * a recorded retention brings recovery to it, so a caller that is about to make the executor's
+   * end terminal must not do so on `false` (`reconcile-runtime-exits.ts` writes both in one
+   * transaction and leaves the runtime for the next sweep otherwise).
    */
-  readonly markRetained: (runId: string, reason: string) => Effect.Effect<void>;
+  readonly markRetained: (
+    runId: string,
+    reason: string,
+    options?: {
+      /**
+       * `false`: do not tell recovery yet (the retention is written inside a transaction that
+       * has not committed; the caller calls `notifyRetained` once it has). Default `true`.
+       */
+      readonly notify?: boolean;
+    },
+  ) => Effect.Effect<boolean>;
+  /**
+   * Tell whoever recovers retained executors that one was recorded (the worker starts a
+   * recovery sweep at once). `markRetained` does this itself unless told not to; a caller that
+   * recorded the retention inside a transaction calls this once that transaction committed, since
+   * a sweep started before the commit cannot see the row. Absent: nobody listens.
+   */
+  readonly notifyRetained?: (runId: string) => Effect.Effect<void>;
 }
 
 /**
@@ -287,8 +319,17 @@ export const notifyingRetention = (
   onRetained: (runId: string) => void,
 ): CaptureDrainLedger => ({
   ...ledger,
-  markRetained: (runId, reason) =>
-    ledger.markRetained(runId, reason).pipe(Effect.tap(() => Effect.sync(() => onRetained(runId)))),
+  markRetained: (runId, reason, options) =>
+    ledger
+      .markRetained(runId, reason, options)
+      .pipe(
+        Effect.tap((recorded) =>
+          recorded && options?.notify !== false
+            ? Effect.sync(() => onRetained(runId))
+            : Effect.void,
+        ),
+      ),
+  notifyRetained: (runId) => Effect.sync(() => onRetained(runId)),
 });
 
 /** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
@@ -416,6 +457,7 @@ export const inMemoryCaptureDrainLedger = (
         };
         row.observation = { state: "kept", detail: `not saved · retained · ${reason}` };
         store.rows.set(runId, row);
+        return true;
       }),
   };
 };
@@ -485,10 +527,32 @@ export const reportsComplete = (status: CaptureFlushReport | undefined): boolean
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
   reportsComplete(entry?.last);
 
+/** Core's own latest observation of the run's daemon, as the preservation policy weighs it. */
+export const observedCaptureOf = (
+  entry: CaptureDrainEntry | undefined,
+): ObservedCapture | undefined => {
+  const last = entry?.last;
+  if (last === undefined && entry?.lastUnreadable === true) {
+    return { readable: false };
+  }
+  return last === undefined
+    ? undefined
+    : {
+        readable: true,
+        epoch: last.epoch,
+        ...(last.headN === undefined ? {} : { headN: last.headN }),
+        complete: reportsComplete(last),
+        ...(last.incompleteReason === undefined ? {} : { incompleteReason: last.incompleteReason }),
+        ...(entry?.lastAtMs === undefined ? {} : { atMs: entry.lastAtMs }),
+      };
+};
+
 /**
- * Whether the control plane's recorded attestation covers THIS executor: it names the run's
- * executor and is not for an epoch older than the executor last reported
- * (`attestationCoversExecutor`). No attestation, or one about another executor, is `false`.
+ * Whether the control plane's recorded attestation covers THIS executor, weighed at the moment
+ * it is consumed: it names the run's executor, and nothing Core observed from it — before or
+ * after the attestation was accepted — contradicts it (`attestationCoversExecutor`: an older
+ * epoch, a later capture, or an observation that the work is not saved made after the seal).
+ * No attestation, or one about another executor, is `false`.
  */
 export const attestedCompleteFor = (
   entry: CaptureDrainEntry | undefined,
@@ -497,7 +561,7 @@ export const attestedCompleteFor = (
   const attested = entry?.completionAttested;
   return (
     attested !== undefined &&
-    attestationCoversExecutor(attested, executor, entry?.last?.epoch).covers
+    attestationCoversExecutor(attested, executor, observedCaptureOf(entry)).covers
   );
 };
 
@@ -538,6 +602,8 @@ export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
       return "the control plane attested a sealed final capture of this executor";
     case "discarded":
       return "the owner discarded its unsaved captures";
+    case "nothing-to-save":
+      return "its recovery boot found nothing to save: it never materialized a capture, so no user code ran on it";
   }
 };
 
@@ -659,14 +725,16 @@ const sampleCapture = (
   command: { readonly flush: CaptureFlushRequest } | "status",
   timeoutMs: number,
 ): Effect.Effect<Sample, never, SealantRuntime> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const runtime = yield* SealantRuntime;
-      const daemon = yield* runtime.connect(target);
-      return yield* command === "status"
-        ? daemon.captureStatus()
-        : daemon.captureFlush(command.flush);
-    }),
+  (command === "status"
+    ? Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* SealantRuntime;
+          const daemon = yield* runtime.connect(target);
+          return yield* daemon.captureStatus();
+        }),
+      )
+    : // A FINAL's sweep closes the connection that carried it: its answer is read again.
+      captureFlushAnswer(target, command.flush)
   ).pipe(
     Effect.timeout(timeoutMs),
     Effect.map((status): Sample => ({ kind: "status", status })),
@@ -712,6 +780,83 @@ export const readCaptureStatus = (
   sampleCapture(target, "status", timeoutMs).pipe(
     Effect.map((sample) => (sample.kind === "status" ? sample.status : undefined)),
   );
+
+/**
+ * Whether a status says a FINAL is still at work (sealantd `in-progress`): wait for it, do not ask
+ * again.
+ */
+const finalInProgress = (status: CaptureFlushReport): boolean =>
+  status.incompleteReason === "in-progress";
+
+/** How often, and how far apart, a FINAL whose answer was lost is re-read. */
+const LOST_FINAL_REREADS = 5;
+const LOST_FINAL_REREAD_DELAY_MS = 500;
+
+/**
+ * One `capture.flush`, as its answer should be read. A FINAL's own sweep stops every writer on the
+ * executor — the relay that carried the request included (Docker reaches the daemon through a
+ * `docker exec … socat` bridge, which the sweep kills) — so its connection often closes before the
+ * answer arrives (e2e 6: every stop logged `refused: connection closed`). A closed connection is
+ * a LOST answer, never the outcome: the status is read again over a new connection at once, and
+ * the FINAL asked again when the daemon is not already at one (a repeated FINAL answers what the
+ * first concluded; it stops nothing twice). Only when no answer can be read at all does the
+ * original error stand. A daemon's refusal (`SealantControlError`) is an answer and is returned as
+ * it is; a SUSPEND flush sweeps nothing and is asked once.
+ */
+export const captureFlushAnswer = (
+  target: SealantTarget,
+  request: CaptureFlushRequest,
+  options: { readonly rereads?: number; readonly rereadDelayMs?: number } = {},
+): Effect.Effect<CaptureFlushReport, SealantError, SealantRuntime> =>
+  Effect.gen(function* () {
+    const runtime = yield* SealantRuntime;
+    // Whether the last round trip reached the daemon at all: a connection that never opened says
+    // the daemon is not there (nothing is re-read); one that closed under the request says only
+    // that its answer was lost.
+    let reached = false;
+    const over = <A>(use: (daemon: SealantSession) => Effect.Effect<A, SealantError>) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          reached = false;
+          const daemon = yield* runtime.connect(target);
+          reached = true;
+          return yield* use(daemon);
+        }),
+      );
+    const first = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
+    if (
+      Result.isSuccess(first) ||
+      request.kind !== "final" ||
+      !reached ||
+      first.failure instanceof SealantControlError
+    ) {
+      return yield* fromResult(first);
+    }
+    const rereads = options.rereads ?? LOST_FINAL_REREADS;
+    const delayMs = options.rereadDelayMs ?? LOST_FINAL_REREAD_DELAY_MS;
+    for (let attempt = 0; attempt < rereads; attempt += 1) {
+      const status = yield* Effect.result(over((daemon) => daemon.captureStatus()));
+      if (Result.isSuccess(status)) {
+        if (reportsComplete(status.success) || finalInProgress(status.success)) {
+          return status.success;
+        }
+        const again = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
+        if (Result.isSuccess(again) || again.failure instanceof SealantControlError) {
+          return yield* fromResult(again);
+        }
+      } else if (status.failure instanceof SealantControlError) {
+        return yield* Effect.fail(status.failure);
+      } else if (!reached) {
+        // The daemon is not answering any more: nothing to re-read.
+        break;
+      }
+      yield* Effect.sleep(delayMs);
+    }
+    return yield* fromResult(first);
+  });
+
+const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
+  Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
 
 export interface DrainCaptureInput {
   readonly runId: string;
@@ -909,7 +1054,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             // The registrar refused a class for the session's byte quota: nothing of it ships
             // until a new epoch or a re-plan, whatever `pending` says. Keep the executor.
             const firstKeep = !entry.keptLogged;
-            entry = { ...entry, last: status, keptLogged: true };
+            entry = { ...entry, last: status, lastAtMs: now, keptLogged: true };
             if (firstKeep) {
               yield* Effect.logError(
                 `${prefix}: not saved · refused · kept · ${describeCaptureStatus(status)}. The registrar refused these captures for the session's byte quota; the workspace is left running.`,
@@ -924,11 +1069,11 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
           }
           if (reportsComplete(status)) {
             yield* Effect.logInfo(`${prefix}: saved · ${describeCaptureStatus(status)}`);
-            entry = { ...entry, last: status, keptLogged: false };
+            entry = { ...entry, last: status, lastAtMs: now, keptLogged: false };
             return yield* finish({ kind: "drained", status });
           }
           if (status.pending === 0) {
-            entry = { ...entry, last: status };
+            entry = { ...entry, last: status, lastAtMs: now };
             if (flushesLeft > 0) {
               // Empty but unconfirmed: one more FINAL flush in this call.
               command = "flush";
@@ -954,7 +1099,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             yield* Effect.logInfo(`${prefix}: saving · ${describeCaptureStatus(status)}`);
             entry = { ...entry, keptLogged: false };
           }
-          entry = { ...entry, last: status };
+          entry = { ...entry, last: status, lastAtMs: now };
         }
 
         const stalledForMs = now - (entry.lastProgressAt ?? now);

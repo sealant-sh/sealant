@@ -402,6 +402,18 @@ describe("microvmBootEnv", () => {
     });
   });
 
+  it("names the launch the create named (SEALANT_CAPTURE_LAUNCH_ID)", () => {
+    expect(
+      microvmBootEnv(
+        { ...captureLaunch, launchId: "launch-7" },
+        { secretEnvFile: true, dotfiles: false },
+      ),
+    ).toMatchObject({ SEALANT_CAPTURE_LAUNCH_ID: "launch-7" });
+    expect(
+      microvmBootEnv(captureLaunch, { secretEnvFile: true, dotfiles: false }),
+    ).not.toHaveProperty("SEALANT_CAPTURE_LAUNCH_ID");
+  });
+
   it("keeps the explicit harness root authoritative over legacy runtime.env", () => {
     const input = {
       ...captureLaunch,
@@ -1286,6 +1298,37 @@ describe("MicrovmRuntimeAdapter.recover (review 3 #7)", () => {
     expect(control.healthTargets.length).toBe(launchHealthChecks + 1);
     expect(api.vms.get("microvm-1")?.state).toBe("RUNNING");
     expect(api.terminates).toEqual([]);
+  });
+
+  it("says when the recovery boot found nothing to save, from the agent's answer or its health (e2e 6)", async () => {
+    const said = "sealantd boot: nothing to save: never materialized (/workspace/repo)";
+    const fromAnswer = fakeEndpoint(
+      [json(200, { outcome: "booting" }), json(200, { outcome: "nothing-to-save", detail: said })],
+      [json(200, { booted: true, controlSocket: true }), exited75],
+    );
+    const first = build(new FakeMicrovmApi(), fromAnswer, fakeControl());
+    await first.launch(captureLaunch);
+    expect(
+      await first.recover({ resourceId: "microvm-1", runId: "run-golden-4", secretEnv: token }),
+    ).toEqual({ outcome: "nothing-to-save", detail: said });
+
+    const fromHealth = fakeEndpoint(
+      [json(200, { outcome: "booting" }), json(200, { outcome: "restarted" })],
+      [
+        json(200, { booted: true, controlSocket: true }),
+        exited75,
+        json(503, {
+          booted: true,
+          controlSocket: false,
+          daemonExit: { code: 76, signal: null, output: `boot: resume\n${said}\n` },
+        }),
+      ],
+    );
+    const second = build(new FakeMicrovmApi(), fromHealth, fakeControl());
+    await second.launch(captureLaunch);
+    expect(
+      await second.recover({ resourceId: "microvm-1", runId: "run-golden-4", secretEnv: token }),
+    ).toEqual({ outcome: "nothing-to-save", detail: said });
   });
 
   it("reports an agent without the recovery route as unsupported, and keeps the VM", async () => {

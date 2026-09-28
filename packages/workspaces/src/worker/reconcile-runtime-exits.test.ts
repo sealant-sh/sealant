@@ -99,6 +99,8 @@ const makeHarness = (input: {
   readonly snapshotMissing?: boolean;
   /** The daemon the drain dials; default = one that must never be dialled. */
   readonly daemon?: Layer.Layer<SealantRuntime>;
+  /** Ended capture executors nothing settled (`listUnsettledCaptureExecutors`). */
+  readonly unsettled?: readonly WorkspaceRuntimeInstance[];
 }): Harness => {
   const markExited = vi.fn((request: { runId: string; resourceId: string; errorMessage: string }) =>
     Effect.succeed(
@@ -125,6 +127,8 @@ const makeHarness = (input: {
     failLostLaunch: () => Effect.succeed(undefined),
     renewLaunchLease: () => Effect.succeed(false),
     listPreservationCandidates: () => Effect.succeed([]),
+    preemptLaunch: () => Effect.succeed(undefined),
+    listUnsettledCaptureExecutors: () => Effect.succeed(input.unsettled ?? []),
     markStopRequested: () => Effect.void,
   };
   const attempts = {
@@ -603,6 +607,155 @@ describe("reconcileRuntimeExitsEffect · drain before removal", () => {
     expect(recorded).toBe(0);
     expect(harness.markExited).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
+  });
+});
+
+/** A ledger whose retention write fails (the database refused it), as the DB ledger reports. */
+const failingRetention = () => {
+  const ledger = inMemoryCaptureDrainLedger();
+  const markRetained = vi.fn(() => Effect.succeed(false));
+  return { ledger: { ...ledger, markRetained }, markRetained };
+};
+
+describe("reconcileRuntimeExitsEffect · retention is recorded with the exit (review 4 #5)", () => {
+  const settings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 30,
+    unreachableWindowMs: 30,
+    requestTimeoutMs: 1_000,
+  };
+
+  it("leaves an exited executor `ready` when its retention cannot be recorded, so the next sweep records both", async () => {
+    // Review 4 #5: the retention write failed and the reconciler committed `failed` anyway; every
+    // later sweep keys on `ready`, `launch-retained` or a retention, so the disk dropped out of
+    // recovery for good. The exit is not recorded unless its retention is.
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 75 }]]),
+    });
+    const { ledger, markRetained } = failingRetention();
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(markRetained).toHaveBeenCalledTimes(1);
+    expect(recorded).toBe(0);
+    expect(harness.markExited).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("does not record a planned stop's exit as stopped when its retention cannot be recorded", async () => {
+    const harness = makeHarness({
+      instances: [runtimeInstance({ stopReason: "user" })],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 75 }]]),
+    });
+    const { ledger } = failingRetention();
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(0);
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("records every ended capture executor nothing settled: retained when its disk remains or it runs, gone when nothing is left", async () => {
+    // Whatever brought a row to `failed`/`stopped` without a retention (a retention write that
+    // failed before this fix, a row from before retention existed), the sweep looks again.
+    const harness = makeHarness({
+      instances: [],
+      // Rows from before the source kind was recorded: their snapshots name a capture source.
+      captureSourced: true,
+      unsettled: [
+        runtimeInstance({ runId: "run_exited", resourceId: "c-exited", status: "failed" }),
+        runtimeInstance({ runId: "run_running", resourceId: "c-running", status: "stopped" }),
+        runtimeInstance({ runId: "run_gone", resourceId: "c-gone", status: "failed" }),
+      ],
+    });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map<string, RuntimeAdapterInspectResult>([
+        ["c-exited", { state: "exited", exitCode: 75 }],
+        ["c-running", { state: "running" }],
+        ["c-gone", { state: "missing" }],
+      ]),
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+    // The running one carries an old attestation: recorded evidence never lets a RUNNING
+    // executor go; only a drain can.
+    ledger.store.rows.set("run_running", {
+      entry: {
+        lastProgressAt: undefined,
+        last: undefined,
+        unreachableSince: undefined,
+        keptLogged: false,
+        silentLogged: false,
+        completionAttested: {
+          executorId: "c-running",
+          epoch: 1,
+          captureN: 4,
+          atMs: 0,
+          by: "user_1",
+        },
+      },
+      observation: undefined,
+      owner: undefined,
+      expiresAt: undefined,
+    });
+
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(ledger.store.rows.get("run_exited")?.entry.retained).toBeDefined();
+    expect(ledger.store.rows.get("run_running")?.entry.retained).toBeDefined();
+    expect(ledger.store.rows.get("run_gone")?.observation?.state).toBe("gone");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("leaves an ended executor whose snapshot names no capture source alone", async () => {
+    const harness = makeHarness({
+      instances: [],
+      unsettled: [runtimeInstance({ runId: "run_git", resourceId: "c-git", status: "failed" })],
+    });
+    const { adapter, inspect } = stubAdapter({
+      inspections: new Map<string, RuntimeAdapterInspectResult>([
+        ["c-git", { state: "exited", exitCode: 0 }],
+      ]),
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(ledger.store.rows.get("run_git")).toBeUndefined();
   });
 });
 

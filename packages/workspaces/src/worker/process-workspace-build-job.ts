@@ -29,7 +29,7 @@ import {
 } from "@sealant/db";
 import { type GitHubSourceIntegration } from "@sealant/source-integrations";
 import { newWorkspaceSchema, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
-import { Effect, Exit, Layer, Option, Schedule } from "effect";
+import { Clock, Deferred, Effect, Exit, Layer, Option, Schedule } from "effect";
 import { z } from "zod";
 
 import type { PlannedWorkspaceImageBuild } from "../buildkit/index.js";
@@ -64,6 +64,7 @@ import {
   resolveDotfilesRuntimeEnv,
   resolveWorkspaceCloneAuth,
 } from "./github-installation-auth-resolver.js";
+import { DEFAULT_CAPTURE_DEADLINE_SETTINGS } from "./preserve-before-deadline.js";
 
 export { WorkspaceBuildJobProcessingError } from "./errors.js";
 
@@ -88,6 +89,13 @@ export interface ProcessWorkspaceBuildJobOptions {
    * job's lease. Default `DEFAULT_LAUNCH_LEASE_MS` (2 minutes).
    */
   readonly launchLeaseMs?: number;
+  /**
+   * How long before a runtime's own deadline (a MicroVM's maximum duration) its preservation
+   * starts (`WORKSPACE_CAPTURE_DEADLINE_LEAD_MS`, the deadline sweep's lead). A launch still
+   * waiting for readiness when that moment comes stops waiting: its executor is kept as a
+   * retained launch, which the deadline sweep drains at once. Absent: the default lead.
+   */
+  readonly preservationLeadMs?: number;
   readonly db: DB;
   /**
    * Every runtime this worker can launch on, each with the builder of the image it boots. The
@@ -129,6 +137,7 @@ const launchPublishedImage = async (input: {
   readonly secretEnvDir?: string;
   readonly secretEnv?: Readonly<Record<string, string>>;
   readonly runId?: string;
+  readonly launchId?: string;
   readonly workspaceId?: string;
   readonly principalId?: string;
   readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
@@ -159,6 +168,8 @@ const launchPublishedImage = async (input: {
       ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
       // Deterministic per-run container name -> idempotent launch/adopt (#4).
       ...(input.runId === undefined ? {} : { runId: input.runId }),
+      // The launch the create named: a capture executor boots with it (SEALANT_CAPTURE_LAUNCH_ID).
+      ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
       ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
       ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
       ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
@@ -577,7 +588,37 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   const launchLeaseMs = Math.max(1_000, options.launchLeaseMs ?? DEFAULT_LAUNCH_LEASE_MS);
   // The executor's identity once the adapter reported it (`onStarted` / `onReady`).
   let startedIdentity: RuntimeLaunchIdentity | undefined;
+  const preservationLeadMs = Math.max(
+    0,
+    options.preservationLeadMs ?? DEFAULT_CAPTURE_DEADLINE_SETTINGS.leadMs,
+  );
   const launchAndRecord = Effect.gen(function* () {
+    // Why this launch stops waiting on its executor, when something decides it must: its
+    // ownership was taken (the deadline sweep preempted it, or the stranded-launch sweep adopted
+    // it), or its runtime's preservation start arrived before it settled. A pending launch never
+    // holds an executor past the moment its work must start being saved (review 4 #6).
+    const abandon = yield* Deferred.make<string>();
+    // The executor's identity as soon as the adapter reports it (its deadline included).
+    const started = yield* Deferred.make<RuntimeLaunchIdentity>();
+    yield* Effect.forkScoped(
+      Deferred.await(started).pipe(
+        Effect.flatMap((identity) => {
+          const deadline =
+            identity.deadline === undefined ? Number.NaN : Date.parse(identity.deadline);
+          return Number.isNaN(deadline)
+            ? Effect.void
+            : Effect.gen(function* () {
+                const nowMs = yield* Clock.currentTimeMillis;
+                const startsAtMs = deadline - preservationLeadMs;
+                yield* Effect.sleep(Math.max(0, startsAtMs - nowMs));
+                yield* Deferred.succeed(
+                  abandon,
+                  `its runtime's preservation starts at ${new Date(startsAtMs).toISOString()} (deadline ${new Date(deadline).toISOString()} less the ${String(Math.round(preservationLeadMs / 1000))} s lead) and the launch had not settled`,
+                );
+              });
+        }),
+      ),
+    );
     if (job.runId !== null) {
       const runId = job.runId;
       yield* runtimeInstances
@@ -601,7 +642,14 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
               renewed
                 ? Effect.void
                 : Effect.logWarning(
-                    `Launch of run ${runId}: its launch ownership was taken over (the stranded-launch sweep adopted it); this worker no longer records it.`,
+                    `Launch of run ${runId}: its launch ownership was taken over (the deadline sweep preempted it, or the stranded-launch sweep adopted it); this worker stops waiting on it and no longer records it.`,
+                  ).pipe(
+                    Effect.andThen(
+                      Deferred.succeed(
+                        abandon,
+                        "its launch ownership was taken over (preempted before its runtime's deadline, or adopted as stranded)",
+                      ),
+                    ),
                   ),
             ),
             Effect.catchCause((cause) =>
@@ -714,6 +762,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       (runId: string) =>
       (identity: RuntimeLaunchIdentity): Promise<void> => {
         startedIdentity = identity;
+        Deferred.doneUnsafe(started, Exit.succeed(identity));
         return Effect.runPromise(
           runtimeInstances
             .upsertRuntimeInstance({
@@ -754,6 +803,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
           ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
           ...(job.runId === null ? {} : { runId: job.runId }),
+          ...(attemptIdentity?.launchId === null || attemptIdentity?.launchId === undefined
+            ? {}
+            : { launchId: attemptIdentity.launchId }),
           ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
           ...(binds.length === 0 ? {} : { binds }),
           ...(attemptIdentity?.ownerUserId === undefined
@@ -778,6 +830,26 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ? Effect.promise(() => stager.removeSecretEnv(job.runId))
           : Effect.void,
       ),
+      // Abandoned (see `abandon`): the launch stops waiting and fails; a started executor is kept
+      // as a retained launch (never removed here), which the deadline sweep drains.
+      (launching) =>
+        Effect.raceFirst(
+          launching,
+          Deferred.await(abandon).pipe(
+            Effect.flatMap((reason) =>
+              Effect.fail(
+                toWorkspaceBuildJobProcessingError(
+                  startedIdentity === undefined
+                    ? new Error(`The launch was abandoned: ${reason}.`)
+                    : new LaunchRetainedError(
+                        startedIdentity,
+                        new Error(`The launch was abandoned: ${reason}.`),
+                      ),
+                ),
+              ),
+            ),
+          ),
+        ),
     );
 
     if (job.runId !== null) {

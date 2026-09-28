@@ -4,6 +4,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
 import {
+  workspaceCaptureDrains,
   workspaceRuntimeInstances,
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
@@ -80,7 +81,9 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "identifyStrandedLaunch",
   "failLostLaunch",
   "renewLaunchLease",
+  "preemptLaunch",
   "listPreservationCandidates",
+  "listUnsettledCaptureExecutors",
   "markExited",
   "markStopRequested",
   "markStopped",
@@ -285,6 +288,18 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly unownedGraceMs: number;
     readonly lostGraceMs: number;
   }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Take a launch in progress away from its worker because its runtime's own deadline is near:
+   * a `pending` row that names an executor becomes a RETAINED launch (`failed` with
+   * `LAUNCH_RETAINED_ERROR_CODE`, identity kept, ownership cleared) whether or not its worker
+   * still holds its lease. Atomic: every later write of that worker is fenced on the ownership it
+   * no longer has (its renewal answers `false`, its terminal write fails), and its launch stops.
+   * `undefined` when the launch settled first (it is no longer `pending`, or names no executor).
+   */
+  readonly preemptLaunch: (input: {
+    readonly runId: string;
+    readonly errorMessage: string;
+  }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
   /** Renew `owner`'s launch ownership of a `pending` row; `false` when it is no longer theirs. */
   readonly renewLaunchLease: (input: {
     readonly runId: string;
@@ -301,6 +316,19 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
+  /**
+   * Ended executors (`failed` or `stopped`, naming an executor) that are capture-sourced — or
+   * record no source, which fails closed — and that nothing settled: no retention is recorded and
+   * no removal (`stopped`, `discarded`, `gone`) was observed. Their disk may still hold work that
+   * no sweep would otherwise look at again (a terminal write that landed while the retention write
+   * failed, a row from before retention existed). Retained launches are left to their own sweep.
+   * The longest-unchanged first, at most `limit`.
+   */
+  readonly listUnsettledCaptureExecutors: (input: {
+    readonly limit: number;
+    /** Only these runtime resources (an exit event names one). */
+    readonly resourceIds?: readonly string[];
+  }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
 }
 
 /**
@@ -716,6 +744,31 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
           }),
         ),
 
+      preemptLaunch: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "preemptLaunch",
+          Effect.gen(function* () {
+            const [preempted] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "failed",
+                errorCode: LAUNCH_RETAINED_ERROR_CODE,
+                errorMessage: input.errorMessage,
+                launchOwner: null,
+                launchLeaseExpiresAt: null,
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  eq(workspaceRuntimeInstances.status, "pending"),
+                  isNotNull(workspaceRuntimeInstances.resourceId),
+                ),
+              )
+              .returning();
+            return preempted;
+          }),
+        ),
+
       renewLaunchLease: (input) =>
         withWorkspaceRuntimeInstanceRepoError(
           "renewLaunchLease",
@@ -758,6 +811,46 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ),
             )
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      listUnsettledCaptureExecutors: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listUnsettledCaptureExecutors",
+          Effect.gen(function* () {
+            const rows = yield* db
+              .select({ instance: workspaceRuntimeInstances })
+              .from(workspaceRuntimeInstances)
+              .leftJoin(
+                workspaceCaptureDrains,
+                eq(workspaceCaptureDrains.runId, workspaceRuntimeInstances.runId),
+              )
+              .where(
+                and(
+                  isNotNull(workspaceRuntimeInstances.resourceId),
+                  isNotNull(workspaceRuntimeInstances.adapter),
+                  inArray(workspaceRuntimeInstances.status, ["failed", "stopped"]),
+                  or(
+                    isNull(workspaceRuntimeInstances.errorCode),
+                    ne(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
+                  ),
+                  or(
+                    isNull(workspaceRuntimeInstances.sourceKind),
+                    eq(workspaceRuntimeInstances.sourceKind, "capture"),
+                  ),
+                  isNull(workspaceCaptureDrains.retainedAt),
+                  or(
+                    isNull(workspaceCaptureDrains.state),
+                    sql`${workspaceCaptureDrains.state} not in ('stopped', 'discarded', 'gone')`,
+                  ),
+                  ...(input.resourceIds === undefined
+                    ? []
+                    : [inArray(workspaceRuntimeInstances.resourceId, [...input.resourceIds])]),
+                ),
+              )
+              .orderBy(workspaceRuntimeInstances.updatedAt)
+              .limit(Math.max(1, Math.round(input.limit)));
+            return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
+          }),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;
   }),

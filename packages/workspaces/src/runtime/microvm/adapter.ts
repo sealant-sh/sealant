@@ -42,6 +42,8 @@ import {
   type RuntimeAdapterLaunchHooks,
 } from "../launch-retention.js";
 import {
+  nothingToSaveDetail,
+  SEALANTD_EXIT_NOTHING_TO_SAVE,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterStopInput,
   parseRuntimeAdapterSupportInput,
@@ -393,10 +395,10 @@ export const microvmBootEnv = (
   const source = blueprint.sources.workspace;
   if (source.kind === "capture") {
     entries.push(
-      ...captureSourceEnv(
-        source,
-        options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs },
-      ),
+      ...captureSourceEnv(source, {
+        ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
+        launchId: input.launchId,
+      }),
     );
   } else if (source.kind === "git") {
     // `git` is Core's blueprint term; pinned sealantd v0.18.2 names this wire mode `clone`.
@@ -823,15 +825,20 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
           `The agent of MicroVM ${microvmId} refused to restart sealantd in recovery mode (HTTP ${String(response.status)}).`,
         );
       }
-      const outcome = agentRecoverResponseSchema.parse(await response.json()).outcome;
-      if (outcome === "running") {
+      const answer = agentRecoverResponseSchema.parse(await response.json());
+      if (answer.outcome === "running") {
         return { outcome: "running" };
       }
-      await this.#awaitRecovered(host, microvmId, input.runId, [
+      if (answer.outcome === "nothing-to-save") {
+        return { outcome: "nothing-to-save", detail: nothingToSaveDetail(answer.detail) };
+      }
+      const recovered = await this.#awaitRecovered(host, microvmId, input.runId, [
         this.#config.controlBearerToken,
         ...Object.values(input.secretEnv),
       ]);
-      return { outcome: "restarted" };
+      return recovered === "ready"
+        ? { outcome: "restarted" }
+        : { outcome: "nothing-to-save", detail: recovered.nothingToSave };
     } finally {
       release();
     }
@@ -1181,12 +1188,16 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     microvmId: string,
     runId: string,
     redactions: readonly string[],
-  ): Promise<void> {
+  ): Promise<"ready" | { readonly nothingToSave: string }> {
     const deadline = this.#now() + this.#config.readinessTimeoutMs;
     const target = this.#controlTarget(host, microvmId);
     while (this.#now() <= deadline) {
       try {
         const health = await this.#readAgentHealth(host, microvmId);
+        if (health.daemonExit?.code === SEALANTD_EXIT_NOTHING_TO_SAVE) {
+          // The recovery boot found nothing to save: it never materialized a capture.
+          return { nothingToSave: nothingToSaveDetail(health.daemonExit.output) };
+        }
         if (health.daemonExit !== undefined) {
           const failure = this.#guestFailure(health, false, redactions);
           throw new MicrovmGuestFailure(
@@ -1197,7 +1208,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         }
         if (health.booted && health.controlSocket) {
           await this.#control.health(target);
-          return;
+          return "ready";
         }
       } catch (error) {
         if (error instanceof MicrovmGuestFailure) {

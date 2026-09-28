@@ -189,10 +189,13 @@ export type AgentRecoverRequest = z.infer<typeof agentRecoverRequestSchema>;
 
 /**
  * `restarted`: sealantd had ended and was started again in recovery mode; `running`: it runs
- * already (nothing was done).
+ * already (nothing was done); `nothing-to-save`: the recovery boot exited 76 (sealantd
+ * `EXIT_NOTHING_TO_SAVE`: the executor never materialized a capture, so no user code ran on it),
+ * `detail` the daemon's own line.
  */
 export const agentRecoverResponseSchema = z.strictObject({
-  outcome: z.enum(["restarted", "running"]),
+  outcome: z.enum(["restarted", "running", "nothing-to-save"]),
+  detail: z.string().optional(),
 });
 
 export type AgentRecoverResponse = z.infer<typeof agentRecoverResponseSchema>;

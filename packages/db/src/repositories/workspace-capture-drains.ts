@@ -60,6 +60,8 @@ export interface WorkspaceCaptureDrainProgress {
   readonly state?: WorkspaceCaptureDrainState;
   readonly detail?: string | null;
   readonly lastStatus?: Readonly<Record<string, unknown>> | null;
+  /** When `lastStatus` was read. */
+  readonly lastStatusAt?: Date | null;
   readonly lastProgressAt?: Date | null;
   readonly unreachableSince?: Date | null;
   readonly keptLogged?: boolean;
@@ -136,6 +138,8 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly attestedBy: string;
     /** The launch identity the attestation named (already matched to the run's). */
     readonly launchId?: string;
+    /** When the attesting store recorded the seal, when the attestation said. */
+    readonly sealedAt?: Date;
   }) => Effect.Effect<WorkspaceCaptureDrain, WorkspaceCaptureDrainRepoError>;
   /**
    * Record that the run's executor is retained (its disk holds work not confirmed saved): the
@@ -189,6 +193,7 @@ const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
   ...(progress.detail === undefined ? {} : { detail: progress.detail }),
   ...(progress.lastStatus === undefined ? {} : { lastStatus: progress.lastStatus }),
+  ...(progress.lastStatusAt === undefined ? {} : { lastStatusAt: progress.lastStatusAt }),
   ...(progress.lastProgressAt === undefined ? {} : { lastProgressAt: progress.lastProgressAt }),
   ...(progress.unreachableSince === undefined
     ? {}
@@ -333,6 +338,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               completionAttestedAt: new Date(),
               completionAttestedBy: input.attestedBy,
               completionLaunchId: input.launchId ?? null,
+              completionSealedAt: input.sealedAt ?? null,
             };
             const [row] = yield* db
               .insert(workspaceCaptureDrains)

@@ -26,6 +26,14 @@ export const CAPTURE_WORKTREE_ID_ENV = "SEALANT_CAPTURE_WORKTREE_ID";
 /** The executor-local directory the daemon captures and restores as harness state. */
 export const CAPTURE_HARNESS_HOME_ENV = "SEALANT_CAPTURE_HARNESS_HOME";
 
+/**
+ * The launch this executor is (cross-repo decisions 5 and 11), as the create named it: the daemon
+ * names it from its first `plan.get`, and a plan answering another executor refuses the boot. A
+ * recovery boot keeps it (Docker restarts the same container; the MicroVM agent reuses the first
+ * boot's environment).
+ */
+export const CAPTURE_LAUNCH_ID_ENV = "SEALANT_CAPTURE_LAUNCH_ID";
+
 /** The launcher's statement that the network to the channel is private: plain HTTP is dialled. */
 export const CAPTURE_ALLOW_PLAINTEXT_ENV = "SEALANT_CAPTURE_ALLOW_PLAINTEXT";
 /** PEM roots the channel's certificate must chain to, in place of the public roots. */
@@ -68,14 +76,16 @@ export const shutdownFinalDeadlineMs = (stopGraceMs: number): number | undefined
  * `stopGraceMs` is how long the runtime waits after `SIGTERM` before it kills the executor: the
  * daemon's shutdown final flush is bounded inside it (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`), so a
  * flush that cannot finish exits 75 — the disk kept and recovered — rather than being killed.
- * An older daemon ignores it.
+ * An older daemon ignores it. `launchId`, when the create named one, is delivered as
+ * `SEALANT_CAPTURE_LAUNCH_ID`.
  */
 export const captureSourceEnv = (
   source: CaptureWorkspaceSource,
-  options: { readonly stopGraceMs?: number } = {},
+  options: { readonly stopGraceMs?: number; readonly launchId?: string | undefined } = {},
 ): ReadonlyArray<readonly [string, string]> => [
   ["SEALANT_WORKSPACE_SOURCE", "capture"],
   [CAPTURE_ENDPOINT_ENV, source.endpoint],
+  ...(options.launchId === undefined ? [] : [[CAPTURE_LAUNCH_ID_ENV, options.launchId] as const]),
   ...(source.worktreeId === undefined
     ? []
     : [[CAPTURE_WORKTREE_ID_ENV, source.worktreeId] as const]),

@@ -315,6 +315,7 @@ export const createDockerService = (options) => {
       env,
       stdio: "ignore",
     });
+    options.onSpawn?.(child, "docker-probe");
     probes.add(child);
     let timeout;
     const outcome = await Promise.race([
@@ -425,6 +426,9 @@ export const createDockerService = (options) => {
       env,
       stdio: ["ignore", "ignore", "pipe"],
     });
+    // The agent records every process it starts (pid and start time): the processes the final
+    // sweep and a recovery may spare are exactly those, never ones that merely share a name.
+    options.onSpawn?.(dockerd, "dockerd");
     dockerd.stderr?.on("data", (chunk) => {
       stderrLog.write(chunk);
       signatureTracker.observe(chunk);

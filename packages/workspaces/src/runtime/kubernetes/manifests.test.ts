@@ -129,6 +129,15 @@ describe("Kubernetes manifests", () => {
     expect(plain.some(([key]) => key === "SEALANT_WORKSPACE_REPO_URL")).toBe(false);
   });
 
+  it("names the launch the create named in a capture Pod's env (SEALANT_CAPTURE_LAUNCH_ID)", () => {
+    const plain = plainEnvEntries(
+      { ...cases.capture, binds: undefined, launchId: "launch-7" },
+      config,
+      { secretEnvFile: true, dotfilesArchiveDir: undefined },
+    );
+    expect(plain).toContainEqual(["SEALANT_CAPTURE_LAUNCH_ID", "launch-7"]);
+  });
+
   it("renders a capture source as channel facts only: no mount env, no repo env", () => {
     const plain = plainEnvEntries({ ...cases.capture, binds: undefined }, config, {
       secretEnvFile: true,

@@ -75,6 +75,8 @@ export const captureStatusFromStored = (stored: unknown): CaptureFlushReport | u
 const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   lastProgressAt: row.lastProgressAt?.getTime(),
   last: captureStatusFromStored(row.lastStatus),
+  lastAtMs: row.lastStatusAt?.getTime(),
+  lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
   unreachableSince: row.unreachableSince?.getTime(),
   keptLogged: row.keptLogged,
   silentLogged: row.silentLogged,
@@ -96,6 +98,7 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
           executorId: row.completionExecutorId,
           epoch: row.completionEpoch,
           captureN: row.completionCaptureN,
+          sealedAtMs: row.completionSealedAt?.getTime(),
           atMs: row.completionAttestedAt.getTime(),
           by: row.completionAttestedBy ?? "unknown",
         },
@@ -179,6 +182,7 @@ export const captureDrainLedgerFromRepo = (
           leaseMs: options.leaseMs,
           progress: {
             lastStatus: entry.last === undefined ? null : storedStatus(entry.last),
+            lastStatusAt: entry.lastAtMs === undefined ? null : new Date(entry.lastAtMs),
             lastProgressAt:
               entry.lastProgressAt === undefined ? null : new Date(entry.lastProgressAt),
             unreachableSince:
@@ -229,13 +233,14 @@ export const captureDrainLedgerFromRepo = (
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
         yield* repo.markRetained({ runId, reason });
+        return true;
       }),
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError(
-          `Capture drain: recording run ${runId}'s executor as retained failed; it is kept regardless, but recovery will not find it until a later sweep records it.`,
+          `Capture drain: recording run ${runId}'s executor as retained failed (not recorded); the executor is kept, and nothing that depends on the record is written.`,
           cause,
-        ),
+        ).pipe(Effect.as(false)),
       ),
     ),
 

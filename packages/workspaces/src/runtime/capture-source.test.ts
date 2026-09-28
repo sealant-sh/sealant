@@ -84,6 +84,17 @@ describe("captureSourceEnv", () => {
     ]);
   });
 
+  it("delivers the launch the create named, and nothing when it named none", () => {
+    expect(
+      captureSourceEnv(captureSource({ worktreeId: "wt_1" }), { launchId: "launch-7" }),
+    ).toContainEqual(["SEALANT_CAPTURE_LAUNCH_ID", "launch-7"]);
+    expect(
+      captureSourceEnv(captureSource({ worktreeId: "wt_1" })).some(
+        ([key]) => key === "SEALANT_CAPTURE_LAUNCH_ID",
+      ),
+    ).toBe(false);
+  });
+
   it("keeps the harness root for standby capture and omits only the worktree", () => {
     expect(captureSourceEnv(captureSource({ harnessHome: "/workspace/harness-home" }))).toEqual([
       ["SEALANT_WORKSPACE_SOURCE", "capture"],

@@ -63,6 +63,8 @@ const sweep = async (input: {
   readonly deadlineInMs: number;
   readonly daemon: ReturnType<typeof fakeCaptureDaemon>;
   readonly row?: Partial<WorkspaceCaptureDrain>;
+  /** The launch is still in progress, its worker holding its lease. */
+  readonly pending?: boolean;
 }) => {
   const schedules: WorkspaceCaptureDrainSchedule[] = [];
   const drains = {
@@ -73,7 +75,31 @@ const sweep = async (input: {
       return Effect.succeed({} as WorkspaceCaptureDrain);
     },
   } as unknown as WorkspaceCaptureDrainRepoService;
-  const row = instance(input.deadlineInMs);
+  let row: WorkspaceRuntimeInstance =
+    input.pending === true
+      ? {
+          ...instance(input.deadlineInMs),
+          status: "pending",
+          launchOwner: "worker-1:job:uuid",
+          launchLeaseExpiresAt: new Date(NOW + 2 * MIN),
+        }
+      : instance(input.deadlineInMs);
+  const candidates = [row];
+  const preemptLaunch = vi.fn((request: { runId: string; errorMessage: string }) =>
+    Effect.sync(() => {
+      if (row.status !== "pending") return undefined;
+      row = {
+        ...row,
+        status: "failed",
+        errorCode: "launch-retained",
+        errorMessage: request.errorMessage,
+        launchOwner: null,
+        launchLeaseExpiresAt: null,
+      };
+      return row;
+    }),
+  );
+  const markAttemptFailed = vi.fn(() => Effect.void);
   const markStopped = vi.fn(() => Effect.succeed({ ...row, status: "stopped" as const }));
   const setWorkspaceStatus = vi.fn(() => Effect.succeed(null));
   const stop = vi.fn(async () => ({
@@ -93,8 +119,9 @@ const sweep = async (input: {
   const workspace = { id: "ws_vm", latestRunId: "run_vm" } as Workspace;
   const layer = Layer.mergeAll(
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      listPreservationCandidates: () => Effect.succeed([row]),
-      getRuntimeInstanceByRunId: () => Effect.succeed(row),
+      listPreservationCandidates: () => Effect.succeed(candidates),
+      getRuntimeInstanceByRunId: () => Effect.sync(() => row),
+      preemptLaunch,
       markStopped,
       markStopRequested: () => Effect.void,
     } as unknown as WorkspaceRuntimeInstanceRepoService),
@@ -105,6 +132,7 @@ const sweep = async (input: {
     } as unknown as WorkspaceRepoService),
     Layer.succeed(WorkspaceAttemptRepo, {
       getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      markAttemptFailed,
     } as unknown as WorkspaceAttemptRepoService),
     Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
     Layer.succeed(WorkspaceCaptureDrainRepo, drains),
@@ -126,7 +154,16 @@ const sweep = async (input: {
       now: () => NOW,
     }).pipe(Effect.provide(layer)),
   );
-  return { driven, schedules, stop, markStopped, setWorkspaceStatus };
+  return {
+    driven,
+    schedules,
+    stop,
+    markStopped,
+    setWorkspaceStatus,
+    preemptLaunch,
+    markAttemptFailed,
+    row: () => row,
+  };
 };
 
 describe("planPreservationStart", () => {
@@ -466,17 +503,33 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
     expect(driven).toBe(0);
     expect(requestRecovery).not.toHaveBeenCalled();
   });
+});
 
-  it("never stops a launch whose worker still owns it, however close its deadline", async () => {
-    const launching: WorkspaceRuntimeInstance = {
-      ...instance(5 * MIN),
-      status: "pending",
-      launchOwner: "worker-1:job:uuid",
-      launchLeaseExpiresAt: new Date(NOW + MIN),
-    };
-    const { driven, requestRecovery, stop } = await sweepRows([launching], false);
-    expect(driven).toBe(0);
-    expect(requestRecovery).not.toHaveBeenCalled();
-    expect(stop).not.toHaveBeenCalled();
+describe("preserveBeforeDeadlineEffect · a launch still in progress at its preservation start (review 4 #6)", () => {
+  it("takes the launch from its worker and sends its executor FINAL, even with its deadline passed", async () => {
+    // Review 4 #6: the sweep sampled a `pending` executor holding 2 GB and returned without a
+    // FINAL, however close (or past) its deadline; everything then hung on the platform's
+    // at-most-60-second terminate hook.
+    for (const deadlineInMs of [120_000, 1_000, -1_000]) {
+      const daemon = fakeCaptureDaemon([
+        captureStatus({ pending: 2, pendingBytes: 2_000_000_000, complete: false }),
+        savedStatus(),
+      ]);
+      const result = await sweep({ deadlineInMs, daemon, pending: true });
+      expect(result.preemptLaunch).toHaveBeenCalledTimes(1);
+      expect(result.row()).toMatchObject({ status: "failed", errorCode: "launch-retained" });
+      expect(result.markAttemptFailed).toHaveBeenCalledTimes(1);
+      expect(daemon.flushRequests[0]).toMatchObject({ kind: "final" });
+      expect(result.driven).toBe(1);
+      expect(result.stop).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("leaves a launch whose preservation start has not come yet to its worker", async () => {
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 0, pendingBytes: 0 })]);
+    const result = await sweep({ deadlineInMs: 30 * MIN, daemon, pending: true });
+    expect(result.preemptLaunch).not.toHaveBeenCalled();
+    expect(daemon.flushRequests).toEqual([]);
+    expect(result.driven).toBe(0);
   });
 });
