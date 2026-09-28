@@ -24,6 +24,10 @@ import {
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
+  DatabaseTransaction,
+  DatabaseTransactionLive,
+  LAUNCH_OWNERSHIP_LOST_MESSAGE,
+  WorkspaceRuntimeInstanceRepoInvariantError,
   SealantDB,
   type DB,
 } from "@sealant/db";
@@ -479,64 +483,128 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     ...(job.runId === null ? {} : { runId: job.runId }),
   });
 
-  // Best-effort cleanup shared by both phases. Every step swallows its own failure so the
-  // originating error is the one that propagates.
-  const failureCleanup = (error: WorkspaceBuildJobProcessingError, markJobAsFailed: boolean) =>
-    Effect.gen(function* () {
-      if (job.runId !== null) {
-        // A capture-sourced launch that failed after readiness kept its executor: the row keeps
-        // its identity (and `LAUNCH_RETAINED_ERROR_CODE`) so the retained-launch sweep drains it
-        // before it is stopped. `finishedAt` stays unset — the executor is still running.
-        const retained =
-          error.cause instanceof LaunchRetainedError ? error.cause.identity : undefined;
-        yield* runtimeInstances
-          .upsertRuntimeInstance({
-            runId: job.runId,
-            status: "failed",
-            releaseLaunch: true,
-            ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
-            errorMessage: error.message,
-            ...(retained === undefined
-              ? { finishedAt: new Date() }
-              : {
-                  adapter: retained.adapter,
-                  resourceId: retained.resourceId,
-                  reference: retained.reference,
-                  ...(retained.endpoint === undefined ? {} : { endpoint: retained.endpoint }),
-                  ...(retained.deadline === undefined
-                    ? {}
-                    : { runtimeDeadlineAt: new Date(retained.deadline) }),
-                }),
-          })
-          .pipe(swallowingFailure("failed runtime-instance update"));
-      }
+  // This worker's claim on the job. A build can outlive its claim lease, and another worker then
+  // claims the job and builds it again; success AND failure are committed only under this exact
+  // claim, so the run is launched by exactly one of them (review 5 #1: a second launch of a
+  // capture run adopts the first one's executor) and a loser never reports its successor's run
+  // failed (review 6 #8).
+  const claim = { workerId: options.workerId, attemptCount: job.attemptCount };
 
-      yield* Effect.all(
-        [
-          markJobAsFailed
-            ? jobs
-                .markJobFailed({
-                  id: job.id,
-                  errorMessage: error.message,
-                  ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
-                })
-                .pipe(swallowingFailure("mark-failed update"))
-            : Effect.void,
-          job.runId === null
-            ? Effect.void
-            : attempts
-                .markAttemptFailed({ id: job.runId })
-                .pipe(swallowingFailure("mark-attempt-failed update")),
-        ],
-        { concurrency: "unbounded", discard: true },
+  // The launch ownership this worker holds on the run's runtime row, once its `pending` row is
+  // written (Phase B). `lost`: the stranded-launch sweep adopted the launch, or the deadline sweep
+  // preempted it — the row is theirs, and this worker writes nothing over it and leaves the
+  // launch material to whoever stops the executor.
+  const launchOwnership: { owner: string | undefined; lost: boolean } = {
+    owner: undefined,
+    lost: false,
+  };
+
+  // The failed runtime row a failure leaves: a capture-sourced launch that failed after its
+  // executor started keeps the executor's identity (and `LAUNCH_RETAINED_ERROR_CODE`) so the
+  // retained-launch sweep drains it before it is stopped; `finishedAt` stays unset — the
+  // executor is still running. Once this worker wrote the launch's `pending` row, the write is
+  // fenced on its launch ownership.
+  const failedRuntimeRow = (runId: string, error: WorkspaceBuildJobProcessingError) => {
+    const retained = error.cause instanceof LaunchRetainedError ? error.cause.identity : undefined;
+    return runtimeInstances.upsertRuntimeInstance({
+      runId,
+      status: "failed",
+      releaseLaunch: true,
+      ...(launchOwnership.owner === undefined ? {} : { fenceLaunchOwner: launchOwnership.owner }),
+      ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
+      errorMessage: error.message,
+      ...(retained === undefined
+        ? { finishedAt: new Date() }
+        : {
+            adapter: retained.adapter,
+            resourceId: retained.resourceId,
+            reference: retained.reference,
+            ...(retained.endpoint === undefined ? {} : { endpoint: retained.endpoint }),
+            ...(retained.deadline === undefined
+              ? {}
+              : { runtimeDeadlineAt: new Date(retained.deadline) }),
+          }),
+    });
+  };
+
+  // Phase A failed: the build (or its publish) failed under this worker's claim. The job is
+  // marked failed only while this claim still holds it, and the run's attempt and runtime rows
+  // are written only when it did — atomically with it where the worker has a transaction. A
+  // claimant whose lease expired and was taken over writes nothing: the job, its attempt and
+  // its runtime belong to the claim that holds it now (review 6 #8). Never masks the error.
+  const buildFailureCleanup = (error: WorkspaceBuildJobProcessingError) =>
+    Effect.gen(function* () {
+      const writes = Effect.gen(function* () {
+        const failed = yield* jobs.markJobFailed({
+          id: job.id,
+          claim,
+          errorMessage: error.message,
+          ...(error.errorCode === undefined ? {} : { errorCode: error.errorCode }),
+        });
+        if (failed === null) {
+          return false;
+        }
+        if (job.runId !== null) {
+          yield* failedRuntimeRow(job.runId, error);
+          yield* attempts.markAttemptFailed({ id: job.runId });
+        }
+        return true;
+      });
+      const transaction = yield* Effect.serviceOption(DatabaseTransaction);
+      const owned = yield* (
+        Option.isSome(transaction) ? transaction.value.run(writes) : writes
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Workspace build job ${job.id}: recording its failure failed; the job stays with its claim, whose lease lapses and is claimed again.`,
+            cause,
+          ).pipe(Effect.as(true)),
+        ),
       );
+      if (!owned) {
+        yield* Effect.logWarning(
+          `Workspace build job ${job.id} failed after this worker's claim (${claim.workerId}, claim ${String(claim.attemptCount)}) was taken over: ${error.message}. Nothing is recorded over the claim that holds it now.`,
+        );
+      }
     });
 
-  // This worker's claim on the job. A build can outlive its claim lease, and another worker then
-  // claims the job and builds it again; success is committed only under this exact claim, so the
-  // run is launched by exactly one of them (review 5 #1: a second launch of a capture run adopts
-  // the first one's executor).
-  const claim = { workerId: options.workerId, attemptCount: job.attemptCount };
+  // Phase B failed (or was interrupted): the job stays succeeded. The runtime row is written only
+  // while this worker still owns the launch, and the attempt only when that write landed: an
+  // adopted or preempted launch is its adopter's (review 6 #8). Every step swallows its own
+  // failure so the originating error is the one that propagates.
+  const launchFailureCleanup = (error: WorkspaceBuildJobProcessingError) =>
+    Effect.gen(function* () {
+      if (job.runId === null) {
+        return;
+      }
+      const runId = job.runId;
+      const written = yield* failedRuntimeRow(runId, error).pipe(
+        Effect.as("written" as const),
+        Effect.catchIf(
+          (failure) =>
+            failure instanceof WorkspaceRuntimeInstanceRepoInvariantError &&
+            failure.message === LAUNCH_OWNERSHIP_LOST_MESSAGE,
+          () => Effect.succeed("ownership-lost" as const),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "Workspace build job failed runtime-instance update failed; continuing.",
+            cause,
+          ).pipe(Effect.as("failed" as const)),
+        ),
+      );
+      if (written === "ownership-lost") {
+        launchOwnership.lost = true;
+        yield* Effect.logWarning(
+          `Launch of run ${runId} failed after its launch ownership was taken over (${error.message}); the launch is left as its adopter recorded it.`,
+        );
+        return;
+      }
+      yield* attempts
+        .markAttemptFailed({ id: runId })
+        .pipe(swallowingFailure("mark-attempt-failed update"));
+    });
+
   const markSucceeded = (fields: {
     readonly builderId: string;
     readonly resultPayload: WorkspaceBuild;
@@ -654,9 +722,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     return { publishedImage, spec, planned };
   });
 
-  const built = yield* buildAndPublish.pipe(
-    Effect.tapError((error) => failureCleanup(error, true)),
-  );
+  const built = yield* buildAndPublish.pipe(Effect.tapError(buildFailureCleanup));
   if (built === null) {
     // Another worker holds the job now (this claim's lease expired under the build): it builds and
     // launches the run; this worker launches nothing and records nothing over it.
@@ -736,6 +802,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           daemonRecoveryBoot,
         })
         .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      launchOwnership.owner = launchOwner;
       // Renew the ownership while the launch runs (the readiness wait can take minutes). Ends
       // with the launch; a lost renewal is logged, and the fenced writes below find out.
       yield* Effect.forkScoped(
@@ -745,16 +812,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
             Effect.flatMap((renewed) =>
               renewed
                 ? Effect.void
-                : Effect.logWarning(
-                    `Launch of run ${runId}: its launch ownership was taken over (the deadline sweep preempted it, or the stranded-launch sweep adopted it); this worker stops waiting on it and no longer records it.`,
-                  ).pipe(
-                    Effect.andThen(
-                      Deferred.succeed(
-                        abandon,
-                        "its launch ownership was taken over (preempted before its runtime's deadline, or adopted as stranded)",
-                      ),
-                    ),
-                  ),
+                : Effect.gen(function* () {
+                    launchOwnership.lost = true;
+                    yield* Effect.logWarning(
+                      `Launch of run ${runId}: its launch ownership was taken over (the deadline sweep preempted it, or the stranded-launch sweep adopted it); this worker stops waiting on it and no longer records it.`,
+                    );
+                    yield* Deferred.succeed(
+                      abandon,
+                      "its launch ownership was taken over (preempted before its runtime's deadline, or adopted as stranded)",
+                    );
+                  }),
             ),
             Effect.catchCause((cause) =>
               Effect.logWarning(
@@ -1013,20 +1080,19 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     if (job.runId === null || identity === undefined) {
       return Effect.void;
     }
-    return failureCleanup(
+    return launchFailureCleanup(
       toWorkspaceBuildJobProcessingError(
         new LaunchRetainedError(
           identity,
           new Error("The worker launching it was interrupted before the launch finished."),
         ),
       ),
-      false,
     );
   });
 
   yield* Effect.scoped(launchAndRecord).pipe(
     Effect.onInterrupt(() => retainOnInterrupt),
-    Effect.tapError((error) => failureCleanup(error, false)),
+    Effect.tapError(launchFailureCleanup),
     // A successful boot has consumed only the secret file; stop owns the remaining dotfiles cleanup.
     // A failed/interrupted launch removes every staged artifact exactly once so retries restage from
     // the durable request instead of inheriting a partial directory.
@@ -1036,9 +1102,15 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           job.secretEnvSealed === null || job.secretEnvSealed === undefined || keepSealedSecret
             ? Effect.void
             : jobs.clearSecretEnv(job.id).pipe(swallowingFailure("clear-secret-env update")),
-          Effect.promise(() =>
-            Exit.isSuccess(exit) ? stager.removeSecretEnv(job.runId) : stager.removeAll(job.runId),
-          ),
+          // A launch its adopter took over keeps its material: the executor is theirs now, and
+          // the stop that removes it removes that too.
+          launchOwnership.lost
+            ? Effect.void
+            : Effect.promise(() =>
+                Exit.isSuccess(exit)
+                  ? stager.removeSecretEnv(job.runId)
+                  : stager.removeAll(job.runId),
+              ),
         ],
         { discard: true },
       ),
@@ -1069,6 +1141,8 @@ export const processWorkspaceBuildJob = (
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,
+    // A build failure's job, attempt and runtime writes land together or not at all.
+    DatabaseTransactionLive,
   ).pipe(Layer.provide(dbLayer));
 
   return Effect.runPromise(
