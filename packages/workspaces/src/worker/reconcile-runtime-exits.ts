@@ -39,17 +39,29 @@
  * the owner discarded it, or nothing of it is left — otherwise retained (recorded; recovery is
  * attempted). A runtime reported `running` with a `detail` (a guest service failed, the executor
  * survived) is reported, never removed.
+ *
+ * A retained executor's retention and its terminal write (`failed`, or `stopped` for a planned
+ * stop) commit in ONE transaction (`withRetention`, review 4 #5): a terminal row without its
+ * retention is an executor every later sweep passes over (they key on `ready`, a retained launch
+ * or a retention), so when the retention cannot be recorded neither is written and the runtime
+ * stays `ready` for the next sweep. And every sweep also looks again at each ended capture
+ * executor nothing settled — `failed` or `stopped` with no retention and no removal recorded,
+ * whatever its earlier status (`settleUnsettledExecutors`) — so a row an older worker left in
+ * that state is recovered too.
  */
 import {
+  DatabaseTransaction,
+  DatabaseTransactionLive,
   SealantDB,
   WorkspaceAttemptRepo,
   WorkspaceAttemptRepoLive,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
+  type DatabaseTransactionError,
   type DB,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import {
   decideExecutorDeletion,
@@ -166,9 +178,6 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       instance.adapter !== null &&
       (wanted === undefined || wanted.has(instance.resourceId)),
   );
-  if (live.length === 0) {
-    return 0;
-  }
 
   // The remains: an exited container keeps its filesystem and any sidecar; a dead Pod keeps its
   // Service and Secrets. The adapter stop is idempotent (`not-found` = already gone).
@@ -262,26 +271,33 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
       const verdict = decided.verdict;
-      if (verdict === "record-keep-remains") {
-        yield* (
-          options.captureDrain?.ledger.markRetained(instance.runId, decided.reason) ?? Effect.void
-        );
-      }
+      // A kept executor's retention and its terminal write land together or not at all
+      // (`withRetention`): a terminal row with no retention is an executor no sweep looks at
+      // again, so when the retention cannot be recorded the runtime is left `ready` for the next.
+      const terminally = <A, E, R>(terminal: Effect.Effect<A, E, R>) =>
+        verdict === "record-keep-remains"
+          ? withRetention(options.captureDrain?.ledger, instance.runId, decided.reason, terminal)
+          : terminal;
       if (instance.stopReason !== null) {
         // A stop is under way for this run (`markStopRequested`): the exit is that planned stop
         // completing, not a crash. Record it stopped with the stop's reason; the stop path's own
         // `markStopped` is idempotent.
-        const settled = yield* runtimeInstances
-          .markStopped({ runId: instance.runId, stopReason: instance.stopReason })
-          .pipe(
-            Effect.as(true),
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                `Runtime exit reconciler: recording the planned stop of run ${instance.runId} failed.`,
-                cause,
-              ).pipe(Effect.as(false)),
-            ),
-          );
+        const stopReason = instance.stopReason;
+        const settled = yield* terminally(
+          Effect.suspend(() => runtimeInstances.markStopped({ runId: instance.runId, stopReason })),
+        ).pipe(
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logError(
+              `Runtime exit reconciler: recording the planned stop of run ${instance.runId} failed${
+                verdict === "record-keep-remains"
+                  ? " (with its retention: neither was written)"
+                  : ""
+              }; the runtime is left as it was for the next sweep.`,
+              cause,
+            ).pipe(Effect.as(false)),
+          ),
+        );
         if (settled) {
           recorded += 1;
           yield* Effect.logInfo(
@@ -300,20 +316,24 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       }
       yield* reportHardCap(instance, inspection);
 
-      const exited = yield* runtimeInstances
-        .markExited({
-          runId: instance.runId,
-          resourceId,
-          errorMessage: describeExit(instance, inspection),
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              `Runtime exit reconciler: recording the exit of run ${instance.runId} failed.`,
-              cause,
-            ).pipe(Effect.as(undefined)),
-          ),
-        );
+      const exited = yield* terminally(
+        Effect.suspend(() =>
+          runtimeInstances.markExited({
+            runId: instance.runId,
+            resourceId,
+            errorMessage: describeExit(instance, inspection),
+          }),
+        ),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError(
+            `Runtime exit reconciler: recording the exit of run ${instance.runId} failed${
+              verdict === "record-keep-remains" ? " (with its retention: neither was written)" : ""
+            }; the runtime is left \`ready\` for the next sweep.`,
+            cause,
+          ).pipe(Effect.as(undefined)),
+        ),
+      );
       if (exited === undefined) {
         // Fenced out: a stop settled the row first, or a relaunch replaced the resource.
         continue;
@@ -340,8 +360,149 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
     }
   }
 
+  // Ended capture executors nothing settled (a terminal row with no retention and no removal):
+  // whatever their earlier status, each is looked at again until its retention or its removal
+  // is recorded.
+  if (options.captureDrain !== undefined) {
+    yield* settleUnsettledExecutors(options, options.captureDrain.ledger, removeRemains).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          "Runtime exit reconciler: the sweep of ended capture executors failed.",
+          cause,
+        ),
+      ),
+    );
+  }
+
   return recorded;
 });
+
+/** The retention a terminal write depends on could not be recorded; nothing was written. */
+export class RetentionNotRecordedError extends Schema.TaggedErrorClass<RetentionNotRecordedError>()(
+  "RetentionNotRecordedError",
+  { runId: Schema.String },
+) {}
+
+/**
+ * Record the run's executor retained, then `terminal` (the write that ends the runtime's row),
+ * as ONE database transaction when the worker has one (`DatabaseTransaction`): both land, or
+ * neither does. Without a ledger there is nothing to record and `terminal` runs alone; without a
+ * transaction the retention is written first and `terminal` runs only once it was recorded. A
+ * retention that could not be recorded fails with `RetentionNotRecordedError`, and `terminal`
+ * never ran (or was rolled back). Once committed, recovery is told (`notifyRetained`).
+ */
+export const withRetention = <A, E, R>(
+  ledger: CaptureDrainLedger | undefined,
+  runId: string,
+  reason: string,
+  terminal: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | RetentionNotRecordedError | DatabaseTransactionError, R> => {
+  if (ledger === undefined) {
+    return terminal;
+  }
+  const both = Effect.gen(function* () {
+    if (!(yield* ledger.markRetained(runId, reason, { notify: false }))) {
+      return yield* new RetentionNotRecordedError({ runId });
+    }
+    return yield* terminal;
+  });
+  return Effect.gen(function* () {
+    const transaction = yield* Effect.serviceOption(DatabaseTransaction);
+    const result = Option.isSome(transaction) ? yield* transaction.value.run(both) : yield* both;
+    yield* ledger.notifyRetained?.(runId) ?? Effect.void;
+    return result;
+  });
+};
+
+/** How many unsettled ended executors one sweep looks at. */
+const UNSETTLED_PER_SWEEP = 50;
+
+/**
+ * Every ended capture executor that nothing settled — `failed` or `stopped`, naming an executor,
+ * with no retention recorded and no removal observed (`listUnsettledCaptureExecutors`) — is
+ * looked at again, whatever brought it there: the runtime is asked what is left of it, and the
+ * one preservation policy decides. Nothing left: recorded `gone`. Evidence it may go (an observed
+ * complete final flush, an attestation, a discard) on an executor that ENDED: its remains are
+ * removed. Anything else — an ended executor whose disk holds unconfirmed work, and a running one
+ * (only a drain can let a running executor go) — is recorded retained, and recovery takes it. A
+ * runtime that cannot say is left for the next sweep.
+ */
+const settleUnsettledExecutors = (
+  options: ReconcileRuntimeExitsEffectOptions,
+  ledger: CaptureDrainLedger,
+  removeRemains: (
+    adapter: RuntimeAdapter,
+    instance: WorkspaceRuntimeInstance,
+    resourceId: string,
+    removal: RemovalBasis,
+  ) => Effect.Effect<void, never, never>,
+) =>
+  Effect.gen(function* () {
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const unsettled = yield* runtimeInstances.listUnsettledCaptureExecutors({
+      limit: UNSETTLED_PER_SWEEP,
+      ...(options.resourceIds === undefined ? {} : { resourceIds: options.resourceIds }),
+    });
+    for (const instance of unsettled) {
+      const runId = instance.runId;
+      const resourceId = instance.resourceId;
+      const adapter = options.runtimeAdapters.find(
+        (candidate) => candidate.id === instance.adapter,
+      );
+      const inspect = adapter?.inspect;
+      if (resourceId === null || adapter === undefined || inspect === undefined) {
+        continue;
+      }
+      yield* Effect.gen(function* () {
+        const inspection = yield* Effect.tryPromise(() => inspect.call(adapter, { resourceId }));
+        const record = yield* ledger.read(runId);
+        const evidence = recordedDeletionEvidence(record, {
+          runId,
+          resourceId,
+          reference: instance.reference,
+        });
+        const decision = decideExecutorDeletion({
+          captureSourced: true,
+          runtime: inspection.state,
+          ...evidence,
+          // Only a drain lets a RUNNING executor go: recorded evidence is not enough for one.
+          ...(inspection.state === "running"
+            ? { observedComplete: false, attestedComplete: false }
+            : {}),
+        });
+        if (decision.delete && decision.basis === "missing") {
+          yield* ledger.observe(runId, {
+            state: "gone",
+            detail: `the ended runtime (${adapter.id} ${resourceId}) is gone; nothing of it is left`,
+          });
+          return;
+        }
+        if (decision.delete) {
+          yield* removeRemains(adapter, instance, resourceId, {
+            captureSourced: true,
+            basis: decision.basis,
+          });
+          return;
+        }
+        const reason =
+          inspection.state === "running"
+            ? "the executor of an ended run is still running and its work is not confirmed saved"
+            : decision.reason;
+        if (yield* ledger.markRetained(runId, reason)) {
+          yield* Effect.logError(
+            `Runtime exit reconciler: run ${runId} (${adapter.id} ${resourceId}) ended (${instance.status}) with no retention recorded: not saved · retained · ${reason}. Recovery is attempted.`,
+          );
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Runtime exit reconciler: looking at the ended capture executor of run ${runId} failed; the next sweep asks again.`,
+            cause,
+          ),
+        ),
+      );
+    }
+  });
 
 /**
  * Before an exit is recorded: `record` (go ahead: record and remove the remains), `leave` (touch
@@ -476,6 +637,8 @@ export const reconcileRuntimeExits = async (
   const dataAccessLayer = Layer.mergeAll(
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceAttemptRepoLive,
+    // A kept executor's retention and its terminal write commit together (`withRetention`).
+    DatabaseTransactionLive,
   ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
   return Effect.runPromise(
     reconcileRuntimeExitsEffect(effectOptions).pipe(

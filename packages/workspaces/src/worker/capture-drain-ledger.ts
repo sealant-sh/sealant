@@ -229,13 +229,14 @@ export const captureDrainLedgerFromRepo = (
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
         yield* repo.markRetained({ runId, reason });
+        return true;
       }),
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError(
-          `Capture drain: recording run ${runId}'s executor as retained failed; it is kept regardless, but recovery will not find it until a later sweep records it.`,
+          `Capture drain: recording run ${runId}'s executor as retained failed (not recorded); the executor is kept, and nothing that depends on the record is written.`,
           cause,
-        ),
+        ).pipe(Effect.as(false)),
       ),
     ),
 

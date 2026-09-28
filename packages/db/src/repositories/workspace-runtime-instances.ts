@@ -4,6 +4,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
 import {
+  workspaceCaptureDrains,
   workspaceRuntimeInstances,
   type WorkspaceLaunchCredentialInjection,
   type WorkspaceRuntimeInstance,
@@ -81,6 +82,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "failLostLaunch",
   "renewLaunchLease",
   "listPreservationCandidates",
+  "listUnsettledCaptureExecutors",
   "markExited",
   "markStopRequested",
   "markStopped",
@@ -301,6 +303,19 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
+  /**
+   * Ended executors (`failed` or `stopped`, naming an executor) that are capture-sourced — or
+   * record no source, which fails closed — and that nothing settled: no retention is recorded and
+   * no removal (`stopped`, `discarded`, `gone`) was observed. Their disk may still hold work that
+   * no sweep would otherwise look at again (a terminal write that landed while the retention write
+   * failed, a row from before retention existed). Retained launches are left to their own sweep.
+   * The longest-unchanged first, at most `limit`.
+   */
+  readonly listUnsettledCaptureExecutors: (input: {
+    readonly limit: number;
+    /** Only these runtime resources (an exit event names one). */
+    readonly resourceIds?: readonly string[];
+  }) => Effect.Effect<readonly WorkspaceRuntimeInstance[], WorkspaceRuntimeInstanceRepoError>;
 }
 
 /**
@@ -758,6 +773,46 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ),
             )
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      listUnsettledCaptureExecutors: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listUnsettledCaptureExecutors",
+          Effect.gen(function* () {
+            const rows = yield* db
+              .select({ instance: workspaceRuntimeInstances })
+              .from(workspaceRuntimeInstances)
+              .leftJoin(
+                workspaceCaptureDrains,
+                eq(workspaceCaptureDrains.runId, workspaceRuntimeInstances.runId),
+              )
+              .where(
+                and(
+                  isNotNull(workspaceRuntimeInstances.resourceId),
+                  isNotNull(workspaceRuntimeInstances.adapter),
+                  inArray(workspaceRuntimeInstances.status, ["failed", "stopped"]),
+                  or(
+                    isNull(workspaceRuntimeInstances.errorCode),
+                    ne(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
+                  ),
+                  or(
+                    isNull(workspaceRuntimeInstances.sourceKind),
+                    eq(workspaceRuntimeInstances.sourceKind, "capture"),
+                  ),
+                  isNull(workspaceCaptureDrains.retainedAt),
+                  or(
+                    isNull(workspaceCaptureDrains.state),
+                    sql`${workspaceCaptureDrains.state} not in ('stopped', 'discarded', 'gone')`,
+                  ),
+                  ...(input.resourceIds === undefined
+                    ? []
+                    : [inArray(workspaceRuntimeInstances.resourceId, [...input.resourceIds])]),
+                ),
+              )
+              .orderBy(workspaceRuntimeInstances.updatedAt)
+              .limit(Math.max(1, Math.round(input.limit)));
+            return rows.map((row: { instance: WorkspaceRuntimeInstance }) => row.instance);
+          }),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;
   }),

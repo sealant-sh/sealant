@@ -271,10 +271,30 @@ export interface CaptureDrainLedger {
   readonly observe: (runId: string, observation: CaptureDrainObservation) => Effect.Effect<void>;
   /**
    * Record that the run's executor is retained (kept: its disk holds work not confirmed saved),
-   * with why; recovery picks it up. Keeps the first instant. Best-effort: a failed write is
-   * logged loudly (the executor is kept either way).
+   * with why; recovery picks it up. Keeps the first instant. Answers whether it was recorded: a
+   * failed write is logged loudly and answers `false` — the executor is kept either way, but only
+   * a recorded retention brings recovery to it, so a caller that is about to make the executor's
+   * end terminal must not do so on `false` (`reconcile-runtime-exits.ts` writes both in one
+   * transaction and leaves the runtime for the next sweep otherwise).
    */
-  readonly markRetained: (runId: string, reason: string) => Effect.Effect<void>;
+  readonly markRetained: (
+    runId: string,
+    reason: string,
+    options?: {
+      /**
+       * `false`: do not tell recovery yet (the retention is written inside a transaction that
+       * has not committed; the caller calls `notifyRetained` once it has). Default `true`.
+       */
+      readonly notify?: boolean;
+    },
+  ) => Effect.Effect<boolean>;
+  /**
+   * Tell whoever recovers retained executors that one was recorded (the worker starts a
+   * recovery sweep at once). `markRetained` does this itself unless told not to; a caller that
+   * recorded the retention inside a transaction calls this once that transaction committed, since
+   * a sweep started before the commit cannot see the row. Absent: nobody listens.
+   */
+  readonly notifyRetained?: (runId: string) => Effect.Effect<void>;
 }
 
 /**
@@ -287,8 +307,17 @@ export const notifyingRetention = (
   onRetained: (runId: string) => void,
 ): CaptureDrainLedger => ({
   ...ledger,
-  markRetained: (runId, reason) =>
-    ledger.markRetained(runId, reason).pipe(Effect.tap(() => Effect.sync(() => onRetained(runId)))),
+  markRetained: (runId, reason, options) =>
+    ledger
+      .markRetained(runId, reason, options)
+      .pipe(
+        Effect.tap((recorded) =>
+          recorded && options?.notify !== false
+            ? Effect.sync(() => onRetained(runId))
+            : Effect.void,
+        ),
+      ),
+  notifyRetained: (runId) => Effect.sync(() => onRetained(runId)),
 });
 
 /** Rows of an in-memory ledger; share one store between ledgers to model several workers. */
@@ -416,6 +445,7 @@ export const inMemoryCaptureDrainLedger = (
         };
         row.observation = { state: "kept", detail: `not saved · retained · ${reason}` };
         store.rows.set(runId, row);
+        return true;
       }),
   };
 };

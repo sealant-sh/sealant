@@ -153,6 +153,7 @@ const makeHarness = (input: {
     failLostLaunch: () => Effect.succeed(undefined),
     renewLaunchLease: () => Effect.succeed(false),
     listPreservationCandidates: () => Effect.succeed([]),
+    listUnsettledCaptureExecutors: () => Effect.succeed([]),
     markStopRequested,
   });
 
