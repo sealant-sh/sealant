@@ -222,6 +222,45 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.calls).toEqual(["flush", "flush"]);
   });
 
+  it("takes `unwatched`, and any reason a newer daemon adds, as not saved: FINAL again (e2e 5)", async () => {
+    // sealantd e2e 5: a class that polls leaves currency unknown in status reads
+    // (`unwatched`); only a FINAL asked again answers from its own snaps.
+    for (const incompleteReason of ["unwatched", "a-reason-this-core-does-not-know"]) {
+      const unknown = captureStatus({ pending: 0, complete: false, incompleteReason });
+      const daemon = fakeCaptureDaemon([unknown, savedStatus()]);
+      const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+      expect(outcome.kind).toBe("drained");
+      expect(daemon.calls).toEqual(["flush", "flush"]);
+      expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
+
+      const still = fakeCaptureDaemon([unknown]);
+      const kept = await drain(still, inMemoryCaptureDrainLedger());
+      expect(kept).toMatchObject({
+        kind: "unconfirmed",
+        detail: expect.stringContaining(incompleteReason),
+      });
+      expect(drainPermitsStop(kept)).toBe(false);
+    }
+  });
+
+  it("never takes `complete: true` with a reason beside it as saved", async () => {
+    const contradictory = captureStatus({
+      pending: 0,
+      complete: true,
+      incompleteReason: "unwatched",
+    });
+    const daemon = fakeCaptureDaemon([contradictory]);
+    const ledger = inMemoryCaptureDrainLedger();
+    const outcome = await drain(daemon, ledger);
+    expect(outcome.kind).toBe("unconfirmed");
+    expect(
+      recordedDeletionEvidence(
+        { readable: true, entry: ledger.store.rows.get("run_1")?.entry },
+        { runId: "run_1", resourceId: "c1", reference: null },
+      ).observedComplete,
+    ).toBe(false);
+  });
+
   it("asks for FINAL again when the disk changed after a complete final flush (sealantd `changed`)", async () => {
     // Complete means current: a change after the final flush's snap makes sealantd answer
     // `complete: false, incomplete_reason: "changed"`. Not saved: FINAL again, which snaps again.

@@ -473,9 +473,17 @@ export const runIsCaptureSourced = <E, R>(input: {
     return kind === "capture";
   });
 
+/**
+ * Whether a status says the executor's work is saved: `complete: true` and no reason it is not.
+ * Every `incompleteReason` — known (`not-final`, `changed`, `sealing`, `unwatched`, …) or one a
+ * newer daemon adds — is not saved: a drain asks for FINAL again, and nothing is removed on it.
+ */
+export const reportsComplete = (status: CaptureFlushReport | undefined): boolean =>
+  status?.complete === true && status.incompleteReason === undefined;
+
 /** Whether Core itself read `complete: true` from the run's daemon (the drain's last status). */
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
-  entry?.last?.complete === true;
+  reportsComplete(entry?.last);
 
 /**
  * Whether the control plane's recorded attestation covers THIS executor: it names the run's
@@ -543,7 +551,7 @@ export const captureProgressed = (
   next.uploadedBytes > previous.uploadedBytes ||
   next.uploadedObjects > previous.uploadedObjects ||
   next.registered > previous.registered ||
-  (next.complete === true && previous.complete !== true);
+  (reportsComplete(next) && !reportsComplete(previous));
 
 /** A daemon-supplied string cut for a log line: a path can be longer than PATH_MAX. */
 const clip = (text: string, max = 160): string =>
@@ -589,9 +597,9 @@ export const describeCaptureStatus = (status: CaptureFlushReport): string => {
     `staged ${String(status.stagedBytes)} bytes`,
     `uploaded ${String(status.uploadedBytes)} bytes`,
     `registered ${String(status.registered)}`,
-    status.complete === true
+    reportsComplete(status)
       ? "final flush complete"
-      : status.complete === false
+      : status.complete !== undefined
         ? `final flush incomplete${status.incompleteReason === undefined ? "" : ` (${status.incompleteReason})`}`
         : "completion not reported",
     ...(status.fenced ? ["fenced"] : []),
@@ -815,7 +823,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
         // runtime that is gone. Asked at once, not only when the window closes.
         const endedNow = yield* input.runtimeState;
         const last = entry.last;
-        if (endedNow !== "running" && last !== undefined && last.complete === true) {
+        if (endedNow !== "running" && last !== undefined && reportsComplete(last)) {
           // Its daemon reported the final flush complete, then the executor ended (the stop that
           // followed it, or the daemon's own exit after the FINAL): that completion is the
           // evidence, and nothing of the executor can add to it. The stop proceeds.
@@ -914,7 +922,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
               detail: joinDetail(`refused ${status.refused.join(", ")}`, snapFailure),
             });
           }
-          if (status.complete === true) {
+          if (reportsComplete(status)) {
             yield* Effect.logInfo(`${prefix}: saved · ${describeCaptureStatus(status)}`);
             entry = { ...entry, last: status, keptLogged: false };
             return yield* finish({ kind: "drained", status });
@@ -927,7 +935,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
               continue;
             }
             const detail = [
-              status.complete === false
+              status.complete !== undefined
                 ? `the daemon reports its final flush incomplete${
                     status.incompleteReason === undefined ? "" : ` (${status.incompleteReason})`
                   }`
