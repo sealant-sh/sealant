@@ -325,8 +325,8 @@ export type DeletionAuthorization =
  * authorized on still stands: taken over by `ticket`, to be issued again), `outstanding` (it
  * still does, the evidence changed since, and the request may still act: it stays issued and
  * exclusionary, and the executor is kept; review 9 #5), `released` (it still does, the evidence
- * changed since, and the runtime's bound on a removal request has passed since it was issued:
- * given up, decide again on what is current), `held` (its issuer, or another, holds it again),
+ * changed since, and the runtime's bound on a removal request has passed since every request
+ * whose outcome is unknown was sent — review 11 #3: given up, decide again on what is current), `held` (its issuer, or another, holds it again),
  * `none` (nothing issued is left), `unknown` (the record could not be written or read: nothing is
  * settled).
  */
@@ -442,8 +442,12 @@ export interface CaptureDrainLedger {
   /** The runtime removed the executor: `deleted` for good. Best-effort: a failed write is logged. */
   readonly completeDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
   /**
-   * Give a held removal up: its runtime call was not made, or the runtime definitively refused it
-   * (`isRemovalRefusal`). Never for a call whose outcome is unknown. Best-effort.
+   * The ticket's runtime call was not made, or the runtime definitively refused its one request
+   * (`isRemovalRefusal`). Never for a call whose outcome is unknown. The refusal settles that
+   * request alone (review 11 #3, decision 34): the removal is given up only when the ticket holds
+   * it and no other request it sent has an unknown outcome; otherwise it stays issued and
+   * exclusionary, its hold ended, settled from the runtime (`reconcileIssuedDeletion`).
+   * Best-effort.
    */
   readonly releaseDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
   /**
@@ -560,9 +564,31 @@ export interface InMemoryCaptureDrainRow {
         readonly expiresAtMs: number;
         /** When the runtime was last asked to remove it (review 9 #5). */
         readonly issuedAtMs?: number;
+        /**
+         * Every request sent for it, each with its own outcome (`deletion_requests`, review 11
+         * #3): a refusal settles only its own; an unknown one keeps the removal issued.
+         */
+        readonly requests?: readonly InMemoryDeletionRequest[];
       }
     | undefined;
 }
+
+/** One request an in-memory removal sent, with its own outcome (as `deletion_requests`). */
+export interface InMemoryDeletionRequest {
+  readonly id: string;
+  readonly issuedAtMs: number;
+  readonly outcome: "unknown" | "refused" | "done";
+}
+
+/** The requests with `token`'s marked `outcome`; a request settled already keeps its own. */
+const settleInMemoryRequest = (
+  requests: readonly InMemoryDeletionRequest[] | undefined,
+  token: string,
+  outcome: "refused" | "done",
+): readonly InMemoryDeletionRequest[] =>
+  (requests ?? []).map((request) =>
+    request.id === token && request.outcome === "unknown" ? { ...request, outcome } : request,
+  );
 
 /**
  * Rows of an in-memory ledger; share one store between ledgers to model several workers. Its
@@ -847,11 +873,19 @@ export const inMemoryCaptureDrainLedger = (
           row.deletion = { ...row.deletion, expiresAtMs: now() };
           return false;
         }
+        // A ticket sends one request: its outcome is its own (review 11 #3).
+        if ((row.deletion.requests ?? []).some((request) => request.id === ticket.token)) {
+          return false;
+        }
         row.deletion = {
           ...row.deletion,
           state: "deleting-issued",
           expiresAtMs: now() + DELETION_HOLD_MS,
           issuedAtMs: now(),
+          requests: [
+            ...(row.deletion.requests ?? []),
+            { id: ticket.token, issuedAtMs: now(), outcome: "unknown" },
+          ],
         };
         return true;
       }),
@@ -885,9 +919,12 @@ export const inMemoryCaptureDrainLedger = (
         if (
           fenceMs === undefined ||
           deletion.issuedAtMs === undefined ||
-          deletion.issuedAtMs + fenceMs > now()
+          deletion.issuedAtMs + fenceMs > now() ||
+          (deletion.requests ?? []).some(
+            (request) => request.outcome === "unknown" && request.issuedAtMs + fenceMs > now(),
+          )
         ) {
-          // The request already sent may still act (review 9 #5): it stays issued.
+          // A request already sent may still act (review 9 #5, review 11 #3): it stays issued.
           return { kind: "outstanding" };
         }
         row.deletion = undefined;
@@ -902,15 +939,30 @@ export const inMemoryCaptureDrainLedger = (
           token: ticket.token,
           evidenceVersion: row.entry.evidenceVersion ?? 0,
           expiresAtMs: Number.POSITIVE_INFINITY,
+          requests: settleInMemoryRequest(row.deletion?.requests, ticket.token, "done"),
         };
         bump(row);
       }),
     releaseDeletion: (runId, ticket) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
-        if (row?.deletion?.state !== "deleted" && row?.deletion?.token === ticket.token) {
-          row.deletion = undefined;
+        const deletion = row?.deletion;
+        if (row === undefined || deletion === undefined || deletion.state === "deleted") {
+          return;
         }
+        // The refusal settles the request the ticket sent, and only it (review 11 #3).
+        const requests = settleInMemoryRequest(deletion.requests, ticket.token, "refused");
+        if (deletion.token !== ticket.token) {
+          row.deletion = { ...deletion, requests };
+          return;
+        }
+        if (requests.some((request) => request.outcome === "unknown")) {
+          // An earlier request's outcome is unknown and may still act: it stays issued and
+          // exclusionary, its hold ended, settled from the runtime.
+          row.deletion = { ...deletion, requests, expiresAtMs: now() };
+          return;
+        }
+        row.deletion = undefined;
       }),
     lapseIssuedDeletion: (runId, ticket) =>
       Effect.sync(() => {
@@ -1454,8 +1506,9 @@ export const removeUnderDeletion = <A, E, R>(input: {
 
 /**
  * A removal's runtime call failed (review 9 #5, decision 27). Only the runtime's definitive
- * refusal (`isRemovalRefusal`: it answered and did not act, or nothing was sent) gives the
- * removal up. Anything else — a transport error after the request may have gone out, a timeout,
+ * refusal (`isRemovalRefusal`: it answered and did not act, or nothing was sent) settles the call's
+ * request — and only that request (review 11 #3): the removal is given up unless an earlier
+ * request's outcome is still unknown, when it stays issued and is settled from the runtime. Anything else — a transport error after the request may have gone out, a timeout,
  * an interruption, a defect — is an outcome nobody knows: the provider may still act on it, so
  * the removal stays issued and exclusionary (no observation, no recovery) and is settled from what
  * the runtime says of the executor.

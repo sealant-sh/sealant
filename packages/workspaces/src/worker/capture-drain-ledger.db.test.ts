@@ -24,6 +24,7 @@ import * as review9 from "@sealant/db/testing/review9-capture-drains";
 import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { removalRefused } from "../runtime/runtime-adapter.js";
 import type { SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { databaseCaptureDrainLedger, storedCaptureStatus } from "./capture-drain-ledger.js";
@@ -1249,6 +1250,96 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       );
       expect(Exit.isFailure(repeat)).toBe(true);
       expect((await row(runId))?.deletionState).toBe("deleting-issued");
+    });
+
+    // Review 11 #3 (decision 34): each request of a removal has its own outcome. A request sent
+    // again and refused settles that request alone; an earlier one whose outcome is unknown keeps
+    // the removal issued and exclusionary until the runtime no longer has the executor or the
+    // runtime's bound on that earlier request has passed.
+    it("settles a refused request sent again on its own: an earlier unknown one keeps the removal (review 11 #3)", async () => {
+      const runId = await newRun();
+      const a = worker(dbA, "deleter");
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      const authorized = await Effect.runPromise(
+        a.authorizeDeletion(runId, (await row(runId))?.evidenceVersion ?? 0),
+      );
+      if (authorized.kind !== "authorized") throw new Error(authorized.kind);
+      // The first request's reply is lost: its outcome is unknown.
+      const lost = await Effect.runPromiseExit(
+        removeUnderDeletion({
+          ledger: a,
+          runId,
+          ticket: authorized.ticket,
+          remove: Effect.fail(new Error("socket hang up")),
+        }),
+      );
+      expect(Exit.isFailure(lost)).toBe(true);
+      const repeat = await Effect.runPromise(
+        a.reconcileIssuedDeletion(runId, "present", 60 * 60_000),
+      );
+      if (repeat.kind !== "reissue") throw new Error(repeat.kind);
+      // The request sent again is refused: definitive for it, and for it alone.
+      const refused = await Effect.runPromiseExit(
+        removeUnderDeletion({
+          ledger: a,
+          runId,
+          ticket: repeat.ticket,
+          remove: Effect.fail(removalRefused(new Error("ConflictException"))),
+        }),
+      );
+      expect(Exit.isFailure(refused)).toBe(true);
+      const kept = await row(runId);
+      expect(kept?.deletionState).toBe("deleting-issued");
+      expect(kept?.deletionRequests.map((request) => request.outcome)).toEqual([
+        "unknown",
+        "refused",
+      ]);
+      expect(await Effect.runPromise(a.openObservation(runId, 1_000))).toBeUndefined();
+      expect(await Effect.runPromise(a.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
+      // The evidence moves: nothing more is sent, and the earlier request stays outstanding
+      // until the runtime's bound on it has passed, then the removal is given up.
+      await Effect.runPromise(
+        a.recordStatus(
+          runId,
+          captureStatus({ headN: 8, complete: false, incompleteReason: "changed" }),
+          Date.now(),
+        ),
+      );
+      expect(
+        await Effect.runPromise(a.reconcileIssuedDeletion(runId, "present", 60 * 60_000)),
+      ).toEqual({ kind: "outstanding" });
+      expect(await Effect.runPromise(a.reconcileIssuedDeletion(runId, "present", 0))).toEqual({
+        kind: "released",
+      });
+      expect((await row(runId))?.deletionState).toBeNull();
+      expect((await row(runId))?.deletionRequests).toEqual([]);
+    });
+
+    it("records an old writer's removal request, so a current refusal of a later one keeps it (review 11 #3)", async () => {
+      const { runId, token } = await oldIssued(1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const a = worker(dbA, "current");
+      const repeat = await Effect.runPromise(
+        a.reconcileIssuedDeletion(runId, "present", 60 * 60_000),
+      );
+      if (repeat.kind !== "reissue") throw new Error(repeat.kind);
+      const refused = await Effect.runPromiseExit(
+        removeUnderDeletion({
+          ledger: a,
+          runId,
+          ticket: repeat.ticket,
+          remove: Effect.fail(removalRefused(new Error("ConflictException"))),
+        }),
+      );
+      expect(Exit.isFailure(refused)).toBe(true);
+      const kept = await row(runId);
+      expect(kept?.deletionState).toBe("deleting-issued");
+      expect(await Effect.runPromise(a.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
+      // The old writer's request, recorded for it by the database, and the refused one.
+      expect(kept?.deletionRequests).toEqual([
+        { id: token, issuedAt: expect.any(Number), outcome: "unknown" },
+        { id: repeat.ticket.token, issuedAt: expect.any(Number), outcome: "refused" },
+      ]);
     });
 
     it("keeps an old worker off an executor a current recovery attempt holds", async () => {

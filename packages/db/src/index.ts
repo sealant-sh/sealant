@@ -403,6 +403,7 @@ export {
   type NewWorkspaceCaptureDrain,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
+  type WorkspaceCaptureDeletionRequest,
   type WorkspaceCreateReservation,
   type WorkspaceCreateReservationState,
   type WorkspaceBuildJob,
