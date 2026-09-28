@@ -471,6 +471,30 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
     paused: false,
   });
 
+  // Decision 17: sealantd 27–30 stamp every answer with the executor's own position.
+  it("reads the executor-origin stamp, and drops an incomplete one", () => {
+    const stamped = {
+      ...base,
+      headN: 7n,
+      launch: "launch-1",
+      bootId: "0123456789abcdef0123456789abcdef",
+      bootGeneration: 2n,
+      observation: 41n,
+    };
+    expect(captureFlushReportFromWire(stamped).origin).toEqual({
+      epoch: 2,
+      launch: "launch-1",
+      bootId: "0123456789abcdef0123456789abcdef",
+      bootGeneration: 2,
+      observation: 41,
+      headN: 7,
+    });
+    // A daemon that names no launch (its plan named none), or predates the stamp: no position.
+    const { launch: _launch, ...unnamed } = stamped;
+    expect(captureFlushReportFromWire(unnamed).origin).toBeUndefined();
+    expect(captureFlushReportFromWire(base).origin).toBeUndefined();
+  });
+
   it("reads every field a newer daemon reports (sealantd 13-25 and the snap failure)", () => {
     // What the typed message looks like once the pin moves: the pinned 0.18.2 type does not
     // declare these, so they are read structurally.

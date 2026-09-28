@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  executorOriginFromStored,
   SealantDB,
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
@@ -64,6 +65,16 @@ const storedStatusSchema = z.object({
   lastSnapError: z.string().optional(),
   snapFailingSinceUnixMs: z.number().optional(),
   snapsFailed: z.number().optional(),
+  origin: z
+    .object({
+      epoch: z.number(),
+      launch: z.string().min(1),
+      bootId: z.string().min(1),
+      bootGeneration: z.number(),
+      observation: z.number(),
+      headN: z.number().optional(),
+    })
+    .optional(),
 });
 
 /** A stored status back into a report; a row of an unknown shape reads as none. */
@@ -77,6 +88,8 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   last: captureStatusFromStored(row.lastStatus),
   lastAtMs: row.lastStatusAt?.getTime(),
   lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
+  evidenceVersion: row.evidenceVersion,
+  observationsInFlight: Object.keys(row.observationFences).length,
   unreachableSince: row.unreachableSince?.getTime(),
   keptLogged: row.keptLogged,
   silentLogged: row.silentLogged,
@@ -99,6 +112,9 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
           epoch: row.completionEpoch,
           captureN: row.completionCaptureN,
           sealedAtMs: row.completionSealedAt?.getTime(),
+          ...(executorOriginFromStored(row.completionOrigin) === undefined
+            ? {}
+            : { origin: executorOriginFromStored(row.completionOrigin) }),
           atMs: row.completionAttestedAt.getTime(),
           by: row.completionAttestedBy ?? "unknown",
         },
@@ -123,8 +139,6 @@ export const storedCaptureStatus = (
   ...status,
   refused: [...status.refused],
 });
-
-const storedStatus = storedCaptureStatus;
 
 export interface DatabaseCaptureDrainLedgerOptions {
   readonly db: DB;
@@ -186,8 +200,6 @@ export const captureDrainLedgerFromRepo = (
           owner: claimLeaseOwner(options.owner, token),
           leaseMs: options.leaseMs,
           progress: {
-            lastStatus: entry.last === undefined ? null : storedStatus(entry.last),
-            lastStatusAt: entry.lastAtMs === undefined ? null : new Date(entry.lastAtMs),
             lastProgressAt:
               entry.lastProgressAt === undefined ? null : new Date(entry.lastProgressAt),
             unreachableSince:
@@ -233,7 +245,39 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  recordStatus: (runId, status, atMs) =>
+  openObservation: (runId, ttlMs) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        const token = randomUUID();
+        yield* repo.openObservation({ runId, token, ttlMs });
+        return { token };
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: marking an observation of run ${runId}'s executor in flight failed; nothing is asked of its daemon.`,
+          cause,
+        ).pipe(Effect.as(undefined)),
+      ),
+    ),
+
+  closeObservation: (runId, fence) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.closeObservation({ runId, token: fence.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: resolving an observation of run ${runId}'s executor that received nothing failed; it stays in flight until a later observation resolves it.`,
+          cause,
+        ),
+      ),
+    ),
+
+  recordStatus: (runId, status, atMs, fence) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
@@ -241,14 +285,31 @@ export const captureDrainLedgerFromRepo = (
           runId,
           status: storedCaptureStatus(status),
           observedAt: new Date(atMs),
+          ...(fence === undefined ? {} : { fence: fence.token }),
         });
+        return true;
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(
+          `Capture drain: recording a status read from run ${runId}'s executor failed; its observation stays unresolved, so nothing Core holds of the executor counts as current until a later one is recorded.`,
+          cause,
+        ).pipe(Effect.as(false)),
+      ),
+    ),
+
+  authorizeDeletion: (runId, evidenceVersion) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        return yield* repo.authorizeDeletion({ runId, evidenceVersion });
       }),
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(
-          `Capture drain: recording a status read from run ${runId}'s executor failed; Core's evidence for it does not include that reading.`,
+          `Capture drain: authorizing the removal of run ${runId}'s executor failed; it is not removed.`,
           cause,
-        ),
+        ).pipe(Effect.as(false)),
       ),
     ),
 

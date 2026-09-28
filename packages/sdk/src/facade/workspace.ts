@@ -8,6 +8,7 @@ import type {
   WorkspaceRuntime as WireWorkspaceRuntime,
   WorkspaceCaptureDrain as WireWorkspaceCaptureDrain,
   CaptureClassSnaps as WireCaptureClassSnaps,
+  CaptureExecutorOrigin,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
   WorkspaceDetails,
 } from "@sealant/api-contracts";
@@ -43,6 +44,7 @@ import type {
   WorkspaceSessions,
   WorkspaceCaptureDrain,
   WorkspaceCaptureClassSnaps,
+  WorkspaceCaptureOrigin,
   WorkspaceCaptureStatus,
   WorkspaceStatus,
   WorkspaceStopOptions,
@@ -167,6 +169,17 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
     ? {}
     : { snapFailingSinceUnixMs: status.snapFailingSinceUnixMs }),
   ...(status.snapsFailed === undefined ? {} : { snapsFailed: status.snapsFailed }),
+  ...(status.origin === undefined ? {} : { origin: toCaptureOrigin(status.origin) }),
+});
+
+/** Wire → public executor-origin position. */
+const toCaptureOrigin = (origin: CaptureExecutorOrigin): WorkspaceCaptureOrigin => ({
+  epoch: origin.epoch,
+  launch: origin.launch,
+  bootId: origin.bootId,
+  bootGeneration: origin.bootGeneration,
+  observation: origin.observation,
+  ...(origin.headN === undefined ? {} : { headN: origin.headN }),
 });
 
 /** Wire → public drain observation. */
@@ -225,6 +238,9 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
           ...(drain.completion.sealedAt === undefined
             ? {}
             : { sealedAt: drain.completion.sealedAt }),
+          ...(drain.completion.origin === undefined
+            ? {}
+            : { origin: toCaptureOrigin(drain.completion.origin) }),
         },
       }),
 });
@@ -515,6 +531,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
                   ...(options.completion.sealedAt === undefined
                     ? {}
                     : { sealedAt: options.completion.sealedAt }),
+                  ...(options.completion.origin === undefined
+                    ? {}
+                    : { origin: toCaptureOrigin(options.completion.origin) }),
                 },
               }),
         }),

@@ -140,6 +140,16 @@ export {
 } from "./repositories/workspace-create-reservations.js";
 
 export {
+  compareExecutorOrigins,
+  executorOriginFromStored,
+  statusSupersedes,
+  storedStatusComplete,
+  storedStatusOrigin,
+  type ExecutorOrigin,
+  type ExecutorOriginOrder,
+} from "./capture-evidence-order.js";
+
+export {
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoLive,
   WorkspaceCaptureDrainRepoUnexpectedError,

@@ -4,6 +4,7 @@
  * before the stop is enqueued, and it is accepted on a workspace whose stop was already recorded
  * (the kept one). A plain stop of such a workspace stays a no-op.
  */
+import type { CaptureExecutorOrigin } from "@sealant/api-contracts";
 import {
   WorkspaceAttemptRepo,
   WorkspaceCaptureDrainRepo,
@@ -119,6 +120,7 @@ const harness = (
         executorId: string;
         launchId?: string;
         sealedAt?: string;
+        origin?: CaptureExecutorOrigin;
       };
     },
     logger: Layer.Layer<never> = Layer.empty,
@@ -196,9 +198,55 @@ describe("stopWorkspace · discardUnsaved", () => {
   });
 });
 
+/** A position in the executor's own history (sealantd's stamp). */
+const position = (observation: number) => ({
+  epoch: 3,
+  launch: "launch-1",
+  bootId: "boot-1",
+  bootGeneration: 1,
+  observation,
+  headN: 41,
+});
+
 describe("stopWorkspace · completion attestation", () => {
   it("records an attestation that names the current executor, and enqueues the stop", async () => {
-    // Core last read the daemon mid-flush, well before the store recorded the seal.
+    // Core last read the daemon mid-flush, before the seal by the executor's own order.
+    const h = harness("ready", {
+      observedEpoch: 3,
+      observedStatus: {
+        headN: 41,
+        pending: 2,
+        complete: false,
+        incompleteReason: "in-progress",
+        origin: position(40),
+      },
+      observedAt: new Date(now.getTime() - 10 * 60_000),
+    });
+    const response = await h.stop({
+      ownerUserId: "user_owner",
+      completion: {
+        captureN: 41,
+        epoch: 3,
+        executorId: "container-1",
+        sealedAt: now.toISOString(),
+        origin: position(41),
+      },
+    });
+    expect(response.completion).toEqual({ outcome: "accepted" });
+    expect(h.attestations).toEqual([
+      expect.objectContaining({
+        runId: "run_1",
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+      }),
+    ]);
+    expect(h.stops).toEqual(["run_1"]);
+  });
+
+  // Review 6 #6: clocks order nothing. The same mid-flush observation, ten minutes before the
+  // seal's time, cannot be placed before a seal that carries no position.
+  it("ignores an attestation whose seal no position orders after an observation of its capture", async () => {
     const h = harness("ready", {
       observedEpoch: 3,
       observedStatus: { headN: 41, pending: 2, complete: false, incompleteReason: "in-progress" },
@@ -213,16 +261,8 @@ describe("stopWorkspace · completion attestation", () => {
         sealedAt: now.toISOString(),
       },
     });
-    expect(response.completion).toEqual({ outcome: "accepted" });
-    expect(h.attestations).toEqual([
-      expect.objectContaining({
-        runId: "run_1",
-        executorId: "container-1",
-        epoch: 3,
-        captureN: 41,
-      }),
-    ]);
-    expect(h.stops).toEqual(["run_1"]);
+    expect(response.completion).toMatchObject({ outcome: "ignored" });
+    expect(h.attestations).toEqual([]);
   });
 
   it("ignores an attestation about another executor or an older epoch, and still stops", async () => {

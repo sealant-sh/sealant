@@ -8,7 +8,9 @@ import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   GitHubInstallationRepo,
+  LAUNCH_OWNERSHIP_LOST_MESSAGE,
   LAUNCH_RETAINED_ERROR_CODE,
+  WorkspaceRuntimeInstanceRepoInvariantError,
   GitHubInstallationRepositoryCacheRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
@@ -2089,6 +2091,8 @@ describe("processWorkspaceBuildJobEffect", () => {
       expect(error.message).toContain("compile exploded");
       expect(jobs.markJobFailed).toHaveBeenCalledWith({
         id: "job_123",
+        // Fenced by the claim the build ran under (review 6 #8).
+        claim: expect.objectContaining({ workerId: expect.any(String) }),
         errorMessage: "compile exploded",
       });
       expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_123" });
@@ -2127,6 +2131,7 @@ describe("processWorkspaceBuildJobEffect", () => {
       expect(error.errorCode).toBe("unsupported-os");
       expect(jobs.markJobFailed).toHaveBeenCalledWith({
         id: "job_123",
+        claim: expect.objectContaining({ workerId: expect.any(String) }),
         errorCode: "unsupported-os",
         errorMessage: "No compiler is available for target.os.family 'fedora'.",
       });
@@ -2490,6 +2495,59 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
         errorMessage: expect.stringContaining("ownership was taken over"),
       }),
     );
+  }, 15_000);
+
+  // Review 6 #8: once the launch was taken over, it is its adopter's. The failure that follows
+  // writes nothing over the adopted row (fenced on this worker's launch ownership), does not
+  // mark the attempt failed over it, and leaves the launch material to whoever stops it.
+  it("writes nothing over a launch its adopter took over, and keeps its launch material", async () => {
+    const jobs = captureJob("job_adopted", "run_adopted");
+    const attempts = workspaceAttemptRepoStub();
+    const upserts: Array<Record<string, unknown>> = [];
+    const runtimeInstances = {
+      ...workspaceRuntimeInstanceRepoStub(),
+      upsertRuntimeInstance: vi.fn((input: Record<string, unknown>) => {
+        upserts.push(input);
+        // Every write fenced on the launch ownership finds it taken (the row was adopted).
+        return input["fenceLaunchOwner"] !== undefined && input["status"] === "failed"
+          ? Effect.fail(
+              new WorkspaceRuntimeInstanceRepoInvariantError({
+                operation: "upsertRuntimeInstance",
+                message: LAUNCH_OWNERSHIP_LOST_MESSAGE,
+              }),
+            )
+          : Effect.succeed({});
+      }),
+      renewLaunchLease: vi.fn(() => Effect.succeed(false)),
+    };
+    const removed: string[] = [];
+    const exit = await Effect.runPromise(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_adopted",
+          credentialCipher: fakeCredentialCipher,
+          runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          launchLeaseMs: 1_000,
+          launchMaterialStager: {
+            stage: async () => ({}),
+            removeSecretEnv: async () => {
+              removed.push("secret-env");
+            },
+            removeAll: async () => {
+              removed.push("all");
+            },
+          },
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    const failed = upserts.filter((input) => input["status"] === "failed");
+    expect(failed.length).toBeGreaterThan(0);
+    // Only fenced: never an unconditional failed write over the adopter's row.
+    expect(failed.every((input) => typeof input["fenceLaunchOwner"] === "string")).toBe(true);
+    expect(attempts.markAttemptFailed).not.toHaveBeenCalled();
+    expect(removed).toEqual([]);
   }, 15_000);
 });
 

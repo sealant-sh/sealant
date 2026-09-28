@@ -309,4 +309,37 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       false,
     );
   });
+
+  // Review 6 #3/#5 (decision 18): a deletion is authorized only on the evidence version it was
+  // decided on, with no observation in flight; a lapsed fence is resolved only by an observation
+  // opened after it lapsed and recorded.
+  it("authorizes a deletion only on the current evidence, with nothing in flight", async () => {
+    const runId = await newRun();
+    const ledger = worker(dbA, "worker-a");
+    await Effect.runPromise(ledger.recordStatus(runId, savedStatus(), Date.now()));
+    const version = async () => {
+      const read = await Effect.runPromise(ledger.read(runId));
+      return read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
+    };
+    const decidedOn = await version();
+    // Evidence changes after the decision was made: refused.
+    await Effect.runPromise(ledger.recordStatus(runId, savedStatus(), Date.now()));
+    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, decidedOn))).toBe(false);
+    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(true);
+
+    // An observation that lapses at once, and is never resolved (its worker died).
+    const lapsed = await Effect.runPromise(ledger.openObservation(runId, 0));
+    expect(lapsed).toBeDefined();
+    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A later observation, opened after it lapsed and recorded, resolves it.
+    const later = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(false);
+    expect(
+      await Effect.runPromise(ledger.recordStatus(runId, savedStatus(), Date.now(), later)),
+    ).toBe(true);
+    const read = await Effect.runPromise(ledger.read(runId));
+    expect(read.readable ? read.entry?.observationsInFlight : -1).toBe(0);
+    expect(await Effect.runPromise(ledger.authorizeDeletion(runId, await version()))).toBe(true);
+  });
 });

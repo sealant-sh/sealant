@@ -29,6 +29,7 @@ import {
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
 import {
+  authorizedDeletion,
   describeDeletionBasis,
   drainCaptureBeforeStop,
   drainPermitsStop,
@@ -367,18 +368,26 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         const recorded = record.readable ? record.entry : undefined;
         const state = yield* runtimeState(adapter, resourceId);
         const drainedBefore = captureSourced ? recorded : undefined;
-        const recordedEvidence = recordedDeletionEvidence(record, {
-          runId: options.runId,
-          resourceId,
-          reference,
-        });
-        // The one preservation policy: may this executor (and its disk) be removed now?
-        const decide = (runtime: ExecutorRuntimeState, observedNow: boolean) =>
-          decideExecutorDeletion({
-            captureSourced,
-            runtime,
-            ...recordedEvidence,
-            drainedNow: observedNow,
+        const executor = { runId: options.runId, resourceId, reference };
+        // The one preservation policy: may this executor (and its disk) be removed now? Weighed
+        // on the evidence as it stands AFTER the last thing learned about the executor (its
+        // runtime state, a drain), and authorized against it (decision 18): an observation
+        // recorded meanwhile — the public status route, a probe, another drain — or one still in
+        // flight is weighed, never raced (review 6 #3). `drainedNow`: this stop's drain read the
+        // final flush complete, and the record still says so.
+        const decide = (runtime: ExecutorRuntimeState, drainedNow: boolean) =>
+          authorizedDeletion({
+            ledger: drain?.ledger,
+            runId: options.runId,
+            decide: (current) => {
+              const evidence = recordedDeletionEvidence(current, executor);
+              return decideExecutorDeletion({
+                captureSourced,
+                runtime,
+                ...evidence,
+                drainedNow: drainedNow && evidence.observedComplete,
+              });
+            },
           });
 
         // Remove the runtime the policy let go; a capture-sourced one records how it went.
@@ -407,14 +416,14 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           // writable layer, a Failed Pod's emptyDir — and sealantd exits 75 with its staging there
           // after an incomplete final flush, whether or not any drain of ours reached it first (a
           // plain `docker stop`, its own shutdown FINAL, a lost reply). Only evidence lets it go.
-          const decision = decide(state, false);
+          const { decision, record: current } = yield* decide(state, false);
           if (!decision.delete) {
             // Said once, when it is first retained; recovery reports every attempt after that.
             if (drain === undefined) {
               yield* Effect.logError(
                 `Workspace stop: run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}; this stop has no capture drain record to find evidence in.`,
               );
-            } else if (recorded?.retained === undefined) {
+            } else if (!current.readable || current.entry?.retained === undefined) {
               yield* Effect.logError(
                 `Workspace stop (${drain.label}): run ${options.runId} (${adapterId} ${resourceId}): not saved · executor exited · kept · ${decision.reason}. Its disk keeps the staged captures; the runtime is left in place and recovery is attempted.`,
               );
@@ -444,7 +453,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         }
 
         if (!captureSourced) {
-          const decision = decide("running", false);
+          const { decision } = yield* decide("running", false);
           return decision.delete ? yield* removeRuntime(decision.basis) : stopOutcome("kept");
         }
         if (drain === undefined) {
@@ -497,7 +506,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
                 : "draining",
           );
         }
-        const decision = decide(
+        const { decision } = yield* decide(
           outcome.kind === "gone" ? "missing" : "running",
           outcome.kind === "drained",
         );

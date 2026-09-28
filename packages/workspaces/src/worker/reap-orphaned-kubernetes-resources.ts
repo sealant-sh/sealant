@@ -39,6 +39,7 @@ import {
   blueprintSourceKind,
   describeDeletionBasis,
   recordedDeletionEvidence,
+  authorizedDeletion,
   runIsCaptureSourced,
   type CaptureDrainLedger,
   type CaptureDrainRead,
@@ -154,18 +155,21 @@ const podMayGo = (
             Effect.map((result) => result.state),
             Effect.catchCause(() => Effect.succeed("unknown" as const)),
           );
-    const record: CaptureDrainRead =
-      options.ledger === undefined
-        ? { readable: false }
-        : yield* options.ledger.read(instance.runId);
-    const decision = decideExecutorDeletion({
-      captureSourced,
-      runtime,
-      ...recordedDeletionEvidence(record, {
-        runId: instance.runId,
-        resourceId,
-        reference: instance.reference,
-      }),
+    // Decided on the evidence as it stands after the inspection, and authorized against it
+    // (decision 18): a newer observation recorded meanwhile, or one in flight, keeps the Pod.
+    const { decision, record } = yield* authorizedDeletion({
+      ledger: options.ledger,
+      runId: instance.runId,
+      decide: (current: CaptureDrainRead) =>
+        decideExecutorDeletion({
+          captureSourced,
+          runtime,
+          ...recordedDeletionEvidence(current, {
+            runId: instance.runId,
+            resourceId,
+            reference: instance.reference,
+          }),
+        }),
     });
     if (decision.delete) {
       return decision.basis;

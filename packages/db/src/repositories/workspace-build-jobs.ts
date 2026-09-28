@@ -87,6 +87,13 @@ export interface MarkWorkspaceBuildJobSucceededInput {
 
 export interface MarkWorkspaceBuildJobFailedInput {
   readonly id: string;
+  /**
+   * The claim this failure is reported under, when a worker's build failed. Fenced like success:
+   * the write lands only while the job is still `running` under exactly this claim, so a claimant
+   * whose lease expired and was taken over never marks its successor's job failed (review 6 #8);
+   * its call answers `null`. Absent (the API failing a job it never claimed): unfenced.
+   */
+  readonly claim?: WorkspaceBuildJobClaim;
   readonly errorMessage: string;
   readonly errorCode?: string;
   readonly finishedAt?: Date;
@@ -587,7 +594,16 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 finishedAt: input.finishedAt ?? new Date(),
                 leaseExpiresAt: null,
               })
-              .where(eq(workspaceBuildJobs.id, input.id))
+              .where(
+                input.claim === undefined
+                  ? eq(workspaceBuildJobs.id, input.id)
+                  : and(
+                      eq(workspaceBuildJobs.id, input.id),
+                      eq(workspaceBuildJobs.status, "running"),
+                      eq(workspaceBuildJobs.workerId, input.claim.workerId),
+                      eq(workspaceBuildJobs.attemptCount, input.claim.attemptCount),
+                    ),
+              )
               .returning();
 
             return job ?? null;

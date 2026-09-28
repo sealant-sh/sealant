@@ -14,16 +14,19 @@
  * allowance, over the upload throughput observed on it — or, until any throughput has been
  * observed, a conservative assumed rate (never "instant").
  *
- * Each tick has two phases, so no drain can starve another runtime:
+ Each tick, no runtime waits on another's plan (review 6 #11):
  *
- *  1. **Plan every runtime first.** Every capture-sourced runtime inside its watch window has its
- *     `capture.status` sampled (bounded concurrency) and its schedule — the start, the throughput
- *     — persisted in `workspace_capture_drains`, before any drain is driven.
- *  2. **Drive every due runtime, earliest deadline first**, through the shared stop path
- *     (`processWorkspaceStopEffect`, label `deadline preservation`) with bounded concurrency and a
- *     per-runtime budget. Every due runtime gets its turn every tick: a drain still pending only
- *     returns `draining` and is picked up again next tick; it never holds a slot another due
- *     runtime needs across ticks.
+ *  - **Due by its record → driven at once.** A runtime whose recorded start passed, or whose
+ *    deadline less the lead did (the latest its start can ever be), is driven with no status
+ *    sampled first; its drain's FINAL reads the queue itself.
+ *  - **Otherwise sampled, then driven the moment its own plan is due.** Its `capture.status` is
+ *    sampled (bounded concurrency; the wait and the read together bounded by the time left before
+ *    its latest possible start) and its schedule — the start, the throughput — persisted in
+ *    `workspace_capture_drains`.
+ *  - **Drives** go through the shared stop path (`processWorkspaceStopEffect`, label `deadline
+ *    preservation`) with bounded concurrency and a per-runtime budget, granted most urgent first.
+ *    Every due runtime gets its turn every tick: a drain still pending only returns `draining` and
+ *    is picked up again next tick; it never holds a slot another due runtime needs across ticks.
  *
  * The candidates are every runtime with a deadline that may still hold work, not only `ready`
  * ones: a retained launch (`failed`, `launch-retained`) is drained and stopped the same way; an
@@ -51,18 +54,19 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
+  type WorkspaceCaptureDrain,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Semaphore } from "effect";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
-import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
+import { SealantRuntimeControlLive, type CaptureFlushReport } from "../sealantd/runtime.js";
 import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
-import { storedCaptureStatus } from "./capture-drain-ledger.js";
 import {
+  ledgerObservationRecorder,
   readCaptureStatus,
   runIsCaptureSourced,
   type CaptureDrainLedger,
@@ -189,10 +193,15 @@ interface DuePreservation {
 }
 
 /**
- * One sweep over the `ready` runtime instances with a deadline: plan and persist every runtime in
- * its watch window, then drive every due one, earliest deadline first, with bounded concurrency.
- * Returns how many due runtimes it drove a stop for (`stopped` or still `draining`). Best-effort
- * per instance: one failure never aborts the sweep.
+ * One sweep over the runtime instances with a deadline. Nothing waits on another runtime: each
+ * candidate is driven as soon as its OWN plan says it is due (review 6 #11), the most urgent
+ * first. A runtime already due by its record (its recorded start passed, or its deadline less the
+ * lead did — the latest its start can ever be) is driven at once, with no status sampled first;
+ * the others are sampled (bounded concurrency), and each sample — the wait for its turn included
+ * — is bounded by the time left before that runtime's latest possible start, so a slow or silent
+ * daemon elsewhere never delays a due FINAL. Drives are bounded by `drainConcurrency` and granted
+ * in the order runtimes became due. Returns how many due runtimes it drove a stop for (`stopped`
+ * or still `draining`). Best-effort per instance: one failure never aborts the sweep.
  */
 export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(function* (
   options: PreserveBeforeDeadlineOptions,
@@ -206,11 +215,12 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
     (instance) => instance.runtimeDeadlineAt !== null,
   );
 
-  // Phase 1: every plan is persisted before any drain is driven.
-  const plans = yield* Effect.forEach(
+  // What the records alone say (no daemon is asked): which runtimes are in their watch window,
+  // capture-sourced and still holding work, and which of them are due already.
+  const prepared = (yield* Effect.forEach(
     capped,
     (instance) =>
-      planOne(options, instance, now).pipe(
+      prepareOne(options, instance, now).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
             `Deadline preservation: run ${instance.runId} could not be planned this sweep.`,
@@ -219,30 +229,69 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
         ),
       ),
     { concurrency: PLAN_CONCURRENCY },
-  );
+  ))
+    .filter((candidate): candidate is PreparedPreservation => candidate !== undefined)
+    // The most urgent first: every permit below is granted in this order.
+    .toSorted((a, b) => a.latestStartMs - b.latestStartMs || a.deadlineMs - b.deadlineMs);
 
-  // Phase 2: earliest deadline first; every due runtime gets its turn this tick.
-  const due = plans
-    .filter((plan): plan is DuePreservation => plan !== undefined)
-    .toSorted((a, b) => a.deadlineMs - b.deadlineMs || a.startsAtMs - b.startsAtMs);
+  const samplers = yield* Semaphore.make(PLAN_CONCURRENCY);
+  const drives = yield* Semaphore.make(
+    Math.max(1, options.drainConcurrency ?? DEFAULT_DRAIN_CONCURRENCY),
+  );
   const driven = yield* Effect.forEach(
-    due,
-    (plan) =>
-      driveOne(options, plan).pipe(
+    prepared,
+    (candidate) =>
+      Effect.gen(function* () {
+        // Due by its record: driven now; its drain's FINAL reads the queue itself. Otherwise
+        // sampled, for no longer than is left before its latest possible start.
+        const sample = candidate.dueByRecord
+          ? undefined
+          : yield* samplers.withPermit(sampleOne(options, candidate, now)).pipe(
+              Effect.timeoutOrElse({
+                duration: Math.max(0, candidate.latestStartMs - now()),
+                orElse: () => Effect.succeed(undefined),
+              }),
+            );
+        const plan = yield* planOne(options, candidate, sample, now);
+        if (plan === undefined) {
+          return false;
+        }
+        return yield* drives.withPermit(
+          driveOne(options, plan).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
+                cause,
+              ).pipe(Effect.as(false)),
+            ),
+          ),
+        );
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
-            `Deadline preservation: run ${plan.instance.runId} could not be driven this sweep.`,
+            `Deadline preservation: run ${candidate.instance.runId} could not be planned this sweep.`,
             cause,
           ).pipe(Effect.as(false)),
         ),
       ),
-    { concurrency: Math.max(1, options.drainConcurrency ?? DEFAULT_DRAIN_CONCURRENCY) },
+    { concurrency: "unbounded" },
   );
   return driven.filter(Boolean).length;
 });
 
-/** Sample, plan and persist one runtime's preservation; the plan when its start is reached. */
-const planOne = (
+/** A candidate in its watch window, as its records describe it before any daemon is asked. */
+interface PreparedPreservation {
+  readonly instance: WorkspaceRuntimeInstance;
+  readonly row: WorkspaceCaptureDrain | undefined;
+  readonly deadlineMs: number;
+  /** The latest its final drain can start: the recorded start, else the deadline less the lead. */
+  readonly latestStartMs: number;
+  /** Its start has been reached already: it is driven without a status sample first. */
+  readonly dueByRecord: boolean;
+}
+
+/** Whether a runtime is in its watch window and holds work that may need saving; no daemon call. */
+const prepareOne = (
   options: PreserveBeforeDeadlineOptions,
   instance: WorkspaceRuntimeInstance,
   now: () => number,
@@ -276,28 +325,61 @@ const planOne = (
       // Ended and not retained: nothing of it is waiting to be saved.
       return undefined;
     }
+    // No estimate is negative: a start is never later than the deadline less the lead.
+    const recordedStartMs = row?.preservationStartsAt?.getTime();
+    const latestStartMs = Math.min(
+      deadlineMs - settings.leadMs,
+      recordedStartMs ?? Number.POSITIVE_INFINITY,
+    );
+    return {
+      instance,
+      row,
+      deadlineMs,
+      latestStartMs,
+      dueByRecord: latestStartMs <= now(),
+    } satisfies PreparedPreservation;
+  });
+
+/**
+ * One `capture.status` of a candidate's daemon; `undefined` when none was read. What the sampler
+ * reads is evidence about the executor like any other reading (review 5 #3): recorded as it
+ * arrives, under an observation fence opened before it was asked for (review 6 #5).
+ */
+const sampleOne = (
+  options: PreserveBeforeDeadlineOptions,
+  candidate: PreparedPreservation,
+  now: () => number,
+) =>
+  Effect.gen(function* () {
+    const { instance } = candidate;
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
-    const status =
-      target === undefined ? undefined : yield* readCaptureStatus(target, STATUS_TIMEOUT_MS);
-    const sampledAtMs = now();
-    if (status !== undefined) {
-      // What the sampler read is evidence about this executor like any other reading (review 5
-      // #3): recorded, ordered by when it was read.
-      yield* drains
-        .recordStatus({
-          runId: instance.runId,
-          status: storedCaptureStatus(status),
-          observedAt: new Date(sampledAtMs),
-        })
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning(
-              `Capture deadline sweep: recording the status read from run ${instance.runId}'s executor failed.`,
-              cause,
-            ),
-          ),
-        );
+    if (target === undefined) {
+      return undefined;
     }
+    const status = yield* readCaptureStatus(
+      target,
+      STATUS_TIMEOUT_MS,
+      ledgerObservationRecorder(options.captureDrain.ledger, instance.runId, STATUS_TIMEOUT_MS),
+    );
+    return status === undefined ? undefined : { status, atMs: now() };
+  });
+
+/**
+ * Plan and persist one runtime's preservation from its record and, when one was read, a status
+ * sample; the plan when its start is reached.
+ */
+const planOne = (
+  options: PreserveBeforeDeadlineOptions,
+  candidate: PreparedPreservation,
+  sample: { readonly status: CaptureFlushReport; readonly atMs: number } | undefined,
+  now: () => number,
+) =>
+  Effect.gen(function* () {
+    const { instance, row, deadlineMs } = candidate;
+    const settings = options.deadline;
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    const status = sample?.status;
+    const sampledAtMs = sample?.atMs ?? now();
     const previousSample =
       row?.uploadSampleBytes === null ||
       row?.uploadSampleBytes === undefined ||

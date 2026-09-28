@@ -336,6 +336,42 @@ describe("recoverRetainedExecutorsEffect", () => {
     expect(h.stop).toHaveBeenCalledTimes(1);
   });
 
+  // Review 6 #3: the release is decided on the evidence as it stands after the parking, not on
+  // what was read before it: a failure recorded meanwhile revokes the attestation.
+  it("does not release on an attestation revoked while what runs beside it was parked", async () => {
+    const h = harness({ inspect: { state: "exited", exitCode: 75 } });
+    const row = h.ledger.store.rows.get("run_1");
+    if (row === undefined) throw new Error("no row");
+    row.entry = {
+      ...row.entry,
+      completionAttested: {
+        executorId: "container-1",
+        epoch: 2,
+        captureN: 17,
+        atMs: NOW,
+        by: "user_1",
+      },
+    };
+    h.parkRetained.mockImplementation(async () => {
+      await Effect.runPromise(
+        h.ledger.recordStatus(
+          "run_1",
+          captureStatus({
+            epoch: 2,
+            headN: 17,
+            complete: false,
+            incompleteReason: "snapshot-failed",
+          }),
+          NOW,
+        ),
+      );
+      return { stopped: [] };
+    });
+
+    expect((await h.run()).get("run_1")).not.toBe("released");
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
   it("does not release on an attestation about another executor", async () => {
     const h = harness({
       inspect: { state: "exited", exitCode: 75 },

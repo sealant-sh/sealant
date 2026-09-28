@@ -85,10 +85,11 @@ import { adoptStrandedLaunchesEffect } from "./adopt-stranded-launches.js";
 import {
   describeDeletionBasis,
   drainCaptureBeforeStop,
-  drainPermitsStop,
   recordedDeletionEvidence,
   runIsCaptureSourced,
   probeCaptureDaemon,
+  ledgerObservationRecorder,
+  authorizedDeletion,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
@@ -469,18 +470,21 @@ const settleUnsettledExecutors = (
           return;
         }
         const inspection = yield* Effect.tryPromise(() => inspect.call(adapter, { resourceId }));
-        const record = yield* ledger.read(runId);
-        const evidence = recordedDeletionEvidence(record, {
-          runId,
-          resourceId,
-          reference: instance.reference,
-        });
         // Only a drain lets a RUNNING executor go: the policy weighs recorded evidence only for
-        // one that ended.
-        const decision = decideExecutorDeletion({
-          captureSourced: true,
-          runtime: inspection.state,
-          ...evidence,
+        // one that ended — as it stands after the inspection, authorized against it.
+        const { decision } = yield* authorizedDeletion({
+          ledger,
+          runId,
+          decide: (record) =>
+            decideExecutorDeletion({
+              captureSourced: true,
+              runtime: inspection.state,
+              ...recordedDeletionEvidence(record, {
+                runId,
+                resourceId,
+                reference: instance.reference,
+              }),
+            }),
         });
         if (decision.delete && decision.basis === "missing") {
           yield* ledger.observe(runId, {
@@ -571,32 +575,54 @@ const drainBeforeRecording = (
       sourceKind: instance.sourceKind,
       readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
     });
-    const decide = Effect.sync(() => {
-      const decision = decideExecutorDeletion({
-        captureSourced,
-        runtime: inspection.state,
-        ...recordedDeletionEvidence(record, {
-          runId: instance.runId,
-          resourceId: instance.resourceId,
-          reference: instance.reference,
-        }),
-      });
-      return decision.delete
-        ? { verdict: "record" as const, removal: { captureSourced, basis: decision.basis } }
-        : { verdict: "record-keep-remains" as const, reason: decision.reason };
-    });
+    const executor = {
+      runId: instance.runId,
+      resourceId: instance.resourceId,
+      reference: instance.reference,
+    };
+    // Decided on the evidence as it stands after the last thing learned about the executor, and
+    // authorized against it (decision 18): a newer observation recorded meanwhile, or one still
+    // in flight, is weighed rather than raced.
+    const decide = (drainedNow: boolean) =>
+      authorizedDeletion({
+        ledger: drain.ledger,
+        runId: instance.runId,
+        decide: (current) => {
+          const evidence = recordedDeletionEvidence(current, executor);
+          return decideExecutorDeletion({
+            captureSourced,
+            runtime: inspection.state,
+            ...evidence,
+            drainedNow: drainedNow && evidence.observedComplete,
+          });
+        },
+      }).pipe(
+        Effect.map(({ decision }) =>
+          decision.delete
+            ? { verdict: "record" as const, removal: { captureSourced, basis: decision.basis } }
+            : { verdict: "record-keep-remains" as const, reason: decision.reason },
+        ),
+      );
     if (!captureSourced) {
-      return yield* decide;
+      return yield* decide(false);
     }
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
+    // What the probe reads is evidence about this executor like any other reading: recorded as
+    // it arrives, under a fence opened before it was asked for.
     const probe =
-      target === undefined ? undefined : yield* probeCaptureDaemon(target, DAEMON_PROBE_TIMEOUT_MS);
-    if (probe?.kind === "status") {
-      // What the probe read is evidence about this executor like any other reading.
-      yield* drain.ledger.recordStatus(instance.runId, probe.status, Date.now());
+      target === undefined
+        ? undefined
+        : yield* probeCaptureDaemon(
+            target,
+            DAEMON_PROBE_TIMEOUT_MS,
+            ledgerObservationRecorder(drain.ledger, instance.runId, DAEMON_PROBE_TIMEOUT_MS),
+          );
+    if (probe?.kind === "unrecorded") {
+      // Nothing could be asked: nothing is concluded this sweep.
+      return { verdict: "leave" as const };
     }
     if (target === undefined || probe === undefined || probe.kind === "unreachable") {
-      return yield* decide;
+      return yield* decide(false);
     }
     yield* Effect.logWarning(
       `Runtime exit reconciler: ${adapter.id} reports run ${instance.runId} ended, but its sealantd still answers; draining its captures before anything is recorded or removed.`,
@@ -610,15 +636,17 @@ const drainBeforeRecording = (
       label: "exit reconciler",
       runtimeState: runtimeReportsState(adapter, instance.resourceId ?? ""),
     });
-    return drainPermitsStop(outcome)
-      ? {
-          verdict: "record" as const,
-          removal: {
-            captureSourced: true,
-            basis: outcome.kind === "gone" ? ("missing" as const) : ("observed-complete" as const),
-          },
-        }
-      : { verdict: "leave" as const };
+    if (outcome.kind === "gone") {
+      return {
+        verdict: "record" as const,
+        removal: { captureSourced: true, basis: "missing" as const },
+      };
+    }
+    if (outcome.kind !== "drained") {
+      return { verdict: "leave" as const };
+    }
+    const drained = yield* decide(true);
+    return drained.verdict === "record" ? drained : { verdict: "leave" as const };
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(

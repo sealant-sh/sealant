@@ -502,7 +502,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -580,7 +580,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: fakeCaptureDaemon([captureStatus({ pending: 7, uploadedBytes: 1 })]).layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -610,7 +610,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: fakeCaptureDaemon(moving).layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -639,7 +639,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
     const inspect = vi.fn(async () => ({ state: "running" as const }));
 
     const outcome = await Effect.runPromise(
@@ -664,7 +664,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
     // Running when the stop starts; gone by the time the silence is judged.
     const inspect = vi
       .fn<NonNullable<RuntimeAdapter["inspect"]>>()
@@ -691,7 +691,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       instance: runtimeInstance({ adapter: "microvm", endpoint: null }),
       captureSourced: true,
     });
-    const stop = stopped();
+    const stop = removedStop();
     const adapter = { ...stubAdapter(stop), id: "microvm" as const };
 
     const outcome = await Effect.runPromise(
@@ -716,7 +716,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: false,
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -741,7 +741,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -767,7 +767,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -792,7 +792,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       instance: runtimeInstance({ sourceKind: null }),
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -817,7 +817,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       instance: runtimeInstance({ sourceKind: "capture" }),
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -930,7 +930,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       captureSourced: true,
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
     const ledger = inMemoryCaptureDrainLedger();
 
     const outcome = await Effect.runPromise(
@@ -960,7 +960,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       instance: runtimeInstance({ sourceKind: "capture" }),
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
         workspaceId: "ws_1",
@@ -1232,7 +1232,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       instance: runtimeInstance({ sourceKind: "capture" }),
       daemon: daemon.layer,
     });
-    const stop = stopped();
+    const stop = removedStop();
 
     const outcome = await Effect.runPromise(
       processWorkspaceStopEffect({
@@ -1256,5 +1256,146 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
       state: "discarded",
       detail: expect.stringContaining("by user_1"),
     });
+  });
+});
+
+/** An adapter stop that removes the runtime. */
+const removedStop = () =>
+  vi.fn(async () => ({
+    adapter: "docker" as const,
+    resourceId: "container-1",
+    outcome: "stopped" as const,
+  }));
+
+// Review 6 #3: the stop read a complete on record, then awaited the runtime's inspection; meanwhile
+// another path (the public status route) recorded a newer failure from the same executor. The
+// removal is decided on the evidence as it stands after the inspection, and authorized against
+// it: the ended executor is retained, not removed on the stale complete.
+describe("an ended executor's removal is decided on current evidence (review 6 #3)", () => {
+  const settings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 100,
+    unreachableWindowMs: 100,
+    requestTimeoutMs: 100,
+  };
+  const stager = {
+    stage: async () => ({}),
+    removeSecretEnv: async () => undefined,
+    removeAll: async () => undefined,
+  };
+
+  it("retains it when a newer failure is recorded while its runtime is inspected", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    await Effect.runPromise(
+      ledger.recordStatus("run_old", savedStatus({ epoch: 3, headN: 7 }), Date.now() - 1_000),
+    );
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = removedStop();
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [
+          stubAdapter(stop, async () => {
+            // Received by another Core path while the stop waits on the runtime.
+            await Effect.runPromise(
+              ledger.recordStatus(
+                "run_old",
+                captureStatus({
+                  epoch: 3,
+                  headN: 8,
+                  complete: false,
+                  incompleteReason: "snapshot-failed",
+                  unreadable: 1,
+                }),
+                Date.now(),
+              ),
+            );
+            return { state: "exited" as const, exitCode: 75 };
+          }),
+        ],
+        captureDrain: { ledger, settings, budgetMs: 1, label: "review 6 #3" },
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(ledger.store.rows.get("run_old")?.entry.retained).toBeDefined();
+  });
+
+  it("retains it while an observation of it is in flight, and removes it once none is", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    await Effect.runPromise(
+      ledger.recordStatus("run_old", savedStatus({ epoch: 3, headN: 7 }), Date.now() - 1_000),
+    );
+    // Another path asked the daemon and has not recorded (or could not record) the answer.
+    const fence = await Effect.runPromise(ledger.openObservation("run_old", 60_000));
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = removedStop();
+    const run = () =>
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [
+            stubAdapter(stop, async () => ({ state: "exited" as const, exitCode: 0 })),
+          ],
+          captureDrain: { ledger, settings, budgetMs: 1, label: "review 6 #5" },
+          launchMaterialStager: stager,
+        }).pipe(Effect.provide(harness.layer)),
+      );
+    expect(await run()).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    // The observation received nothing: resolved, the recorded complete stands.
+    if (fence !== undefined) {
+      await Effect.runPromise(ledger.closeObservation("run_old", fence));
+    }
+    expect(await run()).toBe("stopped");
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("waits for an observation in flight to be recorded, then decides on what it said", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    await Effect.runPromise(
+      ledger.recordStatus("run_old", savedStatus({ epoch: 3, headN: 7 }), Date.now() - 1_000),
+    );
+    // A status poll is in flight when the stop decides; its answer — the same complete — is
+    // recorded a moment later.
+    const fence = await Effect.runPromise(ledger.openObservation("run_old", 60_000));
+    setTimeout(() => {
+      void Effect.runPromise(
+        ledger.recordStatus("run_old", savedStatus({ epoch: 3, headN: 7 }), Date.now(), fence),
+      );
+    }, 50);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = removedStop();
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [
+          stubAdapter(stop, async () => ({ state: "exited" as const, exitCode: 0 })),
+        ],
+        captureDrain: { ledger, settings, budgetMs: 1, label: "review 6 #5" },
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(outcome).toBe("stopped");
+    expect(stop).toHaveBeenCalledOnce();
   });
 });

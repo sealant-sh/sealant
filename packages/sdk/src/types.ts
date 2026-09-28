@@ -343,6 +343,29 @@ export interface WorkspaceCaptureStatus {
   readonly snapFailingSinceUnixMs?: number;
   /** From `snaps`: failed snaps of every class since the daemon started. */
   readonly snapsFailed?: number;
+  /**
+   * Where in the executor's own history this answer was made. Order evidence about one executor
+   * by it — never by any clock: a later position is the newer answer. Absent from a daemon (or
+   * control plane) that predates it; such answers cannot be ordered by position.
+   */
+  readonly origin?: WorkspaceCaptureOrigin;
+}
+
+/**
+ * An executor-origin position (sealantd's stamp on every status, FINAL answer and seal): the
+ * capture lease epoch, the launch the executor runs as, the daemon boot that answered, how many
+ * daemon boots opened its disk (0: unknown), an observation number that only grows within that
+ * boot, and the capture head. Of the same epoch, launch and boot, order by `observation`; of the
+ * same epoch and launch and different boots whose generations are both above 0 and differ, by
+ * (`bootGeneration`, `observation`); anything else cannot be ordered.
+ */
+export interface WorkspaceCaptureOrigin {
+  readonly epoch: number;
+  readonly launch: string;
+  readonly bootId: string;
+  readonly bootGeneration: number;
+  readonly observation: number;
+  readonly headN?: number;
 }
 
 /** One capture class's snaps, as `WorkspaceCaptureStatus.snaps` reports them. */
@@ -409,6 +432,8 @@ export interface WorkspaceCaptureDrain {
     readonly launchId?: string;
     /** When the store recorded the seal, when the attestation said. */
     readonly sealedAt?: string;
+    /** Where in the executor's own history the seal was made, when the attestation said. */
+    readonly origin?: WorkspaceCaptureOrigin;
   };
 }
 
@@ -433,12 +458,15 @@ export interface WorkspaceCompletionAttestation {
    * ignored. A seal never transfers to another executor.
    */
   readonly launchId?: string;
-  /**
-   * When the store recorded the seal (ISO 8601). The control plane weighs the seal against its
-   * own observations of the executor: a report that the work is not saved, made after the seal,
-   * revokes it (review 4 #1). Without it, any such report at or past `captureN` does.
-   */
+  /** When the store recorded the seal (ISO 8601). Kept for display: clocks order nothing. */
   readonly sealedAt?: string;
+  /**
+   * Where in the executor's own history the seal was made (the `final_seal`'s stamp). The control
+   * plane weighs the seal against its own observations of the executor by it: a report that the
+   * work is not saved, made at or after the seal, revokes it (review 4 #1). Without it, any such
+   * report at or past `captureN` does.
+   */
+  readonly origin?: WorkspaceCaptureOrigin;
 }
 
 /** Options for `workspace.stop()`. */

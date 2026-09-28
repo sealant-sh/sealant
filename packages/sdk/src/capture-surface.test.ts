@@ -216,6 +216,14 @@ describe("workspace.capture", () => {
       lastSnapError: "EIO",
       snapFailingSinceUnixMs: 5,
       snapsFailed: 1,
+      origin: {
+        epoch: 3,
+        launch: "launch-1",
+        bootId: "boot-1",
+        bootGeneration: 1,
+        observation: 12,
+        headN: 41,
+      },
     };
     expect(Object.keys(full).toSorted()).toEqual(
       Object.keys(workspaceCaptureStatusSchema.fields).toSorted(),

@@ -30,6 +30,8 @@
  * state is unknown, and one whose drain ledger could not be read.
  */
 
+import { compareExecutorOrigins, storedStatusOrigin, type ExecutorOrigin } from "@sealant/db";
+
 /** What the runtime positively reports of the executor; `unknown` when it cannot say. */
 export type ExecutorRuntimeState = "running" | "exited" | "missing" | "unknown";
 
@@ -132,8 +134,13 @@ export interface CompletionAttestation {
   readonly executorId: string;
   readonly epoch: number;
   readonly captureN: number;
-  /** When the store recorded the seal (Unix ms); absent from a control plane that predates it. */
+  /** When the store recorded the seal (Unix ms): display only, never compared with Core's clock. */
   readonly sealedAtMs?: number | undefined;
+  /**
+   * Where in the executor's own history the seal was made (sealantd stamps it; decision 17): the
+   * one thing that orders the seal against an observation of the same capture.
+   */
+  readonly origin?: ExecutorOrigin | undefined;
 }
 
 /** What names one executor: the run that launched it and the runtime's own identifiers. */
@@ -146,7 +153,8 @@ export interface ExecutorIdentity {
 /**
  * Core's own latest observation of the executor's daemon (the drain ledger's last status): its
  * lease epoch, the chain position of its newest capture, whether it was a complete final flush,
- * and when Core read it (Core's clock). `unreadable`: a status is stored but cannot be read.
+ * and where in the executor's history it was made (`origin`). `unreadable`: a status is stored
+ * but cannot be read.
  */
 export type ObservedCapture =
   | {
@@ -157,17 +165,12 @@ export type ObservedCapture =
       readonly complete: boolean;
       /** Why it is not complete, as the daemon said (for the reason a stale attestation gets). */
       readonly incompleteReason?: string | undefined;
-      /** When Core read it (Unix ms, Core's clock); absent on a status stored before it was kept. */
+      /** When Core read it (Unix ms, the reader's clock): display only, it orders nothing. */
       readonly atMs?: number | undefined;
+      /** Where in the executor's own history it was made, when the daemon stamped it. */
+      readonly origin?: ExecutorOrigin | undefined;
     }
   | { readonly readable: false };
-
-/**
- * How far apart the store's clock (a seal's time) and Core's (an observation's time) are assumed
- * to be at most. An observation is taken as older than a seal only when it was made more than this
- * before the seal's time: an observation that may have followed the seal counts against it.
- */
-export const ATTESTATION_CLOCK_SKEW_MS = 60_000;
 
 /**
  * Core's observation from a stored drain status (`workspace_capture_drains.last_status`) and when
@@ -194,6 +197,7 @@ export const observedCaptureFromStored = (
     complete: stored["complete"] === true && incompleteReason === undefined,
     ...(typeof incompleteReason === "string" ? { incompleteReason } : {}),
     ...(atMs === undefined ? {} : { atMs }),
+    ...(storedStatusOrigin(stored) === undefined ? {} : { origin: storedStatusOrigin(stored) }),
   };
 };
 
@@ -207,12 +211,12 @@ export const observedCaptureFromStored = (
  *    an earlier lease does not cover later work).
  *  - Freshness, in the same epoch: Core's latest observation that is NOT a complete final flush
  *    (pending work, `changed`, `unreadable`, `snapshot-failed`, anything but `complete`) revokes
- *    the seal unless it provably came before it: its head was still short of the sealed capture
- *    (`headN < captureN`), or Core read it more than `ATTESTATION_CLOCK_SKEW_MS` before the seal's
- *    time. An observation whose head is past the sealed capture revokes it whatever it says (a
- *    later capture exists that the seal does not cover). An attestation that carries no seal time
- *    cannot be ordered against an observation, so any incomplete one at or past its capture
- *    revokes it. A stored observation Core cannot read revokes it too (fail closed).
+ *    the seal unless it provably came before it, by the executor's own history: its head was
+ *    still short of the sealed capture (`headN < captureN`), or its executor-origin position is
+ *    before the seal's (decision 17). An observation whose head is past the sealed capture revokes
+ *    it whatever it says. Clocks order nothing (review 6 #6): an observation and a seal that no
+ *    position orders are contradictory, and the seal does not stand. A stored observation Core
+ *    cannot read revokes it too (fail closed).
  *
  * A seal stands in for a LOST answer, never for a received one that said the work is not saved.
  */
@@ -267,23 +271,17 @@ export const attestationCoversExecutor = (
   const said = `not saved${
     observed.incompleteReason === undefined ? "" : ` (${observed.incompleteReason})`
   }`;
-  if (attestation.sealedAtMs === undefined) {
-    return {
-      covers: false,
-      reason: `the executor last reported its work ${said} at capture ${String(observed.headN ?? "unknown")}, and the attestation for capture ${n} carries no seal time to show it came after that`,
-    };
-  }
-  if (
-    observed.atMs !== undefined &&
-    observed.atMs < attestation.sealedAtMs - ATTESTATION_CLOCK_SKEW_MS
-  ) {
+  const order = compareExecutorOrigins(observed.origin, attestation.origin);
+  if (order === "before") {
+    // The executor made that answer before it made the seal.
     return { covers: true };
   }
   return {
     covers: false,
-    reason: `the executor reported its work ${said}${
-      observed.atMs === undefined ? "" : ` at ${new Date(observed.atMs).toISOString()}`
-    }, not before the seal of capture ${n} (${new Date(attestation.sealedAtMs).toISOString()}): a newer observation revokes an older seal`,
+    reason:
+      order === "incomparable"
+        ? `the executor last reported its work ${said} at capture ${String(observed.headN ?? "unknown")}, and nothing in the executor's own history (its origin position) shows the seal of capture ${n} came after that`
+        : `the executor reported its work ${said} at or after the seal of capture ${n}, by its own history: a newer observation revokes an older seal`,
   };
 };
 
