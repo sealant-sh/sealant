@@ -97,6 +97,22 @@ describe("workspace.capture", () => {
     expect("pendingBytes" in status).toBe(false);
   });
 
+  it("flush(options) forwards kind, deadline and grace as given", async () => {
+    const { client, calls } = makeStub({});
+    const workspace = workspaceFor(client);
+    await workspace.capture.flush({ kind: "final", deadlineMs: 55_000, graceMs: 30_000 });
+    await workspace.capture.flush({ kind: "suspend" });
+    await workspace.capture.flush({});
+    expect(calls.flush).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: "usr_local", kind: "final", deadlineMs: 55_000, graceMs: 30_000 },
+      },
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local", kind: "suspend" } },
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: "usr_local" } },
+    ]);
+  });
+
   it("status() reads the queue from the workspace's capture endpoint without flushing", async () => {
     const { client, calls } = makeStub({
       status: () => ({
@@ -121,6 +137,76 @@ describe("workspace.capture", () => {
       pendingBytes: 1_048_576,
       pendingBulk: 1,
     });
+  });
+
+  it("status() carries the daemon's account of its final flush, and leaves it absent when unreported", async () => {
+    const reported = makeStub({
+      status: () => ({ ...STATUS, complete: false, incompleteReason: "ship-failed" }),
+    });
+    expect(await workspaceFor(reported.client).capture.status()).toMatchObject({
+      complete: false,
+      incompleteReason: "ship-failed",
+    });
+    // A daemon that predates the field: absent, which a caller reads as not complete.
+    const older = await workspaceFor(makeStub({}).client).capture.status();
+    expect("complete" in older).toBe(false);
+  });
+
+  it("status() and flush() carry every field the daemon reports, snap failure included", async () => {
+    const failing: WorkspaceCaptureStatus = {
+      ...STATUS,
+      refused: [],
+      pendingBulk: 1,
+      pendingBytes: 2048,
+      complete: false,
+      incompleteReason: "snapshot-failed",
+      unreadable: 3,
+      carried: 2,
+      unreadablePaths: ["tree/a/deep", ".git/index.lock", "harness/x"],
+      registerRefused: "missing-objects",
+      registerRefusedN: 9,
+      registerMissing: ["obj/ab12"],
+      registerRefusals: 4,
+      repairing: true,
+      bulkBuilding: true,
+      snaps: [
+        {
+          class: "small",
+          snapsFailed: 12,
+          lastSnapError: "File name too long (os error 36)",
+          snapFailingSinceUnixMs: 1_757_760_000_000,
+        },
+        { class: "bulk", snapsFailed: 0 },
+      ],
+      lastSnapError: "File name too long (os error 36)",
+      snapFailingSinceUnixMs: 1_757_760_000_000,
+      snapsFailed: 12,
+    };
+    const { client } = makeStub({ status: () => failing, flush: () => failing });
+    const workspace = workspaceFor(client);
+    expect(await workspace.capture.status()).toEqual(failing);
+    expect(await workspace.capture.flush({ kind: "final" })).toEqual(failing);
+  });
+
+  it("status() leaves every field an older control plane does not send absent", async () => {
+    const status = await workspaceFor(makeStub({}).client).capture.status();
+    for (const key of [
+      "unreadable",
+      "carried",
+      "unreadablePaths",
+      "registerRefused",
+      "registerRefusedN",
+      "registerMissing",
+      "registerRefusals",
+      "repairing",
+      "bulkBuilding",
+      "snaps",
+      "lastSnapError",
+      "snapFailingSinceUnixMs",
+      "snapsFailed",
+    ]) {
+      expect(key in status).toBe(false);
+    }
   });
 
   it("replan() posts the owner to the workspace's replan endpoint and maps the counts", async () => {

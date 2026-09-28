@@ -36,6 +36,11 @@ import { CAPTURE_HARNESS_HOME_ENV, captureSourceEnv } from "../capture-source.js
 import { inlineDotfilesFromDir } from "../inline-dotfiles.js";
 import { liveControlChannel, type ControlChannel } from "../kubernetes/adapter.js";
 import {
+  LaunchRetainedError,
+  completeReadyLaunch,
+  type RuntimeAdapterLaunchHooks,
+} from "../launch-retention.js";
+import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterStopInput,
   parseRuntimeAdapterSupportInput,
@@ -538,7 +543,10 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     return supportForMicrovm(this.#config, parseRuntimeAdapterSupportInput(input));
   }
 
-  async launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult> {
+  async launch(
+    input: RuntimeAdapterLaunchInput,
+    hooks?: RuntimeAdapterLaunchHooks,
+  ): Promise<RuntimeAdapterLaunchResult> {
     const parsed = parseRuntimeAdapterLaunchInput(input);
     const support = this.supports({ blueprint: parsed.blueprint });
     if (!support.supported) {
@@ -632,20 +640,40 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         config.controlBearerToken,
         ...Object.values(secretEnv ?? {}),
       ]);
-      if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
-        await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
-      }
-      return {
-        adapter: this.id,
-        resourceId: microvmId,
-        reference: microvmId,
-        status: "ready",
-        endpoint: `wss://${host}${AGENT_CONTROL_ROUTE}`,
-        deadline: microvmDeadline(running, vm, requestedAt, config.maxDurationSeconds),
-      };
+      // The daemon answers: a writer can run in the VM from here. A capture-sourced launch that
+      // fails past this point keeps the VM (`launch-retention.ts`); anything else is terminated.
+      const endpointUrl = `wss://${host}${AGENT_CONTROL_ROUTE}`;
+      const runtimeDeadline = microvmDeadline(running, vm, requestedAt, config.maxDurationSeconds);
+      return await completeReadyLaunch({
+        blueprint: parsed.blueprint,
+        identity: {
+          adapter: this.id,
+          resourceId: microvmId,
+          reference: microvmId,
+          endpoint: endpointUrl,
+          deadline: runtimeDeadline,
+        },
+        hooks,
+        steps: async () => {
+          if (parsed.credentialFiles !== undefined && parsed.credentialFiles.length > 0) {
+            await this.#control.writeCredentialFiles(target, parsed.credentialFiles);
+          }
+          return {
+            adapter: this.id,
+            resourceId: microvmId,
+            reference: microvmId,
+            status: "ready" as const,
+            endpoint: endpointUrl,
+            deadline: runtimeDeadline,
+          };
+        },
+      });
     } catch (error) {
-      await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
-      this.#tokens.forget(microvmId);
+      if (!(error instanceof LaunchRetainedError)) {
+        await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
+        this.#tokens.forget(microvmId);
+      }
+      // A retained launch keeps the VM, and the endpoint tokens its drain dials with.
       throw error;
     } finally {
       release();

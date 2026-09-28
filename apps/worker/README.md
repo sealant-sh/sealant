@@ -61,17 +61,43 @@ whose container or Pod died on its own is recorded `failed` with its exit code a
 remains are removed — the same terminal state a container that dies during boot gets.
 
 No stop loses a capture-sourced workspace's unsaved work. Before the worker tears one down — a
-lifecycle stop, or the expired, stranded, superseded and orphaned reapers — it flushes the
-workspace's sealantd and polls its capture queue until it is empty
-(`WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS`). A queue still moving defers the stop to the reaper's
-next tick. A daemon that answers but whose queue does not move for
-`WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` keeps its workspace running and is logged
-`not saved · kept`. A daemon silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` keeps its
-workspace too (`not saved · daemon silent · kept`) while the runtime reports the executor running,
-and every sweep asks again; only a runtime that reports the executor ended lets the stop proceed.
-The exit reconciler asks the daemon before it records an exit: a runtime whose daemon still answers
-is drained first. A MicroVM whose guest Docker failed while sealantd is up is reported, never
+lifecycle stop, the expired, stranded, superseded and orphaned reapers, a retained launch, or the
+deadline sweep — it asks the workspace's sealantd for a FINAL flush (this executor is ending) and
+polls its capture status (`WORKSPACE_CAPTURE_DRAIN_POLL_INTERVAL_MS`). The runtime is removed only
+once the daemon reports that flush `complete`; an empty queue alone is not proof, and a daemon that
+does not report completeness (sealantd up to the pinned 0.18.2) is never taken as saved, so its
+workspace is kept (`not saved · not confirmed · kept`). A queue still moving defers the stop to the
+reaper's next tick. A daemon that answers but whose queue does not move for
+`WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` keeps its workspace running (`not saved · kept`). A daemon
+silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` keeps its workspace too
+(`not saved · daemon silent · kept`) while the runtime reports the executor running; a runtime that
+reports the executor gone lets the stop proceed, and one that exited after a final flush it never
+confirmed is left in place (its disk holds the staged captures). The FINAL flush asks the daemon to
+answer within `WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS`, never more than the round trip's bound
+(`WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS`) less a margin, and gives managed processes
+`WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS` between SIGTERM and SIGKILL. A FINAL past its deadline
+answers incomplete and keeps shipping in the daemon, so the polls that follow and the next sweep's
+flush converge on one upload. A run whose source cannot be read is treated as capture-sourced. The
+exit reconciler asks the daemon before it records an exit: a runtime whose daemon still answers is
+drained first. A MicroVM whose guest Docker failed while sealantd is up is reported, never
 terminated.
+
+Drain ownership and progress live in `workspace_capture_drains`: one worker drains a workspace at a
+time across every worker process (`WORKSPACE_CAPTURE_DRAIN_LEASE_MS`), and the last observation is
+what `GET /v1/workspaces/:id` reports as `captureDrain`. A capture-sourced launch that fails after
+its executor became ready keeps the executor (`launch-retained`) and is drained before it is
+stopped. A runtime with its own deadline (a MicroVM's maximum duration) gets its final drain and a
+planned stop `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` (plus an upload estimate) before the deadline. A
+stop records that it is under way before it asks the runtime to go, so the exit reconciler records
+the resulting exit as the planned stop, not a failure; a stop that fails after its drain is recorded
+`stop-failed` on the drain and retried by the reaper. An owner's `stop({ discardUnsaved: true })` is
+recorded (who, when) and every stop path honours it: the runtime is terminated without a drain and
+the drain reads `discarded`.
+
+Docker workspace containers carry their own stop timeout (`--stop-timeout`:
+`SEALANT_DOCKER_STOP_GRACE_SECONDS`, or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` for a capture
+workspace), so any `docker stop` waits for sealantd's final flush; raise the Docker daemon's
+`shutdown-timeout` on hosts that run capture workspaces, or a daemon shutdown still cuts it off.
 
 Runtime launch defaults to Docker via `DEFAULT_RUNTIME_ADAPTER=docker` when the normalized workspace
 spec leaves `target.runtime.family` as `auto`.

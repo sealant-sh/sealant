@@ -1,5 +1,5 @@
 import type { RuntimeAdapterId } from "@sealant/validators";
-import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
 import { SealantDB } from "../client.js";
@@ -27,6 +27,8 @@ export interface UpsertWorkspaceRuntimeInstanceInput {
   readonly finishedAt?: Date;
   /** The runtime's own lifetime deadline (MicroVM max duration); omit where it has none. */
   readonly runtimeDeadlineAt?: Date;
+  /** The blueprint's `sources.workspace.kind` (`capture`, `git`, …); see the column. */
+  readonly sourceKind?: string;
 }
 
 /** @deprecated Use WorkspaceRuntimeInstanceRepo + WorkspaceRuntimeInstanceRepoLive instead. */
@@ -43,7 +45,9 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "getRuntimeInstanceByRunId",
   "listRuntimeInstancesByRunIds",
   "listRunningInstances",
+  "listRetainedLaunches",
   "markExited",
+  "markStopRequested",
   "markStopped",
   "upsertRuntimeInstance",
 ]);
@@ -111,6 +115,14 @@ export interface MarkWorkspaceRuntimeInstanceStoppedInput {
 /** `errorCode` written by `markExited`: the runtime ended without a stop request. */
 export const RUNTIME_EXITED_ERROR_CODE = "runtime-exited";
 
+/**
+ * `errorCode` of a launch that failed AFTER its capture-sourced runtime became ready (a writer
+ * could already have run): the runtime was kept, not removed, and its row carries the identity
+ * (`adapter`, `resourceId`, `reference`, `endpoint`) the retained-launch sweep drains it through
+ * before it is stopped. `markStopped` settles it like any other stop.
+ */
+export const LAUNCH_RETAINED_ERROR_CODE = "launch-retained";
+
 export interface MarkWorkspaceRuntimeInstanceExitedInput {
   readonly runId: string;
   /**
@@ -130,12 +142,22 @@ export interface WorkspaceRuntimeInstanceRepoService {
   /**
    * Terminal write for a runtime that ended on its own: `ready` becomes `failed` with
    * `RUNTIME_EXITED_ERROR_CODE` and the observed detail. Fenced: only a `ready` instance on the
-   * observed resource changes, so a stop that already settled the row (`markStopped`) or a
-   * relaunch that replaced the resource wins, and the call returns `undefined`.
+   * observed resource with no stop under way (`markStopRequested`) changes, so a stop — settled
+   * or in progress — or a relaunch that replaced the resource wins, and the call returns
+   * `undefined`.
    */
   readonly markExited: (
     input: MarkWorkspaceRuntimeInstanceExitedInput,
   ) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * A stop is under way: record its reason while the runtime is still up, before the runtime is
+   * asked to go. From here an exit the runtime reports is the planned stop completing, never a
+   * crash — `markExited` is fenced on it. Only a row not yet stopped and with no reason changes.
+   */
+  readonly markStopRequested: (input: {
+    readonly runId: string;
+    readonly stopReason: WorkspaceRuntimeInstanceStopReason;
+  }) => Effect.Effect<void, WorkspaceRuntimeInstanceRepoError>;
   /**
    * Terminal stop write. Idempotent: an already-stopped instance is returned unchanged (the first
    * stopReason wins), so a user stop racing the TTL reaper records exactly one outcome.
@@ -158,6 +180,14 @@ export interface WorkspaceRuntimeInstanceRepoService {
    * reach.
    */
   readonly listRunningInstances: () => Effect.Effect<
+    readonly WorkspaceRuntimeInstance[],
+    WorkspaceRuntimeInstanceRepoError
+  >;
+  /**
+   * Launches that failed after their capture-sourced runtime became ready and were kept
+   * (`failed` with `LAUNCH_RETAINED_ERROR_CODE`): each still holds a runtime to drain and stop.
+   */
+  readonly listRetainedLaunches: () => Effect.Effect<
     readonly WorkspaceRuntimeInstance[],
     WorkspaceRuntimeInstanceRepoError
   >;
@@ -194,6 +224,7 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               ...(input.runtimeDeadlineAt === undefined
                 ? {}
                 : { runtimeDeadlineAt: input.runtimeDeadlineAt }),
+              ...(input.sourceKind === undefined ? {} : { sourceKind: input.sourceKind }),
             };
 
             // A late "failed" upsert from a superseded/stale worker (a redelivery or reaper
@@ -256,12 +287,30 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
                   eq(workspaceRuntimeInstances.runId, input.runId),
                   eq(workspaceRuntimeInstances.status, "ready"),
                   eq(workspaceRuntimeInstances.resourceId, input.resourceId),
+                  // A stop under way owns the exit: it settles the row `stopped`.
+                  isNull(workspaceRuntimeInstances.stopReason),
                 ),
               )
               .returning();
 
             return updated;
           }),
+        ),
+
+      markStopRequested: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "markStopRequested",
+          db
+            .update(workspaceRuntimeInstances)
+            .set({ stopReason: input.stopReason })
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.runId, input.runId),
+                ne(workspaceRuntimeInstances.status, "stopped"),
+                isNull(workspaceRuntimeInstances.stopReason),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
 
       markStopped: (input) =>
@@ -351,6 +400,21 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
             // "ready" = control channel accepting. The launch path no longer emits "running", so
             // keying on "ready" finds the instances that are actually reachable (e.g. for telemetry).
             .where(eq(workspaceRuntimeInstances.status, "ready"))
+            .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
+        ),
+
+      listRetainedLaunches: () =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "listRetainedLaunches",
+          db
+            .select()
+            .from(workspaceRuntimeInstances)
+            .where(
+              and(
+                eq(workspaceRuntimeInstances.status, "failed"),
+                eq(workspaceRuntimeInstances.errorCode, LAUNCH_RETAINED_ERROR_CODE),
+              ),
+            )
             .orderBy(desc(workspaceRuntimeInstances.updatedAt)),
         ),
     } satisfies WorkspaceRuntimeInstanceRepoService;

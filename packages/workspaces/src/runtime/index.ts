@@ -133,3 +133,10 @@ export type {
   WorkspaceCloneAuth,
 } from "./runtime-adapter.js";
 export type { RegisteredRuntime } from "./registered-runtime.js";
+export {
+  LaunchRetainedError,
+  completeReadyLaunch,
+  launchHoldsCaptures,
+  type RuntimeAdapterLaunchHooks,
+  type RuntimeLaunchIdentity,
+} from "./launch-retention.js";

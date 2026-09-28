@@ -269,18 +269,137 @@ export interface WorkspaceCaptureStatus {
   readonly pendingBytes?: number;
   /** Bulk captures (dependency trees, build output) still pending; present once reported. */
   readonly pendingBulk?: number;
+  /**
+   * The daemon's account of its last FINAL flush (the executor is ending): true only when it
+   * quiesced every process, snapshotted everything and registered it. The only proof the
+   * executor's work is saved — `pending === 0` alone is not. Absent until the daemon reports it;
+   * read absent as not complete.
+   */
+  readonly complete?: boolean;
+  /**
+   * Why the last final flush is not complete, when the daemon says: `not-final`, `in-progress`,
+   * `processes-remain`, `sweep-unavailable`, `snapshot-failed`, `unreadable`, `fenced`,
+   * `conflict`, `deadline`, `ship-failed`, `pending`, `internal`.
+   */
+  readonly incompleteReason?: string;
+  /**
+   * Paths the last snap of each class could not read, summed over both classes. Never taken as
+   * deleted: an automatic snap carries the last captured content forward, a final snap fails.
+   */
+  readonly unreadable?: number;
+  /** Of `unreadable`, the paths whose last captured content was carried forward. */
+  readonly carried?: number;
+  /**
+   * The first unreadable paths (at most 20), virtual: `tree/<path>`, `.git/<path>`,
+   * `harness/<path>`; small class first.
+   */
+  readonly unreadablePaths?: readonly string[];
+  /**
+   * A capture the registrar refused to register that the executor is working through
+   * (`missing-objects` or `unrestorable`). Nothing is dropped: it is rebuilt from disk.
+   */
+  readonly registerRefused?: string;
+  /** That refused capture's chain position. */
+  readonly registerRefusedN?: number;
+  /** The first keys (at most 20) the registrar named as missing. */
+  readonly registerMissing?: readonly string[];
+  /** Register refusals the daemon has seen since it started. */
+  readonly registerRefusals?: number;
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  readonly repairing?: boolean;
+  /**
+   * A bulk build is in progress: its capture is not queued yet, so `pending` does not count it.
+   * The executor's work is not all saved while this is true.
+   */
+  readonly bulkBuilding?: boolean;
+  /**
+   * Each captured class's snaps: how many failed since the daemon started, and the last one's
+   * error while it fails. A snap that fails stages nothing: what changed since the last capture
+   * is on the executor's disk only.
+   */
+  readonly snaps?: readonly WorkspaceCaptureClassSnaps[];
+  /**
+   * From `snaps`: the error of the class that has been failing longest. Present means the newest
+   * work is NOT being captured, whatever `pending` says.
+   */
+  readonly lastSnapError?: string;
+  /** From `snaps`: when the earliest current run of failed snaps began (Unix ms). */
+  readonly snapFailingSinceUnixMs?: number;
+  /** From `snaps`: failed snaps of every class since the daemon started. */
+  readonly snapsFailed?: number;
+}
+
+/** One capture class's snaps, as `WorkspaceCaptureStatus.snaps` reports them. */
+export interface WorkspaceCaptureClassSnaps {
+  readonly class: "small" | "bulk";
+  /** Snaps of this class that failed since the daemon started. */
+  readonly snapsFailed: number;
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  readonly lastSnapError?: string;
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  readonly snapFailingSinceUnixMs?: number;
 }
 
 /**
- * What `workspace.stop()` observed. `stopped`: the runtime is gone. `draining`: the stop is
- * accepted, and the control plane is shipping the workspace's unsaved captures before it removes
- * the runtime (capture-sourced workspaces only); `capture` is the queue as last read. A drain can
- * take minutes, and a queue that stops moving keeps the workspace running rather than lose its
- * work. Follow it with `capture.status()` or `status()`, or call `stop()` again: it is idempotent.
+ * What the control plane last observed of a capture-sourced workspace's drain (the FINAL flush
+ * and queue polling a stop runs before it removes the runtime). `draining`: the queue is still
+ * moving. `kept`: nothing will stop the runtime, because its work is not confirmed saved —
+ * `detail` says why. `saved`: the daemon confirmed its final flush complete. `gone`: the daemon
+ * is silent and the runtime reports the executor ended.
+ */
+export interface WorkspaceCaptureDrain {
+  /**
+   * Also `stop-failed` (removing the runtime failed; retried), `stopped` (removed after its
+   * drain), `discarded` (the owner discarded the unsaved captures; terminated without a drain).
+   */
+  readonly state: "draining" | "kept" | "saved" | "gone" | "stop-failed" | "stopped" | "discarded";
+  readonly detail?: string;
+  /** ISO-8601: when it was observed. */
+  readonly observedAt?: string;
+  /** ISO-8601: when the control plane starts (or started) the drain ahead of the deadline. */
+  readonly preservationStartsAt?: string;
+  /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
+  readonly discard?: { readonly requestedBy: string; readonly requestedAt: string };
+}
+
+/** Options for `workspace.stop()`. */
+export interface WorkspaceStopOptions {
+  /**
+   * End the workspace WITHOUT saving its unsaved captures: no drain, the runtime is terminated
+   * at once. The only way to end a capture-sourced workspace the control plane keeps because its
+   * work cannot be confirmed saved. Recorded (who, when) and reported on the workspace's capture
+   * drain as `discarded`. Owner only; irreversible — what was not saved is lost.
+   */
+  readonly discardUnsaved?: boolean;
+}
+
+/**
+ * What `workspace.stop()` observed — never more than was observed:
+ *
+ *  - `stopped`: the runtime is gone.
+ *  - `requested`: the control plane accepted the stop, and the runtime is still up; nothing more
+ *    has been observed yet. The stop continues on the server.
+ *  - `draining`: the control plane is draining the workspace's unsaved captures (capture-sourced
+ *    workspaces only) and the queue is still moving; the runtime is removed once the daemon
+ *    confirms them saved.
+ *  - `kept`: the control plane will NOT remove the runtime: its work is not confirmed saved
+ *    (`drain.detail` says why). The workspace keeps running until it is.
+ *
+ * `drain` is the control plane's last observation; `capture` is the daemon's queue as read now,
+ * when it answers. Call `stop()` again to check (it is idempotent), or follow `status()`.
  */
 export type WorkspaceStopResult =
   | { readonly state: "stopped" }
-  | { readonly state: "draining"; readonly capture: WorkspaceCaptureStatus };
+  | {
+      readonly state: "requested";
+      readonly drain?: WorkspaceCaptureDrain;
+      readonly capture?: WorkspaceCaptureStatus;
+    }
+  | {
+      readonly state: "draining" | "kept";
+      readonly drain: WorkspaceCaptureDrain;
+      readonly capture?: WorkspaceCaptureStatus;
+    };
 
 /** The daemon's answer to `workspace.capture.replan()` (sealantd 0.15 `capture.replan`). */
 export interface WorkspaceCaptureReplanned {
@@ -304,14 +423,36 @@ export interface WorkspaceCaptureReplanned {
   readonly unchanged: boolean;
 }
 
+/** Options for `workspace.capture.flush()`: which flush the daemon runs, and its bounds. */
+export interface WorkspaceCaptureFlushOptions {
+  /**
+   * `final`: the executor is ending. The daemon stops its managed processes, snapshots both
+   * capture classes, ships, reports `complete`, and refuses new work from then on. `suspend`
+   * (the default): a checkpoint; the executor keeps running.
+   */
+  readonly kind?: "final" | "suspend";
+  /**
+   * How long the daemon may take before it answers, in milliseconds (a positive integer). A final
+   * flush past its deadline answers `complete: false` and keeps shipping in the daemon, so later
+   * `status()` reads and repeated final flushes converge. Absent: the daemon's default.
+   */
+  readonly deadlineMs?: number;
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL, in milliseconds (a
+   * positive integer), counted inside `deadlineMs`. Absent: the daemon's default.
+   */
+  readonly graceMs?: number;
+}
+
 /** Capture operations of a capture-sourced workspace. */
 export interface WorkspaceCapture {
   /**
-   * Final capture, then ship and register everything staged. Synchronous: resolves once the
-   * daemon has flushed (bounded by its grace window). Gate an executor's retirement on
-   * `pending === 0 && !fenced`. Refused on workspaces that are not capture-sourced.
+   * Capture, then ship and register everything staged. Synchronous: resolves once the daemon has
+   * flushed, bounded by `options.deadlineMs`. Pass `{ kind: "final" }` before letting the
+   * executor go away, and gate its retirement on `complete === true`. Refused on workspaces that
+   * are not capture-sourced.
    */
-  flush(): Promise<WorkspaceCaptureStatus>;
+  flush(options?: WorkspaceCaptureFlushOptions): Promise<WorkspaceCaptureStatus>;
   /**
    * The daemon's capture queue as it stands, nothing flushed: `pending` captures not yet saved,
    * `headN` / `registered` what the session channel holds, `refused` what the quota turned away.
@@ -550,8 +691,9 @@ export interface Workspace {
   runtimeDeadline(): Promise<string | null>;
   /**
    * Resolves once the workspace runtime is live and ready to accept a run. When the handle came
-   * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), the workspace
-   * is stopped before the error is thrown, so an abandoned launch never keeps running to its cap.
+   * from `workspaces.create()` and readiness times out (`workspace_ready_timeout`), a stop is
+   * requested before the error is thrown, so an abandoned launch does not keep running to its
+   * cap; the error says whether the request was accepted (not that the workspace stopped).
    */
   ready(): Promise<this>;
   /** Run a harness in this workspace. */
@@ -575,13 +717,15 @@ export interface Workspace {
   events(): AsyncIterable<WorkspaceEvent>;
   /**
    * Stop the workspace: remove its runtime and settle it in the terminal "stopped" status.
-   * Resolves `{ state: "stopped" }` once the runtime is gone. A capture-sourced workspace is
-   * drained first (its unsaved captures shipped); if the runtime is still up after a minute and
-   * its capture queue answers, resolves `{ state: "draining", capture }` instead of failing —
-   * the stop continues on the server. Throws `workspace_stop_timeout` only when neither can be
-   * observed.
+   * Resolves `{ state: "stopped" }` once the runtime is observed gone. A capture-sourced
+   * workspace is drained first (its unsaved captures shipped and confirmed saved), which can take
+   * minutes; if the runtime is still up after a minute, resolves with what was observed instead:
+   * `draining`, `kept` (the workspace keeps running because its work is not confirmed saved), or
+   * `requested` (accepted, nothing more observed yet). Never reports a stop it did not observe.
+   * `{ discardUnsaved: true }` ends it without saving its unsaved captures (see
+   * `WorkspaceStopOptions`).
    */
-  stop(): Promise<WorkspaceStopResult>;
+  stop(options?: WorkspaceStopOptions): Promise<WorkspaceStopResult>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**

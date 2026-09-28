@@ -5,6 +5,8 @@ import {
 } from "@sealant/validators";
 import { z } from "zod";
 
+import type { RuntimeAdapterLaunchHooks } from "./launch-retention.js";
+
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
 
 // The id list lives in @sealant/validators (the one home); re-exported here so runtime code
@@ -286,7 +288,15 @@ export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
   supports(input: RuntimeAdapterSupportInput): RuntimeAdapterSupport;
-  launch(input: RuntimeAdapterLaunchInput): Promise<RuntimeAdapterLaunchResult>;
+  /**
+   * Launch the executor. `hooks.onReady` is called once its daemon answers, before any later
+   * step; a capture-sourced launch that fails after that keeps its executor and throws
+   * `LaunchRetainedError` (`launch-retention.ts`).
+   */
+  launch(
+    input: RuntimeAdapterLaunchInput,
+    hooks?: RuntimeAdapterLaunchHooks,
+  ): Promise<RuntimeAdapterLaunchResult>;
   stop(input: RuntimeAdapterStopInput): Promise<RuntimeAdapterStopResult>;
   /**
    * Optional: what the runtime knows about a launched executor right now. Adapters that cannot

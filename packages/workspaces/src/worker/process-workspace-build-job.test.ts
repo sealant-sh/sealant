@@ -8,6 +8,7 @@ import type { CredentialCipherService } from "@sealant/credentials";
 import {
   ConnectedAccountRepo,
   GitHubInstallationRepo,
+  LAUNCH_RETAINED_ERROR_CODE,
   GitHubInstallationRepositoryCacheRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
@@ -30,7 +31,7 @@ import {
   type WorkspaceImageBuilder,
 } from "../images/index.js";
 import type { RegistryClient } from "../registry/index.js";
-import type { RuntimeAdapter } from "../runtime/index.js";
+import { LaunchRetainedError, type RuntimeAdapter } from "../runtime/index.js";
 import { WorkspaceBuildJobProcessingError } from "./errors.js";
 import {
   dotfilesStagingRoot,
@@ -515,6 +516,8 @@ describe("processWorkspaceBuildJobEffect", () => {
         expect.objectContaining({
           publishedImage: expect.objectContaining({ digest: "sha256:prior" }),
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
@@ -795,6 +798,8 @@ describe("processWorkspaceBuildJobEffect", () => {
             },
           ],
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
       expect(connectedAccounts.updateSyncState).toHaveBeenCalledTimes(2);
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts, connectedAccounts })));
@@ -857,10 +862,14 @@ describe("processWorkspaceBuildJobEffect", () => {
             },
           ],
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
       // No env injection at all for the session-file shape (empty env is omitted from launch).
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.not.objectContaining({ credentialEnv: expect.anything() }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
       // The launch-time injection shape is persisted on the runtime instance row so the post-run
       // sync-back can trust what THIS workspace was actually seeded with.
@@ -950,6 +959,8 @@ describe("processWorkspaceBuildJobEffect", () => {
             token: "github-installation-token",
           },
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(
       Effect.provide(
@@ -1009,6 +1020,8 @@ describe("processWorkspaceBuildJobEffect", () => {
             SEALANT_DOTFILES_HTTP_TOKEN: "github-installation-token",
           },
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1020,6 +1033,8 @@ describe("processWorkspaceBuildJobEffect", () => {
             }),
           }),
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(
       Effect.provide(
@@ -1064,6 +1079,8 @@ describe("processWorkspaceBuildJobEffect", () => {
             }),
           }),
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(
       Effect.provide(
@@ -1127,6 +1144,8 @@ describe("processWorkspaceBuildJobEffect", () => {
           expect.objectContaining({
             secretEnvDir: expect.stringContaining("sealant-secret-env-run_secret_env"),
           }),
+          // The launch hooks (onReady records the executor at readiness).
+          expect.anything(),
         );
         expect(stagedContents).toBe(JSON.stringify(secretEnv));
         expect(stagedMode).toBe(0o600);
@@ -1229,6 +1248,112 @@ describe("processWorkspaceBuildJobEffect", () => {
       Effect.provide(
         provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
       ),
+    );
+  });
+
+  describe("a capture launch that fails after its executor became ready", () => {
+    const captureJob = (id: string) =>
+      workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id,
+          runId: `run_${id}`,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+              inputs: [],
+              mounts: [],
+            },
+          },
+        }),
+      });
+    const identity = {
+      adapter: "docker" as const,
+      resourceId: "container-retained",
+      reference: "sealant-retained",
+      endpoint: "unix:///run/sealant/sockets/retained/control.sock",
+    };
+
+    it.effect(
+      "records the source kind, the executor's identity at readiness, and a retained failure",
+      () => {
+        const jobs = captureJob("job_retained");
+        const attempts = workspaceAttemptRepoStub();
+        const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+        const runtimeAdapter = createRuntimeAdapterStub("docker", {
+          launch: vi.fn(async (_input, hooks) => {
+            await hooks?.onReady?.(identity);
+            throw new LaunchRetainedError(identity, new Error("credential file write failed"));
+          }),
+        });
+
+        return Effect.gen(function* () {
+          const error = yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_retained",
+              runtimeAdapters: [runtimeAdapter],
+              compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            }),
+          ).pipe(Effect.flip);
+
+          expect(error.errorCode).toBe(LAUNCH_RETAINED_ERROR_CODE);
+          const writes = runtimeInstances.upsertRuntimeInstance.mock.calls.map(([input]) => input);
+          expect(writes).toEqual([
+            { runId: "run_job_retained", status: "pending", sourceKind: "capture" },
+            expect.objectContaining({ status: "pending", ...identity, sourceKind: "capture" }),
+            expect.objectContaining({
+              runId: "run_job_retained",
+              status: "failed",
+              errorCode: LAUNCH_RETAINED_ERROR_CODE,
+              ...identity,
+            }),
+          ]);
+          // Still running: no finish instant on the retained row.
+          expect(writes[2]).not.toHaveProperty("finishedAt");
+          expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_job_retained" });
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      },
+    );
+
+    it.effect(
+      "records a launched capture executor retained when its ready row cannot be written",
+      () => {
+        const jobs = captureJob("job_unrecorded");
+        const attempts = workspaceAttemptRepoStub();
+        const runtimeInstances = {
+          upsertRuntimeInstance: vi.fn(
+            (input: { readonly status: string }): Effect.Effect<object, Error> =>
+              input.status === "ready"
+                ? Effect.fail(new Error("connection terminated"))
+                : Effect.succeed({}),
+          ),
+        };
+        const runtimeAdapter = createRuntimeAdapterStub("docker", {
+          launch: vi.fn(async () => ({ ...identity, status: "ready" as const })),
+        });
+
+        return Effect.gen(function* () {
+          const error = yield* processWorkspaceBuildJobEffect(
+            baseOptions({
+              jobId: "job_unrecorded",
+              runtimeAdapters: [runtimeAdapter],
+              compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            }),
+          ).pipe(Effect.flip);
+
+          expect(error.errorCode).toBe(LAUNCH_RETAINED_ERROR_CODE);
+          expect(runtimeInstances.upsertRuntimeInstance).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              status: "failed",
+              errorCode: LAUNCH_RETAINED_ERROR_CODE,
+              resourceId: "container-retained",
+            }),
+          );
+          expect(runtimeAdapter.stop).not.toHaveBeenCalled();
+        }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+      },
     );
   });
 
@@ -1376,6 +1501,8 @@ describe("processWorkspaceBuildJobEffect", () => {
         expect.objectContaining({
           dotfilesArchiveDir: expect.stringContaining("sealant-dotfiles-run_dotfiles_archives"),
         }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
       const launchMock = vi.mocked(runtimeAdapter.launch);
       const launchInput = launchMock.mock.calls[0]?.[0];
@@ -1499,6 +1626,8 @@ describe("processWorkspaceBuildJobEffect", () => {
 
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.not.objectContaining({ dotfilesArchiveDir: expect.anything() }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(
       Effect.provide(
@@ -1554,6 +1683,8 @@ describe("processWorkspaceBuildJobEffect", () => {
       expect(gitHubSourceIntegration.createInstallationAccessToken).not.toHaveBeenCalled();
       expect(runtimeAdapter.launch).toHaveBeenCalledWith(
         expect.not.objectContaining({ platformEnv: expect.anything() }),
+        // The launch hooks (onReady records the executor at readiness).
+        expect.anything(),
       );
     }).pipe(
       Effect.provide(

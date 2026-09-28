@@ -40,6 +40,7 @@ import {
   type StopWorkspaceRequest,
   type StopWorkspaceResponse,
   type WorkspaceAttemptSummary,
+  type WorkspaceCaptureDrain,
   type WorkspaceDetails,
   type WorkspaceEvent,
   type WorkspaceEventType,
@@ -65,9 +66,11 @@ import {
   RunRepo,
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
+  WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type ConnectedAccount,
+  type WorkspaceCaptureDrain as WorkspaceCaptureDrainRecord,
 } from "@sealant/db";
 import {
   GitHubSourceIntegrationService,
@@ -84,6 +87,7 @@ import {
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   SealantRuntime,
+  type CaptureFlushRequest,
   type SealantError,
   type SealantSession,
   resolveWorkspaceError,
@@ -1782,8 +1786,12 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       workspaceRuntimeInstanceRepo.getRuntimeInstanceByRunId(workspace.latestRunId),
       "Failed to load workspace runtime instance.",
     );
+    const captureDrain = yield* withInternalError(
+      (yield* WorkspaceCaptureDrainRepo).getByRunId(workspace.latestRunId),
+      "Failed to load workspace capture drain.",
+    );
 
-    return mapWorkspaceDetails(
+    const details = mapWorkspaceDetails(
       workspace,
       attempt,
       latestJob,
@@ -1791,7 +1799,37 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       attemptSnapshot,
       sshGatewayConfig,
     );
+    const observed = mapWorkspaceCaptureDrain(captureDrain);
+    return observed === undefined ? details : { ...details, captureDrain: observed };
   });
+};
+
+/**
+ * The drain as last observed, for `WorkspaceDetails.captureDrain`: only what the worker
+ * recorded (a state it observed, a schedule it planned), never an inference from a stop request.
+ */
+export const mapWorkspaceCaptureDrain = (
+  row: WorkspaceCaptureDrainRecord | undefined,
+): WorkspaceCaptureDrain | undefined => {
+  if (row === undefined || row.state === null) {
+    return undefined;
+  }
+  return {
+    state: row.state,
+    ...(row.detail === null ? {} : { detail: row.detail }),
+    ...(row.observedAt === null ? {} : { observedAt: row.observedAt.toISOString() }),
+    ...(row.preservationStartsAt === null
+      ? {}
+      : { preservationStartsAt: row.preservationStartsAt.toISOString() }),
+    ...(row.discardRequestedAt === null || row.discardRequestedBy === null
+      ? {}
+      : {
+          discard: {
+            requestedBy: row.discardRequestedBy,
+            requestedAt: row.discardRequestedAt.toISOString(),
+          },
+        }),
+  };
 };
 
 export const getWorkspaceSshTarget = (input: {
@@ -2276,8 +2314,9 @@ export const bindWorkspace = (input: {
 };
 
 /**
- * Flush captures (sealantd ADR-0015): a final capture, then ship and register everything staged.
+ * Flush captures (sealantd ADR-0015): a capture, then ship and register everything staged.
  * Synchronous over the daemon's control connection; the reply is the daemon's capture status.
+ * The caller's `kind` (default `suspend`), `deadlineMs` and `graceMs` go to the daemon as asked.
  */
 export const flushWorkspaceCapture = (input: {
   readonly workspaceId: string;
@@ -2285,8 +2324,15 @@ export const flushWorkspaceCapture = (input: {
 }) =>
   withCaptureDaemon(
     { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
-    (daemon) => daemon.captureFlush(),
+    (daemon) => daemon.captureFlush(captureFlushRequestOf(input.payload)),
   );
+
+/** The flush request → the daemon's: `suspend` unless the caller asked for `final`. */
+const captureFlushRequestOf = (payload: FlushWorkspaceCaptureRequest): CaptureFlushRequest => ({
+  kind: payload.kind ?? "suspend",
+  ...(payload.deadlineMs === undefined ? {} : { deadlineMs: payload.deadlineMs }),
+  ...(payload.graceMs === undefined ? {} : { graceMs: payload.graceMs }),
+});
 
 /**
  * Capture status (sealantd `capture.status`): the daemon's queue as it stands, nothing flushed.
@@ -2414,8 +2460,11 @@ export const stopWorkspace = (input: {
 }) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.payload.ownerUserId);
+    const discard = input.payload.discardUnsaved === true;
 
-    if (workspace.status === "stopped") {
+    // A discard is accepted on a workspace whose stop was already recorded: that is exactly the
+    // workspace a drain keeps running because its work is not confirmed saved.
+    if (workspace.status === "stopped" && !discard) {
       const response: StopWorkspaceResponse = { workspaceId: workspace.id, status: "stopped" };
       return response;
     }
@@ -2439,6 +2488,19 @@ export const stopWorkspace = (input: {
       return yield* new WorkspaceConflictError({
         message: `Workspace ${input.workspaceId} is still launching; stop it once the runtime is up.`,
       });
+    }
+
+    if (discard) {
+      // The audit, and the durable intent every stop path honours (the lifecycle stop, and the
+      // reaper that re-drives a lost one): the owner discarded this runtime's unsaved captures.
+      const drains = yield* WorkspaceCaptureDrainRepo;
+      yield* withInternalError(
+        drains.requestDiscard({ runId: latestRunId, requestedBy: input.payload.ownerUserId }),
+        "Failed to record the discard of the workspace's unsaved captures.",
+      );
+      yield* Effect.logWarning(
+        `Workspace ${workspace.id}: owner ${input.payload.ownerUserId} discarded the unsaved captures of run ${latestRunId}; the runtime is terminated without a drain.`,
+      );
     }
 
     // Durable stop intent BEFORE the enqueue: the stored "stopped" status is the reaper's

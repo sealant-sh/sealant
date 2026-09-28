@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
+import { LaunchRetainedError } from "./launch-retention.js";
 import {
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterSupportInput,
@@ -332,13 +333,15 @@ describe("DockerRuntimeAdapter", () => {
     const args = firstCall?.[1];
     expect(command).toBe("docker");
     expect(args).toBeDefined();
-    expect(args?.slice(0, 10)).toEqual([
+    expect(args?.slice(0, 12)).toEqual([
       "run",
       "-d",
       "--runtime",
       "runc",
       "--name",
       expect.any(String),
+      "--stop-timeout",
+      "120",
       "--add-host",
       "host.docker.internal:host-gateway",
       "-w",
@@ -1364,6 +1367,75 @@ describe("DockerRuntimeAdapter", () => {
     expect(forceRemoved).toBe(true);
   });
 
+  it("keeps a capture-sourced container whose credential write fails after readiness", async () => {
+    // Once the daemon answers, a writer can run in the container: its disk may hold the only copy
+    // of work. The launch fails, but the container is NOT removed; the identity rides the error.
+    const commandRunner = vi.fn<
+      (
+        command: string,
+        args: Array<string>,
+        options?: { input?: string },
+      ) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "run") {
+        return { stdout: "container-id-capture\n", stderr: "" };
+      }
+      if (args[0] === "exec" && args.includes("-i")) {
+        throw new Error("test: base64 write exploded");
+      }
+      if (args[0] === "exec") {
+        return { stdout: "", stderr: "" };
+      }
+      return {
+        stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n',
+        stderr: "",
+      };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+    const onReady = vi.fn(async () => undefined);
+
+    const failure = await adapter
+      .launch(
+        parseRuntimeAdapterLaunchInput({
+          ...createLaunchInput({
+            sources: {
+              workspace: {
+                kind: "capture",
+                endpoint: "https://mend.example.com/session/s1",
+                worktreeId: "wt_1",
+              },
+            },
+          }),
+          credentialFiles: [
+            {
+              path: "$HOME/.codex/auth.json",
+              contentBase64: Buffer.from("{}", "utf8").toString("base64"),
+              mode: "600",
+            },
+          ],
+        }),
+        { onReady },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      code: "launch-retained",
+      identity: { adapter: "docker", resourceId: "container-id-capture" },
+    });
+    // The identity was reported before the step that failed.
+    expect(onReady).toHaveBeenCalledWith(
+      expect.objectContaining({ adapter: "docker", resourceId: "container-id-capture" }),
+    );
+    expect(commandRunner.mock.calls.some((call) => call[1]?.[0] === "rm")).toBe(false);
+  });
+
   it("rejects credential file paths with shell metacharacters instead of interpolating them", async () => {
     const commandRunner = vi.fn<
       (
@@ -1534,6 +1606,63 @@ describe("DockerRuntimeAdapter", () => {
     calls.length = 0;
     await adapter.stop({ resourceId: "container-id-123", fence: true });
     expect(calls.some((args) => args[0] === "stop")).toBe(false);
+  });
+
+  it("creates every container with its own stop timeout, far longer for a capture workspace", async () => {
+    // A plain `docker stop` (operator, host restart, Docker Desktop quitting) otherwise gives the
+    // container Docker's 10 s: SIGKILL mid-flush lost a 300 MB node_modules file end to end.
+    const runArgs = async (
+      overrides: Record<string, unknown>,
+      options: { stopGraceSeconds?: number; captureStopGraceSeconds?: number } = {},
+    ) => {
+      const commandRunner = vi.fn(async (_command: string, args: Array<string>) =>
+        args[0] === "run"
+          ? { stdout: "container-id-grace\n", stderr: "" }
+          : { stdout: '{"Status":"running","Running":true,"ExitCode":0,"Error":""}\n', stderr: "" },
+      );
+      await new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+        ...options,
+      }).launch(createLaunchInput(overrides));
+      const run = commandRunner.mock.calls.find((call) => call[1][0] === "run")?.[1] ?? [];
+      return run[run.indexOf("--stop-timeout") + 1];
+    };
+    const capture = {
+      sources: {
+        workspace: {
+          kind: "capture",
+          endpoint: "https://mend.example.com/session/s1",
+          worktreeId: "wt_1",
+        },
+      },
+    };
+
+    expect(await runArgs({})).toBe("120");
+    expect(await runArgs(capture)).toBe("3600");
+    expect(await runArgs(capture, { captureStopGraceSeconds: 7200 })).toBe("7200");
+    expect(await runArgs({}, { stopGraceSeconds: 300 })).toBe("300");
+  });
+
+  it("gives a planned stop the container's own stop timeout when it is longer", async () => {
+    const calls: Array<readonly string[]> = [];
+    const commandRunner = vi.fn(async (_command: string, args: Array<string>) => {
+      calls.push(args);
+      if (args[0] === "inspect" && args.includes("{{.Config.StopTimeout}}")) {
+        return { stdout: "3600\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    }).stop({ resourceId: "container-id-capture" });
+    expect(calls.find((args) => args[0] === "stop")).toEqual([
+      "stop",
+      "-t",
+      "3600",
+      "container-id-capture",
+    ]);
   });
 
   it("treats an already-removed container as a successful (not-found) stop", async () => {

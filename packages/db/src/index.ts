@@ -124,6 +124,17 @@ export {
 } from "./repositories/workspaces.js";
 
 export {
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
+  WorkspaceCaptureDrainRepoUnexpectedError,
+  type WorkspaceCaptureDrainProgress,
+  type WorkspaceCaptureDrainRepoError,
+  type WorkspaceCaptureDrainRepoService,
+  type WorkspaceCaptureDrainSchedule,
+} from "./repositories/workspace-capture-drains.js";
+
+export {
+  LAUNCH_RETAINED_ERROR_CODE,
   RUNTIME_EXITED_ERROR_CODE,
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoInvariantError,
@@ -291,6 +302,8 @@ export {
   ociImageBuildJobStatusValues,
   workspaceRuntimeInstances,
   workspaceRuntimeInstanceStatusValues,
+  workspaceCaptureDrains,
+  workspaceCaptureDrainStateValues,
   workspaceBuildJobs,
   workspaceBuildJobStatusValues,
   account,
@@ -353,6 +366,9 @@ export {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceStatus,
   type WorkspaceRuntimeInstanceStopReason,
+  type NewWorkspaceCaptureDrain,
+  type WorkspaceCaptureDrain,
+  type WorkspaceCaptureDrainState,
   type WorkspaceBuildJob,
   type WorkspaceBuildJobStatus,
   type NewSshKey,

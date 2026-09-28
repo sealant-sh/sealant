@@ -122,6 +122,8 @@ const state = {
   launchInProgress: false,
   launchAccepted: false,
   flushTimeoutMs: 50_000,
+  /** The launch boots a capture source (`SEALANT_WORKSPACE_SOURCE=capture`): hooks flush it. */
+  captureSourced: false,
   booted: false,
   daemon: null,
   /**
@@ -408,11 +410,20 @@ const flushCaptures = async (kind) => {
       child.once("error", reject);
       child.once("exit", (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
     });
+    // What the daemon said about completeness, when its report carries it (the agreed FINAL
+    // semantics: `complete` is true only after quiescing, snapshotting both classes and
+    // registering everything). Absent from every released sealantd: `null`, unknown.
+    const reported = /"complete"\s*:\s*(true|false)/.exec(output);
+    const complete = reported === null ? null : reported[1] === "true";
+    const final = kind === "final" && FINAL_FLUSH;
     return {
-      ok: code === 0 && !timedOut,
+      // A final flush is ok only when the daemon confirmed it complete; any flush is failed when
+      // it exited non-zero, timed out, or the daemon reported it incomplete.
+      ok: code === 0 && !timedOut && complete !== false && (!final || complete === true),
       exitCode: code,
       signal,
       timedOut,
+      complete,
       durationMs: Date.now() - startedAt,
       output,
     };
@@ -482,11 +493,17 @@ const handleHook = async (hook, req, res) => {
       if (!state.booted) {
         return json(res, 200, { status: "ok", hook, flush: "not-booted" });
       }
+      if (!state.captureSourced) {
+        // Nothing on this VM is captured: there is nothing for a flush to save.
+        return json(res, 200, { status: "ok", hook, flush: "not-capture" });
+      }
       const flush = await flushCaptures(hook === "terminate" ? "final" : "suspend");
       log(`${hook}: capture flush ${flush.ok ? "ok" : "FAILED"} ${JSON.stringify(flush)}`);
-      // Always 200: the platform's behaviour on a non-200 suspend/terminate is undocumented,
-      // and a refused hook cannot recover a failed flush anyway. The report is the evidence.
-      return json(res, 200, { status: "ok", hook, flush });
+      // A failed flush is never answered 200: the platform (and anyone reading the hook's
+      // record) must see that this VM's work was not saved. What the platform does on a non-200
+      // suspend/terminate is undocumented — it may end the VM anyway; this hook is the last
+      // resort, the control plane drains before the deadline — but the answer is the truth.
+      return json(res, flush.ok ? 200 : 500, { status: flush.ok ? "ok" : "failed", hook, flush });
     }
     default:
       return message(res, 404, `unknown hook ${hook}`);
@@ -802,6 +819,7 @@ const handleLaunch = async (req, res) => {
   state.controlToken = body.controlToken;
   state.redactions = redactionsFor(body.controlToken, secretEnvJson);
   state.flushTimeoutMs = body.flushTimeoutMs;
+  state.captureSourced = body.bootEnv.SEALANT_WORKSPACE_SOURCE === "capture";
   state.launchSecret = null;
   state.launchAccepted = true;
   state.launchInProgress = false;

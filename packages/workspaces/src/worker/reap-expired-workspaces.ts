@@ -14,7 +14,7 @@ import { Effect, Layer } from "effect";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive } from "../sealantd/runtime.js";
 import type { SealantTargetDerivationOptions } from "../sealantd/target.js";
-import type { CaptureDrainSettings, CaptureDrainTracker } from "./capture-drain.js";
+import type { CaptureDrainLedger, CaptureDrainSettings } from "./capture-drain.js";
 import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process-workspace-stop.js";
 
 export interface ReapExpiredWorkspacesOptions {
@@ -31,12 +31,13 @@ export interface ReapExpiredWorkspacesOptions {
   /** How this worker reaches each runtime family (client TLS for Kubernetes). */
   readonly targetOptions?: SealantTargetDerivationOptions;
   /**
-   * Drain capture-sourced workspaces before stopping them (no loss of work product). The tracker
-   * is the worker's, shared with every other stop path so a drain spans ticks and never runs
-   * twice at once. Absent = stop without draining (tests, callers that drain themselves).
+   * Drain capture-sourced workspaces before stopping them (no loss of work product). The ledger
+   * is durable and shared by every stop path of every worker, so a drain spans ticks and workers
+   * and never runs twice at once. Absent = stop without draining (tests, callers that drain
+   * themselves).
    */
   readonly captureDrain?: {
-    readonly tracker: CaptureDrainTracker;
+    readonly ledger: CaptureDrainLedger;
     readonly settings: CaptureDrainSettings;
     /** How long one tick may wait on one workspace's queue before moving on. */
     readonly budgetMs?: number;
@@ -63,41 +64,33 @@ const countsAsReaped = (outcome: WorkspaceStopOutcome): boolean =>
  *    but the teardown was lost (queue outage, dead-lettered message, worker crash); reason "user".
  *  - **orphaned** — the workspace row is gone entirely; the container is torn down directly with
  *    reason "failed" (there is no row left to settle).
+ *  - **retained** — a capture-sourced launch that failed after its runtime became ready, kept
+ *    with `LAUNCH_RETAINED_ERROR_CODE`; reason "failed", workspace row untouched.
  *
  * Every one of those is platform-initiated, so with `captureDrain` a capture-sourced workspace is
- * drained first and stopped only once its capture queue is empty (`capture-drain.ts`); a queue
- * still moving is revisited next tick, a stalled one is kept (`not saved · kept`).
+ * drained first and stopped only once the daemon confirms its final flush complete
+ * (`capture-drain.ts`); a queue still moving is revisited next tick, one that cannot be confirmed
+ * is kept (`not saved · kept`).
  *
  * Best-effort per item: one failure never aborts the sweep. No leader election — the adapter stop
  * and both status writes are idempotent, so concurrent reapers are safe.
  */
-export const reapExpiredWorkspaces = async (
-  options: ReapExpiredWorkspacesOptions,
-): Promise<number> => {
-  const { db, maxReapsPerTick, runtimeAdapters, credentialCipher, targetOptions } = options;
+export const reapExpiredWorkspacesEffect = (options: Omit<ReapExpiredWorkspacesOptions, "db">) => {
+  const { maxReapsPerTick, runtimeAdapters, credentialCipher, targetOptions } = options;
   const maxReaps = maxReapsPerTick ?? DEFAULT_MAX_REAPS_PER_TICK;
   const drainFor = (label: string) =>
     options.captureDrain === undefined
       ? {}
       : {
           captureDrain: {
-            tracker: options.captureDrain.tracker,
+            ledger: options.captureDrain.ledger,
             settings: options.captureDrain.settings,
             budgetMs: options.captureDrain.budgetMs ?? DEFAULT_DRAIN_BUDGET_PER_TICK_MS,
             label,
           },
         };
 
-  const dataAccessLayer = Layer.mergeAll(
-    WorkspaceRepoLive,
-    WorkspaceRuntimeInstanceRepoLive,
-    // The shared stop path's pre-teardown credential sync-back needs the attempt snapshot (for
-    // the blueprint refs), the connected-account repo, and the docker exec bridge.
-    WorkspaceAttemptRepoLive,
-    ConnectedAccountRepoLive,
-  ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
-
-  const program = Effect.gen(function* () {
+  return Effect.gen(function* () {
     const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
     const workspaces = yield* WorkspaceRepo;
 
@@ -165,10 +158,56 @@ export const reapExpiredWorkspaces = async (
       }
     }
 
+    // Retained launches: a capture-sourced launch that failed after its runtime became ready was
+    // kept, not removed (a writer may already have run). Drain it, then stop it, through the same
+    // path. The workspace row is left alone: the launch failed, and its stored status is the
+    // API's intent anchor.
+    const retained = yield* runtimeInstances.listRetainedLaunches();
+    for (const instance of retained) {
+      if (reaped >= maxReaps) {
+        break;
+      }
+      const ok = yield* processWorkspaceStopEffect({
+        runId: instance.runId,
+        stopReason: "failed",
+        runtimeAdapters,
+        ...(credentialCipher === undefined ? {} : { credentialCipher }),
+        ...(targetOptions === undefined ? {} : { targetOptions }),
+        ...drainFor("retained launch"),
+      }).pipe(
+        Effect.map(countsAsReaped),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Expiry reaper: releasing the retained launch of run ${instance.runId} failed.`,
+            cause,
+          ).pipe(Effect.as(false)),
+        ),
+      );
+      if (ok) {
+        reaped += 1;
+      }
+    }
+
     return reaped;
   });
+};
+
+export const reapExpiredWorkspaces = async (
+  options: ReapExpiredWorkspacesOptions,
+): Promise<number> => {
+  const { db, ...effectOptions } = options;
+  const dataAccessLayer = Layer.mergeAll(
+    WorkspaceRepoLive,
+    WorkspaceRuntimeInstanceRepoLive,
+    // The shared stop path's pre-teardown credential sync-back needs the attempt snapshot (for
+    // the blueprint refs), the connected-account repo, and the docker exec bridge.
+    WorkspaceAttemptRepoLive,
+    ConnectedAccountRepoLive,
+  ).pipe(Layer.provide(Layer.succeed(SealantDB, db)));
 
   return Effect.runPromise(
-    program.pipe(Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive))),
+    reapExpiredWorkspacesEffect(effectOptions).pipe(
+      Effect.provide(Layer.mergeAll(dataAccessLayer, SealantRuntimeControlLive)),
+    ),
   );
 };

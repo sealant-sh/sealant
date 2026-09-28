@@ -152,15 +152,33 @@ export const workspaceBindsSchema = Schema.Struct({
 });
 export type WorkspaceBinds = typeof workspaceBindsSchema.Type;
 
+/** Which flush sealantd runs: `final` (the executor is ending) or `suspend` (a checkpoint). */
+export const workspaceCaptureFlushKindSchema = Schema.Literals(["final", "suspend"]);
+export type WorkspaceCaptureFlushKind = typeof workspaceCaptureFlushKindSchema.Type;
+
 /**
- * Flush a capture-sourced workspace's captures (sealantd ADR-0015 `capture.flush`): a final
- * capture, then everything staged is shipped and registered on the session channel. Synchronous
- * over the daemon's control connection, bounded by the daemon's grace window. The reply is the
- * daemon's capture status; `pending === 0 && !fenced` is what a caller gates on before letting
- * the executor go away.
+ * Flush a capture-sourced workspace's captures (sealantd ADR-0015 `capture.flush`): a capture,
+ * then everything staged is shipped and registered on the session channel. Synchronous over the
+ * daemon's control connection, bounded by `deadlineMs`. The reply is the daemon's capture status.
+ *
+ * `kind: "final"` says the executor is ending: the daemon stops its managed processes (SIGTERM,
+ * then SIGKILL after `graceMs`), snapshots both capture classes, ships, and reports `complete`.
+ * Only `complete === true` means the executor's work is saved. After a final flush the daemon
+ * refuses new work for good. A final flush that runs past its deadline answers `complete: false`
+ * and keeps shipping in the daemon, so later status reads and repeated finals converge.
+ * `kind: "suspend"` (the default) is a checkpoint: the executor keeps running.
  */
 export const flushWorkspaceCaptureRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /** `final` or `suspend` (the default). */
+  kind: Schema.optional(workspaceCaptureFlushKindSchema),
+  /** How long the daemon may take before it answers, in milliseconds. Absent: its own default. */
+  deadlineMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL, in milliseconds,
+   * counted inside `deadlineMs`. Absent: the daemon's default.
+   */
+  graceMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type FlushWorkspaceCaptureRequest = typeof flushWorkspaceCaptureRequestSchema.Type;
 
@@ -175,6 +193,18 @@ export type GetWorkspaceCaptureStatusQuery = typeof getWorkspaceCaptureStatusQue
 
 export const captureClassSchema = Schema.Literals(["small", "bulk"]);
 export type CaptureClass = typeof captureClassSchema.Type;
+
+/** One capture class's snaps (sealantd `CaptureClassSnaps`). */
+export const captureClassSnapsSchema = Schema.Struct({
+  class: captureClassSchema,
+  /** Snaps of this class that failed since the daemon started. */
+  snapsFailed: Schema.Number,
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  lastSnapError: Schema.optional(Schema.String),
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  snapFailingSinceUnixMs: Schema.optional(Schema.Number),
+});
+export type CaptureClassSnaps = typeof captureClassSnapsSchema.Type;
 
 export const workspaceCaptureStatusSchema = Schema.Struct({
   epoch: Schema.Number,
@@ -198,11 +228,72 @@ export const workspaceCaptureStatusSchema = Schema.Struct({
   refused: Schema.optional(Schema.Array(captureClassSchema)),
   /**
    * Bytes still to ship, and bulk captures still pending (sealantd's `pending_bytes` /
-   * `pending_bulk`). Reserved: absent until the daemon reports them; a drain is complete only
-   * when every reported one is zero.
+   * `pending_bulk`). Every field below `refused` is absent until the daemon reports it (the
+   * control plane's pinned sealantd wire predates them).
    */
   pendingBytes: Schema.optional(Schema.Number),
   pendingBulk: Schema.optional(Schema.Number),
+  /**
+   * The daemon's own account of its last FINAL flush: true only when it quiesced every managed
+   * process, snapshotted both capture classes and registered everything. The only proof that an
+   * executor may go away; `pending === 0` alone is not. Absent until sealantd reports it (read
+   * absent as not complete).
+   */
+  complete: Schema.optional(Schema.Boolean),
+  /**
+   * Why the last final flush is not complete (`not-final`, `in-progress`, `processes-remain`,
+   * `sweep-unavailable`, `snapshot-failed`, `unreadable`, `fenced`, `conflict`, `deadline`,
+   * `ship-failed`, `pending`, `internal`). A class whose last snap failed is `snapshot-failed`.
+   */
+  incompleteReason: Schema.optional(Schema.String),
+  /**
+   * Paths the last snap of each class could not read (listed, stat'ed or opened), summed over
+   * both classes. Never taken as deleted: an automatic snap carries a path's last captured
+   * content forward, a final snap fails instead.
+   */
+  unreadable: Schema.optional(Schema.Number),
+  /** Of `unreadable`, the paths whose last captured content was carried forward. */
+  carried: Schema.optional(Schema.Number),
+  /**
+   * The first unreadable paths (at most 20), virtual: `tree/<path>` under the worktree,
+   * `.git/<path>`, `harness/<path>`; small class first.
+   */
+  unreadablePaths: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * A capture the registrar refused to register that the executor is working through:
+   * `missing-objects` (an object it names is not in the store) or `unrestorable` (a section's
+   * tree would not restore). Nothing is dropped: its objects are uploaded again and it is
+   * rebuilt from disk in its place.
+   */
+  registerRefused: Schema.optional(Schema.String),
+  /** That refused capture's chain position. */
+  registerRefusedN: Schema.optional(Schema.Number),
+  /** The first keys (at most 20) the registrar named as missing. */
+  registerMissing: Schema.optional(Schema.Array(Schema.String)),
+  /** Register refusals the daemon has seen since it started. */
+  registerRefusals: Schema.optional(Schema.Number),
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  repairing: Schema.optional(Schema.Boolean),
+  /**
+   * A bulk build is in progress: its capture is not queued yet, so `pending` and `pendingBulk`
+   * do not count it (`pendingBytes` counts what it has staged). A drain is not done while true.
+   */
+  bulkBuilding: Schema.optional(Schema.Boolean),
+  /**
+   * Each captured class's snaps: how many failed since the daemon started, and the last one's
+   * error while it fails. A snap that fails stages nothing: what changed since the last capture
+   * is on the executor's disk only.
+   */
+  snaps: Schema.optional(Schema.Array(captureClassSnapsSchema)),
+  /**
+   * Derived from `snaps`: the error of the class that has been failing longest. Present means the
+   * executor's newest work is NOT being captured, whatever `pending` says.
+   */
+  lastSnapError: Schema.optional(Schema.String),
+  /** Derived from `snaps`: when the earliest current run of failed snaps began (Unix ms). */
+  snapFailingSinceUnixMs: Schema.optional(Schema.Number),
+  /** Derived from `snaps`: failed snaps of every class since the daemon started. */
+  snapsFailed: Schema.optional(Schema.Number),
 });
 export type WorkspaceCaptureStatus = typeof workspaceCaptureStatusSchema.Type;
 
@@ -243,6 +334,15 @@ export type RenameWorkspaceRequest = typeof renameWorkspaceRequestSchema.Type;
 // mismatch yields a uniform 404 (existence is not leaked).
 export const stopWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
+  /**
+   * End the workspace WITHOUT saving its unsaved captures. A capture-sourced workspace is
+   * otherwise drained before it stops, and kept running for as long as its work cannot be
+   * confirmed saved; this is the owner's explicit way out. The request is recorded (who, when)
+   * and every stop path honours it: the runtime is terminated at once, and the workspace's
+   * `captureDrain` reads `discarded`. Accepted on a workspace already stopped whose runtime is
+   * still up (a kept one). Owner only.
+   */
+  discardUnsaved: Schema.optional(Schema.Boolean),
 });
 export type StopWorkspaceRequest = typeof stopWorkspaceRequestSchema.Type;
 
@@ -315,6 +415,48 @@ export const workspaceSummarySchema = Schema.Struct({
 });
 export type WorkspaceSummary = typeof workspaceSummarySchema.Type;
 
+/**
+ * What the control plane last OBSERVED of a capture-sourced workspace's drain — the FINAL flush
+ * and queue polling every platform stop runs before it removes the runtime. A stop request is
+ * not a stop: until the runtime is gone, this is what is happening.
+ *
+ *  - `draining`: the queue is still moving; the stop continues on the server.
+ *  - `kept`: nothing will stop the runtime — the work is not confirmed saved (the queue stalled,
+ *    a class was refused, the daemon is silent while the executor runs, or the daemon did not
+ *    report its final flush complete). `detail` says which.
+ *  - `saved`: the daemon reported its final flush complete; the runtime is being removed.
+ *  - `gone`: the daemon is silent and the runtime reports the executor ended.
+ *  - `stop-failed`: the drain let the stop through but removing the runtime failed (`detail`
+ *    has the error); the control plane retries the stop.
+ *  - `stopped`: the runtime was removed after its drain let it go.
+ *  - `discarded`: the owner discarded the unsaved captures (`stop({ discardUnsaved: true })`);
+ *    the runtime was terminated without a drain. `discard` records who asked, and when.
+ *
+ * `preservationStartsAt` is when the control plane starts that drain on its own ahead of the
+ * runtime's deadline (`runtime.deadline`), once it has planned one.
+ */
+export const workspaceCaptureDrainSchema = Schema.Struct({
+  state: Schema.Literals([
+    "draining",
+    "kept",
+    "saved",
+    "gone",
+    "stop-failed",
+    "stopped",
+    "discarded",
+  ]),
+  detail: Schema.optional(Schema.String),
+  /** ISO-8601: when this was observed. */
+  observedAt: Schema.optional(Schema.String),
+  /** ISO-8601: when the deadline sweep starts (or started) the final drain. */
+  preservationStartsAt: Schema.optional(Schema.String),
+  /** The owner's request to discard the unsaved captures: who asked, and when (ISO-8601). */
+  discard: Schema.optional(
+    Schema.Struct({ requestedBy: NonEmptyString, requestedAt: Schema.String }),
+  ),
+});
+export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
+
 export const workspaceDetailsSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   name: NonEmptyString,
@@ -332,6 +474,11 @@ export const workspaceDetailsSchema = Schema.Struct({
   finishedAt: Schema.optional(Schema.String),
   expiresAt: Schema.optional(Schema.String),
   spec: Schema.optional(Schema.Unknown),
+  /**
+   * The current runtime's capture drain as last observed (see `workspaceCaptureDrainSchema`).
+   * Absent while no drain or preservation schedule exists, and from older control planes.
+   */
+  captureDrain: Schema.optional(workspaceCaptureDrainSchema),
 });
 export type WorkspaceDetails = typeof workspaceDetailsSchema.Type;
 

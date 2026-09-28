@@ -42,6 +42,8 @@ import {
   type SealantTargetDerivationOptions,
   syncBackWorkspaceCredentials,
   type SealantTarget,
+  splitWorkingTreeChanges,
+  workingTreeChangesScript,
 } from "@sealant/workspaces";
 import { Effect, Layer, Schedule, Stream } from "effect";
 
@@ -214,15 +216,15 @@ const resolveRuntimeTarget = (runId: string, targetOptions: SealantTargetDerivat
     };
   });
 
-/** Captures the staged git diff after execution (shared by both framings). */
+/**
+ * Captures what the run changed (shared by both framings): the working tree against HEAD, staged
+ * in a throwaway index so the repository's own index — the user's git state — is never written.
+ */
 const captureChanges = (target: SealantTarget) =>
   Effect.gen(function* () {
-    const diff = yield* shellExec(
-      target,
-      `git add -A >/dev/null 2>&1; git --no-pager diff --cached`,
-    );
-    const names = yield* shellExec(target, `git --no-pager diff --cached --name-status`);
-    return { diff: diff.stdout, changedFiles: parseNameStatus(names.stdout) };
+    const output = yield* shellExec(target, workingTreeChangesScript());
+    const { diff, nameStatus } = splitWorkingTreeChanges(output.stdout);
+    return { diff, changedFiles: parseNameStatus(nameStatus) };
   });
 
 /** HARNESS framing: one command; a nonzero exit marks the run failed. */

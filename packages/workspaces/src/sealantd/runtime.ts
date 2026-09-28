@@ -207,6 +207,150 @@ export interface CaptureFlushReport {
    * until the next epoch or `capture.replan`. Non-empty means work is NOT being saved.
    */
   readonly refused: readonly CaptureClassName[];
+  /**
+   * The agreed FINAL semantics (sealantd `capture.flush` kind FINAL): true only when the daemon
+   * quiesced every managed process, then snapshotted the small AND bulk classes, and registered
+   * everything. The ONLY proof a capture-sourced executor may go away: `pending === 0` alone is
+   * not (a daemon that never snapshotted bulk reports an empty queue). Absent from every daemon
+   * that predates the field, which a consumer reads as not complete.
+   */
+  readonly complete?: boolean | undefined;
+  /** Bytes staged on the executor that no upload has taken yet (sealantd `pending_bytes`). */
+  readonly pendingBytes?: number | undefined;
+  /** Of `pending`, the bulk captures still uploading (sealantd `pending_bulk`). */
+  readonly pendingBulk?: number | undefined;
+  /**
+   * Why the last final flush is not complete (sealantd `incomplete_reason`): `not-final`,
+   * `in-progress`, `processes-remain`, `sweep-unavailable`, `snapshot-failed`, `unreadable`,
+   * `fenced`, `conflict`, `deadline`, `ship-failed`, `pending`, `internal`. A class whose last
+   * snap failed (`snaps`) is `snapshot-failed` too. Absent when complete, or from a daemon that
+   * predates it.
+   */
+  readonly incompleteReason?: string | undefined;
+  /**
+   * Paths the last snap of each class could not read, summed over both classes (sealantd
+   * `unreadable`). Never taken as deleted: an automatic snap carries the last captured content
+   * forward, a final snap fails instead.
+   */
+  readonly unreadable?: number | undefined;
+  /** Of `unreadable`, the paths whose last captured content was carried forward (`carried`). */
+  readonly carried?: number | undefined;
+  /**
+   * The first unreadable paths, virtual (`tree/<path>`, `.git/<path>`, `harness/<path>`), small
+   * class first (sealantd `unreadable_paths`, at most 20). Absent when none are reported.
+   */
+  readonly unreadablePaths?: readonly string[] | undefined;
+  /**
+   * A capture the registrar refused to register that the executor is working through
+   * (`missing-objects`, `unrestorable`; sealantd `register_refused`). Nothing is dropped: its
+   * objects are uploaded again and it is rebuilt from disk.
+   */
+  readonly registerRefused?: string | undefined;
+  /** That refused capture's chain position (`register_refused_n`). */
+  readonly registerRefusedN?: number | undefined;
+  /** The first keys the registrar named as missing (`register_missing`, at most 20). */
+  readonly registerMissing?: readonly string[] | undefined;
+  /** Register refusals the daemon has seen since it started (`register_refusals`). */
+  readonly registerRefusals?: number | undefined;
+  /** The refused capture waits to be rebuilt from disk; nothing behind it registers first. */
+  readonly repairing?: boolean | undefined;
+  /**
+   * A bulk build is in progress (`bulk_building`): its capture is not queued yet, so `pending`
+   * does not count it. A drain is not done while this is true.
+   */
+  readonly bulkBuilding?: boolean | undefined;
+  /**
+   * Each captured class's snaps (sealantd `snaps`, `CaptureClassSnaps`): how many failed, and
+   * the last one's error while it fails. A snap that fails stages nothing: what changed since the
+   * last capture is on the executor's disk only. Absent from a daemon that predates it.
+   */
+  readonly snaps?: readonly CaptureClassSnaps[] | undefined;
+  /**
+   * Derived from `snaps` for consumers that read one error: the error of the class that has been
+   * failing longest. Present means the executor's newest work is NOT being captured, whatever
+   * `pending` says. Absent while no class's last snap failed.
+   */
+  readonly lastSnapError?: string | undefined;
+  /** Derived from `snaps`: when the earliest current run of failed snaps began (Unix ms). */
+  readonly snapFailingSinceUnixMs?: number | undefined;
+  /** Derived from `snaps`: failed snaps of every class since the daemon started. */
+  readonly snapsFailed?: number | undefined;
+}
+
+/** One capture class's snaps (wire `CaptureClassSnaps`). */
+export interface CaptureClassSnaps {
+  readonly class: CaptureClassName;
+  /** Snaps of this class that failed since the daemon started. */
+  readonly snapsFailed: number;
+  /** The last snap's error, while the last snap failed; absent once one succeeds. */
+  readonly lastSnapError?: string | undefined;
+  /** When the current run of failed snaps began (Unix ms), while the last snap failed. */
+  readonly snapFailingSinceUnixMs?: number | undefined;
+}
+
+/**
+ * The flat snap-failure fields derived from `snaps`: the error of the class failing longest (a
+ * failing class that reports no start counts as the newest), the earliest start, and the sum of
+ * failed snaps. Absent `snaps` derives nothing. Exported for the drain and tests.
+ */
+export const snapFailureSummary = (
+  snaps: readonly CaptureClassSnaps[] | undefined,
+): Pick<CaptureFlushReport, "lastSnapError" | "snapFailingSinceUnixMs" | "snapsFailed"> => {
+  if (snaps === undefined) {
+    return {};
+  }
+  const snapsFailed = snaps.reduce((sum, entry) => sum + entry.snapsFailed, 0);
+  let longest: CaptureClassSnaps | undefined;
+  for (const entry of snaps) {
+    if (entry.lastSnapError === undefined) {
+      continue;
+    }
+    const since = entry.snapFailingSinceUnixMs ?? Number.POSITIVE_INFINITY;
+    const longestSince = longest?.snapFailingSinceUnixMs ?? Number.POSITIVE_INFINITY;
+    if (longest === undefined || since < longestSince) {
+      longest = entry;
+    }
+  }
+  const earliest = snaps.reduce<number | undefined>(
+    (min, entry) =>
+      entry.lastSnapError === undefined || entry.snapFailingSinceUnixMs === undefined
+        ? min
+        : min === undefined
+          ? entry.snapFailingSinceUnixMs
+          : Math.min(min, entry.snapFailingSinceUnixMs),
+    undefined,
+  );
+  return {
+    snapsFailed,
+    ...(longest?.lastSnapError === undefined ? {} : { lastSnapError: longest.lastSnapError }),
+    ...(earliest === undefined ? {} : { snapFailingSinceUnixMs: earliest }),
+  };
+};
+
+/**
+ * What a `capture.flush` asks for. `final`: this executor is ending — the daemon stops admitting
+ * processes, terminates and awaits every managed one, snapshots both classes, then ships until
+ * nothing is pending, and reports `complete`. `suspend`: today's meaning (checkpoint / handoff;
+ * processes keep running).
+ *
+ * After a final flush the daemon refuses exec, sessions, sftp, execution starts, binds and
+ * replans for good: the executor is never reused, and whatever must be read from it (credential
+ * sync-back) is read before.
+ *
+ * The pinned wire (`@sealant/runtime-protocol` 0.18.2) carries NO flush arguments: the request is
+ * sent as an empty message and the daemon runs its only flush, whatever `kind` says. The fields
+ * travel once the pin moves to the release with `CaptureFlushArgs { kind = 1, deadline_ms = 2,
+ * grace_ms = 3 }`.
+ */
+export interface CaptureFlushRequest {
+  readonly kind: "final" | "suspend";
+  /** How long the daemon may take (wire `deadline_ms`). */
+  readonly deadlineMs?: number;
+  /**
+   * Final only: how long managed processes get between SIGTERM and SIGKILL (wire `grace_ms`),
+   * counted inside `deadlineMs`.
+   */
+  readonly graceMs?: number;
 }
 
 /** A capture class as the control plane names it (wire `CaptureClass`). */
@@ -232,7 +376,124 @@ export const captureFlushReportFromWire = (report: CaptureStatusReport): Capture
     const name = captureClassName(value);
     return name === undefined ? [] : [name];
   }),
+  // Fields a newer daemon reports (sealantd 13-26). The pinned wire
+  // type does not declare them, so they are read structurally: a 0.18.2 message never carries
+  // them and they stay absent (complete = unknown).
+  ...optionalWireFields(report),
 });
+
+const wireCount = (value: unknown): number | undefined =>
+  typeof value === "bigint" || typeof value === "number" ? Number(value) : undefined;
+
+const wireText = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const wireTexts = (value: unknown): readonly string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const texts = value.filter((item): item is string => typeof item === "string");
+  return texts.length === 0 ? undefined : texts;
+};
+
+/** A field `report` carries, read structurally; `undefined` when it does not carry it. */
+const wireField = (report: object, key: string): unknown =>
+  key in report ? Reflect.get(report, key) : undefined;
+
+type OptionalWireField =
+  | "complete"
+  | "pendingBytes"
+  | "pendingBulk"
+  | "incompleteReason"
+  | "unreadable"
+  | "carried"
+  | "unreadablePaths"
+  | "registerRefused"
+  | "registerRefusedN"
+  | "registerMissing"
+  | "registerRefusals"
+  | "repairing"
+  | "bulkBuilding"
+  | "snaps"
+  | "lastSnapError"
+  | "snapFailingSinceUnixMs"
+  | "snapsFailed";
+
+/** One wire `CaptureClassSnaps`, read structurally; `undefined` for an unknown class. */
+const wireClassSnaps = (value: unknown): CaptureClassSnaps | undefined => {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const classValue = wireField(value, "class");
+  const name =
+    classValue === WireCaptureClass.SMALL
+      ? "small"
+      : classValue === WireCaptureClass.BULK
+        ? "bulk"
+        : undefined;
+  if (name === undefined) {
+    return undefined;
+  }
+  const lastSnapError = wireText(wireField(value, "lastSnapError"));
+  const snapFailingSinceUnixMs = wireCount(wireField(value, "snapFailingSinceUnixMs"));
+  return {
+    class: name,
+    snapsFailed: wireCount(wireField(value, "snapsFailed")) ?? 0,
+    ...(lastSnapError === undefined ? {} : { lastSnapError }),
+    ...(snapFailingSinceUnixMs === undefined ? {} : { snapFailingSinceUnixMs }),
+  };
+};
+
+/** Wire `snaps` (26); absent when the message does not carry it or carries no known class. */
+const wireSnaps = (value: unknown): readonly CaptureClassSnaps[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const snaps = value.flatMap((item) => {
+    const entry = wireClassSnaps(item);
+    return entry === undefined ? [] : [entry];
+  });
+  return snaps.length === 0 ? undefined : snaps;
+};
+
+/**
+ * Every CaptureStatusReport field past the pinned wire (sealantd 13–26), read structurally: a
+ * field the message does not carry stays absent, never a default. The flat snap-failure fields
+ * are derived from `snaps`.
+ */
+const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWireField> => {
+  const complete = wireField(report, "complete");
+  const repairing = wireField(report, "repairing");
+  const bulkBuilding = wireField(report, "bulkBuilding");
+  const pendingBytes = wireCount(wireField(report, "pendingBytes"));
+  const pendingBulk = wireCount(wireField(report, "pendingBulk"));
+  const unreadable = wireCount(wireField(report, "unreadable"));
+  const carried = wireCount(wireField(report, "carried"));
+  const registerRefusedN = wireCount(wireField(report, "registerRefusedN"));
+  const registerRefusals = wireCount(wireField(report, "registerRefusals"));
+  const snaps = wireSnaps(wireField(report, "snaps"));
+  const incompleteReason = wireText(wireField(report, "incompleteReason"));
+  const registerRefused = wireText(wireField(report, "registerRefused"));
+  const unreadablePaths = wireTexts(wireField(report, "unreadablePaths"));
+  const registerMissing = wireTexts(wireField(report, "registerMissing"));
+  return {
+    ...(typeof complete === "boolean" ? { complete } : {}),
+    ...(pendingBytes === undefined ? {} : { pendingBytes }),
+    ...(pendingBulk === undefined ? {} : { pendingBulk }),
+    ...(incompleteReason === undefined ? {} : { incompleteReason }),
+    ...(unreadable === undefined ? {} : { unreadable }),
+    ...(carried === undefined ? {} : { carried }),
+    ...(unreadablePaths === undefined ? {} : { unreadablePaths }),
+    ...(registerRefused === undefined ? {} : { registerRefused }),
+    ...(registerRefusedN === undefined ? {} : { registerRefusedN }),
+    ...(registerMissing === undefined ? {} : { registerMissing }),
+    ...(registerRefusals === undefined ? {} : { registerRefusals }),
+    ...(typeof repairing === "boolean" ? { repairing } : {}),
+    ...(typeof bulkBuilding === "boolean" ? { bulkBuilding } : {}),
+    ...(snaps === undefined ? {} : { snaps }),
+    ...snapFailureSummary(snaps),
+  };
+};
 
 /**
  * The daemon's answer to `capture.replan` (wire `CaptureReplanned`), with JSON-safe numbers: the
@@ -746,11 +1007,14 @@ export interface SealantSession {
    */
   readonly bindMount: (mountPath: string, subpath: string) => Effect.Effect<void, SealantError>;
   /**
-   * Final capture, then ship and register everything staged (sealantd ADR-0015 `capture.flush`,
-   * the suspend/terminate hook). Bounded by the daemon's shutdown grace; only answers on a
-   * capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
+   * Capture, then ship and register everything staged (sealantd ADR-0015 `capture.flush`, the
+   * suspend/terminate hook). `request.kind` says whether the executor is ending (`final`) or not
+   * (`suspend`, the default); see `CaptureFlushRequest` for what the pinned wire sends. Only
+   * answers on a capture-sourced workspace (`SEALANT_WORKSPACE_SOURCE=capture`).
    */
-  readonly captureFlush: () => Effect.Effect<CaptureFlushReport, SealantError>;
+  readonly captureFlush: (
+    request?: CaptureFlushRequest,
+  ) => Effect.Effect<CaptureFlushReport, SealantError>;
   /**
    * The daemon's capture status (`capture.status`) without flushing: what a drain polls between
    * flushes to see the queue empty (`pending === 0`) or stop moving. Only answers on a
@@ -993,7 +1257,9 @@ const makeSession = (client: SealantClient): SealantSession => ({
       "bindMount",
       Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
     ),
-  captureFlush: () =>
+  // `_request` is not on the pinned wire (0.18.2 `capture_flush` is `Empty`); when the pin moves
+  // to the release with `CaptureFlushArgs`, this sends `{ kind, deadlineMs }` in `value`.
+  captureFlush: (_request) =>
     withSealantError(
       "captureFlush",
       Effect.tryPromise(async () => {

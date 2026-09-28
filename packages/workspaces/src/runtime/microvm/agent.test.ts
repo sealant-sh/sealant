@@ -75,6 +75,7 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
 const FAKE_SEALANTCTL = `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_SEALANTCTL_LOG"
 if [ -n "$FAKE_SEALANTCTL_SLEEP" ]; then sleep "$FAKE_SEALANTCTL_SLEEP"; fi
+if [ -n "$FAKE_SEALANTCTL_OUTPUT" ]; then printf '%s\\n' "$FAKE_SEALANTCTL_OUTPUT"; fi
 exit "\${FAKE_SEALANTCTL_EXIT:-0}"
 `;
 
@@ -353,7 +354,7 @@ describe("microvm agent", () => {
       `--socket ${agent.socketPath} capture flush`,
     ]);
 
-    // A stalled flush is killed at the launch-delivered bound and reported, still with a 200.
+    // A stalled flush is killed at the launch-delivered bound, and the hook says it failed.
     const stalled = await startAgent({ FAKE_SEALANTCTL_SLEEP: "5" });
     try {
       await hook(stalled, "run", {
@@ -367,8 +368,9 @@ describe("microvm agent", () => {
       const startedAt = Date.now();
       const terminate = await hook(stalled, "terminate");
       expect(Date.now() - startedAt).toBeLessThan(3_000);
-      expect(terminate.status).toBe(200);
+      expect(terminate.status).toBe(500);
       expect(terminate.body).toMatchObject({
+        status: "failed",
         hook: "terminate",
         flush: { ok: false, timedOut: true },
       });
@@ -377,8 +379,114 @@ describe("microvm agent", () => {
     }
   });
 
+  const bootedAgent = async (env: Record<string, string>, microvmId: string) => {
+    const booted = await startAgent(env);
+    await hook(booted, "run", {
+      microvmId,
+      runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+    });
+    await call(booted, "POST", AGENT_LAUNCH_ROUTE, { body: launchRequest, bearer: launchSecret });
+    await waitFor(async () =>
+      stat(booted.socketPath).then(
+        () => true,
+        () => false,
+      ),
+    );
+    return booted;
+  };
+
+  it("never answers 200 to a hook whose flush failed", async () => {
+    const failing = await bootedAgent({ FAKE_SEALANTCTL_EXIT: "3" }, "microvm-fail");
+    try {
+      for (const name of ["suspend", "terminate"] as const) {
+        const answer = await hook(failing, name);
+        expect(answer.status).toBe(500);
+        expect(answer.body).toMatchObject({
+          status: "failed",
+          hook: name,
+          flush: { ok: false, exitCode: 3 },
+        });
+      }
+    } finally {
+      await stopAgent(failing);
+    }
+    // The daemon ran but reported its flush incomplete: failed too.
+    const incomplete = await bootedAgent(
+      { FAKE_SEALANTCTL_OUTPUT: '{"pending":0,"complete":false}' },
+      "microvm-inc",
+    );
+    try {
+      const answer = await hook(incomplete, "terminate");
+      expect(answer.status).toBe(500);
+      expect(answer.body).toMatchObject({ flush: { ok: false, complete: false } });
+    } finally {
+      await stopAgent(incomplete);
+    }
+  });
+
+  it("answers the hooks without a flush on a VM that boots no capture source", async () => {
+    const git = await startAgent();
+    try {
+      await hook(git, "run", {
+        microvmId: "microvm-git",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      await call(git, "POST", AGENT_LAUNCH_ROUTE, {
+        body: {
+          ...launchRequest,
+          bootEnv: {
+            SEALANT_WORKSPACE_SOURCE: "git",
+            SEALANT_WORKSPACE_REPO_URL: "https://x/y.git",
+          },
+        },
+        bearer: launchSecret,
+      });
+      await waitFor(async () =>
+        stat(git.socketPath).then(
+          () => true,
+          () => false,
+        ),
+      );
+      expect(await hook(git, "terminate")).toMatchObject({
+        status: 200,
+        body: { flush: "not-capture" },
+      });
+      await expect(readFile(git.ctlLog, "utf8")).rejects.toThrow();
+    } finally {
+      await stopAgent(git);
+    }
+  });
+
+  it("confirms a final flush only when the daemon reports it complete", async () => {
+    const confirmed = await bootedAgent(
+      { SEALANT_MICROVM_FINAL_FLUSH: "1", FAKE_SEALANTCTL_OUTPUT: '{"pending":0,"complete":true}' },
+      "microvm-final",
+    );
+    try {
+      expect(await hook(confirmed, "terminate")).toMatchObject({
+        status: 200,
+        body: { status: "ok", flush: { ok: true, complete: true } },
+      });
+    } finally {
+      await stopAgent(confirmed);
+    }
+    // A final flush the daemon does not confirm is not taken as saved.
+    const silent = await bootedAgent({ SEALANT_MICROVM_FINAL_FLUSH: "1" }, "microvm-final-2");
+    try {
+      expect(await hook(silent, "terminate")).toMatchObject({
+        status: 500,
+        body: { flush: { ok: false, complete: null } },
+      });
+    } finally {
+      await stopAgent(silent);
+    }
+  });
+
   it("asks for a final flush on terminate only once the image enables it", async () => {
-    const enabled = await startAgent({ SEALANT_MICROVM_FINAL_FLUSH: "1" });
+    const enabled = await startAgent({
+      SEALANT_MICROVM_FINAL_FLUSH: "1",
+      FAKE_SEALANTCTL_OUTPUT: '{"pending":0,"complete":true}',
+    });
     try {
       await hook(enabled, "run", {
         microvmId: "microvm-3",

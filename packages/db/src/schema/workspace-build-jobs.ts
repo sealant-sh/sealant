@@ -1,5 +1,7 @@
 import { runtimeAdapterIds, type NewWorkspace, type WorkspaceBuild } from "@sealant/validators";
 import {
+  boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -131,6 +133,14 @@ export const workspaceRuntimeInstances = pgTable(
      * plans its drain before this.
      */
     runtimeDeadlineAt: timestamp("runtime_deadline_at", { mode: "date", withTimezone: true }),
+    /**
+     * The workspace source the launch booted from (`sources.workspace.kind` of the blueprint:
+     * `capture`, `git`, `empty`, …), written with the first row of the launch. A capture-sourced
+     * runtime holds work nowhere else until its queue is saved, so every stop drains it first.
+     * Null on rows written before this column existed; stop paths then read the attempt snapshot,
+     * and treat a run whose source cannot be read as capture-sourced (fail closed).
+     */
+    sourceKind: text("source_kind"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -144,6 +154,92 @@ export const workspaceRuntimeInstances = pgTable(
     index("workspace_runtime_instances_adapter_status_idx").on(table.adapter, table.status),
   ],
 );
+
+/**
+ * What the last drain observation concluded about a capture-sourced runtime (`capture-drain.ts`):
+ *
+ *  - `draining`: the queue is still moving; the stop continues on a later sweep.
+ *  - `kept`: nothing may stop the runtime — the queue stalled, a class was refused, the daemon is
+ *    silent while the executor runs, or the final flush did not report `complete`.
+ *  - `saved`: the daemon reported the final flush complete; the stop proceeds.
+ *  - `gone`: the daemon is silent and the runtime reports the executor ended; nothing to save.
+ *  - `stop-failed`: the drain let the stop through, but removing the runtime (or recording it)
+ *    failed; `detail` carries the error, and the next sweep retries the stop.
+ *  - `stopped`: the runtime was removed after the drain let it go.
+ *  - `discarded`: the owner discarded the unsaved captures; the runtime was terminated without a
+ *    drain (`discardRequestedAt` / `discardRequestedBy` record who asked, and when).
+ */
+export const workspaceCaptureDrainStateValues = [
+  "draining",
+  "kept",
+  "saved",
+  "gone",
+  "stop-failed",
+  "stopped",
+  "discarded",
+] as const;
+
+export type WorkspaceCaptureDrainState = (typeof workspaceCaptureDrainStateValues)[number];
+
+/**
+ * One row per run whose capture queue a worker drained or is draining, or whose runtime deadline
+ * scheduled a preservation. It is the durable half of `capture-drain.ts`:
+ *
+ *  - **Ownership**: `leaseOwner` / `leaseExpiresAt`. One worker at a time drains a run, across
+ *    every worker process; a lease that expires (its worker died) is taken over.
+ *  - **Progress**: the stall and silence windows are measured from `lastProgressAt` and
+ *    `unreachableSince`, so a drain spanning many sweeps, or moving between workers, keeps its
+ *    clock.
+ *  - **Observation**: `state`, `detail`, `lastStatus`, `observedAt` — what the API reports while
+ *    a stop is in progress (a stop request is not a stop).
+ *  - **Schedule**: `preservationStartsAt`, the instant the deadline sweep starts the final drain
+ *    of a runtime with a platform lifetime, and the throughput it was estimated from.
+ */
+export const workspaceCaptureDrains = pgTable(
+  "workspace_capture_drains",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => workspaceAttempts.id, { onDelete: "cascade" }),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { mode: "date", withTimezone: true }),
+    state: text({ enum: workspaceCaptureDrainStateValues }),
+    detail: text(),
+    /** The daemon's last capture status, as the worker read it (JSON-safe numbers). */
+    lastStatus: jsonb("last_status").$type<Readonly<Record<string, unknown>>>(),
+    lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
+    unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
+    keptLogged: boolean("kept_logged").notNull().default(false),
+    silentLogged: boolean("silent_logged").notNull().default(false),
+    observedAt: timestamp("observed_at", { mode: "date", withTimezone: true }),
+    preservationStartsAt: timestamp("preservation_starts_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    /** Upload throughput observed on the executor (bytes per second), for the lead estimate. */
+    uploadBytesPerSecond: doublePrecision("upload_bytes_per_second"),
+    /** The `uploadedBytes` sample and its instant that the next throughput reading diffs from. */
+    uploadSampleBytes: doublePrecision("upload_sample_bytes"),
+    uploadSampledAt: timestamp("upload_sampled_at", { mode: "date", withTimezone: true }),
+    /**
+     * The audit of a discard: when the owner asked to end this runtime without saving its
+     * unsaved captures, and who asked. Set once, never cleared; every stop path honours it.
+     */
+    discardRequestedAt: timestamp("discard_requested_at", { mode: "date", withTimezone: true }),
+    discardRequestedBy: text("discard_requested_by"),
+    createdAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: timestamp({ mode: "date", withTimezone: true })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [index("workspace_capture_drains_state_idx").on(table.state)],
+);
+
+export type WorkspaceCaptureDrain = typeof workspaceCaptureDrains.$inferSelect;
+export type NewWorkspaceCaptureDrain = typeof workspaceCaptureDrains.$inferInsert;
 
 export type OciImageBuildJob = typeof ociImageBuildJobs.$inferSelect;
 export type NewOciImageBuildJob = typeof ociImageBuildJobs.$inferInsert;

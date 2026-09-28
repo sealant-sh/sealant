@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./cloudflare/bridge-contract": "./src/runtime/cloudflare/bridge-contract.ts"
+    "./cloudflare/bridge-contract": "./src/runtime/cloudflare/bridge-contract.ts",
+    "./git/working-tree-changes": "./src/git/working-tree-changes.ts"
   },
   "scripts": {
     "lint": "oxlint .",

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SealantTarget } from "../../sealantd/runtime.js";
 import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
+import { LaunchRetainedError } from "../launch-retention.js";
 import type { CredentialFileInjection, PublishedImage } from "../runtime-adapter.js";
 import {
   buildRunInput,
@@ -554,6 +555,74 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     // One mint served the push and every control connection (the launch holds the token).
     expect(api.mints).toEqual([{ microvmId: "microvm-1", expirationInMinutes: 60, port: 8080 }]);
     expect(control.written).toEqual([{ target, files }]);
+  });
+
+  it("keeps a capture VM whose credential write fails after the daemon answered", async () => {
+    // The daemon answered: a writer can already have run in the VM. Terminating it would destroy
+    // the only copy; the launch fails with the VM's identity instead, and nothing is terminated.
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint([json(200, { outcome: "booting" })]);
+    const healthy = fakeControl();
+    const control = {
+      ...healthy,
+      channel: {
+        ...healthy.channel,
+        writeCredentialFiles: () => Promise.reject(new Error("write exploded")),
+      },
+    };
+    const adapter = build(api, endpoint, control);
+    const onReady = vi.fn(async () => undefined);
+
+    const failure = await adapter
+      .launch(
+        {
+          ...captureLaunch,
+          credentialFiles: [
+            { path: "$HOME/.claude/.credentials.json", contentBase64: "e30=", mode: "600" },
+          ],
+        },
+        { onReady },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      identity: {
+        adapter: "microvm",
+        resourceId: "microvm-1",
+        endpoint: `wss://${ENDPOINT}/sealant/control`,
+        deadline: "2026-09-13T18:00:00.000Z",
+      },
+    });
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("still terminates a git-sourced VM whose credential write fails", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint([json(200, { outcome: "booting" })]);
+    const healthy = fakeControl();
+    const control = {
+      ...healthy,
+      channel: {
+        ...healthy.channel,
+        writeCredentialFiles: () => Promise.reject(new Error("write exploded")),
+      },
+    };
+    const adapter = build(api, endpoint, control);
+
+    await expect(
+      adapter.launch({
+        ...cases.gitSource,
+        credentialFiles: [
+          { path: "$HOME/.claude/.credentials.json", contentBase64: "e30=", mode: "600" },
+        ],
+      }),
+    ).rejects.toThrow(/write exploded/);
+    expect(api.terminates).toEqual(["microvm-1"]);
   });
 
   it("boots the built image and sends the v2 requirement with reserved socket env", async () => {

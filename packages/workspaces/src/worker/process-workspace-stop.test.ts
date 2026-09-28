@@ -19,8 +19,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntime } from "../sealantd/runtime.js";
-import { captureStatus, fakeCaptureDaemon } from "./capture-daemon.fixture.js";
-import { CaptureDrainTracker, type CaptureDrainSettings } from "./capture-drain.js";
+import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
+import { inMemoryCaptureDrainLedger, type CaptureDrainSettings } from "./capture-drain.js";
 import { processWorkspaceStopEffect } from "./process-workspace-stop.js";
 
 const runtimeInstance = (
@@ -39,6 +39,8 @@ const runtimeInstance = (
   launchedAt: new Date("2026-07-01T00:00:00.000Z"),
   finishedAt: null,
   runtimeDeadlineAt: null,
+  // Null = a row that predates the column: the stop path reads the attempt snapshot.
+  sourceKind: null,
   createdAt: new Date("2026-07-01T00:00:00.000Z"),
   updatedAt: new Date("2026-07-01T00:00:00.000Z"),
   ...overrides,
@@ -77,6 +79,7 @@ const stubAdapter = (
 
 interface Harness {
   readonly markStopped: ReturnType<typeof vi.fn>;
+  readonly markStopRequested: ReturnType<typeof vi.fn>;
   readonly setWorkspaceStatus: ReturnType<typeof vi.fn>;
   readonly getAttemptSnapshotByRunId: ReturnType<typeof vi.fn>;
   readonly layer: Layer.Layer<
@@ -91,7 +94,10 @@ interface Harness {
 const makeHarness = (input: {
   readonly workspace: Workspace | undefined;
   readonly instance: WorkspaceRuntimeInstance | undefined;
-  /** The run's stored blueprint names a capture source. */
+  /**
+   * The run's stored blueprint names a capture source (true), or the runtime instance records a
+   * non-capture source (false). Absent: nothing records the source at all.
+   */
   readonly captureSourced?: boolean;
   /** The daemon the drain talks to; default = one that must never be dialled. */
   readonly daemon?: Layer.Layer<SealantRuntime>;
@@ -100,6 +106,7 @@ const makeHarness = (input: {
     Effect.succeed(runtimeInstance({ runId: request.runId, status: "stopped" })),
   );
   const setWorkspaceStatus = vi.fn(() => Effect.succeed(input.workspace ?? null));
+  const markStopRequested = vi.fn((_request: { runId: string; stopReason: string }) => Effect.void);
 
   const workspaceRepoLayer = Layer.succeed(WorkspaceRepo, {
     createWorkspace: () => Effect.die("unused"),
@@ -118,9 +125,16 @@ const makeHarness = (input: {
     upsertRuntimeInstance: () => Effect.die("unused"),
     markExited: () => Effect.die("unused"),
     markStopped,
-    getRuntimeInstanceByRunId: () => Effect.succeed(input.instance),
+    getRuntimeInstanceByRunId: () =>
+      Effect.succeed(
+        input.instance !== undefined && input.captureSourced === false
+          ? { ...input.instance, sourceKind: "github" }
+          : input.instance,
+      ),
     listRuntimeInstancesByRunIds: () => Effect.succeed(new Map()),
     listRunningInstances: () => Effect.succeed(input.instance ? [input.instance] : []),
+    listRetainedLaunches: () => Effect.succeed([]),
+    markStopRequested,
   });
 
   // The pre-teardown credential sync-back consults the attempt snapshot before the adapter stop;
@@ -147,6 +161,7 @@ const makeHarness = (input: {
 
   return {
     markStopped,
+    markStopRequested,
     setWorkspaceStatus,
     getAttemptSnapshotByRunId,
     layer: Layer.mergeAll(
@@ -378,14 +393,14 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     unreachableWindowMs: 30,
     requestTimeoutMs: 1_000,
   };
-  const drainOptions = (tracker = new CaptureDrainTracker()) => ({
-    captureDrain: { tracker, settings: FAST, budgetMs: 1_000, label: "test reaper" },
+  const drainOptions = (ledger = inMemoryCaptureDrainLedger()) => ({
+    captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "test reaper" },
   });
 
-  it("drains a capture-sourced runtime to an empty queue, then stops it", async () => {
+  it("drains a capture-sourced runtime until its final flush is complete, then stops it", async () => {
     const daemon = fakeCaptureDaemon([
       captureStatus({ pending: 2, uploadedBytes: 5 }),
-      captureStatus({ pending: 0, uploadedBytes: 9 }),
+      savedStatus({ uploadedBytes: 9 }),
     ]);
     const harness = makeHarness({
       workspace: workspaceRow(),
@@ -457,7 +472,7 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
         stopReason: "user",
         runtimeAdapters: [stubAdapter(stop)],
         captureDrain: {
-          tracker: new CaptureDrainTracker(),
+          ledger: inMemoryCaptureDrainLedger(),
           settings: FAST,
           budgetMs: 3,
           label: "lifecycle stop",
@@ -593,5 +608,302 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
 
     expect(outcome).toBe("stopped");
     expect(daemon.calls).toEqual([]);
+  });
+
+  it("keeps a runtime whose queue is empty but whose daemon never confirmed the flush complete", async () => {
+    // sealantd 0.18.2 (the pinned daemon) answers an empty queue without `complete`: bulk it never
+    // snapshotted can still sit on the executor's disk. Not saved, so not stopped.
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 0, registered: 3 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+    expect(harness.setWorkspaceStatus).not.toHaveBeenCalled();
+  });
+
+  it("drains a run whose source nothing records (no source kind, no attempt snapshot): fail closed", async () => {
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 4, uploadedBytes: 1 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: null }),
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(daemon.calls[0]).toBe("flush");
+    expect(outcome).toBe("kept");
+    expect(stop).not.toHaveBeenCalled();
+    expect(harness.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("drains a run the runtime instance records as capture-sourced even without a snapshot", async () => {
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop)],
+        ...drainOptions(),
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.calls).toEqual(["flush"]);
+  });
+
+  it("reads credentials back BEFORE the final flush (the daemon refuses exec after it), once", async () => {
+    const order: string[] = [];
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 2, uploadedBytes: 1 })]);
+    const connect = daemon.connect.getMockImplementation();
+    daemon.connect.mockImplementation((...args: Parameters<NonNullable<typeof connect>>) => {
+      order.push("daemon");
+      return connect?.(...args) ?? Effect.die("no implementation");
+    });
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: daemon.layer,
+    });
+    harness.getAttemptSnapshotByRunId.mockImplementation((_runId: string) =>
+      Effect.sync(() => {
+        order.push("sync-back");
+        return undefined;
+      }),
+    );
+    const ledger = inMemoryCaptureDrainLedger();
+    const run = () =>
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "expired",
+          runtimeAdapters: [stubAdapter(stopped())],
+          captureDrain: { ledger, settings: FAST, budgetMs: 2, label: "test reaper" },
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+    expect(await run()).toBe("draining");
+    expect(order[0]).toBe("sync-back");
+    expect(order.indexOf("sync-back")).toBeLessThan(order.indexOf("daemon"));
+
+    // The next sweep continues the drain; the daemon already had its FINAL flush, so no exec.
+    order.length = 0;
+    await run();
+    expect(order).not.toContain("sync-back");
+  });
+
+  it("keeps an executor that exited after a final flush it never confirmed complete", async () => {
+    // First sweep: the daemon answers the FINAL flush but reports it incomplete.
+    const ledger = inMemoryCaptureDrainLedger();
+    const first = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon([
+        captureStatus({ pending: 0, complete: false, incompleteReason: "ship-failed" }),
+      ]).layer,
+    });
+    const firstStop = stopped();
+    expect(
+      await Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "expired",
+          runtimeAdapters: [stubAdapter(firstStop, async () => ({ state: "running" as const }))],
+          captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "test reaper" },
+        }).pipe(Effect.provide(first.layer)),
+      ),
+    ).toBe("kept");
+
+    // The daemon then exited (75) with its staging on disk; the container is exited, not gone.
+    const second = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const secondStop = stopped();
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(secondStop, async () => ({ state: "exited" as const }))],
+        captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "test reaper" },
+      }).pipe(Effect.provide(second.layer)),
+    );
+
+    expect(outcome).toBe("kept");
+    expect(secondStop).not.toHaveBeenCalled();
+    expect(second.markStopped).not.toHaveBeenCalled();
+  });
+
+  it("records the stop under way before the runtime is asked to go", async () => {
+    const order: string[] = [];
+    const harness = makeHarness({ workspace: workspaceRow(), instance: runtimeInstance() });
+    harness.markStopRequested.mockImplementation(() =>
+      Effect.sync(() => {
+        order.push("stop-requested");
+      }),
+    );
+    const stop = vi.fn(async () => {
+      order.push("adapter-stop");
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+
+    await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(order).toEqual(["stop-requested", "adapter-stop"]);
+    expect(harness.markStopRequested).toHaveBeenCalledWith({
+      runId: "run_old",
+      stopReason: "user",
+    });
+  });
+
+  it("completes a stop whose launch-material cleanup fails (a directory the container re-owned)", async () => {
+    // End to end: rmdir of the secret-env staging dir failed with EPERM after the container was
+    // removed, the stop threw, and the row was never recorded stopped.
+    const harness = makeHarness({ workspace: workspaceRow(), instance: runtimeInstance() });
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stopped())],
+        launchMaterialStager: {
+          stage: async () => ({}),
+          removeSecretEnv: async () => undefined,
+          removeAll: async () => {
+            throw Object.assign(new Error("EPERM: operation not permitted, rmdir"), {
+              code: "EPERM",
+            });
+          },
+        },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(outcome).toBe("stopped");
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(harness.setWorkspaceStatus).toHaveBeenCalledWith({ id: "ws_1", status: "stopped" });
+  });
+
+  it("records a failed stop on the drain, and the retry that succeeds replaces it", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon([savedStatus()]).layer,
+    });
+    const run = (stop: RuntimeAdapter["stop"]) =>
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [stubAdapter(stop)],
+          captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "lifecycle stop" },
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+    await expect(
+      run(async () => {
+        throw new Error("removal of container is already in progress");
+      }),
+    ).rejects.toThrow(/already in progress/);
+    expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
+      state: "stop-failed",
+      detail: expect.stringMatching(/already in progress.*retries/),
+    });
+    expect(harness.markStopped).not.toHaveBeenCalled();
+
+    expect(await run(stopped())).toBe("stopped");
+    expect(ledger.store.rows.get("run_old")?.observation?.state).toBe("stopped");
+  });
+
+  it("terminates a run whose owner discarded its unsaved captures, without a drain, and records it", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    ledger.store.rows.set("run_old", {
+      entry: {
+        lastProgressAt: undefined,
+        last: undefined,
+        unreachableSince: undefined,
+        keptLogged: false,
+        silentLogged: false,
+        discardRequested: { atMs: Date.parse("2026-09-27T12:00:00.000Z"), by: "user_1" },
+      },
+      observation: { state: "kept", detail: "not saved · not confirmed" },
+      owner: undefined,
+      expiresAt: undefined,
+    });
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 5 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow({ status: "stopped" }),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: daemon.layer,
+    });
+    const stop = stopped();
+
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "user",
+        runtimeAdapters: [stubAdapter(stop)],
+        captureDrain: { ledger, settings: FAST, budgetMs: 1_000, label: "stranded reaper" },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(outcome).toBe("stopped");
+    expect(daemon.connect).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-old",
+      fence: true,
+    });
+    expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "user" });
+    expect(ledger.store.rows.get("run_old")?.observation).toMatchObject({
+      state: "discarded",
+      detail: expect.stringContaining("by user_1"),
+    });
   });
 });

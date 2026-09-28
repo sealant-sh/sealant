@@ -1,8 +1,8 @@
 /**
  * The workspace's lifetime surface: `runtimeDeadline()` maps the runtime's deadline (null where
- * there is none, or on a control plane that predates it), and a readiness timeout on a handle
- * `create()` made stops the workspace so no abandoned runtime keeps running to its cap. Driven
- * against a stub contract client (no live API).
+ * there is none, or on a control plane that predates it); a readiness timeout on a handle
+ * `create()` made requests a stop (and says only that); and `stop()` reports only what the
+ * control plane observed. Driven against a stub contract client (no live API).
  */
 import type { WorkspaceCaptureStatus, WorkspaceDetails } from "@sealant/api-contracts";
 import { Effect } from "effect";
@@ -105,12 +105,14 @@ describe("workspace.ready() timeout", () => {
     return { error: await outcome, stops: stub.stops };
   };
 
-  it("stops a workspace this handle created before throwing", async () => {
+  it("requests a stop of a workspace this handle created before throwing, and says only that", async () => {
     const { error, stops } = await timeOut({ created: true });
     expect(error).toMatchObject({
       code: "workspace_ready_timeout",
-      message: expect.stringContaining("The workspace was stopped."),
+      message: expect.stringContaining("A stop was requested"),
     });
+    // An accepted request is not a stop: the message never claims one.
+    expect(error).not.toMatchObject({ message: expect.stringMatching(/was stopped/) });
     expect(stops).toEqual([
       { params: { workspaceId: "ws_1" }, payload: { ownerUserId: expect.any(String) } },
     ]);
@@ -160,19 +162,80 @@ describe("workspace.stop()", () => {
     expect(stub.stops).toHaveLength(1);
   });
 
-  it("reports a server-side drain instead of throwing when the runtime outlives the wait", async () => {
+  it("does not call a reachable capture queue a drain: stop requested", async () => {
+    // The daemon answering capture.status says nothing about whether the server is draining (a
+    // refused or abandoned drain answers too).
     const stub = makeStub(
       () => details({ status: "ready" }),
       () => CAPTURE,
     );
     await expect(stopWith(stub)).resolves.toEqual({
-      result: { state: "draining", capture: { ...CAPTURE } },
+      result: { state: "requested", capture: { ...CAPTURE } },
     });
   });
 
-  it("throws workspace_stop_timeout only when no drain can be observed", async () => {
-    const stub = makeStub(() => details({ status: "ready" }));
-    const outcome = await stopWith(stub);
-    expect(outcome).toMatchObject({ error: { code: "workspace_stop_timeout" } });
+  it("reports draining only when the control plane observed the drain moving", async () => {
+    const drain = {
+      state: "draining" as const,
+      detail: "pending 12 · staged 4096 bytes",
+      observedAt: "2026-09-27T10:00:30.000Z",
+    };
+    const stub = makeStub(
+      () => details({ status: "ready", captureDrain: drain }),
+      () => CAPTURE,
+    );
+    await expect(stopWith(stub)).resolves.toEqual({
+      result: { state: "draining", drain, capture: { ...CAPTURE } },
+    });
+  });
+
+  it("reports kept when the control plane will not remove the runtime", async () => {
+    const drain = {
+      state: "kept" as const,
+      detail:
+        "not saved · not confirmed · the daemon reports its final flush incomplete (ship-failed)",
+    };
+    const stub = makeStub(() => details({ status: "ready", captureDrain: drain }));
+    await expect(stopWith(stub)).resolves.toEqual({ result: { state: "kept", drain } });
+  });
+
+  it("reports the stop requested, never stopped, while termination is not observed", async () => {
+    const saved = { state: "saved" as const, detail: "final flush complete" };
+    const stub = makeStub(() => details({ status: "ready", captureDrain: saved }));
+    await expect(stopWith(stub)).resolves.toEqual({
+      result: { state: "requested", drain: saved },
+    });
+    const plain = makeStub(() => details({ status: "ready" }));
+    await expect(stopWith(plain)).resolves.toEqual({ result: { state: "requested" } });
+  });
+
+  it("asks the control plane to discard unsaved captures only when told to, and reports what it did", async () => {
+    const discarded = {
+      state: "discarded" as const,
+      detail: "unsaved captures discarded at the owner's request",
+      discard: { requestedBy: "local", requestedAt: "2026-09-27T12:00:00.000Z" },
+    };
+    let reads = 0;
+    const stub = makeStub(() =>
+      (reads += 1) < 3
+        ? details({ status: "ready", captureDrain: discarded })
+        : details({ status: "stopped", captureDrain: discarded }),
+    );
+    vi.useFakeTimers();
+    const outcome = workspaceFor(stub.client).stop({ discardUnsaved: true });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(outcome).resolves.toEqual({ state: "stopped" });
+    expect(stub.stops).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: { ownerUserId: expect.any(String), discardUnsaved: true },
+      },
+    ]);
+
+    const plain = makeStub(() => details({ status: "stopped" }));
+    await workspaceFor(plain.client).stop();
+    expect(plain.stops).toEqual([
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: expect.any(String) } },
+    ]);
   });
 });

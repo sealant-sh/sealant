@@ -28,6 +28,7 @@ const runtimeInstance = (
   errorMessage: null,
   stopReason: null,
   launchCredentialInjections: null,
+  sourceKind: null,
   launchedAt: new Date("2026-06-21T00:00:00.000Z"),
   finishedAt: null,
   runtimeDeadlineAt: null,

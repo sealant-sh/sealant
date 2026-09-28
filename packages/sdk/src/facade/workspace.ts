@@ -5,6 +5,8 @@
  * lifecycle verbs are typed now and reject until their endpoints land (Phase 3).
  */
 import type {
+  WorkspaceCaptureDrain as WireWorkspaceCaptureDrain,
+  CaptureClassSnaps as WireCaptureClassSnaps,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
   WorkspaceDetails,
 } from "@sealant/api-contracts";
@@ -35,8 +37,11 @@ import type {
   WorkspaceForward,
   WorkspaceForwardOptions,
   WorkspaceSessions,
+  WorkspaceCaptureDrain,
+  WorkspaceCaptureClassSnaps,
   WorkspaceCaptureStatus,
   WorkspaceStatus,
+  WorkspaceStopOptions,
   WorkspaceStopResult,
 } from "../types.js";
 import type { SdkContext } from "./context.js";
@@ -98,7 +103,20 @@ const BUILTIN_LAUNCH_COMMANDS: Record<string, string> = {
   "claude-code": "claude",
 };
 
-/** Wire → public capture status; `refused` is empty from a control plane that predates it. */
+/** Wire → public snaps of one capture class. */
+const toClassSnaps = (snaps: WireCaptureClassSnaps): WorkspaceCaptureClassSnaps => ({
+  class: snaps.class,
+  snapsFailed: snaps.snapsFailed,
+  ...(snaps.lastSnapError === undefined ? {} : { lastSnapError: snaps.lastSnapError }),
+  ...(snaps.snapFailingSinceUnixMs === undefined
+    ? {}
+    : { snapFailingSinceUnixMs: snaps.snapFailingSinceUnixMs }),
+});
+
+/**
+ * Wire → public capture status; `refused` is empty from a control plane that predates it, and
+ * every other field the control plane does not send stays absent.
+ */
 const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureStatus => ({
   epoch: status.epoch,
   worktreeId: status.worktreeId,
@@ -114,6 +132,38 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
   refused: status.refused ?? [],
   ...(status.pendingBytes === undefined ? {} : { pendingBytes: status.pendingBytes }),
   ...(status.pendingBulk === undefined ? {} : { pendingBulk: status.pendingBulk }),
+  ...(status.complete === undefined ? {} : { complete: status.complete }),
+  ...(status.incompleteReason === undefined ? {} : { incompleteReason: status.incompleteReason }),
+  ...(status.unreadable === undefined ? {} : { unreadable: status.unreadable }),
+  ...(status.carried === undefined ? {} : { carried: status.carried }),
+  ...(status.unreadablePaths === undefined ? {} : { unreadablePaths: status.unreadablePaths }),
+  ...(status.registerRefused === undefined ? {} : { registerRefused: status.registerRefused }),
+  ...(status.registerRefusedN === undefined ? {} : { registerRefusedN: status.registerRefusedN }),
+  ...(status.registerMissing === undefined ? {} : { registerMissing: status.registerMissing }),
+  ...(status.registerRefusals === undefined ? {} : { registerRefusals: status.registerRefusals }),
+  ...(status.repairing === undefined ? {} : { repairing: status.repairing }),
+  ...(status.bulkBuilding === undefined ? {} : { bulkBuilding: status.bulkBuilding }),
+  ...(status.snaps === undefined ? {} : { snaps: status.snaps.map(toClassSnaps) }),
+  ...(status.lastSnapError === undefined ? {} : { lastSnapError: status.lastSnapError }),
+  ...(status.snapFailingSinceUnixMs === undefined
+    ? {}
+    : { snapFailingSinceUnixMs: status.snapFailingSinceUnixMs }),
+  ...(status.snapsFailed === undefined ? {} : { snapsFailed: status.snapsFailed }),
+});
+
+/** Wire → public drain observation. */
+const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain => ({
+  state: drain.state,
+  ...(drain.detail === undefined ? {} : { detail: drain.detail }),
+  ...(drain.observedAt === undefined ? {} : { observedAt: drain.observedAt }),
+  ...(drain.preservationStartsAt === undefined
+    ? {}
+    : { preservationStartsAt: drain.preservationStartsAt }),
+  ...(drain.discard === undefined
+    ? {}
+    : {
+        discard: { requestedBy: drain.discard.requestedBy, requestedAt: drain.discard.requestedAt },
+      }),
 });
 
 export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace => {
@@ -260,17 +310,18 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           );
         }
         if (Date.now() > deadline) {
-          // A workspace this handle created and nobody will ever use: stop it, so its runtime
-          // does not keep running (and billing) to the platform's lifetime cap. Best-effort: the
-          // timeout is what the caller must see, whatever the stop answers.
-          const stopped = init.created === true ? await requestStop() : undefined;
+          // A workspace this handle created and nobody will ever use: request a stop, so its
+          // runtime does not keep running (and billing) to the platform's lifetime cap.
+          // Best-effort: the timeout is what the caller must see, whatever the request answers.
+          // The request being accepted is all that is known — not that anything has stopped.
+          const accepted = init.created === true ? await requestStop() : undefined;
           throw new SealantError(
             `Timed out waiting for workspace ${init.id} to become ready.${
-              stopped === undefined
+              accepted === undefined
                 ? ""
-                : stopped
-                  ? " The workspace was stopped."
-                  : " Stopping it failed; stop it yourself."
+                : accepted
+                  ? " A stop was requested; the workspace has not been observed stopped."
+                  : " Requesting a stop failed; stop it yourself."
             }`,
             { code: "workspace_ready_timeout" },
           );
@@ -297,10 +348,15 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     },
 
     capture: {
-      flush: async () =>
+      flush: async (options = {}) =>
         toCaptureStatus(
           await ctx.runtime.run(
-            flushWorkspaceCaptureOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+            flushWorkspaceCaptureOp(init.id, {
+              ownerUserId: ctx.config.hostLocal.ownerUserId,
+              ...(options.kind === undefined ? {} : { kind: options.kind }),
+              ...(options.deadlineMs === undefined ? {} : { deadlineMs: options.deadlineMs }),
+              ...(options.graceMs === undefined ? {} : { graceMs: options.graceMs }),
+            }),
           ),
         ),
       status: () => readCaptureStatus(),
@@ -356,11 +412,18 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
 
     // BLOCKING stop: the control plane accepts the stop (202) and the worker tears the runtime
     // down — after draining a capture-sourced workspace's unsaved captures, which can take
-    // minutes. Resolves "stopped" once the workspace reports it; past the wait, a capture queue
-    // that still answers means the server is draining, which is reported, never thrown.
-    stop: async (): Promise<WorkspaceStopResult> => {
+    // minutes. Resolves "stopped" only once the workspace reports it; past the wait it reports
+    // what the control plane last OBSERVED of the drain (`captureDrain`: draining or kept), and
+    // otherwise that the stop was requested. A reachable capture queue is not an observation of
+    // a drain (a refused or abandoned drain answers too), so it never decides the state.
+    stop: async (options?: WorkspaceStopOptions): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
-      await ctx.runtime.run(stopWorkspaceOp(init.id, { ownerUserId }));
+      await ctx.runtime.run(
+        stopWorkspaceOp(init.id, {
+          ownerUserId,
+          ...(options?.discardUnsaved === true ? { discardUnsaved: true } : {}),
+        }),
+      );
 
       const deadline = Date.now() + STOP_TIMEOUT_MS;
       for (;;) {
@@ -371,13 +434,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           return { state: "stopped" };
         }
         if (Date.now() > deadline) {
+          const drain =
+            details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
           const capture = await readCaptureStatus().catch(() => undefined);
-          if (capture !== undefined) {
-            return { state: "draining", capture };
+          const extras = capture === undefined ? {} : { capture };
+          if (drain !== undefined && (drain.state === "draining" || drain.state === "kept")) {
+            return { state: drain.state, drain, ...extras };
           }
-          throw new SealantError(`Timed out waiting for workspace ${init.id} to stop.`, {
-            code: "workspace_stop_timeout",
-          });
+          return { state: "requested", ...(drain === undefined ? {} : { drain }), ...extras };
         }
         await delay(STOP_POLL_INTERVAL_MS);
       }

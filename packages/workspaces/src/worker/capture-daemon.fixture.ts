@@ -1,3 +1,19 @@
+/** A status the daemon reports after a FINAL flush that saved everything. */
+export const savedStatus = (overrides: Partial<CaptureFlushReport> = {}): CaptureFlushReport => ({
+  epoch: 1,
+  worktreeId: "wt_1",
+  pending: 0,
+  stagedBytes: 0,
+  uploadedObjects: 0,
+  uploadedBytes: 0,
+  registered: 0,
+  fenced: false,
+  paused: false,
+  refused: [],
+  complete: true,
+  ...overrides,
+});
+
 /**
  * A scripted sealantd for drain tests: each `capture.flush` / `capture.status` round trip takes
  * the next answer from the script (the last one repeats). `unreachable` fails the connection the
@@ -11,6 +27,7 @@ import {
   SealantRuntime,
   TransportError,
   type CaptureFlushReport,
+  type CaptureFlushRequest,
   type SealantSession,
 } from "../sealantd/runtime.js";
 
@@ -54,6 +71,8 @@ export const fakeCaptureDaemon = (script: readonly CaptureDaemonAnswer[]) => {
     return answer;
   };
   const calls: Array<"flush" | "status"> = [];
+  /** Every flush request as sent (`undefined` = no arguments). */
+  const flushRequests: Array<CaptureFlushRequest | undefined> = [];
 
   const connect = vi.fn(() => {
     const value = next();
@@ -63,8 +82,9 @@ export const fakeCaptureDaemon = (script: readonly CaptureDaemonAnswer[]) => {
       );
     }
     const session = {
-      captureFlush: () => {
+      captureFlush: (request?: CaptureFlushRequest) => {
         calls.push("flush");
+        flushRequests.push(request);
         return answerWith("flush", value);
       },
       captureStatus: () => {
@@ -85,6 +105,7 @@ export const fakeCaptureDaemon = (script: readonly CaptureDaemonAnswer[]) => {
 
   return {
     calls,
+    flushRequests,
     connect,
     layer: Layer.succeed(SealantRuntime, { connect }),
   };
