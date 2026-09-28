@@ -682,6 +682,8 @@ describe("reconcileRuntimeExitsEffect · retention is recorded with the exit (re
     // failed before this fix, a row from before retention existed), the sweep looks again.
     const harness = makeHarness({
       instances: [],
+      // Rows from before the source kind was recorded: their snapshots name a capture source.
+      captureSourced: true,
       unsettled: [
         runtimeInstance({ runId: "run_exited", resourceId: "c-exited", status: "failed" }),
         runtimeInstance({ runId: "run_running", resourceId: "c-running", status: "stopped" }),
@@ -730,6 +732,30 @@ describe("reconcileRuntimeExitsEffect · retention is recorded with the exit (re
     expect(ledger.store.rows.get("run_running")?.entry.retained).toBeDefined();
     expect(ledger.store.rows.get("run_gone")?.observation?.state).toBe("gone");
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("leaves an ended executor whose snapshot names no capture source alone", async () => {
+    const harness = makeHarness({
+      instances: [],
+      unsettled: [runtimeInstance({ runId: "run_git", resourceId: "c-git", status: "failed" })],
+    });
+    const { adapter, inspect } = stubAdapter({
+      inspections: new Map<string, RuntimeAdapterInspectResult>([
+        ["c-git", { state: "exited", exitCode: 0 }],
+      ]),
+    });
+    const ledger = inMemoryCaptureDrainLedger();
+
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(ledger.store.rows.get("run_git")).toBeUndefined();
   });
 });
 

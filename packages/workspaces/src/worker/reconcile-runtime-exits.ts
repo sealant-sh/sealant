@@ -454,6 +454,17 @@ const settleUnsettledExecutors = (
         continue;
       }
       yield* Effect.gen(function* () {
+        // A row that records no source kind (it predates the column) is read from its attempt
+        // snapshot; one whose source cannot be read at all is treated as capture-sourced.
+        const attempts = yield* WorkspaceAttemptRepo;
+        const captureSourced = yield* runIsCaptureSourced({
+          runId,
+          sourceKind: instance.sourceKind,
+          readSnapshotPayload: attempts.getAttemptSnapshotByRunId(runId),
+        });
+        if (!captureSourced) {
+          return;
+        }
         const inspection = yield* Effect.tryPromise(() => inspect.call(adapter, { resourceId }));
         const record = yield* ledger.read(runId);
         const evidence = recordedDeletionEvidence(record, {
