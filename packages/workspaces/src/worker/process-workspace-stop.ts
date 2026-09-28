@@ -59,6 +59,8 @@ export interface WorkspaceStopCaptureDrain {
   readonly budgetMs: number;
   /** Who is stopping, for the log lines ("expiry reaper", "lifecycle stop"). */
   readonly label: string;
+  /** Its executor already answered a FINAL: the drain polls its status first (review 7 #6). */
+  readonly opensWithStatus?: boolean;
 }
 
 /**
@@ -281,7 +283,9 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             }),
           catch: toWorkspaceStopProcessingError,
         }).pipe(keepingClaim(input.claim)),
-      });
+        // Once re-checked, the removal runs to its end: a caller's bound (the deadline sweep's)
+        // never interrupts a runtime call half-made or its hold's release or completion.
+      }).pipe(Effect.uninterruptible);
       if (!removal.removed) {
         return "voided" as const;
       }
@@ -541,6 +545,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           budgetMs: drain.budgetMs,
           label: drain.label,
           runtimeState: runtimeState(adapter, resourceId),
+          ...(drain.opensWithStatus === true ? { opensWithStatus: true } : {}),
         });
         if (!drainPermitsStop(outcome)) {
           if (outcome.kind === "silent") {

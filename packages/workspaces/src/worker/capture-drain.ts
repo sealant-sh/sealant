@@ -1606,6 +1606,12 @@ export interface DrainCaptureInput {
    * runtime) and releases it itself. Absent: the drain claims the run and releases it on return.
    */
   readonly claim?: CaptureDrainClaim;
+  /**
+   * The executor already answered a FINAL (an earlier call of this drain): this call polls its
+   * status first instead of asking for another FINAL (review 7 #6). A FINAL is still asked when
+   * the queue empties without the daemon confirming.
+   */
+  readonly opensWithStatus?: boolean;
 }
 
 const observationOf = (outcome: CaptureDrainOutcome): CaptureDrainObservation | undefined => {
@@ -1702,7 +1708,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
 
   return yield* Effect.gen(function* () {
     const startedAt = yield* Clock.currentTimeMillis;
-    let command: "flush" | "status" = "flush";
+    let command: "flush" | "status" = input.opensWithStatus === true ? "status" : "flush";
     // One FINAL flush opens every call; one more is allowed when the queue empties without the
     // daemon confirming (a daemon that finished shipping after an incomplete flush snapshots
     // again). Past that, the next sweep asks again.

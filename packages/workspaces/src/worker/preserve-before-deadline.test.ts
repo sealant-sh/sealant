@@ -677,3 +677,178 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
     });
   });
 });
+
+/** The socket a daemon target names: one executor per socket in these sweeps. */
+const socketOf = (target: unknown): string =>
+  typeof target === "object" && target !== null && "socketPath" in target
+    ? String(target.socketPath)
+    : "unknown";
+
+// Review 7 #6: each drive held one of four permits for its whole drain (a 60 s budget), and a
+// runtime's first FINAL waited for a permit with no bound: with 68 runtimes due together at the
+// default 15 min lead, eight got their first FINAL at or after their platform cap. Every due
+// FINAL is now sent first under its own permits, polling is bounded separately and ends with the
+// sweep, and the FINAL round trips queued ahead of a runtime move its start earlier.
+describe("every due runtime gets its first FINAL before its cap (review 7 #6)", () => {
+  const CAP_MS = 15 * MIN;
+  const vm = (index: number, deadlineInMs: number): WorkspaceRuntimeInstance => ({
+    ...instance(deadlineInMs),
+    runId: `run_cap_${String(index)}`,
+    resourceId: `container_cap_${String(index)}`,
+    endpoint: `unix:///tmp/review7-cap-${String(index)}.sock`,
+  });
+
+  const sweepAtCap = async (input: {
+    readonly rows: readonly WorkspaceRuntimeInstance[];
+    /** How long each FINAL round trip takes before it answers (virtual). */
+    readonly flushTakesMs: number;
+    readonly initiateConcurrency?: number;
+    readonly schedules?: Array<{ runId: string; startsAtMs: number | undefined }>;
+  }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    // Every FINAL each executor was sent, at the virtual instant it was sent.
+    const finals = new Map<string, number[]>();
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        listPreservationCandidates: () => Effect.succeed(input.rows),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(input.rows.find((row) => row.runId === runId)),
+        markStopRequested: () => Effect.void,
+        markStopped: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceAttemptRepoService),
+      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      Layer.succeed(WorkspaceCaptureDrainRepo, {
+        getByRunId: () => Effect.succeed(undefined),
+        recordSchedule: (request: { runId: string; schedule: WorkspaceCaptureDrainSchedule }) =>
+          Effect.sync(() => {
+            input.schedules?.push({
+              runId: request.runId,
+              startsAtMs: request.schedule.preservationStartsAt?.getTime(),
+            });
+            return {} as WorkspaceCaptureDrain;
+          }),
+        recordStatus: () => Effect.succeed(true),
+      } as unknown as WorkspaceCaptureDrainRepoService),
+      Layer.succeed(SealantRuntime, {
+        connect: (target: unknown) =>
+          Effect.succeed({
+            // A queue that never empties: every drain stays pending, as in the reproduction.
+            captureStatus: () => Effect.succeed(captureStatus({ pending: 1, complete: false })),
+            captureFlush: () =>
+              Effect.gen(function* () {
+                const socket = socketOf(target);
+                finals.set(socket, [...(finals.get(socket) ?? []), Date.now() - NOW]);
+                yield* Effect.sleep(input.flushTakesMs);
+                return captureStatus({ pending: 1, complete: false });
+              }),
+          } as unknown as SealantSession),
+      } as unknown as SealantRuntimeService),
+    );
+    const adapter: RuntimeAdapter = {
+      id: "docker",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      inspect: async () => ({ state: "running" }),
+      stop: async () => {
+        throw new Error("a pending queue is never stopped");
+      },
+    };
+    try {
+      const result: { doneAtMs: number | undefined; driven: number } = {
+        doneAtMs: undefined,
+        driven: -1,
+      };
+      void Effect.runPromise(
+        preserveBeforeDeadlineEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: {
+            ledger: inMemoryCaptureDrainLedger(),
+            // The worker's defaults: 1 s polls, 60 s round trips, the default budget.
+            settings: {
+              pollIntervalMs: 1_000,
+              stallWindowMs: 60 * MIN,
+              unreachableWindowMs: 60 * MIN,
+              requestTimeoutMs: 60_000,
+            },
+          },
+          deadline: { leadMs: 15 * MIN, watchWindowMs: 60 * MIN },
+          ...(input.initiateConcurrency === undefined
+            ? {}
+            : { initiateConcurrency: input.initiateConcurrency }),
+          now: () => Date.now(),
+        }).pipe(Effect.provide(layer)),
+      ).then((count) => {
+        result.driven = count;
+        result.doneAtMs = Date.now() - NOW;
+        return count;
+      });
+      // Virtual time in 1 s steps until the sweep returns (or 20 min: past every cap here).
+      for (let elapsed = 0; elapsed < 20 * MIN; elapsed += 1_000) {
+        if (result.doneAtMs !== undefined) {
+          break;
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      return { finals, doneAtMs: result.doneAtMs, driven: result.driven };
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("sends all 68 first FINALs at once when 68 runtimes reach their start together", async () => {
+    const rows = Array.from({ length: 68 }, (_, index) => vm(index, CAP_MS));
+    const { finals, doneAtMs, driven } = await sweepAtCap({ rows, flushTakesMs: 0 });
+    const firsts = [...finals.values()].map((sent) => sent[0] ?? Number.POSITIVE_INFINITY);
+    expect(firsts).toHaveLength(68);
+    expect(Math.max(...firsts)).toBeLessThan(CAP_MS);
+    expect(firsts.filter((at) => at >= CAP_MS)).toHaveLength(0);
+    expect(Math.max(...firsts)).toBeLessThan(1_000);
+    // A started drain is polled, never sent a second FINAL while its queue moves.
+    expect([...finals.values()].every((sent) => sent.length === 1)).toBe(true);
+    // The sweep ends with its budget (plus the round trip a poll may be in): the next tick is
+    // never held back for minutes.
+    expect(driven).toBe(68);
+    expect(doneAtMs).toBeDefined();
+    expect(doneAtMs ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(2 * MIN + 1_000);
+  }, 60_000);
+
+  it("sends every first FINAL before its cap when each FINAL round trip takes 55 s", async () => {
+    const rows = Array.from({ length: 68 }, (_, index) => vm(index, CAP_MS));
+    const { finals, doneAtMs } = await sweepAtCap({ rows, flushTakesMs: 55_000 });
+    const firsts = [...finals.values()].map((sent) => sent[0] ?? Number.POSITIVE_INFINITY);
+    expect(firsts).toHaveLength(68);
+    // 32 at a time: three waves of 55 s.
+    expect(Math.max(...firsts)).toBeLessThanOrEqual(2 * 55_000 + 1_000);
+    expect(doneAtMs ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(5 * MIN);
+  }, 60_000);
+
+  it("starts a runtime earlier by the FINAL round trips queued ahead of it", async () => {
+    // Twelve runtimes whose lead alone starts them in 90 s; four FINAL permits and 60 s round
+    // trips put two waves (120 s) ahead of the last four, which are due now.
+    const rows = Array.from({ length: 12 }, (_, index) => vm(index, CAP_MS + 90_000));
+    const schedules: Array<{ runId: string; startsAtMs: number | undefined }> = [];
+    const { finals } = await sweepAtCap({
+      rows,
+      flushTakesMs: 0,
+      initiateConcurrency: 4,
+      schedules,
+    });
+    expect(finals.size).toBe(4);
+    expect(
+      [...finals.values()].every((sent) => (sent[0] ?? Number.POSITIVE_INFINITY) < 1_000),
+    ).toBe(true);
+    const starts = new Map(schedules.map((entry) => [entry.runId, entry.startsAtMs]));
+    expect(starts.get("run_cap_0")).toBe(NOW + 90_000);
+    expect(starts.get("run_cap_4")).toBe(NOW + 30_000);
+    expect(starts.get("run_cap_11")).toBe(NOW - 30_000);
+  }, 60_000);
+});
