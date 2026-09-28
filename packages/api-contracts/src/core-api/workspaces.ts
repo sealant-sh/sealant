@@ -35,6 +35,8 @@ export const workspaceRuntimeSchema = Schema.Struct({
   deadline: Schema.optional(Schema.NullOr(Schema.String)),
   /** The run (launch attempt) this executor belongs to. Absent from older control planes. */
   runId: Schema.optional(NonEmptyString),
+  /** The launch identity the create named for this executor (`launchId`), when it named one. */
+  launchId: Schema.optional(NonEmptyString),
 });
 export type WorkspaceRuntime = typeof workspaceRuntimeSchema.Type;
 
@@ -112,6 +114,13 @@ export const createWorkspaceRequestSchema = Schema.Struct({
    * means the same; this field wins when both are sent.
    */
   idempotencyKey: Schema.optional(NonEmptyString),
+  /**
+   * The caller's immutable identity for the ONE physical executor this create launches, minted
+   * before create (a caller that makes the create idempotent can reuse its idempotency key). It is
+   * recorded on the launch attempt and reported with the executor (`runtime.launchId`); a stop's
+   * completion attestation that names a launch must name this one.
+   */
+  launchId: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceRequest = typeof createWorkspaceRequestSchema.Type;
 
@@ -376,6 +385,12 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
       epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
       /** The executor the seal names: run id, or runtime `resourceId` / `reference`. */
       executorId: NonEmptyString,
+      /**
+       * The launch identity the seal names (`final_seal.executor`). Required when the create named
+       * a `launchId`, and then it must be that one; an attestation without it, or naming another
+       * launch, is ignored (a seal never transfers between executors).
+       */
+      launchId: Schema.optional(NonEmptyString),
     }),
   ),
 });
@@ -467,8 +482,42 @@ export const createWorkspaceResponseSchema = Schema.Struct({
   runtime: Schema.optional(workspaceRuntimeSchema),
   /** `true` when an earlier create with the same `idempotencyKey` made this workspace. */
   replayed: Schema.optional(Schema.Boolean),
+  /** The launch identity the create named (`launchId`), recorded on its attempt. */
+  launchId: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceResponse = typeof createWorkspaceResponseSchema.Type;
+
+/**
+ * What became of an idempotent create, by its key (owner-scoped):
+ *
+ *  - `pending`: a create with the key started and has not committed — it may still be in flight,
+ *    or it died before it committed. A repeat of the create finishes it; `cancel` makes sure it
+ *    never does. `workspaceId` names a half-made workspace a create from before this record
+ *    left, which a repeat of the create completes.
+ *  - `found`: the create committed; `workspaceId` (and `runId`, `launchId`) name what it made.
+ *  - `cancelled`: the key was cancelled; no create with it ever commits.
+ *  - `none`: no create with the key has reached this control plane (yet). Point-in-time only: a
+ *    delayed request can still arrive — `cancel` is the answer that stays true.
+ */
+export const workspaceCreateStateSchema = Schema.Struct({
+  idempotencyKey: NonEmptyString,
+  state: Schema.Literals(["pending", "found", "cancelled", "none"]),
+  workspaceId: Schema.optional(NonEmptyString),
+  runId: Schema.optional(NonEmptyString),
+  launchId: Schema.optional(NonEmptyString),
+});
+export type WorkspaceCreateState = typeof workspaceCreateStateSchema.Type;
+
+export const getWorkspaceCreateQuerySchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type GetWorkspaceCreateQuery = typeof getWorkspaceCreateQuerySchema.Type;
+
+/** Owner-scoped: cancel the create with this key, so it never commits. */
+export const cancelWorkspaceCreateRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type CancelWorkspaceCreateRequest = typeof cancelWorkspaceCreateRequestSchema.Type;
 
 export const workspaceSummarySchema = Schema.Struct({
   workspaceId: NonEmptyString,
@@ -564,6 +613,7 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       epoch: Schema.Int,
       captureN: Schema.Int,
       attestedAt: Schema.String,
+      launchId: Schema.optional(NonEmptyString),
     }),
   ),
 });
@@ -763,6 +813,8 @@ export class WorkspaceConflictError extends Schema.TaggedErrorClass<WorkspaceCon
   "WorkspaceConflictError",
   {
     message: Schema.String,
+    /** A stable reason, where one applies (`create-cancelled`: the create's key was cancelled). */
+    code: Schema.optional(NonEmptyString),
   },
   { httpApiStatus: 409 },
 ) {}
@@ -792,6 +844,7 @@ export class WorkspaceInternalServerError extends Schema.TaggedErrorClass<Worksp
 ) {}
 
 const workspaceIdParams = Schema.Struct({ workspaceId: NonEmptyString });
+const idempotencyKeyParams = Schema.Struct({ idempotencyKey: NonEmptyString });
 
 export const WorkspacesGroup = HttpApiGroup.make("workspaces")
   .add(
@@ -812,6 +865,25 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         WorkspaceServiceUnavailableError,
         WorkspaceInternalServerError,
       ],
+    }),
+  )
+  .add(
+    // What became of an idempotent create, by its key (owner-scoped).
+    HttpApiEndpoint.get("getWorkspaceCreate", "/idempotency-keys/:idempotencyKey", {
+      params: idempotencyKeyParams,
+      query: getWorkspaceCreateQuerySchema,
+      success: workspaceCreateStateSchema,
+      error: [WorkspaceBadRequestError, WorkspaceInternalServerError],
+    }),
+  )
+  .add(
+    // Cancel an idempotent create by its key: a create with it never commits afterwards (a
+    // delayed original request included). `found` when it had already committed.
+    HttpApiEndpoint.post("cancelWorkspaceCreate", "/idempotency-keys/:idempotencyKey/cancel", {
+      params: idempotencyKeyParams,
+      payload: cancelWorkspaceCreateRequestSchema,
+      success: workspaceCreateStateSchema,
+      error: [WorkspaceBadRequestError, WorkspaceInternalServerError],
     }),
   )
   .add(

@@ -5,10 +5,13 @@
  * (the kept one). A plain stop of such a workspace stays a no-op.
  */
 import {
+  WorkspaceAttemptRepo,
   WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type Workspace,
+  type WorkspaceAttempt,
+  type WorkspaceAttemptRepoService,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainRepoService,
   type WorkspaceRepoService,
@@ -25,10 +28,20 @@ const now = new Date("2026-09-27T12:00:00.000Z");
 
 const harness = (
   status: Workspace["status"],
-  options: { readonly observedEpoch?: number; readonly retained?: boolean } = {},
+  options: {
+    readonly observedEpoch?: number;
+    readonly retained?: boolean;
+    /** The launch identity the create named (recorded on the attempt). */
+    readonly launchId?: string;
+  } = {},
 ) => {
   const discards: Array<{ runId: string; requestedBy: string }> = [];
-  const attestations: Array<{ runId: string; executorId: string; epoch: number }> = [];
+  const attestations: Array<{
+    runId: string;
+    executorId: string;
+    epoch: number;
+    launchId?: string;
+  }> = [];
   const recoveries: string[] = [];
   const stops: string[] = [];
   const statuses: string[] = [];
@@ -39,6 +52,10 @@ const harness = (
     latestRunId: "run_1",
   } as Workspace;
   const layer = Layer.mergeAll(
+    Layer.succeed(WorkspaceAttemptRepo, {
+      getAttemptById: (id: string) =>
+        Effect.succeed({ id, launchId: options.launchId ?? null } as WorkspaceAttempt),
+    } as unknown as WorkspaceAttemptRepoService),
     Layer.succeed(WorkspaceRepo, {
       getWorkspaceById: () => Effect.succeed(workspace),
       setWorkspaceStatus: (input: { status: string }) => {
@@ -92,7 +109,7 @@ const harness = (
     payload: {
       ownerUserId: string;
       discardUnsaved?: boolean;
-      completion?: { captureN: number; epoch: number; executorId: string };
+      completion?: { captureN: number; epoch: number; executorId: string; launchId?: string };
     },
     logger: Layer.Layer<never> = Layer.empty,
   ) =>
@@ -275,5 +292,55 @@ describe("recoverWorkspace", () => {
       },
       completion: { executorId: "container-1", epoch: 3, captureN: 41 },
     });
+  });
+});
+
+describe("stopWorkspace · completion names the launch (decision 5, review 3)", () => {
+  const completion = { captureN: 41, epoch: 3, executorId: "container-1" };
+
+  it("records an attestation that names this executor's launch", async () => {
+    const h = harness("ready", { launchId: "launch_a" });
+    const answer = await h.stop({
+      ownerUserId: "user_owner",
+      completion: { ...completion, launchId: "launch_a" },
+    });
+    expect(answer.completion).toEqual({ outcome: "accepted" });
+    expect(h.attestations).toEqual([
+      expect.objectContaining({ runId: "run_1", executorId: "container-1", launchId: "launch_a" }),
+    ]);
+  });
+
+  it("ignores a seal of another launch, even on the same resource", async () => {
+    // A seal never transfers to another physical executor.
+    const h = harness("ready", { launchId: "launch_b" });
+    const answer = await h.stop({
+      ownerUserId: "user_owner",
+      completion: { ...completion, launchId: "launch_a" },
+    });
+    expect(answer.completion).toMatchObject({
+      outcome: "ignored",
+      detail: expect.stringContaining("not this executor's launch launch_b"),
+    });
+    expect(h.attestations).toEqual([]);
+  });
+
+  it("ignores an attestation that names no launch when the create named one", async () => {
+    const h = harness("ready", { launchId: "launch_b" });
+    const answer = await h.stop({ ownerUserId: "user_owner", completion });
+    expect(answer.completion).toMatchObject({
+      outcome: "ignored",
+      detail: expect.stringContaining("names no launch"),
+    });
+    expect(h.attestations).toEqual([]);
+  });
+
+  it("ignores a launch it cannot match: the create named none", async () => {
+    const h = harness("ready");
+    const answer = await h.stop({
+      ownerUserId: "user_owner",
+      completion: { ...completion, launchId: "launch_a" },
+    });
+    expect(answer.completion).toMatchObject({ outcome: "ignored" });
+    expect(h.attestations).toEqual([]);
   });
 });

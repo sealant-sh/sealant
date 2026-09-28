@@ -11,6 +11,7 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
+import { inMemoryCaptureDrainLedger, type CaptureDrainLedger } from "./capture-drain.js";
 import { reapOrphanedKubernetesResourcesEffect } from "./reap-orphaned-kubernetes-resources.js";
 
 const row = (
@@ -24,6 +25,7 @@ const harness = (input: {
   /** Source kind in each run's attempt snapshot; absent = no snapshot. */
   readonly snapshots?: ReadonlyMap<string, string>;
   readonly upsertFails?: boolean;
+  readonly ledger?: CaptureDrainLedger;
 }) => {
   const stop = vi.fn(async (request: { resourceId: string }) => ({
     adapter: "k8s" as const,
@@ -65,7 +67,10 @@ const harness = (input: {
   } as unknown as WorkspaceAttemptRepoService;
   const run = () =>
     Effect.runPromise(
-      reapOrphanedKubernetesResourcesEffect({ adapter }).pipe(
+      reapOrphanedKubernetesResourcesEffect({
+        adapter,
+        ...(input.ledger === undefined ? {} : { ledger: input.ledger }),
+      }).pipe(
         Effect.provide(
           Layer.mergeAll(
             Layer.succeed(WorkspaceRuntimeInstanceRepo, instances),
@@ -148,5 +153,35 @@ describe("reapOrphanedKubernetesResources", () => {
     });
     expect(await h.run()).toBe(0);
     expect(h.stopped()).toEqual([]);
+  });
+
+  it("ends the drain record of a capture Pod it removes with evidence (review 3 #23)", async () => {
+    // The retention and the sealed recovery token end with the executor, whichever path removed it.
+    const ledger = inMemoryCaptureDrainLedger();
+    Effect.runSync(ledger.markRetained("discarded", "executor exited"));
+    const current = ledger.store.rows.get("discarded");
+    if (current === undefined) throw new Error("no ledger row");
+    // The owner discarded its unsaved captures (audited): the policy lets the Pod go.
+    current.entry = { ...current.entry, discardRequested: { by: "user_owner", atMs: 1 } };
+    const h = harness({
+      rows: new Map([
+        [
+          "discarded",
+          row("discarded", {
+            status: "failed",
+            errorCode: "runtime-exited",
+            sourceKind: "capture",
+          }),
+        ],
+      ]),
+      pods: ["discarded"],
+      ledger,
+    });
+    expect(await h.run()).toBe(1);
+    expect(h.stopped()).toEqual(["ws-discarded"]);
+    expect(ledger.store.rows.get("discarded")).toMatchObject({
+      observation: { state: "stopped" },
+      entry: expect.not.objectContaining({ retained: expect.anything() }),
+    });
   });
 });

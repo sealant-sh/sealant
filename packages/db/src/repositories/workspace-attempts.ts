@@ -24,6 +24,8 @@ export interface CreateQueuedWorkspaceAttemptInput {
   readonly requestedByUserId?: string;
   readonly retryOfRunId?: string;
   readonly queuedAt?: Date;
+  /** The caller's immutable identity for the executor this attempt launches (see the column). */
+  readonly launchId?: string;
 }
 
 export interface SetWorkspaceAttemptSnapshotInput {
@@ -235,6 +237,7 @@ export const WorkspaceAttemptRepoLive = Layer.effect(
                   : { requestedByUserId: input.requestedByUserId }),
                 ...(input.retryOfRunId === undefined ? {} : { retryOfRunId: input.retryOfRunId }),
                 ...(input.queuedAt === undefined ? {} : { queuedAt: input.queuedAt }),
+                ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
               } satisfies NewWorkspaceAttempt)
               .returning();
 

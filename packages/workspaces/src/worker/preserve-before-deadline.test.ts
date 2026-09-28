@@ -50,6 +50,10 @@ const instance = (deadlineInMs: number): WorkspaceRuntimeInstance => ({
   launchedAt: new Date(NOW - 60 * MIN),
   finishedAt: null,
   runtimeDeadlineAt: new Date(NOW + deadlineInMs),
+  launchOwner: null,
+  launchLeaseExpiresAt: null,
+  daemonImage: null,
+  daemonRecoveryBoot: null,
   sourceKind: "capture",
   createdAt: new Date(NOW - 60 * MIN),
   updatedAt: new Date(NOW - 60 * MIN),
@@ -89,7 +93,7 @@ const sweep = async (input: {
   const workspace = { id: "ws_vm", latestRunId: "run_vm" } as Workspace;
   const layer = Layer.mergeAll(
     Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-      listRunningInstances: () => Effect.succeed([row]),
+      listPreservationCandidates: () => Effect.succeed([row]),
       getRuntimeInstanceByRunId: () => Effect.succeed(row),
       markStopped,
       markStopRequested: () => Effect.void,
@@ -303,7 +307,7 @@ describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () 
     const daemon = fakeCaptureDaemon([captureStatus({ pending: 1, complete: false })]);
     const layer = Layer.mergeAll(
       Layer.succeed(WorkspaceRuntimeInstanceRepo, {
-        listRunningInstances: () => Effect.succeed(rows),
+        listPreservationCandidates: () => Effect.succeed(rows),
         getRuntimeInstanceByRunId: (runId: string) =>
           Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
         markStopRequested: () => Effect.void,
@@ -369,5 +373,110 @@ describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () 
     }
     // Earliest deadline first: run5's stop path opens each sweep.
     expect(inspected[0]).toBe("container5");
+  });
+});
+
+describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 #6, #7)", () => {
+  const sweepRows = async (rows: readonly WorkspaceRuntimeInstance[], retained: boolean) => {
+    const requestRecovery = vi.fn((runId: string) =>
+      Effect.succeed(
+        retained ? ({ runId, retainedAt: new Date(NOW) } as WorkspaceCaptureDrain) : undefined,
+      ),
+    );
+    const stop = vi.fn(async () => ({
+      adapter: "docker" as const,
+      resourceId: "container-vm",
+      outcome: "stopped" as const,
+    }));
+    const adapter: RuntimeAdapter = {
+      id: "docker",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      stop,
+      inspect: async () => ({ state: "running" }),
+    };
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        listPreservationCandidates: () => Effect.succeed(rows),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
+        markStopRequested: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceAttemptRepoService),
+      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      Layer.succeed(WorkspaceCaptureDrainRepo, {
+        getByRunId: () =>
+          Effect.succeed(
+            retained ? ({ retainedAt: new Date(NOW - MIN) } as WorkspaceCaptureDrain) : undefined,
+          ),
+        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
+        requestRecovery,
+      } as unknown as WorkspaceCaptureDrainRepoService),
+      fakeCaptureDaemon(["unreachable"]).layer,
+    );
+    const driven = await Effect.runPromise(
+      preserveBeforeDeadlineEffect({
+        runtimeAdapters: [adapter],
+        captureDrain: {
+          ledger: inMemoryCaptureDrainLedger(),
+          settings: {
+            pollIntervalMs: 1,
+            stallWindowMs: 30,
+            unreachableWindowMs: 30,
+            requestTimeoutMs: 1_000,
+          },
+        },
+        deadline: { leadMs: 15 * MIN, watchWindowMs: 60 * MIN, estimateSafetyFactor: 1.5 },
+        now: () => NOW,
+      }).pipe(Effect.provide(layer)),
+    );
+    return { driven, requestRecovery, stop };
+  };
+
+  it("makes a retained executor's recovery due before its deadline (its daemon exited on a live VM)", async () => {
+    // Review 3 #7: the exit reconciler marked the exit-75 VM `failed`, which took it out of the
+    // pre-deadline sweep; the platform cap then destroyed its disk with the staging on it.
+    const exited: WorkspaceRuntimeInstance = {
+      ...instance(5 * MIN),
+      status: "failed",
+      errorCode: "runtime-exited",
+      finishedAt: new Date(NOW - MIN),
+    };
+    const { driven, requestRecovery, stop } = await sweepRows([exited], true);
+    expect(driven).toBe(1);
+    expect(requestRecovery).toHaveBeenCalledWith("run_vm");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("leaves an ended executor that nothing retains alone", async () => {
+    const exited: WorkspaceRuntimeInstance = {
+      ...instance(5 * MIN),
+      status: "failed",
+      errorCode: "runtime-exited",
+      finishedAt: new Date(NOW - MIN),
+    };
+    const { driven, requestRecovery } = await sweepRows([exited], false);
+    expect(driven).toBe(0);
+    expect(requestRecovery).not.toHaveBeenCalled();
+  });
+
+  it("never stops a launch whose worker still owns it, however close its deadline", async () => {
+    const launching: WorkspaceRuntimeInstance = {
+      ...instance(5 * MIN),
+      status: "pending",
+      launchOwner: "worker-1:job:uuid",
+      launchLeaseExpiresAt: new Date(NOW + MIN),
+    };
+    const { driven, requestRecovery, stop } = await sweepRows([launching], false);
+    expect(driven).toBe(0);
+    expect(requestRecovery).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
   });
 });

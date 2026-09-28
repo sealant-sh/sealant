@@ -18,6 +18,8 @@ import {
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
+  WorkspaceCreateReservationRepo,
+  DatabaseTransaction,
   type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
@@ -150,6 +152,7 @@ const makeLayer = (store: Store) => {
         requestedByUserId: input.requestedByUserId ?? null,
         retryOfRunId: input.retryOfRunId ?? null,
         cancelReason: null,
+        launchId: input.launchId ?? null,
         queuedAt: input.queuedAt ?? now,
         startedAt: null,
         finishedAt: null,
@@ -262,6 +265,9 @@ const makeLayer = (store: Store) => {
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
+    // No idempotency key in these creates: no reservation; the transaction passes through.
+    Layer.mock(WorkspaceCreateReservationRepo, {}),
+    Layer.succeed(DatabaseTransaction, { run: (effect) => effect }),
     Layer.succeed(PackageStandardizerService, packageStandardizer),
     Layer.succeed(CredentialCipher, {
       encrypt: () => Effect.die("unused"),

@@ -288,6 +288,14 @@ export interface RuntimeAdapterExitWatch {
 export interface RuntimeAdapterRecoverInput {
   readonly resourceId: string;
   readonly reference?: string;
+  /** The run the executor was launched for (a runtime that checks it, MicroVM). */
+  readonly runId?: string;
+  /**
+   * The recovery boot's secret env (the capture token the executor was launched with), for a
+   * runtime that hands it to the restarted daemon itself (MicroVM: pushed to its agent). Docker
+   * reads it from the host directory the worker stages it into again.
+   */
+  readonly secretEnv?: Readonly<Record<string, string>>;
 }
 
 /**

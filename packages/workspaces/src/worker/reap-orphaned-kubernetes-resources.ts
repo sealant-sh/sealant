@@ -31,11 +31,13 @@ import { Effect, Layer } from "effect";
 
 import {
   decideExecutorDeletion,
+  type ExecutorDeletionBasis,
   type ExecutorRuntimeState,
 } from "../runtime/executor-preservation.js";
 import type { KubernetesRuntimeAdapter } from "../runtime/kubernetes/adapter.js";
 import {
   blueprintSourceKind,
+  describeDeletionBasis,
   recordedDeletionEvidence,
   runIsCaptureSourced,
   type CaptureDrainLedger,
@@ -72,6 +74,8 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
         break;
       }
       const instance = known.get(runId);
+      // A capture Pod the policy let go ends its drain record once it is removed (below).
+      let captureRemoval: ExecutorDeletionBasis | undefined;
       if (instance !== undefined) {
         const wanted = instance.status !== "stopped" && instance.status !== "failed";
         const retained =
@@ -79,9 +83,11 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
         if (wanted || retained) {
           continue;
         }
-        if (!(yield* podMayGo(options, instance, resourceId))) {
+        const mayGo = yield* podMayGo(options, instance, resourceId);
+        if (mayGo === false) {
           continue;
         }
+        captureRemoval = mayGo === "not-capture" ? undefined : mayGo;
       } else {
         // No row: the launch never recorded this Pod. Stop it only when its snapshot proves it
         // holds no captures; otherwise record it retained, so it is drained before any stop.
@@ -101,6 +107,13 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
       );
       if (ok) {
         reaped += 1;
+        if (captureRemoval !== undefined && options.ledger !== undefined) {
+          // Its retention ends and the sealed capture token kept for its recovery is cleared.
+          yield* options.ledger.observe(runId, {
+            state: "stopped",
+            detail: `the ended Pod was removed: ${describeDeletionBasis(captureRemoval)}`,
+          });
+        }
       }
     }
     return reaped;
@@ -110,7 +123,8 @@ export const reapOrphanedKubernetesResourcesEffect = Effect.fn("reapOrphanedKube
 /**
  * The one preservation policy, for a Pod whose row says it should not run: its source (the row,
  * else the attempt snapshot; unreadable = capture), what the Pod is now, and the drain record.
- * A retained Pod is recorded retained (so recovery reports it) and kept. Never fails: a failed
+ * A retained Pod is recorded retained (so recovery reports it) and kept (`false`). A Pod that may
+ * go answers why: `not-capture`, or the policy's basis for a capture Pod. Never fails: a failed
  * read keeps the Pod.
  */
 const podMayGo = (
@@ -130,7 +144,7 @@ const podMayGo = (
       readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
     });
     if (!captureSourced) {
-      return true;
+      return "not-capture" as const;
     }
     const inspect = options.adapter.inspect;
     const runtime: ExecutorRuntimeState =
@@ -154,7 +168,7 @@ const podMayGo = (
       }),
     });
     if (decision.delete) {
-      return true;
+      return decision.basis;
     }
     if (!(record.readable && record.entry?.retained !== undefined)) {
       yield* Effect.logError(
@@ -165,13 +179,13 @@ const podMayGo = (
           Effect.void
       );
     }
-    return false;
+    return false as const;
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(
         `Kubernetes reconciler: deciding whether run ${instance.runId}'s Pod may go failed; it is kept this sweep.`,
         cause,
-      ).pipe(Effect.as(false)),
+      ).pipe(Effect.as(false as const)),
     ),
   );
 

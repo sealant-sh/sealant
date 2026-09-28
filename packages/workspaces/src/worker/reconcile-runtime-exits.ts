@@ -51,7 +51,10 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
-import { decideExecutorDeletion } from "../runtime/executor-preservation.js";
+import {
+  decideExecutorDeletion,
+  type ExecutorDeletionBasis,
+} from "../runtime/executor-preservation.js";
 import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
@@ -66,8 +69,10 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
+import { adoptStrandedLaunchesEffect } from "./adopt-stranded-launches.js";
 import {
   captureDaemonAnswers,
+  describeDeletionBasis,
   drainCaptureBeforeStop,
   drainPermitsStop,
   recordedDeletionEvidence,
@@ -142,6 +147,18 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
   const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
 
+  // Launches stranded by a lost worker after their executor started are observed here too: they
+  // are adopted as retained launches, and one that already ended is recorded retained.
+  yield* adoptStrandedLaunchesEffect({
+    runtimeAdapters: options.runtimeAdapters,
+    ...(options.resourceIds === undefined ? {} : { resourceIds: options.resourceIds }),
+    ...(options.captureDrain === undefined ? {} : { ledger: options.captureDrain.ledger }),
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Runtime exit reconciler: the stranded-launch sweep failed.", cause),
+    ),
+  );
+
   const wanted = options.resourceIds === undefined ? undefined : new Set(options.resourceIds);
   const live = (yield* runtimeInstances.listRunningInstances()).filter(
     (instance) =>
@@ -155,18 +172,36 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 
   // The remains: an exited container keeps its filesystem and any sidecar; a dead Pod keeps its
   // Service and Secrets. The adapter stop is idempotent (`not-found` = already gone).
+  // A capture executor removed here ends its drain record the way every other removal does
+  // (`stopped`, with why it could go): its retention ends, and the sealed capture token kept for
+  // its recovery is cleared — nothing can recover an executor that is gone.
   const removeRemains = (
     adapter: RuntimeAdapter,
     instance: WorkspaceRuntimeInstance,
     resourceId: string,
+    removal: RemovalBasis,
   ) =>
     Effect.gen(function* () {
-      yield* Effect.tryPromise(() =>
+      const removed = yield* Effect.tryPromise(() =>
         adapter.stop({
           resourceId,
           ...(instance.reference === null ? {} : { reference: instance.reference }),
         }),
-      ).pipe(swallowingFailure("removing the exited runtime", instance.runId));
+      ).pipe(
+        Effect.as(true),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Runtime exit reconciler: removing the exited runtime for run ${instance.runId} failed.`,
+            cause,
+          ).pipe(Effect.as(false)),
+        ),
+      );
+      if (removed && removal.captureSourced && options.captureDrain !== undefined) {
+        yield* options.captureDrain.ledger.observe(instance.runId, {
+          state: "stopped",
+          detail: `the ended runtime was removed: ${describeDeletionBasis(removal.basis)}`,
+        });
+      }
       yield* Effect.tryPromise(() => stager.removeAll(instance.runId)).pipe(
         swallowingFailure("removing staged launch material", instance.runId),
       );
@@ -258,7 +293,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
             );
           } else {
             // The remains, as below; the stop path may be removing them already (idempotent).
-            yield* removeRemains(adapter, instance, resourceId);
+            yield* removeRemains(adapter, instance, resourceId, decided.removal);
           }
         }
         continue;
@@ -301,7 +336,7 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
 
-      yield* removeRemains(adapter, instance, resourceId);
+      yield* removeRemains(adapter, instance, resourceId, decided.removal);
     }
   }
 
@@ -324,7 +359,8 @@ const drainBeforeRecording = (
   adapter: RuntimeAdapter,
   inspection: RuntimeEnd,
 ): Effect.Effect<
-  | { readonly verdict: "record" | "leave" }
+  | { readonly verdict: "record"; readonly removal: RemovalBasis }
+  | { readonly verdict: "leave" }
   | { readonly verdict: "record-keep-remains"; readonly reason: string },
   never,
   WorkspaceAttemptRepo | SealantRuntime
@@ -332,12 +368,15 @@ const drainBeforeRecording = (
   Effect.gen(function* () {
     const drain = options.captureDrain;
     if (drain === undefined) {
-      return { verdict: "record" as const };
+      return { verdict: "record" as const, removal: NOT_CAPTURE };
     }
     const record = yield* drain.ledger.read(instance.runId);
     if (record.readable && record.entry?.discardRequested !== undefined) {
       // The owner discarded this run's unsaved captures: nothing is drained or kept for them.
-      return { verdict: "record" as const };
+      return {
+        verdict: "record" as const,
+        removal: { captureSourced: true, basis: "discarded" as const },
+      };
     }
     const attempts = yield* WorkspaceAttemptRepo;
     const captureSourced = yield* runIsCaptureSourced({
@@ -356,7 +395,7 @@ const drainBeforeRecording = (
         }),
       });
       return decision.delete
-        ? { verdict: "record" as const }
+        ? { verdict: "record" as const, removal: { captureSourced, basis: decision.basis } }
         : { verdict: "record-keep-remains" as const, reason: decision.reason };
     });
     if (!captureSourced) {
@@ -379,7 +418,13 @@ const drainBeforeRecording = (
       runtimeState: runtimeReportsState(adapter, instance.resourceId ?? ""),
     });
     return drainPermitsStop(outcome)
-      ? { verdict: "record" as const }
+      ? {
+          verdict: "record" as const,
+          removal: {
+            captureSourced: true,
+            basis: outcome.kind === "gone" ? ("missing" as const) : ("observed-complete" as const),
+          },
+        }
       : { verdict: "leave" as const };
   }).pipe(
     Effect.catchCause((cause) =>
@@ -389,6 +434,14 @@ const drainBeforeRecording = (
       ).pipe(Effect.as({ verdict: "leave" as const })),
     ),
   );
+
+/** Why an ended executor's remains may go, and whether it was a capture executor. */
+interface RemovalBasis {
+  readonly captureSourced: boolean;
+  readonly basis: ExecutorDeletionBasis;
+}
+
+const NOT_CAPTURE: RemovalBasis = { captureSourced: false, basis: "not-capture" };
 
 /** A fresh `inspect`: exited or missing only on a positive answer; unknown is `running`. */
 const runtimeReportsState = (

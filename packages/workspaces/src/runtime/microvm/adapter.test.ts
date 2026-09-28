@@ -26,6 +26,7 @@ import {
 } from "./adapter.js";
 import {
   AGENT_HEALTH_ROUTE,
+  AGENT_RECOVER_ROUTE,
   agentLaunchRequestSchema,
   DOCKER_AGENT_CONTRACT_VERSION,
   launchSecretForRun,
@@ -1238,5 +1239,91 @@ describe("MicrovmRuntimeAdapter.watchExits", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("MicrovmRuntimeAdapter.recover (review 3 #7)", () => {
+  const exited75 = json(503, {
+    booted: true,
+    controlSocket: false,
+    daemonExit: { code: 75, signal: null },
+  });
+  const token = { SEALANT_CAPTURE_TOKEN: "mst_capture_token" };
+
+  it("restarts sealantd in recovery mode on a live VM whose daemon exited 75, with the kept token", async () => {
+    // Review 3 #7: the adapter answered `unsupported` for a VM that still ran with its staging on
+    // its disk; the worker backed off until the platform's cap destroyed the disk.
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" }), json(200, { outcome: "restarted" })],
+      [
+        json(200, { booted: true, controlSocket: true }),
+        exited75,
+        json(200, { booted: true, controlSocket: true }),
+      ],
+    );
+    const control = fakeControl();
+    const adapter = build(api, endpoint, control);
+    await adapter.launch(captureLaunch);
+    const launchHealthChecks = control.healthTargets.length;
+
+    expect(
+      await adapter.recover({ resourceId: "microvm-1", runId: "run-golden-4", secretEnv: token }),
+    ).toEqual({ outcome: "restarted" });
+    const recoverRequest = endpoint.requests.at(-1);
+    expect(recoverRequest).toMatchObject({
+      url: `https://${ENDPOINT}${AGENT_RECOVER_ROUTE}`,
+      method: "POST",
+      headers: expect.objectContaining({ authorization: "Bearer control-token" }),
+      body: { version: 1, runId: "run-golden-4", secretEnvJson: JSON.stringify(token) },
+    });
+    // It waited for the recovered daemon to answer before the caller drains it.
+    expect(control.healthTargets.length).toBe(launchHealthChecks + 1);
+    expect(api.vms.get("microvm-1")?.state).toBe("RUNNING");
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("reports an agent without the recovery route as unsupported, and keeps the VM", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" }), json(404, { message: "unknown route" })],
+      [json(200, { booted: true, controlSocket: true }), exited75],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+    await adapter.launch(captureLaunch);
+    expect(
+      await adapter.recover({ resourceId: "microvm-1", runId: "run-golden-4", secretEnv: token }),
+    ).toMatchObject({
+      outcome: "unsupported",
+      detail: expect.stringContaining("no recovery route"),
+    });
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("starts nothing without the capture token, and says a terminated VM's disk is gone", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [json(200, { booted: true, controlSocket: true }), exited75],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+    await adapter.launch(captureLaunch);
+    const before = endpoint.requests.length;
+    expect(await adapter.recover({ resourceId: "microvm-1" })).toMatchObject({
+      outcome: "unsupported",
+    });
+    expect(endpoint.requests.length).toBe(before);
+    const vm = api.vms.get("microvm-1");
+    if (vm === undefined) throw new Error("no VM");
+    api.vms.set("microvm-1", {
+      ...vm,
+      state: "TERMINATED",
+      stateReason: "Maximum duration exceeded",
+    });
+    expect(
+      await adapter.recover({ resourceId: "microvm-1", runId: "run-golden-4", secretEnv: token }),
+    ).toEqual({
+      outcome: "missing",
+    });
   });
 });

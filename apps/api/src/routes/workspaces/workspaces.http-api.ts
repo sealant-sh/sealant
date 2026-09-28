@@ -3,12 +3,14 @@ import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import {
   bindWorkspace,
+  cancelWorkspaceCreate,
   createWorkspace,
   execWorkspace,
   expireWorkspace,
   flushWorkspaceCapture,
   getWorkspace,
   getWorkspaceCaptureStatus,
+  getWorkspaceCreate,
   getWorkspaceSshTarget,
   listWorkspaceAttempts,
   listWorkspaceEvents,
@@ -28,6 +30,18 @@ export const WorkspacesHandlersLive = HttpApiBuilder.group(
       .handle("createWorkspace", ({ headers, payload }) =>
         createWorkspace({
           headers,
+          payload,
+        }),
+      )
+      .handle("getWorkspaceCreate", ({ params, query }) =>
+        getWorkspaceCreate({
+          idempotencyKey: params.idempotencyKey,
+          ownerUserId: query.ownerUserId,
+        }),
+      )
+      .handle("cancelWorkspaceCreate", ({ params, payload }) =>
+        cancelWorkspaceCreate({
+          idempotencyKey: params.idempotencyKey,
           payload,
         }),
       )

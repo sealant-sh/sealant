@@ -142,7 +142,17 @@ export const attestationCoversExecutor = (
 /**
  * Whether a runtime can bring a retained, ENDED executor back on its own disk
  * (`RuntimeAdapter.recover` restarting it). Docker can (`docker start` of the kept container).
- * Kubernetes cannot restart an ended Pod, and a terminated MicroVM's disk is gone.
+ * MicroVM can while the VM runs on after its daemon ended (the agent starts sealantd again in
+ * recovery mode on the VM's disk); a TERMINATED VM's disk is gone, which `recover` reports as
+ * `missing`. Kubernetes cannot restart an ended Pod.
  */
 export const runtimeRestartsRetainedExecutors = (adapterId: string | null | undefined): boolean =>
-  adapterId === "docker";
+  adapterId === "docker" || adapterId === "microvm";
+
+/**
+ * Whether the runtime hands the recovery boot its capture token itself (`recover({ secretEnv })`:
+ * the MicroVM agent writes it on the VM) rather than reading a secret env file the worker stages
+ * on its host again (Docker).
+ */
+export const runtimeRecoveryTakesSecretEnv = (adapterId: string | null | undefined): boolean =>
+  adapterId === "microvm";

@@ -142,6 +142,34 @@ export const workspaceRuntimeInstances = pgTable(
      * and treat a run whose source cannot be read as capture-sourced (fail closed).
      */
     sourceKind: text("source_kind"),
+    /**
+     * Launch ownership while the row is `pending`: the worker launching the executor and the
+     * instant its ownership lapses unless renewed. The launching worker renews it while it waits
+     * for readiness and clears it with the row's terminal launch write (`ready` or `failed`). A
+     * `pending` row that names an executor (`resource_id`) and whose ownership lapsed was left by
+     * a worker that died or was interrupted after the executor started: the stranded-launch
+     * sweep adopts it as a retained launch, so it is drained, preserved before its deadline and
+     * stopped like any other. Null on rows written before these columns existed.
+     */
+    launchOwner: text("launch_owner"),
+    launchLeaseExpiresAt: timestamp("launch_lease_expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    /**
+     * The build of sealantd the executor boots: the released sealantd image its workspace image
+     * copied the daemon from (`COPY --from=<image> /usr/local/bin/sealantd`), recorded at launch.
+     * Null when the launch could not tell (no image plan), and on rows written before it existed.
+     */
+    daemonImage: text("daemon_image"),
+    /**
+     * Whether that daemon has sealantd's recovery boot (resume its own staging, no restore, no
+     * dotfiles, no lifecycle step, no harness, admission closed), as Core knew it at launch.
+     * Recovery restarts a retained executor on its own disk ONLY when this is `true`: a daemon
+     * without it would run its ordinary boot over the work the disk holds. Null = unknown, and
+     * unknown is not recoverable in place (kept, reported).
+     */
+    daemonRecoveryBoot: boolean("daemon_recovery_boot"),
     createdAt: timestamp({ mode: "date", withTimezone: true })
       .notNull()
       .$defaultFn(() => new Date()),
@@ -240,6 +268,8 @@ export const workspaceCaptureDrains = pgTable(
     completionCaptureN: bigint("completion_capture_n", { mode: "number" }),
     completionAttestedAt: timestamp("completion_attested_at", { mode: "date", withTimezone: true }),
     completionAttestedBy: text("completion_attested_by"),
+    /** The launch identity the attestation named, when it named one (it matched the run's). */
+    completionLaunchId: text("completion_launch_id"),
     /**
      * The executor is RETAINED: kept because its disk holds work not confirmed saved (it ended
      * without a complete final flush, or its launch failed after it started). Set once (the

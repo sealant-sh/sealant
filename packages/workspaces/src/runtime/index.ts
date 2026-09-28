@@ -148,6 +148,7 @@ export {
 export {
   attestationCoversExecutor,
   decideExecutorDeletion,
+  runtimeRecoveryTakesSecretEnv,
   runtimeRestartsRetainedExecutors,
   type CompletionAttestation,
   type ExecutorDeletionBasis,
@@ -156,3 +157,10 @@ export {
   type ExecutorIdentity,
   type ExecutorRuntimeState,
 } from "./executor-preservation.js";
+
+export {
+  SEALANTD_RECOVERY_BOOT_MIN_VERSION,
+  declaredRecoveryBootImages,
+  sealantdHasRecoveryBoot,
+  sealantdImageOfContainerfile,
+} from "./daemon-recovery.js";
