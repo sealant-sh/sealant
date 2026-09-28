@@ -497,6 +497,7 @@ const settleUnsettledExecutors = (
         const { decision, ticket, heldElsewhere } = yield* authorizedDeletion({
           ledger,
           runId,
+          runtime: inspection.state,
           decide: (record) =>
             decideExecutorDeletion({
               captureSourced: true,
@@ -614,6 +615,7 @@ const drainBeforeRecording = (
       authorizedDeletion({
         ledger: drain.ledger,
         runId: instance.runId,
+        runtime: inspection.state,
         decide: (current) => {
           const evidence = recordedDeletionEvidence(current, executor);
           return decideExecutorDeletion({

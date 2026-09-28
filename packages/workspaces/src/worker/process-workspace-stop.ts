@@ -419,6 +419,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           authorizedDeletion({
             ledger: drain?.ledger,
             runId: options.runId,
+            runtime,
             decide: (current) => {
               const evidence = recordedDeletionEvidence(current, executor);
               return decideExecutorDeletion({
@@ -527,6 +528,20 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             launchCredentialInjections: instance.launchCredentialInjections ?? [],
             credentialCipher: options.credentialCipher,
           });
+        }
+
+        // A removal the runtime was asked to make whose outcome nobody recorded (its issuer's hold
+        // lapsed) is settled before anything is asked of the daemon (review 8 #7): issued again on
+        // the evidence it was authorized on while that still stands, else given up — and only
+        // then is the executor drained like any other.
+        if (captureSourced && drain !== undefined && recorded?.removalIssued === true) {
+          const settled = yield* decideAndRemove("running", false);
+          if (settled.removed) {
+            return settled.outcome;
+          }
+          if (settled.heldElsewhere) {
+            return stopOutcome("busy");
+          }
         }
 
         if (!captureSourced) {

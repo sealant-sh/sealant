@@ -29,6 +29,7 @@ import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
 import {
   attestedCompleteFor,
   drainCaptureBeforeStop,
+  removeUnderDeletion,
   type CaptureDrainLedger,
 } from "./capture-drain.js";
 
@@ -457,5 +458,160 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(await repo((drains) => drains.admitRecovery({ runId }))).toBe("admitted");
     expect((await repo((drains) => drains.getByRunId(runId)))?.deletionState).toBeNull();
+  });
+
+  // Review 8 #7: the removal's hold lapsed while the runtime call it authorized was still out
+  // (its renewals failed, or its worker is cut off), and the database then admitted observations
+  // and recovery as though nothing were being removed; the old call still removed the executor.
+  // A removal the runtime was asked to make stays exclusionary until its outcome is known.
+  it("keeps an issued removal exclusionary past its hold while the runtime call runs (review 8 #7)", async () => {
+    const runId = await newRun();
+    // A 200 ms hold: renewals (every 30 s) never land before it lapses.
+    const a = databaseCaptureDrainLedger({
+      db: dbA,
+      owner: "worker-a",
+      leaseMs: 60_000,
+      deletionHoldMs: 200,
+    });
+    const b = worker(dbB, "worker-b");
+    await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now() - 1_000));
+    const version = async () => {
+      const read = await Effect.runPromise(b.read(runId));
+      return read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
+    };
+    const authorization = await Effect.runPromise(a.authorizeDeletion(runId, await version()));
+    if (authorization.kind !== "authorized") {
+      throw new Error(`expected an authorized removal, got ${authorization.kind}`);
+    }
+    let issued = false;
+    const issuedYet = () => issued;
+    let finish!: () => void;
+    const provider = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const deleting = Effect.runPromise(
+      removeUnderDeletion({
+        ledger: a,
+        runId,
+        ticket: authorization.ticket,
+        remove: Effect.promise(async () => {
+          issued = true;
+          await provider;
+        }),
+      }),
+    );
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && !issuedYet()) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(issued).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Past the hold, the runtime call still out: nothing is admitted.
+    expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).not.toBe(
+      "authorized",
+    );
+    finish();
+    expect(await deleting).toMatchObject({ removed: true });
+    const after = await Effect.runPromise(b.read(runId));
+    expect(after.readable && after.entry?.last?.headN).toBe(7);
+    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleted");
+  });
+
+  it("settles an issued removal whose issuer died from what the runtime says (review 8 #7)", async () => {
+    const repo = <A, E>(use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+    const a = worker(dbA, "worker-a");
+    // A removal authorized on saved/head 7 and issued, whose issuer's hold lapses at once.
+    const issuedAndLapsed = async () => {
+      const runId = await newRun();
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      const row = await repo((drains) => drains.getByRunId(runId));
+      const token = randomUUID();
+      expect(
+        await repo((drains) =>
+          drains.authorizeDeletion({
+            runId,
+            evidenceVersion: row?.evidenceVersion ?? 0,
+            token,
+            leaseMs: 60_000,
+          }),
+        ),
+      ).toBe("authorized");
+      expect(await repo((drains) => drains.issueDeletion({ runId, token, leaseMs: 1 }))).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { runId, token };
+    };
+    const state = async (runId: string) =>
+      (await repo((drains) => drains.getByRunId(runId)))?.deletionState;
+    const reconcile = (runId: string, runtime: "gone" | "present") =>
+      repo((drains) =>
+        drains.reconcileIssuedDeletion({ runId, runtime, token: randomUUID(), leaseMs: 60_000 }),
+      );
+
+    // Lapsed and issued: still exclusionary.
+    const gone = await issuedAndLapsed();
+    expect(
+      await repo((drains) =>
+        drains.openObservation({ runId: gone.runId, token: randomUUID(), ttlMs: 1_000 }),
+      ),
+    ).toEqual({ refused: "deleting" });
+    expect(await repo((drains) => drains.admitRecovery({ runId: gone.runId }))).toBe("deleting");
+    const goneRow = await repo((drains) => drains.getByRunId(gone.runId));
+    expect(
+      await repo((drains) =>
+        drains.authorizeDeletion({
+          runId: gone.runId,
+          evidenceVersion: goneRow?.evidenceVersion ?? 0,
+          token: randomUUID(),
+          leaseMs: 60_000,
+        }),
+      ),
+    ).toBe("unresolved");
+    // The runtime no longer has it: deleted.
+    expect(await reconcile(gone.runId, "gone")).toBe("deleted");
+    expect(await state(gone.runId)).toBe("deleted");
+
+    // Still there, evidence unchanged: taken over, still issued, the old issuer's hold gone.
+    const present = await issuedAndLapsed();
+    expect(await reconcile(present.runId, "present")).toBe("reissue");
+    expect(await state(present.runId)).toBe("deleting-issued");
+    expect(
+      await repo((drains) =>
+        drains.confirmDeletion({ runId: present.runId, token: present.token, leaseMs: 60_000 }),
+      ),
+    ).toBe(false);
+    await repo((drains) => drains.releaseDeletion({ runId: present.runId, token: present.token }));
+    expect(await state(present.runId)).toBe("deleting-issued");
+    // Held again by its new holder: nothing to settle now.
+    expect(await reconcile(present.runId, "present")).toBe("held");
+
+    // Still there, evidence changed since (a status recorded without a fence): kept as evidence,
+    // never voiding the issued removal; settled by giving it up, and observations resume.
+    const changed = await issuedAndLapsed();
+    await Effect.runPromise(
+      a.recordStatus(
+        changed.runId,
+        captureStatus({ complete: false, incompleteReason: "snapshot-failed", headN: 8 }),
+        Date.now(),
+      ),
+    );
+    expect(await state(changed.runId)).toBe("deleting-issued");
+    expect(await reconcile(changed.runId, "present")).toBe("released");
+    expect(await state(changed.runId)).toBeNull();
+    expect(
+      await repo((drains) =>
+        drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
+      ),
+    ).toHaveProperty("openedAt");
   });
 });

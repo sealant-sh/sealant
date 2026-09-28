@@ -72,7 +72,13 @@ export type ExecutorDeletionBasis =
    * so no user code ran on it (capture starts before any). Only the recovery sweep gives it, from
    * the daemon's own answer (`RuntimeAdapterRecoverResult` `nothing-to-save`).
    */
-  | "nothing-to-save";
+  | "nothing-to-save"
+  /**
+   * A removal of it was issued earlier on recorded evidence, its outcome was never recorded, and
+   * the runtime still has the executor while that evidence still stands (review 8 #7): the
+   * removal is issued again. Only `authorizedDeletion` gives it, when it settles such a removal.
+   */
+  | "issued-before";
 
 export type ExecutorDeletionDecision =
   | { readonly delete: true; readonly basis: ExecutorDeletionBasis }

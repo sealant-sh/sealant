@@ -274,9 +274,15 @@ export const workspaceCaptureDrains = pgTable(
      * it removes the runtime). While it is held, no observation of the executor is admitted and no
      * recovery starts it; a status recorded anyway voids it, and so does anything admitted once it
      * lapsed — the deleter re-checks right before the runtime call and decides again.
+     * `deleting-issued`: the runtime was asked to remove the executor (review 8 #7). A request
+     * already sent cannot be revoked, so this stays exclusionary whether or not its hold is live:
+     * no observation is admitted, no recovery starts it and no status voids it. A live hold is its
+     * issuer, still waiting on the runtime; a lapsed one is an outcome nobody knows until the
+     * runtime is inspected (`reconcileIssuedDeletion`): gone ⇒ `deleted`; still there ⇒ issued
+     * again on the evidence it was authorized on, or given up when that evidence changed.
      * `deleted`: the runtime was removed; nothing is observed or recovered again. Null: none.
      */
-    deletionState: text("deletion_state", { enum: ["deleting", "deleted"] }),
+    deletionState: text("deletion_state", { enum: ["deleting", "deleting-issued", "deleted"] }),
     deletionToken: text("deletion_token"),
     deletionEvidenceVersion: bigint("deletion_evidence_version", { mode: "number" }),
     deletionAuthorizedAt: timestamp("deletion_authorized_at", { mode: "date", withTimezone: true }),

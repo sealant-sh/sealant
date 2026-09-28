@@ -26,6 +26,7 @@ import {
   type CaptureDrainLedger,
   type CaptureDrainObservation,
   type DeletionAuthorization,
+  type IssuedDeletionSettlement,
 } from "./capture-drain.js";
 
 const storedStatusSchema = z.object({
@@ -92,6 +93,7 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
   evidenceVersion: row.evidenceVersion,
   observationsInFlight: Object.keys(row.observationFences).length,
+  ...(row.deletionState === "deleting-issued" ? { removalIssued: true } : {}),
   unreachableSince: row.unreachableSince?.getTime(),
   keptLogged: row.keptLogged,
   silentLogged: row.silentLogged,
@@ -148,6 +150,8 @@ export interface DatabaseCaptureDrainLedgerOptions {
   readonly owner: string;
   /** How long a claim lasts without renewal. */
   readonly leaseMs: number;
+  /** How long a removal's hold lasts without renewal. Default `DELETION_HOLD_MS` (tests shorten it). */
+  readonly deletionHoldMs?: number;
 }
 
 /** The ledger over `workspace_capture_drains`; every failure is logged and fails safe. */
@@ -157,8 +161,13 @@ export const databaseCaptureDrainLedger = (
   const layer = WorkspaceCaptureDrainRepoLive.pipe(
     Layer.provide(Layer.succeed(SealantDB, options.db)),
   );
-  return captureDrainLedgerFromRepo({ owner: options.owner, leaseMs: options.leaseMs }, (effect) =>
-    effect.pipe(Effect.provide(layer)),
+  return captureDrainLedgerFromRepo(
+    {
+      owner: options.owner,
+      leaseMs: options.leaseMs,
+      ...(options.deletionHoldMs === undefined ? {} : { deletionHoldMs: options.deletionHoldMs }),
+    },
+    (effect) => effect.pipe(Effect.provide(layer)),
   );
 };
 
@@ -167,7 +176,11 @@ export const databaseCaptureDrainLedger = (
  * provides the repo to each call.
  */
 export const captureDrainLedgerFromRepo = (
-  options: { readonly owner: string; readonly leaseMs: number },
+  options: {
+    readonly owner: string;
+    readonly leaseMs: number;
+    readonly deletionHoldMs?: number;
+  },
   run: <A>(
     effect: Effect.Effect<A, unknown, WorkspaceCaptureDrainRepo>,
   ) => Effect.Effect<A, unknown>,
@@ -317,7 +330,7 @@ export const captureDrainLedgerFromRepo = (
           runId,
           evidenceVersion,
           token,
-          leaseMs: DELETION_HOLD_MS,
+          leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
         });
         return outcome === "authorized"
           ? ({ kind: "authorized", ticket: { token } } satisfies DeletionAuthorization)
@@ -339,7 +352,7 @@ export const captureDrainLedgerFromRepo = (
         return yield* repo.confirmDeletion({
           runId,
           token: ticket.token,
-          leaseMs: DELETION_HOLD_MS,
+          leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
         });
       }),
     ).pipe(
@@ -351,6 +364,49 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
+  issueDeletion: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        return yield* repo.issueDeletion({
+          runId,
+          token: ticket.token,
+          leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
+        });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: re-checking the removal of run ${runId}'s executor failed; the runtime is not asked to remove it now.`,
+          cause,
+        ).pipe(Effect.as(false)),
+      ),
+    ),
+
+  reconcileIssuedDeletion: (runId, runtime) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        const token = randomUUID();
+        const outcome = yield* repo.reconcileIssuedDeletion({
+          runId,
+          runtime,
+          token,
+          leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
+        });
+        return outcome === "reissue"
+          ? ({ kind: "reissue", ticket: { token } } satisfies IssuedDeletionSettlement)
+          : ({ kind: outcome } satisfies IssuedDeletionSettlement);
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: settling the issued removal of run ${runId}'s executor failed; it stays issued and the executor is kept.`,
+          cause,
+        ).pipe(Effect.as({ kind: "unknown" } satisfies IssuedDeletionSettlement)),
+      ),
+    ),
+
   completeDeletion: (runId, ticket) =>
     run(
       Effect.gen(function* () {
@@ -358,14 +414,14 @@ export const captureDrainLedgerFromRepo = (
         const held = yield* repo.completeDeletion({ runId, token: ticket.token });
         if (!held) {
           yield* Effect.logError(
-            `Capture drain: run ${runId}'s executor was removed after its removal's hold was lost (it lapsed and was voided); recorded deleted.`,
+            `Capture drain: run ${runId}'s executor was removed after its removal's hold was lost (it was taken over or given up meanwhile); recorded deleted.`,
           );
         }
       }),
     ).pipe(
       Effect.catchCause((cause) =>
         Effect.logError(
-          `Capture drain: recording that run ${runId}'s executor was removed failed; its removal stays held until the hold lapses.`,
+          `Capture drain: recording that run ${runId}'s executor was removed failed; its removal stays issued until the runtime is inspected and it is settled.`,
           cause,
         ),
       ),

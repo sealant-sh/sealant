@@ -170,6 +170,7 @@ const podMayGo = (
     const { decision, record, ticket, heldElsewhere } = yield* authorizedDeletion({
       ledger: options.ledger,
       runId: instance.runId,
+      runtime,
       decide: (current: CaptureDrainRead) =>
         decideExecutorDeletion({
           captureSourced,

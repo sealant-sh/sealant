@@ -7,13 +7,14 @@
  * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
 import { Effect, Logger } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CaptureFlushReport, SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
   InMemoryCaptureDrainStore,
+  authorizedDeletion,
   blueprintSourceKind,
   ledgerObservationRecorder,
   probeCaptureDaemon,
@@ -24,6 +25,7 @@ import {
   inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
   recordedDeletionEvidence,
+  removeUnderDeletion,
   reportsComplete,
   runIsCaptureSourced,
   snapFailureDetail,
@@ -31,6 +33,7 @@ import {
   finalFlushRequest,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
+  type DeletionTicket,
 } from "./capture-drain.js";
 
 const TARGET: SealantTarget = {
@@ -996,5 +999,185 @@ describe("capture status past the pinned wire", () => {
     expect(captureStatusFromStored(stored)).toEqual(everything);
     const pinned = captureStatus({ pending: 1 });
     expect(captureStatusFromStored(JSON.parse(JSON.stringify(pinned)))).toEqual(pinned);
+  });
+});
+
+// Review 8 #7: a removal's hold lasts 120 s and is renewed while the runtime call runs; a renewal
+// that failed (a database error maps to `false`) ended the renewals without revoking the call.
+// Once the hold lapsed, observations and recovery were admitted again — a fresh `complete:false`
+// was recorded — and the old runtime call still completed and recorded the executor `deleted`.
+// A removal the runtime was asked to make now stays exclusionary until its outcome is recorded
+// or settled from the runtime, whatever becomes of its hold.
+const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect);
+const versionOf = async (ledger: CaptureDrainLedger, runId: string) => {
+  const read = await run(ledger.read(runId));
+  return read.readable ? (read.entry?.evidenceVersion ?? 0) : -1;
+};
+// What a stop of a running executor decides without a drain of its own: keep.
+const keepRunning = () => ({
+  delete: false as const,
+  reason: "a running executor needs a drain",
+});
+
+describe("an issued removal outlives its hold (review 8 #7)", () => {
+  it("admits no fresh evidence, no recovery and no second deleter while the runtime call runs past its hold", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const base = inMemoryCaptureDrainLedger({ now: () => Date.now() });
+      await run(base.recordStatus("run_lapse", savedStatus({ headN: 7 }), Date.now()));
+      const authorized = await run(
+        base.authorizeDeletion("run_lapse", await versionOf(base, "run_lapse")),
+      );
+      if (authorized.kind !== "authorized") {
+        throw new Error(authorized.kind);
+      }
+      let issued = false;
+      // Every renewal once the runtime call is out fails, as the database ledger maps an error.
+      const ledger: CaptureDrainLedger = {
+        ...base,
+        confirmDeletion: (runId, ticket) =>
+          Effect.suspend(() =>
+            issued ? Effect.succeed(false) : base.confirmDeletion(runId, ticket),
+          ),
+      };
+      let finish!: () => void;
+      const provider = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const deleting = Effect.runPromise(
+        removeUnderDeletion({
+          ledger,
+          runId: "run_lapse",
+          ticket: authorized.ticket,
+          remove: Effect.promise(async () => {
+            issued = true;
+            await provider;
+          }),
+        }),
+      );
+      // Past the 120 s hold, with no renewal landing.
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect(issued).toBe(true);
+      expect(await run(base.openObservation("run_lapse", 1_000))).toBeUndefined();
+      expect(await run(base.admitRecovery("run_lapse"))).toBe("deleting");
+      expect(
+        (await run(base.authorizeDeletion("run_lapse", await versionOf(base, "run_lapse")))).kind,
+      ).not.toBe("authorized");
+      finish();
+      expect(await deleting).toMatchObject({ removed: true });
+      const row = base.store.rows.get("run_lapse");
+      expect(row?.deletion?.state).toBe("deleted");
+      // Nothing newer was admitted in the interval: the evidence it was removed on is the last.
+      expect(row?.entry.last?.complete).toBe(true);
+      expect(row?.entry.last?.headN).toBe(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A removal issued on saved/head 7 whose issuer died: its hold lapsed, no outcome recorded. */
+  const lapsedIssue = async () => {
+    let clock = 0;
+    const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+    await run(ledger.recordStatus("run_issued", savedStatus({ headN: 7 }), clock));
+    const authorized = await run(
+      ledger.authorizeDeletion("run_issued", await versionOf(ledger, "run_issued")),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    expect(await run(ledger.issueDeletion("run_issued", authorized.ticket))).toBe(true);
+    clock += 121_000;
+    const state = () => ledger.store.rows.get("run_issued")?.deletion?.state;
+    return { ledger, ticket: authorized.ticket, state, advance: (ms: number) => (clock += ms) };
+  };
+
+  it("settles it as deleted when the runtime no longer has the executor", async () => {
+    const { ledger, state } = await lapsedIssue();
+    const settled = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "missing",
+        decide: () => ({ delete: true, basis: "missing" }),
+      }),
+    );
+    expect(settled.decision).toEqual({ delete: true, basis: "missing" });
+    expect(settled.ticket).toBeUndefined();
+    expect(state()).toBe("deleted");
+    expect(await run(ledger.admitRecovery("run_issued"))).toBe("deleted");
+  });
+
+  it("issues it again when the runtime still has the executor and its evidence still stands", async () => {
+    const { ledger, ticket, state } = await lapsedIssue();
+    const settled = await run(
+      authorizedDeletion({ ledger, runId: "run_issued", runtime: "running", decide: keepRunning }),
+    );
+    expect(settled.decision).toEqual({ delete: true, basis: "issued-before" });
+    const reissue: DeletionTicket | undefined = settled.ticket;
+    expect(reissue).toBeDefined();
+    expect(reissue?.token).not.toBe(ticket.token);
+    // Still issued throughout: nothing is admitted between the settlement and the call.
+    expect(state()).toBe("deleting-issued");
+    expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
+    // The old issuer's late failure gives nothing up: the removal is the new ticket's now.
+    await run(ledger.releaseDeletion("run_issued", ticket));
+    expect(state()).toBe("deleting-issued");
+    const removal = await run(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_issued",
+        ticket: reissue,
+        remove: Effect.succeed("removed"),
+      }),
+    );
+    expect(removal).toEqual({ removed: true, value: "removed" });
+    expect(state()).toBe("deleted");
+  });
+
+  it("gives it up, loudly, when the evidence changed since it was authorized", async () => {
+    const { ledger, state } = await lapsedIssue();
+    // A status recorded anyway (asked without a fence) is kept as evidence, and no longer voids
+    // an issued removal: it stays until the runtime says.
+    await run(
+      ledger.recordStatus(
+        "run_issued",
+        captureStatus({ complete: false, incompleteReason: "snapshot-failed", headN: 8 }),
+        0,
+      ),
+    );
+    expect(state()).toBe("deleting-issued");
+    expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
+    const settled = await run(
+      authorizedDeletion({ ledger, runId: "run_issued", runtime: "running", decide: keepRunning }),
+    );
+    expect(settled.decision.delete).toBe(false);
+    expect(settled.heldElsewhere).toBeUndefined();
+    expect(state()).toBeUndefined();
+    // Decided again on what is current: observations resume.
+    expect(await run(ledger.openObservation("run_issued", 1_000))).toBeDefined();
+  });
+
+  it("keeps it issued while its issuer holds it, or while the runtime cannot say", async () => {
+    const { ledger, state, advance } = await lapsedIssue();
+    const unknown = await run(
+      authorizedDeletion({ ledger, runId: "run_issued", runtime: "unknown", decide: keepRunning }),
+    );
+    expect(unknown.decision.delete).toBe(false);
+    expect(unknown.heldElsewhere).toBe(true);
+    expect(state()).toBe("deleting-issued");
+    // Its issuer's renewal lands again (the database is back): held, whatever the runtime says.
+    const current = ledger.store.rows.get("run_issued")?.deletion;
+    if (current === undefined) {
+      throw new Error("no removal");
+    }
+    expect(await run(ledger.confirmDeletion("run_issued", { token: current.token }))).toBe(true);
+    advance(1_000);
+    const held = await run(
+      authorizedDeletion({ ledger, runId: "run_issued", runtime: "running", decide: keepRunning }),
+    );
+    expect(held.heldElsewhere).toBe(true);
+    expect(state()).toBe("deleting-issued");
   });
 });
