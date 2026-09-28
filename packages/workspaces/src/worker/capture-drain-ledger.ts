@@ -116,10 +116,15 @@ const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
       }),
 });
 
-const storedStatus = (status: CaptureFlushReport): Readonly<Record<string, unknown>> => ({
+/** A status as the drain record stores it (`workspace_capture_drains.last_status`). */
+export const storedCaptureStatus = (
+  status: CaptureFlushReport,
+): Readonly<Record<string, unknown>> => ({
   ...status,
   refused: [...status.refused],
 });
+
+const storedStatus = storedCaptureStatus;
 
 export interface DatabaseCaptureDrainLedgerOptions {
   readonly db: DB;
@@ -225,6 +230,25 @@ export const captureDrainLedgerFromRepo = (
           `Capture drain: reading run ${runId}'s drain failed; nothing in it is known (no completion, attestation or discard counts).`,
           cause,
         ).pipe(Effect.as({ readable: false as const })),
+      ),
+    ),
+
+  recordStatus: (runId, status, atMs) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.recordStatus({
+          runId,
+          status: storedCaptureStatus(status),
+          observedAt: new Date(atMs),
+        });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: recording a status read from run ${runId}'s executor failed; Core's evidence for it does not include that reading.`,
+          cause,
+        ),
       ),
     ),
 

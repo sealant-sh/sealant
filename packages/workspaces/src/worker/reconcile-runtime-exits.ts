@@ -83,12 +83,12 @@ import {
 } from "../sealantd/target.js";
 import { adoptStrandedLaunchesEffect } from "./adopt-stranded-launches.js";
 import {
-  captureDaemonAnswers,
   describeDeletionBasis,
   drainCaptureBeforeStop,
   drainPermitsStop,
   recordedDeletionEvidence,
   runIsCaptureSourced,
+  probeCaptureDaemon,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
@@ -589,7 +589,13 @@ const drainBeforeRecording = (
       return yield* decide;
     }
     const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
-    if (target === undefined || !(yield* captureDaemonAnswers(target, DAEMON_PROBE_TIMEOUT_MS))) {
+    const probe =
+      target === undefined ? undefined : yield* probeCaptureDaemon(target, DAEMON_PROBE_TIMEOUT_MS);
+    if (probe?.kind === "status") {
+      // What the probe read is evidence about this executor like any other reading.
+      yield* drain.ledger.recordStatus(instance.runId, probe.status, Date.now());
+    }
+    if (target === undefined || probe === undefined || probe.kind === "unreachable") {
       return yield* decide;
     }
     yield* Effect.logWarning(

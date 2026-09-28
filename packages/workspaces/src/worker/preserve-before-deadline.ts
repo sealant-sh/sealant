@@ -61,6 +61,7 @@ import {
   sealantTargetForRuntimeInstance,
   type SealantTargetDerivationOptions,
 } from "../sealantd/target.js";
+import { storedCaptureStatus } from "./capture-drain-ledger.js";
 import {
   readCaptureStatus,
   runIsCaptureSourced,
@@ -279,6 +280,24 @@ const planOne = (
     const status =
       target === undefined ? undefined : yield* readCaptureStatus(target, STATUS_TIMEOUT_MS);
     const sampledAtMs = now();
+    if (status !== undefined) {
+      // What the sampler read is evidence about this executor like any other reading (review 5
+      // #3): recorded, ordered by when it was read.
+      yield* drains
+        .recordStatus({
+          runId: instance.runId,
+          status: storedCaptureStatus(status),
+          observedAt: new Date(sampledAtMs),
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Capture deadline sweep: recording the status read from run ${instance.runId}'s executor failed.`,
+              cause,
+            ),
+          ),
+        );
+    }
     const previousSample =
       row?.uploadSampleBytes === null ||
       row?.uploadSampleBytes === undefined ||

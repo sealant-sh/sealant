@@ -67,6 +67,7 @@ const sweep = async (input: {
   readonly pending?: boolean;
 }) => {
   const schedules: WorkspaceCaptureDrainSchedule[] = [];
+  const statuses: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
   const drains = {
     getByRunId: () =>
       Effect.succeed(input.row === undefined ? undefined : (input.row as WorkspaceCaptureDrain)),
@@ -74,6 +75,12 @@ const sweep = async (input: {
       schedules.push(request.schedule);
       return Effect.succeed({} as WorkspaceCaptureDrain);
     },
+    // Every status the sampler reads is recorded as evidence (review 5 #3).
+    recordStatus: (request: { runId: string; status: Readonly<Record<string, unknown>> }) =>
+      Effect.sync(() => {
+        statuses.push(request);
+        return true;
+      }),
   } as unknown as WorkspaceCaptureDrainRepoService;
   let row: WorkspaceRuntimeInstance =
     input.pending === true
@@ -157,6 +164,7 @@ const sweep = async (input: {
   return {
     driven,
     schedules,
+    statuses,
     stop,
     markStopped,
     setWorkspaceStatus,
@@ -281,6 +289,14 @@ describe("preserveBeforeDeadlineEffect", () => {
         uploadSampleBytes: 5_000,
       }),
     ]);
+    // The reading is evidence about the executor: recorded (review 5 #3).
+    expect(result.statuses).toEqual([
+      {
+        runId: "run_vm",
+        status: expect.objectContaining({ pending: 2, uploadedBytes: 5_000 }),
+        observedAt: new Date(NOW),
+      },
+    ]);
   });
 
   it("drives a FINAL drain and a planned stop once the lead is reached", async () => {
@@ -363,6 +379,7 @@ describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () 
             return undefined;
           }),
         recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
+        recordStatus: () => Effect.succeed(true),
       } as unknown as WorkspaceCaptureDrainRepoService),
       daemon.layer,
     );
@@ -454,6 +471,7 @@ describe("preserveBeforeDeadlineEffect · runtimes that are not ready (review 3 
             retained ? ({ retainedAt: new Date(NOW - MIN) } as WorkspaceCaptureDrain) : undefined,
           ),
         recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
+        recordStatus: () => Effect.succeed(true),
         requestRecovery,
       } as unknown as WorkspaceCaptureDrainRepoService),
       fakeCaptureDaemon(["unreachable"]).layer,

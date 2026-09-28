@@ -462,6 +462,28 @@ describe("reconcileRuntimeExitsEffect · drain before removal", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 
+  it("records what its probe of the daemon read as evidence about the executor (review 5 #3)", async () => {
+    const probed = captureStatus({ pending: 4, complete: false, incompleteReason: "changed" });
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon([probed, "unreachable"]).layer,
+    });
+    const { adapter, stop } = stubAdapter({ inspections: exited });
+    const ledger = inMemoryCaptureDrainLedger();
+
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: fakeStager().stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(ledger.store.rows.get("run_1")?.entry.last).toEqual(probed);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("leaves a runtime whose daemon answers but whose queue stalled untouched", async () => {
     const harness = makeHarness({
       instances: [runtimeInstance()],

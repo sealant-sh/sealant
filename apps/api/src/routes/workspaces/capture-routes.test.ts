@@ -8,6 +8,7 @@ import {
 import {
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
+  WorkspaceCaptureDrainRepo,
   WorkspaceRepo,
   WorkspaceRuntimeInstanceRepo,
   type Workspace,
@@ -58,6 +59,7 @@ const flushHarness = (
 ) => {
   const flushRequests: Array<CaptureFlushRequest | undefined> = [];
   const calls: string[] = [];
+  const recorded: Array<{ runId: string; status: Readonly<Record<string, unknown>> }> = [];
   const workspace = { id: "ws_1", ownerUserId: "usr_owner", latestRunId: "run_1" } as Workspace;
   const spec = {
     sources: {
@@ -112,6 +114,14 @@ const flushHarness = (
         } as WorkspaceRuntimeInstance),
     } as unknown as WorkspaceRuntimeInstanceRepoService),
     Layer.succeed(SealantRuntime, { connect: () => Effect.succeed(daemon) }),
+    // Every relayed answer is recorded against the run's executor (review 5 #3).
+    Layer.mock(WorkspaceCaptureDrainRepo, {
+      recordStatus: (input) =>
+        Effect.sync(() => {
+          recorded.push({ runId: input.runId, status: input.status });
+          return true;
+        }),
+    }),
   );
   const flush = (payload: Omit<FlushWorkspaceCaptureRequest, "ownerUserId">) =>
     Effect.runPromise(
@@ -120,7 +130,7 @@ const flushHarness = (
         payload: { ownerUserId: "usr_owner", ...payload },
       }).pipe(Effect.provide(layer)),
     );
-  return { flush, flushRequests, calls };
+  return { flush, flushRequests, calls, recorded };
 };
 
 /**
@@ -234,6 +244,8 @@ describe("workspace capture routes", () => {
     };
     const h = flushHarness(failing);
     expect(await h.flush({ kind: "final" })).toEqual(failing);
+    // Recorded against the run's executor before it is returned (review 5 #3).
+    expect(h.recorded).toEqual([{ runId: "run_1", status: { ...failing } }]);
   });
 
   it("reject a snaps entry of an unknown class or without its failed count", () => {
