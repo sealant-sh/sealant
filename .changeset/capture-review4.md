@@ -25,3 +25,10 @@ and a launch never waits for readiness past that start (`WORKSPACE_CAPTURE_DEADL
 MicroVM agent spares, in a recovery and in the list it hands sealantd (`SEALANT_SWEEP_EXEMPT_FILE`),
 only the processes it started itself, by pid and start time — never by name — and stops the guest
 Docker service before a recovery boot. Migration `capture_attestation_freshness`.
+
+Also server-side: every capture executor boots with `SEALANT_CAPTURE_LAUNCH_ID` when the create
+named a launch; `store-fidelity` is never saved; a FINAL whose connection closes under it (its sweep
+stops the relay) is read again rather than reported as refused, in the flush route and in every
+drain; a Docker recovery starts the workspace's parked Docker sidecar first; and an executor whose
+recovery boot finds nothing to save (sealantd exit 76: it never materialized) is released with the
+daemon's words recorded.
