@@ -457,6 +457,23 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       );
     });
 
+  // This worker's claim on the job. A build can outlive its claim lease, and another worker then
+  // claims the job and builds it again; success is committed only under this exact claim, so the
+  // run is launched by exactly one of them (review 5 #1: a second launch of a capture run adopts
+  // the first one's executor).
+  const claim = { workerId: options.workerId, attemptCount: job.attemptCount };
+  const markSucceeded = (fields: {
+    readonly builderId: string;
+    readonly resultPayload: WorkspaceBuild;
+    readonly publishedReference: string;
+    readonly publishedDigestReference: string;
+    readonly publishedDigest: string;
+  }) =>
+    jobs.markJobSucceeded({ id: job.id, claim, ...fields }).pipe(
+      Effect.mapError(toWorkspaceBuildJobProcessingError),
+      Effect.map((succeeded) => succeeded !== null),
+    );
+
   // Phase A: build the image, publish it, and mark the job succeeded.
   const buildAndPublish = Effect.gen(function* () {
     if (job.runId !== null) {
@@ -511,16 +528,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           });
 
     if (reuse !== null) {
-      yield* jobs
-        .markJobSucceeded({
-          id: job.id,
-          builderId: reuse.builderId,
-          resultPayload: reuse.resultPayload,
-          publishedReference: reuse.publishedImage.reference,
-          publishedDigestReference: reuse.publishedImage.digestReference,
-          publishedDigest: reuse.publishedImage.digest,
-        })
-        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      const owned = yield* markSucceeded({
+        builderId: reuse.builderId,
+        resultPayload: reuse.resultPayload,
+        publishedReference: reuse.publishedImage.reference,
+        publishedDigestReference: reuse.publishedImage.digestReference,
+        publishedDigest: reuse.publishedImage.digest,
+      });
+      if (!owned) {
+        return null;
+      }
 
       yield* Effect.logInfo(
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
@@ -548,23 +565,32 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
-    yield* jobs
-      .markJobSucceeded({
-        id: job.id,
-        builderId: compileResult.builder.id,
-        resultPayload: compileResult,
-        publishedReference: publishedImage.reference,
-        publishedDigestReference: publishedImage.digestReference,
-        publishedDigest: publishedImage.digest,
-      })
-      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    const owned = yield* markSucceeded({
+      builderId: compileResult.builder.id,
+      resultPayload: compileResult,
+      publishedReference: publishedImage.reference,
+      publishedDigestReference: publishedImage.digestReference,
+      publishedDigest: publishedImage.digest,
+    });
+    if (!owned) {
+      return null;
+    }
 
     return { publishedImage, spec, planned };
   });
 
-  const { publishedImage, spec, planned } = yield* buildAndPublish.pipe(
+  const built = yield* buildAndPublish.pipe(
     Effect.tapError((error) => failureCleanup(error, true)),
   );
+  if (built === null) {
+    // Another worker holds the job now (this claim's lease expired under the build): it builds and
+    // launches the run; this worker launches nothing and records nothing over it.
+    yield* Effect.logWarning(
+      `Workspace build job ${job.id} is no longer held by this worker's claim (${claim.workerId}, claim ${String(claim.attemptCount)}); its success was not recorded and the run is not launched from here.`,
+    );
+    return null;
+  }
+  const { publishedImage, spec, planned } = built;
 
   // Phase B: launch the runtime instance and record its state.
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;

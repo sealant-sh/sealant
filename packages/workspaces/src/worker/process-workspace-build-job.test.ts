@@ -54,7 +54,7 @@ const workspaceBuildJobRepoStub = (
   getLatestSucceededJobByPlanHash: vi.fn((_input: { registryId: string; planHash: string }) =>
     Effect.succeed(overrides.getLatestSucceededJobByPlanHash?.() ?? undefined),
   ),
-  markJobSucceeded: vi.fn((_input: unknown) => Effect.succeed({})),
+  markJobSucceeded: vi.fn((_input: unknown): Effect.Effect<object | null> => Effect.succeed({})),
   markJobFailed: vi.fn((_input: unknown) => Effect.succeed({})),
   clearSecretEnv: vi.fn((_id: string) => Effect.void),
 });
@@ -433,6 +433,49 @@ describe("processWorkspaceBuildJobEffect", () => {
       );
     }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
   });
+
+  it.effect(
+    "launches nothing when another worker took the job over under the build (review 5 #1)",
+    () => {
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_taken_over",
+          runId: "run_taken_over",
+          attemptCount: 1,
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: createWorkspaceBuildSpec({ osFamily: "arch" }),
+        }),
+      });
+      // The lease expired under the build and another worker claimed the job: the claim-fenced
+      // success write answers null.
+      jobs.markJobSucceeded.mockImplementation(() => Effect.succeed(null));
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const adapter = createRuntimeAdapterStub("docker");
+
+      return Effect.gen(function* () {
+        const result = yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_taken_over",
+            runtimeAdapters: [adapter],
+            compileWorkspaceSpec: async () => createCompileResult({ id: "arch" }),
+          }),
+        );
+        expect(result).toBeNull();
+        expect(jobs.markJobSucceeded).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "job_taken_over",
+            claim: { workerId: "worker-test", attemptCount: 1 },
+          }),
+        );
+        expect(adapter.launch).not.toHaveBeenCalled();
+        expect(runtimeInstances.upsertRuntimeInstance).not.toHaveBeenCalled();
+        expect(jobs.markJobFailed).not.toHaveBeenCalled();
+        expect(attempts.markAttemptFailed).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    },
+  );
 
   it.effect("skips build and publish when the plan hash matches a published image", () => {
     const priorPlanHash = "a".repeat(64);

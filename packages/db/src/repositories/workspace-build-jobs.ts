@@ -58,8 +58,25 @@ export interface ClaimWorkspaceBuildJobByIdInput {
   readonly now?: Date;
 }
 
+/**
+ * The claim a worker holds on a job: who claimed it and which claim (each claim increments
+ * `attemptCount`). A lease can expire under a slow build and another worker claim the job; the
+ * claim is what tells the two apart.
+ */
+export interface WorkspaceBuildJobClaim {
+  readonly workerId: string;
+  readonly attemptCount: number;
+}
+
 export interface MarkWorkspaceBuildJobSucceededInput {
   readonly id: string;
+  /**
+   * The claim this success is made under. The write lands only while the job is still `running`
+   * under exactly this claim, so a claimant whose lease expired and was taken over can never also
+   * commit success and go on to launch the same run a second time (review 5 #1): its call answers
+   * `null`.
+   */
+  readonly claim: WorkspaceBuildJobClaim;
   readonly builderId: string;
   readonly resultPayload?: NonNullable<WorkspaceBuildJob["resultPayload"]>;
   readonly publishedReference: string;
@@ -543,7 +560,14 @@ export const WorkspaceBuildJobRepoLive = Layer.effect(
                 errorCode: null,
                 errorMessage: null,
               })
-              .where(eq(workspaceBuildJobs.id, input.id))
+              .where(
+                and(
+                  eq(workspaceBuildJobs.id, input.id),
+                  eq(workspaceBuildJobs.status, "running"),
+                  eq(workspaceBuildJobs.workerId, input.claim.workerId),
+                  eq(workspaceBuildJobs.attemptCount, input.claim.attemptCount),
+                ),
+              )
               .returning();
 
             return job ?? null;

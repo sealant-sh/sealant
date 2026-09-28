@@ -928,6 +928,55 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(api.vms.size).toBe(1);
   });
 
+  it("keeps an already booted capture VM a repeated launch adopts when its first Describe fails (review 5 #1)", async () => {
+    // RunMicrovm is idempotent on the run's client token: the second launch gets the VM the
+    // first one booted (sealantd and user code running on its disk). A transient Describe failure
+    // before this invocation's own push is no evidence the VM never ran a writer.
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint([
+      json(200, { outcome: "booting" }),
+      json(409, { message: "already booted" }),
+    ]);
+    const adapter = build(api, endpoint, fakeControl());
+    const first = await adapter.launch(captureLaunch);
+    expect(api.vms.get(first.resourceId)?.state).toBe("RUNNING");
+    vi.spyOn(api, "getMicrovm").mockRejectedValueOnce(
+      new Error("temporary Describe network failure"),
+    );
+    const failure = await adapter.launch(captureLaunch).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(api.runs[1]?.clientToken).toBe(api.runs[0]?.clientToken);
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      identity: { adapter: "microvm", resourceId: first.resourceId },
+    });
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("keeps a fresh capture VM whose readiness wait times out: nothing proves it took no push", async () => {
+    const api = new FakeMicrovmApi();
+    api.pendingGets = Number.POSITIVE_INFINITY;
+    const endpoint = fakeEndpoint([]);
+    const adapter = build(api, endpoint, fakeControl());
+    const failure = await adapter.launch(captureLaunch).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(api.terminates).toEqual([]);
+  });
+
+  it("still terminates a git VM whose first Describe fails", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint([]);
+    const adapter = build(api, endpoint, fakeControl());
+    vi.spyOn(api, "getMicrovm").mockRejectedValueOnce(new Error("Describe failed"));
+    await expect(adapter.launch(cases.gitSource)).rejects.toThrow(/Describe failed/);
+    expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
   it("terminates a VM that ends before it is ready and says why", async () => {
     const api = new FakeMicrovmApi();
     api.dieWith = "Run hook failed";
