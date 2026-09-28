@@ -253,4 +253,58 @@ describe.skipIf(DATABASE_URL === undefined)("stranded launches (Postgres)", () =
     expect(late.ready.message).toBe(LAUNCH_OWNERSHIP_LOST_MESSAGE);
     expect(late.row).toMatchObject({ status: "failed", errorCode: LAUNCH_RETAINED_ERROR_CODE });
   });
+
+  it("preempts a launch whose worker still holds its lease, and fences that worker (review 4 #6)", async () => {
+    const runId = await newRun();
+    await startLaunch({
+      runId,
+      owner: "live-worker",
+      leaseMs: 10 * 60_000,
+      resourceId: `c-${runId}`,
+      deadline: new Date(Date.now() + 60_000),
+    });
+    const outcome = await run(
+      Effect.gen(function* () {
+        const instances = yield* WorkspaceRuntimeInstanceRepo;
+        const preempted = yield* instances.preemptLaunch({
+          runId,
+          errorMessage: "preservation start reached",
+        });
+        const again = yield* instances.preemptLaunch({ runId, errorMessage: "twice" });
+        const renewed = yield* instances.renewLaunchLease({
+          runId,
+          owner: "live-worker",
+          leaseMs: 60_000,
+        });
+        const ready = yield* instances
+          .upsertRuntimeInstance({
+            runId,
+            status: "ready",
+            fenceLaunchOwner: "live-worker",
+            releaseLaunch: true,
+            adapter: "docker",
+            resourceId: `c-${runId}`,
+            reference: `c-${runId}`,
+          })
+          .pipe(Effect.flip);
+        return {
+          preempted,
+          again,
+          renewed,
+          ready,
+          row: yield* instances.getRuntimeInstanceByRunId(runId),
+        };
+      }),
+    );
+    expect(outcome.preempted).toMatchObject({
+      status: "failed",
+      errorCode: LAUNCH_RETAINED_ERROR_CODE,
+      launchOwner: null,
+      resourceId: `c-${runId}`,
+    });
+    expect(outcome.again).toBeUndefined();
+    expect(outcome.renewed).toBe(false);
+    expect(outcome.ready.message).toBe(LAUNCH_OWNERSHIP_LOST_MESSAGE);
+    expect(outcome.row).toMatchObject({ status: "failed", errorCode: LAUNCH_RETAINED_ERROR_CODE });
+  });
 });

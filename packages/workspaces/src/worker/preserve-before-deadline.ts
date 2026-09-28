@@ -29,8 +29,10 @@
  * ones: a retained launch (`failed`, `launch-retained`) is drained and stopped the same way; an
  * executor whose daemon ended on a machine that still runs (sealantd exited 75 on a MicroVM) and
  * was retained has its recovery made due now (the recovery sweep restarts its daemon on its own
- * disk and drains it); a launch still in progress (`pending`, owned by its launching worker) is
- * watched, and driven once its launch settles or is adopted as stranded.
+ * disk and drains it); and a launch still in progress (`pending`, even while its launching worker
+ * still owns it) whose preservation start arrives is taken from its worker (`preemptLaunch`,
+ * which fences every later write of that worker) and drained as a retained launch: a pending
+ * state never postpones the platform's cap (review 4 #6).
  *
  * A drain the daemon cannot confirm keeps the executor, as every drain does — the platform may
  * still end it at the deadline, which the exit reconciler then reports loudly.
@@ -340,19 +342,40 @@ const planOne = (
 /**
  * Drive one due runtime for this tick's budget: its final drain and planned stop; for one whose
  * daemon ended on a machine that runs on (a retained executor), its recovery, now — the recovery
- * sweep restarts its daemon on its own disk and drains it; for a launch still in progress,
- * nothing yet (its launching worker settles it within its readiness wait, or it is adopted).
+ * sweep restarts its daemon on its own disk and drains it; for a launch still in progress, the
+ * launch is taken from its worker and its executor drained like a retained launch.
  */
 const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation) =>
   Effect.gen(function* () {
     const { instance } = plan;
     if (instance.status === "pending") {
-      if (plan.firstStart) {
-        yield* Effect.logWarning(
-          `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} and its launch has not settled yet; it is driven as soon as its launch settles (ready, or adopted as a retained launch).`,
-        );
+      // A launch still in progress when its preservation start arrives (a slow readiness wait,
+      // a worker that died before its lease lapsed): a pending state cannot postpone the
+      // platform's cap. The launch is taken from its worker (`preemptLaunch`: every later write of
+      // that worker is fenced, and it abandons the launch) and becomes a retained launch, and the
+      // executor it created gets its FINAL drain now, like any other.
+      const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+      const preempted = yield* runtimeInstances.preemptLaunch({
+        runId: instance.runId,
+        errorMessage: `The runtime ends at ${new Date(plan.deadlineMs).toISOString()} (its own deadline) and its launch had not settled when its preservation had to start; the launch was taken from its worker and the executor kept as a retained launch, drained before it is stopped.`,
+      });
+      if (preempted === undefined) {
+        // It settled in between: the next tick drives it as what it became.
+        return false;
       }
-      return false;
+      yield* (yield* WorkspaceAttemptRepo)
+        .markAttemptFailed({ id: instance.runId })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Deadline preservation: marking run ${instance.runId}'s attempt failed failed.`,
+              cause,
+            ),
+          ),
+        );
+      yield* Effect.logError(
+        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} and its launch had not settled by its preservation start (lead ${String(Math.round(options.deadline.leadMs / 1000))} s + upload estimate ${String(Math.round(plan.estimateMs / 1000))} s): the launch is taken from its worker (${instance.launchOwner ?? "no owner recorded"}) and kept as a retained launch · starting its final drain now.`,
+      );
     }
     if (instance.status === "failed" && instance.errorCode !== LAUNCH_RETAINED_ERROR_CODE) {
       const drains = yield* WorkspaceCaptureDrainRepo;
@@ -365,7 +388,7 @@ const driveOne = (options: PreserveBeforeDeadlineOptions, plan: DuePreservation)
       );
       return true;
     }
-    if (plan.firstStart) {
+    if (plan.firstStart && instance.status !== "pending") {
       yield* Effect.logWarning(
         `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline); starting its final drain and a planned stop now (lead ${String(Math.round(options.deadline.leadMs / 1000))} s + upload estimate ${String(Math.round(plan.estimateMs / 1000))} s).`,
       );

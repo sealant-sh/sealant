@@ -81,6 +81,7 @@ const workspaceRuntimeInstanceRepoOperationSchema = Schema.Literals([
   "identifyStrandedLaunch",
   "failLostLaunch",
   "renewLaunchLease",
+  "preemptLaunch",
   "listPreservationCandidates",
   "listUnsettledCaptureExecutors",
   "markExited",
@@ -286,6 +287,18 @@ export interface WorkspaceRuntimeInstanceRepoService {
     readonly errorMessage: string;
     readonly unownedGraceMs: number;
     readonly lostGraceMs: number;
+  }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
+  /**
+   * Take a launch in progress away from its worker because its runtime's own deadline is near:
+   * a `pending` row that names an executor becomes a RETAINED launch (`failed` with
+   * `LAUNCH_RETAINED_ERROR_CODE`, identity kept, ownership cleared) whether or not its worker
+   * still holds its lease. Atomic: every later write of that worker is fenced on the ownership it
+   * no longer has (its renewal answers `false`, its terminal write fails), and its launch stops.
+   * `undefined` when the launch settled first (it is no longer `pending`, or names no executor).
+   */
+  readonly preemptLaunch: (input: {
+    readonly runId: string;
+    readonly errorMessage: string;
   }) => Effect.Effect<WorkspaceRuntimeInstance | undefined, WorkspaceRuntimeInstanceRepoError>;
   /** Renew `owner`'s launch ownership of a `pending` row; `false` when it is no longer theirs. */
   readonly renewLaunchLease: (input: {
@@ -728,6 +741,31 @@ export const WorkspaceRuntimeInstanceRepoLive = Layer.effect(
               )
               .returning();
             return failed;
+          }),
+        ),
+
+      preemptLaunch: (input) =>
+        withWorkspaceRuntimeInstanceRepoError(
+          "preemptLaunch",
+          Effect.gen(function* () {
+            const [preempted] = yield* db
+              .update(workspaceRuntimeInstances)
+              .set({
+                status: "failed",
+                errorCode: LAUNCH_RETAINED_ERROR_CODE,
+                errorMessage: input.errorMessage,
+                launchOwner: null,
+                launchLeaseExpiresAt: null,
+              })
+              .where(
+                and(
+                  eq(workspaceRuntimeInstances.runId, input.runId),
+                  eq(workspaceRuntimeInstances.status, "pending"),
+                  isNotNull(workspaceRuntimeInstances.resourceId),
+                ),
+              )
+              .returning();
+            return preempted;
           }),
         ),
 
