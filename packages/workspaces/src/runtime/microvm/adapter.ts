@@ -861,7 +861,12 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
     if (isEnded(vm.state)) {
       // The platform reports no exit code for a VM; the state reason is what it knows.
-      return { state: "exited", detail: describeEnded(vm) };
+      return {
+        state: "exited",
+        detail: describeEnded(vm),
+        platformEnded: true,
+        platformState: vm.state,
+      };
     }
     let serviceFailure: string | undefined;
     if (vm.state === "RUNNING" && vm.endpoint !== undefined && vm.endpoint.trim().length > 0) {
@@ -871,10 +876,13 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       // up leaves the executor, its captures and every session on it intact: terminating the VM
       // for it would destroy unsaved work to punish a sidecar. It is reported, not acted on.
       if (failure !== undefined && failure.phase !== "docker") {
+        // The daemon ended; the VM (and its disk) did not.
         return {
           state: "exited",
           ...(failure.exitCode === undefined ? {} : { exitCode: failure.exitCode }),
           detail: failure.message,
+          platformEnded: false,
+          platformState: vm.state,
         };
       }
       serviceFailure = failure?.message;

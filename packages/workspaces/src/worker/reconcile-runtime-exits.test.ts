@@ -13,7 +13,7 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Logger } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { LaunchMaterialStager } from "../runtime/launch-material.js";
@@ -310,8 +310,9 @@ describe("reconcileRuntimeExitsEffect", () => {
   it("inspects only the named resources when an exit event narrows the sweep", async () => {
     const harness = makeHarness({
       instances: [
-        runtimeInstance({ runId: "run_1", resourceId: "container-1" }),
-        runtimeInstance({ runId: "run_2", resourceId: "container-2" }),
+        // Git-sourced: this reconciler has no capture drain (a capture source is left alone).
+        runtimeInstance({ runId: "run_1", resourceId: "container-1", sourceKind: "git" }),
+        runtimeInstance({ runId: "run_2", resourceId: "container-2", sourceKind: "git" }),
       ],
     });
     const { adapter, inspect } = stubAdapter({
@@ -617,6 +618,144 @@ const failingRetention = () => {
   return { ledger: { ...ledger, markRetained }, markRetained };
 };
 
+describe("reconcileRuntimeExitsEffect · without a capture drain (review 5 #12)", () => {
+  it("leaves a capture-sourced exit untouched: an omitted option is no evidence its disk was saved", async () => {
+    const harness = makeHarness({
+      instances: [runtimeInstance({ sourceKind: "capture" })],
+      captureSourced: true,
+    });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 75 }]]),
+    });
+    const { stager, removeAll } = fakeStager();
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(0);
+    expect(harness.markExited).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(removeAll).not.toHaveBeenCalled();
+  });
+
+  it("leaves an exit whose source nothing records", async () => {
+    const harness = makeHarness({ instances: [runtimeInstance()], snapshotMissing: true });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 1 }]]),
+    });
+    const { stager } = fakeStager();
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(recorded).toBe(0);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("still records and removes a git-sourced exit", async () => {
+    const harness = makeHarness({ instances: [runtimeInstance({ sourceKind: "git" })] });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 1 }]]),
+    });
+    const { stager } = fakeStager();
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: stager,
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(recorded).toBe(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("reconcileRuntimeExitsEffect · an ended executor near its deadline is reported as observed (review 5 #7)", () => {
+  const settings = {
+    pollIntervalMs: 1,
+    stallWindowMs: 1_000,
+    unreachableWindowMs: 1_000,
+    requestTimeoutMs: 100,
+  };
+  const reconcileLogging = async (
+    deadline: Date,
+    inspection: RuntimeAdapterInspectResult,
+  ): Promise<{ readonly lines: readonly string[]; readonly stopped: boolean }> => {
+    const lines: string[] = [];
+    const logger = Logger.layer([
+      Logger.make(({ message }) => {
+        lines.push(Array.isArray(message) ? message.map(String).join(" ") : String(message));
+      }),
+    ]);
+    const harness = makeHarness({
+      instances: [
+        runtimeInstance({ adapter: "microvm", sourceKind: "capture", runtimeDeadlineAt: deadline }),
+      ],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const { adapter, stop } = stubAdapter({
+      id: "microvm",
+      inspections: new Map([["container-1", inspection]]),
+    });
+    await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        captureDrain: { ledger: inMemoryCaptureDrainLedger(), settings },
+      }).pipe(Effect.provide(harness.layer), Effect.provide(logger)),
+    );
+    return { lines, stopped: stop.mock.calls.length > 0 };
+  };
+
+  it("does not claim the platform ended a VM whose daemon exited while the VM runs on", async () => {
+    const { lines, stopped } = await reconcileLogging(new Date(Date.now() + 10_000), {
+      state: "exited",
+      exitCode: 75,
+      detail: "sealantd exited 75",
+      platformEnded: false,
+      platformState: "RUNNING",
+    });
+    expect(stopped).toBe(false);
+    const report = lines.find((line) => line.includes("deadline")) ?? "";
+    expect(report).toContain("daemon exited with 75");
+    expect(report).toContain("platform still reports the machine RUNNING · disk present");
+    expect(report).toMatch(/\d+ s left/);
+    expect(report).toContain("Nothing observed says the platform ended it");
+    expect(
+      lines.some((line) => /ended by the platform|lifetime cap|is lost|not recoverable/.test(line)),
+    ).toBe(false);
+  });
+
+  it("does not claim destruction when the runtime does not say what the platform did", async () => {
+    const { lines } = await reconcileLogging(new Date(Date.now() + 10_000), {
+      state: "exited",
+      exitCode: 75,
+    });
+    expect(lines.some((line) => line.includes("platform state not observed"))).toBe(true);
+    expect(lines.some((line) => /ended by the platform|lifetime cap|is lost/.test(line))).toBe(
+      false,
+    );
+  });
+
+  it("reports the platform ending the VM at its cap only on the platform's word, past the deadline", async () => {
+    const { lines } = await reconcileLogging(new Date(Date.now() - 5_000), {
+      state: "exited",
+      detail: "TERMINATED: maximum duration reached",
+      platformEnded: true,
+      platformState: "TERMINATED",
+    });
+    const report = lines.find((line) => line.includes("ended by the platform")) ?? "";
+    expect(report).toContain("platform TERMINATED");
+    expect(report).toContain("at or past its lifetime cap");
+    expect(report).toMatch(/passed \d+ s ago/);
+  });
+});
+
 describe("reconcileRuntimeExitsEffect · retention is recorded with the exit (review 4 #5)", () => {
   const settings = {
     pollIntervalMs: 1,
@@ -769,8 +908,9 @@ describe("watchRuntimeExits", () => {
     vi.useFakeTimers();
     const harness = makeHarness({
       instances: [
-        runtimeInstance({ runId: "run_1", resourceId: "container-1" }),
-        runtimeInstance({ runId: "run_2", resourceId: "container-2" }),
+        // Git-sourced: this reconciler has no capture drain (a capture source is left alone).
+        runtimeInstance({ runId: "run_1", resourceId: "container-1", sourceKind: "git" }),
+        runtimeInstance({ runId: "run_2", resourceId: "container-2", sourceKind: "git" }),
       ],
     });
     liveRepo.current = harness.repo;
@@ -810,7 +950,7 @@ describe("watchRuntimeExits", () => {
   });
 
   it("runs the Promise entry against the live repo layer", async () => {
-    const harness = makeHarness({ instances: [runtimeInstance()] });
+    const harness = makeHarness({ instances: [runtimeInstance({ sourceKind: "git" })] });
     liveRepo.current = harness.repo;
     const { adapter } = stubAdapter({
       inspections: new Map([["container-1", { state: "missing" }]]),

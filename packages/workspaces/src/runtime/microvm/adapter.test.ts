@@ -1143,11 +1143,15 @@ describe("MicrovmRuntimeAdapter.inspect", () => {
     await expect(adapter.inspect({ resourceId: "microvm-1" })).resolves.toEqual({
       state: "exited",
       detail: "TERMINATING: User initiated",
+      platformEnded: true,
+      platformState: "TERMINATING",
     });
     await api.getMicrovm("microvm-1");
     await expect(adapter.inspect({ resourceId: "microvm-1" })).resolves.toEqual({
       state: "exited",
       detail: "TERMINATED: User initiated",
+      platformEnded: true,
+      platformState: "TERMINATED",
     });
 
     api.forgetVm("microvm-1");
@@ -1192,6 +1196,26 @@ describe("MicrovmRuntimeAdapter.inspect", () => {
       state: "running",
       platformState: "RUNNING",
       detail: "Guest-local Docker failed in the MicroVM (exited; code 2, signal null).",
+    });
+  });
+
+  it("reports a daemon that exited on a VM the platform still runs as exited, the VM not ended (review 5 #7)", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [
+        json(200, { booted: true, controlSocket: true }),
+        json(503, { booted: true, controlSocket: false, daemonExit: { code: 75, signal: null } }),
+      ],
+    );
+    const adapter = build(api, endpoint, fakeControl());
+    const launched = await adapter.launch(captureLaunch);
+
+    await expect(adapter.inspect({ resourceId: launched.resourceId })).resolves.toMatchObject({
+      state: "exited",
+      exitCode: 75,
+      platformEnded: false,
+      platformState: "RUNNING",
     });
   });
 
@@ -1257,7 +1281,15 @@ describe("MicrovmRuntimeAdapter.watchExits", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(exits).toEqual([
         { resourceId: "microvm-3", result: { state: "missing" } },
-        { resourceId: "microvm-2", result: { state: "exited", detail: "TERMINATED: cap" } },
+        {
+          resourceId: "microvm-2",
+          result: {
+            state: "exited",
+            detail: "TERMINATED: cap",
+            platformEnded: true,
+            platformState: "TERMINATED",
+          },
+        },
       ]);
       await vi.advanceTimersByTimeAsync(1_000);
       expect(api.gets.slice(3)).toEqual(["microvm-1", "microvm-2", "microvm-1"]);

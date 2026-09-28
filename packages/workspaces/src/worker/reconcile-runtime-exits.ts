@@ -103,7 +103,10 @@ export interface ReconcileRuntimeExitsEffectOptions {
   readonly targetOptions?: SealantTargetDerivationOptions;
   /**
    * Drain a capture-sourced runtime whose daemon still answers before recording its exit and
-   * removing it. Absent = record and remove at once (the pre-drain behaviour).
+   * removing it. Absent, a runtime whose source is capture (or cannot be read) is left untouched —
+   * neither recorded nor removed, and reported: without its drain record nothing can say its disk
+   * was saved, and a missing option is no evidence (review 5 #12). Every other runtime is recorded
+   * and removed as before.
    */
   readonly captureDrain?: {
     readonly ledger: CaptureDrainLedger;
@@ -119,8 +122,8 @@ const DEFAULT_DRAIN_BUDGET_PER_SWEEP_MS = 30_000;
 const DAEMON_PROBE_TIMEOUT_MS = 10_000;
 
 /**
- * A lifetime-capped runtime (Lambda MicroVM) that ended at or past its deadline was ended by the
- * platform, whatever state its capture queue was in. Nothing can drain it any more; say so loudly.
+ * How close to a lifetime-capped runtime's (Lambda MicroVM) deadline an ended executor is reported
+ * with its deadline (`describeCappedRuntimeEnd`). Proximity is reported, never taken as the cause.
  */
 const HARD_CAP_SLACK_MS = 60_000;
 
@@ -538,7 +541,21 @@ const drainBeforeRecording = (
   Effect.gen(function* () {
     const drain = options.captureDrain;
     if (drain === undefined) {
-      return { verdict: "record" as const, removal: NOT_CAPTURE };
+      // No drain record to consult: the source decides alone, and a capture (or unreadable)
+      // source is never recorded or removed from here — this worker cannot preserve it.
+      const attempts = yield* WorkspaceAttemptRepo;
+      const captureSourced = yield* runIsCaptureSourced({
+        runId: instance.runId,
+        sourceKind: instance.sourceKind,
+        readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
+      });
+      if (!captureSourced) {
+        return { verdict: "record" as const, removal: NOT_CAPTURE };
+      }
+      yield* Effect.logError(
+        `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${instance.resourceId ?? ""}) ended and is capture-sourced, but this reconciler has no capture drain configured: not saved · kept · nothing recorded or removed.`,
+      );
+      return { verdict: "leave" as const };
     }
     const record = yield* drain.ledger.read(instance.runId);
     if (record.readable && record.entry?.discardRequested !== undefined) {
@@ -628,16 +645,68 @@ const runtimeReportsState = (
   );
 };
 
-/** Log, loudly, a capped runtime the platform ended at its deadline. */
-const reportHardCap = (instance: WorkspaceRuntimeInstance, end: RuntimeEnd) => {
-  const deadline = instance.runtimeDeadlineAt;
-  if (deadline === null || Date.now() < deadline.getTime() - HARD_CAP_SLACK_MS) {
-    return Effect.void;
-  }
-  return Effect.logError(
-    `Runtime exit reconciler: run ${instance.runId} reached its platform lifetime cap (deadline ${deadline.toISOString()}) and the platform ended it (${end.state === "exited" ? (end.detail ?? "no reason given") : "gone"}). Any capture still queued on it when the cap hit is lost; the drain must be planned before the deadline.`,
-  );
+/** How far `now` is from `deadline`, as observed: "12 s left" or "passed 3 s ago". */
+const describeDeadlineDistance = (deadline: Date, nowMs: number): string => {
+  const deltaS = Math.round((deadline.getTime() - nowMs) / 1000);
+  return deltaS >= 0 ? `${String(deltaS)} s left` : `passed ${String(-deltaS)} s ago`;
 };
+
+/**
+ * Report an ended executor of a lifetime-capped runtime near (or past) its deadline, as what was
+ * OBSERVED, never as what timing suggests (review 5 #7): the daemon's exit, what the platform
+ * says of the machine under it, and the distance to the deadline, each on its own. The platform
+ * ended the machine — and its disk with it — only when the platform said so (`platformEnded`,
+ * or the resource is `missing`); "at its lifetime cap" only when that happened at or past the
+ * deadline. A daemon that exited on a machine the platform still runs is a retained disk, not a
+ * lost one; one the runtime does not separate is reported as not observed.
+ */
+export const describeCappedRuntimeEnd = (
+  instance: Pick<WorkspaceRuntimeInstance, "runId" | "runtimeDeadlineAt">,
+  end: RuntimeEnd,
+  nowMs: number,
+): { readonly level: "error" | "warning"; readonly message: string } | undefined => {
+  const deadline = instance.runtimeDeadlineAt;
+  if (deadline === null || nowMs < deadline.getTime() - HARD_CAP_SLACK_MS) {
+    return undefined;
+  }
+  const timing = `deadline ${deadline.toISOString()} · ${describeDeadlineDistance(deadline, nowMs)}`;
+  const pastDeadline = nowMs >= deadline.getTime();
+  const platformEnded = end.state === "missing" || end.platformEnded === true;
+  if (platformEnded) {
+    const how =
+      end.state === "missing"
+        ? "the platform no longer knows it"
+        : `platform ${end.platformState ?? "ended"}${end.detail === undefined ? "" : ` (${end.detail})`}`;
+    return {
+      level: "error",
+      message: `Runtime exit reconciler: run ${instance.runId} · executor ended by the platform · observed (${how}) · ${timing}${
+        pastDeadline ? " · at or past its lifetime cap" : ""
+      }. Its disk went with it: whatever its daemon had not shipped is not recoverable from it.`,
+    };
+  }
+  const exit = `daemon exited${end.exitCode === undefined ? "" : ` with ${String(end.exitCode)}`}${
+    end.detail === undefined ? "" : ` (${end.detail})`
+  }`;
+  const machine =
+    end.platformEnded === false
+      ? `platform still reports the machine ${end.platformState ?? "up"} · disk present`
+      : "platform state not observed";
+  return {
+    level: "warning",
+    message: `Runtime exit reconciler: run ${instance.runId} · ${exit} · ${machine} · ${timing}. Nothing observed says the platform ended it; its disk is kept or released by the preservation policy, and any recovery must finish before the deadline.`,
+  };
+};
+
+const reportHardCap = (instance: WorkspaceRuntimeInstance, end: RuntimeEnd) =>
+  Effect.gen(function* () {
+    const report = describeCappedRuntimeEnd(instance, end, Date.now());
+    if (report === undefined) {
+      return;
+    }
+    yield* report.level === "error"
+      ? Effect.logError(report.message)
+      : Effect.logWarning(report.message);
+  });
 
 export const reconcileRuntimeExits = async (
   options: ReconcileRuntimeExitsOptions,
