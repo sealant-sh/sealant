@@ -1612,6 +1612,53 @@ describe("DockerRuntimeAdapter", () => {
     expect(failed.steps.at(-1)).toBe("stop sidecar-id");
   });
 
+  it("says when the recovery boot found nothing to save (exit 76), and fails any other exit (e2e 6)", async () => {
+    const recoverExiting = async (exitCode: number) => {
+      let started = false;
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        if (args[0] === "inspect" && args.at(-1) === "exited-id") {
+          const code = started ? exitCode : 1;
+          return {
+            stdout: `{"Status":"exited","Running":false,"ExitCode":${String(code)},"Error":""}\n`,
+            stderr: "",
+          };
+        }
+        if (args[0] === "start") {
+          started = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (args[0] === "exec") throw new Error("no socket");
+        if (args[0] === "logs") {
+          return {
+            stdout: "",
+            stderr:
+              exitCode === 76
+                ? "sealantd boot: nothing to save: never materialized (/workspace/repo)\n"
+                : "sealantd boot: invalid boot configuration: recovery: not this executor's continuation\n",
+          };
+        }
+        if (args[0] === "inspect") throw new Error("Error: No such object");
+        if (args[0] === "network") throw new Error("Error: No such network");
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter
+        .recover({ resourceId: "exited-id", reference: "sealant-x" })
+        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+    };
+
+    expect(await recoverExiting(76)).toEqual({
+      outcome: "nothing-to-save",
+      detail: "sealantd boot: nothing to save: never materialized (/workspace/repo)",
+    });
+    expect(await recoverExiting(75)).toEqual(expect.stringContaining("exitCode: 75"));
+  });
+
   it("recovers a retained container by starting it on its own disk, and only an ended one", async () => {
     const states: Record<string, string> = {
       "exited-id": '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}',

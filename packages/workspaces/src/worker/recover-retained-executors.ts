@@ -25,6 +25,11 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     While it waits, an ended executor has nothing running beside it: its runtime stops what it
  *     no longer needs (`RuntimeAdapter.parkRetained`; Docker: its dockerd sidecar), never its
  *     disk.
+ *     A recovery boot that finds nothing to save exits 76 (sealantd `EXIT_NOTHING_TO_SAVE`: the
+ *     executor never materialized a capture — it died before its first materialize, e.g. at its
+ *     first plan request — and capture starts before any user code, so nothing ran on it). The
+ *     runtime reports it (`nothing-to-save`) and the executor is removed, the daemon's own words
+ *     recorded with why. Exit 75 (not saved) stays a failed attempt: kept.
  *  3. **Cannot recover.** Kubernetes cannot restart an ended Pod, and its emptyDir lives only as
  *     long as the Pod object; a terminated MicroVM's disk is gone with it. Those are reported as
  *     such (`unsupported`, with what can still be done by hand) and stay retained — never
@@ -220,14 +225,17 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     const executor = { runId, resourceId, reference };
     const stopReason = instance.stopReason ?? "failed";
 
-    // Remove it and end the retention: only ever on a basis the policy gave.
-    const release = (basis: ExecutorDeletionBasis) =>
+    // Remove it and end the retention: only ever on a basis the policy (or the daemon's own
+    // nothing-to-save answer) gave. `said`: the daemon's words, kept with the record.
+    const release = (basis: ExecutorDeletionBasis, said?: string) =>
       Effect.gen(function* () {
         yield* Effect.tryPromise(() =>
           adapter.stop({ resourceId, ...(reference === null ? {} : { reference }) }),
         );
         yield* runtimeInstances.markStopped({ runId, stopReason });
-        const detail = `the retained executor was removed: ${describeDeletionBasis(basis)}`;
+        const detail = `the retained executor was removed: ${describeDeletionBasis(basis)}${
+          said === undefined ? "" : ` (${said})`
+        }`;
         yield* ledger.observe(runId, { state: "stopped", detail });
         yield* Effect.logInfo(`${prefix}: ${detail}.`);
         return "released" as const;
@@ -380,6 +388,21 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
             ),
           );
     switch (recovered.outcome) {
+      case "nothing-to-save": {
+        // sealantd's recovery boot exited 76: the executor never materialized a capture (its
+        // worktree is absent or holds only the boot lock), and capture starts before any user
+        // code, so nothing ran on it and nothing is lost by removing it. Recorded with the
+        // daemon's own words; exit 75 (not saved) never comes here.
+        if (restaged) {
+          yield* Effect.tryPromise(() => stager.removeSecretEnv(runId)).pipe(
+            Effect.catchCause(() => Effect.void),
+          );
+        }
+        yield* Effect.logWarning(
+          `${prefix}: nothing to save · the recovery boot of ${instance.adapter} ${resourceId} found no materialized capture (${recovered.detail}); no user code ran on it. Removing it.`,
+        );
+        return yield* release("nothing-to-save", recovered.detail);
+      }
       case "missing": {
         const detail = `the runtime no longer knows the retained executor (${instance.adapter} ${resourceId}); whatever it held that was not saved is lost`;
         yield* Effect.logError(`${prefix}: LOST · ${detail}.`);

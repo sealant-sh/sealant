@@ -64,7 +64,13 @@ export type ExecutorDeletionBasis =
   | "missing"
   | "observed-complete"
   | "attested-complete"
-  | "discarded";
+  | "discarded"
+  /**
+   * Its recovery boot found nothing to save (sealantd exit 76): it never materialized a capture,
+   * so no user code ran on it (capture starts before any). Only the recovery sweep gives it, from
+   * the daemon's own answer (`RuntimeAdapterRecoverResult` `nothing-to-save`).
+   */
+  | "nothing-to-save";
 
 export type ExecutorDeletionDecision =
   | { readonly delete: true; readonly basis: ExecutorDeletionBasis }

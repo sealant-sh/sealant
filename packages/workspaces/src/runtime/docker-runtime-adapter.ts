@@ -38,6 +38,8 @@ import {
   type RuntimeMountIntent,
 } from "./mount-intent.js";
 import {
+  nothingToSaveDetail,
+  SEALANTD_EXIT_NOTHING_TO_SAVE,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterStopInput,
@@ -1591,6 +1593,19 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           resourceId: input.resourceId,
           ...(reference === undefined ? {} : { reference }),
         }).catch(() => undefined);
+      }
+      // The recovery boot found nothing to save (it never materialized): said as such, the one
+      // exit that is not a failure to recover. Any other exit (75: not saved) stays a failure.
+      const ended = await this.inspectContainerState(input.resourceId).catch(() => undefined);
+      if (
+        ended !== undefined &&
+        !ended.running &&
+        ended.exitCode === SEALANTD_EXIT_NOTHING_TO_SAVE
+      ) {
+        return {
+          outcome: "nothing-to-save",
+          detail: nothingToSaveDetail(error instanceof Error ? error.message : String(error)),
+        };
       }
       throw error;
     }

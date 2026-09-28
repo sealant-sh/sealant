@@ -55,6 +55,10 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
   const secrets = JSON.parse(fs.readFileSync(process.env.SEALANT_SECRET_ENV_FILE, "utf8"));
   fs.writeSync(2, secrets.SEALANT_CAPTURE_TOKEN + "\u20ac".repeat(2726));
   process.exit(6);
+} else if (process.env.FAKE_SEALANTD_RECOVERY_EXIT76 === "1" && process.argv.includes("--recovery")) {
+  // A recovery boot of an executor that never materialized: nothing to save (sealantd exit 76).
+  fs.writeSync(2, "sealantd boot: nothing to save: never materialized (/workspace/repo)\\n");
+  process.exit(76);
 } else if (process.env.FAKE_SEALANTD_EXIT75 === "1" && !process.argv.includes("--recovery")) {
   // A final flush that did not complete: sealantd exits 75 and keeps its staging on the disk,
   // leaving a writer it started behind (same process group; nothing reaps it).
@@ -1016,6 +1020,40 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
     },
     20_000,
   );
+
+  it("answers `nothing-to-save` when the recovery boot exits 76, with the daemon's line (e2e 6)", async () => {
+    const agent = await startAgent({
+      FAKE_SEALANTD_EXIT75: "1",
+      FAKE_SEALANTD_RECOVERY_EXIT76: "1",
+    });
+    try {
+      await hook(agent, "run", {
+        microvmId: "microvm-7",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      expect(
+        await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+          body: launchRequest,
+          bearer: launchSecret,
+        }),
+      ).toMatchObject({ status: 200 });
+      await waitFor(async () => {
+        const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, { bearer: "control-token" });
+        return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+      });
+      const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+        body: recoverBody,
+        bearer: "control-token",
+      });
+      expect(recovered.status).toBe(200);
+      expect(agentRecoverResponseSchema.parse(recovered.body)).toEqual({
+        outcome: "nothing-to-save",
+        detail: "sealantd boot: nothing to save: never materialized (/workspace/repo)",
+      });
+    } finally {
+      await stopAgent(agent);
+    }
+  });
 
   it("refuses a recovery of a VM that was never launched", async () => {
     const agent = await startAgent();

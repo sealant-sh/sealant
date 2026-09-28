@@ -602,6 +602,8 @@ export const describeDeletionBasis = (basis: ExecutorDeletionBasis): string => {
       return "the control plane attested a sealed final capture of this executor";
     case "discarded":
       return "the owner discarded its unsaved captures";
+    case "nothing-to-save":
+      return "its recovery boot found nothing to save: it never materialized a capture, so no user code ran on it";
   }
 };
 

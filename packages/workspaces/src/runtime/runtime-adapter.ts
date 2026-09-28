@@ -313,12 +313,29 @@ export interface RuntimeAdapterRecoverInput {
  *    flush, which stops every writer the reboot started, snapshots both classes and ships.
  *  - `running`: it is running already; nothing was done (drain it).
  *  - `missing`: nothing of it is left to recover.
+ *  - `nothing-to-save`: the recovery boot found nothing to save and exited without starting
+ *    (sealantd exit 76, `EXIT_NOTHING_TO_SAVE`): the executor never materialized a capture —
+ *    its worktree is absent or holds only the daemon's boot lock — and since capture starts
+ *    before any user code, no user code ever ran on it. `detail` is the daemon's own words. The
+ *    only evidence that lets an executor whose recovery never completed go; exit 75 stays kept.
  *  - `unsupported`: this runtime cannot restart an ended executor on its own disk; `detail`
  *    says why and what, if anything, can still be done by hand. The executor stays retained.
  */
 export type RuntimeAdapterRecoverResult =
   | { readonly outcome: "restarted" | "running" | "missing" }
-  | { readonly outcome: "unsupported"; readonly detail: string };
+  | { readonly outcome: "unsupported" | "nothing-to-save"; readonly detail: string };
+
+/** sealantd's exit when its recovery boot finds nothing to save (`EXIT_NOTHING_TO_SAVE`). */
+export const SEALANTD_EXIT_NOTHING_TO_SAVE = 76;
+
+/** The daemon's own line saying why there is nothing to save, from its output; else a summary. */
+export const nothingToSaveDetail = (output: string | undefined): string => {
+  const line = /sealantd boot: nothing to save[^\n]*/.exec(output ?? "")?.[0];
+  return (
+    line?.trim() ??
+    "sealantd's recovery boot exited 76: nothing to save (the executor never materialized a capture)"
+  );
+};
 
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;

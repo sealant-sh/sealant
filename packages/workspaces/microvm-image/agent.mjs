@@ -71,6 +71,11 @@ const SWEEP_EXEMPT_FILE = path.join(STATE_DIR, "sweep-exempt.json");
 const SWEEP_EXEMPT_VERSION = 1;
 // How long a recovery waits for the processes the dead daemon left to be gone after SIGKILL.
 const LEFTOVER_KILL_TIMEOUT_MS = 5_000;
+// sealantd's recovery boot exits 76 (EXIT_NOTHING_TO_SAVE) when the executor never materialized a
+// capture: nothing ran on it, so there is nothing to save. The recovery route waits this long for
+// the boot to settle (its control socket, or that exit) so it can say which.
+const EXIT_NOTHING_TO_SAVE = 76;
+const RECOVERY_SETTLE_MS = Number(process.env.SEALANT_MICROVM_RECOVERY_SETTLE_MS ?? 15_000);
 const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
@@ -1244,6 +1249,23 @@ const handleRecover = async (req, res) => {
     state.daemonExit = null;
     state.daemonOutput = { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
     startDaemon(env, ["boot", "--recovery"]);
+    // Wait for the boot to settle: it answers on its control socket, or it exits. Exit 76 is the
+    // daemon's word that there is nothing to save (it never materialized); it is reported as such
+    // and nothing else is. Any other exit, or a boot still starting, answers `restarted` and the
+    // control plane reads the daemon's health as before.
+    const settleBy = Date.now() + RECOVERY_SETTLE_MS;
+    while (Date.now() < settleBy && !controlSocketReady() && state.daemonExit === null) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (state.daemonExit !== null && state.daemonExit.code === EXIT_NOTHING_TO_SAVE) {
+      const report = daemonExitReport();
+      const line = /sealantd boot: nothing to save[^\n]*/.exec(report.output ?? "")?.[0];
+      log(`recover: sealantd found nothing to save (${line ?? "exit 76"})`);
+      return json(res, 200, {
+        outcome: "nothing-to-save",
+        detail: line ?? "sealantd boot: nothing to save (exit 76)",
+      });
+    }
     return json(res, 200, { outcome: "restarted" });
   } finally {
     state.recoveryInProgress = false;
