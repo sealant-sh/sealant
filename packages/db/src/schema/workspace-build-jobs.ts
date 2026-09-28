@@ -251,6 +251,23 @@ export const workspaceCaptureDrains = pgTable(
       withTimezone: true,
     }),
     /**
+     * Every answer on record that says the executor's work is not saved and that no answer
+     * recorded since covers (review 9 #4, decision 25): an antichain of the executor's unsaved
+     * positions, each with when it was recorded (the database's clock, microseconds since the
+     * epoch). `last_status` is one latest answer; two answers no position orders are both kept
+     * here, and nothing reads saved — no observed complete, no seal — until every one of them is
+     * covered (`nextUnsavedObservations`).
+     */
+    unsavedStatuses: jsonb("unsaved_statuses")
+      .$type<
+        readonly {
+          readonly status: Readonly<Record<string, unknown>>;
+          readonly recordedAt: number | null;
+        }[]
+      >()
+      .notNull()
+      .default([]),
+    /**
      * Bumped by every change to the evidence about this executor: a status recorded, an
      * observation opened or resolved, an attestation. A destructive decision records the version
      * it read and commits only while it is still current (`authorizeDeletion`, decision 18).

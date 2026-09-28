@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { statusSupersedes } from "../capture-evidence-order.js";
+import { nextUnsavedObservations, statusSupersedes } from "../capture-evidence-order.js";
 import { SealantDB } from "../client.js";
 import {
   workspaceCaptureDrains,
@@ -165,8 +165,9 @@ export interface WorkspaceCaptureDrainRepoService {
    * before it was opened. Ordered by the executor's own history, never by any process's clock
    * (`statusSupersedes`, review 6 #6): it replaces the stored status when its executor-origin
    * position is later, else when its request was sent after the stored one was recorded, else
-   * — nothing orders them — only when that cannot make a complete out of an incomplete. No
-   * `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
+   * — nothing orders them — only when that cannot make a complete out of an incomplete. Every
+   * unsaved answer no answer recorded since covers is kept besides it (`unsaved_statuses`, review
+   * 9 #4): an incomparable later answer never erases one. No `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
    * Core received about the executor outranks a decision taken before it. One already issued
@@ -600,8 +601,18 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               const [current] = yield* tx
                 .select({
                   lastStatus: workspaceCaptureDrains.lastStatus,
+                  unsavedStatuses: workspaceCaptureDrains.unsavedStatuses,
                   deletionState: workspaceCaptureDrains.deletionState,
                   causallyAfter: sql<boolean>`coalesce(${workspaceCaptureDrains.lastStatusRecordedAt} IS NULL OR ${openedAt} > ${workspaceCaptureDrains.lastStatusRecordedAt}, false)`,
+                  // The same instants in microseconds (the database's clock), for the unsaved
+                  // answers on record, which each keep when they were recorded.
+                  lastRecordedAtUs: sql<
+                    string | null
+                  >`(extract(epoch FROM ${workspaceCaptureDrains.lastStatusRecordedAt}) * 1000000)::bigint::text`,
+                  askedAtUs: sql<
+                    string | null
+                  >`(extract(epoch FROM ${openedAt}) * 1000000)::bigint::text`,
+                  nowUs: sql<string>`(extract(epoch FROM now()) * 1000000)::bigint::text`,
                 })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
@@ -616,6 +627,18 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 incoming: input.status,
                 causallyAfter: current.causallyAfter,
               });
+              // Every unsaved answer no later one covers stays on record, whichever status is
+              // the latest (review 9 #4, decision 25).
+              const microseconds = (value: string | null): number | null =>
+                value === null ? null : Number(value);
+              const unsaved = nextUnsavedObservations({
+                unsaved: current.unsavedStatuses,
+                stored: current.lastStatus,
+                storedRecordedAt: microseconds(current.lastRecordedAtUs),
+                incoming: input.status,
+                askedAt: microseconds(current.askedAtUs),
+                recordedAt: Number(current.nowUs),
+              });
               // This fence resolves, and so does every fence that lapsed before it was opened:
               // this answer was asked for after their owners could still be waiting on theirs.
               const remaining =
@@ -626,6 +649,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .update(workspaceCaptureDrains)
                 .set({
                   observationFences: remaining,
+                  unsavedStatuses: unsaved,
                   evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
                   // Received evidence outranks a removal decided before it: voided (decision 21).
                   // One already issued cannot be: it stays until its outcome is known, and the

@@ -148,3 +148,95 @@ export const statusSupersedes = (input: {
   }
   return !storedStatusComplete(input.incoming) || storedStatusComplete(input.stored);
 };
+
+/**
+ * An answer on record that says the executor's work is not saved, with when it was recorded (the
+ * database's clock in microseconds, or the in-memory store's tick; `null` when unknown).
+ */
+export interface UnsavedObservation<S extends object = Readonly<Record<string, unknown>>> {
+  readonly status: S;
+  readonly recordedAt: number | null;
+}
+
+/**
+ * Whether an answer being recorded now covers one already on record (review 9 #4, decision 25):
+ * the executor's own position puts it at or after the recorded one, or no position orders them
+ * and its request was sent after the recorded one was recorded (`askedAt`, the same clock; `null`
+ * when unknown). A position that says "before" never covers, whatever causality says.
+ */
+export const answerCovers = (input: {
+  readonly answer: unknown;
+  readonly askedAt: number | null;
+  readonly recorded: unknown;
+  readonly recordedAt: number | null;
+}): boolean => {
+  const order = compareExecutorOrigins(
+    storedStatusOrigin(input.answer),
+    storedStatusOrigin(input.recorded),
+  );
+  if (order === "after" || order === "same") {
+    return true;
+  }
+  return (
+    order === "incomparable" &&
+    input.askedAt !== null &&
+    (input.recordedAt === null || input.askedAt > input.recordedAt)
+  );
+};
+
+/**
+ * The unsaved answers on record once `incoming` is recorded (review 9 #4, decision 25): every
+ * answer that says the work is not saved and that no answer recorded since covers — an antichain
+ * of the executor's unsaved positions. One latest status cannot hold them: two answers no
+ * position orders (two boots whose generation was not persisted) are both kept, and an answer
+ * that arrives later but covers only one of them never erases the other. The executor reads saved
+ * only once every one of them is covered by an answer or a seal.
+ *
+ *  - `incoming` covers (`answerCovers`) the members it follows: they leave.
+ *  - An `incoming` that a known answer (the stored status or a member) already follows, by the
+ *    executor's own position, and that was not asked for after that answer was recorded, is
+ *    stale: nothing changes.
+ *  - Otherwise an unsaved `incoming` joins.
+ */
+export const nextUnsavedObservations = <S extends object>(input: {
+  readonly unsaved: readonly UnsavedObservation<S>[];
+  /** The latest status on record (`last_status`), and when it was recorded. */
+  readonly stored: unknown;
+  readonly storedRecordedAt: number | null;
+  readonly incoming: S;
+  /** When the incoming answer's request was sent; `null` when unknown. */
+  readonly askedAt: number | null;
+  /** Now, on the clock `recordedAt` uses. */
+  readonly recordedAt: number;
+}): readonly UnsavedObservation<S>[] => {
+  const known: readonly UnsavedObservation<object>[] = [
+    ...(input.stored === undefined || input.stored === null || !isRecord(input.stored)
+      ? []
+      : [{ status: input.stored, recordedAt: input.storedRecordedAt }]),
+    ...input.unsaved,
+  ];
+  const stale = known.some((answer) => {
+    const order = compareExecutorOrigins(
+      storedStatusOrigin(input.incoming),
+      storedStatusOrigin(answer.status),
+    );
+    const askedAfter =
+      input.askedAt !== null && (answer.recordedAt === null || input.askedAt > answer.recordedAt);
+    return order === "same" || (order === "before" && !askedAfter);
+  });
+  if (stale) {
+    return input.unsaved;
+  }
+  const kept = input.unsaved.filter(
+    (member) =>
+      !answerCovers({
+        answer: input.incoming,
+        askedAt: input.askedAt,
+        recorded: member.status,
+        recordedAt: member.recordedAt,
+      }),
+  );
+  return storedStatusComplete(input.incoming)
+    ? kept
+    : [...kept, { status: input.incoming, recordedAt: input.recordedAt }];
+};

@@ -90,7 +90,7 @@ import {
   type NewWorkspace,
 } from "@sealant/validators";
 import {
-  attestationCoversExecutor,
+  attestationCoversObservations,
   captureFlushAnswer,
   captureStatusAnswer,
   CaptureObservationUnrecordedError,
@@ -3140,7 +3140,9 @@ export const stopWorkspace = (input: {
           : attestationCoversLaunch(
               attestation,
               attempt?.launchId ?? null,
-              attestationCoversExecutor(
+              // The seal must cover every unsaved answer on record no later one covers, not
+              // only the latest (review 9 #4).
+              attestationCoversObservations(
                 {
                   executorId: attestation.executorId,
                   epoch: attestation.epoch,
@@ -3154,6 +3156,9 @@ export const stopWorkspace = (input: {
                   reference: instance.reference,
                 },
                 observedCaptureFromStored(existing?.lastStatus, existing?.lastStatusAt?.getTime()),
+                (existing?.unsavedStatuses ?? []).map((member) =>
+                  observedCaptureFromStored(member.status, undefined),
+                ),
               ),
             );
       if (covers.covers) {

@@ -55,12 +55,18 @@
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
-import { statusSupersedes, type ExecutorOrigin } from "@sealant/db";
+import {
+  nextUnsavedObservations,
+  statusSupersedes,
+  type ExecutorOrigin,
+  type UnsavedObservation,
+} from "@sealant/db";
 import { Clock, Effect, Exit, Result } from "effect";
 import { z } from "zod";
 
 import {
   attestationCoversExecutor,
+  attestationCoversObservations,
   type ExecutorDeletionBasis,
   type ExecutorDeletionDecision,
   type ExecutorIdentity,
@@ -177,6 +183,15 @@ export interface CaptureDrainEntry {
    * cannot weigh, so no attestation may be taken over it.
    */
   readonly lastUnreadable?: boolean | undefined;
+  /**
+   * Every answer on record that says the executor's work is not saved and that no answer recorded
+   * since covers (review 9 #4, decision 25), `last` among them when it is one. Two answers no
+   * position orders are both here; nothing reads saved — no observed complete, no seal — until
+   * every one of them is covered.
+   */
+  readonly unsaved?: readonly CaptureFlushReport[] | undefined;
+  /** An unsaved answer is on record that cannot be read: nothing reads saved over it. */
+  readonly unsavedUnreadable?: boolean | undefined;
   /**
    * The evidence version this entry was read at (`workspace_capture_drains.evidence_version`):
    * every status recorded, observation opened or resolved, and attestation bumps it. A deletion
@@ -485,6 +500,8 @@ export interface InMemoryCaptureDrainRow {
   >;
   /** When the status on record was recorded, in the store's own order. */
   recordedTick?: number;
+  /** The unsaved answers no later one covers, with when each was recorded (the store's tick). */
+  unsaved?: UnsavedObservation<CaptureFlushReport>[];
   /** The executor's removal (decision 21), as `deletion_*` holds it. */
   deletion?:
     | {
@@ -529,6 +546,9 @@ const bump = (row: InMemoryCaptureDrainRow) => {
 /** An in-memory row as a read answers it: its version and observations in flight included. */
 const entryOf = (row: InMemoryCaptureDrainRow): CaptureDrainEntry => ({
   ...row.entry,
+  ...(row.unsaved === undefined || row.unsaved.length === 0
+    ? {}
+    : { unsaved: row.unsaved.map((member) => member.status) }),
   evidenceVersion: row.entry.evidenceVersion ?? 0,
   observationsInFlight: row.fences?.size ?? 0,
   ...(row.deletion?.state === "deleting-issued" ? { removalIssued: true } : {}),
@@ -688,9 +708,21 @@ export const inMemoryCaptureDrainLedger = (
             : row.entry.last === undefined
               ? undefined
               : storedStatusRecord(row.entry.last);
+        const recordedTick = nextTick();
+        // Every unsaved answer no later one covers stays on record (review 9 #4).
+        row.unsaved = [
+          ...nextUnsavedObservations({
+            unsaved: row.unsaved ?? [],
+            stored,
+            storedRecordedAt: row.recordedTick ?? null,
+            incoming: status,
+            askedAt: openedTick ?? null,
+            recordedAt: recordedTick,
+          }),
+        ];
         if (statusSupersedes({ stored, incoming: storedStatusRecord(status), causallyAfter })) {
           row.entry = { ...row.entry, last: status, lastAtMs: atMs, lastUnreadable: false };
-          row.recordedTick = nextTick();
+          row.recordedTick = recordedTick;
         }
         if (row.deletion?.state === "deleting") {
           // Received evidence outranks a removal decided before it: voided.
@@ -918,9 +950,26 @@ export const runIsCaptureSourced = <E, R>(input: {
 export const reportsComplete = (status: CaptureFlushReport | undefined): boolean =>
   status?.complete === true && status.incompleteReason === undefined;
 
-/** Whether Core itself read `complete: true` from the run's daemon (the drain's last status). */
+/**
+ * Whether Core itself read `complete: true` from the run's daemon (the drain's last status), and
+ * no unsaved answer on record is left that it does not cover (review 9 #4).
+ */
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
-  reportsComplete(entry?.last);
+  reportsComplete(entry?.last) && unsavedOnRecord(entry) === undefined;
+
+/**
+ * An unsaved answer on record that nothing recorded since covers (review 9 #4), as a line; the
+ * executor reads saved only when there is none. `undefined`: none.
+ */
+export const unsavedOnRecord = (entry: CaptureDrainEntry | undefined): string | undefined => {
+  if (entry?.unsavedUnreadable === true) {
+    return "an answer of the executor that says its work is not saved is on record and cannot be read";
+  }
+  const first = entry?.unsaved?.[0];
+  return first === undefined
+    ? undefined
+    : `an answer of the executor that no later one covers says its work is not saved (${describeCaptureStatus(first)})`;
+};
 
 /** Core's own latest observation of the run's daemon, as the preservation policy weighs it. */
 export const observedCaptureOf = (
@@ -930,18 +979,22 @@ export const observedCaptureOf = (
   if (last === undefined && entry?.lastUnreadable === true) {
     return { readable: false };
   }
-  return last === undefined
-    ? undefined
-    : {
-        readable: true,
-        epoch: last.epoch,
-        ...(last.headN === undefined ? {} : { headN: last.headN }),
-        complete: reportsComplete(last),
-        ...(last.incompleteReason === undefined ? {} : { incompleteReason: last.incompleteReason }),
-        ...(entry?.lastAtMs === undefined ? {} : { atMs: entry.lastAtMs }),
-        ...(last.origin === undefined ? {} : { origin: last.origin }),
-      };
+  return last === undefined ? undefined : observedCaptureOfStatus(last, entry?.lastAtMs);
 };
+
+/** One status the daemon answered, as the preservation policy weighs it. */
+export const observedCaptureOfStatus = (
+  status: CaptureFlushReport,
+  atMs?: number,
+): ObservedCapture => ({
+  readable: true,
+  epoch: status.epoch,
+  ...(status.headN === undefined ? {} : { headN: status.headN }),
+  complete: reportsComplete(status),
+  ...(status.incompleteReason === undefined ? {} : { incompleteReason: status.incompleteReason }),
+  ...(atMs === undefined ? {} : { atMs }),
+  ...(status.origin === undefined ? {} : { origin: status.origin }),
+});
 
 /**
  * Whether the control plane's recorded attestation covers THIS executor, weighed at the moment
@@ -955,10 +1008,18 @@ export const attestedCompleteFor = (
   executor: ExecutorIdentity,
 ): boolean => {
   const attested = entry?.completionAttested;
-  return (
-    attested !== undefined &&
-    attestationCoversExecutor(attested, executor, observedCaptureOf(entry)).covers
-  );
+  if (attested === undefined || entry?.unsavedUnreadable === true) {
+    return false;
+  }
+  // The seal must cover Core's latest observation AND every unsaved answer no later one covers
+  // (review 9 #4): a failure no position orders against the seal is never erased by an answer
+  // that arrived after it.
+  return attestationCoversObservations(
+    attested,
+    executor,
+    observedCaptureOf(entry),
+    (entry?.unsaved ?? []).map((status) => observedCaptureOfStatus(status)),
+  ).covers;
 };
 
 /**
@@ -1893,7 +1954,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             ? "a newer observation of the executor is on record that cannot be read"
             : newest?.last !== undefined && !reportsComplete(newest.last)
               ? `a newer observation of the executor says its work is not saved (${describeCaptureStatus(newest.last)})`
-              : undefined;
+              : unsavedOnRecord(newest);
       if (contradiction === undefined) {
         return outcome;
       }

@@ -1,0 +1,3 @@
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "unsaved_statuses" jsonb DEFAULT '[]' NOT NULL;--> statement-breakpoint
+-- A stored status that is not a saved answer is the first unsaved answer on record (review 9 #4).
+UPDATE "workspace_capture_drains" SET "unsaved_statuses" = jsonb_build_array(jsonb_build_object('status', "last_status", 'recordedAt', CASE WHEN "last_status_recorded_at" IS NULL THEN NULL ELSE (extract(epoch FROM "last_status_recorded_at") * 1000000)::bigint END)) WHERE "last_status" IS NOT NULL AND NOT (coalesce("last_status" ->> 'complete', '') = 'true' AND NOT ("last_status" ? 'incompleteReason'));

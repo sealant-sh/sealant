@@ -86,11 +86,24 @@ export const captureStatusFromStored = (stored: unknown): CaptureFlushReport | u
   return parsed.success ? parsed.data : undefined;
 };
 
+/** The unsaved answers no later one covers (review 9 #4); one that cannot be read is flagged. */
+const unsavedFromRow = (
+  row: WorkspaceCaptureDrain,
+): Pick<CaptureDrainEntry, "unsaved" | "unsavedUnreadable"> => {
+  const members = row.unsavedStatuses.map((member) => captureStatusFromStored(member.status));
+  const unsaved = members.filter((status): status is CaptureFlushReport => status !== undefined);
+  return {
+    ...(unsaved.length === 0 ? {} : { unsaved }),
+    ...(unsaved.length < members.length ? { unsavedUnreadable: true } : {}),
+  };
+};
+
 const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   lastProgressAt: row.lastProgressAt?.getTime(),
   last: captureStatusFromStored(row.lastStatus),
   lastAtMs: row.lastStatusAt?.getTime(),
   lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
+  ...unsavedFromRow(row),
   evidenceVersion: row.evidenceVersion,
   observationsInFlight: Object.keys(row.observationFences).length,
   ...(row.deletionState === "deleting-issued" ? { removalIssued: true } : {}),

@@ -14,6 +14,7 @@ import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
   InMemoryCaptureDrainStore,
+  attestedCompleteFor,
   authorizedDeletion,
   blueprintSourceKind,
   ledgerObservationRecorder,
@@ -698,6 +699,103 @@ describe("recordStatus · ordered by the executor, not by clocks (review 6 #6)",
     const e = await open(ledger);
     await Effect.runPromise(ledger.recordStatus("run_1", complete(), 0, e));
     expect(reportsComplete(last(ledger))).toBe(true);
+  });
+
+  // Review 9 #4 (decision 25): one latest status cannot hold two unsaved answers no position
+  // orders; an answer that arrives later and covers only one of them must not erase the other.
+  it("keeps every unsaved answer no later one covers, and a seal stands only over all of them (review 9 #4)", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const executor = { runId: "run_1", resourceId: null, reference: null };
+    const oldA = await open(ledger);
+    const savedA = await open(ledger);
+    const failedB = await open(ledger);
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(100), 1_000, savedA));
+    const row = ledger.store.rows.get("run_1");
+    if (row === undefined) {
+      throw new Error("no row");
+    }
+    // The control plane's seal of boot 1's observation 100.
+    row.entry = {
+      ...row.entry,
+      completionAttested: {
+        executorId: "run_1",
+        epoch: 1,
+        captureN: 7,
+        origin: origin(100),
+        atMs: 1_000,
+        by: "control plane",
+      },
+    };
+    // A recovery boot whose generation was not persisted (0) fails: no position orders it.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        "run_1",
+        captureStatus({
+          complete: false,
+          incompleteReason: "snapshot-failed",
+          origin: origin(1, "boot-B", 0),
+        }),
+        2_000,
+        failedB,
+      ),
+    );
+    const blocked = await Effect.runPromise(ledger.read("run_1"));
+    expect(blocked.readable && attestedCompleteFor(blocked.entry, executor)).toBe(false);
+    // Boot 1's pre-seal answer, delayed: the seal covers it, not boot B's failure.
+    await Effect.runPromise(ledger.recordStatus("run_1", failed(90), 3_000, oldA));
+    const revived = await Effect.runPromise(ledger.read("run_1"));
+    expect(revived.readable && attestedCompleteFor(revived.entry, executor)).toBe(false);
+    expect(recordedDeletionEvidence(revived, executor)).toMatchObject({
+      observedComplete: false,
+      attestedComplete: false,
+    });
+    expect(revived.readable && revived.entry?.unsaved?.map((s) => s.origin?.bootId)).toEqual([
+      "boot-B",
+      "boot-1",
+    ]);
+    // An answer asked for after both were recorded covers them: saved again.
+    const fresh = await open(ledger);
+    await Effect.runPromise(ledger.recordStatus("run_1", complete(101), 4_000, fresh));
+    const saved = await Effect.runPromise(ledger.read("run_1"));
+    expect(saved.readable && saved.entry?.unsaved).toBeUndefined();
+    expect(recordedDeletionEvidence(saved, executor)).toMatchObject({ observedComplete: true });
+  });
+
+  it("keeps a drain's complete answer unconfirmed while an unsaved answer it does not cover is on record (review 9 #4)", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    // Both asked before the drain's FINAL was sent, recorded while it runs: boot B's failure (no
+    // position orders it) and boot 1's older not-saved answer.
+    const failedB = await open(ledger);
+    const olderA = await open(ledger);
+    let raced = false;
+    const racing: CaptureDrainLedger = {
+      ...ledger,
+      openObservation: (runId, ttlMs) =>
+        ledger.openObservation(runId, ttlMs).pipe(
+          Effect.tap(() =>
+            raced
+              ? Effect.void
+              : Effect.gen(function* () {
+                  raced = true;
+                  yield* ledger.recordStatus(
+                    "run_1",
+                    captureStatus({
+                      complete: false,
+                      incompleteReason: "snapshot-failed",
+                      origin: origin(1, "boot-B", 0),
+                    }),
+                    2_000,
+                    failedB,
+                  );
+                  yield* ledger.recordStatus("run_1", failed(95), 2_500, olderA);
+                }),
+          ),
+        ),
+    };
+    // The FINAL's complete answer follows boot 1's (it is the latest status), not boot B's.
+    const outcome = await drain(fakeCaptureDaemon([complete(100)]), racing);
+    expect(last(ledger)?.complete).toBe(true);
+    expect(outcome.kind).toBe("unconfirmed");
   });
 });
 

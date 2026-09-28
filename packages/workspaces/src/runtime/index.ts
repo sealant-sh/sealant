@@ -147,6 +147,7 @@ export {
 
 export {
   attestationCoversExecutor,
+  attestationCoversObservations,
   decideExecutorDeletion,
   observedCaptureFromStored,
   runtimeRecoveryTakesSecretEnv,

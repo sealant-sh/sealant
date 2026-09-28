@@ -392,6 +392,45 @@ describe.skipIf(DATABASE_URL === undefined)(
       });
     });
 
+    // Review 9 #4 (decision 25): a recovery boot's failure that no position orders against the
+    // seal is not erased by boot 1's delayed pre-seal answer arriving after it; the stop refuses
+    // the seal, whose position covers the delayed answer but not the failure.
+    it("refuses a seal that covers the latest answer but not an unsaved answer no later one covers", async () => {
+      const { runId, workspaceId, run, drains } = await setup();
+      for (const token of ["old-a", "saved-a", "failed-b"]) {
+        await drains((repo) => repo.openObservation({ runId, token, ttlMs: 60_000 }));
+      }
+      const record = (status: CaptureFlushReport, fence: string) =>
+        drains((repo) =>
+          repo.recordStatus({
+            runId,
+            status: storedCaptureStatus(status),
+            observedAt: new Date(),
+            fence,
+          }),
+        );
+      await record({ ...SAVED, origin: origin(100) }, "saved-a");
+      await record(
+        { ...NOT_SAVED, origin: { ...origin(1), bootId: "boot-2", bootGeneration: 0 } },
+        "failed-b",
+      );
+      await record({ ...NOT_SAVED, incompleteReason: "sealing", origin: origin(90) }, "old-a");
+      const row = await drains((repo) => repo.getByRunId(runId));
+      expect(row?.lastStatus).toMatchObject({ origin: origin(90) });
+      expect(row?.observationFences).toEqual({});
+      const stop = await run(
+        stopWorkspace({
+          workspaceId,
+          payload: {
+            ownerUserId: owner,
+            completion: { executorId: "container_1", epoch: 3, captureN: 7, origin: origin(100) },
+          },
+        }),
+      );
+      expect(stop.completion).toMatchObject({ outcome: "ignored" });
+      expect(await deletionAfterExit(runId)).toMatchObject({ delete: false });
+    });
+
     // Review 6 #5: a received answer whose recording fails fences the executor: nothing Core
     // holds of it counts as current, so the older complete no longer lets its disk go — not now,
     // and not after the fault is gone, until a later observation is recorded.

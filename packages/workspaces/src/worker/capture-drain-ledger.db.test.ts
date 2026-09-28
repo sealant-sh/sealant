@@ -29,6 +29,7 @@ import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
 import {
   attestedCompleteFor,
   drainCaptureBeforeStop,
+  observedComplete,
   removeUnderDeletion,
   type CaptureDrainLedger,
 } from "./capture-drain.js";
@@ -613,5 +614,155 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
       ),
     ).toHaveProperty("openedAt");
+  });
+
+  it("keeps an unsaved answer no later one covers, so a delayed older answer cannot revive a seal (review 9 #4)", async () => {
+    const runId = await newRun();
+    const repo = <A, E>(use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+    const ledger = worker(dbA, "review9-evidence");
+    const originA = {
+      epoch: 1,
+      launch: "launch9",
+      bootId: "boot-A",
+      bootGeneration: 1,
+      observation: 100,
+      headN: 7,
+    };
+    await repo((drains) =>
+      drains.attestCompletion({
+        runId,
+        executorId: runId,
+        epoch: 1,
+        captureN: 7,
+        origin: originA,
+        attestedBy: "control plane",
+      }),
+    );
+    // Four requests sent before any answer was recorded: the order they are received in orders
+    // nothing.
+    const oldA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const savedA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const failedB = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const lateSavedA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    if (
+      oldA === undefined ||
+      savedA === undefined ||
+      failedB === undefined ||
+      lateSavedA === undefined
+    ) {
+      throw new Error("no observation could be opened");
+    }
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({ epoch: 1, headN: 7, origin: originA }),
+        Date.now(),
+        savedA,
+      ),
+    );
+    // A recovery boot whose generation could not be persisted (0): incomparable with boot A.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        captureStatus({
+          epoch: 1,
+          headN: 7,
+          complete: false,
+          incompleteReason: "snapshot-failed",
+          origin: { ...originA, bootId: "boot-B", bootGeneration: 0, observation: 1 },
+        }),
+        Date.now(),
+        failedB,
+      ),
+    );
+    const blocked = await Effect.runPromise(ledger.read(runId));
+    if (!blocked.readable) {
+      throw new Error("unreadable");
+    }
+    expect(attestedCompleteFor(blocked.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    // Boot A's older, pre-seal answer arrives last. It is incomparable with boot B's failure and
+    // must not erase it.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        captureStatus({
+          epoch: 1,
+          headN: 7,
+          complete: false,
+          incompleteReason: "sealing",
+          origin: { ...originA, observation: 90 },
+        }),
+        Date.now(),
+        oldA,
+      ),
+    );
+    const after = await Effect.runPromise(ledger.read(runId));
+    if (!after.readable) {
+      throw new Error("unreadable");
+    }
+    expect(attestedCompleteFor(after.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    expect(observedComplete(after.entry)).toBe(false);
+    expect(after.entry?.unsaved?.map((status) => status.origin?.bootId).sort()).toEqual([
+      "boot-A",
+      "boot-B",
+    ]);
+
+    // Boot A's next answer, complete, asked for before boot B's failure was recorded: it covers
+    // boot A's older answer, not boot B's. Still not saved, though the latest answer is complete.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({ epoch: 1, headN: 7, origin: { ...originA, observation: 101 } }),
+        Date.now(),
+        lateSavedA,
+      ),
+    );
+    const partly = await Effect.runPromise(ledger.read(runId));
+    if (!partly.readable) {
+      throw new Error("unreadable");
+    }
+    expect(partly.entry?.observationsInFlight).toBe(0);
+    expect(partly.entry?.last?.complete).toBe(true);
+    expect(partly.entry?.unsaved?.map((status) => status.origin?.bootId)).toEqual(["boot-B"]);
+    expect(observedComplete(partly.entry)).toBe(false);
+    expect(attestedCompleteFor(partly.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    // Only an answer asked for after both were recorded covers them all.
+    const fresh = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    if (fresh === undefined) {
+      throw new Error("no observation could be opened");
+    }
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({
+          epoch: 1,
+          headN: 7,
+          origin: { ...originA, bootId: "boot-C", bootGeneration: 0, observation: 1 },
+        }),
+        Date.now(),
+        fresh,
+      ),
+    );
+    const saved = await Effect.runPromise(ledger.read(runId));
+    if (!saved.readable) {
+      throw new Error("unreadable");
+    }
+    expect(saved.entry?.unsaved ?? []).toEqual([]);
+    expect(observedComplete(saved.entry)).toBe(true);
   });
 });
