@@ -561,6 +561,15 @@ describe("preserveBeforeDeadlineEffect · a launch still in progress at its pres
 // before driving any due FINAL, so slow or silent daemons delayed urgent executors past their
 // own cap. Each runtime is driven as soon as its own plan is due.
 describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
+  // The stop path removes launch material on the real filesystem: virtual time is advanced in
+  // small steps while real I/O completes between them.
+  const realSetTimeout = globalThis.setTimeout;
+  const advanceUntil = async (done: () => boolean, virtualMs: number) => {
+    for (let elapsed = 0; elapsed < virtualMs && !done(); elapsed += 10) {
+      await vi.advanceTimersByTimeAsync(10);
+      await new Promise((resolve) => realSetTimeout(resolve, 5));
+    }
+  };
   const sweepMany = async (
     rows: readonly WorkspaceRuntimeInstance[],
     run: (finalAt: number[], result: Promise<number>) => Promise<void>,
@@ -644,7 +653,7 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
     // 17 runtimes ending in 20 s: every one is past its latest start (deadline less the lead).
     const rows = Array.from({ length: 17 }, (_, index) => vm(index, 20_000));
     await sweepMany(rows, async (finalAt, result) => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await advanceUntil(() => finalAt.length === 17, 900);
       expect(finalAt.length).toBe(17);
       expect(Math.max(...finalAt)).toBeLessThan(1_000);
       await vi.advanceTimersByTimeAsync(20_000);
@@ -660,7 +669,7 @@ describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
       vm(16, 20_000),
     ];
     await sweepMany(rows, async (finalAt, result) => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await advanceUntil(() => finalAt.length === 1, 900);
       expect(finalAt).toHaveLength(1);
       expect(finalAt[0]).toBeLessThan(1_000);
       await vi.advanceTimersByTimeAsync(30_000);
