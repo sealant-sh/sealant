@@ -401,6 +401,68 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeDefined();
   });
 
+  // e2e 8 F9: an observation cut at a runtime's deadline held its 56 min fence, and the complete
+  // FINAL the executor answered 40 min later could not be confirmed. Its request ended: it lapses
+  // at once, and the next observation asked after it settles it.
+  it("lets the next observation settle a fence whose request ended unrecorded (e2e 8 F9)", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "worker-a");
+    const b = worker(dbB, "worker-b");
+    const version = async () => {
+      const read = await Effect.runPromise(b.read(runId));
+      return read.readable ? (read.entry?.evidenceVersion ?? -1) : -1;
+    };
+    // The API's bound: 55 min, plus the margin.
+    const cut = await Effect.runPromise(a.openObservation(runId, 56 * 60_000));
+    if (cut === undefined) {
+      throw new Error("no fence");
+    }
+    await Effect.runPromise(a.endObservation(runId, cut));
+    // Ended, not resolved: nothing is removed on the evidence before it.
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).toBe(
+      "changed",
+    );
+    const final = await Effect.runPromise(b.openObservation(runId, 60_000));
+    if (final === undefined) {
+      throw new Error("no fence");
+    }
+    await Effect.runPromise(b.recordStatus(runId, savedStatus(), Date.now(), final));
+    const row = await Effect.runPromise(b.read(runId));
+    expect(row.readable ? row.entry?.observationsInFlight : -1).toBe(0);
+    expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).toBe(
+      "authorized",
+    );
+  });
+
+  it("still honours a fence while its request can be answered, and one asked before it ended", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "worker-a");
+    const b = worker(dbB, "worker-b");
+    const inFlight = await Effect.runPromise(a.openObservation(runId, 56 * 60_000));
+    const before = await Effect.runPromise(b.openObservation(runId, 60_000));
+    if (inFlight === undefined || before === undefined) {
+      throw new Error("no fence");
+    }
+    // A later answer does not settle a fence whose request is still out.
+    const later = await Effect.runPromise(b.openObservation(runId, 60_000));
+    if (later === undefined) {
+      throw new Error("no fence");
+    }
+    await Effect.runPromise(b.recordStatus(runId, savedStatus(), Date.now(), later));
+    const fences = async () => {
+      const read = await Effect.runPromise(b.read(runId));
+      return read.readable ? read.entry?.observationsInFlight : -1;
+    };
+    expect(await fences()).toBe(2);
+    // It ends now; `before` was asked before that, so its answer does not settle it.
+    await Effect.runPromise(a.endObservation(runId, inFlight));
+    await Effect.runPromise(b.recordStatus(runId, savedStatus(), Date.now(), before));
+    expect(await fences()).toBe(1);
+    // Ending a fence already resolved writes nothing back.
+    await Effect.runPromise(b.endObservation(runId, before));
+    expect(await fences()).toBe(1);
+  });
+
   it("admits nothing once the removal completed: no observation, no recovery, no second removal", async () => {
     const runId = await newRun();
     const a = worker(dbA, "worker-a");

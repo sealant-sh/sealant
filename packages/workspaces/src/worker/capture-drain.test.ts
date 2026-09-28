@@ -6,11 +6,16 @@
  * that answers without moving is kept; progress and the stall window carry across calls AND
  * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
-import { Effect, Exit, Logger } from "effect";
+import { Effect, Exit, Fiber, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { removalRefused } from "../runtime/runtime-adapter.js";
-import type { CaptureFlushReport, SealantTarget } from "../sealantd/runtime.js";
+import {
+  SealantRuntime,
+  type CaptureFlushReport,
+  type SealantSession,
+  type SealantTarget,
+} from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { captureStatusFromStored } from "./capture-drain-ledger.js";
 import {
@@ -21,6 +26,8 @@ import {
   ledgerObservationRecorder,
   probeCaptureDaemon,
   captureProgressed,
+  captureStatusAnswer,
+  readCaptureStatus,
   describeCaptureStatus,
   drainCaptureBeforeStop,
   drainPermitsStop,
@@ -1572,5 +1579,84 @@ describe("a recovery claim keeps other deleters off (review 10 residual 2)", () 
     expect(await run(ledger.admitRecovery("run_recovering", lapsed))).toBe("unclaimed");
     expect(await run(ledger.admitRecovery("run_recovering", NO_CLAIM))).toBe("unclaimed");
     expect(await run(ledger.admitRecovery("run_recovering", current))).toBe("admitted");
+  });
+});
+
+// e2e 8 F9: the deadline sweep's status round trips, and the API's (a 55 min bound, so a 56 min
+// fence), were cut seconds before a runtime's deadline. Three fences stayed open for their whole
+// life, and the complete FINAL each executor answered 40 min later could not be confirmed:
+// "another observation of the executor is in flight or could not be recorded". An observation
+// whose request provably ended no longer holds its fence for the TTL.
+/** How many observations of run_1's executor are in flight. */
+const fencesOf = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>) =>
+  ledger.store.rows.get("run_1")?.fences?.size ?? 0;
+
+describe("an observation cut off at the deadline (e2e 8 F9)", () => {
+  /** The API's round-trip bound: its fences lapse 56 min after they open. */
+  const API_ROUND_TRIP_MS = 55 * 60_000;
+  const working = captureStatus({ pending: 2, complete: false, incompleteReason: "in-progress" });
+
+  it("records an answer received before the cut, so the complete FINAL after it is confirmed at once", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const recorder = ledgerObservationRecorder(ledger, "run_1", API_ROUND_TRIP_MS);
+    // The answer is in; the sweep's bound runs out while it is being recorded.
+    const slow = {
+      ...recorder,
+      record: (fence: { readonly token: string }, status: CaptureFlushReport, atMs: number) =>
+        Effect.sleep(50).pipe(Effect.andThen(recorder.record(fence, status, atMs))),
+    };
+    await Effect.runPromise(
+      readCaptureStatus(TARGET, 10, slow).pipe(Effect.provide(fakeCaptureDaemon([working]).layer)),
+    );
+    // What was received is on record, and nothing is left in flight.
+    expect(ledger.store.rows.get("run_1")?.entry.last?.incompleteReason).toBe("in-progress");
+    expect(fencesOf(ledger)).toBe(0);
+
+    const outcome = await drain(fakeCaptureDaemon([savedStatus()]), ledger);
+    expect(outcome.kind).toBe("drained");
+  });
+
+  it("ends the fence of an answer that could not be recorded, so the next complete FINAL settles it", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const recorder = ledgerObservationRecorder(ledger, "run_1", API_ROUND_TRIP_MS);
+    const lost = { ...recorder, record: () => Effect.succeed(false) };
+    await Effect.runPromise(
+      captureStatusAnswer(TARGET, lost, API_ROUND_TRIP_MS).pipe(
+        Effect.provide(fakeCaptureDaemon([working]).layer),
+      ),
+    );
+    // Its request ended; what it said is unknown. It still counts until a later observation,
+    // asked after it ended, is recorded: nothing is removed on the evidence before it.
+    expect(fencesOf(ledger)).toBe(1);
+    expect(
+      (await run(ledger.authorizeDeletion("run_1", await versionOf(ledger, "run_1")))).kind,
+    ).toBe("changed");
+
+    const outcome = await drain(fakeCaptureDaemon([savedStatus()]), ledger);
+    expect(outcome.kind).toBe("drained");
+    expect(fencesOf(ledger)).toBe(0);
+  });
+
+  it("still honours an observation whose answer could arrive: kept while its round trip runs", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const recorder = ledgerObservationRecorder(ledger, "run_1", API_ROUND_TRIP_MS);
+    // A daemon that has not answered yet.
+    const pending = Layer.succeed(SealantRuntime, {
+      connect: () =>
+        Effect.succeed({ captureStatus: () => Effect.never } as unknown as SealantSession),
+    });
+    const fiber = Effect.runFork(
+      captureStatusAnswer(TARGET, recorder, API_ROUND_TRIP_MS).pipe(Effect.provide(pending)),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fencesOf(ledger)).toBe(1);
+
+    const outcome = await drain(fakeCaptureDaemon([savedStatus()]), ledger);
+    expect(outcome.kind).toBe("unconfirmed");
+
+    // Cut off before any answer: nothing can land any more, and the fence is resolved.
+    await Effect.runPromise(Fiber.interrupt(fiber));
+    expect(fencesOf(ledger)).toBe(0);
+    expect((await drain(fakeCaptureDaemon([savedStatus()]), ledger)).kind).toBe("drained");
   });
 });

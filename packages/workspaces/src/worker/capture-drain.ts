@@ -383,6 +383,12 @@ export interface CaptureDrainLedger {
   /** Resolve an observation under which no answer was received. Best-effort: it may stay open. */
   readonly closeObservation: (runId: string, fence: CaptureObservationFence) => Effect.Effect<void>;
   /**
+   * End an observation whose request is over but whose answer was not recorded (e2e 8 F9): it
+   * lapses now, not `ttlMs` after it was opened, and still counts until an observation opened
+   * after it ended is recorded. Best-effort: when this fails too, it lapses at its TTL.
+   */
+  readonly endObservation: (runId: string, fence: CaptureObservationFence) => Effect.Effect<void>;
+  /**
    * Record a capture status received from the run's executor — by a drain, a probe, a sampler:
    * every status Core receives is evidence about its disk (review 5 #3) — resolving `fence`, the
    * observation it answers. Ordered by the executor's own history, never by any clock
@@ -547,7 +553,13 @@ export interface InMemoryCaptureDrainRow {
   /** Observations in flight, by token: when opened (the store's own order and clock), lapsing when. */
   fences?: Map<
     string,
-    { readonly openedTick: number; readonly openedAtMs: number; readonly expiresAtMs: number }
+    {
+      readonly openedTick: number;
+      readonly openedAtMs: number;
+      readonly expiresAtMs: number;
+      /** Its request ended without its answer recorded (`endObservation`), in the store's order. */
+      readonly endedTick?: number;
+    }
   >;
   /** When the status on record was recorded, in the store's own order. */
   recordedTick?: number;
@@ -769,6 +781,19 @@ export const inMemoryCaptureDrainLedger = (
           bump(row);
         }
       }),
+    endObservation: (runId, fence) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        const open = row === undefined ? undefined : fencesOf(row).get(fence.token);
+        if (row !== undefined && open !== undefined) {
+          fencesOf(row).set(fence.token, {
+            ...open,
+            expiresAtMs: Math.min(open.expiresAtMs, now()),
+            endedTick: nextTick(),
+          });
+          bump(row);
+        }
+      }),
     recordStatus: (runId, status, atMs, fence) =>
       Effect.sync(() => {
         const row = rowOf(runId);
@@ -809,7 +834,10 @@ export const inMemoryCaptureDrainLedger = (
           fences.delete(fence.token);
           if (opened !== undefined) {
             for (const [token, other] of fences) {
-              if (other.expiresAtMs < opened.openedAtMs) {
+              if (
+                other.expiresAtMs < opened.openedAtMs ||
+                (other.endedTick !== undefined && other.endedTick < opened.openedTick)
+              ) {
                 fences.delete(token);
               }
             }
@@ -1739,6 +1767,11 @@ export interface CaptureObservationRecorder {
   ) => Effect.Effect<boolean>;
   /** Resolve a fence under which nothing was received. */
   readonly close: (fence: CaptureObservationFence) => Effect.Effect<void>;
+  /**
+   * End a fence whose request is over but whose answer could not be recorded: it lapses now, and
+   * counts until an observation asked after it is recorded (e2e 8 F9).
+   */
+  readonly end: (fence: CaptureObservationFence) => Effect.Effect<void>;
 }
 
 /** How long past its own bound an observation's fence stays open before it may lapse. */
@@ -1753,6 +1786,7 @@ export const ledgerObservationRecorder = (
   open: ledger.openObservation(runId, boundMs + OBSERVATION_FENCE_MARGIN_MS),
   record: (fence, status, atMs) => ledger.recordStatus(runId, status, atMs, fence),
   close: (fence) => ledger.closeObservation(runId, fence),
+  end: (fence) => ledger.endObservation(runId, fence),
 });
 
 /** No observation could be marked in flight, so nothing was asked of the daemon. */
@@ -1792,27 +1826,39 @@ interface ObservedAnswer {
  * One round trip that can bring back a status, fenced: the observation is marked in flight before
  * it is sent, the answer recorded as soon as it arrives, and the fence resolved when nothing
  * arrived (a failure, a timeout, an interruption before the answer).
+ *
+ * Only the round trip itself can be cut off (e2e 8 F9: the deadline sweep's bound and the API's
+ * caller ran out seconds before a runtime's deadline, and three fences outlived the request by
+ * their whole 56 min TTL). Opening the fence and recording the answer run to the end whoever
+ * interrupts: a fence opened is always this call's to resolve, and an answer received is always
+ * recorded. One that cannot be recorded ends its fence at once — no answer can arrive after its
+ * request — so the next observation asked after it settles it, not the TTL.
  */
 const observedRoundTrip = <E, R>(
   recorder: CaptureObservationRecorder,
   roundTrip: Effect.Effect<CaptureFlushReport, E, R>,
 ): Effect.Effect<ObservedAnswer, E | CaptureObservationUnrecordedError, R> =>
-  Effect.gen(function* () {
-    const fence = yield* recorder.open;
-    if (fence === undefined) {
-      return yield* Effect.fail(
-        new CaptureObservationUnrecordedError(
-          "no observation of the executor could be marked in flight, so nothing was asked of its daemon",
-        ),
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fence = yield* recorder.open;
+      if (fence === undefined) {
+        return yield* Effect.fail(
+          new CaptureObservationUnrecordedError(
+            "no observation of the executor could be marked in flight, so nothing was asked of its daemon",
+          ),
+        );
+      }
+      const status = yield* restore(roundTrip).pipe(
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : recorder.close(fence))),
       );
-    }
-    const status = yield* roundTrip.pipe(
-      Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : recorder.close(fence))),
-    );
-    const atMs = yield* Clock.currentTimeMillis;
-    const recorded = yield* recorder.record(fence, status, atMs);
-    return { status, recorded };
-  });
+      const atMs = yield* Clock.currentTimeMillis;
+      const recorded = yield* recorder.record(fence, status, atMs);
+      if (!recorded) {
+        yield* recorder.end(fence);
+      }
+      return { status, recorded };
+    }),
+  );
 
 type Sample =
   | {
