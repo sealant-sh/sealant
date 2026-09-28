@@ -2798,6 +2798,17 @@ const apiObservationRecorder = (runId: string) =>
               ),
             ),
           ),
+      end: (fence) =>
+        drains
+          .endObservation({ runId, token: fence.token })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Capture observation of run ${runId} could not be recorded, and ending it failed too; it stays in flight until it lapses and a later observation resolves it.`,
+                cause,
+              ),
+            ),
+          ),
     } satisfies CaptureObservationRecorder;
   });
 

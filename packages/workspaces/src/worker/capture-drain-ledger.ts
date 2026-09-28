@@ -321,6 +321,21 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
+  endObservation: (runId, fence) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.endObservation({ runId, token: fence.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: ending an observation of run ${runId}'s executor whose answer could not be recorded failed; it stays in flight until it lapses and a later observation resolves it.`,
+          cause,
+        ),
+      ),
+    ),
+
   recordStatus: (runId, status, atMs, fence) =>
     run(
       Effect.gen(function* () {

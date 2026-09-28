@@ -32,6 +32,7 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "storeCaptureToken",
   "openObservation",
   "closeObservation",
+  "endObservation",
   "authorizeDeletion",
   "confirmDeletion",
   "issueDeletion",
@@ -140,8 +141,9 @@ export interface WorkspaceCaptureDrainRepoService {
    * #5): `token` names it until it is resolved — by `recordStatus` with its answer, or by
    * `closeObservation` when nothing was received. While any is unresolved, nothing Core holds of
    * the executor counts as current, and no deletion is authorized on it. It lapses `ttlMs` after
-   * it was opened (the database's clock); a lapsed fence still counts until an observation opened
-   * after it lapsed is recorded. Bumps the evidence version. Answers when it was opened.
+   * it was opened (the database's clock), or when its request ended without its answer recorded
+   * (`endObservation`); a lapsed fence still counts until an observation opened after it lapsed
+   * is recorded. Bumps the evidence version. Answers when it was opened.
    *
    * Refused while the executor's removal is held (`deleting`, decision 21: the deleter decided
    * on the evidence as it stood, and nothing asked after that is admitted before the runtime is
@@ -159,6 +161,17 @@ export interface WorkspaceCaptureDrainRepoService {
   >;
   /** Resolve an observation under which nothing was received (the request failed first). */
   readonly closeObservation: (input: {
+    readonly runId: string;
+    readonly token: string;
+  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
+  /**
+   * End an observation whose request is over but whose answer was not recorded (e2e 8 F9): it
+   * lapses now instead of `ttlMs` after it was opened, since no answer to it can arrive any more.
+   * It still counts, as a lapsed fence does, until an observation opened after it ended is
+   * recorded — so what it said is outranked only by what the executor answered after it. Bumps
+   * the evidence version. A fence already resolved stays resolved (nothing is written).
+   */
+  readonly endObservation: (input: {
     readonly runId: string;
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
@@ -685,6 +698,24 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
             })
             .where(eq(workspaceCaptureDrains.runId, input.runId))
+            .pipe(Effect.asVoid),
+        ),
+
+      endObservation: (input) =>
+        withRepoError(
+          "endObservation",
+          db
+            .update(workspaceCaptureDrains)
+            .set({
+              observationFences: sql`jsonb_set(${workspaceCaptureDrains.observationFences}, ARRAY[${input.token}::text, 'expiresAt'], to_jsonb(least((${workspaceCaptureDrains.observationFences} -> ${input.token}::text ->> 'expiresAt')::timestamptz, now())))`,
+              evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+            })
+            .where(
+              and(
+                eq(workspaceCaptureDrains.runId, input.runId),
+                sql`${workspaceCaptureDrains.observationFences} -> ${input.token}::text IS NOT NULL`,
+              ),
+            )
             .pipe(Effect.asVoid),
         ),
 
