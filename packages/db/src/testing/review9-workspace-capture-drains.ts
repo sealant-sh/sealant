@@ -1,11 +1,18 @@
+/**
+ * TEST FIXTURE — the drain ledger repository exactly as Core shipped it before review 10
+ * (`packages/db/src/repositories/workspace-capture-drains.ts` at 20e2aeb262fb, the ninth review's
+ * head), kept so tests can run an OLD Core writer against the CURRENT schema, as a rolling deploy
+ * does (decision 32): it maintains no `unsaved_statuses`, releases issued removals, ignores
+ * recovery claims, and never marks its transactions as a current writer. Not used by any
+ * production path. Changes from the original: this comment, and the service key.
+ */
 import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { nextUnsavedObservations, statusSupersedes } from "../capture-evidence-order.js";
-import { SealantDB, type DB } from "../client.js";
+import { statusSupersedes } from "../capture-evidence-order.js";
+import { SealantDB } from "../client.js";
 import {
   workspaceCaptureDrains,
-  workspaceRuntimeInstances,
   type NewWorkspaceCaptureDrain,
   type WorkspaceCaptureDrain,
   type WorkspaceCaptureDrainState,
@@ -25,8 +32,6 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "markRetained",
   "listRetainedDue",
   "recordRecoveryAttempt",
-  "claimRecovery",
-  "releaseRecovery",
   "requestRecovery",
   "storeCaptureToken",
   "openObservation",
@@ -37,7 +42,6 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "reconcileIssuedDeletion",
   "completeDeletion",
   "releaseDeletion",
-  "lapseIssuedDeletion",
   "admitRecovery",
 ]);
 
@@ -169,9 +173,8 @@ export interface WorkspaceCaptureDrainRepoService {
    * before it was opened. Ordered by the executor's own history, never by any process's clock
    * (`statusSupersedes`, review 6 #6): it replaces the stored status when its executor-origin
    * position is later, else when its request was sent after the stored one was recorded, else
-   * — nothing orders them — only when that cannot make a complete out of an incomplete. Every
-   * unsaved answer no answer recorded since covers is kept besides it (`unsaved_statuses`, review
-   * 9 #4): an incomparable later answer never erases one. No `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
+   * — nothing orders them — only when that cannot make a complete out of an incomplete. No
+   * `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
    * Core received about the executor outranks a decision taken before it. One already issued
@@ -197,19 +200,15 @@ export interface WorkspaceCaptureDrainRepoService {
    * on what is current. `held`: another deleter's removal is live — or was issued and its issuer
    * still holds it. `unresolved`: a removal was issued and its issuer's hold lapsed; nobody knows
    * whether the runtime carried it out until it is inspected (`reconcileIssuedDeletion`).
-   * `recovering`: a recovery attempt holds the executor (a live recovery claim, `claimRecovery`)
-   * and `recoveryToken` is not that claim's: nothing but that attempt removes it until the claim
-   * is released or lapses (review 10 residual 2). `deleted`: it was removed.
+   * `deleted`: it was removed.
    */
   readonly authorizeDeletion: (input: {
     readonly runId: string;
     readonly evidenceVersion: number;
     readonly token: string;
     readonly leaseMs: number;
-    /** The recovery claim the deleter holds, when the deleter is that recovery attempt. */
-    readonly recoveryToken?: string | undefined;
   }) => Effect.Effect<
-    "authorized" | "changed" | "held" | "unresolved" | "recovering" | "deleted",
+    "authorized" | "changed" | "held" | "unresolved" | "deleted",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -226,14 +225,11 @@ export interface WorkspaceCaptureDrainRepoService {
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
   /**
    * RIGHT BEFORE the runtime call that removes the executor (review 8 #7): the removal is still
-   * held by `token`, and the evidence it was authorized on is still the current version with no
-   * observation in flight; it becomes `deleting-issued` in the same transaction — from then on it
-   * stays exclusionary until its issuer records the outcome or the runtime is inspected
-   * (`reconcileIssuedDeletion`), whatever becomes of its hold. A removal taken over as issued
-   * already (`reissue`) is issued again only on the same check (review 10 #4): an earlier
-   * request staying exclusionary is not permission to send another. When the evidence moved
-   * since, nothing is sent, the removal stays issued, and its hold ends so it is settled from the
-   * runtime. Renews the hold. `false`: nothing may be called — decide again.
+   * held by `token` and nothing voided it (as `confirmDeletion`), and it becomes
+   * `deleting-issued` in the same transaction — from then on it stays exclusionary until its
+   * issuer records the outcome or the runtime is inspected (`reconcileIssuedDeletion`), whatever
+   * becomes of its hold. A removal taken over as issued already (`reissue`) is issued again while
+   * `token` holds it. Renews the hold. `false`: nothing may be called — decide again.
    */
   readonly issueDeletion: (input: {
     readonly runId: string;
@@ -242,30 +238,21 @@ export interface WorkspaceCaptureDrainRepoService {
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
   /**
    * Settle an issued removal whose issuer's hold lapsed, from what the runtime says of the
-   * executor now (review 8 #7). `gone`: it was carried out — `deleted`. `present`: not carried
-   * out YET — it failed, never reached the runtime, or is still on its way (review 9 #5: presence
-   * proves only that it has not finished). While the evidence it was authorized on is still the
-   * current version with no observation in flight, that authorization stands: it is taken over by
-   * `token` (fresh hold, still `deleting-issued`) to be issued again (`reissue`; `issueDeletion`
-   * checks the evidence again right before that request). Otherwise the
-   * evidence changed since, and the executor must be kept — but the earlier request may still
-   * act, so the removal stays issued and exclusionary (`outstanding`: nothing is observed or
-   * recovered) until the runtime's own bound on a removal request (`fenceMs`, the adapter's
-   * `removalFenceMs`) has passed since it was last issued; only then is it given up (`released`,
-   * the evidence version bumped) and decided again on what is current. No `fenceMs`: the runtime
-   * gives no such bound, and it stays `outstanding` until the runtime no longer has the executor
-   * or the evidence stands again. `held`: its issuer holds it again (or someone took it over);
-   * `none`: nothing issued is left to settle; `deleted` also when it was recorded removed
-   * meanwhile.
+   * executor now (review 8 #7). `gone`: it was carried out — `deleted`. `present`: it failed or
+   * never reached the runtime. While the evidence it was authorized on is still the current version
+   * with no observation in flight, that authorization stands: it is taken over by `token` (fresh
+   * hold, still `deleting-issued`) and issued again (`reissue`). Otherwise the evidence changed
+   * since: the removal is given up (`released`, the evidence version bumped) and decided again on
+   * what is current. `held`: its issuer holds it again (or someone took it over); `none`: nothing
+   * issued is left to settle; `deleted` also when it was recorded removed meanwhile.
    */
   readonly reconcileIssuedDeletion: (input: {
     readonly runId: string;
     readonly runtime: "gone" | "present";
     readonly token: string;
     readonly leaseMs: number;
-    readonly fenceMs?: number | undefined;
   }) => Effect.Effect<
-    "deleted" | "reissue" | "released" | "outstanding" | "held" | "none",
+    "deleted" | "reissue" | "released" | "held" | "none",
     WorkspaceCaptureDrainRepoError
   >;
   /**
@@ -277,42 +264,20 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly runId: string;
     readonly token: string;
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
-  /**
-   * Give a held removal up: it was not made, or the runtime definitively refused it (it answered
-   * and did not act). Observations resume. Never for a call whose outcome is unknown
-   * (`lapseIssuedDeletion`).
-   */
+  /** Give a held removal up (its runtime call failed, or it was not made): observations resume. */
   readonly releaseDeletion: (input: {
     readonly runId: string;
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * The runtime call of the issued removal `token` holds ended with an outcome nobody knows (a
-   * transport error after the request may have gone out; review 9 #5): it stays `deleting-issued`
-   * and exclusionary, its hold ends now, and whoever finds it settles it from the runtime
-   * (`reconcileIssuedDeletion`).
-   */
-  readonly lapseIssuedDeletion: (input: {
-    readonly runId: string;
-    readonly token: string;
-  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
-  /**
-   * May the recovery attempt holding claim `recoveryToken` start the run's executor? `deleting`: a
-   * live removal holds it, or one was issued (`deleting-issued`, whatever its hold: only
-   * inspecting the runtime settles it); `deleted`: it was removed; `unclaimed`: `recoveryToken`
-   * does not hold a live recovery claim (it lapsed, or another attempt holds it) — nothing may be
-   * started under it (review 10 residual 2: admission is only ever given under the claim that
-   * keeps every other deleter off, `authorizeDeletion`). A removal not yet issued whose hold
-   * lapsed is voided (and the evidence version bumped, so its deleter decides again) and recovery
-   * is `admitted`.
+   * May recovery start the run's executor? `deleting`: a live removal holds it, or one was issued
+   * (`deleting-issued`, whatever its hold: only inspecting the runtime settles it); `deleted`: it
+   * was removed. A removal not yet issued whose hold lapsed is voided (and the evidence version
+   * bumped, so its deleter decides again) and recovery is `admitted`.
    */
   readonly admitRecovery: (input: {
     readonly runId: string;
-    readonly recoveryToken: string;
-  }) => Effect.Effect<
-    "admitted" | "deleting" | "deleted" | "unclaimed",
-    WorkspaceCaptureDrainRepoError
-  >;
+  }) => Effect.Effect<"admitted" | "deleting" | "deleted", WorkspaceCaptureDrainRepoError>;
   /**
    * Record the owner's request to discard the run's unsaved captures (the audit): the first
    * request's instant and requester stand. Returns the row.
@@ -347,31 +312,12 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly runId: string;
     readonly reason: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
-  /**
-   * Retained executors whose next recovery attempt is due and that nobody is recovering now (no
-   * live recovery lease): the one whose runtime ends soonest first (its platform deadline, review
-   * 9 #8), then the most overdue.
-   */
+  /** Retained executors whose next recovery attempt is due, the most overdue first. */
   readonly listRetainedDue: (input: {
     readonly limit: number;
     /** Only these runs (executors just recorded retained); absent = every due retention. */
     readonly runIds?: readonly string[];
   }) => Effect.Effect<readonly WorkspaceCaptureDrain[], WorkspaceCaptureDrainRepoError>;
-  /**
-   * Take the recovery of the run's retained executor for one attempt (review 9 #8): held by
-   * `token` for `leaseMs` of database time, when nobody holds it (or its holder's lease lapsed).
-   * `false`: another attempt is under way (or it is not retained).
-   */
-  readonly claimRecovery: (input: {
-    readonly runId: string;
-    readonly token: string;
-    readonly leaseMs: number;
-  }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
-  /** The attempt `token` held ended: its lease is released (fenced on the token). */
-  readonly releaseRecovery: (input: {
-    readonly runId: string;
-    readonly token: string;
-  }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /** One recovery attempt happened: count it, keep its error (or clear it), schedule the next. */
   readonly recordRecoveryAttempt: (input: {
     readonly runId: string;
@@ -400,7 +346,7 @@ export interface WorkspaceCaptureDrainRepoService {
 export class WorkspaceCaptureDrainRepo extends Context.Service<
   WorkspaceCaptureDrainRepo,
   WorkspaceCaptureDrainRepoService
->()("WorkspaceCaptureDrainRepo") {}
+>()("Review9WorkspaceCaptureDrainRepo") {}
 
 const leaseExpiry = (leaseMs: number) =>
   sql`now() + (${Math.max(0, Math.round(leaseMs))} * interval '1 millisecond')`;
@@ -412,7 +358,6 @@ const NO_DELETION = {
   deletionEvidenceVersion: null,
   deletionAuthorizedAt: null,
   deletionExpiresAt: null,
-  deletionIssuedAt: null,
 } as const;
 
 /** The removal state under the row lock, with whether its hold is still live (database clock). */
@@ -421,22 +366,6 @@ const deletionColumns = {
   deletionToken: workspaceCaptureDrains.deletionToken,
   deletionEvidenceVersion: workspaceCaptureDrains.deletionEvidenceVersion,
   deletionLive: sql<boolean>`coalesce(${workspaceCaptureDrains.deletionExpiresAt} > now(), false)`,
-};
-
-/**
- * Mark the transaction as a writer that keeps the ledger's invariants itself (review 10, decision
- * 32): `unsaved_statuses`, an issued removal until its outcome is known, the evidence behind every
- * removal request, recovery claims. The table's trigger (`workspace_capture_drains_invariants`)
- * keeps them for every write NOT marked — a Core process from before them, still running in a
- * rolling deploy — and leaves marked writes as they are. Local to the transaction.
- */
-const markCurrentWriter = (tx: Pick<DB, "execute">) =>
-  tx.execute(sql`SELECT set_config('sealant.capture_ledger', '1', true)`);
-
-/** The run's recovery claim, with whether it is still live (database clock). */
-const recoveryClaimColumns = {
-  recoveryLeaseToken: workspaceCaptureDrains.recoveryLeaseToken,
-  recoveryLive: sql<boolean>`coalesce(${workspaceCaptureDrains.recoveryLeaseUntil} > now(), false)`,
 };
 
 /** The removal state, the evidence version and the fences (select under the row lock). */
@@ -454,10 +383,6 @@ const deletionEvidenceCurrent = (current: {
 }): boolean =>
   current.deletionEvidenceVersion === current.evidenceVersion &&
   Object.keys(current.observationFences).length === 0;
-
-/** A database instant in microseconds, as read (`::bigint::text`); `null` when unknown. */
-const microseconds = (value: string | null): number | null =>
-  value === null ? null : Number(value);
 
 const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
@@ -669,7 +594,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "recordStatus",
           db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* markCurrentWriter(tx);
               yield* tx
                 .insert(workspaceCaptureDrains)
                 .values({ runId: input.runId } satisfies NewWorkspaceCaptureDrain)
@@ -684,18 +608,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               const [current] = yield* tx
                 .select({
                   lastStatus: workspaceCaptureDrains.lastStatus,
-                  unsavedStatuses: workspaceCaptureDrains.unsavedStatuses,
                   deletionState: workspaceCaptureDrains.deletionState,
                   causallyAfter: sql<boolean>`coalesce(${workspaceCaptureDrains.lastStatusRecordedAt} IS NULL OR ${openedAt} > ${workspaceCaptureDrains.lastStatusRecordedAt}, false)`,
-                  // The same instants in microseconds (the database's clock), for the unsaved
-                  // answers on record, which each keep when they were recorded.
-                  lastRecordedAtUs: sql<
-                    string | null
-                  >`(extract(epoch FROM ${workspaceCaptureDrains.lastStatusRecordedAt}) * 1000000)::bigint::text`,
-                  askedAtUs: sql<
-                    string | null
-                  >`(extract(epoch FROM ${openedAt}) * 1000000)::bigint::text`,
-                  nowUs: sql<string>`(extract(epoch FROM now()) * 1000000)::bigint::text`,
                 })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
@@ -710,16 +624,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 incoming: input.status,
                 causallyAfter: current.causallyAfter,
               });
-              // Every unsaved answer no later one covers stays on record, whichever status is
-              // the latest (review 9 #4, decision 25).
-              const unsaved = nextUnsavedObservations({
-                unsaved: current.unsavedStatuses,
-                stored: current.lastStatus,
-                storedRecordedAt: microseconds(current.lastRecordedAtUs),
-                incoming: input.status,
-                askedAt: microseconds(current.askedAtUs),
-                recordedAt: Number(current.nowUs),
-              });
               // This fence resolves, and so does every fence that lapsed before it was opened:
               // this answer was asked for after their owners could still be waiting on theirs.
               const remaining =
@@ -730,7 +634,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .update(workspaceCaptureDrains)
                 .set({
                   observationFences: remaining,
-                  unsavedStatuses: unsaved,
                   evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
                   // Received evidence outranks a removal decided before it: voided (decision 21).
                   // One already issued cannot be: it stays until its outcome is known, and the
@@ -755,13 +658,11 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "authorizeDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* markCurrentWriter(tx);
               const [current] = yield* tx
                 .select({
                   evidenceVersion: workspaceCaptureDrains.evidenceVersion,
                   observationFences: workspaceCaptureDrains.observationFences,
                   ...deletionColumns,
-                  ...recoveryClaimColumns,
                 })
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
@@ -776,14 +677,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 // Issued: never re-authorized over. Its issuer still holds it, or nobody knows
                 // whether the runtime carried it out until it is inspected (review 8 #7).
                 return current.deletionLive ? ("held" as const) : ("unresolved" as const);
-              }
-              if (
-                current.recoveryLive &&
-                current.recoveryLeaseToken !== (input.recoveryToken ?? null)
-              ) {
-                // A recovery attempt was admitted under its live claim: only that attempt removes
-                // the executor until the claim ends (review 10 residual 2).
-                return "recovering" as const;
               }
               if (
                 current.deletionState === "deleting" &&
@@ -818,7 +711,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "confirmDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* markCurrentWriter(tx);
               const [current] = yield* tx
                 .select(lockedDeletionColumns)
                 .from(workspaceCaptureDrains)
@@ -847,7 +739,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "issueDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* markCurrentWriter(tx);
               const [current] = yield* tx
                 .select(lockedDeletionColumns)
                 .from(workspaceCaptureDrains)
@@ -857,25 +748,9 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 return false;
               }
               if (
-                current.deletionState !== "deleting" &&
-                current.deletionState !== "deleting-issued"
+                current.deletionState !== "deleting-issued" &&
+                !(current.deletionState === "deleting" && deletionEvidenceCurrent(current))
               ) {
-                return false;
-              }
-              // Every request sent needs the evidence the removal was authorized on to stand,
-              // the first and every one sent again alike (review 10 #4, decision 31): a request
-              // already out stays exclusionary whatever the evidence does, but it gives no
-              // permission to send another once the evidence moved.
-              if (!deletionEvidenceCurrent(current)) {
-                if (current.deletionState === "deleting-issued") {
-                  // Taken over to be issued again, and the evidence moved since: nothing more is
-                  // sent. The request already out stays issued; its hold ends now, so it is
-                  // settled from the runtime (`outstanding` until its bound passes).
-                  yield* tx
-                    .update(workspaceCaptureDrains)
-                    .set({ deletionExpiresAt: sql`now()` })
-                    .where(eq(workspaceCaptureDrains.runId, input.runId));
-                }
                 return false;
               }
               yield* tx
@@ -883,7 +758,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .set({
                   deletionState: "deleting-issued",
                   deletionExpiresAt: leaseExpiry(input.leaseMs),
-                  deletionIssuedAt: sql`now()`,
                 })
                 .where(eq(workspaceCaptureDrains.runId, input.runId));
               return true;
@@ -896,18 +770,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "reconcileIssuedDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
-              yield* markCurrentWriter(tx);
-              const fenceMs = input.fenceMs;
               const [current] = yield* tx
-                .select({
-                  ...lockedDeletionColumns,
-                  // The runtime's bound on a removal request has passed since it was last
-                  // issued: nothing that request sent can still act (review 9 #5).
-                  fenced:
-                    fenceMs === undefined
-                      ? sql<boolean>`false`
-                      : sql<boolean>`coalesce(${workspaceCaptureDrains.deletionIssuedAt} + (${Math.max(0, Math.round(fenceMs))} * interval '1 millisecond') <= now(), false)`,
-                })
+                .select(lockedDeletionColumns)
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
@@ -941,11 +805,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   })
                   .where(eq(workspaceCaptureDrains.runId, input.runId));
                 return "reissue" as const;
-              }
-              if (!current.fenced) {
-                // The evidence changed, so it may not be issued again; but the request already
-                // sent may still act, so it stays issued: nothing observed, nothing recovered.
-                return "outstanding" as const;
               }
               yield* tx
                 .update(workspaceCaptureDrains)
@@ -991,34 +850,13 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
       releaseDeletion: (input) =>
         withRepoError(
           "releaseDeletion",
-          db.transaction((tx) =>
-            Effect.gen(function* () {
-              // A definitive refusal may give an issued removal up: this writer knows it.
-              yield* markCurrentWriter(tx);
-              yield* tx
-                .update(workspaceCaptureDrains)
-                .set(NO_DELETION)
-                .where(
-                  and(
-                    eq(workspaceCaptureDrains.runId, input.runId),
-                    inArray(workspaceCaptureDrains.deletionState, ["deleting", "deleting-issued"]),
-                    eq(workspaceCaptureDrains.deletionToken, input.token),
-                  ),
-                );
-            }),
-          ),
-        ),
-
-      lapseIssuedDeletion: (input) =>
-        withRepoError(
-          "lapseIssuedDeletion",
           db
             .update(workspaceCaptureDrains)
-            .set({ deletionExpiresAt: sql`now()` })
+            .set(NO_DELETION)
             .where(
               and(
                 eq(workspaceCaptureDrains.runId, input.runId),
-                eq(workspaceCaptureDrains.deletionState, "deleting-issued"),
+                inArray(workspaceCaptureDrains.deletionState, ["deleting", "deleting-issued"]),
                 eq(workspaceCaptureDrains.deletionToken, input.token),
               ),
             )
@@ -1031,31 +869,18 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           db.transaction((tx) =>
             Effect.gen(function* () {
               const [current] = yield* tx
-                .select({ ...deletionColumns, ...recoveryClaimColumns })
+                .select(deletionColumns)
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
-              if (current?.deletionState === "deleted") {
+              if (current === undefined || current.deletionState === null) {
+                return "admitted" as const;
+              }
+              if (current.deletionState === "deleted") {
                 return "deleted" as const;
               }
-              if (
-                current !== undefined &&
-                (current.deletionState === "deleting-issued" ||
-                  (current.deletionState === "deleting" && current.deletionLive))
-              ) {
+              if (current.deletionState === "deleting-issued" || current.deletionLive) {
                 return "deleting" as const;
-              }
-              // Admitted only under the live claim that keeps every other deleter off
-              // (`authorizeDeletion`): what it starts, no one else removes until it ends.
-              if (
-                current === undefined ||
-                !current.recoveryLive ||
-                current.recoveryLeaseToken !== input.recoveryToken
-              ) {
-                return "unclaimed" as const;
-              }
-              if (current.deletionState === null) {
-                return "admitted" as const;
               }
               // Its deleter's hold lapsed before it issued anything: voided, and its deleter
               // decides again.
@@ -1141,12 +966,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
         withRepoError(
           "listRetainedDue",
           db
-            .select({ drain: workspaceCaptureDrains })
+            .select()
             .from(workspaceCaptureDrains)
-            .leftJoin(
-              workspaceRuntimeInstances,
-              eq(workspaceRuntimeInstances.runId, workspaceCaptureDrains.runId),
-            )
             .where(
               and(
                 isNotNull(workspaceCaptureDrains.retainedAt),
@@ -1154,101 +975,32 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
                 ),
-                or(
-                  isNull(workspaceCaptureDrains.recoveryLeaseUntil),
-                  lte(workspaceCaptureDrains.recoveryLeaseUntil, sql`now()`),
-                ),
                 ...(input.runIds === undefined
                   ? []
                   : [inArray(workspaceCaptureDrains.runId, [...input.runIds])]),
               ),
             )
-            // The runtime that ends soonest first, whatever its backoff said (review 9 #8).
-            .orderBy(
-              sql`${workspaceRuntimeInstances.runtimeDeadlineAt} ASC NULLS LAST`,
-              asc(workspaceCaptureDrains.nextRecoveryAt),
-            )
-            .limit(Math.max(1, Math.round(input.limit)))
-            .pipe(
-              Effect.map((rows: readonly { readonly drain: WorkspaceCaptureDrain }[]) =>
-                rows.map((row) => row.drain),
-              ),
-            ),
-        ),
-
-      claimRecovery: (input) =>
-        withRepoError(
-          "claimRecovery",
-          Effect.gen(function* () {
-            const [row] = yield* db
-              .update(workspaceCaptureDrains)
-              .set({
-                recoveryLeaseToken: input.token,
-                recoveryLeaseUntil: leaseExpiry(input.leaseMs),
-                // Not due to anyone before the claim ends: a worker from before claims lists what
-                // is due and would start a second attempt beside this one (decision 32). The
-                // attempt schedules what follows it (`recordRecoveryAttempt`).
-                nextRecoveryAt: sql`greatest(coalesce(${workspaceCaptureDrains.nextRecoveryAt}, now()), ${leaseExpiry(input.leaseMs)})`,
-              })
-              .where(
-                and(
-                  eq(workspaceCaptureDrains.runId, input.runId),
-                  isNotNull(workspaceCaptureDrains.retainedAt),
-                  or(
-                    isNull(workspaceCaptureDrains.recoveryLeaseUntil),
-                    lte(workspaceCaptureDrains.recoveryLeaseUntil, sql`now()`),
-                    eq(workspaceCaptureDrains.recoveryLeaseToken, input.token),
-                  ),
-                ),
-              )
-              .returning({ runId: workspaceCaptureDrains.runId });
-            return row !== undefined;
-          }),
-        ),
-
-      releaseRecovery: (input) =>
-        withRepoError(
-          "releaseRecovery",
-          db
-            .update(workspaceCaptureDrains)
-            .set({
-              recoveryLeaseToken: null,
-              recoveryLeaseUntil: null,
-              // Still the claim's end (the attempt scheduled nothing after it): due again now,
-              // as it was when claimed.
-              nextRecoveryAt: sql`CASE WHEN ${workspaceCaptureDrains.nextRecoveryAt} = ${workspaceCaptureDrains.recoveryLeaseUntil} THEN now() ELSE ${workspaceCaptureDrains.nextRecoveryAt} END`,
-            })
-            .where(
-              and(
-                eq(workspaceCaptureDrains.runId, input.runId),
-                eq(workspaceCaptureDrains.recoveryLeaseToken, input.token),
-              ),
-            )
-            .pipe(Effect.asVoid),
+            .orderBy(asc(workspaceCaptureDrains.nextRecoveryAt))
+            .limit(Math.max(1, Math.round(input.limit))),
         ),
 
       recordRecoveryAttempt: (input) =>
         withRepoError(
           "recordRecoveryAttempt",
-          db.transaction((tx) =>
-            Effect.gen(function* () {
-              // Written by the attempt that holds the claim, scheduling what follows it.
-              yield* markCurrentWriter(tx);
-              yield* tx
-                .update(workspaceCaptureDrains)
-                .set({
-                  recoveryAttempts: sql`${workspaceCaptureDrains.recoveryAttempts} + 1`,
-                  lastRecoveryError: input.error,
-                  nextRecoveryAt: input.nextRecoveryAt,
-                })
-                .where(
-                  and(
-                    eq(workspaceCaptureDrains.runId, input.runId),
-                    isNotNull(workspaceCaptureDrains.retainedAt),
-                  ),
-                );
-            }),
-          ),
+          db
+            .update(workspaceCaptureDrains)
+            .set({
+              recoveryAttempts: sql`${workspaceCaptureDrains.recoveryAttempts} + 1`,
+              lastRecoveryError: input.error,
+              nextRecoveryAt: input.nextRecoveryAt,
+            })
+            .where(
+              and(
+                eq(workspaceCaptureDrains.runId, input.runId),
+                isNotNull(workspaceCaptureDrains.retainedAt),
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
 
       storeCaptureToken: (input) =>

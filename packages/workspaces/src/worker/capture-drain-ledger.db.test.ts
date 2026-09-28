@@ -20,12 +20,13 @@ import {
   type DB,
   type WorkspaceCaptureDrainRepoService,
 } from "@sealant/db";
+import * as review9 from "@sealant/db/testing/review9-capture-drains";
 import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
-import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
+import { databaseCaptureDrainLedger, storedCaptureStatus } from "./capture-drain-ledger.js";
 import {
   attestedCompleteFor,
   drainCaptureBeforeStop,
@@ -35,6 +36,9 @@ import {
 } from "./capture-drain.js";
 
 const DATABASE_URL = process.env.SEALANT_TEST_DATABASE_URL;
+/** The executor a rolling-deploy case reads completion for: the run itself, no runtime. */
+const rollingExecutor = (runId: string) => ({ runId, resourceId: null, reference: null });
+
 /** A recovery ticket that holds no claim: admission answers only what excludes a recovery. */
 const NO_CLAIM = { token: "no-recovery-claim" };
 
@@ -994,5 +998,299 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect((await Effect.runPromise(b.authorizeDeletion(runId, await version()))).kind).toBe(
       "authorized",
     );
+  });
+
+  // Review 10, decision 32: a rolling deploy runs a Core process from before the current
+  // invariants beside current ones, on the current schema. The old writer here is the ninth
+  // review's repository, verbatim (`@sealant/db/testing/review9-capture-drains`); the database
+  // keeps the invariants for it.
+  describe("a writer from before the invariants, on the current schema (rolling deploy)", () => {
+    const withOld = <A>(
+      use: (drains: review9.WorkspaceCaptureDrainRepoService) => Effect.Effect<A, unknown>,
+    ) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* review9.WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            review9.WorkspaceCaptureDrainRepoLive.pipe(
+              Layer.provide(Layer.succeed(SealantDB, dbB)),
+            ),
+          ),
+        ),
+      );
+    const current = <A, E>(
+      use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>,
+    ) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+    const row = (runId: string) => current((drains) => drains.getByRunId(runId));
+    const origin = {
+      epoch: 1,
+      launch: "rolling",
+      bootId: "A",
+      bootGeneration: 1,
+      observation: 100,
+      headN: 7,
+    };
+
+    // The reviewer's sequence: complete A100 recorded by a current worker; an old worker records
+    // the old seal, then an incomparable failure from boot B (the seal no longer stands), then a
+    // delayed failure A90 through an older fence, which replaces B as the latest status.
+    it("keeps an unsaved answer an old writer replaces: its old seal never stands again", async () => {
+      const runId = await newRun();
+      const ledger = worker(dbA, "current-reader");
+      const oldA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      const savedA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      const failedB = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      // Asked before the old writer recorded B: its answer, when it comes, cannot cover B.
+      const lateSave = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      if (
+        oldA === undefined ||
+        savedA === undefined ||
+        failedB === undefined ||
+        lateSave === undefined
+      ) {
+        throw new Error("fences");
+      }
+      await Effect.runPromise(
+        ledger.recordStatus(runId, savedStatus({ headN: 7, origin }), Date.now(), savedA),
+      );
+      await withOld((repo) =>
+        repo.attestCompletion({
+          runId,
+          executorId: runId,
+          epoch: 1,
+          captureN: 7,
+          origin,
+          attestedBy: "store",
+        }),
+      );
+      await withOld((repo) =>
+        repo.recordStatus({
+          runId,
+          status: storedCaptureStatus(
+            captureStatus({
+              headN: 7,
+              complete: false,
+              incompleteReason: "snapshot-failed",
+              origin: { ...origin, bootId: "B", bootGeneration: 0, observation: 1 },
+            }),
+          ),
+          observedAt: new Date(),
+          fence: failedB.token,
+        }),
+      );
+      const blocked = await Effect.runPromise(ledger.read(runId));
+      expect(blocked.readable && attestedCompleteFor(blocked.entry, rollingExecutor(runId))).toBe(
+        false,
+      );
+      await withOld((repo) =>
+        repo.recordStatus({
+          runId,
+          status: storedCaptureStatus(
+            captureStatus({
+              headN: 7,
+              complete: false,
+              incompleteReason: "changed",
+              origin: { ...origin, observation: 90 },
+            }),
+          ),
+          observedAt: new Date(),
+          fence: oldA.token,
+        }),
+      );
+      const after = await Effect.runPromise(ledger.read(runId));
+      if (!after.readable) throw new Error("unreadable");
+      expect(attestedCompleteFor(after.entry, rollingExecutor(runId))).toBe(false);
+      expect(observedComplete(after.entry)).toBe(false);
+      // Both unsaved answers stay on record: B, which the old writer replaced, and A90.
+      expect(after.entry?.unsaved?.map((status) => status.origin?.bootId).toSorted()).toEqual([
+        "A",
+        "B",
+      ]);
+      // A current save of boot A, asked before B was recorded, covers A90 and never B.
+      await Effect.runPromise(
+        ledger.recordStatus(
+          runId,
+          savedStatus({ headN: 7, origin: { ...origin, observation: 120 } }),
+          Date.now(),
+          lateSave,
+        ),
+      );
+      const covered = await Effect.runPromise(ledger.read(runId));
+      expect(
+        covered.readable && covered.entry?.unsaved?.map((status) => status.origin?.bootId),
+      ).toEqual(["B"]);
+      expect(covered.readable && observedComplete(covered.entry)).toBe(false);
+    });
+
+    /** A removal an old writer authorized on saved evidence and issued; `leaseMs` its hold. */
+    const oldIssued = async (leaseMs: number) => {
+      const runId = await newRun();
+      await Effect.runPromise(
+        worker(dbA, "saver").recordStatus(runId, savedStatus({ headN: 7 }), Date.now()),
+      );
+      const version = (await row(runId))?.evidenceVersion ?? 0;
+      const token = randomUUID();
+      expect(
+        await withOld((repo) =>
+          repo.authorizeDeletion({ runId, evidenceVersion: version, token, leaseMs }),
+        ),
+      ).toBe("authorized");
+      expect(await withOld((repo) => repo.issueDeletion({ runId, token, leaseMs }))).toBe(true);
+      return { runId, token };
+    };
+
+    it("keeps an issued removal an old writer gives up: only its outcome ends it", async () => {
+      const { runId, token } = await oldIssued(60_000);
+      // Its issue instant is recorded for it (the runtime's bound runs from it).
+      expect((await row(runId))?.deletionIssuedAt).toBeInstanceOf(Date);
+      // The old writer's call failed with a lost reply: it releases the removal it issued.
+      await withOld((repo) => repo.releaseDeletion({ runId, token }));
+      const kept = await row(runId);
+      expect(kept?.deletionState).toBe("deleting-issued");
+      // Its hold ended with it, so it is settled from the runtime at once.
+      expect(kept?.deletionExpiresAt?.getTime() ?? Infinity).toBeLessThanOrEqual(Date.now());
+      const b = worker(dbA, "current");
+      expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
+      expect(await Effect.runPromise(b.admitRecovery(runId, NO_CLAIM))).toBe("deleting");
+      // New evidence arrives; the old writer settles the removal as released (it predates
+      // outstanding removals). It stays issued: outstanding for the current worker.
+      await Effect.runPromise(
+        b.recordStatus(
+          runId,
+          captureStatus({ headN: 8, complete: false, incompleteReason: "changed" }),
+          Date.now(),
+        ),
+      );
+      expect(
+        await withOld((repo) =>
+          repo.reconcileIssuedDeletion({
+            runId,
+            runtime: "present",
+            token: randomUUID(),
+            leaseMs: 60_000,
+          }),
+        ),
+      ).toBe("released");
+      expect((await row(runId))?.deletionState).toBe("deleting-issued");
+      expect(
+        await Effect.runPromise(b.reconcileIssuedDeletion(runId, "present", 60 * 60_000)),
+      ).toEqual({ kind: "outstanding" });
+      // Its outcome ends it: the runtime no longer has the executor.
+      expect(await Effect.runPromise(b.reconcileIssuedDeletion(runId, "gone"))).toEqual({
+        kind: "deleted",
+      });
+    });
+
+    it("refuses an old writer's repeat removal request on evidence that moved (review 10 #4)", async () => {
+      const runId = await newRun();
+      const b = worker(dbA, "current");
+      const stale = await Effect.runPromise(b.openObservation(runId, 1));
+      if (stale === undefined) throw new Error("fence");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const fresh = await Effect.runPromise(b.openObservation(runId, 60_000));
+      if (fresh === undefined) throw new Error("fence");
+      await Effect.runPromise(b.recordStatus(runId, savedStatus({ headN: 7 }), Date.now(), fresh));
+      const version = (await row(runId))?.evidenceVersion ?? 0;
+      const first = randomUUID();
+      expect(
+        await withOld((repo) =>
+          repo.authorizeDeletion({ runId, evidenceVersion: version, token: first, leaseMs: 1 }),
+        ),
+      ).toBe("authorized");
+      expect(await withOld((repo) => repo.issueDeletion({ runId, token: first, leaseMs: 1 }))).toBe(
+        true,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Its hold lapsed; the evidence still stands: the old writer takes it over to issue again.
+      const again = randomUUID();
+      expect(
+        await withOld((repo) =>
+          repo.reconcileIssuedDeletion({
+            runId,
+            runtime: "present",
+            token: again,
+            leaseMs: 60_000,
+          }),
+        ),
+      ).toBe("reissue");
+      // The earlier read's answer is published now: not saved.
+      await Effect.runPromise(
+        b.recordStatus(
+          runId,
+          captureStatus({ headN: 8, complete: false, incompleteReason: "changed" }),
+          Date.now(),
+          stale,
+        ),
+      );
+      const repeat = await Effect.runPromiseExit(
+        Effect.gen(function* () {
+          return yield* (yield* review9.WorkspaceCaptureDrainRepo).issueDeletion({
+            runId,
+            token: again,
+            leaseMs: 60_000,
+          });
+        }).pipe(
+          Effect.provide(
+            review9.WorkspaceCaptureDrainRepoLive.pipe(
+              Layer.provide(Layer.succeed(SealantDB, dbB)),
+            ),
+          ),
+        ),
+      );
+      expect(Exit.isFailure(repeat)).toBe(true);
+      expect((await row(runId))?.deletionState).toBe("deleting-issued");
+    });
+
+    it("keeps an old worker off an executor a current recovery attempt holds", async () => {
+      const runId = await newRun();
+      const a = worker(dbA, "recovery");
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      expect(await Effect.runPromise(a.markRetained(runId, "test"))).toBe(true);
+      const dueToOld = async () =>
+        (await withOld((repo) => repo.listRetainedDue({ limit: 10, runIds: [runId] }))).map(
+          (due) => due.runId,
+        );
+      expect(await dueToOld()).toEqual([runId]);
+      const claim = await Effect.runPromise(a.claimRecovery(runId, 60_000));
+      if (claim === undefined) throw new Error("not claimed");
+      expect(await Effect.runPromise(a.admitRecovery(runId, claim))).toBe("admitted");
+      // An old worker, which knows no claims, does not find it due, even once asked to recover
+      // it now; and its removal is refused.
+      expect(await dueToOld()).toEqual([]);
+      await withOld((repo) => repo.requestRecovery(runId));
+      expect(await dueToOld()).toEqual([]);
+      const version = (await row(runId))?.evidenceVersion ?? 0;
+      const refused = await Effect.runPromiseExit(
+        Effect.gen(function* () {
+          return yield* (yield* review9.WorkspaceCaptureDrainRepo).authorizeDeletion({
+            runId,
+            evidenceVersion: version,
+            token: randomUUID(),
+            leaseMs: 60_000,
+          });
+        }).pipe(
+          Effect.provide(
+            review9.WorkspaceCaptureDrainRepoLive.pipe(
+              Layer.provide(Layer.succeed(SealantDB, dbB)),
+            ),
+          ),
+        ),
+      );
+      expect(Exit.isFailure(refused)).toBe(true);
+      expect((await row(runId))?.deletionState).toBeNull();
+      // The claim released (nothing scheduled after it): due again, to old and current alike.
+      await Effect.runPromise(a.releaseRecovery(runId, claim));
+      expect(await dueToOld()).toEqual([runId]);
+    });
   });
 });
