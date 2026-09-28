@@ -203,7 +203,10 @@ export const runSelector = (
  */
 export const plainEnvEntries = (
   input: Pick<RuntimeAdapterLaunchInput, "blueprint" | "binds">,
-  config: Pick<KubernetesRuntimeConfig, "controlPort" | "volumeMappings">,
+  config: Pick<
+    KubernetesRuntimeConfig,
+    "controlPort" | "volumeMappings" | "captureTerminationGracePeriodSeconds"
+  >,
   options: { readonly secretEnvFile: boolean; readonly dotfilesArchiveDir: string | undefined },
 ): ReadonlyArray<readonly [string, string]> => {
   const { blueprint } = input;
@@ -224,8 +227,13 @@ export const plainEnvEntries = (
     ]);
   } else if (source.kind === "capture") {
     // Nothing to mount and nothing to clone (sealantd ADR-0015); the credential is in the boot
-    // secret file, never in the Pod spec.
-    entries.push(...captureSourceEnv(source));
+    // secret file, never in the Pod spec. Its shutdown final flush is bounded inside the Pod's
+    // termination grace, so one that cannot finish exits 75 before the kubelet kills it.
+    entries.push(
+      ...captureSourceEnv(source, {
+        stopGraceMs: config.captureTerminationGracePeriodSeconds * 1000,
+      }),
+    );
   } else {
     entries.push(["SEALANT_WORKSPACE_REPO_URL", source.url]);
     if (source.ref !== undefined) {

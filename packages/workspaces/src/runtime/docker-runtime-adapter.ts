@@ -532,11 +532,18 @@ const captureSourceEnvArgs = (
     RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
     { kind: "capture" }
   >,
-): Array<string> => captureSourceEnv(source).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  stopGraceSeconds: number,
+): Array<string> =>
+  captureSourceEnv(source, { stopGraceMs: stopGraceSeconds * 1000 }).flatMap(([key, value]) => [
+    "-e",
+    `${key}=${value}`,
+  ]);
 
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
   mountAllowedStoreRoots: string | undefined,
+  /** The capture container's `--stop-timeout`: its shutdown final flush is bounded inside it. */
+  captureStopGraceSeconds: number,
 ): Array<string> => {
   const source = input.blueprint.sources.workspace;
   const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) =>
@@ -597,7 +604,7 @@ const envArgsFromBlueprint = (
             // the platform. The daemon materialises the worktree from the session channel onto the
             // container's own disk; its credential (`SEALANT_CAPTURE_TOKEN`) rides the secret env
             // file, never argv.
-            captureSourceEnvArgs(source)
+            captureSourceEnvArgs(source, captureStopGraceSeconds)
           : [
               "-e",
               `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
@@ -1927,7 +1934,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...secretEnvArgs,
         ...workspaceMountArgs(parsed, mountArgsForIntent),
         ...extraMountArgs(parsed, mountArgsForIntent),
-        ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
+        ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots, this.captureStopGraceSeconds),
         ...platformEnvArgs,
         // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
         // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token
