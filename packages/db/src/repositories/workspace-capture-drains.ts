@@ -1007,6 +1007,9 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           "completeDeletion",
           db.transaction((tx) =>
             Effect.gen(function* () {
+              // The runtime removed it: this writer knows it, whatever is on record (review 11 #4
+              // refuses the same write from a writer from before the unsaved record).
+              yield* markCurrentWriter(tx);
               const [current] = yield* tx
                 .select({
                   ...deletionColumns,

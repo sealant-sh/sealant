@@ -1342,6 +1342,84 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       ]);
     });
 
+    // Review 11 #4: the database keeps unsaved answers for current readers, but an old reader
+    // weighs only the legacy status columns and would remove over them. While any unsaved answer
+    // is on record, the database refuses an old writer's removal transitions outright.
+    it("refuses an old reader's removal while an unsaved answer is on record (review 11 #4)", async () => {
+      const runId = await newRun();
+      const ledger = worker(dbA, "current-reader");
+      const stale = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      const complete = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      const failed = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+      if (stale === undefined || complete === undefined || failed === undefined) {
+        throw new Error("fences");
+      }
+      await Effect.runPromise(
+        ledger.recordStatus(runId, savedStatus({ headN: 7, origin }), Date.now(), complete),
+      );
+      await withOld((repo) =>
+        repo.attestCompletion({
+          runId,
+          executorId: runId,
+          epoch: 1,
+          captureN: 7,
+          origin,
+          attestedBy: "store",
+        }),
+      );
+      await withOld((repo) =>
+        repo.recordStatus({
+          runId,
+          status: storedCaptureStatus(
+            captureStatus({
+              headN: 7,
+              complete: false,
+              incompleteReason: "snapshot-failed",
+              origin: { ...origin, bootId: "B", bootGeneration: 0, observation: 1 },
+            }),
+          ),
+          observedAt: new Date(),
+          fence: failed.token,
+        }),
+      );
+      await withOld((repo) =>
+        repo.recordStatus({
+          runId,
+          status: storedCaptureStatus(
+            captureStatus({
+              headN: 7,
+              complete: false,
+              incompleteReason: "changed",
+              origin: { ...origin, observation: 90 },
+            }),
+          ),
+          observedAt: new Date(),
+          fence: stale.token,
+        }),
+      );
+      const currentRead = await Effect.runPromise(ledger.read(runId));
+      expect(
+        currentRead.readable && attestedCompleteFor(currentRead.entry, rollingExecutor(runId)),
+      ).toBe(false);
+      expect((await row(runId))?.unsavedStatuses).toHaveLength(2);
+      // The old reader sees the seal cover A90 (its legacy status) and decides to remove; the
+      // database refuses its authorization on the current evidence version.
+      const version = (await row(runId))?.evidenceVersion ?? 0;
+      const token = randomUUID();
+      await expect(
+        withOld((repo) =>
+          repo.authorizeDeletion({ runId, evidenceVersion: version, token, leaseMs: 60_000 }),
+        ),
+      ).rejects.toBeDefined();
+      expect((await row(runId))?.deletionState).toBeNull();
+      // Nor may it record a removal as done over them.
+      await expect(
+        withOld((repo) => repo.completeDeletion({ runId, token })),
+      ).rejects.toBeDefined();
+      expect((await row(runId))?.deletionState).toBeNull();
+      expect((await row(runId))?.unsavedStatuses).toHaveLength(2);
+    });
+
     it("keeps an old worker off an executor a current recovery attempt holds", async () => {
       const runId = await newRun();
       const a = worker(dbA, "recovery");
