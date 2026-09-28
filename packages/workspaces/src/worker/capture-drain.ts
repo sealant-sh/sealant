@@ -1312,6 +1312,11 @@ export const removeUnderDeletion = <A, E, R>(input: {
   readonly runId: string;
   readonly ticket: DeletionTicket | undefined;
   readonly remove: Effect.Effect<A, E, R>;
+  /**
+   * Run right before the runtime call, once the removal was re-checked and issued: nothing can
+   * veto it any more (review 9 #9: the one signal that a removal is under way).
+   */
+  readonly onIssued?: Effect.Effect<void> | undefined;
 }): Effect.Effect<
   { readonly removed: true; readonly value: A } | { readonly removed: false },
   E,
@@ -1320,6 +1325,7 @@ export const removeUnderDeletion = <A, E, R>(input: {
   Effect.gen(function* () {
     const { ledger, runId, ticket } = input;
     if (ledger === undefined || ticket === undefined) {
+      yield* input.onIssued ?? Effect.void;
       const value = yield* input.remove;
       return { removed: true as const, value };
     }
@@ -1332,6 +1338,7 @@ export const removeUnderDeletion = <A, E, R>(input: {
       );
       return { removed: false as const };
     }
+    yield* input.onIssued ?? Effect.void;
     // Renewed for as long as the runtime call runs, through failed renewals (a database that is
     // briefly unreachable): a hold that lapsed meanwhile is live again once a renewal lands.
     const renew = ledger

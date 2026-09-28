@@ -1483,6 +1483,57 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(row?.deletion).toBeUndefined();
   });
 
+  // Review 9 #9 (decision 28): the stop tells its caller "removing" only once the removal was
+  // re-checked and issued, never before a step that could still veto it.
+  it("tells its caller the removal began only once it was issued (review 9 #9)", async () => {
+    const phasesOf = async (veto: boolean) => {
+      const ledger = await seededWithComplete();
+      const harness = makeHarness({
+        workspace: workspaceRow(),
+        instance: runtimeInstance({ sourceKind: "capture" }),
+        daemon: fakeCaptureDaemon(["unreachable"]).layer,
+      });
+      if (veto) {
+        harness.markStopRequested.mockImplementation(() =>
+          ledger.recordStatus("run_old", newerFailure(), Date.now()).pipe(Effect.asVoid),
+        );
+      }
+      const phases: string[] = [];
+      const stop = removedStop();
+      const outcome = await Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [
+            stubAdapter(stop, async () => ({ state: "exited" as const, exitCode: 75 })),
+          ],
+          captureDrain: {
+            ledger,
+            settings,
+            budgetMs: 1,
+            label: "review 9 #9",
+            onPhase: (phase) =>
+              Effect.sync(() => {
+                phases.push(
+                  phase.kind === "drain-ended" ? `drain-ended:${phase.drain}` : phase.kind,
+                );
+              }),
+          },
+          launchMaterialStager: stager,
+        }).pipe(Effect.provide(harness.layer)),
+      );
+      return { outcome, phases, stopped: stop.mock.calls.length };
+    };
+    const vetoed = await phasesOf(true);
+    expect(vetoed.outcome).toBe("kept");
+    expect(vetoed.stopped).toBe(0);
+    expect(vetoed.phases).not.toContain("removing");
+    const removed = await phasesOf(false);
+    expect(removed.outcome).toBe("stopped");
+    expect(removed.phases.at(-1)).toBe("removing");
+  });
+
   it("admits no observation while it removes the runtime, and none once it was removed", async () => {
     const ledger = await seededWithComplete();
     const harness = makeHarness({

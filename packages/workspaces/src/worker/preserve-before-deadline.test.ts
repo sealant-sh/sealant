@@ -31,7 +31,7 @@ import {
   type SealantSession,
 } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
-import { inMemoryCaptureDrainLedger } from "./capture-drain.js";
+import { inMemoryCaptureDrainLedger, type CaptureDrainLedger } from "./capture-drain.js";
 import {
   observeUploadThroughput,
   planPreservationStart,
@@ -711,9 +711,45 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
     readonly thenAdvanceMs?: number;
     readonly initiateConcurrency?: number;
     readonly schedules?: Array<{ runId: string; startsAtMs: number | undefined }>;
+    /**
+     * Review 9 #9: once the drain read complete, a newer not-saved observation is recorded and
+     * the evidence read that decides the removal takes this long (virtual).
+     */
+    readonly revokeAndDelayDecisionMs?: number;
+    /**
+     * Review 9 #9: the daemon is unreachable and the executor exited 75; the stop's inspection
+     * after its drain takes this long (virtual).
+     */
+    readonly silentFollowupInspectMs?: number;
   }) => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+    const baseLedger = inMemoryCaptureDrainLedger();
+    let delayedDecision = false;
+    let completeReads = 0;
+    const ledger: CaptureDrainLedger = {
+      ...baseLedger,
+      read: (runId: string) =>
+        Effect.gen(function* () {
+          if (baseLedger.store.rows.get(runId)?.entry.last?.complete === true) {
+            completeReads += 1;
+          }
+          if (
+            input.revokeAndDelayDecisionMs !== undefined &&
+            !delayedDecision &&
+            completeReads === 2
+          ) {
+            delayedDecision = true;
+            yield* baseLedger.recordStatus(
+              runId,
+              captureStatus({ complete: false, incompleteReason: "changed", headN: 999 }),
+              Date.now(),
+            );
+            yield* Effect.sleep(input.revokeAndDelayDecisionMs);
+          }
+          return yield* baseLedger.read(runId);
+        }),
+    };
     // Every FINAL each executor was sent, at the virtual instant it was sent.
     const finals = new Map<string, number[]>();
     // Every runtime removed, at the virtual instant its removal finished.
@@ -768,13 +804,23 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
         }),
       ]),
     );
+    let inspections = 0;
     const adapter: RuntimeAdapter = {
       id: "docker",
       supports: () => ({ supported: true }),
       launch: async () => {
         throw new Error("unused");
       },
-      inspect: async () => ({ state: "running" }),
+      inspect: async () => {
+        inspections += 1;
+        if (input.silentFollowupInspectMs === undefined || inspections === 1) {
+          return { state: "running" };
+        }
+        if (inspections === 3) {
+          await new Promise((resolve) => setTimeout(resolve, input.silentFollowupInspectMs));
+        }
+        return { state: "exited", exitCode: 75 };
+      },
       stop: async (request) => {
         const takesMs = input.stopTakesMs;
         if (takesMs === undefined) {
@@ -794,7 +840,7 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
         preserveBeforeDeadlineEffect({
           runtimeAdapters: [adapter],
           captureDrain: {
-            ledger: inMemoryCaptureDrainLedger(),
+            ledger,
             // The worker's defaults: 1 s polls, 60 s round trips, the default budget.
             settings: {
               pollIntervalMs: 1_000,
@@ -808,7 +854,13 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
             ? {}
             : { initiateConcurrency: input.initiateConcurrency }),
           now: () => Date.now(),
-        }).pipe(Effect.provide(layer)),
+        }).pipe(
+          Effect.provide(
+            input.silentFollowupInspectMs === undefined
+              ? layer
+              : Layer.merge(layer, fakeCaptureDaemon(["unreachable"]).layer),
+          ),
+        ),
       ).then((count) => {
         result.driven = count;
         result.doneAtMs = Date.now() - NOW;
@@ -859,6 +911,49 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
       logs.filter((line) => line.includes("answered complete") && line.includes("removal")),
     ).toHaveLength(33);
   }, 60_000);
+
+  // Review 9 #9 (decision 28): "removal under way" only once the removal was issued. A silent
+  // daemon on an executor that exited never lets it go, whatever the stop does after its drain.
+  it("never reports a removal under way for a silent, unsaved executor (review 9 #9)", async () => {
+    const { removed, logs, doneAtMs } = await sweepAtCap({
+      rows: [vm(0, CAP_MS)],
+      flushTakesMs: 0,
+      silentFollowupInspectMs: 3 * MIN,
+      thenAdvanceMs: 4 * MIN,
+    });
+    expect(doneAtMs).toBeLessThan(3 * MIN);
+    expect(removed.size).toBe(0);
+    expect(logs.some((line) => line.includes("not saved · executor exited"))).toBe(true);
+    expect(logs.filter((line) => line.includes("lets it go"))).toEqual([]);
+    expect(logs.filter((line) => line.includes("asked to remove"))).toEqual([]);
+    expect(
+      logs.some(
+        (line) => line.includes("its drain ended silent") && line.includes("nothing removed"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports the removal still being weighed, not under way, while newer evidence may veto it (review 9 #9)", async () => {
+    const { finals, removed, logs, doneAtMs } = await sweepAtCap({
+      rows: [vm(0, CAP_MS)],
+      flushTakesMs: 0,
+      stopTakesMs: 0,
+      revokeAndDelayDecisionMs: 3 * MIN,
+      thenAdvanceMs: 4 * MIN,
+    });
+    expect(finals.size).toBe(1);
+    expect(doneAtMs).toBeLessThan(3 * MIN);
+    // The newer observation vetoed the removal.
+    expect(removed.size).toBe(0);
+    expect(logs.some((line) => line.includes("asked to remove"))).toBe(false);
+    expect(logs.some((line) => line.includes("under way"))).toBe(false);
+    expect(
+      logs.some(
+        (line) => line.includes("still being weighed") && line.includes("nothing removed yet"),
+      ),
+    ).toBe(true);
+    expect(logs.some((line) => line.includes("nothing lets the executor go"))).toBe(true);
+  });
 
   it("sends all 68 first FINALs at once when 68 runtimes reach their start together", async () => {
     const rows = Array.from({ length: 68 }, (_, index) => vm(index, CAP_MS));
