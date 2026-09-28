@@ -1,4 +1,5 @@
 import {
+  CAPTURE_TOKEN_SECRET_ENV_NAME,
   formatWorkspaceEnvIssue,
   parseWorkspaceSecretEnv,
   splitPlatformSecretEnv,
@@ -15,6 +16,8 @@ import {
   WorkspaceAttemptRepoLive,
   WorkspaceBuildJobRepo,
   WorkspaceBuildJobRepoLive,
+  WorkspaceCaptureDrainRepo,
+  WorkspaceCaptureDrainRepoLive,
   WorkspaceRepo,
   WorkspaceRepoLive,
   WorkspaceRuntimeInstanceRepo,
@@ -598,6 +601,36 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       job.secretEnvSealed === null || job.secretEnvSealed === undefined
         ? undefined
         : yield* unsealSecretEnv(job.secretEnvSealed, options.credentialCipher);
+
+    // A capture executor's boot reads its capture token once, from the secret env file removed
+    // once it is ready. Recovering a retained executor boots it again, so the token (only the
+    // token) is kept sealed beside its drain record before the launch. Best-effort: a launch
+    // whose token cannot be kept still launches, and its recovery reports it unrecoverable.
+    const captureToken = secretEnv?.[CAPTURE_TOKEN_SECRET_ENV_NAME];
+    if (
+      job.runId !== null &&
+      captureToken !== undefined &&
+      options.credentialCipher !== undefined
+    ) {
+      const runId = job.runId;
+      const cipher = options.credentialCipher;
+      const drains = yield* Effect.serviceOption(WorkspaceCaptureDrainRepo);
+      if (Option.isSome(drains)) {
+        yield* cipher
+          .encrypt(JSON.stringify({ [CAPTURE_TOKEN_SECRET_ENV_NAME]: captureToken }))
+          .pipe(
+            Effect.flatMap((sealed) =>
+              drains.value.storeCaptureToken({ runId, sealed: sealed.sealed }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Launch of run ${runId}: keeping its sealed capture token for recovery failed; a retained executor of this run cannot be recovered.`,
+                cause,
+              ),
+            ),
+          );
+      }
+    }
     const {
       dotfilesArchiveDir,
       secretEnvDir,
@@ -657,9 +690,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(attemptIdentity?.ownerUserId === undefined
             ? {}
             : { principalId: attemptIdentity.ownerUserId }),
-          // Once the daemon answers, the executor's identity is on the row before any later
-          // launch step runs: a worker that dies after this leaves a runtime it can be found by.
-          hooks: job.runId === null ? {} : { onReady: recordReadyIdentity(job.runId) },
+          // As soon as the executor exists — and again once its daemon answers — its identity is
+          // on the row before any later launch step runs: a worker that dies after this leaves a
+          // runtime it can be found by (a capture executor is retained from its start).
+          hooks:
+            job.runId === null
+              ? {}
+              : {
+                  onStarted: recordReadyIdentity(job.runId),
+                  onReady: recordReadyIdentity(job.runId),
+                },
         }),
       catch: toWorkspaceBuildJobProcessingError,
     }).pipe(
@@ -762,6 +802,8 @@ export const processWorkspaceBuildJob = (
     WorkspaceRuntimeInstanceRepoLive,
     WorkspaceRepoLive,
     WorkspaceAttemptRepoLive,
+    // The sealed capture token a retained executor's recovery stages again.
+    WorkspaceCaptureDrainRepoLive,
     GitHubInstallationRepoLive,
     GitHubInstallationRepositoryCacheRepoLive,
     ConnectedAccountRepoLive,

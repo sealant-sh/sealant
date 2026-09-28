@@ -284,6 +284,28 @@ export interface RuntimeAdapterExitWatch {
   readonly close: () => void;
 }
 
+/** Which retained executor to recover (`RuntimeAdapter.recover`). */
+export interface RuntimeAdapterRecoverInput {
+  readonly resourceId: string;
+  readonly reference?: string;
+}
+
+/**
+ * What a recovery attempt did:
+ *
+ *  - `restarted`: the executor had ended and the runtime started it again ON ITS OWN DISK
+ *    (Docker `docker start` of the kept container). sealantd boots, finds its staging at or past
+ *    the head and resumes it without materializing over it; the caller then asks for a FINAL
+ *    flush, which stops every writer the reboot started, snapshots both classes and ships.
+ *  - `running`: it is running already; nothing was done (drain it).
+ *  - `missing`: nothing of it is left to recover.
+ *  - `unsupported`: this runtime cannot restart an ended executor on its own disk; `detail`
+ *    says why and what, if anything, can still be done by hand. The executor stays retained.
+ */
+export type RuntimeAdapterRecoverResult =
+  | { readonly outcome: "restarted" | "running" | "missing" }
+  | { readonly outcome: "unsupported"; readonly detail: string };
+
 export interface RuntimeAdapter {
   readonly id: RuntimeAdapterId;
 
@@ -311,6 +333,12 @@ export interface RuntimeAdapter {
    * announced while a stream is down are not replayed — the caller's poll is the convergence net.
    */
   watchExits?(input: RuntimeAdapterExitWatchInput): RuntimeAdapterExitWatch;
+  /**
+   * Optional: bring a RETAINED executor — kept because its disk holds work not confirmed saved —
+   * back up on its own disk so its daemon can finish shipping (see
+   * `RuntimeAdapterRecoverResult`). Absent = the runtime cannot; the executor stays retained.
+   */
+  recover?(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult>;
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

@@ -34,7 +34,7 @@ import { makeSdkRuntime, type SdkRuntime } from "./effect/runtime.js";
 import { SealantError } from "./errors.js";
 import type { SdkContext } from "./facade/context.js";
 import { makeRun } from "./facade/run.js";
-import { makeWorkspace, registerHarnessExecutors } from "./facade/workspace.js";
+import { makeWorkspace, registerHarnessExecutors, toRuntimeInfo } from "./facade/workspace.js";
 import { buildCreateWorkspaceRequest } from "./internal/blueprint.js";
 import { resolveInternalConfig } from "./internal/config.js";
 import { parseTtlSeconds } from "./internal/duration.js";
@@ -104,7 +104,14 @@ export class Sealant {
         name: created.name,
         status: created.status,
         harness: options.harness,
-        created: true,
+        // A replayed create did not start this launch here: a readiness timeout on it is not an
+        // abandoned launch this handle owns.
+        created: created.replayed !== true,
+        launch: {
+          replayed: created.replayed === true,
+          ...(created.runId === undefined ? {} : { runId: created.runId }),
+          ...(created.runtime === undefined ? {} : { runtime: toRuntimeInfo(created.runtime) }),
+        },
       });
       if (options.wait === false) {
         return workspace;
@@ -135,6 +142,23 @@ export class Sealant {
         name: details.name,
         status: details.status,
       });
+    },
+
+    /**
+     * The owner's workspace a `create({ idempotencyKey })` made, or `null`: what a caller that
+     * lost a create's answer uses to find the executor it started.
+     */
+    findByIdempotencyKey: async (idempotencyKey: string): Promise<Workspace | null> => {
+      const response = await this.#runtime.run(
+        listWorkspacesOp({
+          ownerUserId: this.#ctx.config.hostLocal.ownerUserId,
+          idempotencyKey,
+        }),
+      );
+      const item = response.items[0];
+      return item === undefined
+        ? null
+        : makeWorkspace(this.#ctx, { id: item.workspaceId, name: item.name, status: item.status });
     },
 
     list: async (options?: ListOptions): Promise<readonly Workspace[]> => {

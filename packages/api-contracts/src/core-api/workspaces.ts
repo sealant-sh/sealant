@@ -18,6 +18,10 @@ export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
 export const workspaceRuntimeSchema = Schema.Struct({
   adapter: Schema.Literals(["docker", "k8s", "k3s", "cloudflare", "microvm"]),
+  /**
+   * The executor's identity on its runtime: the Docker container id, the Pod name, the MicroVM
+   * id. This is the id a caller records at launch and names in a stop's `completion`.
+   */
   resourceId: NonEmptyString,
   reference: NonEmptyString,
   status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
@@ -29,6 +33,8 @@ export const workspaceRuntimeSchema = Schema.Struct({
    * only from control planes that predate it.
    */
   deadline: Schema.optional(Schema.NullOr(Schema.String)),
+  /** The run (launch attempt) this executor belongs to. Absent from older control planes. */
+  runId: Schema.optional(NonEmptyString),
 });
 export type WorkspaceRuntime = typeof workspaceRuntimeSchema.Type;
 
@@ -98,6 +104,14 @@ export const createWorkspaceRequestSchema = Schema.Struct({
   // Per-create TTL override in seconds; when omitted the server default TTL (if configured)
   // applies. The reaper stops the workspace once the TTL elapses.
   ttlSeconds: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /**
+   * Makes the create idempotent for this owner: a repeated create with the same key returns the
+   * workspace the first one made (`replayed: true`) instead of creating another, so a caller that
+   * lost the answer (a crash, a timeout) can repeat it or look the workspace up
+   * (`GET /v1/workspaces?idempotencyKey=`). Scoped to `ownerUserId`. The `idempotency-key` header
+   * means the same; this field wins when both are sent.
+   */
+  idempotencyKey: Schema.optional(NonEmptyString),
 });
 export type CreateWorkspaceRequest = typeof createWorkspaceRequestSchema.Type;
 
@@ -343,14 +357,65 @@ export const stopWorkspaceRequestSchema = Schema.Struct({
    * still up (a kept one). Owner only.
    */
   discardUnsaved: Schema.optional(Schema.Boolean),
+  /**
+   * The caller's attestation that its capture store holds a SEALED final capture of this
+   * workspace's current executor: a FINAL flush that completed (every writer stopped, both
+   * classes snapshotted, everything registered) and was recorded durably by the store. It is
+   * permission to remove that executor's disk once it has ended, even when this control plane
+   * never read `complete: true` from it itself (the FINAL reply was lost, the daemon exited
+   * before a drain reached it). Accepted only when `executorId` names the current executor — the
+   * run id, or the runtime's `resourceId` / `reference` (`workspace.details().runtime`) — and
+   * `epoch` is not older than any the executor reported; otherwise ignored, and the executor is
+   * kept as before. Never a reason to skip the drain of a running executor.
+   */
+  completion: Schema.optional(
+    Schema.Struct({
+      /** The sealed capture's chain position (`n`). */
+      captureN: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      /** The capture lease epoch the seal was made under. */
+      epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      /** The executor the seal names: run id, or runtime `resourceId` / `reference`. */
+      executorId: NonEmptyString,
+    }),
+  ),
 });
 export type StopWorkspaceRequest = typeof stopWorkspaceRequestSchema.Type;
 
 export const stopWorkspaceResponseSchema = Schema.Struct({
   workspaceId: NonEmptyString,
   status: workspaceStatusSchema,
+  /**
+   * What became of a `completion` attestation on the request: `accepted` (recorded; it lets the
+   * executor's disk go once it has ended) or `ignored` (it does not name this executor, or is for
+   * an older epoch; `detail` says which). Absent when the request carried none.
+   */
+  completion: Schema.optional(
+    Schema.Struct({
+      outcome: Schema.Literals(["accepted", "ignored"]),
+      detail: Schema.optional(Schema.String),
+    }),
+  ),
 });
 export type StopWorkspaceResponse = typeof stopWorkspaceResponseSchema.Type;
+
+/** Owner-scoped: ask the control plane to recover the workspace's retained executor now. */
+export const recoverWorkspaceRequestSchema = Schema.Struct({
+  ownerUserId: NonEmptyString,
+});
+export type RecoverWorkspaceRequest = typeof recoverWorkspaceRequestSchema.Type;
+
+/**
+ * `requested`: the workspace's executor is retained (its disk holds work not confirmed saved) and
+ * a recovery attempt is due now; `recoverable` says whether its runtime can restart it on its own
+ * disk (Docker) or only report it (Kubernetes, MicroVM). `not-retained`: nothing is retained for
+ * the workspace's current run; nothing was done.
+ */
+export const recoverWorkspaceResponseSchema = Schema.Struct({
+  workspaceId: NonEmptyString,
+  state: Schema.Literals(["requested", "not-retained"]),
+  recoverable: Schema.optional(Schema.Boolean),
+});
+export type RecoverWorkspaceResponse = typeof recoverWorkspaceResponseSchema.Type;
 
 export const restartWorkspaceRequestSchema = Schema.Struct({
   ownerUserId: NonEmptyString,
@@ -393,6 +458,15 @@ export const createWorkspaceResponseSchema = Schema.Struct({
   registryId: NonEmptyString,
   repository: NonEmptyString,
   tag: NonEmptyString,
+  /** The launch attempt this create started (or, replayed, the workspace's latest). */
+  runId: Schema.optional(NonEmptyString),
+  /**
+   * The executor, once one exists: on a fresh create there is none yet (the launch is
+   * asynchronous); a replayed create carries the workspace's current one.
+   */
+  runtime: Schema.optional(workspaceRuntimeSchema),
+  /** `true` when an earlier create with the same `idempotencyKey` made this workspace. */
+  replayed: Schema.optional(Schema.Boolean),
 });
 export type CreateWorkspaceResponse = typeof createWorkspaceResponseSchema.Type;
 
@@ -454,6 +528,44 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
   discard: Schema.optional(
     Schema.Struct({ requestedBy: NonEmptyString, requestedAt: Schema.String }),
   ),
+  /**
+   * The executor is RETAINED: kept because its disk holds work not confirmed saved. `since` and
+   * `reason` say when and why; recovery is attempted on a backoff (`recoveryAttempts`,
+   * `nextRecoveryAt`, `lastRecoveryError`); `recoverable` says whether its runtime can restart it
+   * on its own disk (Docker) or only report it (Kubernetes, MicroVM). Absent when nothing is
+   * retained.
+   */
+  retained: Schema.optional(
+    Schema.Struct({
+      since: Schema.String,
+      reason: Schema.String,
+      recoverable: Schema.Boolean,
+      recoveryAttempts: Schema.Int,
+      nextRecoveryAt: Schema.optional(Schema.String),
+      lastRecoveryError: Schema.optional(Schema.String),
+    }),
+  ),
+  /**
+   * The executor this observation is about: the run and its runtime identity (`resourceId` is
+   * the id a stop's `completion` names).
+   */
+  executor: Schema.optional(
+    Schema.Struct({
+      runId: NonEmptyString,
+      adapter: NonEmptyString,
+      resourceId: NonEmptyString,
+      reference: Schema.optional(NonEmptyString),
+    }),
+  ),
+  /** The latest `completion` attestation accepted for this executor (see `stop`). */
+  completion: Schema.optional(
+    Schema.Struct({
+      executorId: NonEmptyString,
+      epoch: Schema.Int,
+      captureN: Schema.Int,
+      attestedAt: Schema.String,
+    }),
+  ),
 });
 export type WorkspaceCaptureDrain = typeof workspaceCaptureDrainSchema.Type;
 
@@ -495,6 +607,8 @@ export const listWorkspacesQuerySchema = Schema.Struct({
   ownerUserId: NonEmptyString,
   status: Schema.optional(workspaceStatusSchema),
   limit: Schema.optional(NonEmptyString),
+  /** Only the owner's workspace created with this `idempotencyKey` (none or one item). */
+  idempotencyKey: Schema.optional(NonEmptyString),
 });
 export type ListWorkspacesQuery = typeof listWorkspacesQuerySchema.Type;
 
@@ -793,6 +907,22 @@ export const WorkspacesGroup = HttpApiGroup.make("workspaces")
         // The workspace has never launched a runtime — nothing to stop yet.
         WorkspaceConflictError,
         WorkspaceBadGatewayError,
+        WorkspaceInternalServerError,
+      ],
+    }),
+  )
+  .add(
+    // Async: 202 = a recovery attempt of the workspace's retained executor is due now; the worker
+    // restarts it on its own disk where the runtime can, drains it with a FINAL flush and only
+    // then removes it. Nothing retained = `not-retained`, nothing done.
+    HttpApiEndpoint.post("recoverWorkspace", "/:workspaceId/recover", {
+      params: workspaceIdParams,
+      payload: recoverWorkspaceRequestSchema,
+      success: recoverWorkspaceResponseSchema.pipe(HttpApiSchema.status(202)),
+      error: [
+        WorkspaceBadRequestError,
+        WorkspaceNotFoundError,
+        WorkspaceConflictError,
         WorkspaceInternalServerError,
       ],
     }),

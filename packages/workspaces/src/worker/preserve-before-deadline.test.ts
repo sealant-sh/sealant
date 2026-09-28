@@ -152,6 +152,39 @@ describe("planPreservationStart", () => {
   });
 });
 
+describe("planPreservationStart · what the estimate must not ignore", () => {
+  it("assumes a conservative rate when no throughput has been observed yet, never an instant upload", () => {
+    // 600 MB at the assumed 1 MB/s = 600 s, times 1.5 = 900 s ahead of the lead.
+    expect(
+      planPreservationStart({
+        deadlineMs: NOW,
+        leadMs: 15 * MIN,
+        pendingBytes: 600_000_000,
+        uploadBytesPerSecond: undefined,
+        safetyFactor: 1.5,
+        assumedBytesPerSecond: 1_000_000,
+      }),
+    ).toEqual({ startsAtMs: NOW - 15 * MIN - 900_000, estimateMs: 900_000 });
+  });
+
+  it("counts a bulk snapshot still being built, which pending bytes do not include yet", () => {
+    // Nothing staged is pending, but bulk is being built: at least the staged size again (or the
+    // allowance, whichever is larger) will have to ship. 300 MB at 1 MB/s × 1.5 = 450 s.
+    expect(
+      planPreservationStart({
+        deadlineMs: NOW,
+        leadMs: 15 * MIN,
+        pendingBytes: 0,
+        stagedBytes: 300_000_000,
+        bulkBuilding: true,
+        uploadBytesPerSecond: 1_000_000,
+        safetyFactor: 1.5,
+        bulkBuildingAllowanceBytes: 100_000_000,
+      }).estimateMs,
+    ).toBe(450_000);
+  });
+});
+
 describe("observeUploadThroughput", () => {
   it("reads a rate only from an interval in which bytes moved, averaging with the last", () => {
     expect(
@@ -253,5 +286,88 @@ describe("preserveBeforeDeadlineEffect", () => {
     const result = await sweep({ deadlineInMs: 5 * MIN, daemon });
     expect(result.stop).not.toHaveBeenCalled();
     expect(result.markStopped).not.toHaveBeenCalled();
+  });
+});
+
+describe("preserveBeforeDeadlineEffect · every due runtime makes progress", () => {
+  it("samples and drives all six due runtimes every sweep, earliest deadline first", async () => {
+    // Review 2 #6: five runtimes whose drains stay pending took every tick; the sixth was never
+    // sampled nor finalised before its cap. Deadlines here: run0 latest … run5 earliest.
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      ...instance(60_000 - i * 1_000),
+      runId: `run${String(i)}`,
+      resourceId: `container${String(i)}`,
+    }));
+    const sampled: string[] = [];
+    const inspected: string[] = [];
+    const daemon = fakeCaptureDaemon([captureStatus({ pending: 1, complete: false })]);
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        listRunningInstances: () => Effect.succeed(rows),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(rows.find((candidate) => candidate.runId === runId)),
+        markStopRequested: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceAttemptRepoService),
+      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      Layer.succeed(WorkspaceCaptureDrainRepo, {
+        getByRunId: (runId: string) =>
+          Effect.sync(() => {
+            sampled.push(runId);
+            return undefined;
+          }),
+        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
+      } as unknown as WorkspaceCaptureDrainRepoService),
+      daemon.layer,
+    );
+    const adapter: RuntimeAdapter = {
+      id: "docker",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      inspect: async ({ resourceId }) => {
+        inspected.push(resourceId);
+        return { state: "running" };
+      },
+      stop: async () => {
+        throw new Error("a pending drain never permits a stop");
+      },
+    };
+    const ledger = inMemoryCaptureDrainLedger();
+    for (let sweepIndex = 0; sweepIndex < 3; sweepIndex += 1) {
+      await Effect.runPromise(
+        preserveBeforeDeadlineEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: {
+            ledger,
+            settings: {
+              pollIntervalMs: 2,
+              stallWindowMs: 10_000,
+              unreachableWindowMs: 10_000,
+              requestTimeoutMs: 1_000,
+            },
+            budgetMs: 1,
+          },
+          deadline: { leadMs: 15 * MIN, watchWindowMs: 60 * MIN },
+          now: () => NOW,
+        }).pipe(Effect.provide(layer)),
+      );
+    }
+
+    for (let i = 0; i < 6; i += 1) {
+      expect(sampled.filter((runId) => runId === `run${String(i)}`)).toHaveLength(3);
+      // Each due runtime's stop path ran every sweep (its inspect opens the stop).
+      expect(
+        inspected.filter((resourceId) => resourceId === `container${String(i)}`).length,
+      ).toBeGreaterThanOrEqual(3);
+    }
+    // Earliest deadline first: run5's stop path opens each sweep.
+    expect(inspected[0]).toBe("container5");
   });
 });

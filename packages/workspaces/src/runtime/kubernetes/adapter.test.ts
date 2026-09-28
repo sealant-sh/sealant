@@ -233,6 +233,87 @@ describe("KubernetesRuntimeAdapter", () => {
     expect(cluster.pods.get(names.pod)?.status).toBeUndefined();
   });
 
+  it("keeps an ended capture Pod on a redelivered launch instead of deleting its disk", async () => {
+    // Review 2 #4: the capture Pod exited 75 with its staging on its emptyDir; a redelivered
+    // launch of the same run deleted it and booted a replacement from the last registered head.
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    const input = { ...cases.capture, secretEnvDir: undefined };
+    const launched = await adapter.launch(input);
+    const old = cluster.pods.get(launched.resourceId);
+    cluster.pods.set(launched.resourceId, {
+      ...old,
+      status: {
+        phase: "Failed",
+        containerStatuses: [
+          {
+            name: "sealantd",
+            image: "test",
+            imageID: "test",
+            ready: false,
+            restartCount: 0,
+            state: { terminated: { exitCode: 75, reason: "Error" } },
+          },
+        ],
+      },
+    });
+    cluster.log.length = 0;
+
+    const failure = await adapter.launch(input).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({
+      identity: { adapter: "k8s", resourceId: launched.resourceId },
+    });
+    expect(cluster.log).not.toContain(`delete pod ${launched.resourceId}`);
+    expect(cluster.pods.get(launched.resourceId)?.status?.phase).toBe("Failed");
+  });
+
+  it("keeps a started capture Pod whose daemon the worker cannot reach, and names it", async () => {
+    // Review 2 #5: the guest boots and runs writers whether or not this worker's probe gets
+    // through; a control-network partition must not delete it.
+    const cluster = fakeCluster();
+    const channel = controlChannel();
+    channel.health.mockRejectedValue(new Error("control network partition"));
+    const onStarted = vi.fn(async () => undefined);
+    const onReady = vi.fn(async () => undefined);
+    const failure = await adapterFor(cluster, channel, { readinessTimeoutMs: 200 })
+      .launch({ ...cases.capture, secretEnvDir: undefined }, { onStarted, onReady })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(cluster.pods.size).toBe(1);
+    expect(cluster.log.some((line) => line.startsWith("delete pod"))).toBe(false);
+    expect(onStarted).toHaveBeenCalledTimes(1);
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
+  it("reports an ended capture Pod as not recoverable here, and never deletes it", async () => {
+    const cluster = fakeCluster();
+    const adapter = adapterFor(cluster, controlChannel());
+    const launched = await adapter.launch({ ...cases.capture, secretEnvDir: undefined });
+    expect(await adapter.recover({ resourceId: launched.resourceId })).toEqual({
+      outcome: "running",
+    });
+    const pod = cluster.pods.get(launched.resourceId);
+    cluster.pods.set(launched.resourceId, { ...pod, status: { phase: "Failed" } });
+    cluster.log.length = 0;
+
+    // A fresh adapter: inspects within the coalescing window share one LIST.
+    const later = adapterFor(cluster, controlChannel());
+    expect(await later.recover({ resourceId: launched.resourceId })).toMatchObject({
+      outcome: "unsupported",
+      detail: expect.stringContaining("cannot be restarted"),
+    });
+    expect(cluster.log.some((line) => line.startsWith("delete"))).toBe(false);
+  });
+
   it("gives a capture Pod a far longer termination grace than any other", async () => {
     // The final flush ships until everything is registered, bulk included: a kubelet SIGKILL at
     // the default grace would cut it off mid-upload.

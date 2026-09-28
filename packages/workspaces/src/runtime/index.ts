@@ -125,6 +125,8 @@ export type {
   RuntimeAdapterInspectResult,
   RuntimeAdapterLaunchInput,
   RuntimeAdapterLaunchResult,
+  RuntimeAdapterRecoverInput,
+  RuntimeAdapterRecoverResult,
   RuntimeAdapterSelection,
   RuntimeAdapterSupport,
   RuntimeAdapterSupportInput,
@@ -136,7 +138,21 @@ export type { RegisteredRuntime } from "./registered-runtime.js";
 export {
   LaunchRetainedError,
   completeReadyLaunch,
+  failLaunch,
   launchHoldsCaptures,
+  reportStartedLaunch,
   type RuntimeAdapterLaunchHooks,
   type RuntimeLaunchIdentity,
 } from "./launch-retention.js";
+
+export {
+  attestationCoversExecutor,
+  decideExecutorDeletion,
+  runtimeRestartsRetainedExecutors,
+  type CompletionAttestation,
+  type ExecutorDeletionBasis,
+  type ExecutorDeletionDecision,
+  type ExecutorDeletionEvidence,
+  type ExecutorIdentity,
+  type ExecutorRuntimeState,
+} from "./executor-preservation.js";

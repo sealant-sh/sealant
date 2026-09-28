@@ -9,14 +9,15 @@
 //   1. Lifecycle hooks. Lambda POSTs `/aws/lambda-microvms/runtime/v1/<hook>` to the image's
 //      hook port: `ready`/`validate` at image build, `run` when a VM starts (with the RunMicrovm
 //      payload), `resume`, and `suspend`/`terminate` before the VM is checkpointed or ends. The
-//      last two run `sealantctl capture flush`. What bounds that flush is sealantd, not this
-//      agent: the daemon clamps every `capture.flush` to its own shutdown grace (10 s today,
-//      not configurable at boot) and returns within it whatever the queue holds. The flush
-//      timeout the launch delivers (`flushTimeoutMs`, 50 s by default) is only this agent's kill
-//      switch for a sealantctl that hangs; it does NOT buy the flush more time. So the hook
-//      cannot promise an empty queue — the control plane drains BEFORE it terminates a VM, and
-//      this hook is the last net. (The platform's own hook timeout is at most 60 s; what it does
-//      when a hook overruns is undocumented.)
+//      last two run `sealantctl capture flush` — on terminate a FINAL flush (`--final`) whenever
+//      the daemon's sealantctl offers it, answered 200 only when the daemon reports it
+//      `complete`. What bounds that flush is sealantd, not this agent: the daemon bounds every
+//      `capture.flush` on its own and returns whatever the queue holds. The flush timeout the
+//      launch delivers (`flushTimeoutMs`, 50 s by default) is only this agent's kill switch for
+//      a sealantctl that hangs; it does NOT buy the flush more time. So the hook cannot promise
+//      an empty queue — the control plane drains BEFORE it terminates a VM, and this hook is the
+//      last net. (The platform's own hook timeout is at most 60 s; what it does when a hook
+//      overruns or answers 500 is undocumented.)
 //   2. Launch material. RunMicrovm takes no environment and no secrets, so the control plane
 //      pushes boot env, the secret env file and dotfiles to `POST /sealant/launch` over the VM's
 //      authenticated endpoint, and only then does `sealantd boot` start. The push is authorised
@@ -57,11 +58,18 @@ const DOTFILES_DIR = path.join(STATE_DIR, "dotfiles");
 const SEALANTD = process.env.SEALANT_MICROVM_SEALANTD ?? "/usr/local/bin/sealantd";
 const SEALANTCTL = process.env.SEALANT_MICROVM_SEALANTCTL ?? "sealantctl";
 const DOCKER_CAPABLE = process.env.SEALANT_MICROVM_DOCKER_CAPABLE === "1";
-// Prepared, not shipped: sealantd's `capture.flush {kind: final}` (`sealantctl capture flush
-// --final`) snapshots bulk too and waits for the queue instead of returning once small captures
-// are registered. No released sealantd accepts the flag, so the image does not set this; the
-// terminate hook passes `--final` only when it is `1`.
-const FINAL_FLUSH = process.env.SEALANT_MICROVM_FINAL_FLUSH === "1";
+// sealantd's `capture.flush {kind: final}` (`sealantctl capture flush --final`): quiesce every
+// writer, snapshot both classes, ship, and report `complete`. The terminate hook asks for it
+// whenever the daemon's sealantctl offers it (a capability probe: `capture flush --help` lists
+// `--final`), so no image has to opt in. `SEALANT_MICROVM_FINAL_FLUSH=1` forces it on, `0` off;
+// unset probes. A terminate that cannot run a final flush answers 500: nothing confirms saved.
+const FINAL_FLUSH_MODE =
+  process.env.SEALANT_MICROVM_FINAL_FLUSH === "1"
+    ? "on"
+    : process.env.SEALANT_MICROVM_FINAL_FLUSH === "0"
+      ? "off"
+      : "probe";
+const FINAL_FLUSH_PROBE_TIMEOUT_MS = 5_000;
 const DOCKERD = process.env.SEALANT_MICROVM_DOCKERD ?? "/usr/local/bin/dockerd";
 const DOCKER = process.env.SEALANT_MICROVM_DOCKER ?? "/usr/local/bin/docker";
 const DOCKER_SOCKET = process.env.SEALANT_MICROVM_DOCKER_SOCKET ?? "/run/docker/docker.sock";
@@ -375,20 +383,55 @@ const handleImageValidation = (res) => {
 // --------------------------------------------------------------------------------------------
 
 /**
+ * Whether the daemon's sealantctl offers `capture flush --final` (its help lists the flag). Asked
+ * once per agent and remembered; a probe that fails, or whose output does not list it, is `false`.
+ */
+let finalFlushProbe;
+const finalFlushSupported = () => {
+  if (FINAL_FLUSH_MODE === "on") return Promise.resolve(true);
+  if (FINAL_FLUSH_MODE === "off") return Promise.resolve(false);
+  finalFlushProbe ??= (async () => {
+    try {
+      const help = await new Promise((resolve, reject) => {
+        const child = spawn(SEALANTCTL, ["capture", "flush", "--help"], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let output = "";
+        const collect = (chunk) => {
+          output = (output + chunk.toString("utf8")).slice(-16384);
+        };
+        child.stdout.on("data", collect);
+        child.stderr.on("data", collect);
+        // A probe that hangs is killed; its close then answers with whatever it printed.
+        const timer = setTimeout(() => child.kill("SIGKILL"), FINAL_FLUSH_PROBE_TIMEOUT_MS);
+        child.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.once("close", () => {
+          clearTimeout(timer);
+          resolve(output);
+        });
+      });
+      return /(^|\s|\[)--final\b/m.test(help);
+    } catch {
+      return false;
+    }
+  })();
+  return finalFlushProbe;
+};
+
+/**
  * `sealantctl capture flush`, bounded; never throws — the hook reports what happened. sealantd
  * returns within its shutdown grace (10 s) on its own; `state.flushTimeoutMs` only kills a
- * sealantctl that hangs. `kind` is the hook's intent: `final` (terminate) adds `--final` once
- * the image enables it (`SEALANT_MICROVM_FINAL_FLUSH`).
+ * sealantctl that hangs. `kind` is the hook's intent: `final` (terminate) adds `--final` when the
+ * daemon offers it (`finalFlushSupported`); without it a terminate flush cannot be confirmed and
+ * is reported failed.
  */
 const flushCaptures = async (kind) => {
   const startedAt = Date.now();
-  const args = [
-    "--socket",
-    CONTROL_SOCKET,
-    "capture",
-    "flush",
-    ...(kind === "final" && FINAL_FLUSH ? ["--final"] : []),
-  ];
+  const final = kind === "final" && (await finalFlushSupported());
+  const args = ["--socket", CONTROL_SOCKET, "capture", "flush", ...(final ? ["--final"] : [])];
   const child = spawn(SEALANTCTL, args, {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -415,11 +458,16 @@ const flushCaptures = async (kind) => {
     // registering everything). Absent from every released sealantd: `null`, unknown.
     const reported = /"complete"\s*:\s*(true|false)/.exec(output);
     const complete = reported === null ? null : reported[1] === "true";
-    const final = kind === "final" && FINAL_FLUSH;
     return {
-      // A final flush is ok only when the daemon confirmed it complete; any flush is failed when
+      // A terminate flush is ok only when it ran as a final flush and the daemon confirmed it
+      // complete (a daemon without `--final` cannot confirm anything); any flush is failed when
       // it exited non-zero, timed out, or the daemon reported it incomplete.
-      ok: code === 0 && !timedOut && complete !== false && (!final || complete === true),
+      ok:
+        code === 0 &&
+        !timedOut &&
+        complete !== false &&
+        (kind !== "final" || (final && complete === true)),
+      ...(kind === "final" ? { final: final ? "requested" : "unsupported" } : {}),
       exitCode: code,
       signal,
       timedOut,

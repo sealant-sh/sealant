@@ -17,6 +17,7 @@ import {
   WorkspaceAttemptRepo,
   WorkspaceBuildJobRepo,
   WorkspaceRepo,
+  WorkspaceRuntimeInstanceRepo,
   type Workspace,
   type WorkspaceAttempt,
   type WorkspaceAttemptRepoService,
@@ -102,10 +103,12 @@ const makeLayer = (store: Store) => {
         updatedAt: now,
         archivedAt: null,
         binds: [],
+        idempotencyKey: input.idempotencyKey ?? null,
       };
       store.workspace = workspace;
       return Effect.succeed(workspace);
     },
+    getWorkspaceByIdempotencyKey: () => Effect.succeed(undefined),
     getWorkspaceByAttemptId: () => Effect.die("unused"),
     getWorkspaceById: (id) =>
       Effect.succeed(store.workspace?.id === id ? store.workspace : undefined),
@@ -258,6 +261,7 @@ const makeLayer = (store: Store) => {
     Layer.succeed(WorkspaceRepo, workspaceRepo),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
+    Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
     Layer.succeed(PackageStandardizerService, packageStandardizer),
     Layer.succeed(CredentialCipher, {
       encrypt: () => Effect.die("unused"),

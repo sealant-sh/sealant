@@ -1,20 +1,26 @@
 /**
- * No loss of work product at launch. Once a capture-sourced executor's daemon answers, a writer
- * can run on it (sealantd ADR-0015): a boot service, a dotfiles hook, a client that already
- * holds the endpoint. From that instant, a failure of any remaining launch step (credential file
- * injection, launch-secret cleanup, persisting the runtime row) must NOT remove the executor —
- * its disk may hold the only copy of that work. The launch reports the executor's identity
- * first (`onReady`, so a crash after it leaves a row to recover from), and a later failure
- * throws `LaunchRetainedError` carrying that identity instead of tearing the executor down. The
- * worker records the run `failed` with `LAUNCH_RETAINED_ERROR_CODE`, and the retained-launch
- * sweep drains it (FINAL flush) and only then stops it.
+ * No loss of work product at launch. A capture-sourced executor can hold unsaved work from the
+ * moment it starts: sealantd boots, restores, runs dotfiles and lifecycle steps and admits
+ * writers whether or not the launching worker's readiness probe ever gets through (a control
+ * network partition, a TLS or socket-mount fault). So retention starts at creation, not at
+ * readiness: once the executor exists, a failure of ANY later launch step — the readiness wait,
+ * credential file injection, launch-secret cleanup, persisting the runtime row — must NOT remove
+ * it. The adapter reports the executor's identity as soon as it exists (`onStarted`), again once
+ * its daemon answers (`onReady`), and a failure after creation throws `LaunchRetainedError`
+ * carrying that identity instead of tearing the executor down. The worker records the run
+ * `failed` with `LAUNCH_RETAINED_ERROR_CODE`, and the retained-launch sweep drains it (FINAL
+ * flush) and only then stops it — or keeps it, for as long as nothing proves its work saved.
  *
- * Before readiness nothing can have written anything that is not already saved: a failed launch
- * there is cleaned up as before. A launch that is not capture-sourced keeps its cleanup too.
+ * The same holds for a redelivered launch that finds an ENDED executor of the same run (a stopped
+ * container, a Failed Pod): its disk may hold the newest work, so it is retained rather than
+ * replaced. Only a launch that is not capture-sourced keeps its cleanup, and only before the
+ * executor exists is a capture launch cleaned up (the adapters decide through
+ * `decideExecutorDeletion`, the one preservation policy).
  */
 import { LAUNCH_RETAINED_ERROR_CODE } from "@sealant/db";
 import type { RuntimeAdapterId } from "@sealant/validators";
 
+import { decideExecutorDeletion, type ExecutorRuntimeState } from "./executor-preservation.js";
 import type { RuntimeAdapterBlueprint } from "./runtime-adapter.js";
 
 /** What locates a launched executor: enough to reach its daemon, drain it and stop it. */
@@ -30,13 +36,19 @@ export interface RuntimeLaunchIdentity {
 /** Optional callbacks a launch caller hands the adapter. */
 export interface RuntimeAdapterLaunchHooks {
   /**
+   * The executor exists (created and started; its daemon may not answer yet): record its
+   * identity at once, so a worker that dies before readiness leaves a row to find it by. Awaited;
+   * a failure here is a post-start failure like any other (retained when capture-sourced).
+   */
+  readonly onStarted?: (identity: RuntimeLaunchIdentity) => Promise<void>;
+  /**
    * The executor's daemon answers: record its identity before anything else happens. Awaited; a
-   * failure here is a post-readiness failure like any other (retained when capture-sourced).
+   * failure here is a post-start failure like any other (retained when capture-sourced).
    */
   readonly onReady?: (identity: RuntimeLaunchIdentity) => Promise<void>;
 }
 
-/** A capture-sourced launch failed after readiness; its executor was kept, not removed. */
+/** A capture-sourced launch failed after its executor existed; the executor was kept. */
 export class LaunchRetainedError extends Error {
   public override readonly name = "LaunchRetainedError";
   public readonly code = LAUNCH_RETAINED_ERROR_CODE;
@@ -46,9 +58,9 @@ export class LaunchRetainedError extends Error {
     cause: unknown,
   ) {
     super(
-      `The workspace launch failed after its executor became ready, and the executor was kept so no work is lost: ${
+      `The workspace launch failed after its executor started, and the executor was kept so no work is lost: ${
         cause instanceof Error ? cause.message : String(cause)
-      } It is drained and stopped by the retained-launch sweep.`,
+      } It is drained and stopped by the retained-launch sweep once its work is confirmed saved.`,
       { cause },
     );
   }
@@ -59,9 +71,47 @@ export const launchHoldsCaptures = (blueprint: RuntimeAdapterBlueprint): boolean
   blueprint.sources.workspace.kind === "capture";
 
 /**
+ * A launch step failed. With no executor yet (`identity` undefined) the adapter's cleanup runs
+ * and the error is rethrown. With one, the preservation policy decides: a capture-sourced
+ * executor is retained (`LaunchRetainedError`, its cleanup NOT run); anything else is cleaned up
+ * and the error rethrown. An error that already is a `LaunchRetainedError` passes through.
+ */
+export const failLaunch = async (input: {
+  readonly blueprint: RuntimeAdapterBlueprint;
+  readonly identity: RuntimeLaunchIdentity | undefined;
+  /** What the launch knows of the executor it created or found. */
+  readonly runtime: ExecutorRuntimeState;
+  readonly error: unknown;
+  readonly cleanup?: () => Promise<void>;
+}): Promise<never> => {
+  if (input.error instanceof LaunchRetainedError) {
+    throw input.error;
+  }
+  if (input.identity !== undefined) {
+    const decision = decideExecutorDeletion({
+      captureSourced: launchHoldsCaptures(input.blueprint),
+      runtime: input.runtime,
+    });
+    if (!decision.delete) {
+      throw new LaunchRetainedError(input.identity, input.error);
+    }
+  }
+  await input.cleanup?.().catch(() => undefined);
+  throw input.error;
+};
+
+/** Report a created executor (`onStarted`); its failure is a post-start launch failure. */
+export const reportStartedLaunch = async (
+  hooks: RuntimeAdapterLaunchHooks | undefined,
+  identity: RuntimeLaunchIdentity,
+): Promise<void> => {
+  await hooks?.onStarted?.(identity);
+};
+
+/**
  * The post-readiness half of a launch: report the identity, run the remaining steps, and on any
- * failure either keep the executor (capture-sourced: throw `LaunchRetainedError`) or run the
- * adapter's cleanup and rethrow (everything else).
+ * failure let the preservation policy decide (`failLaunch`): keep the executor (capture-sourced:
+ * `LaunchRetainedError`) or run the adapter's cleanup and rethrow (everything else).
  */
 export const completeReadyLaunch = async <A>(input: {
   readonly blueprint: RuntimeAdapterBlueprint;
@@ -75,10 +125,12 @@ export const completeReadyLaunch = async <A>(input: {
     await input.hooks?.onReady?.(input.identity);
     return await input.steps();
   } catch (error) {
-    if (launchHoldsCaptures(input.blueprint)) {
-      throw new LaunchRetainedError(input.identity, error);
-    }
-    await input.cleanup?.().catch(() => undefined);
-    throw error;
+    return failLaunch({
+      blueprint: input.blueprint,
+      identity: input.identity,
+      runtime: "running",
+      error,
+      ...(input.cleanup === undefined ? {} : { cleanup: input.cleanup }),
+    });
   }
 };

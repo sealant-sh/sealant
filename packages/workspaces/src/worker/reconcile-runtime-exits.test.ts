@@ -356,12 +356,55 @@ describe("reconcileRuntimeExitsEffect · drain before removal", () => {
     ["container-1", { state: "exited", exitCode: 1, detail: "reported dead" }],
   ]);
 
-  it("records a capture-sourced exit at once when its daemon does not answer", async () => {
+  it("records a capture-sourced exit whose daemon does not answer, and keeps its remains", async () => {
+    // Review 2 #2: sealantd exited 75 on its own (a plain `docker stop`, its own shutdown FINAL
+    // failing its uploads) before any drain reached it. The exit is recorded; nothing proves the
+    // staged captures on its disk saved, so the remains are kept.
     const daemon = fakeCaptureDaemon(["unreachable"]);
     const harness = makeHarness({
       instances: [runtimeInstance()],
       captureSourced: true,
       daemon: daemon.layer,
+    });
+    const { adapter, stop } = stubAdapter({
+      inspections: new Map([["container-1", { state: "exited", exitCode: 75 }]]),
+    });
+    const { stager, removeAll } = fakeStager();
+    const ledger = inMemoryCaptureDrainLedger();
+
+    const recorded = await Effect.runPromise(
+      reconcileRuntimeExitsEffect({
+        runtimeAdapters: [adapter],
+        launchMaterialStager: stager,
+        captureDrain: { ledger, settings },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+
+    expect(recorded).toBe(1);
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+    expect(harness.markExited).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(removeAll).not.toHaveBeenCalled();
+  });
+
+  it("removes the remains of a capture-sourced exit the daemon confirmed saved before it ended", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    ledger.store.rows.set("run_1", {
+      entry: {
+        lastProgressAt: Date.now() - 1_000,
+        last: captureStatus({ pending: 0, complete: true }),
+        unreachableSince: undefined,
+        keptLogged: false,
+        silentLogged: false,
+      },
+      observation: { state: "saved", detail: "final flush complete" },
+      owner: undefined,
+      expiresAt: undefined,
+    });
+    const harness = makeHarness({
+      instances: [runtimeInstance()],
+      captureSourced: true,
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
     const { adapter, stop } = stubAdapter({ inspections: exited });
 
@@ -369,12 +412,11 @@ describe("reconcileRuntimeExitsEffect · drain before removal", () => {
       reconcileRuntimeExitsEffect({
         runtimeAdapters: [adapter],
         launchMaterialStager: fakeStager().stager,
-        captureDrain: { ledger: inMemoryCaptureDrainLedger(), settings },
+        captureDrain: { ledger, settings },
       }).pipe(Effect.provide(harness.layer)),
     );
 
     expect(recorded).toBe(1);
-    expect(daemon.connect).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledTimes(1);
   });
 

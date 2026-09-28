@@ -5,6 +5,7 @@
  * lifecycle verbs are typed now and reject until their endpoints land (Phase 3).
  */
 import type {
+  WorkspaceRuntime as WireWorkspaceRuntime,
   WorkspaceCaptureDrain as WireWorkspaceCaptureDrain,
   CaptureClassSnaps as WireCaptureClassSnaps,
   WorkspaceCaptureStatus as WireWorkspaceCaptureStatus,
@@ -22,6 +23,7 @@ import {
   getWorkspaceOp,
   listSessionsOp,
   replanWorkspaceCaptureOp,
+  recoverWorkspaceOp,
   restartWorkspaceOp,
   stopWorkspaceOp,
 } from "../effect/operations.js";
@@ -35,6 +37,8 @@ import type {
   Workspace,
   WorkspaceEvent,
   WorkspaceForward,
+  WorkspaceLaunch,
+  WorkspaceRuntimeInfo,
   WorkspaceForwardOptions,
   WorkspaceSessions,
   WorkspaceCaptureDrain,
@@ -58,7 +62,19 @@ export interface WorkspaceInit {
    * an abandoned launch the SDK owns: `ready()` stops the workspace before it throws.
    */
   readonly created?: boolean;
+  /** What the create answered of the launch (run, executor when known, replayed). */
+  readonly launch?: WorkspaceLaunch;
 }
+
+/** The wire runtime as the SDK reports it. */
+export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeInfo => ({
+  kind: runtime.adapter,
+  resourceId: runtime.resourceId,
+  reference: runtime.reference,
+  status: runtime.status,
+  ...(runtime.runId === undefined ? {} : { runId: runtime.runId }),
+  deadline: runtime.deadline ?? null,
+});
 
 // Terminal statuses a workspace can never leave: ready()/events() fail fast (or end the stream)
 // on these instead of polling out their deadline. "stopped" is terminal too — a TTL expiry or a
@@ -154,6 +170,18 @@ const toCaptureStatus = (status: WireWorkspaceCaptureStatus): WorkspaceCaptureSt
 /** Wire → public drain observation. */
 const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain => ({
   state: drain.state,
+  ...(drain.executor === undefined
+    ? {}
+    : {
+        executor: {
+          runId: drain.executor.runId,
+          kind: drain.executor.adapter,
+          resourceId: drain.executor.resourceId,
+          ...(drain.executor.reference === undefined
+            ? {}
+            : { reference: drain.executor.reference }),
+        },
+      }),
   ...(drain.detail === undefined ? {} : { detail: drain.detail }),
   ...(drain.observedAt === undefined ? {} : { observedAt: drain.observedAt }),
   ...(drain.preservationStartsAt === undefined
@@ -163,6 +191,32 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
     ? {}
     : {
         discard: { requestedBy: drain.discard.requestedBy, requestedAt: drain.discard.requestedAt },
+      }),
+  ...(drain.retained === undefined
+    ? {}
+    : {
+        retained: {
+          since: drain.retained.since,
+          reason: drain.retained.reason,
+          recoverable: drain.retained.recoverable,
+          recoveryAttempts: drain.retained.recoveryAttempts,
+          ...(drain.retained.nextRecoveryAt === undefined
+            ? {}
+            : { nextRecoveryAt: drain.retained.nextRecoveryAt }),
+          ...(drain.retained.lastRecoveryError === undefined
+            ? {}
+            : { lastRecoveryError: drain.retained.lastRecoveryError }),
+        },
+      }),
+  ...(drain.completion === undefined
+    ? {}
+    : {
+        completion: {
+          executorId: drain.completion.executorId,
+          epoch: drain.completion.epoch,
+          captureN: drain.completion.captureN,
+          attestedAt: drain.completion.attestedAt,
+        },
       }),
 });
 
@@ -273,9 +327,23 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     }
   };
 
+  // What the handle knows of its launch; `ready()` adds the executor it saw become ready.
+  let launch: WorkspaceLaunch | undefined = init.launch;
+
   const workspace: Workspace = {
     id: init.id,
     name: init.name,
+
+    get launch() {
+      return launch;
+    },
+
+    runtime: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.runtime === undefined ? null : toRuntimeInfo(details.runtime);
+    },
 
     status: async () => {
       const details: WorkspaceDetails = await ctx.runtime.run(
@@ -301,6 +369,9 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         // in-workspace daemon's control socket is accepting (readiness probe in the launch path).
         // This is honest: when ready() resolves, harness.run() can connect without racing the socket.
         if (details.status === "ready") {
+          if (launch !== undefined && details.runtime !== undefined) {
+            launch = { ...launch, runtime: toRuntimeInfo(details.runtime) };
+          }
           return workspace;
         }
         if (FAILED_STATUSES.has(details.status)) {
@@ -418,12 +489,32 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
     // a drain (a refused or abandoned drain answers too), so it never decides the state.
     stop: async (options?: WorkspaceStopOptions): Promise<WorkspaceStopResult> => {
       const ownerUserId = ctx.config.hostLocal.ownerUserId;
-      await ctx.runtime.run(
+      const accepted = await ctx.runtime.run(
         stopWorkspaceOp(init.id, {
           ownerUserId,
           ...(options?.discardUnsaved === true ? { discardUnsaved: true } : {}),
+          ...(options?.completion === undefined
+            ? {}
+            : {
+                completion: {
+                  captureN: options.completion.captureN,
+                  epoch: options.completion.epoch,
+                  executorId: options.completion.executorId,
+                },
+              }),
         }),
       );
+      const completion =
+        accepted.completion === undefined
+          ? {}
+          : {
+              completion: {
+                outcome: accepted.completion.outcome,
+                ...(accepted.completion.detail === undefined
+                  ? {}
+                  : { detail: accepted.completion.detail }),
+              },
+            };
 
       const deadline = Date.now() + STOP_TIMEOUT_MS;
       for (;;) {
@@ -431,13 +522,13 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
           getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
         );
         if (details.status === "stopped") {
-          return { state: "stopped" };
+          return { state: "stopped", ...completion };
         }
         if (Date.now() > deadline) {
           const drain =
             details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
           const capture = await readCaptureStatus().catch(() => undefined);
-          const extras = capture === undefined ? {} : { capture };
+          const extras = { ...(capture === undefined ? {} : { capture }), ...completion };
           if (drain !== undefined && (drain.state === "draining" || drain.state === "kept")) {
             return { state: drain.state, drain, ...extras };
           }
@@ -445,6 +536,17 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }
         await delay(STOP_POLL_INTERVAL_MS);
       }
+    },
+
+    // Recover makes a recovery attempt of a retained executor due now; the worker does the rest.
+    recover: async () => {
+      const answered = await ctx.runtime.run(
+        recoverWorkspaceOp(init.id, { ownerUserId: ctx.config.hostLocal.ownerUserId }),
+      );
+      return {
+        state: answered.state,
+        ...(answered.recoverable === undefined ? {} : { recoverable: answered.recoverable }),
+      };
     },
 
     // Restart drives a fresh launch (new attempt, new container, same resolved spec) and returns a

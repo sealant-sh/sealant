@@ -687,7 +687,7 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(api.runs).toEqual([]);
   });
 
-  it("fails immediately on the agent's structured daemon exit and terminates the VM", async () => {
+  it("fails immediately on the agent's structured daemon exit and terminates a git VM", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint(
       [json(200, { outcome: "booting" })],
@@ -702,7 +702,7 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     const control = fakeControl();
     const adapter = build(api, endpoint, control);
 
-    await expect(adapter.launch(captureLaunch)).rejects.toMatchObject({
+    await expect(adapter.launch(cases.gitSource)).rejects.toMatchObject({
       code: "microvm-guest-failed",
       phase: "sealantd",
       message: expect.stringContaining("code 1"),
@@ -710,6 +710,25 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     expect(endpoint.healthRequests).toHaveLength(1);
     expect(control.healthTargets).toEqual([]);
     expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
+  it("keeps a capture VM whose daemon exited during boot: it ran, and its disk may hold work", async () => {
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint(
+      [json(200, { outcome: "booting" })],
+      [json(503, { booted: true, controlSocket: false, daemonExit: { code: 1, signal: null } })],
+    );
+    const failure = await build(api, endpoint, fakeControl())
+      .launch(captureLaunch)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure instanceof Error ? failure.cause : undefined).toMatchObject({
+      code: "microvm-guest-failed",
+    });
+    expect(api.terminates).toEqual([]);
   });
 
   it("reports the daemon's last output with its exit, secrets redacted and control bytes dropped", async () => {
@@ -732,7 +751,7 @@ describe("MicrovmRuntimeAdapter.launch", () => {
     const adapter = build(api, endpoint, fakeControl());
 
     const failure = await adapter
-      .launch({ ...captureLaunch, secretEnv: { MEND_SESSION_TOKEN: "mst_secret_long_value" } })
+      .launch({ ...cases.gitSource, secretEnv: { MEND_SESSION_TOKEN: "mst_secret_long_value" } })
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -909,18 +928,33 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       json(401, { message: "bad launch secret raw-log control-token" }),
     ]);
     const adapter = build(api, endpoint, fakeControl());
-    const launch = adapter.launch(captureLaunch);
+    const launch = adapter.launch(cases.gitSource);
     await expect(launch).rejects.toThrow(/failed with HTTP 401/);
     await expect(launch).rejects.not.toThrow(/raw-log|control-token/);
     expect(api.terminates).toEqual(["microvm-1"]);
   });
 
-  it("gives up on a VM whose daemon never answers, terminating it", async () => {
+  it("gives up on a git VM whose daemon never answers, terminating it", async () => {
     const api = new FakeMicrovmApi();
     const endpoint = fakeEndpoint([json(200, { outcome: "booting" })]);
     const adapter = build(api, endpoint, fakeControl(Number.POSITIVE_INFINITY));
-    await expect(adapter.launch(captureLaunch)).rejects.toThrow(/did not become ready within/);
+    await expect(adapter.launch(cases.gitSource)).rejects.toThrow(/did not become ready within/);
     expect(api.terminates).toEqual(["microvm-1"]);
+  });
+
+  it("keeps a capture VM that accepted its launch but whose daemon the worker cannot reach", async () => {
+    // Review 2 #5: once the agent accepted the launch, sealantd boots and runs writers whether
+    // or not this worker's health probe gets through; terminating the VM loses its disk.
+    const api = new FakeMicrovmApi();
+    const endpoint = fakeEndpoint([json(200, { outcome: "booting" })]);
+    const adapter = build(api, endpoint, fakeControl(Number.POSITIVE_INFINITY));
+    const failure = await adapter.launch(captureLaunch).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(LaunchRetainedError);
+    expect(failure).toMatchObject({ identity: { adapter: "microvm", resourceId: "microvm-1" } });
+    expect(api.terminates).toEqual([]);
   });
 
   it("refuses launches it cannot serve before touching the platform", async () => {

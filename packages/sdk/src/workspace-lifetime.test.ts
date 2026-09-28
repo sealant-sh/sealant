@@ -30,6 +30,7 @@ const makeStub = (
   capture?: () => WorkspaceCaptureStatus | undefined,
 ) => {
   const stops: unknown[] = [];
+  const recovers: unknown[] = [];
   const workspaces = {
     getWorkspace: () => Effect.sync(read),
     getWorkspaceCaptureStatus: () =>
@@ -39,12 +40,28 @@ const makeStub = (
           ? Effect.fail(new Error("not a capture-sourced workspace"))
           : Effect.succeed(status);
       }),
-    stopWorkspace: (request: unknown) => {
+    stopWorkspace: (request: { payload: { completion?: { executorId: string } } }) => {
       stops.push(request);
-      return Effect.succeed({ workspaceId: "ws_1", status: "stopped" });
+      const completion = request.payload.completion;
+      return Effect.succeed({
+        workspaceId: "ws_1",
+        status: "stopped",
+        ...(completion === undefined
+          ? {}
+          : {
+              completion:
+                completion.executorId === "microvm-1"
+                  ? { outcome: "accepted" }
+                  : { outcome: "ignored", detail: "names another executor" },
+            }),
+      });
+    },
+    recoverWorkspace: (request: unknown) => {
+      recovers.push(request);
+      return Effect.succeed({ workspaceId: "ws_1", state: "requested", recoverable: true });
     },
   };
-  return { client: { workspaces } as unknown as ControlPlaneClient, stops };
+  return { client: { workspaces } as unknown as ControlPlaneClient, stops, recovers };
 };
 
 const makeCtx = (client: ControlPlaneClient): SdkContext => ({
@@ -199,6 +216,37 @@ describe("workspace.stop()", () => {
     await expect(stopWith(stub)).resolves.toEqual({ result: { state: "kept", drain } });
   });
 
+  it("names the executor a kept drain is about, as the id a completion attestation uses", async () => {
+    const stub = makeStub(() =>
+      details({
+        status: "ready",
+        captureDrain: {
+          state: "kept",
+          detail: "not saved · retained · executor exited",
+          executor: {
+            runId: "run_1",
+            adapter: "docker",
+            resourceId: "container-1",
+            reference: "sealant-run_1",
+          },
+        },
+      }),
+    );
+    await expect(stopWith(stub)).resolves.toMatchObject({
+      result: {
+        state: "kept",
+        drain: {
+          executor: {
+            runId: "run_1",
+            kind: "docker",
+            resourceId: "container-1",
+            reference: "sealant-run_1",
+          },
+        },
+      },
+    });
+  });
+
   it("reports the stop requested, never stopped, while termination is not observed", async () => {
     const saved = { state: "saved" as const, detail: "final flush complete" };
     const stub = makeStub(() => details({ status: "ready", captureDrain: saved }));
@@ -235,6 +283,43 @@ describe("workspace.stop()", () => {
     const plain = makeStub(() => details({ status: "stopped" }));
     await workspaceFor(plain.client).stop();
     expect(plain.stops).toEqual([
+      { params: { workspaceId: "ws_1" }, payload: { ownerUserId: expect.any(String) } },
+    ]);
+  });
+});
+
+describe("workspace.stop({ completion }) and workspace.recover()", () => {
+  it("sends the completion attestation and reports whether the control plane accepted it", async () => {
+    const stub = makeStub(() => details({ status: "stopped" }));
+    await expect(
+      workspaceFor(stub.client).stop({
+        completion: { captureN: 41, epoch: 3, executorId: "microvm-1" },
+      }),
+    ).resolves.toEqual({ state: "stopped", completion: { outcome: "accepted" } });
+    expect(stub.stops).toEqual([
+      {
+        params: { workspaceId: "ws_1" },
+        payload: {
+          ownerUserId: expect.any(String),
+          completion: { captureN: 41, epoch: 3, executorId: "microvm-1" },
+        },
+      },
+    ]);
+    await expect(
+      workspaceFor(stub.client).stop({ completion: { captureN: 1, epoch: 1, executorId: "x" } }),
+    ).resolves.toEqual({
+      state: "stopped",
+      completion: { outcome: "ignored", detail: "names another executor" },
+    });
+  });
+
+  it("asks the control plane to recover the retained executor", async () => {
+    const stub = makeStub(() => details({ status: "stopped" }));
+    await expect(workspaceFor(stub.client).recover()).resolves.toEqual({
+      state: "requested",
+      recoverable: true,
+    });
+    expect(stub.recovers).toEqual([
       { params: { workspaceId: "ws_1" }, payload: { ownerUserId: expect.any(String) } },
     ]);
   });

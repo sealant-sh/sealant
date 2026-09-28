@@ -23,6 +23,8 @@ export interface CreateWorkspaceInput {
   readonly requestedByUserId?: string;
   readonly status?: WorkspaceStatus;
   readonly expiresAt?: Date;
+  /** The caller's idempotency key for this create; unique per owner. */
+  readonly idempotencyKey?: string;
 }
 
 export interface ListWorkspacesInput {
@@ -73,6 +75,7 @@ const workspaceRepoOperationSchema = Schema.Literals([
   "createWorkspace",
   "getWorkspaceByAttemptId",
   "getWorkspaceById",
+  "getWorkspaceByIdempotencyKey",
   "linkWorkspaceAttempt",
   "listWorkspaceAttemptLinks",
   "listWorkspaces",
@@ -153,6 +156,12 @@ export interface WorkspaceRepoService {
     id: string,
   ) => Effect.Effect<Workspace | undefined, WorkspaceRepoError>;
 
+  /** The owner's workspace created with `idempotencyKey`; undefined when there is none. */
+  readonly getWorkspaceByIdempotencyKey: (input: {
+    readonly ownerUserId: string;
+    readonly idempotencyKey: string;
+  }) => Effect.Effect<Workspace | undefined, WorkspaceRepoError>;
+
   /** Upserts the workspace-attempt link and updates latestRunId on the workspace row. */
   readonly linkWorkspaceAttempt: (
     input: LinkWorkspaceAttemptInput,
@@ -221,6 +230,9 @@ export const WorkspaceRepoLive = Layer.effect(
                   : { requestedByUserId: input.requestedByUserId }),
                 ...(input.status === undefined ? {} : { status: input.status }),
                 ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+                ...(input.idempotencyKey === undefined
+                  ? {}
+                  : { idempotencyKey: input.idempotencyKey }),
               } satisfies NewWorkspace)
               .returning();
 
@@ -245,6 +257,24 @@ export const WorkspaceRepoLive = Layer.effect(
             });
 
             return link?.workspace ?? undefined;
+          }),
+        ),
+
+      getWorkspaceByIdempotencyKey: (input) =>
+        withWorkspaceRepoError(
+          "getWorkspaceByIdempotencyKey",
+          Effect.gen(function* () {
+            const [workspace] = yield* db
+              .select()
+              .from(workspaces)
+              .where(
+                and(
+                  eq(workspaces.ownerUserId, input.ownerUserId),
+                  eq(workspaces.idempotencyKey, input.idempotencyKey),
+                ),
+              )
+              .limit(1);
+            return workspace;
           }),
         ),
 

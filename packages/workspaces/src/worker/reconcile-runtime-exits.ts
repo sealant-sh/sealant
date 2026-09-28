@@ -27,15 +27,18 @@
  *
  * **No loss of work product.** A capture-sourced runtime (sealantd ADR-0015) holds captures
  * nowhere else until the daemon confirms them saved. With `captureDrain`, before an exit is
- * recorded the reconciler asks the daemon one `capture.status`: a daemon that does not answer is
- * the crash the runtime reported, and the exit is recorded as before — unless a drain already
- * reached that daemon and was never told its work is saved: then the executor exited on purpose
- * with its staging on disk, and the exit is recorded but the remains are kept. A daemon that
- * answers means the runtime is not dead, so it is drained first (`capture-drain.ts`) and the exit
- * recorded and the remains removed only once its final flush is confirmed complete. A queue still
- * moving is revisited next sweep; one that cannot be confirmed is left untouched (`not saved ·
- * kept`). A runtime reported `running` with a
- * `detail` (a guest service failed, the executor survived) is reported, never removed.
+ * recorded the reconciler asks the daemon one `capture.status`. A daemon that answers means the
+ * runtime is not dead, so it is drained first (`capture-drain.ts`) and the exit recorded and the
+ * remains removed only once its final flush is confirmed complete; a queue still moving is
+ * revisited next sweep, one that cannot be confirmed is left untouched (`not saved · kept`). A
+ * daemon that does not answer leaves an ended executor WITH ITS DISK: sealantd exits 75 with its
+ * staging there after an incomplete final flush, whether or not any drain reached it (a plain
+ * `docker stop`, its own shutdown FINAL, a lost reply). The exit is recorded, and the remains
+ * go only through the one preservation policy (`decideExecutorDeletion`): removed when Core
+ * observed its final flush complete, the control plane attested a sealed final capture of it,
+ * the owner discarded it, or nothing of it is left — otherwise retained (recorded; recovery is
+ * attempted). A runtime reported `running` with a `detail` (a guest service failed, the executor
+ * survived) is reported, never removed.
  */
 import {
   SealantDB,
@@ -48,6 +51,7 @@ import {
 } from "@sealant/db";
 import { Effect, Layer } from "effect";
 
+import { decideExecutorDeletion } from "../runtime/executor-preservation.js";
 import {
   hostDirectoryLaunchMaterialStager,
   type LaunchMaterialStager,
@@ -66,7 +70,7 @@ import {
   captureDaemonAnswers,
   drainCaptureBeforeStop,
   drainPermitsStop,
-  finalWasAnswered,
+  recordedDeletionEvidence,
   runIsCaptureSourced,
   type CaptureDrainLedger,
   type CaptureDrainSettings,
@@ -218,11 +222,17 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
 
-      const verdict = yield* drainBeforeRecording(options, instance, adapter);
-      if (verdict === "leave") {
+      const decided = yield* drainBeforeRecording(options, instance, adapter, inspection);
+      if (decided.verdict === "leave") {
         continue;
       }
-      if (instance.stopReason !== null && verdict === "record") {
+      const verdict = decided.verdict;
+      if (verdict === "record-keep-remains") {
+        yield* (
+          options.captureDrain?.ledger.markRetained(instance.runId, decided.reason) ?? Effect.void
+        );
+      }
+      if (instance.stopReason !== null) {
         // A stop is under way for this run (`markStopRequested`): the exit is that planned stop
         // completing, not a crash. Record it stopped with the stop's reason; the stop path's own
         // `markStopped` is idempotent.
@@ -242,8 +252,14 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
           yield* Effect.logInfo(
             `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended by its planned stop (${instance.stopReason}); recorded stopped.`,
           );
-          // The remains, as below; the stop path may be removing them already (idempotent).
-          yield* removeRemains(adapter, instance, resourceId);
+          if (verdict === "record-keep-remains") {
+            yield* Effect.logError(
+              `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended by its planned stop without a final flush confirmed complete: not saved · executor exited · kept · ${decided.reason}. Its remains are left in place; recovery is attempted.`,
+            );
+          } else {
+            // The remains, as below; the stop path may be removing them already (idempotent).
+            yield* removeRemains(adapter, instance, resourceId);
+          }
         }
         continue;
       }
@@ -277,11 +293,10 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
       );
 
       if (verdict === "record-keep-remains") {
-        // The executor ended after a drain reached its daemon and was never told its work is
-        // saved: its disk holds the staged captures (sealantd exits 75 after an incomplete final
-        // flush). The exit is recorded; the remains are NOT removed.
+        // The executor ended and nothing proves its disk saved: the exit is recorded; the remains
+        // are NOT removed (the preservation policy retained them).
         yield* Effect.logError(
-          `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended after a final flush that was not confirmed complete: not saved · executor exited · kept. Its remains are left in place; remove them only once its captures are recovered.`,
+          `Runtime exit reconciler: run ${instance.runId} (${adapter.id} ${resourceId}) ended without a final flush confirmed complete: not saved · executor exited · kept · ${decided.reason}. Its remains are left in place; recovery is attempted.`,
         );
         continue;
       }
@@ -295,35 +310,34 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
 
 /**
  * Before an exit is recorded: `record` (go ahead: record and remove the remains), `leave` (touch
- * nothing this sweep), or `record-keep-remains` (record the exit, keep the remains). Everything
- * that is not a capture-sourced runtime is `record`. For a capture-sourced one (or one whose
- * source cannot be read): a daemon that still answers is drained first, and `record` only once
- * its work is confirmed saved; a daemon that does not answer is the crash the runtime reported
- * (`record`) — unless a drain already reached it and was never told its work is saved, when the
- * executor exited on purpose with its staging on disk (`record-keep-remains`, or `leave` while
- * its runtime still reports it). Never fails — a failed read leaves the instance alone.
+ * nothing this sweep), or `record-keep-remains` (record the exit, keep the remains: retained).
+ * A capture-sourced runtime (or one whose source cannot be read) whose daemon still answers is
+ * drained first, and `record` only once its work is confirmed saved. One whose daemon does not
+ * answer — or that this worker cannot address — goes through the preservation policy with what
+ * the runtime reported (`exited` keeps a disk, `missing` does not) and what the drain record
+ * holds (an observed complete flush, an attestation, a discard). Everything that is not
+ * capture-sourced is `record`. Never fails — a failed read leaves the instance alone.
  */
 const drainBeforeRecording = (
   options: ReconcileRuntimeExitsEffectOptions,
   instance: WorkspaceRuntimeInstance,
   adapter: RuntimeAdapter,
+  inspection: RuntimeEnd,
 ): Effect.Effect<
-  "record" | "leave" | "record-keep-remains",
+  | { readonly verdict: "record" | "leave" }
+  | { readonly verdict: "record-keep-remains"; readonly reason: string },
   never,
   WorkspaceAttemptRepo | SealantRuntime
 > =>
   Effect.gen(function* () {
     const drain = options.captureDrain;
     if (drain === undefined) {
-      return "record" as const;
+      return { verdict: "record" as const };
     }
-    // The owner discarded this run's unsaved captures: nothing is kept for them.
-    if ((yield* drain.ledger.peek(instance.runId))?.discardRequested !== undefined) {
-      return "record" as const;
-    }
-    const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
-    if (target === undefined) {
-      return "record" as const;
+    const record = yield* drain.ledger.read(instance.runId);
+    if (record.readable && record.entry?.discardRequested !== undefined) {
+      // The owner discarded this run's unsaved captures: nothing is drained or kept for them.
+      return { verdict: "record" as const };
     }
     const attempts = yield* WorkspaceAttemptRepo;
     const captureSourced = yield* runIsCaptureSourced({
@@ -331,14 +345,26 @@ const drainBeforeRecording = (
       sourceKind: instance.sourceKind,
       readSnapshotPayload: attempts.getAttemptSnapshotByRunId(instance.runId),
     });
+    const decide = Effect.sync(() => {
+      const decision = decideExecutorDeletion({
+        captureSourced,
+        runtime: inspection.state,
+        ...recordedDeletionEvidence(record, {
+          runId: instance.runId,
+          resourceId: instance.resourceId,
+          reference: instance.reference,
+        }),
+      });
+      return decision.delete
+        ? { verdict: "record" as const }
+        : { verdict: "record-keep-remains" as const, reason: decision.reason };
+    });
     if (!captureSourced) {
-      return "record" as const;
+      return yield* decide;
     }
-    if (!(yield* captureDaemonAnswers(target, DAEMON_PROBE_TIMEOUT_MS))) {
-      const earlier = yield* drain.ledger.peek(instance.runId);
-      return earlier !== undefined && finalWasAnswered(earlier)
-        ? ("record-keep-remains" as const)
-        : ("record" as const);
+    const target = sealantTargetForRuntimeInstance(instance, options.targetOptions ?? {});
+    if (target === undefined || !(yield* captureDaemonAnswers(target, DAEMON_PROBE_TIMEOUT_MS))) {
+      return yield* decide;
     }
     yield* Effect.logWarning(
       `Runtime exit reconciler: ${adapter.id} reports run ${instance.runId} ended, but its sealantd still answers; draining its captures before anything is recorded or removed.`,
@@ -352,13 +378,15 @@ const drainBeforeRecording = (
       label: "exit reconciler",
       runtimeState: runtimeReportsState(adapter, instance.resourceId ?? ""),
     });
-    return drainPermitsStop(outcome) ? ("record" as const) : ("leave" as const);
+    return drainPermitsStop(outcome)
+      ? { verdict: "record" as const }
+      : { verdict: "leave" as const };
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning(
         `Runtime exit reconciler: checking the capture queue of run ${instance.runId} failed; leaving it for the next sweep.`,
         cause,
-      ).pipe(Effect.as("leave" as const)),
+      ).pipe(Effect.as({ verdict: "leave" as const })),
     ),
   );
 

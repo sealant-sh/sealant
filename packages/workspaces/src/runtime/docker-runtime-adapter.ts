@@ -1,7 +1,8 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
@@ -20,10 +21,12 @@ import {
   type ResolvedDockerVolumeMount,
 } from "./docker-volume-mounts.js";
 import {
-  LaunchRetainedError,
   completeReadyLaunch,
+  failLaunch,
   launchHoldsCaptures,
+  reportStartedLaunch,
   type RuntimeAdapterLaunchHooks,
+  type RuntimeLaunchIdentity,
 } from "./launch-retention.js";
 import {
   bindRootMountPath,
@@ -51,6 +54,8 @@ import {
   type RuntimeAdapterInspectResult,
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
+  type RuntimeAdapterRecoverInput,
+  type RuntimeAdapterRecoverResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
   type RuntimeAdapterSupport,
@@ -121,9 +126,32 @@ export type DockerEventStreamOpener = (input: {
   readonly onEnd: (error: unknown) => void;
 }) => DockerEventStream;
 
+/**
+ * The file whose presence in a container's root makes sealantd boot in recovery mode (sealantd
+ * `BootConfig::recovery`): the root of the container's filesystem is outside every capture root.
+ */
+export const RECOVERY_MARKER_NAME = ".sealantd-recovery";
+
 interface DockerContainerAcquisition {
   readonly containerId: string;
   readonly adopted: boolean;
+}
+
+/**
+ * A launch found an ENDED container of the same run under its name and was told to keep ended
+ * ones (a capture workspace: that disk may hold the newest work). Nothing was removed.
+ */
+class DockerEndedContainerFound extends Error {
+  public override readonly name = "DockerEndedContainerFound";
+
+  public constructor(
+    public readonly containerId: string,
+    containerName: string,
+  ) {
+    super(
+      `A stopped container of this run ('${containerName}', ${containerId}) still holds its disk; it is kept, not replaced, until its captures are confirmed saved or recovered.`,
+    );
+  }
 }
 
 interface DockerVolumeLaunchMountPlan {
@@ -1264,6 +1292,13 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
   private async runOrAdoptContainer(
     args: Array<string>,
     containerName: string,
+    options: {
+      /**
+       * Never remove a stopped same-name container: throw `DockerEndedContainerFound` instead (a
+       * capture workspace, whose ended container's disk may hold the only copy of work).
+       */
+      readonly keepEnded?: boolean;
+    } = {},
   ): Promise<DockerContainerAcquisition> {
     const runOnce = async (): Promise<DockerContainerAcquisition> => {
       const result = await this.commandRunner("docker", args);
@@ -1287,6 +1322,9 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       }
       if (existing.running) {
         return { containerId: existing.id, adopted: true };
+      }
+      if (options.keepEnded === true) {
+        throw new DockerEndedContainerFound(existing.id, containerName);
       }
       await this.forceRemoveContainer(existing.id);
       return runOnce();
@@ -1444,6 +1482,49 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         state.error.length > 0 ? `, error: ${state.error}` : ""
       }${logs === undefined ? "" : `\nLogs:\n${logs}`}`,
     };
+  }
+
+  /**
+   * Recover a RETAINED container: one kept because its disk holds captures not confirmed saved
+   * (sealantd exited 75 after an incomplete final flush, a plain `docker stop`, a failed boot).
+   * `docker start` runs it again on its own writable layer and volumes; sealantd boots, finds its
+   * staging at or past the head and resumes it without materializing over it (sealantd #99/#105).
+   * The container's original command runs again — its lifecycle steps and foreground harness
+   * start too (sealantd has no boot mode without them yet) — so the caller asks for a FINAL flush
+   * at once: it closes admission, terminates every managed process, snapshots both classes and
+   * ships. Waits for the control socket when the adapter verifies readiness.
+   */
+  public async recover(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult> {
+    let state: Awaited<ReturnType<DockerRuntimeAdapter["inspectContainerState"]>>;
+    try {
+      state = await this.inspectContainerState(input.resourceId);
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return { outcome: "missing" };
+      throw error;
+    }
+    if (state.status === "removing") return { outcome: "missing" };
+    if (state.running) return { outcome: "running" };
+    // A kept container starts with the environment it was created with, so the recovery boot is
+    // asked for by a marker in its own filesystem (sealantd reads `/.sealantd-recovery`): no
+    // lifecycle step, no dotfiles, no harness, admission closed, its own staging resumed.
+    await this.writeRecoveryMarker(input.resourceId);
+    await this.commandRunner("docker", ["start", input.resourceId]);
+    if (this.verifyRunning) {
+      await this.awaitControlSocketReady(input.resourceId, input.reference ?? input.resourceId);
+    }
+    return { outcome: "restarted" };
+  }
+
+  /** `docker cp` sealantd's recovery marker into the (stopped) container's root. */
+  private async writeRecoveryMarker(containerId: string): Promise<void> {
+    const directory = await mkdtemp(joinPath(tmpdir(), "sealant-recovery-"));
+    try {
+      const marker = joinPath(directory, RECOVERY_MARKER_NAME);
+      await writeFile(marker, "recovery\n", { encoding: "utf8", mode: 0o644 });
+      await this.commandRunner("docker", ["cp", marker, `${containerId}:/${RECOVERY_MARKER_NAME}`]);
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   /**
@@ -1614,8 +1695,18 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     await this.assertRuntimeConfigured(parsed.blueprint.runtime.ociRuntime);
 
     const containerName = buildContainerName(parsed, this.containerNamePrefix);
+    const holdsCaptures = launchHoldsCaptures(parsed.blueprint);
     let acquisition: DockerContainerAcquisition | undefined;
     let dockerService: DockerServiceProvision | undefined;
+    // The executor this launch created, adopted or found ended: from the moment it exists a
+    // capture-sourced launch that fails keeps it (`launch-retention.ts`).
+    let executor: { readonly identity: RuntimeLaunchIdentity; readonly ended: boolean } | undefined;
+    const identityOf = (containerId: string): RuntimeLaunchIdentity => ({
+      adapter: this.id,
+      resourceId: containerId,
+      reference: containerName,
+      endpoint: this.resolveControlEndpoint(containerId, containerName),
+    });
     try {
       const volumeMountPlan = await this.prepareVolumeLaunchMounts(parsed, containerName);
       const mountArgsForIntent = volumeMountPlan?.mountArgsForIntent ?? dockerBindArgsForIntent;
@@ -1745,11 +1836,24 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...credentialEnvArgs,
         imageReference,
       ];
-      if (this.autoRemove) {
+      // Never `--rm` a capture workspace: Docker would delete its disk the moment it exits, and
+      // an exit (75 after an incomplete final flush) is exactly when that disk is the only copy.
+      if (this.autoRemove && !holdsCaptures) {
         args.splice(2, 0, "--rm");
       }
-      acquisition = await this.runOrAdoptContainer(args, containerName);
+      try {
+        acquisition = await this.runOrAdoptContainer(args, containerName, {
+          keepEnded: holdsCaptures,
+        });
+      } catch (error) {
+        if (error instanceof DockerEndedContainerFound) {
+          executor = { identity: identityOf(error.containerId), ended: true };
+        }
+        throw error;
+      }
       const { containerId } = acquisition;
+      executor = { identity: identityOf(containerId), ended: false };
+      await reportStartedLaunch(hooks, executor.identity);
 
       if (this.verifyRunning) {
         await this.assertContainerRunning(containerId, containerName);
@@ -1768,7 +1872,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
       // launch that fails past this point keeps the container (`launch-retention.ts`).
       return await completeReadyLaunch({
         blueprint: parsed.blueprint,
-        identity: { adapter: this.id, resourceId: containerId, reference: containerName, endpoint },
+        identity: executor.identity,
         hooks,
         steps: async () => {
           // Credential FILE injections happen only after the container is up (and, when
@@ -1789,11 +1893,16 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         // Not capture-sourced: the catch below removes what this launch created.
       });
     } catch (error) {
-      if (!(error instanceof LaunchRetainedError)) {
-        await this.cleanupFailedLaunch(containerName, acquisition, dockerService);
-      }
-      // A retained launch keeps the container (and its sidecar): it may hold the only copy of work.
-      throw error;
+      // The one preservation policy decides: a capture executor that exists (created, adopted,
+      // or found ended) is kept with its sidecar — it may hold the only copy of work; anything
+      // else is cleaned up as before.
+      return failLaunch({
+        blueprint: parsed.blueprint,
+        identity: executor?.identity,
+        runtime: executor?.ended === true ? "exited" : "running",
+        error,
+        cleanup: () => this.cleanupFailedLaunch(containerName, acquisition, dockerService),
+      });
     }
   }
 }

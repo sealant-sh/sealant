@@ -1,0 +1,1 @@
+ALTER TABLE "workspace_capture_drains" ADD COLUMN "capture_token_sealed" text;

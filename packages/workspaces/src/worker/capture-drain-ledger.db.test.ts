@@ -108,9 +108,9 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect((await inFlight).outcome.kind).toBe("drained");
 
     // Released: worker B claims now and loads what worker A recorded.
-    const entry = await Effect.runPromise(b.claim(runId));
-    expect(entry?.last).toMatchObject({ complete: true, pending: 0 });
-    expect(entry?.lastProgressAt).toBeTypeOf("number");
+    const claim = await Effect.runPromise(b.claim(runId));
+    expect(claim?.entry.last).toMatchObject({ complete: true, pending: 0 });
+    expect(claim?.entry.lastProgressAt).toBeTypeOf("number");
   });
 
   it("takes over a dead worker's lease once it expires, and fences the dead worker's writes", async () => {
@@ -118,7 +118,8 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     const dead = worker(dbA, "worker-dead", 150);
     const live = worker(dbB, "worker-live", 150);
 
-    expect(await Effect.runPromise(dead.claim(runId))).toBeDefined();
+    const deadClaim = await Effect.runPromise(dead.claim(runId));
+    expect(deadClaim).toBeDefined();
     expect(await Effect.runPromise(live.claim(runId))).toBeUndefined();
 
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -128,6 +129,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       await Effect.runPromise(
         dead.save(
           runId,
+          deadClaim?.token ?? "",
           {
             lastProgressAt: Date.now(),
             last: undefined,
@@ -185,7 +187,93 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     expect(first.discardRequestedBy).toBe("user_owner");
     expect(second.discardRequestedBy).toBe("user_owner");
     expect(second.discardRequestedAt?.getTime()).toBe(first.discardRequestedAt?.getTime());
-    const entry = await Effect.runPromise(worker(dbB, "worker-b").peek(runId));
-    expect(entry?.discardRequested?.by).toBe("user_owner");
+    const read = await Effect.runPromise(worker(dbB, "worker-b").read(runId));
+    expect(read.readable && read.entry?.discardRequested?.by).toBe("user_owner");
+  });
+
+  it("lets one of two simultaneous claims of one worker process through, and neither releases the other", async () => {
+    // Review 2 RISK: every stop path of a worker shares its lease owner, and the claim admitted a
+    // live lease of the same owner, so two drains of one run in one process both ran.
+    const runId = await newRun();
+    const ledger = worker(dbA, "one-worker");
+    const claims = await Promise.all([
+      Effect.runPromise(ledger.claim(runId)),
+      Effect.runPromise(ledger.claim(runId)),
+    ]);
+    const granted = claims.filter((claim) => claim !== undefined);
+    expect(granted).toHaveLength(1);
+    // A stale token (another drain's) cannot release the live claim.
+    await Effect.runPromise(ledger.release(runId, "not-the-holder"));
+    expect(await Effect.runPromise(ledger.claim(runId))).toBeUndefined();
+    await Effect.runPromise(ledger.release(runId, granted[0]?.token ?? ""));
+    expect(await Effect.runPromise(ledger.claim(runId))).toBeDefined();
+  });
+
+  it("records a retained executor, lists it due, counts attempts, and releases it when stopped", async () => {
+    const runId = await newRun();
+    const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const ledger = worker(dbB, "worker-b");
+    await Effect.runPromise(ledger.markRetained(runId, "executor exited · exit 75"));
+    await Effect.runPromise(ledger.markRetained(runId, "executor exited · again"));
+    const due = await Effect.runPromise(
+      Effect.gen(function* () {
+        const drains = yield* WorkspaceCaptureDrainRepo;
+        return yield* drains.listRetainedDue({ limit: 1_000 });
+      }).pipe(Effect.provide(layer)),
+    );
+    const row = due.find((candidate) => candidate.runId === runId);
+    expect(row).toMatchObject({ retainedReason: "executor exited · again", state: "kept" });
+    const later = new Date(Date.now() + 60_000);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const drains = yield* WorkspaceCaptureDrainRepo;
+        yield* drains.recordRecoveryAttempt({
+          runId,
+          error: "docker start failed",
+          nextRecoveryAt: later,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    const read = await Effect.runPromise(ledger.read(runId));
+    expect(read.readable && read.entry?.retained).toMatchObject({
+      atMs: row?.retainedAt?.getTime(),
+      recoveryAttempts: 1,
+      lastRecoveryError: "docker start failed",
+      nextRecoveryAtMs: later.getTime(),
+    });
+    const notDue = await Effect.runPromise(
+      Effect.gen(function* () {
+        const drains = yield* WorkspaceCaptureDrainRepo;
+        return yield* drains.listRetainedDue({ limit: 1_000 });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(notDue.some((candidate) => candidate.runId === runId)).toBe(false);
+    await Effect.runPromise(ledger.observe(runId, { state: "stopped", detail: "removed" }));
+    const released = await Effect.runPromise(ledger.read(runId));
+    expect(released.readable && released.entry?.retained).toBeUndefined();
+  });
+
+  it("reads a completion attestation back through the ledger", async () => {
+    const runId = await newRun();
+    const layer = WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const drains = yield* WorkspaceCaptureDrainRepo;
+        yield* drains.attestCompletion({
+          runId,
+          executorId: "container-1",
+          epoch: 3,
+          captureN: 41,
+          attestedBy: "user_owner",
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    const read = await Effect.runPromise(worker(dbB, "worker-b").read(runId));
+    expect(read.readable && read.entry?.completionAttested).toMatchObject({
+      executorId: "container-1",
+      epoch: 3,
+      captureN: 41,
+      by: "user_owner",
+    });
   });
 });
