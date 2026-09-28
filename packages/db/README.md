@@ -72,3 +72,16 @@ await jobs.insertQueuedJob({
   },
 });
 ```
+
+## Capture ledger contract (rolling deploys)
+
+`workspace_capture_drains` has a trigger (`workspace_capture_drains_invariants`) that keeps the
+ledger's invariants for a Core process from an older release still running during a rolling deploy.
+The current writer marks each transaction with `sealant.capture_ledger = CAPTURE_LEDGER_CONTRACT`
+(`src/repositories/workspace-capture-drains.ts`); the trigger trusts only that exact value and holds
+every other writer, unset or an older version, to the old-writer guards.
+
+Bump `CAPTURE_LEDGER_CONTRACT` whenever the ledger contract changes (a new invariant, a new column a
+writer must keep, a changed transition), in the same change as a migration that recreates the
+trigger to trust only the new value. If the marker stays the same, the previous release carries it
+too and skips guards it doesn't implement.

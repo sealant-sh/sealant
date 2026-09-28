@@ -18,9 +18,12 @@ import {
   WorkspaceRuntimeInstanceRepo,
   WorkspaceRuntimeInstanceRepoLive,
   type DB,
+  type WorkspaceCaptureDeletionRequest,
   type WorkspaceCaptureDrainRepoService,
 } from "@sealant/db";
+import * as ledgerWrites from "@sealant/db/testing/capture-ledger-writes";
 import * as review9 from "@sealant/db/testing/review9-capture-drains";
+import * as review11 from "@sealant/db/testing/review11-capture-drains";
 import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -1374,7 +1377,11 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         kind: "released",
       });
       expect((await row(runId))?.deletionState).toBeNull();
-      expect((await row(runId))?.deletionRequests).toEqual([]);
+      // The request of unknown outcome is past the runtime's bound: recorded as fenced.
+      expect((await row(runId))?.deletionRequests.map((request) => request.outcome)).toEqual([
+        "fenced",
+        "refused",
+      ]);
     });
 
     it("records an old writer's removal request, so a current refusal of a later one keeps it (review 11 #3)", async () => {
@@ -1480,6 +1487,85 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       ).rejects.toBeDefined();
       expect((await row(runId))?.deletionState).toBeNull();
       expect((await row(runId))?.unsavedStatuses).toHaveLength(2);
+    });
+
+    // Review 12 #3: the immediately previous Core writer (review 11, 1d268ec) already marked its
+    // transactions as a current writer, so the table's trigger let it through; but it knows no
+    // per-request outcomes and released an issued removal on the refusal of its latest request,
+    // while an earlier request, accepted with its reply lost, could still act. The marker is now
+    // the ledger contract's version: every other value is an old writer.
+    it("AUDIT R12 review11 marker bypass releases unknown request on a rolling upgrade", async () => {
+      const runId = await newRun();
+      const a = worker(dbA, "current");
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      const authorized = await Effect.runPromise(
+        a.authorizeDeletion(runId, (await row(runId))?.evidenceVersion ?? 0),
+      );
+      if (authorized.kind !== "authorized") throw new Error(authorized.kind);
+      // Request 1: accepted by the runtime, its reply lost.
+      await Effect.runPromiseExit(
+        removeUnderDeletion({
+          ledger: a,
+          runId,
+          ticket: authorized.ticket,
+          remove: Effect.fail(new Error("accepted request lost response")),
+        }),
+      );
+      // Its hold lapsed on unchanged evidence: request 2.
+      const repeat = await Effect.runPromise(
+        a.reconcileIssuedDeletion(runId, "present", 60 * 60_000),
+      );
+      if (repeat.kind !== "reissue") throw new Error(repeat.kind);
+      expect(await Effect.runPromise(a.issueDeletion(runId, repeat.ticket))).toBe(true);
+      // The review 11 writer handles request 2's definitive refusal while request 1 is unknown.
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const repo = yield* review11.WorkspaceCaptureDrainRepo;
+          yield* repo.releaseDeletion({ runId, token: repeat.ticket.token });
+        }).pipe(
+          Effect.provide(
+            review11.WorkspaceCaptureDrainRepoLive.pipe(
+              Layer.provide(Layer.succeed(SealantDB, dbB)),
+            ),
+          ),
+        ),
+      );
+      const after = await row(runId);
+      // The removal stays issued with both requests on record, and excludes recovery and
+      // observation until it is settled from the runtime.
+      expect(after?.deletionState).toBe("deleting-issued");
+      expect(
+        after?.deletionRequests.filter((request) => request.outcome === "unknown"),
+      ).toHaveLength(2);
+      expect(after?.deletionExpiresAt?.getTime() ?? Infinity).toBeLessThanOrEqual(Date.now());
+      await Effect.runPromise(a.markRetained(runId, "first request pending"));
+      const claim = await Effect.runPromise(a.claimRecovery(runId, 60_000));
+      expect(await Effect.runPromise(a.admitRecovery(runId, claim ?? NO_CLAIM))).toBe("deleting");
+      expect(await Effect.runPromise(a.openObservation(runId, 60_000))).toBeUndefined();
+    });
+
+    // The rule holds for every writer, the current one included: an issued removal ends only as
+    // 'deleted', or with every request it sent whose outcome was unknown settled on the row.
+    it("refuses any writer's release of an issued removal that drops a request of unknown outcome", async () => {
+      const runId = await newRun();
+      const a = worker(dbA, "current");
+      await Effect.runPromise(a.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+      const authorized = await Effect.runPromise(
+        a.authorizeDeletion(runId, (await row(runId))?.evidenceVersion ?? 0),
+      );
+      if (authorized.kind !== "authorized") throw new Error(authorized.kind);
+      expect(await Effect.runPromise(a.issueDeletion(runId, authorized.ticket))).toBe(true);
+      const release = (requests: readonly WorkspaceCaptureDeletionRequest[]) =>
+        Effect.runPromise(ledgerWrites.releaseRemovalAsCurrentWriter(dbA, runId, requests));
+      // Dropped, or left unknown: refused.
+      await expect(release([])).rejects.toBeDefined();
+      const [request] = (await row(runId))?.deletionRequests ?? [];
+      if (request === undefined) throw new Error("no request recorded");
+      await expect(release([request])).rejects.toBeDefined();
+      expect((await row(runId))?.deletionState).toBe("deleting-issued");
+      // Settled on the row: allowed.
+      await release([{ ...request, outcome: "refused" }]);
+      expect((await row(runId))?.deletionState).toBeNull();
     });
 
     it("keeps an old worker off an executor a current recovery attempt holds", async () => {
