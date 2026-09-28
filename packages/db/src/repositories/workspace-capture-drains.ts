@@ -222,11 +222,14 @@ export interface WorkspaceCaptureDrainRepoService {
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
   /**
    * RIGHT BEFORE the runtime call that removes the executor (review 8 #7): the removal is still
-   * held by `token` and nothing voided it (as `confirmDeletion`), and it becomes
-   * `deleting-issued` in the same transaction — from then on it stays exclusionary until its
-   * issuer records the outcome or the runtime is inspected (`reconcileIssuedDeletion`), whatever
-   * becomes of its hold. A removal taken over as issued already (`reissue`) is issued again while
-   * `token` holds it. Renews the hold. `false`: nothing may be called — decide again.
+   * held by `token`, and the evidence it was authorized on is still the current version with no
+   * observation in flight; it becomes `deleting-issued` in the same transaction — from then on it
+   * stays exclusionary until its issuer records the outcome or the runtime is inspected
+   * (`reconcileIssuedDeletion`), whatever becomes of its hold. A removal taken over as issued
+   * already (`reissue`) is issued again only on the same check (review 10 #4): an earlier
+   * request staying exclusionary is not permission to send another. When the evidence moved
+   * since, nothing is sent, the removal stays issued, and its hold ends so it is settled from the
+   * runtime. Renews the hold. `false`: nothing may be called — decide again.
    */
   readonly issueDeletion: (input: {
     readonly runId: string;
@@ -239,7 +242,8 @@ export interface WorkspaceCaptureDrainRepoService {
    * out YET — it failed, never reached the runtime, or is still on its way (review 9 #5: presence
    * proves only that it has not finished). While the evidence it was authorized on is still the
    * current version with no observation in flight, that authorization stands: it is taken over by
-   * `token` (fresh hold, still `deleting-issued`) and issued again (`reissue`). Otherwise the
+   * `token` (fresh hold, still `deleting-issued`) to be issued again (`reissue`; `issueDeletion`
+   * checks the evidence again right before that request). Otherwise the
    * evidence changed since, and the executor must be kept — but the earlier request may still
    * act, so the removal stays issued and exclusionary (`outstanding`: nothing is observed or
    * recovered) until the runtime's own bound on a removal request (`fenceMs`, the adapter's
@@ -812,9 +816,25 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 return false;
               }
               if (
-                current.deletionState !== "deleting-issued" &&
-                !(current.deletionState === "deleting" && deletionEvidenceCurrent(current))
+                current.deletionState !== "deleting" &&
+                current.deletionState !== "deleting-issued"
               ) {
+                return false;
+              }
+              // Every request sent needs the evidence the removal was authorized on to stand,
+              // the first and every one sent again alike (review 10 #4, decision 31): a request
+              // already out stays exclusionary whatever the evidence does, but it gives no
+              // permission to send another once the evidence moved.
+              if (!deletionEvidenceCurrent(current)) {
+                if (current.deletionState === "deleting-issued") {
+                  // Taken over to be issued again, and the evidence moved since: nothing more is
+                  // sent. The request already out stays issued; its hold ends now, so it is
+                  // settled from the runtime (`outstanding` until its bound passes).
+                  yield* tx
+                    .update(workspaceCaptureDrains)
+                    .set({ deletionExpiresAt: sql`now()` })
+                    .where(eq(workspaceCaptureDrains.runId, input.runId));
+                }
                 return false;
               }
               yield* tx

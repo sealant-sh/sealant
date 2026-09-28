@@ -1245,6 +1245,46 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
       ),
     );
 
+  // Review 10 #4 (decision 31): a request already out stays exclusionary, but that is no
+  // permission to send another. Evidence received after the reissue was handed out, before its
+  // call, refuses the call; the earlier request stays issued.
+  it("sends no second request when the evidence moved after the removal was taken over to be issued again (review 10 #4)", async () => {
+    const { ledger, state } = await lapsedIssue();
+    const settled = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: keepRunning,
+      }),
+    );
+    expect(settled.decision).toEqual({ delete: true, basis: "issued-before" });
+    await changeEvidence(ledger);
+    let called = false;
+    const removal = await run(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_issued",
+        ticket: settled.ticket,
+        remove: Effect.sync(() => {
+          called = true;
+          return "removed";
+        }),
+      }),
+    );
+    expect(removal).toEqual({ removed: false });
+    expect(called).toBe(false);
+    // The earlier request may still act: issued, exclusionary, and settled from the runtime at
+    // once (its hold ended) as outstanding — the executor kept.
+    expect(state()).toBe("deleting-issued");
+    expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
+    expect(await run(ledger.admitRecovery("run_issued"))).toBe("deleting");
+    expect(await run(ledger.reconcileIssuedDeletion("run_issued", "present", 20 * 60_000))).toEqual(
+      { kind: "outstanding" },
+    );
+  });
+
   // Review 9 #5 (decision 27): the runtime still having the executor proves only that the
   // earlier request has not finished. With the evidence changed it may not be issued again, and
   // it is not given up either: it stays issued, and the executor is kept.

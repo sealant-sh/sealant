@@ -882,4 +882,66 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(await Effect.runPromise(ledgerB.claimRecovery(older, 60_000))).toBeDefined();
   });
+
+  // Review 10 #4 (decision 31), the reviewer's race on two database clients: a removal taken over
+  // to be issued again while its evidence stood; an answer asked for before it (its fence long
+  // lapsed) is published after the takeover and says the work is not saved. The repeat call is
+  // refused; the earlier request stays issued and exclusionary.
+  it("sends no repeat removal on evidence that moved after the reissue was handed out (review 10 #4)", async () => {
+    const runId = await newRun();
+    const a = worker(dbA, "reissue-a");
+    const b = worker(dbB, "reissue-b");
+    const old = await Effect.runPromise(a.openObservation(runId, 1));
+    if (old === undefined) throw new Error("old fence");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const fresh = await Effect.runPromise(b.openObservation(runId, 60_000));
+    if (fresh === undefined) throw new Error("fresh fence");
+    await Effect.runPromise(b.recordStatus(runId, savedStatus({ headN: 7 }), Date.now(), fresh));
+    const saved = await Effect.runPromise(b.read(runId));
+    if (!saved.readable) throw new Error("unreadable");
+    expect(saved.entry?.observationsInFlight).toBe(0);
+    const first = await Effect.runPromise(
+      a.authorizeDeletion(runId, saved.entry?.evidenceVersion ?? 0),
+    );
+    if (first.kind !== "authorized") throw new Error(first.kind);
+    expect(await Effect.runPromise(a.issueDeletion(runId, first.ticket))).toBe(true);
+    await Effect.runPromise(a.lapseIssuedDeletion(runId, first.ticket));
+    const again = await Effect.runPromise(b.reconcileIssuedDeletion(runId, "present"));
+    if (again.kind !== "reissue") throw new Error(again.kind);
+    // The earlier read's answer is published now: head 8, not saved.
+    await Effect.runPromise(
+      a.recordStatus(
+        runId,
+        captureStatus({ headN: 8, complete: false, incompleteReason: "changed" }),
+        Date.now(),
+        old,
+      ),
+    );
+    const unsaved = await Effect.runPromise(b.read(runId));
+    expect(unsaved.readable && observedComplete(unsaved.entry)).toBe(false);
+    let called = false;
+    const removed = await Effect.runPromise(
+      removeUnderDeletion({
+        ledger: b,
+        runId,
+        ticket: again.ticket,
+        remove: Effect.sync(() => {
+          called = true;
+          return "removed";
+        }),
+      }),
+    );
+    expect(removed).toEqual({ removed: false });
+    expect(called).toBe(false);
+    // The request already out may still act: issued, exclusionary, its hold ended so it is
+    // settled from the runtime — outstanding while the runtime's bound has not passed.
+    const after = await Effect.runPromise(b.read(runId));
+    expect(after.readable && after.entry?.removalIssued).toBe(true);
+    expect(after.readable && after.entry?.last?.headN).toBe(8);
+    expect(await Effect.runPromise(b.openObservation(runId, 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(b.admitRecovery(runId))).toBe("deleting");
+    expect(
+      await Effect.runPromise(a.reconcileIssuedDeletion(runId, "present", 60 * 60_000)),
+    ).toEqual({ kind: "outstanding" });
+  });
 });

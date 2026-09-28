@@ -412,11 +412,15 @@ export interface CaptureDrainLedger {
    */
   readonly confirmDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
   /**
-   * RIGHT BEFORE the runtime call that removes the executor (decision 21, review 8 #7): as
-   * `confirmDeletion`, and in the same step the removal becomes issued — exclusionary from then on
-   * whatever becomes of its hold, until its outcome is recorded (`completeDeletion`,
-   * `releaseDeletion`) or settled from the runtime (`reconcileIssuedDeletion`). `false` (and when
-   * it cannot be checked): nothing may be called — decide again.
+   * RIGHT BEFORE the runtime call that removes the executor (decision 21, review 8 #7): the
+   * ticket holds the removal and the evidence it was authorized on is still current with none in
+   * flight — for the first request and for one issued again alike (review 10 #4: an earlier
+   * request staying exclusionary is no permission to send another) — and in the same step the
+   * removal becomes issued: exclusionary from then on whatever becomes of its hold, until its
+   * outcome is recorded (`completeDeletion`, `releaseDeletion`) or settled from the runtime
+   * (`reconcileIssuedDeletion`). One issued again whose evidence moved sends nothing and stays
+   * issued, its hold ended. `false` (and when it cannot be checked): nothing may be called —
+   * decide again.
    */
   readonly issueDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
   /**
@@ -818,6 +822,16 @@ export const inMemoryCaptureDrainLedger = (
       Effect.sync(() => {
         const row = store.rows.get(runId);
         if (row === undefined || row.deletion === undefined || !heldBy(row, ticket)) {
+          return false;
+        }
+        // Every request sent needs the evidence it was authorized on (review 10 #4): one taken
+        // over to be issued again, the evidence moved since, sends nothing and stays issued,
+        // its hold ended so it is settled from the runtime.
+        if (
+          row.deletion.evidenceVersion !== (row.entry.evidenceVersion ?? 0) ||
+          (row.fences?.size ?? 0) > 0
+        ) {
+          row.deletion = { ...row.deletion, expiresAtMs: now() };
           return false;
         }
         row.deletion = {
