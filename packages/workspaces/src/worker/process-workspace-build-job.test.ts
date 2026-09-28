@@ -309,8 +309,16 @@ const provideRepos = (stubs: {
   readonly installations?: unknown;
   readonly installationRepositories?: unknown;
   readonly connectedAccounts?: unknown;
+  /** Where a capture launch keeps its recovery credential; default: every write succeeds. */
+  readonly captureDrains?: unknown;
 }) =>
   Layer.mergeAll(
+    Layer.succeed(
+      WorkspaceCaptureDrainRepo,
+      (stubs.captureDrains ?? {
+        storeCaptureToken: () => Effect.void,
+      }) as WorkspaceCaptureDrainRepoService,
+    ),
     Layer.succeed(WorkspaceBuildJobRepo, stubs.jobs as WorkspaceBuildJobRepoService),
     Layer.succeed(
       WorkspaceRuntimeInstanceRepo,
@@ -377,6 +385,9 @@ const fakeCredentialCipher: CredentialCipherService = {
   encrypt: (plaintext) => Effect.succeed({ sealed: `sealed:${plaintext}`, keyId: "k-test" }),
   decrypt: (sealed) => Effect.succeed(sealed.slice("sealed:".length)),
 };
+
+/** A capture job's sealed secret env: the capture token the control plane seals for it. */
+const SEALED_CAPTURE_TOKEN = `sealed:${JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mct_test" })}`;
 
 const connectedAccountStub = (input: {
   readonly id: string;
@@ -1316,6 +1327,7 @@ describe("processWorkspaceBuildJobEffect", () => {
               mounts: [],
             },
           },
+          secretEnvSealed: SEALED_CAPTURE_TOKEN,
         }),
       });
     const identity = {
@@ -1342,6 +1354,7 @@ describe("processWorkspaceBuildJobEffect", () => {
           const error = yield* processWorkspaceBuildJobEffect(
             baseOptions({
               jobId: "job_retained",
+              credentialCipher: fakeCredentialCipher,
               runtimeAdapters: [runtimeAdapter],
               compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
             }),
@@ -1403,6 +1416,7 @@ describe("processWorkspaceBuildJobEffect", () => {
           const error = yield* processWorkspaceBuildJobEffect(
             baseOptions({
               jobId: "job_unrecorded",
+              credentialCipher: fakeCredentialCipher,
               runtimeAdapters: [runtimeAdapter],
               compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
             }),
@@ -1492,17 +1506,151 @@ describe("processWorkspaceBuildJobEffect", () => {
       ]);
     }).pipe(
       Effect.provide(
-        provideRepos({ jobs, runtimeInstances, attempts, installations, installationRepositories }),
-      ),
-      Effect.provide(
-        Layer.succeed(WorkspaceCaptureDrainRepo, {
-          storeCaptureToken: (input: { runId: string; sealed: string }) =>
-            Effect.sync(() => {
-              storedTokens.push(input);
-            }),
-        } as unknown as WorkspaceCaptureDrainRepoService),
+        provideRepos({
+          jobs,
+          runtimeInstances,
+          attempts,
+          installations,
+          installationRepositories,
+          captureDrains: {
+            storeCaptureToken: (input: { runId: string; sealed: string }) =>
+              Effect.sync(() => {
+                storedTokens.push(input);
+              }),
+          },
+        }),
       ),
     );
+  });
+
+  describe("a capture launch whose recovery credential cannot be kept (review 5 #4)", () => {
+    const captureTokenJob = () =>
+      workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_token_unkept",
+          runId: "run_token_unkept",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+              inputs: [],
+              mounts: [],
+            },
+          },
+          secretEnvSealed: `sealed:${JSON.stringify({ MEND_SESSION_TOKEN: "mst_1", SEALANT_CAPTURE_TOKEN: "mst_1" })}`,
+        }),
+      });
+
+    it.effect("is never launched, and its sealed job secret is kept", () => {
+      const jobs = captureTokenJob();
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const stager = {
+        stage: vi.fn(async () => ({})),
+        removeSecretEnv: vi.fn(async () => undefined),
+        removeAll: vi.fn(async () => undefined),
+      };
+      const storeCaptureToken = vi.fn(() =>
+        Effect.fail(new Error("injected transient write failure")),
+      );
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+      return Effect.gen(function* () {
+        const error = yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_token_unkept",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            launchMaterialStager: stager,
+            recoveryCredentialRetry: { times: 2, spacingMs: 0 },
+          }),
+        ).pipe(Effect.flip);
+
+        expect(error.message).toContain("recovery credential could not be kept");
+        expect(error.message).toContain("injected transient write failure");
+        // Retried before giving up: the first write and two more.
+        expect(storeCaptureToken).toHaveBeenCalledTimes(3);
+        expect(stager.stage).not.toHaveBeenCalled();
+        expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+        // The sealed job secret is the only durable copy of the credential: not cleared.
+        expect(jobs.clearSecretEnv).not.toHaveBeenCalled();
+        expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_token_unkept" });
+      }).pipe(
+        Effect.provide(
+          provideRepos({ jobs, runtimeInstances, attempts, captureDrains: { storeCaptureToken } }),
+        ),
+      );
+    });
+
+    it.effect("launches once a retried write lands", () => {
+      const jobs = captureTokenJob();
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      let calls = 0;
+      const storeCaptureToken = vi.fn(() =>
+        Effect.suspend(() => {
+          calls += 1;
+          return calls === 1 ? Effect.fail(new Error("transient")) : Effect.void;
+        }),
+      );
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+
+      return Effect.gen(function* () {
+        yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_token_unkept",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+            recoveryCredentialRetry: { times: 2, spacingMs: 0 },
+          }),
+        );
+        expect(storeCaptureToken).toHaveBeenCalledTimes(2);
+        expect(runtimeAdapter.launch).toHaveBeenCalledOnce();
+        expect(jobs.clearSecretEnv).toHaveBeenCalledWith("job_token_unkept");
+      }).pipe(
+        Effect.provide(
+          provideRepos({ jobs, runtimeInstances, attempts, captureDrains: { storeCaptureToken } }),
+        ),
+      );
+    });
+
+    it.effect("is never launched without a capture token to keep", () => {
+      const jobs = workspaceBuildJobRepoStub({
+        claimJobById: () => ({
+          id: "job_no_token",
+          runId: "run_no_token",
+          repository: "sealant/workspaces/demo",
+          tag: "opencode",
+          requestPayload: {
+            ...createWorkspaceBuildSpec({ osFamily: "nix" }),
+            sources: {
+              workspace: { kind: "capture", endpoint: "https://mend.example.com/session/s1" },
+              inputs: [],
+              mounts: [],
+            },
+          },
+        }),
+      });
+      const attempts = workspaceAttemptRepoStub();
+      const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+      const runtimeAdapter = createRuntimeAdapterStub("docker");
+      return Effect.gen(function* () {
+        const error = yield* processWorkspaceBuildJobEffect(
+          baseOptions({
+            jobId: "job_no_token",
+            runtimeAdapters: [runtimeAdapter],
+            credentialCipher: fakeCredentialCipher,
+            compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+          }),
+        ).pipe(Effect.flip);
+        expect(error.message).toContain("carries no capture token");
+        expect(runtimeAdapter.launch).not.toHaveBeenCalled();
+      }).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })));
+    });
   });
 
   it.effect("still refuses other platform-prefixed names in the sealed channel", () => {
@@ -2158,6 +2306,7 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
             mounts: [],
           },
         },
+        secretEnvSealed: SEALED_CAPTURE_TOKEN,
       }),
     });
     const attempts = workspaceAttemptRepoStub();
@@ -2183,6 +2332,7 @@ describe("a worker lost after its capture executor started (review 3 #6)", () =>
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_interrupted",
+          credentialCipher: fakeCredentialCipher,
           runtimeAdapters: [runtimeAdapter],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
         }),
@@ -2226,6 +2376,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
             mounts: [],
           },
         },
+        secretEnvSealed: SEALED_CAPTURE_TOKEN,
       }),
     });
   /** An executor that starts (its deadline reported) and whose readiness never comes. */
@@ -2255,6 +2406,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_slow",
+          credentialCipher: fakeCredentialCipher,
           runtimeAdapters: [neverReady(deadline)],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
           preservationLeadMs: leadMs,
@@ -2301,6 +2453,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_named",
+          credentialCipher: fakeCredentialCipher,
           runtimeAdapters: [runtimeAdapter],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
         }),
@@ -2320,6 +2473,7 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
       processWorkspaceBuildJobEffect(
         baseOptions({
           jobId: "job_preempted",
+          credentialCipher: fakeCredentialCipher,
           runtimeAdapters: [neverReady(new Date(Date.now() + 3_600_000).toISOString())],
           compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
           launchLeaseMs: 1_000,
