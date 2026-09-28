@@ -137,6 +137,7 @@ const launchPublishedImage = async (input: {
   readonly secretEnvDir?: string;
   readonly secretEnv?: Readonly<Record<string, string>>;
   readonly runId?: string;
+  readonly launchId?: string;
   readonly workspaceId?: string;
   readonly principalId?: string;
   readonly binds?: readonly { readonly mountPath: string; readonly subpath: string }[];
@@ -167,6 +168,8 @@ const launchPublishedImage = async (input: {
       ...(input.secretEnv === undefined ? {} : { secretEnv: { ...input.secretEnv } }),
       // Deterministic per-run container name -> idempotent launch/adopt (#4).
       ...(input.runId === undefined ? {} : { runId: input.runId }),
+      // The launch the create named: a capture executor boots with it (SEALANT_CAPTURE_LAUNCH_ID).
+      ...(input.launchId === undefined ? {} : { launchId: input.launchId }),
       ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
       ...(input.principalId === undefined ? {} : { principalId: input.principalId }),
       ...(input.binds === undefined || input.binds.length === 0 ? {} : { binds: [...input.binds] }),
@@ -800,6 +803,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           ...(secretEnvDir === undefined ? {} : { secretEnvDir }),
           ...(passThroughSecretEnv === undefined ? {} : { secretEnv: passThroughSecretEnv }),
           ...(job.runId === null ? {} : { runId: job.runId }),
+          ...(attemptIdentity?.launchId === null || attemptIdentity?.launchId === undefined
+            ? {}
+            : { launchId: attemptIdentity.launchId }),
           ...(labelWorkspaceId === undefined ? {} : { workspaceId: labelWorkspaceId }),
           ...(binds.length === 0 ? {} : { binds }),
           ...(attemptIdentity?.ownerUserId === undefined

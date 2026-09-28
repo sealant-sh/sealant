@@ -543,8 +543,11 @@ describe("DockerRuntimeAdapter", () => {
         runtime: { env: { SEALANT_CAPTURE_HARNESS_HOME: "/legacy/override" } },
       }),
       secretEnvDir: "/host/staging/sealant-secret-env-run_capture",
+      launchId: "launch-7",
     });
     const args = commandRunner.mock.calls[0]?.[1] ?? [];
+    // The launch the create named: the daemon names it from its first plan request.
+    expect(args).toContain("SEALANT_CAPTURE_LAUNCH_ID=launch-7");
     // Only launch material is bound; the working directory is the container's own disk.
     expect(args.filter((arg, index) => args[index - 1] === "-v" && arg !== undefined)).toEqual([
       "/host/staging/sealant-secret-env-run_capture:/run/sealant/secrets:ro",

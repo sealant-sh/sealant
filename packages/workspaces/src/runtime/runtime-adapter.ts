@@ -97,6 +97,12 @@ export const runtimeAdapterLaunchInputSchema = z.strictObject({
   // for the same run adopts the existing container instead of spawning a duplicate (#4 double-launch).
   runId: z.string().trim().min(1).optional(),
   /**
+   * The launch identity the create named for this executor (cross-repo decisions 5 and 11): a
+   * capture-sourced executor boots with it (`SEALANT_CAPTURE_LAUNCH_ID`), names it from its first
+   * `plan.get`, and refuses a plan that answers another executor. Absent when the create named none.
+   */
+  launchId: z.string().trim().min(1).optional(),
+  /**
    * Unsealed, policy-validated secret env for runtimes that cannot take a host directory
    * (Kubernetes projects it as the boot secret file). Docker ignores it and uses `secretEnvDir`.
    */

@@ -393,10 +393,10 @@ export const microvmBootEnv = (
   const source = blueprint.sources.workspace;
   if (source.kind === "capture") {
     entries.push(
-      ...captureSourceEnv(
-        source,
-        options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs },
-      ),
+      ...captureSourceEnv(source, {
+        ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
+        launchId: input.launchId,
+      }),
     );
   } else if (source.kind === "git") {
     // `git` is Core's blueprint term; pinned sealantd v0.18.2 names this wire mode `clone`.

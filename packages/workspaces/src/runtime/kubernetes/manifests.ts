@@ -202,7 +202,7 @@ export const runSelector = (
  * credential env) are NOT here — see `secretEnvEntries`.
  */
 export const plainEnvEntries = (
-  input: Pick<RuntimeAdapterLaunchInput, "blueprint" | "binds">,
+  input: Pick<RuntimeAdapterLaunchInput, "blueprint" | "binds" | "launchId">,
   config: Pick<
     KubernetesRuntimeConfig,
     "controlPort" | "volumeMappings" | "captureTerminationGracePeriodSeconds"
@@ -232,6 +232,7 @@ export const plainEnvEntries = (
     entries.push(
       ...captureSourceEnv(source, {
         stopGraceMs: config.captureTerminationGracePeriodSeconds * 1000,
+        launchId: input.launchId,
       }),
     );
   } else {

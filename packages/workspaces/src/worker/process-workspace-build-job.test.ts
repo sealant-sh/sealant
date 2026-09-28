@@ -2233,6 +2233,39 @@ describe("a launch never waits past its runtime's preservation start (review 4 #
     expect(attempts.markAttemptFailed).toHaveBeenCalledWith({ id: "run_slow" });
   });
 
+  it("hands the adapter the launch the create named, for the executor's boot env", async () => {
+    const jobs = captureJob("job_named", "run_named");
+    const attempts = {
+      ...workspaceAttemptRepoStub(),
+      getAttemptById: vi.fn((id: string) =>
+        Effect.succeed({ id, ownerUserId: "user_1", launchId: "launch-named" }),
+      ),
+    };
+    const runtimeInstances = workspaceRuntimeInstanceRepoStub();
+    const launched: Array<{ launchId?: string | undefined }> = [];
+    const runtimeAdapter = createRuntimeAdapterStub("docker", {
+      launch: async (input) => {
+        launched.push(input);
+        return {
+          adapter: "docker",
+          resourceId: "container-named",
+          reference: "sealant-named",
+          status: "ready",
+        };
+      },
+    });
+    await Effect.runPromise(
+      processWorkspaceBuildJobEffect(
+        baseOptions({
+          jobId: "job_named",
+          runtimeAdapters: [runtimeAdapter],
+          compileWorkspaceSpec: vi.fn(async () => createCompileResult({ id: "nix" })),
+        }),
+      ).pipe(Effect.provide(provideRepos({ jobs, runtimeInstances, attempts })), Effect.exit),
+    );
+    expect(launched.map((input) => input.launchId)).toEqual(["launch-named"]);
+  });
+
   it("stops waiting once its launch ownership was taken over (preempted by the deadline sweep)", async () => {
     const jobs = captureJob("job_preempted", "run_preempted");
     const attempts = workspaceAttemptRepoStub();

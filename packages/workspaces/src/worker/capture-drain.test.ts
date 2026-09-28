@@ -23,6 +23,7 @@ import {
   inMemoryCaptureDrainLedger,
   isCaptureSourcedBlueprint,
   recordedDeletionEvidence,
+  reportsComplete,
   runIsCaptureSourced,
   snapFailureDetail,
   DEFAULT_FINAL_FLUSH_GRACE_MS,
@@ -241,6 +242,33 @@ describe("drainCaptureBeforeStop", () => {
       });
       expect(drainPermitsStop(kept)).toBe(false);
     }
+  });
+
+  it("never takes `store-fidelity` as saved: the store cannot hold what the daemon writes (review 4)", async () => {
+    // sealantd round 4: a registrar that cannot read every manifest feature the daemon writes
+    // (git_trees) gets no lossy downgrade; the FINAL never completes and says `store-fidelity`.
+    const lossy = captureStatus({
+      pending: 0,
+      complete: false,
+      incompleteReason: "store-fidelity",
+    });
+    const daemon = fakeCaptureDaemon([lossy]);
+    const ledger = inMemoryCaptureDrainLedger();
+    const kept = await drain(daemon, ledger);
+    expect(kept).toMatchObject({
+      kind: "unconfirmed",
+      detail: expect.stringContaining("store-fidelity"),
+    });
+    expect(drainPermitsStop(kept)).toBe(false);
+    expect(reportsComplete(lossy)).toBe(false);
+    // Even beside a `complete: true`, the reason means not saved.
+    expect(reportsComplete({ ...lossy, complete: true })).toBe(false);
+    expect(
+      recordedDeletionEvidence(
+        { readable: true, entry: ledger.store.rows.get("run_1")?.entry },
+        { runId: "run_1", resourceId: "c1", reference: null },
+      ).observedComplete,
+    ).toBe(false);
   });
 
   it("never takes `complete: true` with a reason beside it as saved", async () => {

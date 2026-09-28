@@ -533,11 +533,11 @@ const captureSourceEnvArgs = (
     { kind: "capture" }
   >,
   stopGraceSeconds: number,
+  launchId: string | undefined,
 ): Array<string> =>
-  captureSourceEnv(source, { stopGraceMs: stopGraceSeconds * 1000 }).flatMap(([key, value]) => [
-    "-e",
-    `${key}=${value}`,
-  ]);
+  captureSourceEnv(source, { stopGraceMs: stopGraceSeconds * 1000, launchId }).flatMap(
+    ([key, value]) => ["-e", `${key}=${value}`],
+  );
 
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
@@ -604,7 +604,7 @@ const envArgsFromBlueprint = (
             // the platform. The daemon materialises the worktree from the session channel onto the
             // container's own disk; its credential (`SEALANT_CAPTURE_TOKEN`) rides the secret env
             // file, never argv.
-            captureSourceEnvArgs(source, captureStopGraceSeconds)
+            captureSourceEnvArgs(source, captureStopGraceSeconds, input.launchId)
           : [
               "-e",
               `SEALANT_WORKSPACE_REPO_URL=${source.url}`,

@@ -97,6 +97,7 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
 const FAKE_SEALANTCTL = `#!/bin/sh
 case "$*" in *--help*) printf '%s\\n' "\${FAKE_SEALANTCTL_HELP:-Usage: sealantctl capture flush [OPTIONS]}"; exit 0;; esac
 printf '%s\\n' "$*" >> "$FAKE_SEALANTCTL_LOG"
+if [ -n "$FAKE_SEALANTCTL_NODE" ]; then exec node -e "$FAKE_SEALANTCTL_NODE"; fi
 if [ -n "$FAKE_SEALANTCTL_SLEEP" ]; then sleep "$FAKE_SEALANTCTL_SLEEP"; fi
 if [ -n "$FAKE_SEALANTCTL_OUTPUT" ]; then printf '%s\\n' "$FAKE_SEALANTCTL_OUTPUT"; fi
 exit "\${FAKE_SEALANTCTL_EXIT:-0}"
@@ -831,7 +832,10 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       });
       expect(
         await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
-          body: launchRequest,
+          body: {
+            ...launchRequest,
+            bootEnv: { ...launchRequest.bootEnv, SEALANT_CAPTURE_LAUNCH_ID: "launch-7" },
+          },
           bearer: launchSecret,
         }),
       ).toMatchObject({ status: 200 });
@@ -877,6 +881,8 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       expect(record.env["SEALANT_WORKSPACE_SOURCE"]).toBe("capture");
       expect(record.env["SEALANT_CAPTURE_ENDPOINT"]).toBe("https://mend.example.com/session/s1");
       expect(record.env["SEALANT_DOTFILES_ARCHIVE_DIR"]).toBeUndefined();
+      // The recovery boot is the same launch: it names it as the first boot did.
+      expect(record.env["SEALANT_CAPTURE_LAUNCH_ID"]).toBe("launch-7");
       // Its secret env file is the first boot's, holding the capture token kept for it.
       const secretFile = record.env["SEALANT_SECRET_ENV_FILE"] ?? "";
       expect(secretFile).toBe(path.join(agent.stateDir, "secrets", "env.json"));
@@ -916,8 +922,18 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       // Review 4 #4: the agent spared every child of PID 1 whose argv[0] was docker, dockerd or
       // sealantctl, with its subtree; an orphan user writer named `docker` survived the recovery,
       // wrote through the recovered daemon's final flush, and was lost with the VM.
+      // The agent's in-flight sealantctl starts a process of its own, which writes: sealantctl
+      // itself is spared (the agent started it), what runs under it is not (decision 4: no
+      // control-peer exemption). It lives 1 s, then exits 0.
+      const sealantctlChildFile = path.join(
+        tmpdir(),
+        `sealantctl-child-${String(process.pid)}-${String(Date.now())}`,
+      );
       const agent = await startAgent(
-        { FAKE_SEALANTD_ORPHAN_DOCKER: "1", FAKE_SEALANTCTL_SLEEP: "1" },
+        {
+          FAKE_SEALANTD_ORPHAN_DOCKER: "1",
+          FAKE_SEALANTCTL_NODE: `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(`setInterval(() => require("node:fs").appendFileSync(${JSON.stringify(sealantctlChildFile)}, "x"), 20)`)}], { stdio: "ignore" }); setTimeout(() => process.exit(0), 1000);`,
+        },
         { asPid1: true },
       );
       try {
@@ -958,12 +974,19 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
         const after = await size();
         await new Promise((resolve) => setTimeout(resolve, 300));
         expect(await size()).toBe(after);
-        // The agent's own sealantctl (and what it runs) was spared: its flush ran to its end.
+        // The agent's own sealantctl was spared: its flush ran to its end. What it started was
+        // swept like any other writer: its file stops growing.
         const flushed = await inFlight;
         expect(flushed.status).toBe(200);
         expect(
           (flushed.body as { flush: { durationMs: number } }).flush.durationMs,
         ).toBeGreaterThanOrEqual(900);
+        const childSize = async () =>
+          (await stat(sealantctlChildFile).catch(() => ({ size: 0 }))).size;
+        const childAfter = await childSize();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(await childSize()).toBe(childAfter);
+        await rm(sealantctlChildFile, { force: true });
 
         // The recovery boot is told what to spare: the agent (PID 1 here) by pid and start
         // time; no process is spared by its name.

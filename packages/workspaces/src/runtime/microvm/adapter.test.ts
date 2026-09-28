@@ -402,6 +402,18 @@ describe("microvmBootEnv", () => {
     });
   });
 
+  it("names the launch the create named (SEALANT_CAPTURE_LAUNCH_ID)", () => {
+    expect(
+      microvmBootEnv(
+        { ...captureLaunch, launchId: "launch-7" },
+        { secretEnvFile: true, dotfiles: false },
+      ),
+    ).toMatchObject({ SEALANT_CAPTURE_LAUNCH_ID: "launch-7" });
+    expect(
+      microvmBootEnv(captureLaunch, { secretEnvFile: true, dotfiles: false }),
+    ).not.toHaveProperty("SEALANT_CAPTURE_LAUNCH_ID");
+  });
+
   it("keeps the explicit harness root authoritative over legacy runtime.env", () => {
     const input = {
       ...captureLaunch,

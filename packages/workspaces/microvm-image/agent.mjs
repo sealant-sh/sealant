@@ -230,8 +230,9 @@ const writeSweepExemptFile = () => {
 
 /**
  * Record a process this agent started (its pid and start time) until it exits. `descendants`:
- * its children are its own work (they are spared with it when their ancestry through live
- * processes reaches it); only for helpers whose children are not the workspace's.
+ * its children are spared with it (when their ancestry through live processes reaches it). No
+ * helper sets it today: whatever runs under a helper — even under the agent's own sealantctl, the
+ * control peer — is swept like any other writer (decision 4: no control-peer exemption).
  */
 const trackHelper = (child, role, { descendants = false } = {}) => {
   const pid = child.pid;
@@ -489,7 +490,7 @@ const finalFlushSupported = () => {
         const child = spawn(SEALANTCTL, ["capture", "flush", "--help"], {
           stdio: ["ignore", "pipe", "pipe"],
         });
-        trackHelper(child, "sealantctl", { descendants: true });
+        trackHelper(child, "sealantctl");
         let output = "";
         const collect = (chunk) => {
           output = (output + chunk.toString("utf8")).slice(-16384);
@@ -530,7 +531,7 @@ const flushCaptures = async (kind) => {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  trackHelper(child, "sealantctl", { descendants: true });
+  trackHelper(child, "sealantctl");
   state.hookChildren.add(child);
   let output = "";
   const collect = (chunk) => {
@@ -1117,8 +1118,8 @@ const daemonLeftovers = (table, daemonPid, spared) => {
 };
 
 /**
- * What a recovery spares: only the agent's own `sealantctl` (a terminate or suspend hook's flush
- * may be in flight). Docker is stopped before a recovery (its containers are the workspace's
+ * What a recovery spares: only the agent's own `sealantctl` itself (a terminate or suspend hook's
+ * flush may be in flight), never what runs under it. Docker is stopped before a recovery (its containers are the workspace's
  * writers, and a recovery boot runs no user code), so neither dockerd nor its probes are spared.
  */
 const RECOVERY_SPARED_ROLES = new Set(["sealantctl"]);
