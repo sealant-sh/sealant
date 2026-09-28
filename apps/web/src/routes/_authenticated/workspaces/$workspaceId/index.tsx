@@ -13,7 +13,14 @@ import { runTitle } from "@/lib/run-record/format";
 import type { AppTrpc } from "@/lib/trpc/client";
 import { useTRPC } from "@/lib/trpc/react";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
+type WorkspaceStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stopped"
+  | "retained";
 
 interface WorkspaceSummary {
   readonly workspaceId: string;
@@ -672,6 +679,10 @@ function statusIndicatorClassName(status: string): { readonly dot: string; reado
   }
 
   if (status === "cancelled") {
+    return { dot: "bg-warning-dot", text: "text-warning" };
+  }
+
+  if (status === "retained") {
     return { dot: "bg-warning-dot", text: "text-warning" };
   }
 

@@ -102,6 +102,7 @@ import {
   resolveWorkspacePublishedImage,
   resolveWorkspaceRuntime,
   resolveWorkspaceStatus,
+  executorIsRetained,
   type WorkspaceSshGatewayConfig,
 } from "@sealant/workspaces";
 import { Cause, type Context, Effect, Result } from "effect";
@@ -1056,10 +1057,12 @@ const mapWorkspaceAttemptSummary = (
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: WorkspaceRuntimeInstanceRecord,
   sshGatewayConfig: WorkspaceSshGatewayConfig | undefined,
+  retained: boolean,
 ): WorkspaceAttemptSummary => {
   const runtime = resolveWorkspaceRuntime(runtimeInstance, {
     workspaceId: link.workspaceId,
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+    retained,
   });
   const publishedImage = resolveWorkspacePublishedImage(latestJob);
   const error = resolveWorkspaceError(latestJob, runtimeInstance);
@@ -1073,6 +1076,7 @@ const mapWorkspaceAttemptSummary = (
       attempt,
       ...(latestJob === undefined ? {} : { latestJob }),
       ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
+      retained,
     }),
     triggerType: attempt.triggerType,
     ...(attempt.triggerRef === null ? {} : { triggerRef: attempt.triggerRef }),
@@ -1168,10 +1172,13 @@ const mapWorkspaceSummary = (
   latestJob: WorkspaceBuildJobRecord,
   runtimeInstance: WorkspaceRuntimeInstanceRecord,
   sshGatewayConfig: WorkspaceSshGatewayConfig | undefined,
+  /** `executorIsRetained` for the latest run: status and runtime read `retained`. */
+  retained: boolean,
 ): WorkspaceSummary => {
   const resolvedRuntime = resolveWorkspaceRuntime(runtimeInstance, {
     workspaceId: workspace.id,
     ...(sshGatewayConfig === undefined ? {} : { sshGateway: sshGatewayConfig }),
+    retained,
   });
   // The executor carries the launch identity its create named (recorded on its attempt).
   const launchId =
@@ -1197,6 +1204,7 @@ const mapWorkspaceSummary = (
           attempt,
           ...(latestJob === undefined ? {} : { latestJob }),
           ...(runtimeInstance === undefined ? {} : { runtimeInstance }),
+          retained,
         });
 
   return {
@@ -1229,6 +1237,7 @@ const mapWorkspaceDetails = (
   runtimeInstance: WorkspaceRuntimeInstanceRecord,
   attemptSnapshot: WorkspaceAttemptSnapshotRecord,
   sshGatewayConfig: WorkspaceSshGatewayConfig | undefined,
+  retained: boolean,
 ): WorkspaceDetails => {
   const summary = mapWorkspaceSummary(
     workspace,
@@ -1236,6 +1245,7 @@ const mapWorkspaceDetails = (
     latestJob,
     runtimeInstance,
     sshGatewayConfig,
+    retained,
   );
   const userSpec = attemptSnapshot?.userSpecPayload ?? latestJob?.requestPayload;
 
@@ -1292,12 +1302,20 @@ const replayedWorkspaceResponse = (workspace: WorkspaceRecord) => {
             (yield* WorkspaceRuntimeInstanceRepo).getRuntimeInstanceByRunId(runId),
             "Failed to load the workspace runtime.",
           );
+    const drain =
+      runId === undefined
+        ? undefined
+        : yield* withInternalError(
+            (yield* WorkspaceCaptureDrainRepo).getByRunId(runId),
+            "Failed to load the workspace capture drain.",
+          );
     const summary = mapWorkspaceSummary(
       workspace,
       attempt,
       latestJob,
       runtimeInstance,
       resolveWorkspaceSshGatewayConfig(),
+      executorIsRetained({ runtimeInstance, retainedAt: drain?.retainedAt }),
     );
     const response: CreateWorkspaceResponse = {
       workspaceId: workspace.id,
@@ -1971,19 +1989,29 @@ export const listWorkspaces = (query: ListWorkspacesQuery) => {
       workspaceRuntimeInstances.listRuntimeInstancesByRunIds(latestRunIds),
       "Failed to load workspace runtime instances.",
     );
+    const drainsByRunId = yield* withInternalError(
+      (yield* WorkspaceCaptureDrainRepo).listByRunIds(latestRunIds),
+      "Failed to load workspace capture drains.",
+    );
 
     const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
 
     const items = workspaces
       .map((workspace) => {
         const runId = workspace.latestRunId ?? undefined;
+        const runtimeInstance =
+          runId === undefined ? undefined : runtimeInstancesByRunId.get(runId);
 
         return mapWorkspaceSummary(
           workspace,
           runId === undefined ? undefined : attemptsByRunId.get(runId),
           runId === undefined ? undefined : latestJobsByRunId.get(runId),
-          runId === undefined ? undefined : runtimeInstancesByRunId.get(runId),
+          runtimeInstance,
           sshGatewayConfig,
+          executorIsRetained({
+            runtimeInstance,
+            retainedAt: runId === undefined ? undefined : drainsByRunId.get(runId)?.retainedAt,
+          }),
         );
       })
       .filter((item) => (query.status === undefined ? true : item.status === query.status))
@@ -2035,6 +2063,7 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
         undefined,
         undefined,
         sshGatewayConfig,
+        false,
       );
     }
 
@@ -2070,8 +2099,18 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       runtimeInstance,
       attemptSnapshot,
       sshGatewayConfig,
+      executorIsRetained({ runtimeInstance, retainedAt: captureDrain?.retainedAt }),
     );
-    const observed = mapWorkspaceCaptureDrain(captureDrain, runtimeInstance);
+    const observed = mapWorkspaceCaptureDrain(
+      captureDrain,
+      runtimeInstance === undefined
+        ? undefined
+        : {
+            ...runtimeInstance,
+            // The launch identity the create named, recorded on this executor's attempt.
+            launchId: attempt?.id === runtimeInstance.runId ? attempt.launchId : null,
+          },
+    );
     return observed === undefined ? details : { ...details, captureDrain: observed };
   });
 };
@@ -2088,6 +2127,7 @@ export const mapWorkspaceCaptureDrain = (
     readonly adapter: string | null;
     readonly resourceId: string | null;
     readonly reference: string | null;
+    readonly launchId?: string | null;
   },
 ): WorkspaceCaptureDrain | undefined => {
   if (row === undefined || row.state === null) {
@@ -2103,6 +2143,9 @@ export const mapWorkspaceCaptureDrain = (
             adapter: executor.adapter,
             resourceId: executor.resourceId,
             ...(executor.reference === null ? {} : { reference: executor.reference }),
+            ...(executor.launchId === null || executor.launchId === undefined
+              ? {}
+              : { launchId: executor.launchId }),
           },
         }),
     state: row.state,
@@ -2297,6 +2340,10 @@ export const listWorkspaceAttempts = (input: {
       workspaceRuntimeInstanceRepo.listRuntimeInstancesByRunIds(runIds),
       "Failed to load workspace runtime instances.",
     );
+    const drainsByRunId = yield* withInternalError(
+      (yield* WorkspaceCaptureDrainRepo).listByRunIds(runIds),
+      "Failed to load workspace capture drains.",
+    );
     const sshGatewayConfig = resolveWorkspaceSshGatewayConfig();
 
     const items = links.flatMap((link) => {
@@ -2313,6 +2360,10 @@ export const listWorkspaceAttempts = (input: {
           latestJobsByRunId.get(link.runId),
           runtimeInstancesByRunId.get(link.runId),
           sshGatewayConfig,
+          executorIsRetained({
+            runtimeInstance: runtimeInstancesByRunId.get(link.runId),
+            retainedAt: drainsByRunId.get(link.runId)?.retainedAt,
+          }),
         ),
       ];
     });

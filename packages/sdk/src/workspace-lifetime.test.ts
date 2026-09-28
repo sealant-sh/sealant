@@ -135,6 +135,14 @@ describe("workspace.ready() timeout", () => {
     ]);
   });
 
+  it("fails at once on a retained workspace: its executor ended and is kept for recovery", async () => {
+    const stub = makeStub(() => details({ status: "retained" }));
+    await expect(workspaceFor(stub.client).ready()).rejects.toMatchObject({
+      code: "workspace_not_ready",
+      message: expect.stringContaining('"retained"'),
+    });
+  });
+
   it("leaves a workspace it did not create alone", async () => {
     const { error, stops } = await timeOut({});
     expect(error).toMatchObject({ code: "workspace_ready_timeout" });
@@ -247,6 +255,25 @@ describe("workspace.stop()", () => {
     });
   });
 
+  it("reports a retained executor kept at once, without waiting out the stop (e2e 5)", async () => {
+    // The executor ended with work not confirmed saved: the control plane keeps it for recovery
+    // and this stop does not remove it. `retained` is what was observed; nothing is waited for.
+    const drain = {
+      state: "kept" as const,
+      detail: "not saved · retained · executor exited",
+      retained: {
+        since: "2026-09-27T10:00:00.000Z",
+        reason: "executor exited",
+        recoverable: true,
+        recoveryAttempts: 0,
+      },
+    };
+    const stub = makeStub(() => details({ status: "retained", captureDrain: drain }));
+    vi.useFakeTimers();
+    const result = await workspaceFor(stub.client).stop();
+    expect(result).toMatchObject({ state: "kept", drain: { retained: { recoverable: true } } });
+  });
+
   it("reports the stop requested, never stopped, while termination is not observed", async () => {
     const saved = { state: "saved" as const, detail: "final flush complete" };
     const stub = makeStub(() => details({ status: "ready", captureDrain: saved }));
@@ -327,6 +354,53 @@ describe("workspace.stop({ completion }) and workspace.recover()", () => {
         },
       },
     ]);
+  });
+
+  it("captureDrain() reads the drain and retention without stopping anything", async () => {
+    const drain = {
+      state: "kept" as const,
+      detail: "not saved · retained · executor exited",
+      observedAt: "2026-09-27T10:00:30.000Z",
+      preservationStartsAt: "2026-09-27T10:05:00.000Z",
+      discard: { requestedBy: "user_owner", requestedAt: "2026-09-27T10:01:00.000Z" },
+      retained: {
+        since: "2026-09-27T10:00:00.000Z",
+        reason: "executor exited",
+        recoverable: true,
+        recoveryAttempts: 2,
+        nextRecoveryAt: "2026-09-27T10:00:40.000Z",
+        lastRecoveryError: "exited 75",
+      },
+      executor: {
+        runId: "run_1",
+        adapter: "docker",
+        resourceId: "container-1",
+        reference: "sealant-run_1",
+        launchId: "launch-1",
+      },
+      completion: {
+        executorId: "container-1",
+        epoch: 3,
+        captureN: 41,
+        attestedAt: "2026-09-27T10:02:00.000Z",
+        launchId: "launch-1",
+      },
+    };
+    const stub = makeStub(() => details({ status: "retained", captureDrain: drain }));
+    expect(await workspaceFor(stub.client).captureDrain()).toEqual({
+      ...drain,
+      executor: {
+        runId: "run_1",
+        kind: "docker",
+        resourceId: "container-1",
+        reference: "sealant-run_1",
+        launchId: "launch-1",
+      },
+    });
+    expect(stub.stops).toEqual([]);
+
+    const none = makeStub(() => details({ status: "ready" }));
+    expect(await workspaceFor(none.client).captureDrain()).toBeNull();
   });
 
   it("asks the control plane to recover the retained executor", async () => {

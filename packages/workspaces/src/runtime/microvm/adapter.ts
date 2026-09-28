@@ -375,7 +375,15 @@ const toBootLifecycleStepJson = (step: {
  */
 export const microvmBootEnv = (
   input: RuntimeAdapterLaunchInput,
-  options: { readonly secretEnvFile: boolean; readonly dotfiles: boolean },
+  options: {
+    readonly secretEnvFile: boolean;
+    readonly dotfiles: boolean;
+    /**
+     * The terminate hook's flush budget (`flushTimeoutMs`): a daemon stopped with the VM bounds
+     * its shutdown final flush inside it and exits 75 rather than being cut off.
+     */
+    readonly stopGraceMs?: number;
+  },
 ): Record<string, string> => {
   const { blueprint } = input;
   const entries: Array<readonly [string, string]> = [];
@@ -384,7 +392,12 @@ export const microvmBootEnv = (
   }
   const source = blueprint.sources.workspace;
   if (source.kind === "capture") {
-    entries.push(...captureSourceEnv(source));
+    entries.push(
+      ...captureSourceEnv(
+        source,
+        options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs },
+      ),
+    );
   } else if (source.kind === "git") {
     // `git` is Core's blueprint term; pinned sealantd v0.18.2 names this wire mode `clone`.
     entries.push(["SEALANT_WORKSPACE_SOURCE", "clone"]);
@@ -607,6 +620,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       bootEnv: microvmBootEnv(parsed, {
         secretEnvFile: secretEnv !== undefined,
         dotfiles: dotfiles !== undefined,
+        stopGraceMs: config.flushTimeoutMs,
       }),
       ...(secretEnv === undefined ? {} : { secretEnvJson: JSON.stringify(secretEnv) }),
       ...(dotfiles === undefined

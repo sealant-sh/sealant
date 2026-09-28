@@ -1,13 +1,24 @@
-import type { WorkspaceRuntimeInstance, WorkspaceBuildJob } from "@sealant/db";
+import {
+  LAUNCH_RETAINED_ERROR_CODE,
+  type WorkspaceRuntimeInstance,
+  type WorkspaceBuildJob,
+} from "@sealant/db";
 import type { RuntimeAdapterId } from "@sealant/validators";
 
-export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
+export type WorkspaceStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stopped"
+  | "retained";
 
 export interface WorkspaceRuntimeDetails {
   readonly adapter: RuntimeAdapterId;
   readonly resourceId: string;
   readonly reference: string;
-  readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
+  readonly status: "pending" | "running" | "ready" | "failed" | "stopped" | "retained";
   readonly endpoint?: string;
   /**
    * ISO-8601 instant the runtime itself ends the executor (a Lambda MicroVM's maximum duration);
@@ -35,14 +46,49 @@ export interface WorkspaceErrorDetails {
   readonly code?: string;
 }
 
+/**
+ * Whether the run's executor is RETAINED: kept, with its disk, because it holds work not
+ * confirmed saved — it ended without a complete final flush (the drain record's `retained_at`),
+ * or its capture launch failed after it started (`LAUNCH_RETAINED_ERROR_CODE`). The platform
+ * still drains or recovers it with the capture token it was launched with; a caller must keep
+ * what that needs (the session's lease and token) until the retention ends — the executor is
+ * removed (saved, attested, discarded) or reported lost, and the status reads `stopped` or
+ * `failed` again.
+ */
+export const executorIsRetained = (input: {
+  readonly runtimeInstance?: WorkspaceRuntimeInstance | undefined;
+  /** The run's `workspace_capture_drains.retained_at`. */
+  readonly retainedAt?: Date | null | undefined;
+}): boolean => {
+  const instance = input.runtimeInstance;
+  if (instance === undefined || instance.resourceId === null) {
+    return false;
+  }
+  if (input.retainedAt !== null && input.retainedAt !== undefined) {
+    return true;
+  }
+  return instance.status === "failed" && instance.errorCode === LAUNCH_RETAINED_ERROR_CODE;
+};
+
 export const resolveWorkspaceStatus = (input: {
   readonly attempt: {
     readonly status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   };
   readonly latestJob?: WorkspaceBuildJob;
   readonly runtimeInstance?: WorkspaceRuntimeInstance;
+  /** `executorIsRetained` for the run: reported as `retained`, whatever else ended. */
+  readonly retained?: boolean;
 }): WorkspaceStatus => {
   const { attempt, latestJob, runtimeInstance } = input;
+
+  // A RETAINED executor is not dead and not stopped: it is kept with its disk, and the platform
+  // drains or recovers it (with the session's capture token) until its work is saved. Checked
+  // first — its runtime row may already read `stopped` (a planned stop that ended incomplete) or
+  // `failed` (an exit, a failed launch) — so no caller takes it for ended and lets go of what the
+  // recovery needs.
+  if (input.retained === true) {
+    return "retained";
+  }
 
   // A stopped runtime is terminal regardless of how the attempt ended: the container is gone
   // (user stop, TTL expiry, or a failure-path stop), so the workspace is "stopped". Checked
@@ -86,6 +132,8 @@ export const resolveWorkspaceRuntime = (
   options: {
     readonly workspaceId?: string;
     readonly sshGateway?: WorkspaceSshGatewayConfig;
+    /** `executorIsRetained` for the run: the runtime reads `retained`. */
+    readonly retained?: boolean;
   } = {},
 ): WorkspaceRuntimeDetails | undefined => {
   // If runtime metadata is incomplete we omit runtime from API response.
@@ -124,7 +172,7 @@ export const resolveWorkspaceRuntime = (
     adapter: runtimeInstance.adapter,
     resourceId: runtimeInstance.resourceId,
     reference: runtimeInstance.reference,
-    status: runtimeInstance.status,
+    status: options.retained === true ? "retained" : runtimeInstance.status,
     ...(endpoint === null || endpoint === undefined ? {} : { endpoint }),
     deadline: runtimeInstance.runtimeDeadlineAt?.toISOString() ?? null,
     runId: runtimeInstance.runId,

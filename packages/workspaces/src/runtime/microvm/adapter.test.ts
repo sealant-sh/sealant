@@ -533,7 +533,12 @@ describe("MicrovmRuntimeAdapter.launch", () => {
       runId: "run-golden-4",
       controlToken: "control-token",
       flushTimeoutMs: 50_000,
-      bootEnv: microvmBootEnv(captureLaunch, { secretEnvFile: true, dotfiles: false }),
+      bootEnv: {
+        ...microvmBootEnv(captureLaunch, { secretEnvFile: true, dotfiles: false }),
+        // A daemon stopped with the VM bounds its shutdown final flush inside the terminate
+        // hook's flush budget (50 s less its 5 s margin) and exits 75 before it is cut off.
+        SEALANT_SHUTDOWN_FINAL_DEADLINE_MS: "45000",
+      },
       secretEnvJson: JSON.stringify({
         MEND_SESSION_TOKEN: "mst_secret",
         SEALANT_CAPTURE_TOKEN: "mst_secret",

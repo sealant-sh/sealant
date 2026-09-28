@@ -27,6 +27,7 @@ import {
   type WorkspaceBuildJob,
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
+  WorkspaceCaptureDrainRepo,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -264,6 +265,8 @@ const makeLayer = (store: Store) => {
     Layer.succeed(WorkspaceRepo, workspaceRepo),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
+    // No capture drain is recorded: nothing is retained.
+    Layer.mock(WorkspaceCaptureDrainRepo, { getByRunId: () => Effect.succeed(undefined) }),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {}),
     // No idempotency key in these creates: no reservation; the transaction passes through.
     Layer.mock(WorkspaceCreateReservationRepo, {}),

@@ -102,6 +102,10 @@ const harness = (input: {
     resourceId: request.resourceId,
     outcome: "stopped" as const,
   }));
+  const parkRetained = vi.fn(async () => {
+    order.push("park");
+    return { stopped: ["sealant-run-1-docker"] };
+  });
   const recover = vi.fn(async () => {
     order.push("recover");
     return (input.recover ?? (async () => ({ outcome: "restarted" as const })))();
@@ -134,6 +138,7 @@ const harness = (input: {
     stop,
     inspect: async () => input.inspect,
     recover,
+    parkRetained,
   };
   const daemon = input.daemon ?? fakeCaptureDaemon(["unreachable"]);
   const run = () =>
@@ -165,7 +170,18 @@ const harness = (input: {
         ),
       ),
     );
-  return { run, ledger, attempts, stop, recover, markStopped, daemon, staged, order };
+  return {
+    run,
+    ledger,
+    attempts,
+    stop,
+    recover,
+    parkRetained,
+    markStopped,
+    daemon,
+    staged,
+    order,
+  };
 };
 
 describe("recoverRetainedExecutorsEffect", () => {
@@ -193,6 +209,32 @@ describe("recoverRetainedExecutorsEffect", () => {
     });
   });
 
+  it("stops what runs beside an ended retained executor before anything else (e2e 5)", async () => {
+    // e2e 5: a kept executor's Docker sidecar was still up 28 minutes later.
+    const h = harness({
+      inspect: { state: "exited", exitCode: 75 },
+      recover: async () => ({ outcome: "unsupported", detail: "cannot restart" }),
+    });
+
+    expect((await h.run()).get("run_1")).toBe("retained");
+    expect(h.parkRetained).toHaveBeenCalledWith({
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+    });
+    expect(h.order[0]).toBe("park");
+    // Its disk is kept: nothing removed it.
+    expect(h.stop).not.toHaveBeenCalled();
+  });
+
+  it("parks nothing beside an executor that is still running", async () => {
+    const h = harness({
+      inspect: { state: "running" },
+      daemon: fakeCaptureDaemon([savedStatus()]),
+    });
+    await h.run();
+    expect(h.parkRetained).not.toHaveBeenCalled();
+  });
+
   it("stages the launch's capture token again before the restart, and removes it after", async () => {
     const h = harness({
       inspect: { state: "exited", exitCode: 75 },
@@ -202,7 +244,7 @@ describe("recoverRetainedExecutorsEffect", () => {
     expect(h.staged).toEqual([
       { runId: "run_1", secretEnv: { SEALANT_CAPTURE_TOKEN: "mend-capture-token" } },
     ]);
-    expect(h.order).toEqual(["restage", "recover", "remove-secret-env"]);
+    expect(h.order).toEqual(["park", "restage", "recover", "remove-secret-env"]);
   });
 
   it("never starts an executor whose capture token was not kept: not recoverable · no capture token", async () => {

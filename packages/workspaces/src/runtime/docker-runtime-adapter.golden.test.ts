@@ -212,6 +212,10 @@ describe("DockerRuntimeAdapter golden argv", () => {
         "-e",
         "SEALANT_CAPTURE_HARNESS_HOME=/workspace/harness-home",
         "-e",
+        // The daemon's shutdown final flush ends inside the container's 3600 s stop timeout
+        // (less a 60 s margin): one that cannot finish exits 75 and the disk is kept.
+        "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS=3540000",
+        "-e",
         "SEALANT_OCI_RUNTIME=runc",
         "-e",
         "SEALANT_HARNESS_BANNER=Starting claude-code workspace",

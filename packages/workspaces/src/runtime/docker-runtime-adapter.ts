@@ -55,6 +55,8 @@ import {
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterRecoverInput,
+  type RuntimeAdapterParkInput,
+  type RuntimeAdapterParkResult,
   type RuntimeAdapterRecoverResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
@@ -467,6 +469,24 @@ const isNoSuchContainerError = (error: unknown): boolean => {
   return /no such (container|object)/i.test(text);
 };
 
+/**
+ * `docker rm` refused because another removal of the same container is under way (a planned stop
+ * and the exit reconciler removing the same ended container): not a failure of the stop, which
+ * waits for that removal instead.
+ */
+const isRemovalInProgressError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /removal of container .* is already in progress/i.test(text);
+};
+
+/** How long a stop waits on another removal of the same container before it reports failure. */
+const CONCURRENT_REMOVAL_WAIT_MS = 30_000;
+const CONCURRENT_REMOVAL_POLL_MS = 250;
+
 const normalizeContainerToken = (value: string): string => {
   return value
     .toLowerCase()
@@ -512,11 +532,18 @@ const captureSourceEnvArgs = (
     RuntimeAdapterLaunchInput["blueprint"]["sources"]["workspace"],
     { kind: "capture" }
   >,
-): Array<string> => captureSourceEnv(source).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  stopGraceSeconds: number,
+): Array<string> =>
+  captureSourceEnv(source, { stopGraceMs: stopGraceSeconds * 1000 }).flatMap(([key, value]) => [
+    "-e",
+    `${key}=${value}`,
+  ]);
 
 const envArgsFromBlueprint = (
   input: RuntimeAdapterLaunchInput,
   mountAllowedStoreRoots: string | undefined,
+  /** The capture container's `--stop-timeout`: its shutdown final flush is bounded inside it. */
+  captureStopGraceSeconds: number,
 ): Array<string> => {
   const source = input.blueprint.sources.workspace;
   const runtimeEnvArgs = Object.entries(input.blueprint.runtime.env).flatMap(([key, value]) =>
@@ -577,7 +604,7 @@ const envArgsFromBlueprint = (
             // the platform. The daemon materialises the worktree from the session channel onto the
             // container's own disk; its credential (`SEALANT_CAPTURE_TOKEN`) rides the secret env
             // file, never argv.
-            captureSourceEnvArgs(source)
+            captureSourceEnvArgs(source, captureStopGraceSeconds)
           : [
               "-e",
               `SEALANT_WORKSPACE_REPO_URL=${source.url}`,
@@ -1515,6 +1542,105 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return { outcome: "restarted" };
   }
 
+  /**
+   * Park a RETAINED container that ended: stop its Docker sidecar (`<name>-docker`), the
+   * workspace's own dockerd, which a kept executor otherwise leaves running for as long as it is
+   * retained (e2e 5: one still up after 28 minutes). Only while the workspace container itself is
+   * not running. The sidecar's image store is not kept for the recovery: a sidecar created with
+   * `--rm` goes with its anonymous volume, one without stays stopped. Nothing of the executor's
+   * own disk is touched, and the sidecar network stays (the container is attached to it; `docker
+   * start` needs it).
+   *
+   * The recovery does not need the sidecar: sealantd's recovery boot runs no user code (no
+   * lifecycle step, no harness, admission closed) and captures only the executor's own
+   * filesystem, so nothing in it reaches `DOCKER_HOST`. `recover` therefore starts the workspace
+   * container alone. A recovery that ever runs user code must start the sidecar first.
+   */
+  public async parkRetained(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult> {
+    const container = await this.inspectContainerState(input.resourceId).catch(() => undefined);
+    if (container === undefined || container.running) {
+      // Gone (nothing to park beside it), unreadable, or running again (recovered): left alone.
+      return { stopped: [] };
+    }
+    const reference = input.reference ?? (await this.containerName(input.resourceId));
+    if (reference === undefined) {
+      return { stopped: [] };
+    }
+    const service = await this.inspectContainerByName(`${reference}-docker`);
+    if (service === undefined || !service.running) {
+      return { stopped: [] };
+    }
+    await this.commandRunner("docker", ["stop", "-t", "10", service.id]);
+    return { stopped: [`${reference}-docker`] };
+  }
+
+  /**
+   * The container a launch of `runId` created: every launch of a run names its container
+   * `<prefix>-<run>` (`buildContainerName`), so a worker lost between `docker run` and recording
+   * the container still leaves it findable. `undefined` only when Docker says no such container.
+   */
+  public async locate(input: {
+    readonly runId: string;
+  }): Promise<RuntimeLaunchIdentity | undefined> {
+    const containerName = `${this.containerNamePrefix}-${normalizeContainerToken(input.runId) || "run"}`;
+    let id: string;
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Id}}",
+        containerName,
+      ]);
+      id = result.stdout.trim();
+    } catch (error) {
+      if (isNoSuchContainerError(error)) return undefined;
+      throw error;
+    }
+    if (id.length === 0) {
+      throw createAdapterError(
+        "adapter-unavailable",
+        `Docker inspect did not return an id for '${containerName}'.`,
+      );
+    }
+    return {
+      adapter: this.id,
+      resourceId: id,
+      reference: containerName,
+      endpoint: this.resolveControlEndpoint(id, containerName),
+    };
+  }
+
+  /** The container's name (without Docker's leading `/`), or undefined when it cannot be read. */
+  private async containerName(containerId: string): Promise<string | undefined> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Name}}",
+        containerId,
+      ]);
+      const name = result.stdout.trim().replace(/^\//, "");
+      return name.length === 0 ? undefined : name;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Whether the container is gone within `timeoutMs` (another removal of it finishing). */
+  private async awaitContainerGone(containerId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        await this.inspectContainerState(containerId);
+      } catch (error) {
+        if (isNoSuchContainerError(error)) return true;
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await delay(CONCURRENT_REMOVAL_POLL_MS);
+    }
+  }
+
   /** `docker cp` sealantd's recovery marker into the (stopped) container's root. */
   private async writeRecoveryMarker(containerId: string): Promise<void> {
     const directory = await mkdtemp(joinPath(tmpdir(), "sealant-recovery-"));
@@ -1608,12 +1734,21 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     // Snapshot sidecar identities before removing the workspace frees its deterministic name.
     // Failed or empty inspections preserve resources rather than falling back to deletion by name.
+    // The sidecar network is looked up even when the sidecar is gone: a retained executor's
+    // sidecar may have been parked (`parkRetained`) and removed with `--rm`, and its network
+    // would otherwise outlive the workspace. Docker refuses to remove a network still in use.
     const service =
       parsed.reference === undefined
         ? undefined
         : await this.inspectContainerByName(`${parsed.reference}-docker`);
+    // The network without a sidecar only once the sidecar's absence is proven (a failed or
+    // inconclusive inspection keeps both).
+    const sidecarAbsent =
+      service === undefined && parsed.reference !== undefined
+        ? await this.isContainerNameAbsent(`${parsed.reference}-docker`)
+        : false;
     const networkId =
-      service === undefined
+      parsed.reference === undefined || (service === undefined && !sidecarAbsent)
         ? undefined
         : await this.commandRunner("docker", [
             "network",
@@ -1657,6 +1792,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
           gone = isNoSuchContainerError(inspectError);
         }
       }
+      if (!gone && isRemovalInProgressError(error)) {
+        // Another removal of this container is under way: wait for it rather than fail a stop
+        // that is completing (and record `stop-failed` for it).
+        gone = await this.awaitContainerGone(parsed.resourceId, CONCURRENT_REMOVAL_WAIT_MS);
+      }
       if (!gone) {
         const message = error instanceof Error ? error.message : "Unknown docker rm error.";
         throw createAdapterError(
@@ -1669,6 +1809,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     if (service !== undefined) {
       await this.removeDockerService({ containerId: service.id, networkId });
+    } else if (networkId !== undefined) {
+      await this.commandRunner("docker", ["network", "rm", networkId]).catch(() => undefined);
     }
     // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
@@ -1828,7 +1970,7 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         ...secretEnvArgs,
         ...workspaceMountArgs(parsed, mountArgsForIntent),
         ...extraMountArgs(parsed, mountArgsForIntent),
-        ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots),
+        ...envArgsFromBlueprint(parsed, this.mountAllowedStoreRoots, this.captureStopGraceSeconds),
         ...platformEnvArgs,
         // Injected connected-account credentials come LAST: docker applies last-wins for duplicate
         // -e flags, so a blueprint `runtime.env` entry must not shadow the securely-resolved token

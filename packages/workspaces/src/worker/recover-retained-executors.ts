@@ -22,6 +22,9 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     the platform's cap: its agent starts sealantd again in recovery mode on that disk, handed
  *     the kept capture token with the request, and it is drained the same way — the deadline
  *     sweep makes that recovery due before the cap.
+ *     While it waits, an ended executor has nothing running beside it: its runtime stops what it
+ *     no longer needs (`RuntimeAdapter.parkRetained`; Docker: its dockerd sidecar), never its
+ *     disk.
  *  3. **Cannot recover.** Kubernetes cannot restart an ended Pod, and its emptyDir lives only as
  *     long as the Pod object; a terminated MicroVM's disk is gone with it. Those are reported as
  *     such (`unsupported`, with what can still be done by hand) and stay retained — never
@@ -76,8 +79,14 @@ export interface RecoveryBackoff {
   readonly maxMs: number;
 }
 
+/**
+ * The first attempt runs as soon as the executor is retained (the worker starts a sweep when it
+ * records one); a failed attempt is retried after 10 s, then 20 s, 40 s, … up to an hour. A
+ * recovery that races a control plane still letting go of the session (a boot refused its plan)
+ * gets its next chance within seconds, not minutes.
+ */
 export const DEFAULT_RECOVERY_BACKOFF: RecoveryBackoff = {
-  baseMs: 60_000,
+  baseMs: 10_000,
   maxMs: 60 * 60_000,
 };
 
@@ -92,6 +101,11 @@ export interface RecoverRetainedExecutorsOptions {
   };
   /** Retained executors handled per sweep, the most overdue first. Default 10. */
   readonly maxPerTick?: number;
+  /**
+   * Only these runs: the executors just recorded retained, recovered at once rather than behind
+   * whatever else is due. Absent: every due retention.
+   */
+  readonly runIds?: readonly string[];
   readonly backoff?: RecoveryBackoff;
   readonly now?: () => number;
   /**
@@ -151,8 +165,12 @@ export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutor
   options: RecoverRetainedExecutorsOptions,
 ) {
   const drains = yield* WorkspaceCaptureDrainRepo;
+  if (options.runIds !== undefined && options.runIds.length === 0) {
+    return new Map<string, RecoveryOutcome>();
+  }
   const due = yield* drains.listRetainedDue({
     limit: options.maxPerTick ?? DEFAULT_MAX_PER_TICK,
+    ...(options.runIds === undefined ? {} : { runIds: options.runIds }),
   });
   const outcomes = new Map<string, RecoveryOutcome>();
   for (const row of due) {
@@ -227,6 +245,30 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     // 1. Evidence first: an attestation or a discard may have arrived since it was retained.
     const record = yield* ledger.read(runId);
     const state = yield* runtimeNow;
+
+    // An ended executor waits for its recovery with nothing running beside it: its runtime
+    // stops what it no longer needs (Docker: its dockerd sidecar), never its disk. The recovery
+    // boot runs no user code, so nothing it does needs them. Best-effort.
+    const park = adapter.parkRetained;
+    if (state === "exited" && park !== undefined) {
+      yield* Effect.tryPromise(() =>
+        park.call(adapter, { resourceId, ...(reference === null ? {} : { reference }) }),
+      ).pipe(
+        Effect.flatMap((parked) =>
+          parked.stopped.length === 0
+            ? Effect.void
+            : Effect.logInfo(
+                `${prefix}: the retained executor ended; stopped ${parked.stopped.join(", ")} beside it while it waits for its recovery (its disk is kept).`,
+              ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `${prefix}: stopping what runs beside the ended executor failed; the next attempt tries again.`,
+            cause,
+          ),
+        ),
+      );
+    }
     const decision = decideExecutorDeletion({
       captureSourced: true,
       runtime: state,

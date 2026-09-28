@@ -149,6 +149,8 @@ export interface WorkspaceCaptureDrainRepoService {
   /** Retained executors whose next recovery attempt is due, the most overdue first. */
   readonly listRetainedDue: (input: {
     readonly limit: number;
+    /** Only these runs (executors just recorded retained); absent = every due retention. */
+    readonly runIds?: readonly string[];
   }) => Effect.Effect<readonly WorkspaceCaptureDrain[], WorkspaceCaptureDrainRepoError>;
   /** One recovery attempt happened: count it, keep its error (or clear it), schedule the next. */
   readonly recordRecoveryAttempt: (input: {
@@ -391,6 +393,9 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   isNull(workspaceCaptureDrains.nextRecoveryAt),
                   lte(workspaceCaptureDrains.nextRecoveryAt, sql`now()`),
                 ),
+                ...(input.runIds === undefined
+                  ? []
+                  : [inArray(workspaceCaptureDrains.runId, [...input.runIds])]),
               ),
             )
             .orderBy(asc(workspaceCaptureDrains.nextRecoveryAt))

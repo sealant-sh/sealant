@@ -80,7 +80,8 @@ export const toRuntimeInfo = (runtime: WireWorkspaceRuntime): WorkspaceRuntimeIn
 // Terminal statuses a workspace can never leave: ready()/events() fail fast (or end the stream)
 // on these instead of polling out their deadline. "stopped" is terminal too — a TTL expiry or a
 // concurrent stop while ready() polls must surface immediately, not as a 10-minute timeout.
-const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled", "stopped"]);
+// "retained" too: the executor ended and is kept for recovery; it never becomes ready.
+const FAILED_STATUSES = new Set<WorkspaceStatus>(["failed", "cancelled", "stopped", "retained"]);
 const READY_POLL_INTERVAL_MS = 2_000;
 const READY_TIMEOUT_MS = 10 * 60 * 1_000;
 const STOP_POLL_INTERVAL_MS = 1_000;
@@ -181,6 +182,7 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
           ...(drain.executor.reference === undefined
             ? {}
             : { reference: drain.executor.reference }),
+          ...(drain.executor.launchId === undefined ? {} : { launchId: drain.executor.launchId }),
         },
       }),
   ...(drain.detail === undefined ? {} : { detail: drain.detail }),
@@ -531,6 +533,22 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         if (details.status === "stopped") {
           return { state: "stopped", ...completion };
         }
+        if (
+          details.status === "retained" &&
+          options?.discardUnsaved !== true &&
+          accepted.completion?.outcome !== "accepted" &&
+          details.captureDrain !== undefined
+        ) {
+          // Observed: the executor ended and is kept for recovery; this stop does not remove it
+          // (only a discard or an accepted completion would), so there is nothing to wait for.
+          const capture = await readCaptureStatus().catch(() => undefined);
+          return {
+            state: "kept",
+            drain: toCaptureDrain(details.captureDrain),
+            ...(capture === undefined ? {} : { capture }),
+            ...completion,
+          };
+        }
         if (Date.now() > deadline) {
           const drain =
             details.captureDrain === undefined ? undefined : toCaptureDrain(details.captureDrain);
@@ -543,6 +561,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }
         await delay(STOP_POLL_INTERVAL_MS);
       }
+    },
+
+    // The drain and retention as last observed, from the workspace read: nothing is stopped.
+    captureDrain: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.captureDrain === undefined ? null : toCaptureDrain(details.captureDrain);
     },
 
     // Recover makes a recovery attempt of a retained executor due now; the worker does the rest.

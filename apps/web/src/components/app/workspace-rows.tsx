@@ -4,7 +4,14 @@ import { Link } from "@tanstack/react-router";
 
 import { useTRPC } from "@/lib/trpc/react";
 
-type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
+type WorkspaceStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stopped"
+  | "retained";
 
 interface WorkspaceListItem {
   readonly workspaceId: string;
@@ -134,7 +141,9 @@ function statusPresentation(status: WorkspaceStatus): {
         dotClassName: "border-[1.5px] border-input bg-transparent",
         textClassName: "text-ink-2",
         label: "Stopped",
-      };
+      }; // Ended with work not confirmed saved: kept with its disk while the platform recovers it.
+    case "retained":
+      return { dotClassName: "bg-warning-dot", textClassName: "text-warning", label: "Retained" };
   }
 }
 

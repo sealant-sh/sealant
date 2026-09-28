@@ -17,17 +17,26 @@
  * retained here at once (its disk may hold work nothing saved), so recovery restarts it. The
  * attempt is marked failed, as the launching worker's own failure cleanup would have.
  *
+ * A worker can also die between creating the executor and recording it (e2e 5: a worker killed
+ * right after `docker run`): the row names no executor. Such a launch is looked for by its run
+ * (`RuntimeAdapter.locate`; Docker names every executor of a run the same), recorded when found
+ * and adopted like the others. One that no runtime knows an executor of, once its ownership has
+ * been lapsed for `lostLaunchGraceMs`, is ended `failed` (`launch-lost`): nothing started, so
+ * nothing is kept. Where a registered runtime cannot look (no `locate`) it is left as it is.
+ *
  * It runs with the exit reconciler (at worker boot and on every poll), so a worker restart
  * catches up on everything its predecessor left.
  */
 import {
   DEFAULT_UNOWNED_LAUNCH_GRACE_MS,
+  LAUNCH_LOST_ERROR_CODE,
   WorkspaceAttemptRepo,
   WorkspaceRuntimeInstanceRepo,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
 import { Effect } from "effect";
 
+import type { RuntimeLaunchIdentity } from "../runtime/launch-retention.js";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { runIsCaptureSourced, type CaptureDrainLedger } from "./capture-drain.js";
 
@@ -39,10 +48,114 @@ export interface AdoptStrandedLaunchesOptions {
   readonly ledger?: CaptureDrainLedger;
   /** How long an ownerless `pending` row (written before ownership existed) must stand still. */
   readonly unownedGraceMs?: number;
+  /**
+   * How long a launch that recorded no executor must have been lost (its ownership lapsed)
+   * before one no runtime can find is ended as `launch-lost`. Default 15 minutes: an executor
+   * creation still in flight when the worker died has landed by then.
+   */
+  readonly lostLaunchGraceMs?: number;
 }
 
 const describe = (instance: WorkspaceRuntimeInstance): string =>
   `${instance.adapter ?? "unknown runtime"} ${instance.resourceId ?? instance.runId}`;
+
+/**
+ * Every stranded launch that recorded no executor: asked of each runtime that can look
+ * (`locate`); a found executor is recorded on the row (then adopted with the others), and a launch
+ * no runtime knows an executor of — every registered runtime having looked — is ended
+ * `launch-lost` once lost for the grace. Best-effort per launch.
+ */
+const identifyUnrecordedExecutors = (
+  options: AdoptStrandedLaunchesOptions,
+  unownedGraceMs: number,
+) =>
+  Effect.gen(function* () {
+    const runtimeInstances = yield* WorkspaceRuntimeInstanceRepo;
+    const attempts = yield* WorkspaceAttemptRepo;
+    const lostGraceMs = options.lostLaunchGraceMs ?? DEFAULT_UNOWNED_LAUNCH_GRACE_MS;
+    const unrecorded = yield* runtimeInstances.listUnidentifiedStrandedLaunches({
+      unownedGraceMs,
+    });
+    for (const instance of unrecorded) {
+      const runId = instance.runId;
+      yield* Effect.gen(function* () {
+        let found: RuntimeLaunchIdentity | undefined;
+        let everyRuntimeLooked = options.runtimeAdapters.length > 0;
+        for (const adapter of options.runtimeAdapters) {
+          const locate = adapter.locate;
+          if (locate === undefined) {
+            everyRuntimeLooked = false;
+            continue;
+          }
+          const located = yield* Effect.tryPromise(() => locate.call(adapter, { runId })).pipe(
+            Effect.map((identity) => ({ read: true as const, identity })),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Stranded launch: asking ${adapter.id} for run ${runId}'s executor failed; the next sweep asks again.`,
+                cause,
+              ).pipe(Effect.as({ read: false as const, identity: undefined })),
+            ),
+          );
+          if (!located.read) {
+            everyRuntimeLooked = false;
+          }
+          if (located.identity !== undefined) {
+            found = located.identity;
+            break;
+          }
+        }
+        if (found !== undefined) {
+          const identified = yield* runtimeInstances.identifyStrandedLaunch({
+            runId,
+            adapter: found.adapter,
+            resourceId: found.resourceId,
+            reference: found.reference,
+            ...(found.endpoint === undefined ? {} : { endpoint: found.endpoint }),
+            unownedGraceMs,
+          });
+          if (identified !== undefined) {
+            yield* Effect.logError(
+              `Stranded launch: run ${runId}'s worker was lost after it created an executor it never recorded; found ${found.adapter} ${found.resourceId} by the run and recorded it, so it is adopted as a retained launch.`,
+            );
+          }
+          return;
+        }
+        if (!everyRuntimeLooked) {
+          return;
+        }
+        const lost = yield* runtimeInstances.failLostLaunch({
+          runId,
+          unownedGraceMs,
+          lostGraceMs,
+          errorMessage:
+            "The worker launching this workspace was lost before it started an executor any runtime knows of; nothing was kept. Launch it again.",
+        });
+        if (lost === undefined) {
+          return;
+        }
+        yield* attempts
+          .markAttemptFailed({ id: runId })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                `Stranded launch: marking run ${runId}'s attempt failed failed.`,
+                cause,
+              ),
+            ),
+          );
+        yield* Effect.logError(
+          `Stranded launch: run ${runId}'s worker was lost before any executor of it started (no runtime knows one); recorded failed (${LAUNCH_LOST_ERROR_CODE}).`,
+        );
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `Stranded launch: looking for run ${runId}'s unrecorded executor failed; the next sweep retries.`,
+            cause,
+          ),
+        ),
+      );
+    }
+  });
 
 /**
  * Adopt every stranded launch as retained. Returns the run ids adopted. Best-effort per launch:
@@ -55,6 +168,12 @@ export const adoptStrandedLaunchesEffect = Effect.fn("adoptStrandedLaunches")(fu
   const attempts = yield* WorkspaceAttemptRepo;
   const unownedGraceMs = options.unownedGraceMs ?? DEFAULT_UNOWNED_LAUNCH_GRACE_MS;
   const wanted = options.resourceIds === undefined ? undefined : new Set(options.resourceIds);
+
+  // Launches lost before they recorded their executor: found by their run, or ended as lost.
+  // (Not for an exit event: it names an executor, and these have none recorded.)
+  if (wanted === undefined) {
+    yield* identifyUnrecordedExecutors(options, unownedGraceMs);
+  }
 
   const stranded = (yield* runtimeInstances.listStrandedLaunches({ unownedGraceMs })).filter(
     (instance) =>

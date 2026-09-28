@@ -1845,6 +1845,132 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.outcome).toBe("not-found");
   });
 
+  it("waits for another removal of the same container instead of failing the stop (e2e 5)", async () => {
+    // e2e 5: the exit reconciler removed an ended container while the lifecycle stop removed it
+    // too; `docker rm` answered "removal ... already in progress" and the stop was recorded failed.
+    let inspections = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "rm") {
+        throw new Error(
+          "Command failed: docker rm -f -v container-id-123\nError response from daemon: removal of container container-id-123 is already in progress",
+        );
+      }
+      if (args[0] === "inspect") {
+        inspections += 1;
+        if (inspections <= 2) {
+          return {
+            stdout: '{"Status":"removing","Running":false,"ExitCode":0,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        throw new Error("Error: No such object: container-id-123");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.stop({ resourceId: "container-id-123", fence: true });
+
+    expect(result.outcome).toBe("not-found");
+  });
+
+  it("parks an ended retained container: stops its Docker sidecar, never the container (e2e 5)", async () => {
+    const calls: Array<readonly string[]> = [];
+    const parkWith = async (workspace: string, sidecar: string | undefined) => {
+      calls.length = 0;
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        calls.push([...args]);
+        if (args[0] === "inspect" && args.at(-1) === "container-1") {
+          return { stdout: workspace, stderr: "" };
+        }
+        if (args[0] === "inspect" && args.at(-1) === "sealant-run-1-docker") {
+          if (sidecar === undefined) throw new Error("Error: No such object: sealant-run-1-docker");
+          return { stdout: sidecar, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter.parkRetained({ resourceId: "container-1", reference: "sealant-run-1" });
+    };
+    const EXITED = '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n';
+
+    expect(await parkWith(EXITED, "sidecar-id\ttrue\n")).toEqual({
+      stopped: ["sealant-run-1-docker"],
+    });
+    expect(calls).toContainEqual(["stop", "-t", "10", "sidecar-id"]);
+    expect(
+      calls.some(
+        (args) => args[0] === "rm" || (args.includes("container-1") && args[0] === "stop"),
+      ),
+    ).toBe(false);
+
+    // Already stopped, absent, or the container running again (recovered): nothing to do.
+    expect(await parkWith(EXITED, "sidecar-id\tfalse\n")).toEqual({ stopped: [] });
+    expect(await parkWith(EXITED, undefined)).toEqual({ stopped: [] });
+    expect(await parkWith(RUNNING_STATE_JSON, "sidecar-id\ttrue\n")).toEqual({ stopped: [] });
+    expect(calls.some((args) => args[0] === "stop")).toBe(false);
+  });
+
+  it("locates the container a lost launch created by its run's name (e2e 5)", async () => {
+    const locateWith = async (answer: "found" | "missing" | "down") => {
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        expect(args).toEqual(["inspect", "--format", "{{.Id}}", "sealant-run_7"]);
+        if (answer === "missing") throw new Error("Error: No such object: sealant-run_7");
+        if (answer === "down") throw new Error("Cannot connect to the Docker daemon");
+        return { stdout: "container-id-7\n", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter.locate({ runId: "run_7" });
+    };
+    await expect(locateWith("found")).resolves.toMatchObject({
+      adapter: "docker",
+      resourceId: "container-id-7",
+      reference: "sealant-run_7",
+    });
+    await expect(locateWith("missing")).resolves.toBeUndefined();
+    // Unknown is never taken for none.
+    await expect(locateWith("down")).rejects.toThrow(/Cannot connect/);
+  });
+
+  it("removes the sidecar network of a workspace whose parked sidecar is gone", async () => {
+    const calls: Array<readonly string[]> = [];
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      calls.push([...args]);
+      if (args[0] === "inspect" && args.at(-1) === "sealant-run-1-docker") {
+        throw new Error("Error: No such object: sealant-run-1-docker");
+      }
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "network-id\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    await adapter.stop({ resourceId: "container-1", reference: "sealant-run-1", fence: true });
+
+    expect(calls).toContainEqual(["network", "rm", "network-id"]);
+  });
+
   it("surfaces a stop failure that is NOT a missing container (so callers never record a false stop)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

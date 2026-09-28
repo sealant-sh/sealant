@@ -5,7 +5,7 @@ import {
 } from "@sealant/validators";
 import { z } from "zod";
 
-import type { RuntimeAdapterLaunchHooks } from "./launch-retention.js";
+import type { RuntimeAdapterLaunchHooks, RuntimeLaunchIdentity } from "./launch-retention.js";
 
 export const runtimeAdapterBlueprintSchema = newWorkspaceSchema;
 
@@ -347,6 +347,30 @@ export interface RuntimeAdapter {
    * `RuntimeAdapterRecoverResult`). Absent = the runtime cannot; the executor stays retained.
    */
   recover?(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult>;
+  /**
+   * Optional: stop what a RETAINED executor that ENDED no longer needs while it waits for its
+   * recovery — never its disk. Docker: the workspace's Docker sidecar (`<name>-docker`, its own
+   * dockerd), which otherwise runs on for as long as the executor is kept. Idempotent; answers
+   * what it stopped (nothing, when there was nothing running beside the executor).
+   */
+  parkRetained?(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult>;
+  /**
+   * Optional: the executor a launch of `runId` created, found by the identity the runtime gives
+   * every executor of a run (Docker: the per-run container name) — for a launch whose worker was
+   * lost between creating the executor and recording it. `undefined` = the runtime knows none;
+   * a failed read throws (unknown is never taken for none). Absent = the runtime cannot tell.
+   */
+  locate?(input: { readonly runId: string }): Promise<RuntimeLaunchIdentity | undefined>;
+}
+
+export interface RuntimeAdapterParkInput {
+  readonly resourceId: string;
+  readonly reference?: string;
+}
+
+export interface RuntimeAdapterParkResult {
+  /** What was stopped (e.g. the Docker sidecar's name); empty when nothing was running. */
+  readonly stopped: readonly string[];
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

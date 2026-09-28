@@ -222,6 +222,45 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.calls).toEqual(["flush", "flush"]);
   });
 
+  it("takes `unwatched`, and any reason a newer daemon adds, as not saved: FINAL again (e2e 5)", async () => {
+    // sealantd e2e 5: a class that polls leaves currency unknown in status reads
+    // (`unwatched`); only a FINAL asked again answers from its own snaps.
+    for (const incompleteReason of ["unwatched", "a-reason-this-core-does-not-know"]) {
+      const unknown = captureStatus({ pending: 0, complete: false, incompleteReason });
+      const daemon = fakeCaptureDaemon([unknown, savedStatus()]);
+      const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+      expect(outcome.kind).toBe("drained");
+      expect(daemon.calls).toEqual(["flush", "flush"]);
+      expect(daemon.flushRequests.every((request) => request?.kind === "final")).toBe(true);
+
+      const still = fakeCaptureDaemon([unknown]);
+      const kept = await drain(still, inMemoryCaptureDrainLedger());
+      expect(kept).toMatchObject({
+        kind: "unconfirmed",
+        detail: expect.stringContaining(incompleteReason),
+      });
+      expect(drainPermitsStop(kept)).toBe(false);
+    }
+  });
+
+  it("never takes `complete: true` with a reason beside it as saved", async () => {
+    const contradictory = captureStatus({
+      pending: 0,
+      complete: true,
+      incompleteReason: "unwatched",
+    });
+    const daemon = fakeCaptureDaemon([contradictory]);
+    const ledger = inMemoryCaptureDrainLedger();
+    const outcome = await drain(daemon, ledger);
+    expect(outcome.kind).toBe("unconfirmed");
+    expect(
+      recordedDeletionEvidence(
+        { readable: true, entry: ledger.store.rows.get("run_1")?.entry },
+        { runId: "run_1", resourceId: "c1", reference: null },
+      ).observedComplete,
+    ).toBe(false);
+  });
+
   it("asks for FINAL again when the disk changed after a complete final flush (sealantd `changed`)", async () => {
     // Complete means current: a change after the final flush's snap makes sealantd answer
     // `complete: false, incomplete_reason: "changed"`. Not saved: FINAL again, which snaps again.
@@ -388,6 +427,73 @@ describe("drainCaptureBeforeStop", () => {
       { ...FAST, unreachableWindowMs: 10_000 },
     );
     expect(outcome.kind).toBe("drained");
+  });
+
+  // e2e 5: the lifecycle stop's drain saw the final flush complete and went on to remove the
+  // runtime; the stranded reaper then drained the same run and retried the silent daemon 12
+  // times over 55 s after the container was gone (the silent window is 5 minutes).
+  const SLOW_SILENCE: CaptureDrainSettings = {
+    ...FAST,
+    pollIntervalMs: 5,
+    unreachableWindowMs: 60_000,
+  };
+
+  it("ends at once, saved, when the executor ended after its daemon reported the final flush complete", async () => {
+    const store = new InMemoryCaptureDrainStore();
+    const first = await drain(
+      fakeCaptureDaemon([savedStatus()]),
+      inMemoryCaptureDrainLedger({ store }),
+    );
+    expect(first.kind).toBe("drained");
+
+    for (const ended of ["missing", "exited"] as const) {
+      const daemon = fakeCaptureDaemon(["unreachable"]);
+      const outcome = await drain(
+        daemon,
+        inMemoryCaptureDrainLedger({ store }),
+        200,
+        SLOW_SILENCE,
+        ended,
+      );
+      expect(outcome).toMatchObject({ kind: "drained", status: { complete: true } });
+      expect(daemon.connect).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("keeps an executor that ended at the first silence, without waiting out the window", async () => {
+    const daemon = fakeCaptureDaemon(["unreachable"]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger(), 200, SLOW_SILENCE, "exited");
+    expect(outcome).toMatchObject({
+      kind: "silent",
+      detail: expect.stringMatching(/without a final flush confirmed complete/),
+    });
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("works under a claim the caller holds and leaves it held", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const claim = await Effect.runPromise(ledger.claim("run_1"));
+    expect(claim).toBeDefined();
+    const outcome = await Effect.runPromise(
+      drainCaptureBeforeStop({
+        runId: "run_1",
+        target: TARGET,
+        ledger,
+        settings: FAST,
+        budgetMs: 1_000,
+        label: "test",
+        runtimeState: Effect.succeed("running"),
+        ...(claim === undefined ? {} : { claim }),
+      }).pipe(Effect.provide(fakeCaptureDaemon([savedStatus()]).layer)),
+    );
+    expect(outcome.kind).toBe("drained");
+    // Still the caller's: another drain of the run is refused until the caller releases it.
+    expect(
+      await drain(
+        fakeCaptureDaemon([savedStatus()]),
+        inMemoryCaptureDrainLedger({ store: ledger.store }),
+      ),
+    ).toEqual({ kind: "busy" });
   });
 });
 

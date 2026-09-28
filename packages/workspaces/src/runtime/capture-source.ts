@@ -34,11 +34,45 @@ export const CAPTURE_CA_PEM_ENV = "SEALANT_CAPTURE_CA_PEM";
 export const CAPTURE_OBJECT_CA_PEM_ENV = "SEALANT_CAPTURE_OBJECT_CA_PEM";
 
 /**
+ * How long a shutdown's final capture flush (`SIGTERM`) may take before the daemon stops trying
+ * and exits 75 with its staging kept (sealantd e2e 5). Unset, a final flush that cannot finish —
+ * a store that is down — retries until the runtime's stop grace ends and SIGKILL lands: the exit
+ * that says "not saved, keep my disk" is never reached.
+ */
+export const SHUTDOWN_FINAL_DEADLINE_ENV = "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS";
+
+/**
+ * sealantd's own shutdown grace (SIGTERM → SIGKILL for its managed processes) when the boot names
+ * none; Core never sets `SEALANT_SHUTDOWN_GRACE_MS`. The final flush's deadline is kept at or
+ * above it: the processes get their grace before anything is snapped.
+ */
+const DAEMON_SHUTDOWN_GRACE_MS = 10_000;
+
+/**
+ * The shutdown final flush's deadline for an executor whose runtime waits `stopGraceMs` after
+ * `SIGTERM` before it kills it (Docker `--stop-timeout`, a Pod's `terminationGracePeriodSeconds`,
+ * a MicroVM's terminate-hook budget): the grace less a margin (a tenth, between 5 s and 60 s) in
+ * which the daemon writes its state and exits 75 (within about a second) before the kill.
+ * `undefined` when that leaves less than the daemon's own shutdown grace: no deadline is set, and
+ * the flush runs until it completes or the runtime kills it, as before.
+ */
+export const shutdownFinalDeadlineMs = (stopGraceMs: number): number | undefined => {
+  const margin = Math.min(60_000, Math.max(5_000, Math.floor(stopGraceMs / 10)));
+  const deadline = stopGraceMs - margin;
+  return deadline < DAEMON_SHUTDOWN_GRACE_MS ? undefined : deadline;
+};
+
+/**
  * The non-secret boot env for a capture source, in emission order. `platform` is a control-plane
  * hint and is deliberately not delivered: the daemon's behaviour does not depend on where it runs.
+ * `stopGraceMs` is how long the runtime waits after `SIGTERM` before it kills the executor: the
+ * daemon's shutdown final flush is bounded inside it (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`), so a
+ * flush that cannot finish exits 75 — the disk kept and recovered — rather than being killed.
+ * An older daemon ignores it.
  */
 export const captureSourceEnv = (
   source: CaptureWorkspaceSource,
+  options: { readonly stopGraceMs?: number } = {},
 ): ReadonlyArray<readonly [string, string]> => [
   ["SEALANT_WORKSPACE_SOURCE", "capture"],
   [CAPTURE_ENDPOINT_ENV, source.endpoint],
@@ -57,4 +91,12 @@ export const captureSourceEnv = (
   ...(source.transport?.objectCaPem === undefined
     ? []
     : [[CAPTURE_OBJECT_CA_PEM_ENV, source.transport.objectCaPem] as const]),
+  ...shutdownFinalDeadlineEnv(options.stopGraceMs),
 ];
+
+const shutdownFinalDeadlineEnv = (
+  stopGraceMs: number | undefined,
+): ReadonlyArray<readonly [string, string]> => {
+  const deadline = stopGraceMs === undefined ? undefined : shutdownFinalDeadlineMs(stopGraceMs);
+  return deadline === undefined ? [] : [[SHUTDOWN_FINAL_DEADLINE_ENV, String(deadline)]];
+};

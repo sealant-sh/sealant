@@ -83,8 +83,24 @@ export interface Harness {
 // Workspaces
 // ---------------------------------------------------------------------------------------------
 
-/** Lifecycle status of a workspace. */
-export type WorkspaceStatus = "queued" | "running" | "ready" | "failed" | "cancelled" | "stopped";
+/**
+ * Lifecycle status of a workspace.
+ *
+ * `retained`: its executor ended (or its capture launch failed after it started) with work on
+ * its disk not confirmed saved. It is KEPT, not dead: the control plane drains or recovers it
+ * with the capture token it was launched with, and the status reads `stopped` or `failed` again
+ * only once that ends (saved and removed, discarded, or lost). Keep what the recovery needs — the
+ * session's lease and token — while it reads `retained`. `details().captureDrain.retained` says
+ * why, and how recovery is going.
+ */
+export type WorkspaceStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stopped"
+  | "retained";
 
 /** A coarse lifecycle event observed while a workspace is being provisioned. */
 export interface WorkspaceEvent {
@@ -380,6 +396,8 @@ export interface WorkspaceCaptureDrain {
     readonly kind: string;
     readonly resourceId: string;
     readonly reference?: string;
+    /** The launch identity the create named for this executor (`CreateOptions.launchId`). */
+    readonly launchId?: string;
   };
   /** The latest completion attestation the control plane accepted for this executor. */
   readonly completion?: {
@@ -462,7 +480,8 @@ export interface WorkspaceRecoverResult {
  *    workspaces only) and the queue is still moving; the runtime is removed once the daemon
  *    confirms them saved.
  *  - `kept`: the control plane will NOT remove the runtime: its work is not confirmed saved
- *    (`drain.detail` says why). The workspace keeps running until it is.
+ *    (`drain.detail` says why). The workspace keeps running until it is — or, its executor having
+ *    ended, it is retained (status `retained`) and recovered.
  *
  * `drain` is the control plane's last observation; `capture` is the daemon's queue as read now,
  * when it answers. Call `stop()` again to check (it is idempotent), or follow `status()`.
@@ -776,7 +795,8 @@ export interface WorkspaceRuntimeInfo {
   readonly resourceId: string;
   /** The runtime's name for it (container name, Pod name, MicroVM id). */
   readonly reference: string;
-  readonly status: "pending" | "running" | "ready" | "failed" | "stopped";
+  /** `retained`: kept with its disk for recovery (see `WorkspaceStatus`). */
+  readonly status: "pending" | "running" | "ready" | "failed" | "stopped" | "retained";
   /** The run (launch attempt) the executor belongs to, when the control plane reports it. */
   readonly runId?: string;
   /** The launch identity the create named for this executor (`CreateOptions.launchId`). */
@@ -895,6 +915,14 @@ export interface Workspace {
    * kept. Resolves once the request is recorded; follow `details().captureDrain`.
    */
   recover(): Promise<WorkspaceRecoverResult>;
+  /**
+   * What the control plane last observed of this workspace's capture drain and retention, read
+   * without stopping anything: the drain state and detail, whether the executor is RETAINED (and
+   * how its recovery is going), the completion attestation it accepted, and the executor it is
+   * about (runtime identity and launch identity). `null` when nothing was observed yet, or from a
+   * control plane that predates it — which says nothing about whether the work is saved.
+   */
+  captureDrain(): Promise<WorkspaceCaptureDrain | null>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**

@@ -6,6 +6,14 @@ import { runCommandSchema, runSchema } from "./runs.js";
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty(), Schema.isTrimmed());
 
+/**
+ * `retained`: the workspace's executor ended (or its capture launch failed after it started)
+ * with work on its disk not confirmed saved. It is kept, not dead: the control plane drains or
+ * recovers it with the capture token it was launched with, and reports `stopped` or `failed`
+ * again only once the retention ends (saved and removed, discarded, or lost). A caller keeps
+ * what the recovery needs — the session's lease and token — while it reads `retained`. See
+ * `captureDrain.retained` for why and the recovery attempts.
+ */
 export const workspaceStatusSchema = Schema.Literals([
   "queued",
   "running",
@@ -13,6 +21,7 @@ export const workspaceStatusSchema = Schema.Literals([
   "failed",
   "cancelled",
   "stopped",
+  "retained",
 ]);
 export type WorkspaceStatus = typeof workspaceStatusSchema.Type;
 
@@ -24,7 +33,8 @@ export const workspaceRuntimeSchema = Schema.Struct({
    */
   resourceId: NonEmptyString,
   reference: NonEmptyString,
-  status: Schema.Literals(["pending", "running", "ready", "failed", "stopped"]),
+  /** `retained`: the executor is kept with its disk for recovery (see `workspaceStatusSchema`). */
+  status: Schema.Literals(["pending", "running", "ready", "failed", "stopped", "retained"]),
   endpoint: Schema.optional(Schema.String),
   /**
    * ISO-8601 instant the runtime itself ends the executor, whatever anyone asks: a Lambda
@@ -604,6 +614,8 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       adapter: NonEmptyString,
       resourceId: NonEmptyString,
       reference: Schema.optional(NonEmptyString),
+      /** The launch identity the create named for this executor (`launchId`), when it named one. */
+      launchId: Schema.optional(NonEmptyString),
     }),
   ),
   /** The latest `completion` attestation accepted for this executor (see `stop`). */

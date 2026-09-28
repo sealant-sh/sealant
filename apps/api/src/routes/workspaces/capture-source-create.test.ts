@@ -21,6 +21,7 @@ import {
   type WorkspaceBuildJobRepoService,
   type WorkspaceRepoService,
   type WorkspaceRuntimeInstance,
+  WorkspaceCaptureDrainRepo,
 } from "@sealant/db";
 import { GitHubSourceIntegrationService } from "@sealant/source-integrations";
 import type { NewWorkspace } from "@sealant/validators";
@@ -349,6 +350,8 @@ const makeRecordingLayer = (
     Layer.succeed(WorkspaceRepo, workspaceRepo),
     Layer.succeed(WorkspaceAttemptRepo, attemptRepo),
     Layer.succeed(WorkspaceBuildJobRepo, buildJobRepo),
+    // No capture drain is recorded: nothing is retained.
+    Layer.mock(WorkspaceCaptureDrainRepo, { getByRunId: () => Effect.succeed(undefined) }),
     Layer.mock(WorkspaceRuntimeInstanceRepo, {
       getRuntimeInstanceByRunId: () => Effect.succeed(state.runtime),
     }),

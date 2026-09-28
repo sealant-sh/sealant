@@ -80,6 +80,14 @@ export interface ProcessWorkspaceBuildJobOptions {
   readonly jobId: string;
   readonly workerId: string;
   readonly leaseDurationMs: number;
+  /**
+   * How long a launch owns its `pending` row without renewal (the launch renews it every third
+   * of this while it waits for readiness). A worker lost mid-launch leaves a launch the
+   * stranded-launch sweep adopts this long after the last renewal — the executor is then
+   * retained, drained and preserved like any other, instead of sitting unowned for the build
+   * job's lease. Default `DEFAULT_LAUNCH_LEASE_MS` (2 minutes).
+   */
+  readonly launchLeaseMs?: number;
   readonly db: DB;
   /**
    * Every runtime this worker can launch on, each with the builder of the image it boots. The
@@ -101,6 +109,9 @@ export interface ProcessWorkspaceBuildJobOptions {
    */
   readonly launchMaterialStager?: LaunchMaterialStager;
 }
+
+/** How long a launch owns its row without renewal when the worker names nothing else. */
+export const DEFAULT_LAUNCH_LEASE_MS = 2 * 60_000;
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
 export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJobOptions, "db">;
@@ -563,7 +574,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   // makes after this one is fenced on the ownership, so a launch that was adopted in between
   // (a worker stalled past its lease) never writes over the adoption.
   const launchOwner = `${options.workerId}:${job.id}:${randomUUID()}`;
-  const launchLeaseMs = Math.max(1_000, options.leaseDurationMs);
+  const launchLeaseMs = Math.max(1_000, options.launchLeaseMs ?? DEFAULT_LAUNCH_LEASE_MS);
   // The executor's identity once the adapter reported it (`onStarted` / `onReady`).
   let startedIdentity: RuntimeLaunchIdentity | undefined;
   const launchAndRecord = Effect.gen(function* () {

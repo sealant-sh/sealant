@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { captureSourceEnv } from "./capture-source.js";
+import { captureSourceEnv, shutdownFinalDeadlineMs } from "./capture-source.js";
 import { parseRuntimeAdapterLaunchInput } from "./runtime-adapter.js";
 
 const captureSource = (input: {
@@ -37,6 +37,38 @@ const captureSource = (input: {
   }
   return source;
 };
+
+describe("the shutdown final flush's deadline (e2e 5)", () => {
+  // e2e 5 (HS): the store was down, Core stopped the executor, and the SIGTERM final flush
+  // retried for the whole 3600 s stop timeout until Docker killed it: the exit 75 that keeps and
+  // recovers the disk was never reached. The deadline is the stop grace less a margin.
+  it("ends inside the runtime's stop grace, leaving the daemon time to exit 75", () => {
+    expect(shutdownFinalDeadlineMs(3_600_000)).toBe(3_540_000);
+    expect(shutdownFinalDeadlineMs(120_000)).toBe(108_000);
+    expect(shutdownFinalDeadlineMs(50_000)).toBe(45_000);
+    expect(shutdownFinalDeadlineMs(15_000)).toBe(10_000);
+    for (const grace of [15_000, 50_000, 120_000, 3_600_000, 86_400_000]) {
+      const deadline = shutdownFinalDeadlineMs(grace) ?? 0;
+      // At least 5 s before the kill, and never under the daemon's own 10 s shutdown grace.
+      expect(grace - deadline).toBeGreaterThanOrEqual(5_000);
+      expect(deadline).toBeGreaterThanOrEqual(10_000);
+    }
+    // A grace too short for both: no deadline (the flush runs until it completes, as before).
+    expect(shutdownFinalDeadlineMs(14_000)).toBeUndefined();
+    expect(shutdownFinalDeadlineMs(1_000)).toBeUndefined();
+  });
+
+  it("is delivered with the capture source when the runtime names its stop grace", () => {
+    const env = captureSourceEnv(captureSource({ worktreeId: "wt_1" }), { stopGraceMs: 3_600_000 });
+    expect(env).toContainEqual(["SEALANT_SHUTDOWN_FINAL_DEADLINE_MS", "3540000"]);
+    for (const emitted of [
+      captureSourceEnv(captureSource({ worktreeId: "wt_1" })),
+      captureSourceEnv(captureSource({ worktreeId: "wt_1" }), { stopGraceMs: 8_000 }),
+    ]) {
+      expect(emitted.some(([key]) => key === "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS")).toBe(false);
+    }
+  });
+});
 
 describe("captureSourceEnv", () => {
   it("encodes the cold capture channel, worktree and harness root", () => {

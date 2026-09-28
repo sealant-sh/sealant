@@ -14,6 +14,7 @@ import {
   consumeWorkspaceBuildJobs,
   consumeWorkspaceLifecycleJobs,
   databaseCaptureDrainLedger,
+  notifyingRetention,
   DEFAULT_CAPTURE_DRAIN_SETTINGS,
   createKubernetesLaunchMaterialStager,
   createLiveKubernetesApi,
@@ -301,11 +302,18 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
     finalFlushGraceMs: env.WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS,
     leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
   };
-  const captureDrainLedger = databaseCaptureDrainLedger({
-    db,
-    owner: `${env.WORKER_ID}:${String(process.pid)}:${randomUUID()}`,
-    leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
-  });
+  // Every executor a stop, the exit reconciler or a launch records retained starts a recovery
+  // sweep at once (`requestRecoverySweep`, below): its first attempt follows its exit within
+  // seconds, while the session that owns it still honours its capture token.
+  let requestRecoverySweep: ((runId: string) => void) | undefined;
+  const captureDrainLedger = notifyingRetention(
+    databaseCaptureDrainLedger({
+      db,
+      owner: `${env.WORKER_ID}:${String(process.pid)}:${randomUUID()}`,
+      leaseMs: env.WORKSPACE_CAPTURE_DRAIN_LEASE_MS,
+    }),
+    (runId) => requestRecoverySweep?.(runId),
+  );
 
   // Every consumer below: resolving completes the delivery, throwing dead-letters it (no retries).
   // Failures are recorded on the domain rows by the handlers themselves; the rethrow only keeps the
@@ -319,6 +327,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
           jobId: message.jobId,
           workerId: env.WORKER_ID,
           leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+          launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
           db,
           runtimes,
           defaultRuntimeAdapterId: env.DEFAULT_RUNTIME_ADAPTER,
@@ -417,6 +426,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       db,
       workerId: env.WORKER_ID,
       leaseDurationMs: env.WORKSPACE_BUILD_JOB_LEASE_DURATION_MS,
+      launchLeaseMs: env.WORKSPACE_LAUNCH_LEASE_MS,
       // The reaper re-drives the same pipeline as the consumer, so it takes the same registered
       // runtimes: a reaped job builds with the same builder a first delivery would.
       runtimes,
@@ -500,12 +510,22 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // Recovery of retained executors: a capture executor kept because its disk holds work not
   // confirmed saved is restarted on its own disk where the runtime can (Docker), drained with a
   // FINAL flush and only then removed; elsewhere it is reported and kept. Backoff per executor.
+  // A sweep runs as soon as an executor is recorded retained, and every
+  // WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS for attempts that fall due; one asked for while a sweep
+  // runs follows it.
   let recoverySweepRunning = false;
+  let recoverySweepAgain = false;
+  // Executors recorded retained since the last sweep began: the next sweep takes exactly them.
+  const justRetained = new Set<string>();
   const runRecoverySweepTick = (): void => {
     if (recoverySweepRunning) {
+      recoverySweepAgain = true;
       return;
     }
     recoverySweepRunning = true;
+    recoverySweepAgain = false;
+    const runIds = justRetained.size === 0 ? undefined : [...justRetained];
+    justRetained.clear();
     recoverRetainedExecutors({
       db,
       runtimeAdapters,
@@ -515,17 +535,25 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
       ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
+      ...(runIds === undefined ? {} : { runIds }),
     })
       .catch((error: unknown) => {
         console.error("Retained executor recovery tick failed", { error });
       })
       .finally(() => {
         recoverySweepRunning = false;
+        if (recoverySweepAgain) {
+          setImmediate(runRecoverySweepTick);
+        }
       });
+  };
+  requestRecoverySweep = (runId) => {
+    justRetained.add(runId);
+    setImmediate(runRecoverySweepTick);
   };
   const recoverySweepTimer = setInterval(
     runRecoverySweepTick,
-    env.WORKSPACE_EXPIRY_REAPER_INTERVAL_MS,
+    env.WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS,
   );
   recoverySweepTimer.unref();
 

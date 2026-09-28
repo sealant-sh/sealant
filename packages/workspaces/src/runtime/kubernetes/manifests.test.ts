@@ -1,10 +1,11 @@
+import { describe, expect, it } from "vitest";
+
 /**
  * Pins the manifests the adapter emits for the Mend-style mount launch. Anything that changes
  * here changes what runs in a cluster — the Pod security posture in particular is asserted field
  * by field so it cannot drift silently.
  */
-import { describe, expect, it } from "vitest";
-
+import { shutdownFinalDeadlineMs } from "../capture-source.js";
 import { cases } from "../docker-runtime-adapter.golden-fixture.js";
 import { collectMountIntents } from "../mount-intent.js";
 import { kubernetesRuntimeConfigSchema, type KubernetesRuntimeConfig } from "./config.js";
@@ -140,8 +141,16 @@ describe("Kubernetes manifests", () => {
         ["SEALANT_CAPTURE_WORKTREE_ID", "wt_1"],
         ["SEALANT_CAPTURE_HARNESS_HOME", "/workspace/harness-home"],
         ["SEALANT_SECRET_ENV_FILE", "/run/sealant/launch/env.json"],
+        // Its shutdown final flush ends inside the capture Pod's termination grace.
+        [
+          "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS",
+          String(shutdownFinalDeadlineMs(config.captureTerminationGracePeriodSeconds * 1000) ?? ""),
+        ],
       ]),
     );
+    expect(
+      Number(plain.find(([key]) => key === "SEALANT_SHUTDOWN_FINAL_DEADLINE_MS")?.[1]),
+    ).toBeLessThan(config.captureTerminationGracePeriodSeconds * 1000);
     const keys = plain.map(([key]) => key);
     expect(keys).not.toContain("SEALANT_WORKSPACE_REPO_URL");
     expect(keys).not.toContain("SEALANT_WORKSPACE_MOUNT_HOST_PATH");
