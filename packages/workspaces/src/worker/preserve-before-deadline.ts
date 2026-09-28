@@ -27,7 +27,12 @@
  *    answered a FINAL yet goes through the shared stop path (`processWorkspaceStopEffect`, label
  *    `deadline preservation`) for that one FINAL round trip only, under its own wide permit
  *    (`initiateConcurrency`), the most urgent first. Waiting for that permit and the round trip
- *    are bounded by the runtime's remaining lifetime. Polling another executor never holds it.
+ *    are bounded by the runtime's remaining lifetime. Polling another executor never holds it,
+ *    and neither does a removal (review 8 #6): the permit is released once the FINAL is
+ *    answered (or the removal it permits begins).
+ *  - **A removal is never waited out.** Removing a runtime is uninterruptible and may last the
+ *    executor's whole stop grace; it runs in its own fiber, holding no permit, and the sweep waits
+ *    for it only until the sweep ends. A later sweep finds its run claimed and leaves it to it.
  *  - **Then the started drains are polled** — status first, never a second FINAL — with bounded
  *    concurrency (`drainConcurrency`) and a budget, and the whole sweep ends by the drain budget
  *    after it began, so a later tick (and the runtimes that become due then) never waits on it.
@@ -65,7 +70,7 @@ import {
   type WorkspaceCaptureDrain,
   type WorkspaceRuntimeInstance,
 } from "@sealant/db";
-import { Effect, Layer, Semaphore } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Semaphore } from "effect";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type CaptureFlushReport } from "../sealantd/runtime.js";
@@ -80,7 +85,11 @@ import {
   type CaptureDrainLedger,
   type CaptureDrainSettings,
 } from "./capture-drain.js";
-import { processWorkspaceStopEffect, type WorkspaceStopOutcome } from "./process-workspace-stop.js";
+import {
+  processWorkspaceStopEffect,
+  type WorkspaceStopOutcome,
+  type WorkspaceStopPhase,
+} from "./process-workspace-stop.js";
 
 export interface CaptureDeadlineSettings {
   /** Fixed lead: the final drain starts at least this long before the deadline. */
@@ -314,28 +323,30 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
 
         // 1. Its first FINAL, before anything polls anything: one round trip, under its own
         // permit, the wait and the trip bounded by the runtime's remaining lifetime (at least
-        // one round trip, so a runtime at its deadline is still asked once).
+        // one round trip, so a runtime at its deadline is still asked once). The permit is held
+        // until that FINAL is answered (or the removal it permits begins), never through the
+        // removal (review 8 #6): an executor that answered complete does not hold up another's
+        // first FINAL while its runtime is removed, and that removal goes on past this sweep.
         let outcome: DriveOutcome = "draining";
         if (!candidate.finalAnswered) {
           const lifetimeLeftMs = Math.max(plan.deadlineMs - now(), roundTripMs);
-          outcome = yield* initiations
-            .withPermit(guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false })))
-            .pipe(
-              Effect.timeoutOrElse({
-                duration: lifetimeLeftMs,
-                orElse: () =>
-                  Effect.logError(
-                    `Deadline preservation: run ${plan.instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()}; its final flush could not be sent before then (every FINAL permit was held): not saved · the platform may end it with its work.`,
-                  ).pipe(Effect.as("not-driven" as const)),
-              }),
-            );
+          const initiated = yield* driveReleasingPermit({
+            permits: initiations,
+            waitMs: lifetimeLeftMs,
+            joinUntilMs: sweepEndsAtMs,
+            now,
+            drive: (onPhase) =>
+              guarded(driveOne(options, plan, { budgetMs: 0, opensWithStatus: false, onPhase })),
+          });
+          outcome = yield* reportInitiation(plan, initiated);
           if (outcome !== "draining") {
             return countsAsDriven(outcome);
           }
         }
 
         // 2. Poll the started drain (status first: its FINAL was answered) and stop it once
-        // complete, under the drive permits, for no longer than the sweep lasts. A runtime just
+        // complete, under the drive permits, for no longer than the sweep lasts — the permit, too,
+        // only until the drain returns: a removal it permits goes on without it. A runtime just
         // sent its first FINAL is polled as what that made it (a launch taken from its worker
         // is a retained launch now), and its start is not announced twice.
         const leftMs = sweepEndsAtMs - now();
@@ -351,26 +362,32 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
         const polling: DuePreservation = candidate.finalAnswered
           ? plan
           : { ...plan, instance: current, firstStart: false };
-        const polled = yield* drives
-          .withPermit(
+        const polled = yield* driveReleasingPermit({
+          permits: drives,
+          // The drain's own budget ends with the sweep; the bound adds the one round trip it
+          // may be in when its budget runs out.
+          waitMs: leftMs + roundTripMs,
+          joinUntilMs: sweepEndsAtMs + roundTripMs,
+          now,
+          drive: (onPhase) =>
             Effect.suspend(() => {
               const remainingMs = sweepEndsAtMs - now();
               return remainingMs <= 0
                 ? Effect.succeed<DriveOutcome>("draining")
                 : guarded(
-                    driveOne(options, polling, { budgetMs: remainingMs, opensWithStatus: true }),
+                    driveOne(options, polling, {
+                      budgetMs: remainingMs,
+                      opensWithStatus: true,
+                      onPhase,
+                    }),
                   );
             }),
-          )
-          .pipe(
-            // The drain's own budget ends with the sweep; the bound adds the one round trip it
-            // may be in when its budget runs out.
-            Effect.timeoutOrElse({
-              duration: leftMs + roundTripMs,
-              orElse: () => Effect.succeed<DriveOutcome>("draining"),
-            }),
-          );
-        return countsAsDriven(polled);
+        });
+        if (polled.kind === "removal-continues") {
+          yield* logRemovalContinues(plan, polled.phase);
+          return countsAsDriven("removing");
+        }
+        return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -384,12 +401,138 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
   return driven.filter(Boolean).length;
 });
 
-/** What driving a due runtime did: a stop's outcome, its recovery made due, or nothing. */
-type DriveOutcome = WorkspaceStopOutcome | "recovery-due" | "not-driven";
+/**
+ * What driving a due runtime did: a stop's outcome, its removal under way past the sweep, its
+ * recovery made due, or nothing.
+ */
+type DriveOutcome = WorkspaceStopOutcome | "removing" | "recovery-due" | "not-driven";
 
-/** Whether an outcome counts as driven (a stop removed it or goes on draining; recovery due). */
+/**
+ * Whether an outcome counts as driven (a stop removed it, is removing it or goes on draining;
+ * recovery due).
+ */
 const countsAsDriven = (outcome: DriveOutcome): boolean =>
-  outcome === "stopped" || outcome === "draining" || outcome === "recovery-due";
+  outcome === "stopped" ||
+  outcome === "removing" ||
+  outcome === "draining" ||
+  outcome === "recovery-due";
+
+/**
+ * How one drive went while the sweep waited on it (`driveReleasingPermit`):
+ *
+ *  - `no-permit`: its bound ran out while every permit was held — it never started.
+ *  - `unanswered`: it started (its FINAL or status was being asked) and nothing came back within
+ *    the bound; it was interrupted.
+ *  - `removal-continues`: its drain returned (or its removal began) and the runtime's removal
+ *    outlasts the sweep; it goes on in its own fiber, holding no permit of the sweep.
+ *  - `done`: it ended within the sweep.
+ */
+type ReleasedDrive =
+  | { readonly kind: "no-permit" }
+  | { readonly kind: "unanswered"; readonly startedAtMs: number }
+  | { readonly kind: "removal-continues"; readonly phase: WorkspaceStopPhase }
+  | { readonly kind: "done"; readonly outcome: DriveOutcome };
+
+/**
+ * Run one drive in its own fiber, holding one of `permits` only until the drive's drain returns,
+ * its runtime's removal begins, or it ends — never through a removal, which is uninterruptible
+ * and may take the executor's whole stop grace (review 8 #6). Waiting for the permit and for the
+ * drain together are bounded by `waitMs`; past it an unanswered drive is interrupted. After the
+ * permit is released the sweep waits for the drive until `joinUntilMs`, then leaves it running on
+ * its own: a later sweep finds its run claimed and leaves it to it.
+ */
+const driveReleasingPermit = <R>(input: {
+  readonly permits: Semaphore.Semaphore;
+  readonly waitMs: number;
+  readonly joinUntilMs: number;
+  readonly now: () => number;
+  readonly drive: (
+    onPhase: (phase: WorkspaceStopPhase) => Effect.Effect<void>,
+  ) => Effect.Effect<DriveOutcome, never, R>;
+}): Effect.Effect<ReleasedDrive, never, R> =>
+  Effect.gen(function* () {
+    const signal = yield* Deferred.make<WorkspaceStopPhase | { readonly kind: "ended" }>();
+    let started: { readonly fiber: Fiber.Fiber<DriveOutcome>; readonly atMs: number } | undefined;
+    const waited = yield* input.permits
+      .withPermit(
+        Effect.gen(function* () {
+          const atMs = input.now();
+          const fiber = yield* Effect.forkDetach(
+            input
+              .drive((phase) => Deferred.succeed(signal, phase).pipe(Effect.asVoid))
+              .pipe(Effect.ensuring(Deferred.succeed(signal, { kind: "ended" }))),
+          );
+          started = { fiber, atMs };
+          return yield* Deferred.await(signal);
+        }),
+      )
+      .pipe(Effect.timeoutOption(Math.max(0, input.waitMs)));
+    if (started === undefined) {
+      return { kind: "no-permit" } satisfies ReleasedDrive;
+    }
+    const { fiber } = started;
+    let phase: WorkspaceStopPhase | { readonly kind: "ended" };
+    if (Option.isSome(waited)) {
+      phase = waited.value;
+    } else if (yield* Deferred.isDone(signal)) {
+      // It passed the point in the same instant the bound ran out: not unanswered.
+      phase = yield* Deferred.await(signal);
+    } else {
+      yield* Fiber.interrupt(fiber);
+      return { kind: "unanswered", startedAtMs: started.atMs } satisfies ReleasedDrive;
+    }
+    const joined = yield* Fiber.await(fiber).pipe(
+      Effect.timeoutOption(Math.max(0, input.joinUntilMs - input.now())),
+    );
+    if (Option.isNone(joined)) {
+      return phase.kind === "ended"
+        ? ({ kind: "done", outcome: "draining" } satisfies ReleasedDrive)
+        : ({ kind: "removal-continues", phase } satisfies ReleasedDrive);
+    }
+    return {
+      kind: "done",
+      outcome: Exit.isSuccess(joined.value) ? joined.value.value : "not-driven",
+    } satisfies ReleasedDrive;
+  });
+
+/**
+ * What a first FINAL's drive came to, said as what happened (review 8 #6): its permit never came
+ * before the runtime's end, its FINAL went unanswered, or its complete answer arrived and the
+ * removal it permits goes on past the sweep. The outcome for the sweep.
+ */
+const reportInitiation = (plan: DuePreservation, initiated: ReleasedDrive) =>
+  Effect.gen(function* () {
+    const ends = new Date(plan.deadlineMs).toISOString();
+    switch (initiated.kind) {
+      case "no-permit":
+        yield* Effect.logError(
+          `Deadline preservation: run ${plan.instance.runId} ends at ${ends}; its final flush could not be sent before then (every FINAL permit was held): not saved · the platform may end it with its work.`,
+        );
+        return "not-driven" as const;
+      case "unanswered":
+        yield* Effect.logError(
+          `Deadline preservation: run ${plan.instance.runId} ends at ${ends}; its final flush was started at ${new Date(initiated.startedAtMs).toISOString()} and no answer came before then: not saved · the platform may end it with its work.`,
+        );
+        return "not-driven" as const;
+      case "removal-continues":
+        yield* logRemovalContinues(plan, initiated.phase);
+        return "removing" as const;
+      case "done":
+        return initiated.outcome;
+    }
+  });
+
+/** A removal that outlasts the sweep, said with what the drain before it observed. */
+const logRemovalContinues = (plan: DuePreservation, phase: WorkspaceStopPhase) =>
+  Effect.logInfo(
+    `Deadline preservation: run ${plan.instance.runId}: ${
+      phase.kind === "drain-ended" && phase.drain === "drained"
+        ? "its final flush answered complete · observed"
+        : phase.kind === "drain-ended" && phase.drain === "gone"
+          ? "its daemon is silent and nothing of the executor is left"
+          : "the evidence on record lets it go"
+    }; the runtime's removal is under way and continues past this sweep.`,
+  );
 
 /** A candidate in its watch window, as its records describe it before any daemon is asked. */
 interface PreparedPreservation {
@@ -578,6 +721,8 @@ const driveOne = (
     readonly budgetMs: number;
     /** Its drain is started (its FINAL was answered): it opens with a status read. */
     readonly opensWithStatus: boolean;
+    /** Told when the drain returns and when the removal begins (review 8 #6). */
+    readonly onPhase?: (phase: WorkspaceStopPhase) => Effect.Effect<void>;
   },
 ) =>
   Effect.gen(function* () {
@@ -646,6 +791,7 @@ const driveOne = (
         budgetMs: drive.budgetMs,
         label: "deadline preservation",
         ...(drive.opensWithStatus ? { opensWithStatus: true } : {}),
+        ...(drive.onPhase === undefined ? {} : { onPhase: drive.onPhase }),
       },
     });
   });
