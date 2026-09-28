@@ -1117,6 +1117,16 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
   });
 });
 
+/** Whether a process of this pid still exists. */
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // Hygiene (review 9): the tests left their fake daemons running. The agent itself stops the daemon
 // it started when it is told to stop; only an uncatchable SIGKILL of a non-PID-1 agent orphans it.
 describe("microvm agent · stopping", () => {
@@ -1146,14 +1156,6 @@ describe("microvm agent · stopping", () => {
       expect(daemonPid).toBeGreaterThan(1);
       agent.child.kill("SIGTERM");
       await exited(agent.child);
-      const alive = (pid: number) => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      };
       await waitFor(async () => daemonPid === undefined || !alive(daemonPid));
     } finally {
       await stopAgent(agent);

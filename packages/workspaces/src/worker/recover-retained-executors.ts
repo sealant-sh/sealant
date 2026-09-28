@@ -237,7 +237,7 @@ export const recoverRetainedExecutorsEffect = Effect.fn("recoverRetainedExecutor
   );
   const ordered = due
     .map((row, index) => ({ row, deadlineMs: deadlines[index] ?? Number.POSITIVE_INFINITY }))
-    .sort((a, b) => a.deadlineMs - b.deadlineMs);
+    .toSorted((a, b) => a.deadlineMs - b.deadlineMs);
   const outcomes = new Map<string, RecoveryOutcome>();
   // Independent attempts: one that stalls holds only its own slot, never another executor's.
   yield* Effect.forEach(

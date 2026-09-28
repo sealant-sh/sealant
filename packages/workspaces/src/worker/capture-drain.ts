@@ -65,7 +65,6 @@ import { Cause, Clock, Effect, Exit, Option, Result } from "effect";
 import { z } from "zod";
 
 import {
-  attestationCoversExecutor,
   attestationCoversObservations,
   type ExecutorDeletionBasis,
   type ExecutorDeletionDecision,
@@ -910,7 +909,7 @@ export const inMemoryCaptureDrainLedger = (
         bump(row);
         return "admitted" as const;
       }),
-    claimRecovery: (runId, leaseMs) =>
+    claimRecovery: (runId, recoveryLeaseMs) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
         if (row === undefined || row.entry.retained === undefined) {
@@ -921,7 +920,7 @@ export const inMemoryCaptureDrainLedger = (
         }
         inMemoryClaimSequence += 1;
         const token = `recovery-${String(inMemoryClaimSequence)}`;
-        row.recoveryLease = { token, untilMs: now() + leaseMs };
+        row.recoveryLease = { token, untilMs: now() + recoveryLeaseMs };
         return { token };
       }),
     releaseRecovery: (runId, ticket) =>

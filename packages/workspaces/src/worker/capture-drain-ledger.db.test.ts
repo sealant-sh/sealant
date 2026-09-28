@@ -20,7 +20,7 @@ import {
   type DB,
   type WorkspaceCaptureDrainRepoService,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
@@ -657,7 +657,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
         }),
       }).pipe(Effect.exit),
     );
-    expect(exit._tag).toBe("Failure");
+    expect(Exit.isFailure(exit)).toBe(true);
     const after = await Effect.runPromise(ledger.read(runId));
     expect(after.readable && after.entry?.removalIssued).toBe(true);
     expect(await Effect.runPromise(ledger.admitRecovery(runId))).toBe("deleting");
@@ -767,7 +767,7 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       false,
     );
     expect(observedComplete(after.entry)).toBe(false);
-    expect(after.entry?.unsaved?.map((status) => status.origin?.bootId).sort()).toEqual([
+    expect(after.entry?.unsaved?.map((status) => status.origin?.bootId).toSorted()).toEqual([
       "boot-A",
       "boot-B",
     ]);

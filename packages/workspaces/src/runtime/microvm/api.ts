@@ -182,12 +182,12 @@ export const createLiveMicrovmApi = (options: LiveMicrovmApiOptions): MicrovmApi
       };
       return toDescription(await client.send(new RunMicrovmCommand(request)));
     },
-    getMicrovm: async (microvmId, options) => {
+    getMicrovm: async (microvmId, call) => {
       try {
         return toDescription(
           await client.send(
             new GetMicrovmCommand({ microvmIdentifier: microvmId }),
-            options?.signal === undefined ? {} : { abortSignal: options.signal },
+            call?.signal === undefined ? {} : { abortSignal: call.signal },
           ),
         );
       } catch (error) {
@@ -197,11 +197,11 @@ export const createLiveMicrovmApi = (options: LiveMicrovmApiOptions): MicrovmApi
         throw error;
       }
     },
-    terminateMicrovm: async (microvmId, options) => {
+    terminateMicrovm: async (microvmId, call) => {
       try {
         await client.send(
           new TerminateMicrovmCommand({ microvmIdentifier: microvmId }),
-          options?.signal === undefined ? {} : { abortSignal: options.signal },
+          call?.signal === undefined ? {} : { abortSignal: call.signal },
         );
         return "terminated";
       } catch (error) {

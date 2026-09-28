@@ -6,7 +6,7 @@
  * that answers without moving is kept; progress and the stall window carry across calls AND
  * across workers; one worker at a time drains a run, and a dead worker's claim is taken over.
  */
-import { Effect, Logger } from "effect";
+import { Effect, Exit, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { removalRefused } from "../runtime/runtime-adapter.js";
@@ -1329,7 +1329,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
         }),
       }).pipe(Effect.exit),
     );
-    expect(exit._tag).toBe("Failure");
+    expect(Exit.isFailure(exit)).toBe(true);
     const row = ledger.store.rows.get("run_lost");
     expect(row?.deletion?.state).toBe("deleting-issued");
     expect(await run(ledger.admitRecovery("run_lost"))).toBe("deleting");
@@ -1362,7 +1362,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
         }),
       }).pipe(Effect.exit),
     );
-    expect(exit._tag).toBe("Failure");
+    expect(Exit.isFailure(exit)).toBe(true);
     expect(ledger.store.rows.get("run_refused")?.deletion).toBeUndefined();
     expect(await run(ledger.admitRecovery("run_refused"))).toBe("admitted");
   });

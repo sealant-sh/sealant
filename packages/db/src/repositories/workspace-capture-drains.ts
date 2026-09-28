@@ -423,6 +423,10 @@ const deletionEvidenceCurrent = (current: {
   current.deletionEvidenceVersion === current.evidenceVersion &&
   Object.keys(current.observationFences).length === 0;
 
+/** A database instant in microseconds, as read (`::bigint::text`); `null` when unknown. */
+const microseconds = (value: string | null): number | null =>
+  value === null ? null : Number(value);
+
 const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
   ...(progress.detail === undefined ? {} : { detail: progress.detail }),
@@ -675,8 +679,6 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               });
               // Every unsaved answer no later one covers stays on record, whichever status is
               // the latest (review 9 #4, decision 25).
-              const microseconds = (value: string | null): number | null =>
-                value === null ? null : Number(value);
               const unsaved = nextUnsavedObservations({
                 unsaved: current.unsavedStatuses,
                 stored: current.lastStatus,

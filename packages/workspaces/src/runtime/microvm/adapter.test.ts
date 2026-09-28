@@ -1052,6 +1052,19 @@ describe("MicrovmRuntimeAdapter.launch", () => {
   });
 });
 
+/** An AWS service exception as the SDK throws it: the service's own answer, with its status. */
+const serviceError = (status: number) =>
+  Object.assign(new Error(status === 409 ? "ConflictException" : "InternalFailure"), {
+    $metadata: { httpStatusCode: status },
+  });
+
+/** How a stop ended: removed, refused by the platform, or with an outcome nobody knows. */
+const stopOutcome = (adapter: MicrovmRuntimeAdapter) =>
+  adapter.stop({ resourceId: "microvm-1" }).then(
+    () => "stopped",
+    (error: unknown) => (isRemovalRefusal(error) ? "refused" : "unknown"),
+  );
+
 describe("MicrovmRuntimeAdapter.stop", () => {
   const launched = async () => {
     const api = new FakeMicrovmApi();
@@ -1106,10 +1119,6 @@ describe("MicrovmRuntimeAdapter.stop", () => {
   // Review 9 #5 (decision 27): only the platform's own refusal, or a failure before anything
   // was sent, is definitive; a TerminateMicrovm that failed any other way may have been taken.
   it("tells a refused termination from one whose outcome nobody knows (review 9 #5)", async () => {
-    const serviceError = (status: number) =>
-      Object.assign(new Error(status === 409 ? "ConflictException" : "InternalFailure"), {
-        $metadata: { httpStatusCode: status },
-      });
     const failing = (failure: { readonly get?: Error; readonly terminate?: Error }) => {
       const api = new FakeMicrovmApi();
       const signals: (AbortSignal | undefined)[] = [];
@@ -1132,23 +1141,20 @@ describe("MicrovmRuntimeAdapter.stop", () => {
       });
       return { adapter, signals };
     };
-    const outcome = (adapter: MicrovmRuntimeAdapter) =>
-      adapter.stop({ resourceId: "microvm-1" }).then(
-        () => "stopped",
-        (error: unknown) => (isRemovalRefusal(error) ? "refused" : "unknown"),
-      );
     // The service answered and did not act.
-    expect(await outcome(failing({ terminate: serviceError(409) }).adapter)).toBe("refused");
+    expect(await stopOutcome(failing({ terminate: serviceError(409) }).adapter)).toBe("refused");
     // Nothing was sent: the read before it failed.
-    expect(await outcome(failing({ get: new Error("socket hang up") }).adapter)).toBe("refused");
+    expect(await stopOutcome(failing({ get: new Error("socket hang up") }).adapter)).toBe(
+      "refused",
+    );
     // A lost reply, a server fault, an abort: the platform may have taken it.
-    expect(await outcome(failing({ terminate: new Error("socket hang up") }).adapter)).toBe(
+    expect(await stopOutcome(failing({ terminate: new Error("socket hang up") }).adapter)).toBe(
       "unknown",
     );
-    expect(await outcome(failing({ terminate: serviceError(500) }).adapter)).toBe("unknown");
+    expect(await stopOutcome(failing({ terminate: serviceError(500) }).adapter)).toBe("unknown");
     // Every call of the stop is bounded (nothing of it is signed past the adapter's fence).
     const bounded = failing({});
-    expect(await outcome(bounded.adapter)).toBe("stopped");
+    expect(await stopOutcome(bounded.adapter)).toBe("stopped");
     expect(bounded.signals).toHaveLength(2);
     expect(bounded.signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
     expect(bounded.adapter.removalFenceMs).toBeGreaterThanOrEqual(
