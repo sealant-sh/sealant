@@ -1,5 +1,485 @@
 # @sealant/api-contracts
 
+## 0.38.0
+
+### Minor Changes
+
+- c8c9c7b: A retained executor reads `retained`, and the drain and retention can be read without a stop.
+
+  - Workspace status and runtime status gain `retained` (`workspaceStatusSchema`,
+    `workspaceRuntimeSchema.status`; SDK `WorkspaceStatus`, `WorkspaceRuntimeInfo.status`): the
+    executor ended — or its capture launch failed after it started — with work on its disk not
+    confirmed saved. It is kept, not dead: the control plane drains or recovers it with the capture
+    token it was launched with, and the status reads `stopped` or `failed` again only once that ends.
+    Keep the session's lease and token while it reads `retained`. An SDK that predates the value fails
+    to decode such a workspace rather than reading it as ended.
+  - `ready()` fails at once on `retained`; `stop()` of a retained workspace answers `kept` with the
+    drain at once (unless it discards, or its completion attestation was accepted).
+  - `workspace.captureDrain()` reads the drain and retention as last observed (state, retained and its
+    recovery, the accepted completion, the executor it is about) without stopping anything; `null`
+    when nothing was observed, which says nothing about whether the work is saved.
+  - `captureDrain.executor.launchId`: the launch identity the create named for that executor.
+
+  Server-side (the packages ride the release train): a retained executor's recovery starts the moment
+  it is retained and is retried after 10 s, doubling (`WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS`, 5 s);
+  one stop of a capture executor at a time (a second finds the drain claim held and leaves it); a
+  drain of an executor that ended ends at once; an ended retained executor's Docker sidecar is
+  stopped; every capture executor bounds its shutdown final flush inside its stop grace
+  (`SEALANT_SHUTDOWN_FINAL_DEADLINE_MS`); a launch whose worker died before it recorded its executor
+  is found by its run, or ended `launch-lost` when nothing started (`WORKSPACE_LAUNCH_LEASE_MS`, 2
+  min); saved means `complete` with no `incompleteReason` (`unwatched` and unknown reasons ask for
+  FINAL again).
+
+- 206abab: `workspace.capture.flush()` takes options: `flush({ kind: "final", deadlineMs, graceMs })`.
+  `POST /v1/workspaces/:id/capture/flush` accepts the same fields beside `ownerUserId`. The public
+  type is `WorkspaceCaptureFlushOptions`.
+
+  - `kind: "final"` says the executor is ending. sealantd stops its managed processes, snapshots both
+    capture classes, ships, and reports `complete`. After it, the daemon refuses new work.
+    `kind: "suspend"` is a checkpoint and stays the default, so `flush()` with no options is
+    unchanged.
+  - `deadlineMs` bounds how long the daemon may take before it answers. A final flush past its
+    deadline answers `complete: false` and keeps shipping in the daemon, so later `status()` reads and
+    repeated final flushes converge.
+  - `graceMs` is how long managed processes get between SIGTERM and SIGKILL, inside the deadline.
+  - Both are positive integers in milliseconds. Absent, the daemon uses its own defaults.
+
+  The control plane passes these to sealantd as given. The pinned sealantd (0.18.2) takes no flush
+  arguments and runs its only flush whatever `kind` says. The fields take effect once the pin moves to
+  the release that accepts them.
+
+  Server-side (the packages ride the release train):
+
+  - A drain's FINAL flush asks for a deadline and a grace. The deadline is
+    `WORKSPACE_CAPTURE_DRAIN_FINAL_DEADLINE_MS`, capped at the round trip's bound
+    (`WORKSPACE_CAPTURE_DRAIN_REQUEST_TIMEOUT_MS`, 60 s) less 5 s. The grace is
+    `WORKSPACE_CAPTURE_DRAIN_FINAL_GRACE_MS` (30 s), capped at the deadline.
+
+- 878e2ee: A capture-sourced executor's disk is kept until something proves its work saved, and a kept executor
+  can be recovered.
+
+  `workspace.stop({ completion: { captureN, epoch, executorId } })` attests that your capture store
+  holds a sealed final capture of the workspace's current executor. `POST /v1/workspaces/:id/stop`
+  takes the same `completion` beside `ownerUserId`.
+
+  - `executorId` names the executor. Send the runtime's `resourceId` from
+    `workspace.details().runtime`. Its `reference`, or the run id, are accepted too.
+  - `epoch` is the capture lease epoch the seal was made under. `captureN` is the sealed capture's
+    chain position.
+  - The control plane accepts the attestation only when `executorId` names the current executor and
+    `epoch` is not older than any the executor reported. An accepted attestation lets the executor's
+    disk go once the executor has ended, even when the control plane never read `complete: true` from
+    it itself. An ignored one changes nothing.
+  - When you send one, the stop's answer and `WorkspaceStopResult` carry `completion`, with `outcome`
+    (`accepted` or `ignored`) and, when ignored, `detail`.
+  - A running executor is still drained first; the attestation never skips that.
+
+  `workspace.recover()` (`POST /v1/workspaces/:id/recover`) makes a recovery attempt of the
+  workspace's retained executor due now. It answers `requested` with `recoverable`, or `not-retained`
+  when nothing is kept.
+
+  `WorkspaceCaptureDrain` (`workspace.details().captureDrain`) gains two optional fields:
+
+  - `retained`: the executor is kept because its disk holds work not confirmed saved. It has `since`,
+    `reason`, `recoverable`, `recoveryAttempts`, `nextRecoveryAt` and `lastRecoveryError`.
+  - `completion`: the latest accepted attestation.
+
+  A caller can record the executor it launched and find it again:
+
+  - `workspace.runtime()` reads the current executor:
+    `{ kind, resourceId, reference, status, runId?, deadline }`, or `null` before one is launched.
+    `WorkspaceRuntime` on the wire gains `runId`.
+  - `workspace.launch` is what a handle from `workspaces.create()` knows of its launch:
+    `{ runId?, runtime?, replayed }`. `runtime` is the executor `ready()` saw become ready, or, on a
+    replayed create, the one that already exists. The create answer (`POST /v1/workspaces`) gains
+    `runId`, `runtime` and `replayed`.
+  - `captureDrain.executor` names the executor an observation is about: `runId`, `resourceId`,
+    `reference`, and the runtime (`adapter` on the wire, `kind` in the SDK).
+  - `workspaces.create({ idempotencyKey })` (the `idempotencyKey` body field, or the `idempotency-key`
+    header) is idempotent per owner. A repeated create with the same key answers with the first
+    workspace, `replayed: true`, and creates nothing. Another owner's workspace is never returned for
+    the same key.
+  - `workspaces.findByIdempotencyKey(key)` (`GET /v1/workspaces?idempotencyKey=`) finds that workspace
+    after a lost answer, or returns `null`.
+
+  Server-side (the packages ride the release train):
+
+  - Every path that can remove an executor or its disk now asks one preservation policy first: the
+    planned stop, the exit reconciler, the Kubernetes orphan sweep, launch adoption and redelivery,
+    launch readiness cleanup, the deadline sweep and recovery. A capture-sourced executor, or one
+    whose source is unknown, goes only when the control plane observed its final flush complete, the
+    caller attested a sealed final capture of it, the owner discarded it, or nothing of it is left. An
+    exited executor with no such evidence is kept, whatever its exit code, and so is one whose drain
+    record cannot be read. A stop that passes no capture drain still reads the source, and keeps a
+    capture-sourced or unknown executor.
+  - Retention starts when the executor is created, not when it answers readiness. A launch that fails
+    after its container, Pod or MicroVM launch push exists keeps it. A redelivered launch that finds
+    an ended executor of the same run keeps it instead of replacing it. A capture container is never
+    created with `--rm`.
+  - Retained executors are recorded and retried on a backoff (1 min doubling to 1 h). Docker restarts
+    the kept container on its own disk (`docker start`), and a final flush follows at once. The
+    executor is removed only after that flush reports complete. The restart boots sealantd in recovery
+    mode: the marker `/.sealantd-recovery` is `docker cp`'d into the stopped container first, so no
+    lifecycle step, dotfiles or harness runs and nothing is admitted. Its capture token, read once at
+    boot from a file removed after readiness, is kept sealed at launch (`capture_token_sealed`,
+    cleared when the executor goes) and staged again first. With no token kept, or none the worker can
+    unseal, the executor is not started and is reported `not recoverable · no capture token`.
+    Kubernetes cannot restart an ended Pod, and its emptyDir lasts only while the Pod object exists,
+    so an ended capture Pod is reported and kept. A terminated MicroVM's disk is gone, so only the
+    pre-deadline drain protects it.
+  - The deadline sweep persists a plan for every runtime in its watch window before it drives any
+    drain. It then drives every due runtime each tick, earliest deadline first, four at a time. The
+    upload estimate counts bytes not yet uploaded, or everything staged when that is unreported. While
+    bulk is being built it adds at least the staged size again, or 256 MiB. Until a rate has been
+    observed it assumes 1 MiB/s.
+  - `incomplete_reason: "sealing"` (nothing pending, the seal not yet acknowledged) is handled like
+    any empty queue without a complete final flush. The drain asks for FINAL again, never takes it as
+    saved, and keeps the executor until the daemon reports `complete`.
+  - Two drains of one run never overlap, including within one worker: each claim holds the lease under
+    its own token.
+  - The idempotency key is stored on the workspace row, unique per owner, and that row is written
+    first. A racing create with the same key fails its insert and answers with the winner. A unique
+    violation from Postgres (`23505`) is now recognised; before, only SQLite's wording was, so on
+    Postgres a race failed with an internal error.
+  - A discard is logged as requested before the runtime is ended. It is logged as terminated only
+    after the runtime adapter confirms it.
+  - The MicroVM terminate hook sends `--final` whenever the image's sealantctl offers it
+    (`SEALANT_MICROVM_FINAL_FLUSH=0` turns it off). It answers 200 only for a complete final flush. A
+    daemon without `--final` gets the ordinary flush, and the hook answers 500.
+
+- dd4e856: An idempotent create can be cancelled by its key, and a create names the launch it makes.
+
+  - `workspaces.cancelCreate(key)` (`POST /v1/workspaces/idempotency-keys/:key/cancel`) makes sure the
+    create with that key never launches. A key that is pending, or that no create has reached yet, is
+    cancelled for good: a later create with it, a delayed original request included, is refused with
+    409 and `code: "create-cancelled"`, and a create still writing cannot commit. A create that
+    already committed answers `found`; stop that workspace instead.
+  - `workspaces.createState(key)` (`GET /v1/workspaces/idempotency-keys/:key`) answers what became of
+    the create: `pending` (started, not committed), `found` (with `workspaceId`, `runId`, `launchId`),
+    `cancelled`, or `none`. `none` holds only as of the answer; `cancelCreate` is the answer that
+    stays true. An answer the SDK cannot decode fails instead of reading as `none`.
+  - `WorkspaceConflictError` gains an optional `code`.
+  - `workspaces.create({ launchId })` names the one executor the create launches. It is recorded with
+    the launch and reported as `runtime.launchId`, `workspace.launch.launchId` and the create answer's
+    `launchId`.
+  - `workspace.stop({ completion: { …, launchId } })`: when the create named a `launchId`, an
+    attestation must name the same one. One that names another launch, or none, is ignored (a seal
+    never transfers between executors). `captureDrain.completion` carries the accepted `launchId`.
+
+  Server-side (the packages ride the release train):
+
+  - A create's writes (workspace, attempt, link, snapshot, launch job, and its key's commit) are one
+    transaction. A repeat that finds a workspace an older create left half-made finishes it instead of
+    replaying it forever, and a repeat that finds its launch job still queued publishes it again.
+  - A launch owns its runtime row under a lease from its first `pending` write until it settles. A
+    worker that dies (or is interrupted) after the executor started no longer strands it outside every
+    sweep: its lapsed launch is adopted as a retained launch, drained, preserved before its deadline,
+    recovered if it ended, and stopped only once its work is confirmed saved.
+  - The deadline sweep also drives retained executors: a retained launch is drained and stopped, and
+    an executor whose daemon exited on a machine that still runs has its recovery made due before the
+    cap.
+  - A MicroVM whose sealantd exited while the VM runs on is recovered on its own disk: the agent
+    (`POST /sealant/recover`) kills every process the dead daemon left, then starts
+    `sealantd boot --recovery` with the first boot's environment and its secret env file holding the
+    capture token kept at launch, and the recovery drains it. An image whose agent predates the route,
+    or a disk the recovery boot refuses (an older daemon's), is reported and kept.
+  - `incomplete_reason: "changed"` (the disk changed after the final flush) is not saved: the drain
+    asks for FINAL again, and a complete flush read before it is no longer evidence.
+  - Recovery restarts an executor in place only when its launch recorded a daemon with sealantd's
+    recovery boot (released sealantd 0.19.0 or later, or an image listed in
+    `SEALANT_SEALANTD_RECOVERY_BOOT_IMAGES`). Any other, or unknown, is kept and reported
+    `not recoverable in place`.
+  - Every removal of an ended capture executor (the exit reconciler's and the Kubernetes orphan
+    sweep's included) ends its retention and clears its sealed recovery token.
+
+- 0e31ee0: A completion attestation carries the seal's time, and a newer observation that the work is not saved
+  revokes an older seal.
+
+  - `stop({ completion: { sealedAt } })` (`StopWorkspaceRequest.completion.sealedAt`, ISO 8601,
+    optional): when the store recorded the seal. The control plane weighs the attestation against its
+    own observations of the executor, when it is accepted and again whenever it is used: an older
+    epoch, a capture past `captureN`, or — in the same epoch — a report that the work is not saved
+    (incomplete, changed, unreadable, a failed snapshot) that did not come before the seal (its head
+    short of `captureN`, or read more than 60 s before `sealedAt`) makes it `ignored`. Without
+    `sealedAt`, any such report at or past `captureN` does. A seal stands in for a lost FINAL answer,
+    never for a received one that said the work is not saved. An unparseable `sealedAt` is ignored.
+  - `captureDrain().completion.sealedAt` reports it back.
+
+  Server-side (the packages ride the release train): recorded evidence (an earlier complete flush, an
+  attestation) removes only an executor that ended; a running one is drained (FINAL) first, the
+  retained-executor recovery included. A kept executor's retention and its terminal write commit in
+  one transaction, and every sweep looks again at an ended capture executor nothing settled. A launch
+  still pending when its runtime's preservation start arrives is taken from its worker and drained,
+  and a launch never waits for readiness past that start (`WORKSPACE_CAPTURE_DEADLINE_LEAD_MS`). The
+  MicroVM agent spares, in a recovery and in the list it hands sealantd (`SEALANT_SWEEP_EXEMPT_FILE`),
+  only the processes it started itself, by pid and start time — never by name — and stops the guest
+  Docker service before a recovery boot. Migration `capture_attestation_freshness`.
+
+  Also server-side: every capture executor boots with `SEALANT_CAPTURE_LAUNCH_ID` when the create
+  named a launch; `store-fidelity` is never saved; a FINAL whose connection closes under it (its sweep
+  stops the relay) is read again rather than reported as refused, in the flush route and in every
+  drain; a Docker recovery starts the workspace's parked Docker sidecar first; and an executor whose
+  recovery boot finds nothing to save (sealantd exit 76: it never materialized) is released with the
+  daemon's words recorded.
+
+- 6219580: Capture evidence is ordered by the executor's own history, never by clocks.
+
+  - `WorkspaceCaptureStatus.origin` (optional, from `capture.status()` and `capture.flush()`): where
+    in the executor's own history the answer was made —
+    `{ epoch, launch, bootId, bootGeneration, observation, headN? }`, sealantd's stamp (wire fields
+    27–30). Of the same epoch, launch and boot, order by `observation`; of the same epoch and launch
+    and different boots whose generations are both above 0 and differ, by `bootGeneration` then
+    `observation`; anything else cannot be ordered and must fail closed. Absent from a daemon that
+    predates the stamp.
+  - `stop({ completion: { origin } })` (`StopWorkspaceRequest.completion.origin`, optional): the
+    seal's position (the `final_seal`'s stamp). The control plane places a report that the work is not
+    saved before the seal only by the executor's history (its head short of `captureN`, or its
+    `origin` before the seal's); `sealedAt` is kept for display and no longer orders anything. Without
+    `origin`, any such report at or past `captureN` revokes the seal. The accepted attestation reads
+    back with its `origin` on the workspace's `captureDrain.completion`.
+  - A FINAL relayed by `capture.flush({ kind: "final" })` whose answer is lost, whose status is read
+    again, and whose repeated FINAL loses its answer too now returns the last status the daemon gave,
+    not the transport error: a received "not saved" is never turned into a lost answer.
+  - `capture.status()` and `capture.flush()` fail (500) without asking the daemon when the control
+    plane cannot mark the observation in flight; an answer it receives but cannot record is still
+    returned, and the executor it came from is kept until a later observation is recorded.
+
+- 206abab: A capture-sourced workspace's capture status now carries everything sealantd reports, so a caller
+  can show a session whose captures are failing. The fields are optional on
+  `GET /v1/workspaces/:id/capture`, on the `POST /v1/workspaces/:id/capture/flush` answer, and on
+  `WorkspaceCaptureStatus` from `workspace.capture.status()` and `workspace.capture.flush()`:
+
+  - `snaps`: one entry per captured class, with `class` (`small` or `bulk`), `snapsFailed` (failed
+    snaps since the daemon started), and, while that class's last snap failed, `lastSnapError` and
+    `snapFailingSinceUnixMs`. A snap that fails stages nothing, so the changes since the last capture
+    exist only on the executor's disk. A path longer than `PATH_MAX` once stopped every snap of a
+    session while `pending` read 0.
+  - `lastSnapError`, `snapFailingSinceUnixMs`, `snapsFailed`: flat fields derived from `snaps`, for a
+    caller that shows one error. They hold the error of the class that has been failing longest, the
+    earliest start, and the sum of failed snaps. While `lastSnapError` is present, the newest work is
+    not being captured.
+  - `unreadable`, `carried`, `unreadablePaths`: paths the last snap could not read, how many of them
+    kept their last captured content, and the first 20 of them (`tree/…`, `.git/…`, `harness/…`).
+  - `registerRefused` (`missing-objects` or `unrestorable`), `registerRefusedN`, `registerMissing`,
+    `registerRefusals`, `repairing`: a capture the registrar would not register, which the executor
+    uploads again and rebuilds from disk. Nothing is dropped.
+  - `bulkBuilding`: a bulk capture is still being built and is not counted in `pending` yet.
+
+  `incompleteReason` documents every reason sealantd gives, including the new `in-progress`: a final
+  flush is still running.
+
+  A field sealantd does not report stays absent. It is never filled with a default. The control plane
+  pins sealantd's wire at 0.18.2, which carries none of these, so every one of them stays absent until
+  that pin moves to a release that reports them.
+
+  Server-side (the packages ride the release train): a drain logs a class whose snaps fail as an error
+  once per distinct error, and every keep it records names each failing class and its error. The
+  stored drain status keeps every field.
+
+- cbd6bf5: A workspace reports when its runtime ends it. `runtime.deadline` on the workspace API
+  (`GET /v1/workspaces/:id`, the list, the attempts) is the ISO-8601 instant the runtime itself ends
+  the executor, whatever anyone asks: a Lambda MicroVM's maximum duration from its start. It is `null`
+  where the runtime imposes no lifetime (Docker, Kubernetes), and absent from control planes that
+  predate it. The SDK reads it as `workspace.runtimeDeadline()` (`string | null`). A caller holding
+  unsaved work on the executor drains before it.
+
+  A capture-sourced workspace's queue can be read without flushing:
+  `GET /v1/workspaces/:id/capture?ownerUserId=…` (sealantd `capture.status`), and
+  `workspace.capture.status()` in the SDK. It answers `pending` (captures not yet saved), `headN` and
+  `registered` (what the session channel holds), and `refused`: the capture classes (`small`, `bulk`)
+  the registrar turned away for the session's byte quota. Non-empty `refused` means that work is not
+  being saved. The flush reply carries `refused` too. `pendingBytes` and `pendingBulk` are reserved
+  and absent until sealantd reports them. The SDK reads a missing `refused` as nothing refused.
+
+  `workspace.stop()` now resolves a `WorkspaceStopResult` (see the drain-ownership changeset for its
+  states). Callers that ignored the old `void` result are unaffected.
+
+  `workspace.ready()` on a handle `workspaces.create()` made requests a stop before it throws
+  `workspace_ready_timeout`, so a launch nobody will use does not run to the platform's lifetime cap.
+  The error says whether the stop request was accepted.
+
+  Server-side (the packages ride the release train): no platform-initiated stop loses a
+  capture-sourced workspace's unsaved work. The worker drains the workspace's sealantd before a
+  lifecycle stop, and before the expired, stranded, superseded and orphaned reapers tear a runtime
+  down (what counts as drained: see the drain-ownership changeset). A queue still moving defers the
+  stop to the next sweep. The workspace is kept running, and every sweep asks again, when:
+
+  - the daemon answers but its queue does not move for `WORKSPACE_CAPTURE_DRAIN_STALL_WINDOW_MS` (10
+    min), logged `not saved · kept`;
+  - the daemon reports a refused capture class, logged `not saved · refused · kept`;
+  - the daemon is silent for `WORKSPACE_CAPTURE_DRAIN_UNREACHABLE_WINDOW_MS` (5 min) while the runtime
+    reports the executor running, logged `not saved · daemon silent · kept`.
+
+  A runtime that reports the executor gone lets a stop proceed without a confirmed drain: there is
+  nothing left to save. The exit reconciler asks the daemon before it records an exit, and drains a
+  runtime whose daemon still answers. A MicroVM whose guest Docker failed while sealantd is up is
+  reported and no longer terminated. A MicroVM ended at its lifetime cap is logged as an error. Docker
+  stops send SIGTERM first (`docker stop -t`, `SEALANT_DOCKER_STOP_GRACE_SECONDS`, default 120 s), so
+  sealantd's final flush runs. Kubernetes workspace Pods get `terminationGracePeriodSeconds` from
+  `SEALANT_K8S_TERMINATION_GRACE_SECONDS` (default 120, was 30).
+
+- 206abab: `workspace.stop({ discardUnsaved: true })` (`POST /v1/workspaces/:id/stop` with
+  `discardUnsaved: true`) ends a workspace without saving its unsaved captures. The stop skips the
+  drain, the runtime is terminated at once, and the request is recorded. It is the owner's only way to
+  end a capture-sourced workspace that the control plane keeps because its work cannot be confirmed
+  saved. It is accepted on a workspace whose stop was already recorded. It is owner only and
+  irreversible. The workspace's `captureDrain` then reads `discarded`, with
+  `discard: { requestedBy, requestedAt }`. `captureDrain.state` also reads `stop-failed` when removing
+  the runtime failed (the control plane retries it) and `stopped` once the runtime was removed after
+  its drain.
+
+  Server-side (the packages ride the release train):
+
+  - Every Docker workspace container is created with its own stop timeout (`--stop-timeout`), so a
+    plain `docker stop` from an operator, a host restart or Docker Desktop quitting waits for
+    sealantd's final flush instead of killing it after 10 s. The timeout is
+    `SEALANT_DOCKER_STOP_GRACE_SECONDS` (120 s), or `SEALANT_DOCKER_CAPTURE_STOP_GRACE_SECONDS` (3600
+    s) for a capture-sourced workspace. Docker's own `shutdown-timeout` still bounds a daemon
+    shutdown.
+  - Kubernetes capture-sourced Pods get `terminationGracePeriodSeconds` from
+    `SEALANT_K8S_CAPTURE_TERMINATION_GRACE_SECONDS` (3600).
+  - Recording a run's changes no longer restages the workspace's git index. The diff is staged in a
+    throwaway index, and the user's index keeps its exact bytes. This covers the worker's run exec and
+    the SSH gateway's interactive runs.
+  - A stop records that it is under way before the runtime is asked to go. An exit observed after that
+    is recorded as the planned stop (`stopped`), never `failed`.
+  - A stop whose launch-material cleanup fails still completes.
+
+- 206abab: A stop reports only what was observed. `workspace.stop()` resolves `{ state: "stopped" }` once the
+  runtime is gone. If it is still up after a minute, it resolves what the control plane last observed
+  of the workspace's capture drain: `{ state: "draining", drain }` while the queue moves,
+  `{ state: "kept", drain }` when the control plane will not remove the runtime because its work is
+  not confirmed saved (`drain.detail` says why), and otherwise `{ state: "requested" }`: the stop was
+  accepted and nothing more has been observed. A capture queue that merely answers is no longer
+  reported as a drain, and `stop()` no longer throws `workspace_stop_timeout`. `capture` carries the
+  daemon's queue when it answers. After a readiness timeout, the error says a stop was requested, not
+  that the workspace stopped.
+
+  `GET /v1/workspaces/:id` gains `captureDrain`: `state` (`draining`, `kept`, `saved`, `gone`),
+  `detail`, `observedAt`, and `preservationStartsAt`, when the control plane starts a drain ahead of
+  the runtime's deadline. The capture status (`workspace.capture.status()` / `flush()`) gains
+  `complete` and `incompleteReason`: the daemon's account of its last FINAL flush. Only
+  `complete === true` means the executor's work is saved. They are absent until sealantd reports them;
+  read absent as not complete.
+
+  Server-side (the packages ride the release train):
+
+  - A drain sends a FINAL flush and lets a runtime go only when the daemon reports it `complete`. An
+    empty queue is not enough. Until the pinned sealantd reports `complete`, capture-sourced
+    workspaces are kept, logged `not saved · not confirmed · kept`, instead of stopped.
+  - Drain ownership and progress are durable in `workspace_capture_drains`. One worker drains a
+    workspace at a time across every worker process, and a dead worker's claim is taken over after
+    `WORKSPACE_CAPTURE_DRAIN_LEASE_MS`.
+  - A run whose workspace source cannot be read is treated as capture-sourced. The source kind is
+    recorded on the runtime instance.
+  - A capture-sourced launch that fails after its executor became ready keeps the executor (error code
+    `launch-retained`) and is drained before it is stopped. This applies to Docker, Kubernetes,
+    MicroVM, and a runtime row that could not be written. A Kubernetes Pod with no runtime row is
+    recorded, not deleted.
+  - An executor that exits after a final flush it never confirmed complete is left in place. Its disk
+    holds the staged captures.
+  - A runtime with its own deadline gets its final drain and a planned stop early enough to finish:
+    `WORKSPACE_CAPTURE_DEADLINE_LEAD_MS` plus an upload estimate from observed throughput and pending
+    bytes.
+  - The MicroVM terminate/suspend hook answers 500 when its flush failed.
+  - Credentials are read back before the final flush.
+
+### Patch Changes
+
+- a815ca9: An executor whose status request was cut off no longer waits out the request's whole fence before
+  a complete FINAL can release it. Before, when a caller of `capture.status()` or `capture.flush()`
+  went away, or a deadline sweep's bounded read ran out, while the answer was being recorded, that
+  observation stayed in flight for up to 56 minutes. Every stop in that window kept the executor, even
+  after it answered `complete`.
+
+  The control plane now always records an answer it received, whoever interrupts. An answer it cannot
+  record ends its observation at once, because no answer can arrive after the request is over. The
+  next observation of that executor then settles it. An observation whose request is still out is
+  honoured as before: nothing is removed while its answer could still arrive unrecorded.
+
+- 44653fd: A retained executor's recovery and a removal from another path can no longer overlap. Recovery
+  starts an executor only under its own live recovery claim. While that claim is live, no other path
+  can remove the executor; only the recovery attempt that holds the claim can. Another path decides
+  again once the claim is released or lapses.
+- 44653fd: A removal issued again after its first request's outcome was lost now checks the evidence again
+  right before it asks the runtime. Before, only the handover checked it, so an answer published
+  between the handover and the call could not stop a second request. Now that answer refuses the call.
+  The first request stays issued and keeps observation and recovery closed until the runtime shows its
+  outcome.
+- 44653fd: A rolling deploy can no longer weaken the capture ledger's guarantees. While older and newer
+  control-plane processes run side by side, the database now enforces the ledger's rules for writes
+  from older processes. An older process that replaces a status keeps the replaced answer on record if
+  the work was not saved, so an earlier seal cannot stand again. An older process can no longer give
+  up a removal it already issued; only the removal's outcome ends it. It can no longer send a removal
+  again after the evidence changed, or authorize one while a recovery attempt holds the executor. It
+  also no longer finds a claimed executor due for recovery, so it cannot start a second recovery
+  beside the first. Apply the migration before starting the new processes.
+- 44653fd: A MicroVM termination is sent once and never retried inside the call. Before, the AWS SDK could
+  retry a termination whose first request reached the platform and lost its reply, and a refusal of
+  the retry was read as proof that nothing had been removed. The removal was then given up while the
+  first request could still act. A refusal now ends a removal only when it answers the call's only
+  request and is an error the platform documents as not acting. Any other failure leaves the removal
+  issued until the runtime shows its outcome.
+- e671cbd: During a rolling deploy, an older control-plane process can no longer remove an executor while an
+  answer that says its work is not saved is on record. The database already kept such answers for
+  newer processes, but an older process reads only the latest status, which can look covered by a
+  seal. The database now refuses an older process's removal while any unsaved answer is on record, and
+  the older process keeps the executor. Newer processes weigh those answers themselves and are not
+  affected.
+- e671cbd: Capture status and flush answers now carry `overdue` when a capture step on the executor is running
+  past its bound: the step, when it started, how long it has been running and its bound. The field
+  comes from sealantd's `CaptureStatusReport.overdue` and reaches SDK callers as
+  `WorkspaceCaptureStatus.overdue`. It is absent while nothing is past its bound, and from older
+  daemons. It reports a stuck step and is not a verdict; the step's own limit ends it.
+- e671cbd: A refused removal request no longer cancels an earlier one that may still act. Core now records
+  every request it sends to remove an executor, each with its own outcome. When a request sent again
+  is refused, only that request is settled. If an earlier request's outcome is still unknown, the
+  removal stays issued, so the executor is not observed or recovered. It stays that way until the
+  runtime no longer has the executor, or until the runtime's bound on every unknown request has
+  passed. Requests sent by older control-plane processes during a rolling deploy are recorded by the
+  database. Apply the migration before starting the new processes.
+- 7aa048f: During a rolling deploy, the control-plane release immediately before this one can no longer give up
+  an executor's removal while an earlier removal request, one the runtime may have accepted, has no
+  known outcome. That release already marked itself as a current writer of the capture ledger, so the
+  database let it through, though it didn't track each request's outcome. The marker now carries the
+  ledger contract's version, and the database holds every writer with another version to the older
+  rules. For every writer, the current one included, the database also refuses to end an issued
+  removal, other than as removed, while any request it sent has an unknown outcome.
+- f139a21: Removing a capture executor is now an owned transition. Once the control plane authorizes the
+  removal on the evidence it holds, `capture.status()` and `capture.flush()` for that workspace fail
+  (500) without asking the daemon, until the removal is released or completes. After the executor is
+  removed they keep failing. Nothing received after that authorization can come too late to be
+  weighed. A status recorded anyway voids the removal, and the control plane decides again on the new
+  evidence.
+- d4ec29c: Once the runtime has been asked to remove a capture executor, `capture.status()` and
+  `capture.flush()` for that workspace keep failing (500) without asking the daemon until the outcome
+  is known. This holds even if the worker that asked stops renewing its hold, because the request
+  cannot be withdrawn. If that worker is gone, the control plane checks the runtime. If the executor
+  is gone, it is recorded removed. If it is still there and the evidence has not changed, the removal
+  is issued again. If the evidence changed, the removal is dropped and the control plane decides
+  again. A status recorded in the meantime is kept as evidence and no longer cancels a removal already
+  issued. The deadline sweep now releases an executor's FINAL slot as soon as its FINAL is answered,
+  so a slow removal of one executor no longer delays another's first FINAL or the next sweep.
+- ba6cc76: A seal must cover every unsaved answer an executor gave. Before, the control plane kept only the
+  latest status, so an older answer that arrived late could erase a newer failure and bring an old
+  seal back. The control plane now keeps every unsaved answer that no later answer covers. A stop's
+  `completion` attestation is `ignored` unless its seal covers all of them. An executor reads saved
+  only once each one is covered by an answer or a seal.
+
+  A removal the runtime was asked to make no longer ends when its call fails with an unknown outcome,
+  for example a lost reply. Until the outcome is known, `capture.status()` and `capture.flush()` keep
+  failing without asking the daemon, and the executor is not recovered. Only the runtime's own
+  refusal, the executor being gone, or the runtime's bound on the request having passed ends it. On
+  MicroVM that bound is 19.5 minutes: the terminate calls are bounded and AWS accepts a signed request
+  only within 15 minutes of signing.
+
+  Retained executors are now recovered independently, the one whose runtime ends soonest first. Every
+  call of a recovery attempt is bounded, and only one attempt runs per executor at a time. The
+  deadline sweep starts an urgent recovery itself instead of waiting for the recovery sweep. It
+  reports a removal as under way only after the removal was issued.
+
+- ab5af90: Workspaces run sealantd 0.19.0. A capture flush now sends its kind (final or suspend), deadline and grace to the daemon, so a stop's final flush is a real FINAL, and every status field a 0.19.0 daemon reports (completion, the executor-origin stamp, the overdue step) reaches the SDK.
+
 ## 0.37.2
 
 ### Patch Changes
