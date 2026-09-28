@@ -307,14 +307,16 @@ export interface DeletionTicket {
  * What authorizing a removal found: `authorized` (held by `ticket`), `changed` (the evidence
  * moved or is unresolved: decide again), `held` (another deleter's removal is live, or one was
  * issued and its issuer still holds it), `unresolved` (one was issued and its issuer's hold
- * lapsed: settle it from the runtime first, `reconcileIssuedDeletion`), `deleted` (it was removed
- * already).
+ * lapsed: settle it from the runtime first, `reconcileIssuedDeletion`), `recovering` (a recovery
+ * attempt holds the executor under its live claim, and the deleter is not that attempt; review
+ * 10 residual 2), `deleted` (it was removed already).
  */
 export type DeletionAuthorization =
   | { readonly kind: "authorized"; readonly ticket: DeletionTicket }
   | { readonly kind: "changed" }
   | { readonly kind: "held" }
   | { readonly kind: "unresolved" }
+  | { readonly kind: "recovering" }
   | { readonly kind: "deleted" };
 
 /**
@@ -400,10 +402,13 @@ export interface CaptureDrainLedger {
    * executor is `deleting`, held by the answered ticket: no observation is admitted and no
    * recovery starts it until the ticket is completed or released (or its hold lapses), and a
    * status recorded anyway voids it. `changed` on any change, and when it cannot be checked.
+   * `recovering` while a recovery attempt holds its live claim, unless `recovery` is that claim
+   * (the attempt removing what it recovered).
    */
   readonly authorizeDeletion: (
     runId: string,
     evidenceVersion: number,
+    recovery?: RecoveryTicket,
   ) => Effect.Effect<DeletionAuthorization>;
   /**
    * Renew the hold of the removal the ticket holds: before it is issued, only while nothing
@@ -412,11 +417,15 @@ export interface CaptureDrainLedger {
    */
   readonly confirmDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
   /**
-   * RIGHT BEFORE the runtime call that removes the executor (decision 21, review 8 #7): as
-   * `confirmDeletion`, and in the same step the removal becomes issued — exclusionary from then on
-   * whatever becomes of its hold, until its outcome is recorded (`completeDeletion`,
-   * `releaseDeletion`) or settled from the runtime (`reconcileIssuedDeletion`). `false` (and when
-   * it cannot be checked): nothing may be called — decide again.
+   * RIGHT BEFORE the runtime call that removes the executor (decision 21, review 8 #7): the
+   * ticket holds the removal and the evidence it was authorized on is still current with none in
+   * flight — for the first request and for one issued again alike (review 10 #4: an earlier
+   * request staying exclusionary is no permission to send another) — and in the same step the
+   * removal becomes issued: exclusionary from then on whatever becomes of its hold, until its
+   * outcome is recorded (`completeDeletion`, `releaseDeletion`) or settled from the runtime
+   * (`reconcileIssuedDeletion`). One issued again whose evidence moved sends nothing and stays
+   * issued, its hold ended. `false` (and when it cannot be checked): nothing may be called —
+   * decide again.
    */
   readonly issueDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
   /**
@@ -444,14 +453,18 @@ export interface CaptureDrainLedger {
    */
   readonly lapseIssuedDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
   /**
-   * May recovery start the run's executor (decision 21)? `deleting`: a live removal holds it, or
-   * one was issued (settled only from the runtime, review 8 #7); `deleted`: it was removed;
-   * `unknown`: it cannot be checked (nothing is started). A removal not yet issued whose hold
-   * lapsed is voided and recovery `admitted`.
+   * May the recovery attempt holding `recovery` start the run's executor (decision 21)?
+   * `deleting`: a live removal holds it, or one was issued (settled only from the runtime, review
+   * 8 #7); `deleted`: it was removed; `unclaimed`: the ticket no longer holds the live recovery
+   * claim (it lapsed or was taken over); `unknown`: it cannot be checked. Nothing is started on
+   * any of those. A removal not yet issued whose hold lapsed is voided and recovery `admitted` —
+   * only ever under the live claim, which keeps every other deleter off until it ends
+   * (`authorizeDeletion`, review 10 residual 2).
    */
   readonly admitRecovery: (
     runId: string,
-  ) => Effect.Effect<"admitted" | "deleting" | "deleted" | "unknown">;
+    recovery: RecoveryTicket,
+  ) => Effect.Effect<"admitted" | "deleting" | "deleted" | "unclaimed" | "unknown">;
   /**
    * Take the recovery of the run's retained executor for one attempt (review 9 #8): one attempt
    * per executor at a time, across workers and paths (the recovery sweep, the deadline sweep's
@@ -779,7 +792,7 @@ export const inMemoryCaptureDrainLedger = (
         bump(row);
         return true;
       }),
-    authorizeDeletion: (runId, evidenceVersion) =>
+    authorizeDeletion: (runId, evidenceVersion, recovery) =>
       Effect.sync((): DeletionAuthorization => {
         const row = store.rows.get(runId);
         if (row?.deletion?.state === "deleted") {
@@ -787,6 +800,10 @@ export const inMemoryCaptureDrainLedger = (
         }
         if (row?.deletion?.state === "deleting-issued") {
           return row.deletion.expiresAtMs > now() ? { kind: "held" } : { kind: "unresolved" };
+        }
+        const lease = row?.recoveryLease;
+        if (lease !== undefined && lease.untilMs > now() && lease.token !== recovery?.token) {
+          return { kind: "recovering" };
         }
         if (row?.deletion !== undefined && row.deletion.expiresAtMs > now()) {
           return { kind: "held" };
@@ -818,6 +835,16 @@ export const inMemoryCaptureDrainLedger = (
       Effect.sync(() => {
         const row = store.rows.get(runId);
         if (row === undefined || row.deletion === undefined || !heldBy(row, ticket)) {
+          return false;
+        }
+        // Every request sent needs the evidence it was authorized on (review 10 #4): one taken
+        // over to be issued again, the evidence moved since, sends nothing and stays issued,
+        // its hold ended so it is settled from the runtime.
+        if (
+          row.deletion.evidenceVersion !== (row.entry.evidenceVersion ?? 0) ||
+          (row.fences?.size ?? 0) > 0
+        ) {
+          row.deletion = { ...row.deletion, expiresAtMs: now() };
           return false;
         }
         row.deletion = {
@@ -892,18 +919,30 @@ export const inMemoryCaptureDrainLedger = (
           row.deletion = { ...row.deletion, expiresAtMs: now() };
         }
       }),
-    admitRecovery: (runId) =>
+    admitRecovery: (runId, recovery) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
         const deletion = row?.deletion;
-        if (row === undefined || deletion === undefined) {
-          return "admitted" as const;
-        }
-        if (deletion.state === "deleted") {
+        if (deletion?.state === "deleted") {
           return "deleted" as const;
         }
-        if (deletion.state === "deleting-issued" || deletion.expiresAtMs > now()) {
+        if (
+          deletion !== undefined &&
+          (deletion.state === "deleting-issued" || deletion.expiresAtMs > now())
+        ) {
           return "deleting" as const;
+        }
+        const lease = row?.recoveryLease;
+        if (
+          row === undefined ||
+          lease === undefined ||
+          lease.untilMs <= now() ||
+          lease.token !== recovery.token
+        ) {
+          return "unclaimed" as const;
+        }
+        if (deletion === undefined) {
+          return "admitted" as const;
         }
         row.deletion = undefined;
         bump(row);
@@ -1172,6 +1211,11 @@ export const authorizedDeletion = (input: {
    * still has the executor.
    */
   readonly removalFenceMs?: number | undefined;
+  /**
+   * The recovery claim the caller holds, when the caller is the recovery attempt removing what
+   * it recovered (review 10 residual 2): every other deleter is kept off while a claim is live.
+   */
+  readonly recovery?: RecoveryTicket | undefined;
 }): Effect.Effect<AuthorizedDeletion> =>
   Effect.gen(function* () {
     const { ledger, runId } = input;
@@ -1219,7 +1263,7 @@ export const authorizedDeletion = (input: {
       const authorization: DeletionAuthorization =
         ledger === undefined || version === undefined
           ? { kind: "changed" }
-          : yield* ledger.authorizeDeletion(runId, version);
+          : yield* ledger.authorizeDeletion(runId, version, input.recovery);
       switch (authorization.kind) {
         case "authorized":
           return { decision, record, ticket: authorization.ticket };
@@ -1232,6 +1276,15 @@ export const authorizedDeletion = (input: {
             decision: {
               delete: false,
               reason: "another path holds the removal of this executor right now",
+            },
+            record,
+            heldElsewhere: true,
+          };
+        case "recovering":
+          return {
+            decision: {
+              delete: false,
+              reason: "a recovery of this executor is under way; only that recovery removes it",
             },
             record,
             heldElsewhere: true,

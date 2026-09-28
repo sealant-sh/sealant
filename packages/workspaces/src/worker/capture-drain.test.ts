@@ -38,6 +38,9 @@ import {
   type DeletionTicket,
 } from "./capture-drain.js";
 
+/** A recovery ticket that holds no claim: admission answers only what excludes a recovery. */
+const NO_CLAIM = { token: "no-recovery-claim" };
+
 const TARGET: SealantTarget = {
   kind: "unix-socket",
   socketPath: "/run/sealant/control.sock",
@@ -1159,7 +1162,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
       await vi.advanceTimersByTimeAsync(121_000);
       expect(issued).toBe(true);
       expect(await run(base.openObservation("run_lapse", 1_000))).toBeUndefined();
-      expect(await run(base.admitRecovery("run_lapse"))).toBe("deleting");
+      expect(await run(base.admitRecovery("run_lapse", NO_CLAIM))).toBe("deleting");
       expect(
         (await run(base.authorizeDeletion("run_lapse", await versionOf(base, "run_lapse")))).kind,
       ).not.toBe("authorized");
@@ -1205,7 +1208,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     expect(settled.decision).toEqual({ delete: true, basis: "missing" });
     expect(settled.ticket).toBeUndefined();
     expect(state()).toBe("deleted");
-    expect(await run(ledger.admitRecovery("run_issued"))).toBe("deleted");
+    expect(await run(ledger.admitRecovery("run_issued", NO_CLAIM))).toBe("deleted");
   });
 
   it("issues it again when the runtime still has the executor and its evidence still stands", async () => {
@@ -1245,6 +1248,46 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
       ),
     );
 
+  // Review 10 #4 (decision 31): a request already out stays exclusionary, but that is no
+  // permission to send another. Evidence received after the reissue was handed out, before its
+  // call, refuses the call; the earlier request stays issued.
+  it("sends no second request when the evidence moved after the removal was taken over to be issued again (review 10 #4)", async () => {
+    const { ledger, state } = await lapsedIssue();
+    const settled = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_issued",
+        runtime: "running",
+        removalFenceMs: 20 * 60_000,
+        decide: keepRunning,
+      }),
+    );
+    expect(settled.decision).toEqual({ delete: true, basis: "issued-before" });
+    await changeEvidence(ledger);
+    let called = false;
+    const removal = await run(
+      removeUnderDeletion({
+        ledger,
+        runId: "run_issued",
+        ticket: settled.ticket,
+        remove: Effect.sync(() => {
+          called = true;
+          return "removed";
+        }),
+      }),
+    );
+    expect(removal).toEqual({ removed: false });
+    expect(called).toBe(false);
+    // The earlier request may still act: issued, exclusionary, and settled from the runtime at
+    // once (its hold ended) as outstanding — the executor kept.
+    expect(state()).toBe("deleting-issued");
+    expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
+    expect(await run(ledger.admitRecovery("run_issued", NO_CLAIM))).toBe("deleting");
+    expect(await run(ledger.reconcileIssuedDeletion("run_issued", "present", 20 * 60_000))).toEqual(
+      { kind: "outstanding" },
+    );
+  });
+
   // Review 9 #5 (decision 27): the runtime still having the executor proves only that the
   // earlier request has not finished. With the evidence changed it may not be issued again, and
   // it is not given up either: it stays issued, and the executor is kept.
@@ -1265,7 +1308,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     expect(settled.heldElsewhere).toBe(true);
     expect(state()).toBe("deleting-issued");
     expect(await run(ledger.openObservation("run_issued", 1_000))).toBeUndefined();
-    expect(await run(ledger.admitRecovery("run_issued"))).toBe("deleting");
+    expect(await run(ledger.admitRecovery("run_issued", NO_CLAIM))).toBe("deleting");
     // A runtime that gives no bound on a removal request: never given up while it has the
     // executor, however long.
     advance(24 * 60 * 60_000);
@@ -1332,7 +1375,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     expect(Exit.isFailure(exit)).toBe(true);
     const row = ledger.store.rows.get("run_lost");
     expect(row?.deletion?.state).toBe("deleting-issued");
-    expect(await run(ledger.admitRecovery("run_lost"))).toBe("deleting");
+    expect(await run(ledger.admitRecovery("run_lost", NO_CLAIM))).toBe("deleting");
     expect(await run(ledger.openObservation("run_lost", 1_000))).toBeUndefined();
     // Its hold ended with the call: it is settled from the runtime at once, not 120 s later.
     clock += 1;
@@ -1364,7 +1407,10 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     );
     expect(Exit.isFailure(exit)).toBe(true);
     expect(ledger.store.rows.get("run_refused")?.deletion).toBeUndefined();
-    expect(await run(ledger.admitRecovery("run_refused"))).toBe("admitted");
+    await run(ledger.markRetained("run_refused", "test"));
+    const claim = await run(ledger.claimRecovery("run_refused", 60_000));
+    if (claim === undefined) throw new Error("not claimed");
+    expect(await run(ledger.admitRecovery("run_refused", claim))).toBe("admitted");
   });
 
   // The review's second case: a removal still running past its hold, fresh unsaved evidence
@@ -1419,7 +1465,7 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     );
     expect(decision.heldElsewhere).toBe(true);
     expect(base.store.rows.get("run_slow")?.deletion?.state).toBe("deleting-issued");
-    expect(await run(ledger.admitRecovery("run_slow"))).toBe("deleting");
+    expect(await run(ledger.admitRecovery("run_slow", NO_CLAIM))).toBe("deleting");
     expect(await run(ledger.openObservation("run_slow", 1_000))).toBeUndefined();
     finish();
     expect(await pending).toMatchObject({ removed: true });
@@ -1446,5 +1492,77 @@ describe("an issued removal outlives its hold (review 8 #7)", () => {
     );
     expect(held.heldElsewhere).toBe(true);
     expect(state()).toBe("deleting-issued");
+  });
+});
+
+// Review 10 residual 2: recovery admission and a later removal decided by another path must
+// agree. A recovery is admitted only under its live claim, and while that claim is live no other
+// path's removal is authorized over what it started; the attempt itself still removes what it
+// recovered, under its claim.
+/** A removal decided on a saved answer. */
+const removeOnSaved = () => ({ delete: true as const, basis: "observed-complete" as const });
+
+describe("a recovery claim keeps other deleters off (review 10 residual 2)", () => {
+  const retainedAndSaved = async () => {
+    let clock = 0;
+    const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+    await run(ledger.recordStatus("run_recovering", savedStatus({ headN: 7 }), clock));
+    await run(ledger.markRetained("run_recovering", "test"));
+    return { ledger, advance: (ms: number) => (clock += ms) };
+  };
+
+  it("refuses another path's removal while an admitted recovery holds its claim", async () => {
+    const { ledger } = await retainedAndSaved();
+    const claim = await run(ledger.claimRecovery("run_recovering", 60_000));
+    if (claim === undefined) throw new Error("not claimed");
+    expect(await run(ledger.admitRecovery("run_recovering", claim))).toBe("admitted");
+    // Another path decides on the same saved evidence: kept, nothing authorized.
+    const other = await run(
+      authorizedDeletion({ ledger, runId: "run_recovering", decide: removeOnSaved }),
+    );
+    expect(other.decision.delete).toBe(false);
+    expect(other.ticket).toBeUndefined();
+    expect(other.heldElsewhere).toBe(true);
+    expect(
+      await run(
+        ledger.authorizeDeletion("run_recovering", await versionOf(ledger, "run_recovering")),
+      ),
+    ).toEqual({ kind: "recovering" });
+    expect(ledger.store.rows.get("run_recovering")?.deletion).toBeUndefined();
+    // The attempt itself removes what it recovered, under its claim.
+    const own = await run(
+      authorizedDeletion({
+        ledger,
+        runId: "run_recovering",
+        decide: removeOnSaved,
+        recovery: claim,
+      }),
+    );
+    expect(own.ticket).toBeDefined();
+  });
+
+  it("lets another path decide again once the claim is released", async () => {
+    const { ledger } = await retainedAndSaved();
+    const claim = await run(ledger.claimRecovery("run_recovering", 60_000));
+    if (claim === undefined) throw new Error("not claimed");
+    expect(await run(ledger.admitRecovery("run_recovering", claim))).toBe("admitted");
+    await run(ledger.releaseRecovery("run_recovering", claim));
+    const other = await run(
+      authorizedDeletion({ ledger, runId: "run_recovering", decide: removeOnSaved }),
+    );
+    expect(other.ticket).toBeDefined();
+  });
+
+  it("admits nothing under a claim that lapsed or that another attempt holds", async () => {
+    const { ledger, advance } = await retainedAndSaved();
+    const lapsed = await run(ledger.claimRecovery("run_recovering", 1_000));
+    if (lapsed === undefined) throw new Error("not claimed");
+    advance(2_000);
+    expect(await run(ledger.admitRecovery("run_recovering", lapsed))).toBe("unclaimed");
+    const current = await run(ledger.claimRecovery("run_recovering", 60_000));
+    if (current === undefined) throw new Error("not claimed");
+    expect(await run(ledger.admitRecovery("run_recovering", lapsed))).toBe("unclaimed");
+    expect(await run(ledger.admitRecovery("run_recovering", NO_CLAIM))).toBe("unclaimed");
+    expect(await run(ledger.admitRecovery("run_recovering", current))).toBe("admitted");
   });
 });

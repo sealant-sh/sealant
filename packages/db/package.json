@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./migrate": "./src/migrate.ts",
-    "./seed-core": "./src/seed-core.ts"
+    "./seed-core": "./src/seed-core.ts",
+    "./testing/review9-capture-drains": "./src/testing/review9-workspace-capture-drains.ts"
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",

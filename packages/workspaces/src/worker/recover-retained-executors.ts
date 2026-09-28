@@ -85,6 +85,7 @@ import {
   type CaptureDrainLedger,
   type CaptureDrainSettings,
   type DeletionTicket,
+  type RecoveryTicket,
 } from "./capture-drain.js";
 
 export interface RecoveryBackoff {
@@ -284,7 +285,7 @@ const recoveryAttempt = (options: RecoverRetainedExecutorsOptions, row: Workspac
           Effect.catchCause(() => Effect.void),
           Effect.as("retained" as const),
         );
-    return yield* recoverOne(options, row, bounds).pipe(
+    return yield* recoverOne(options, row, bounds, claim).pipe(
       Effect.timeoutOrElse({
         duration: bounds.attemptMs,
         orElse: () =>
@@ -322,6 +323,7 @@ const recoverOne = (
   options: RecoverRetainedExecutorsOptions,
   row: WorkspaceCaptureDrain,
   bounds: RecoveryBounds,
+  claim: RecoveryTicket,
 ) =>
   Effect.gen(function* () {
     const drains = yield* WorkspaceCaptureDrainRepo;
@@ -434,6 +436,7 @@ const recoverOne = (
     const first = yield* authorizedDeletion({
       ledger,
       runId,
+      recovery: claim,
       runtime: state,
       removalFenceMs: adapter.removalFenceMs,
       decide: (record) =>
@@ -459,7 +462,9 @@ const recoverOne = (
 
     // Recovery admission honours a removal (decision 21): an executor whose removal another
     // path holds is not started under it, and one that was removed is not recovered at all.
-    const admission = yield* ledger.admitRecovery(runId);
+    // Admitted only under this attempt's live claim: from here until it ends, no other path's
+    // removal is authorized over what it starts (review 10 residual 2).
+    const admission = yield* ledger.admitRecovery(runId, claim);
     if (admission === "deleted") {
       const detail = `the retained executor was removed by another path (${instance.adapter} ${resourceId}), on the evidence its removal was authorized on`;
       yield* Effect.logWarning(`${prefix}: ${detail}; its retention ends.`);
@@ -470,7 +475,9 @@ const recoverOne = (
       return yield* retry(
         admission === "deleting"
           ? "another path is removing the executor right now"
-          : "whether another path is removing the executor cannot be read",
+          : admission === "unclaimed"
+            ? "this attempt's recovery claim lapsed before it started anything"
+            : "whether another path is removing the executor cannot be read",
         backoff.baseMs,
       );
     }
@@ -649,6 +656,7 @@ const recoverOne = (
       const drained = yield* authorizedDeletion({
         ledger,
         runId,
+        recovery: claim,
         runtime: "running",
         removalFenceMs: adapter.removalFenceMs,
         decide: (record) => {

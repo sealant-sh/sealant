@@ -334,7 +334,7 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  authorizeDeletion: (runId, evidenceVersion) =>
+  authorizeDeletion: (runId, evidenceVersion, recovery) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
@@ -344,6 +344,7 @@ export const captureDrainLedgerFromRepo = (
           evidenceVersion,
           token,
           leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
+          ...(recovery === undefined ? {} : { recoveryToken: recovery.token }),
         });
         return outcome === "authorized"
           ? ({ kind: "authorized", ticket: { token } } satisfies DeletionAuthorization)
@@ -503,11 +504,11 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  admitRecovery: (runId) =>
+  admitRecovery: (runId, recovery) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
-        return yield* repo.admitRecovery({ runId });
+        return yield* repo.admitRecovery({ runId, recoveryToken: recovery.token });
       }),
     ).pipe(
       Effect.catchCause((cause) =>
