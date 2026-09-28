@@ -55,6 +55,25 @@ jobs:
     name: Docker volume mounts
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The `*.db.test.ts` suites (drain leases, retention with its exit write, launch preemption,
+    # attestation freshness, idempotent creates) run against a real, migrated Postgres. They skip
+    # themselves without SEALANT_TEST_DATABASE_URL, and turbo passes it to `test` (turbo.json).
+    # (`@sealant/telemetry`'s DB suite reads the bare DATABASE_URL and still skips here.)
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sealant_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s
+          --health-retries 12
+    env:
+      SEALANT_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
+      # The pg-boss queue suite keeps its own schema in the same database.
+      SEALANT_JOBS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sealant_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,6 +89,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --lockfile=false
+
+      - name: Migrate the test database
+        run: pnpm db:migrate
+        env:
+          DATABASE_URL: ${{ env.SEALANT_TEST_DATABASE_URL }}
 
       - name: Unit and integration tests
         run: pnpm exec turbo test --force
