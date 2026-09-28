@@ -51,7 +51,7 @@ const harness = (input: {
     status: input.attemptStatus ?? "succeeded",
     triggerType: "api",
     triggerRef: null,
-    launchId: null,
+    launchId: "launch-1",
     queuedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -159,6 +159,14 @@ describe("a retained executor reads `retained`", () => {
     expect(details.status).toBe("retained");
     expect(details.runtime?.status).toBe("retained");
     expect(details.captureDrain?.retained).toMatchObject({ reason: "executor exited" });
+    // The executor the retention is about, with the launch identity the create named.
+    expect(details.captureDrain?.executor).toEqual({
+      runId: "run_1",
+      adapter: "docker",
+      resourceId: "container-1",
+      reference: "sealant-run-1",
+      launchId: "launch-1",
+    });
     expect(list.items[0]?.status).toBe("retained");
     expect(list.items[0]?.runtime?.status).toBe("retained");
     expect(attempts.items[0]?.status).toBe("retained");

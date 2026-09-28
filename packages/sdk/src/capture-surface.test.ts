@@ -3,7 +3,11 @@
  * ops' call shapes and the facade's wire → public mapping, driven against a stub contract client
  * (no live API).
  */
-import type { WorkspaceCaptureReplanned, WorkspaceCaptureStatus } from "@sealant/api-contracts";
+import {
+  workspaceCaptureStatusSchema,
+  type WorkspaceCaptureReplanned,
+  type WorkspaceCaptureStatus,
+} from "@sealant/api-contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -186,6 +190,39 @@ describe("workspace.capture", () => {
     const workspace = workspaceFor(client);
     expect(await workspace.capture.status()).toEqual(failing);
     expect(await workspace.capture.flush({ kind: "final" })).toEqual(failing);
+  });
+
+  it("flush() forwards every field the wire carries: a consumer fails closed without them", async () => {
+    // Every field of the wire schema, populated: nothing the control plane sends is dropped.
+    const full: Required<WorkspaceCaptureStatus> = {
+      ...STATUS,
+      headN: 41,
+      lastSnapUnixMs: 1_757_760_000_000,
+      refused: ["bulk"],
+      pendingBulk: 1,
+      pendingBytes: 2048,
+      complete: false,
+      incompleteReason: "unreadable",
+      unreadable: 3,
+      carried: 2,
+      unreadablePaths: ["tree/a"],
+      registerRefused: "unrestorable",
+      registerRefusedN: 9,
+      registerMissing: ["obj/ab12"],
+      registerRefusals: 4,
+      repairing: true,
+      bulkBuilding: true,
+      snaps: [{ class: "small", snapsFailed: 1, lastSnapError: "EIO", snapFailingSinceUnixMs: 5 }],
+      lastSnapError: "EIO",
+      snapFailingSinceUnixMs: 5,
+      snapsFailed: 1,
+    };
+    expect(Object.keys(full).toSorted()).toEqual(
+      Object.keys(workspaceCaptureStatusSchema.fields).toSorted(),
+    );
+    const { client } = makeStub({ flush: () => full });
+    const flushed = await workspaceFor(client).capture.flush({ kind: "final" });
+    expect(flushed).toEqual(full);
   });
 
   it("status() leaves every field an older control plane does not send absent", async () => {

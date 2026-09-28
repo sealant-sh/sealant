@@ -614,6 +614,8 @@ export const workspaceCaptureDrainSchema = Schema.Struct({
       adapter: NonEmptyString,
       resourceId: NonEmptyString,
       reference: Schema.optional(NonEmptyString),
+      /** The launch identity the create named for this executor (`launchId`), when it named one. */
+      launchId: Schema.optional(NonEmptyString),
     }),
   ),
   /** The latest `completion` attestation accepted for this executor (see `stop`). */

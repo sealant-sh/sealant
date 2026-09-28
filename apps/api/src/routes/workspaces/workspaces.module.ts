@@ -2101,7 +2101,16 @@ export const getWorkspace = (workspaceId: string, ownerUserId: string | undefine
       sshGatewayConfig,
       executorIsRetained({ runtimeInstance, retainedAt: captureDrain?.retainedAt }),
     );
-    const observed = mapWorkspaceCaptureDrain(captureDrain, runtimeInstance);
+    const observed = mapWorkspaceCaptureDrain(
+      captureDrain,
+      runtimeInstance === undefined
+        ? undefined
+        : {
+            ...runtimeInstance,
+            // The launch identity the create named, recorded on this executor's attempt.
+            launchId: attempt?.id === runtimeInstance.runId ? attempt.launchId : null,
+          },
+    );
     return observed === undefined ? details : { ...details, captureDrain: observed };
   });
 };
@@ -2118,6 +2127,7 @@ export const mapWorkspaceCaptureDrain = (
     readonly adapter: string | null;
     readonly resourceId: string | null;
     readonly reference: string | null;
+    readonly launchId?: string | null;
   },
 ): WorkspaceCaptureDrain | undefined => {
   if (row === undefined || row.state === null) {
@@ -2133,6 +2143,9 @@ export const mapWorkspaceCaptureDrain = (
             adapter: executor.adapter,
             resourceId: executor.resourceId,
             ...(executor.reference === null ? {} : { reference: executor.reference }),
+            ...(executor.launchId === null || executor.launchId === undefined
+              ? {}
+              : { launchId: executor.launchId }),
           },
         }),
     state: row.state,

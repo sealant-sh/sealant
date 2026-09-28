@@ -182,6 +182,7 @@ const toCaptureDrain = (drain: WireWorkspaceCaptureDrain): WorkspaceCaptureDrain
           ...(drain.executor.reference === undefined
             ? {}
             : { reference: drain.executor.reference }),
+          ...(drain.executor.launchId === undefined ? {} : { launchId: drain.executor.launchId }),
         },
       }),
   ...(drain.detail === undefined ? {} : { detail: drain.detail }),
@@ -560,6 +561,14 @@ export const makeWorkspace = (ctx: SdkContext, init: WorkspaceInit): Workspace =
         }
         await delay(STOP_POLL_INTERVAL_MS);
       }
+    },
+
+    // The drain and retention as last observed, from the workspace read: nothing is stopped.
+    captureDrain: async () => {
+      const details: WorkspaceDetails = await ctx.runtime.run(
+        getWorkspaceOp(init.id, ctx.config.hostLocal.ownerUserId),
+      );
+      return details.captureDrain === undefined ? null : toCaptureDrain(details.captureDrain);
     },
 
     // Recover makes a recovery attempt of a retained executor due now; the worker does the rest.

@@ -396,6 +396,8 @@ export interface WorkspaceCaptureDrain {
     readonly kind: string;
     readonly resourceId: string;
     readonly reference?: string;
+    /** The launch identity the create named for this executor (`CreateOptions.launchId`). */
+    readonly launchId?: string;
   };
   /** The latest completion attestation the control plane accepted for this executor. */
   readonly completion?: {
@@ -913,6 +915,14 @@ export interface Workspace {
    * kept. Resolves once the request is recorded; follow `details().captureDrain`.
    */
   recover(): Promise<WorkspaceRecoverResult>;
+  /**
+   * What the control plane last observed of this workspace's capture drain and retention, read
+   * without stopping anything: the drain state and detail, whether the executor is RETAINED (and
+   * how its recovery is going), the completion attestation it accepted, and the executor it is
+   * about (runtime identity and launch identity). `null` when nothing was observed yet, or from a
+   * control plane that predates it — which says nothing about whether the work is saved.
+   */
+  captureDrain(): Promise<WorkspaceCaptureDrain | null>;
   /** Restart the workspace into a fresh runtime — a new container, no filesystem carry-over. */
   restart(): Promise<Workspace>;
   /**
