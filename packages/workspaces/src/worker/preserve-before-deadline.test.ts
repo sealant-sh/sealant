@@ -25,6 +25,11 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import {
+  SealantRuntime,
+  type SealantRuntimeService,
+  type SealantSession,
+} from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import { inMemoryCaptureDrainLedger } from "./capture-drain.js";
 import {
@@ -549,5 +554,117 @@ describe("preserveBeforeDeadlineEffect · a launch still in progress at its pres
     expect(result.preemptLaunch).not.toHaveBeenCalled();
     expect(daemon.flushRequests).toEqual([]);
     expect(result.driven).toBe(0);
+  });
+});
+
+// Review 6 #11: the sweep used to sample every candidate's status (concurrency 16, 15 s each)
+// before driving any due FINAL, so slow or silent daemons delayed urgent executors past their
+// own cap. Each runtime is driven as soon as its own plan is due.
+describe("no all-plans barrier before a due FINAL (review 6 #11)", () => {
+  const sweepMany = async (
+    rows: readonly WorkspaceRuntimeInstance[],
+    run: (finalAt: number[], result: Promise<number>) => Promise<void>,
+  ) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const finalAt: number[] = [];
+    const daemon: Pick<SealantSession, "captureStatus" | "captureFlush"> = {
+      // Every status read hangs (a slow or silent daemon); a FINAL answers complete at once.
+      captureStatus: () => Effect.never,
+      captureFlush: () =>
+        Effect.sync(() => {
+          finalAt.push(Date.now() - NOW);
+          return savedStatus();
+        }),
+    };
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        listPreservationCandidates: () => Effect.succeed(rows),
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(rows.find((row) => row.runId === runId)),
+        markStopRequested: () => Effect.void,
+        markStopped: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      Layer.succeed(WorkspaceRepo, {
+        getWorkspaceByAttemptId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceRepoService),
+      Layer.succeed(WorkspaceAttemptRepo, {
+        getAttemptSnapshotByRunId: () => Effect.succeed(undefined),
+      } as unknown as WorkspaceAttemptRepoService),
+      Layer.succeed(ConnectedAccountRepo, {} as ConnectedAccountRepoService),
+      Layer.succeed(WorkspaceCaptureDrainRepo, {
+        getByRunId: () => Effect.succeed(undefined),
+        recordSchedule: () => Effect.succeed({} as WorkspaceCaptureDrain),
+        recordStatus: () => Effect.succeed(true),
+      } as unknown as WorkspaceCaptureDrainRepoService),
+      Layer.succeed(SealantRuntime, {
+        connect: () => Effect.succeed(daemon as SealantSession),
+      } as unknown as SealantRuntimeService),
+    );
+    const adapter: RuntimeAdapter = {
+      id: "docker",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      inspect: async () => ({ state: "running" }),
+      stop: async ({ resourceId }) => ({ adapter: "docker", resourceId, outcome: "stopped" }),
+    };
+    try {
+      const result = Effect.runPromise(
+        preserveBeforeDeadlineEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: {
+            ledger: inMemoryCaptureDrainLedger(),
+            settings: {
+              pollIntervalMs: 1,
+              stallWindowMs: 1_000,
+              unreachableWindowMs: 1_000,
+              requestTimeoutMs: 1_000,
+            },
+            budgetMs: 100,
+          },
+          deadline: { leadMs: 15 * MIN, watchWindowMs: 60 * MIN },
+          now: () => Date.now(),
+        }).pipe(Effect.provide(layer)),
+      );
+      await run(finalAt, result);
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+  const vm = (index: number, deadlineInMs: number): WorkspaceRuntimeInstance => ({
+    ...instance(deadlineInMs),
+    runId: `run_due_${String(index)}`,
+    resourceId: `container_due_${String(index)}`,
+    endpoint: `unix:///tmp/review6-due-${String(index)}.sock`,
+  });
+
+  it("sends every due FINAL at once when every status read hangs", async () => {
+    // 17 runtimes ending in 20 s: every one is past its latest start (deadline less the lead).
+    const rows = Array.from({ length: 17 }, (_, index) => vm(index, 20_000));
+    await sweepMany(rows, async (finalAt, result) => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finalAt.length).toBe(17);
+      expect(Math.max(...finalAt)).toBeLessThan(1_000);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await result).toBe(17);
+    });
+  });
+
+  it("drives a due runtime while samples of runtimes not yet due hang", async () => {
+    // Sixteen runtimes still before their start, whose daemons never answer a status, fill the
+    // sampling slots; the one due runtime — listed last — is not held behind them.
+    const rows = [
+      ...Array.from({ length: 16 }, (_, index) => vm(index, 15 * MIN + 10 * MIN)),
+      vm(16, 20_000),
+    ];
+    await sweepMany(rows, async (finalAt, result) => {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(finalAt).toHaveLength(1);
+      expect(finalAt[0]).toBeLessThan(1_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await result).toBe(1);
+    });
   });
 });
