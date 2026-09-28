@@ -659,3 +659,194 @@ describe("recoverRetainedExecutorsEffect · a MicroVM whose daemon exited on a l
     expect(h.recover).not.toHaveBeenCalled();
   });
 });
+
+// Review 9 #8: retained recovery was serial, ordered by backoff, and unbounded per operation. An
+// older executor's recovery RPC that took 120 s kept a MicroVM with 60 s left from ever being asked
+// before the platform ended it.
+describe("recovery attempts are independent, bounded and ordered by deadline (review 9 #8)", () => {
+  const settings = {
+    pollIntervalMs: 1_000,
+    stallWindowMs: 60_000,
+    unreachableWindowMs: 60_000,
+    requestTimeoutMs: 60_000,
+  };
+  const cipher = {
+    encrypt: () => Effect.die("unused"),
+    decrypt: () => Effect.succeed(JSON.stringify({ SEALANT_CAPTURE_TOKEN: "token" })),
+  };
+  const retainedRows = (ledger: ReturnType<typeof inMemoryCaptureDrainLedger>, ids: string[]) =>
+    ids.map((runId) => {
+      Effect.runSync(ledger.markRetained(runId, "exit 75"));
+      return {
+        runId,
+        retainedAt: new Date(NOW - 1_000),
+        recoveryAttempts: 0,
+        captureTokenSealed: "sealed",
+      } as WorkspaceCaptureDrain;
+    });
+  const layerFor = (rows: readonly WorkspaceCaptureDrain[], deadlines: Record<string, number>) => {
+    const attempts: Array<{ runId: string; error: string | null }> = [];
+    const layer = Layer.mergeAll(
+      Layer.succeed(WorkspaceCaptureDrainRepo, {
+        listRetainedDue: () => Effect.succeed(rows),
+        recordRecoveryAttempt: (request: { runId: string; error: string | null }) =>
+          Effect.sync(() => {
+            attempts.push({ runId: request.runId, error: request.error });
+          }),
+      } as unknown as WorkspaceCaptureDrainRepoService),
+      Layer.succeed(WorkspaceRuntimeInstanceRepo, {
+        getRuntimeInstanceByRunId: (runId: string) =>
+          Effect.succeed(
+            instance({
+              runId,
+              resourceId: runId,
+              adapter: "microvm",
+              runtimeDeadlineAt: new Date(NOW + (deadlines[runId] ?? 3_600_000)),
+            }),
+          ),
+        markStopped: () => Effect.void,
+      } as unknown as WorkspaceRuntimeInstanceRepoService),
+      fakeCaptureDaemon([savedStatus()]).layer,
+    );
+    return { layer, attempts };
+  };
+
+  it("asks a capped VM to recover at once, though an older executor's recovery stalls", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const ledger = inMemoryCaptureDrainLedger();
+      const asked: Array<{ id: string; at: number }> = [];
+      // Listed most overdue first, as the backoff orders them: the older one ahead.
+      const rows = retainedRows(ledger, ["older", "urgent"]);
+      const adapter: RuntimeAdapter = {
+        id: "microvm",
+        supports: () => ({ supported: true }),
+        launch: async () => {
+          throw new Error("unused");
+        },
+        stop: async () => {
+          throw new Error("never saved");
+        },
+        inspect: async ({ resourceId }) =>
+          resourceId === "urgent" && Date.now() >= NOW + 60_000
+            ? { state: "missing" }
+            : { state: "exited", exitCode: 75 },
+        recover: async ({ resourceId }) => {
+          asked.push({ id: resourceId, at: Date.now() - NOW });
+          if (resourceId === "older") {
+            await new Promise((resolve) => setTimeout(resolve, 120_000));
+          }
+          return { outcome: "unsupported", detail: "delayed agent refusal" };
+        },
+      };
+      const { layer } = layerFor(rows, { older: 3_600_000, urgent: 60_000 });
+      let result: ReadonlyMap<string, string> | undefined;
+      const promise = Effect.runPromise(
+        recoverRetainedExecutorsEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: { ledger, settings },
+          credentialCipher: cipher,
+          now: Date.now,
+        }).pipe(Effect.provide(layer)),
+      ).then((outcomes) => {
+        result = outcomes;
+        return outcomes;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The capped VM is asked first and at once; the older one alongside it.
+      expect(asked.map((entry) => entry.id)).toEqual(["urgent", "older"]);
+      expect(asked.every((entry) => entry.at < 1_000)).toBe(true);
+      await vi.advanceTimersByTimeAsync(121_000);
+      await promise;
+      expect(result?.get("urgent")).toBe("retained");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a runtime's recovery request: a stalled one fails its attempt, never the sweep", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const ledger = inMemoryCaptureDrainLedger();
+      const rows = retainedRows(ledger, ["stalled"]);
+      const adapter: RuntimeAdapter = {
+        id: "microvm",
+        supports: () => ({ supported: true }),
+        launch: async () => {
+          throw new Error("unused");
+        },
+        stop: async () => {
+          throw new Error("never saved");
+        },
+        inspect: async () => ({ state: "exited", exitCode: 75 }),
+        // The agent never answers.
+        recover: () => new Promise(() => undefined),
+      };
+      const { layer, attempts } = layerFor(rows, {});
+      let result: ReadonlyMap<string, string> | undefined;
+      void Effect.runPromise(
+        recoverRetainedExecutorsEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: { ledger, settings },
+          credentialCipher: cipher,
+          bounds: { recoverMs: 30_000 },
+          now: Date.now,
+        }).pipe(Effect.provide(layer)),
+      ).then((outcomes) => {
+        result = outcomes;
+        return outcomes;
+      });
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(result?.get("stalled")).toBe("retained");
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]?.error).toContain("did not answer within");
+      // Its claim was released with the attempt: the next one may start.
+      expect(await Effect.runPromise(ledger.claimRecovery("stalled", 1_000))).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs one attempt per executor at a time, whichever sweep or path asks", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const rows = retainedRows(ledger, ["run_once"]);
+    let release!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const recover = vi.fn(async () => {
+      await answered;
+      return { outcome: "unsupported" as const, detail: "kept" };
+    });
+    const adapter: RuntimeAdapter = {
+      id: "microvm",
+      supports: () => ({ supported: true }),
+      launch: async () => {
+        throw new Error("unused");
+      },
+      stop: async () => {
+        throw new Error("never saved");
+      },
+      inspect: async () => ({ state: "exited", exitCode: 75 }),
+      recover,
+    };
+    const { layer } = layerFor(rows, {});
+    const sweep = () =>
+      Effect.runPromise(
+        recoverRetainedExecutorsEffect({
+          runtimeAdapters: [adapter],
+          captureDrain: { ledger, settings },
+          credentialCipher: cipher,
+        }).pipe(Effect.provide(layer)),
+      );
+    const first = sweep();
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledOnce());
+    // A second sweep (another worker, the deadline path) finds it claimed and leaves it.
+    expect((await sweep()).get("run_once")).toBe("retained");
+    expect(recover).toHaveBeenCalledOnce();
+    release();
+    await first;
+  });
+});

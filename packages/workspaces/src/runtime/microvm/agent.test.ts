@@ -38,8 +38,10 @@ const net = require("node:net");
 const socketPath = process.env.SEALANT_CONTROL_SOCKET;
 const record = process.env.FAKE_SEALANTD_RECORD;
 const temp = record + ".tmp";
-fs.writeFileSync(temp, JSON.stringify({ argv: process.argv.slice(2), env: process.env }));
+fs.writeFileSync(temp, JSON.stringify({ argv: process.argv.slice(2), env: process.env, pid: process.pid }));
 fs.renameSync(temp, record);
+// Every daemon this agent started, for the test's teardown (the record keeps only the latest).
+fs.appendFileSync(record + ".pids", process.pid + "\\n");
 if (process.env.FAKE_SEALANTD_FAIL === "1") {
   // A boot that fails the way a dotfiles apply does: plenty of output first, the reason last.
   for (let line = 0; line < 400; line += 1) process.stdout.write("boot: step " + line + " ok\\n");
@@ -119,6 +121,8 @@ interface Agent {
   readonly ctlLog: string;
   /** Everything the agent has written to its console (the VM's log group) so far. */
   readonly output: () => string;
+  /** Started as PID 1 of its own PID namespace: the daemons' recorded pids are that namespace's. */
+  readonly asPid1: boolean;
 }
 
 /**
@@ -184,12 +188,55 @@ const startAgent = async (
     });
     child.once("exit", (code) => reject(new Error(`agent exited early (${code}): ${output}`)));
   });
-  return { child, port, dir, stateDir, socketPath, recordFile, ctlLog, output: () => output };
+  return {
+    child,
+    port,
+    dir,
+    stateDir,
+    socketPath,
+    recordFile,
+    ctlLog,
+    output: () => output,
+    asPid1: options.asPid1 === true,
+  };
 };
 
+const exited = (child: ChildProcess): Promise<void> =>
+  child.exitCode !== null || child.signalCode !== null
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => child.once("exit", () => resolve()));
+
+/**
+ * Stop the agent the way the VM does (SIGTERM: its shutdown stops the daemon's process group and
+ * waits for it), then SIGKILL if it has not gone within a bound. A SIGKILLed agent cannot stop the
+ * daemon it started detached — on the VM it is PID 1, whose death ends everything; here the daemon
+ * would be re-parented to the test's init and outlive the test (the agent.test.ts leak). So every
+ * daemon this agent started is killed by its process group last, outside a PID namespace of its
+ * own (inside one, the recorded pids are that namespace's, and `unshare --kill-child` ends them).
+ */
 const stopAgent = async (agent: Agent): Promise<void> => {
-  agent.child.kill("SIGKILL");
-  await new Promise<void>((resolve) => agent.child.once("exit", () => resolve()));
+  agent.child.kill("SIGTERM");
+  const stopped = await Promise.race([
+    exited(agent.child).then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+  ]);
+  if (!stopped) {
+    agent.child.kill("SIGKILL");
+    await exited(agent.child);
+  }
+  if (!agent.asPid1) {
+    const pids = await readFile(`${agent.recordFile}.pids`, "utf8").catch(() => "");
+    for (const pid of pids
+      .split("\n")
+      .map(Number)
+      .filter((value) => value > 1)) {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Gone already.
+      }
+    }
+  }
   await rm(agent.dir, { recursive: true, force: true });
 };
 
@@ -1064,6 +1111,52 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
           bearer: "control-token",
         }),
       ).toMatchObject({ status: 401 });
+    } finally {
+      await stopAgent(agent);
+    }
+  });
+});
+
+/** Whether a process of this pid still exists. */
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Hygiene (review 9): the tests left their fake daemons running. The agent itself stops the daemon
+// it started when it is told to stop; only an uncatchable SIGKILL of a non-PID-1 agent orphans it.
+describe("microvm agent · stopping", () => {
+  it("stops the daemon it started when it is told to stop, leaving nothing behind", async () => {
+    const agent = await startAgent();
+    let daemonPid: number | undefined;
+    try {
+      await hook(agent, "run", {
+        microvmId: "microvm-stop",
+        runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+      });
+      await call(agent, "POST", AGENT_LAUNCH_ROUTE, { body: launchRequest, bearer: launchSecret });
+      await waitFor(async () =>
+        stat(agent.socketPath).then(
+          () => true,
+          () => false,
+        ),
+      );
+      const record: unknown = JSON.parse(await readFile(agent.recordFile, "utf8"));
+      daemonPid =
+        typeof record === "object" &&
+        record !== null &&
+        "pid" in record &&
+        typeof record.pid === "number"
+          ? record.pid
+          : undefined;
+      expect(daemonPid).toBeGreaterThan(1);
+      agent.child.kill("SIGTERM");
+      await exited(agent.child);
+      await waitFor(async () => daemonPid === undefined || !alive(daemonPid));
     } finally {
       await stopAgent(agent);
     }

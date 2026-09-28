@@ -72,6 +72,7 @@ import {
 } from "@sealant/db";
 import { Deferred, Effect, Exit, Fiber, Layer, Option, Semaphore } from "effect";
 
+import type { LaunchMaterialStager } from "../runtime/launch-material.js";
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntimeControlLive, type CaptureFlushReport } from "../sealantd/runtime.js";
 import {
@@ -90,6 +91,10 @@ import {
   type WorkspaceStopOutcome,
   type WorkspaceStopPhase,
 } from "./process-workspace-stop.js";
+import {
+  recoverRetainedExecutorsEffect,
+  type RecoveryBounds,
+} from "./recover-retained-executors.js";
 
 export interface CaptureDeadlineSettings {
   /** Fixed lead: the final drain starts at least this long before the deadline. */
@@ -200,6 +205,13 @@ export interface PreserveBeforeDeadlineOptions {
    * runtime into its start.
    */
   readonly initiateConcurrency?: number;
+  /**
+   * Where a retained Docker executor was created to read its secret env, for the urgent recovery
+   * this sweep starts itself (review 9 #8); defaults to host directories.
+   */
+  readonly launchMaterialStager?: LaunchMaterialStager;
+  /** Bounds on the urgent recovery's operations (`DEFAULT_RECOVERY_BOUNDS`). */
+  readonly recoveryBounds?: Partial<RecoveryBounds>;
   readonly now?: () => number;
 }
 
@@ -384,8 +396,12 @@ export const preserveBeforeDeadlineEffect = Effect.fn("preserveBeforeDeadline")(
             }),
         });
         if (polled.kind === "removal-continues") {
-          yield* logRemovalContinues(plan, polled.phase);
+          yield* logRemovalContinues(plan, polled.drain);
           return countsAsDriven("removing");
+        }
+        if (polled.kind === "deciding") {
+          yield* logStopContinues(plan, polled.drain);
+          return countsAsDriven("draining");
         }
         return countsAsDriven(polled.kind === "done" ? polled.outcome : "draining");
       }).pipe(
@@ -423,15 +439,23 @@ const countsAsDriven = (outcome: DriveOutcome): boolean =>
  *  - `no-permit`: its bound ran out while every permit was held — it never started.
  *  - `unanswered`: it started (its FINAL or status was being asked) and nothing came back within
  *    the bound; it was interrupted.
- *  - `removal-continues`: its drain returned (or its removal began) and the runtime's removal
- *    outlasts the sweep; it goes on in its own fiber, holding no permit of the sweep.
+ *  - `removal-continues`: the runtime was asked to remove the executor (its removal was issued:
+ *    nothing could veto it any more) and the removal outlasts the sweep; it goes on in its own
+ *    fiber, holding no permit of the sweep. `drain`: what its drain returned, when one ran.
+ *  - `deciding`: its drain returned, and the stop outlasts the sweep with no removal issued (review
+ *    9 #9): it is still weighing the evidence, recording a keep, or inspecting the runtime — the
+ *    executor may yet be kept. It goes on in its own fiber, holding no permit of the sweep.
  *  - `done`: it ended within the sweep.
  */
 type ReleasedDrive =
   | { readonly kind: "no-permit" }
   | { readonly kind: "unanswered"; readonly startedAtMs: number }
-  | { readonly kind: "removal-continues"; readonly phase: WorkspaceStopPhase }
+  | { readonly kind: "removal-continues"; readonly drain: DrainEnded | undefined }
+  | { readonly kind: "deciding"; readonly drain: DrainEnded | undefined }
   | { readonly kind: "done"; readonly outcome: DriveOutcome };
+
+/** What a stop's drain returned, as its `drain-ended` phase said. */
+type DrainEnded = Extract<WorkspaceStopPhase, { readonly kind: "drain-ended" }>["drain"];
 
 /**
  * Run one drive in its own fiber, holding one of `permits` only until the drive's drain returns,
@@ -452,15 +476,25 @@ const driveReleasingPermit = <R>(input: {
 }): Effect.Effect<ReleasedDrive, never, R> =>
   Effect.gen(function* () {
     const signal = yield* Deferred.make<WorkspaceStopPhase | { readonly kind: "ended" }>();
+    // Every phase the stop passed, not only the first: the permit goes at the first, and what the
+    // sweep reports at its end follows the latest (review 9 #9).
+    let drainEnded: DrainEnded | undefined;
+    let removalIssued = false;
+    const passed = (phase: WorkspaceStopPhase) =>
+      Effect.sync(() => {
+        if (phase.kind === "drain-ended") {
+          drainEnded = phase.drain;
+        } else {
+          removalIssued = true;
+        }
+      }).pipe(Effect.andThen(Deferred.succeed(signal, phase)), Effect.asVoid);
     let started: { readonly fiber: Fiber.Fiber<DriveOutcome>; readonly atMs: number } | undefined;
     const waited = yield* input.permits
       .withPermit(
         Effect.gen(function* () {
           const atMs = input.now();
           const fiber = yield* Effect.forkDetach(
-            input
-              .drive((phase) => Deferred.succeed(signal, phase).pipe(Effect.asVoid))
-              .pipe(Effect.ensuring(Deferred.succeed(signal, { kind: "ended" }))),
+            input.drive(passed).pipe(Effect.ensuring(Deferred.succeed(signal, { kind: "ended" }))),
           );
           started = { fiber, atMs };
           return yield* Deferred.await(signal);
@@ -485,9 +519,14 @@ const driveReleasingPermit = <R>(input: {
       Effect.timeoutOption(Math.max(0, input.joinUntilMs - input.now())),
     );
     if (Option.isNone(joined)) {
-      return phase.kind === "ended"
-        ? ({ kind: "done", outcome: "draining" } satisfies ReleasedDrive)
-        : ({ kind: "removal-continues", phase } satisfies ReleasedDrive);
+      if (phase.kind === "ended") {
+        return { kind: "done", outcome: "draining" } satisfies ReleasedDrive;
+      }
+      // Only an issued removal is one under way; a drain that ended leaves the executor's fate
+      // to what the stop decides next.
+      return removalIssued
+        ? ({ kind: "removal-continues", drain: drainEnded } satisfies ReleasedDrive)
+        : ({ kind: "deciding", drain: drainEnded } satisfies ReleasedDrive);
     }
     return {
       kind: "done",
@@ -515,24 +554,58 @@ const reportInitiation = (plan: DuePreservation, initiated: ReleasedDrive) =>
         );
         return "not-driven" as const;
       case "removal-continues":
-        yield* logRemovalContinues(plan, initiated.phase);
+        yield* logRemovalContinues(plan, initiated.drain);
         return "removing" as const;
+      case "deciding":
+        yield* logStopContinues(plan, initiated.drain);
+        return "draining" as const;
       case "done":
         return initiated.outcome;
     }
   });
 
-/** A removal that outlasts the sweep, said with what the drain before it observed. */
-const logRemovalContinues = (plan: DuePreservation, phase: WorkspaceStopPhase) =>
+/**
+ * A removal that outlasts the sweep, said with what the drain before it observed. Only for a
+ * removal that was issued (review 9 #9).
+ */
+const logRemovalContinues = (plan: DuePreservation, drain: DrainEnded | undefined) =>
   Effect.logInfo(
     `Deadline preservation: run ${plan.instance.runId}: ${
-      phase.kind === "drain-ended" && phase.drain === "drained"
+      drain === "drained"
         ? "its final flush answered complete · observed"
-        : phase.kind === "drain-ended" && phase.drain === "gone"
+        : drain === "gone"
           ? "its daemon is silent and nothing of the executor is left"
           : "the evidence on record lets it go"
-    }; the runtime's removal is under way and continues past this sweep.`,
+    }; the runtime was asked to remove it, and the removal continues past this sweep.`,
   );
+
+/**
+ * A stop that outlasts the sweep with no removal issued (review 9 #9): its drain returned, and the
+ * stop is still deciding — nothing says the executor goes. Said with what the drain observed.
+ */
+const logStopContinues = (plan: DuePreservation, drain: DrainEnded | undefined) => {
+  const prefix = `Deadline preservation: run ${plan.instance.runId}`;
+  switch (drain) {
+    case "drained":
+      return Effect.logInfo(
+        `${prefix}: its final flush answered complete · observed; whether the executor may be removed is still being weighed on the evidence on record, past this sweep · nothing removed yet.`,
+      );
+    case "gone":
+      return Effect.logInfo(
+        `${prefix}: its daemon is silent and the runtime reported nothing of the executor left; the stop goes on past this sweep · nothing removed yet.`,
+      );
+    case "silent":
+    case "stalled":
+    case "unconfirmed":
+    case "pending":
+      return Effect.logError(
+        `${prefix}: not saved · its drain ended ${drain} · the stop goes on past this sweep deciding what to keep · nothing removed.`,
+      );
+    case "busy":
+    case undefined:
+      return Effect.logInfo(`${prefix}: the stop goes on past this sweep · nothing removed yet.`);
+  }
+};
 
 /** A candidate in its watch window, as its records describe it before any daemon is asked. */
 interface PreparedPreservation {
@@ -763,7 +836,36 @@ const driveOne = (
         return "not-driven" as const;
       }
       yield* (plan.firstStart ? Effect.logError : Effect.logWarning)(
-        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery is due now (restart on its own disk, then a final drain).`,
+        `Deadline preservation: run ${instance.runId} ends at ${new Date(plan.deadlineMs).toISOString()} (the runtime's own deadline) and its daemon ended with work not confirmed saved: not saved · retained; its recovery starts now (restart on its own disk, then a final drain).`,
+      );
+      // Started here, not left due behind a recovery sweep that may be busy with another executor
+      // (review 9 #8): its own attempt, under the same per-executor claim as the sweep's (one
+      // already under way is left to it), in its own fiber — it holds no permit of this sweep.
+      yield* Effect.forkDetach(
+        recoverRetainedExecutorsEffect({
+          runtimeAdapters: options.runtimeAdapters,
+          ...(options.targetOptions === undefined ? {} : { targetOptions: options.targetOptions }),
+          captureDrain: {
+            ledger: options.captureDrain.ledger,
+            settings: options.captureDrain.settings,
+          },
+          ...(options.credentialCipher === undefined
+            ? {}
+            : { credentialCipher: options.credentialCipher }),
+          ...(options.launchMaterialStager === undefined
+            ? {}
+            : { launchMaterialStager: options.launchMaterialStager }),
+          ...(options.recoveryBounds === undefined ? {} : { bounds: options.recoveryBounds }),
+          runIds: [instance.runId],
+          ...(options.now === undefined ? {} : { now: options.now }),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `Deadline preservation: run ${instance.runId}'s urgent recovery could not be started; the recovery sweep takes it (it is due).`,
+              cause,
+            ),
+          ),
+        ),
       );
       return "recovery-due" as const;
     }

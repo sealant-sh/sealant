@@ -20,7 +20,7 @@ import {
   type DB,
   type WorkspaceCaptureDrainRepoService,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Exit, Layer } from "effect";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import type { SealantTarget } from "../sealantd/runtime.js";
@@ -29,6 +29,7 @@ import { databaseCaptureDrainLedger } from "./capture-drain-ledger.js";
 import {
   attestedCompleteFor,
   drainCaptureBeforeStop,
+  observedComplete,
   removeUnderDeletion,
   type CaptureDrainLedger,
 } from "./capture-drain.js";
@@ -553,9 +554,15 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
     };
     const state = async (runId: string) =>
       (await repo((drains) => drains.getByRunId(runId)))?.deletionState;
-    const reconcile = (runId: string, runtime: "gone" | "present") =>
+    const reconcile = (runId: string, runtime: "gone" | "present", fenceMs?: number) =>
       repo((drains) =>
-        drains.reconcileIssuedDeletion({ runId, runtime, token: randomUUID(), leaseMs: 60_000 }),
+        drains.reconcileIssuedDeletion({
+          runId,
+          runtime,
+          token: randomUUID(),
+          leaseMs: 60_000,
+          ...(fenceMs === undefined ? {} : { fenceMs }),
+        }),
       );
 
     // Lapsed and issued: still exclusionary.
@@ -606,12 +613,273 @@ describe.skipIf(DATABASE_URL === undefined)("capture drain ledger (Postgres, two
       ),
     );
     expect(await state(changed.runId)).toBe("deleting-issued");
-    expect(await reconcile(changed.runId, "present")).toBe("released");
+    // Review 9 #5: present proves only that the request has not finished. It stays issued and
+    // exclusionary while the request may still act — with no bound from the runtime, or before
+    // the runtime's bound has passed since it was issued.
+    expect(await reconcile(changed.runId, "present")).toBe("outstanding");
+    expect(await reconcile(changed.runId, "present", 60 * 60_000)).toBe("outstanding");
+    expect(await state(changed.runId)).toBe("deleting-issued");
+    expect(
+      await repo((drains) =>
+        drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
+      ),
+    ).toEqual({ refused: "deleting" });
+    expect(await repo((drains) => drains.admitRecovery({ runId: changed.runId }))).toBe("deleting");
+    // Past the runtime's bound on the request since it was issued: it can no longer act; given
+    // up, and observations resume.
+    expect(await reconcile(changed.runId, "present", 10)).toBe("released");
     expect(await state(changed.runId)).toBeNull();
     expect(
       await repo((drains) =>
         drains.openObservation({ runId: changed.runId, token: randomUUID(), ttlMs: 1_000 }),
       ),
     ).toHaveProperty("openedAt");
+  });
+
+  it("keeps a removal issued when its runtime call failed with an outcome nobody knows (review 9 #5)", async () => {
+    const runId = await newRun();
+    const ledger = worker(dbA, "review9-deletion");
+    await Effect.runPromise(ledger.recordStatus(runId, savedStatus({ headN: 7 }), Date.now()));
+    const read = await Effect.runPromise(ledger.read(runId));
+    const authorized = await Effect.runPromise(
+      ledger.authorizeDeletion(runId, read.readable ? (read.entry?.evidenceVersion ?? 0) : -1),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    const exit = await Effect.runPromise(
+      removeUnderDeletion({
+        ledger,
+        runId,
+        ticket: authorized.ticket,
+        remove: Effect.tryPromise(async () => {
+          throw new Error("socket closed after TerminateMicrovm was sent");
+        }),
+      }).pipe(Effect.exit),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    const after = await Effect.runPromise(ledger.read(runId));
+    expect(after.readable && after.entry?.removalIssued).toBe(true);
+    expect(await Effect.runPromise(ledger.admitRecovery(runId))).toBe("deleting");
+    expect(await Effect.runPromise(ledger.openObservation(runId, 1_000))).toBeUndefined();
+    // Its hold ended with the call: settled from the runtime at once.
+    expect((await Effect.runPromise(ledger.reconcileIssuedDeletion(runId, "gone"))).kind).toBe(
+      "deleted",
+    );
+  });
+
+  it("keeps an unsaved answer no later one covers, so a delayed older answer cannot revive a seal (review 9 #4)", async () => {
+    const runId = await newRun();
+    const repo = <A, E>(use: (drains: WorkspaceCaptureDrainRepoService) => Effect.Effect<A, E>) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* use(yield* WorkspaceCaptureDrainRepo);
+        }).pipe(
+          Effect.provide(
+            WorkspaceCaptureDrainRepoLive.pipe(Layer.provide(Layer.succeed(SealantDB, dbA))),
+          ),
+        ),
+      );
+    const ledger = worker(dbA, "review9-evidence");
+    const originA = {
+      epoch: 1,
+      launch: "launch9",
+      bootId: "boot-A",
+      bootGeneration: 1,
+      observation: 100,
+      headN: 7,
+    };
+    await repo((drains) =>
+      drains.attestCompletion({
+        runId,
+        executorId: runId,
+        epoch: 1,
+        captureN: 7,
+        origin: originA,
+        attestedBy: "control plane",
+      }),
+    );
+    // Four requests sent before any answer was recorded: the order they are received in orders
+    // nothing.
+    const oldA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const savedA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const failedB = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    const lateSavedA = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    if (
+      oldA === undefined ||
+      savedA === undefined ||
+      failedB === undefined ||
+      lateSavedA === undefined
+    ) {
+      throw new Error("no observation could be opened");
+    }
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({ epoch: 1, headN: 7, origin: originA }),
+        Date.now(),
+        savedA,
+      ),
+    );
+    // A recovery boot whose generation could not be persisted (0): incomparable with boot A.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        captureStatus({
+          epoch: 1,
+          headN: 7,
+          complete: false,
+          incompleteReason: "snapshot-failed",
+          origin: { ...originA, bootId: "boot-B", bootGeneration: 0, observation: 1 },
+        }),
+        Date.now(),
+        failedB,
+      ),
+    );
+    const blocked = await Effect.runPromise(ledger.read(runId));
+    if (!blocked.readable) {
+      throw new Error("unreadable");
+    }
+    expect(attestedCompleteFor(blocked.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    // Boot A's older, pre-seal answer arrives last. It is incomparable with boot B's failure and
+    // must not erase it.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        captureStatus({
+          epoch: 1,
+          headN: 7,
+          complete: false,
+          incompleteReason: "sealing",
+          origin: { ...originA, observation: 90 },
+        }),
+        Date.now(),
+        oldA,
+      ),
+    );
+    const after = await Effect.runPromise(ledger.read(runId));
+    if (!after.readable) {
+      throw new Error("unreadable");
+    }
+    expect(attestedCompleteFor(after.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    expect(observedComplete(after.entry)).toBe(false);
+    expect(after.entry?.unsaved?.map((status) => status.origin?.bootId).toSorted()).toEqual([
+      "boot-A",
+      "boot-B",
+    ]);
+
+    // Boot A's next answer, complete, asked for before boot B's failure was recorded: it covers
+    // boot A's older answer, not boot B's. Still not saved, though the latest answer is complete.
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({ epoch: 1, headN: 7, origin: { ...originA, observation: 101 } }),
+        Date.now(),
+        lateSavedA,
+      ),
+    );
+    const partly = await Effect.runPromise(ledger.read(runId));
+    if (!partly.readable) {
+      throw new Error("unreadable");
+    }
+    expect(partly.entry?.observationsInFlight).toBe(0);
+    expect(partly.entry?.last?.complete).toBe(true);
+    expect(partly.entry?.unsaved?.map((status) => status.origin?.bootId)).toEqual(["boot-B"]);
+    expect(observedComplete(partly.entry)).toBe(false);
+    expect(attestedCompleteFor(partly.entry, { runId, resourceId: null, reference: null })).toBe(
+      false,
+    );
+    // Only an answer asked for after both were recorded covers them all.
+    const fresh = await Effect.runPromise(ledger.openObservation(runId, 60_000));
+    if (fresh === undefined) {
+      throw new Error("no observation could be opened");
+    }
+    await Effect.runPromise(
+      ledger.recordStatus(
+        runId,
+        savedStatus({
+          epoch: 1,
+          headN: 7,
+          origin: { ...originA, bootId: "boot-C", bootGeneration: 0, observation: 1 },
+        }),
+        Date.now(),
+        fresh,
+      ),
+    );
+    const saved = await Effect.runPromise(ledger.read(runId));
+    if (!saved.readable) {
+      throw new Error("unreadable");
+    }
+    expect(saved.entry?.unsaved ?? []).toEqual([]);
+    expect(observedComplete(saved.entry)).toBe(true);
+  });
+
+  it("lists the soonest-ending retained executor first and holds one recovery attempt per executor (review 9 #8)", async () => {
+    const layer = Layer.mergeAll(
+      WorkspaceCaptureDrainRepoLive,
+      WorkspaceRuntimeInstanceRepoLive,
+    ).pipe(Layer.provide(Layer.succeed(SealantDB, dbA)));
+    const run = <A, E>(
+      effect: Effect.Effect<A, E, WorkspaceCaptureDrainRepo | WorkspaceRuntimeInstanceRepo>,
+    ) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
+    const older = await newRun();
+    const urgent = await newRun();
+    const ledgerA = worker(dbA, "recovery-a");
+    const ledgerB = worker(dbB, "recovery-b");
+    // Retained in backoff order: the older one first, its runtime ending in an hour; the urgent
+    // one's in a minute.
+    for (const [runId, endsInMs] of [
+      [older, 60 * 60_000],
+      [urgent, 60_000],
+    ] as const) {
+      await run(
+        Effect.gen(function* () {
+          yield* (yield* WorkspaceRuntimeInstanceRepo).upsertRuntimeInstance({
+            runId,
+            status: "failed",
+            adapter: "microvm",
+            resourceId: runId,
+            reference: runId,
+            runtimeDeadlineAt: new Date(Date.now() + endsInMs),
+            sourceKind: "capture",
+          });
+        }),
+      );
+      await Effect.runPromise(ledgerA.markRetained(runId, "executor exited · exit 75"));
+    }
+    const listed = async () =>
+      (
+        await run(
+          Effect.gen(function* () {
+            return yield* (yield* WorkspaceCaptureDrainRepo).listRetainedDue({
+              limit: 1_000,
+              runIds: [older, urgent],
+            });
+          }),
+        )
+      ).map((row) => row.runId);
+    expect(await listed()).toEqual([urgent, older]);
+    // One attempt at a time, across workers: the second claim is refused, and a claimed executor
+    // is not listed due.
+    const claim = await Effect.runPromise(ledgerA.claimRecovery(urgent, 60_000));
+    expect(claim).toBeDefined();
+    expect(await Effect.runPromise(ledgerB.claimRecovery(urgent, 60_000))).toBeUndefined();
+    expect(await listed()).toEqual([older]);
+    if (claim === undefined) {
+      throw new Error("not claimed");
+    }
+    // Another worker's release does nothing; the holder's frees it.
+    await Effect.runPromise(ledgerB.releaseRecovery(urgent, { token: "not-the-holder" }));
+    expect(await Effect.runPromise(ledgerB.claimRecovery(urgent, 60_000))).toBeUndefined();
+    await Effect.runPromise(ledgerA.releaseRecovery(urgent, claim));
+    expect(await listed()).toEqual([urgent, older]);
+    // A claim whose holder died lapses and is taken over.
+    expect(await Effect.runPromise(ledgerA.claimRecovery(older, 1))).toBeDefined();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await Effect.runPromise(ledgerB.claimRecovery(older, 60_000))).toBeDefined();
   });
 });

@@ -1,11 +1,13 @@
 export {
   credentialFileInjectionSchema,
+  isRemovalRefusal,
   parseRuntimeAdapterInspectResult,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterLaunchResult,
   parseRuntimeAdapterSupportInput,
   parseRuntimeAdapterSupport,
   publishedImageSchema,
+  removalRefused,
   runtimeAdapterBlueprintSchema,
   runtimeAdapterExitEventSchema,
   runtimeAdapterIdSchema,
@@ -147,6 +149,7 @@ export {
 
 export {
   attestationCoversExecutor,
+  attestationCoversObservations,
   decideExecutorDeletion,
   observedCaptureFromStored,
   runtimeRecoveryTakesSecretEnv,

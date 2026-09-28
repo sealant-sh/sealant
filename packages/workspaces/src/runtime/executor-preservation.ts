@@ -292,6 +292,26 @@ export const attestationCoversExecutor = (
 };
 
 /**
+ * `attestationCoversExecutor` over Core's latest observation AND every unsaved answer on record
+ * that no later one covers (review 9 #4, decision 25): a seal stands only when it covers all of
+ * them. The first one it does not cover answers.
+ */
+export const attestationCoversObservations = (
+  attestation: CompletionAttestation,
+  executor: ExecutorIdentity,
+  observed: ObservedCapture | undefined,
+  unsaved: readonly (ObservedCapture | undefined)[],
+): { readonly covers: true } | { readonly covers: false; readonly reason: string } => {
+  for (const each of [observed, ...unsaved]) {
+    const covers = attestationCoversExecutor(attestation, executor, each);
+    if (!covers.covers) {
+      return covers;
+    }
+  }
+  return { covers: true };
+};
+
+/**
  * Whether a runtime can bring a retained, ENDED executor back on its own disk
  * (`RuntimeAdapter.recover` restarting it). Docker can (`docker start` of the kept container).
  * MicroVM can while the VM runs on after its daemon ended (the agent starts sealantd again in

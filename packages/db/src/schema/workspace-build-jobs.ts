@@ -251,6 +251,23 @@ export const workspaceCaptureDrains = pgTable(
       withTimezone: true,
     }),
     /**
+     * Every answer on record that says the executor's work is not saved and that no answer
+     * recorded since covers (review 9 #4, decision 25): an antichain of the executor's unsaved
+     * positions, each with when it was recorded (the database's clock, microseconds since the
+     * epoch). `last_status` is one latest answer; two answers no position orders are both kept
+     * here, and nothing reads saved — no observed complete, no seal — until every one of them is
+     * covered (`nextUnsavedObservations`).
+     */
+    unsavedStatuses: jsonb("unsaved_statuses")
+      .$type<
+        readonly {
+          readonly status: Readonly<Record<string, unknown>>;
+          readonly recordedAt: number | null;
+        }[]
+      >()
+      .notNull()
+      .default([]),
+    /**
      * Bumped by every change to the evidence about this executor: a status recorded, an
      * observation opened or resolved, an attestation. A destructive decision records the version
      * it read and commits only while it is still current (`authorizeDeletion`, decision 18).
@@ -279,7 +296,10 @@ export const workspaceCaptureDrains = pgTable(
      * no observation is admitted, no recovery starts it and no status voids it. A live hold is its
      * issuer, still waiting on the runtime; a lapsed one is an outcome nobody knows until the
      * runtime is inspected (`reconcileIssuedDeletion`): gone ⇒ `deleted`; still there ⇒ issued
-     * again on the evidence it was authorized on, or given up when that evidence changed.
+     * again on the evidence it was authorized on; still there with that evidence changed ⇒ kept
+     * issued (the request may still act: review 9 #5) until the runtime's own bound on a removal
+     * request has passed since `deletionIssuedAt`, then given up. A failed runtime call leaves
+     * it issued unless the runtime definitively refused it.
      * `deleted`: the runtime was removed; nothing is observed or recovered again. Null: none.
      */
     deletionState: text("deletion_state", { enum: ["deleting", "deleting-issued", "deleted"] }),
@@ -287,6 +307,13 @@ export const workspaceCaptureDrains = pgTable(
     deletionEvidenceVersion: bigint("deletion_evidence_version", { mode: "number" }),
     deletionAuthorizedAt: timestamp("deletion_authorized_at", { mode: "date", withTimezone: true }),
     deletionExpiresAt: timestamp("deletion_expires_at", { mode: "date", withTimezone: true }),
+    /**
+     * When the runtime was last asked to remove the executor (`issueDeletion`, the database's
+     * clock; review 9 #5). An issued removal whose outcome is unknown and whose evidence changed
+     * since is given up only once the runtime's own bound on a removal request (its
+     * `removalFenceMs`) has passed since this instant: before that, the request may still act.
+     */
+    deletionIssuedAt: timestamp("deletion_issued_at", { mode: "date", withTimezone: true }),
     lastProgressAt: timestamp("last_progress_at", { mode: "date", withTimezone: true }),
     unreachableSince: timestamp("unreachable_since", { mode: "date", withTimezone: true }),
     keptLogged: boolean("kept_logged").notNull().default(false),
@@ -337,6 +364,15 @@ export const workspaceCaptureDrains = pgTable(
     recoveryAttempts: integer("recovery_attempts").notNull().default(0),
     nextRecoveryAt: timestamp("next_recovery_at", { mode: "date", withTimezone: true }),
     lastRecoveryError: text("last_recovery_error"),
+    /**
+     * Who is recovering the retained executor right now (review 9 #8): one recovery attempt per
+     * executor at a time, across every worker and path (the recovery sweep, the deadline sweep's
+     * urgent recovery). Held by `recoveryLeaseToken` until `recoveryLeaseUntil` (the database's
+     * clock), longer than the attempt's own bound; released when the attempt ends, and taken
+     * over once it lapses (its worker died). A leased executor is not listed due.
+     */
+    recoveryLeaseToken: text("recovery_lease_token"),
+    recoveryLeaseUntil: timestamp("recovery_lease_until", { mode: "date", withTimezone: true }),
     /**
      * The capture token the executor was launched with (`SEALANT_CAPTURE_TOKEN`, the one Mend
      * issued for the session), sealed with the credential cipher. The daemon reads it once at

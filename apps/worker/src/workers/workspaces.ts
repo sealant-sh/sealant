@@ -65,6 +65,11 @@ import {
 // Build scratch older than this is a leftover, never a build in flight.
 const STALE_BUILD_CONTEXT_AGE_MS = 6 * 60 * 60 * 1000;
 const IMAGE_RETENTION_BOOT_DELAY_MS = 30_000;
+/**
+ * How many retained-executor recovery sweeps may run at once (review 9 #8). Each executor's
+ * attempt holds its own recovery claim, so overlapping sweeps never recover one executor twice.
+ */
+const MAX_OVERLAPPING_RECOVERY_SWEEPS = 4;
 // A lifecycle stop waits this long on a capture queue, inside the queue's 15-minute active
 // window; a drain that needs longer is finished by the reaper (the stop intent is durable).
 const LIFECYCLE_STOP_DRAIN_BUDGET_MS = 10 * 60 * 1000;
@@ -491,6 +496,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
       ...(credentialCipher === undefined ? {} : { credentialCipher }),
       targetOptions,
       captureDrain: { ledger: captureDrainLedger, settings: captureDrainSettings },
+      ...(launchMaterialStager === undefined ? {} : { launchMaterialStager }),
       deadline: {
         leadMs: env.WORKSPACE_CAPTURE_DEADLINE_LEAD_MS,
         watchWindowMs: env.WORKSPACE_CAPTURE_DEADLINE_WATCH_MS,
@@ -513,18 +519,20 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
   // confirmed saved is restarted on its own disk where the runtime can (Docker), drained with a
   // FINAL flush and only then removed; elsewhere it is reported and kept. Backoff per executor.
   // A sweep runs as soon as an executor is recorded retained, and every
-  // WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS for attempts that fall due; one asked for while a sweep
-  // runs follows it.
-  let recoverySweepRunning = false;
+  // WORKSPACE_RECOVERY_SWEEP_INTERVAL_MS for attempts that fall due. Sweeps may overlap (review 9
+  // #8): each executor's attempt holds its own recovery claim, so a sweep busy with one slow
+  // attempt never keeps another executor's first attempt waiting; one asked for while the most
+  // sweeps allowed run follows them.
+  let recoverySweepsRunning = 0;
   let recoverySweepAgain = false;
   // Executors recorded retained since the last sweep began: the next sweep takes exactly them.
   const justRetained = new Set<string>();
   const runRecoverySweepTick = (): void => {
-    if (recoverySweepRunning) {
+    if (recoverySweepsRunning >= MAX_OVERLAPPING_RECOVERY_SWEEPS) {
       recoverySweepAgain = true;
       return;
     }
-    recoverySweepRunning = true;
+    recoverySweepsRunning += 1;
     recoverySweepAgain = false;
     const runIds = justRetained.size === 0 ? undefined : [...justRetained];
     justRetained.clear();
@@ -543,7 +551,7 @@ export const startWorkspaceWorker = async (env: WorkerEnv) => {
         console.error("Retained executor recovery tick failed", { error });
       })
       .finally(() => {
-        recoverySweepRunning = false;
+        recoverySweepsRunning -= 1;
         if (recoverySweepAgain) {
           setImmediate(runRecoverySweepTick);
         }

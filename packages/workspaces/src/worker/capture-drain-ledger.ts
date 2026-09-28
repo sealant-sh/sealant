@@ -86,11 +86,24 @@ export const captureStatusFromStored = (stored: unknown): CaptureFlushReport | u
   return parsed.success ? parsed.data : undefined;
 };
 
+/** The unsaved answers no later one covers (review 9 #4); one that cannot be read is flagged. */
+const unsavedFromRow = (
+  row: WorkspaceCaptureDrain,
+): Pick<CaptureDrainEntry, "unsaved" | "unsavedUnreadable"> => {
+  const members = row.unsavedStatuses.map((member) => captureStatusFromStored(member.status));
+  const unsaved = members.filter((status): status is CaptureFlushReport => status !== undefined);
+  return {
+    ...(unsaved.length === 0 ? {} : { unsaved }),
+    ...(unsaved.length < members.length ? { unsavedUnreadable: true } : {}),
+  };
+};
+
 const entryFromRow = (row: WorkspaceCaptureDrain): CaptureDrainEntry => ({
   lastProgressAt: row.lastProgressAt?.getTime(),
   last: captureStatusFromStored(row.lastStatus),
   lastAtMs: row.lastStatusAt?.getTime(),
   lastUnreadable: row.lastStatus !== null && captureStatusFromStored(row.lastStatus) === undefined,
+  ...unsavedFromRow(row),
   evidenceVersion: row.evidenceVersion,
   observationsInFlight: Object.keys(row.observationFences).length,
   ...(row.deletionState === "deleting-issued" ? { removalIssued: true } : {}),
@@ -383,7 +396,7 @@ export const captureDrainLedgerFromRepo = (
       ),
     ),
 
-  reconcileIssuedDeletion: (runId, runtime) =>
+  reconcileIssuedDeletion: (runId, runtime, fenceMs) =>
     run(
       Effect.gen(function* () {
         const repo = yield* WorkspaceCaptureDrainRepo;
@@ -393,6 +406,7 @@ export const captureDrainLedgerFromRepo = (
           runtime,
           token,
           leaseMs: options.deletionHoldMs ?? DELETION_HOLD_MS,
+          ...(fenceMs === undefined ? {} : { fenceMs }),
         });
         return outcome === "reissue"
           ? ({ kind: "reissue", ticket: { token } } satisfies IssuedDeletionSettlement)
@@ -437,6 +451,53 @@ export const captureDrainLedgerFromRepo = (
       Effect.catchCause((cause) =>
         Effect.logWarning(
           `Capture drain: giving up the removal of run ${runId}'s executor failed; it lapses on its own.`,
+          cause,
+        ),
+      ),
+    ),
+
+  lapseIssuedDeletion: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.lapseIssuedDeletion({ runId, token: ticket.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Capture drain: ending the hold of run ${runId}'s issued removal failed; it stays issued and its hold lapses on its own.`,
+          cause,
+        ),
+      ),
+    ),
+
+  claimRecovery: (runId, leaseMs) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        const token = randomUUID();
+        const claimed = yield* repo.claimRecovery({ runId, token, leaseMs });
+        return claimed ? { token } : undefined;
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Executor recovery: claiming the recovery of run ${runId}'s retained executor failed; nothing is started this time.`,
+          cause,
+        ).pipe(Effect.as(undefined)),
+      ),
+    ),
+
+  releaseRecovery: (runId, ticket) =>
+    run(
+      Effect.gen(function* () {
+        const repo = yield* WorkspaceCaptureDrainRepo;
+        yield* repo.releaseRecovery({ runId, token: ticket.token });
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          `Executor recovery: releasing the recovery of run ${runId}'s retained executor failed; it lapses on its own.`,
           cause,
         ),
       ),

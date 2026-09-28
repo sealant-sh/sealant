@@ -55,18 +55,24 @@
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
-import { statusSupersedes, type ExecutorOrigin } from "@sealant/db";
-import { Clock, Effect, Exit, Result } from "effect";
+import {
+  nextUnsavedObservations,
+  statusSupersedes,
+  type ExecutorOrigin,
+  type UnsavedObservation,
+} from "@sealant/db";
+import { Cause, Clock, Effect, Exit, Option, Result } from "effect";
 import { z } from "zod";
 
 import {
-  attestationCoversExecutor,
+  attestationCoversObservations,
   type ExecutorDeletionBasis,
   type ExecutorDeletionDecision,
   type ExecutorIdentity,
   type ExecutorRuntimeState,
   type ObservedCapture,
 } from "../runtime/executor-preservation.js";
+import { isRemovalRefusal } from "../runtime/runtime-adapter.js";
 import {
   SealantControlError,
   SealantRuntime,
@@ -178,6 +184,15 @@ export interface CaptureDrainEntry {
    */
   readonly lastUnreadable?: boolean | undefined;
   /**
+   * Every answer on record that says the executor's work is not saved and that no answer recorded
+   * since covers (review 9 #4, decision 25), `last` among them when it is one. Two answers no
+   * position orders are both here; nothing reads saved — no observed complete, no seal — until
+   * every one of them is covered.
+   */
+  readonly unsaved?: readonly CaptureFlushReport[] | undefined;
+  /** An unsaved answer is on record that cannot be read: nothing reads saved over it. */
+  readonly unsavedUnreadable?: boolean | undefined;
+  /**
    * The evidence version this entry was read at (`workspace_capture_drains.evidence_version`):
    * every status recorded, observation opened or resolved, and attestation bumps it. A deletion
    * decided on this entry is authorized only while it is still current (`authorizeDeletion`).
@@ -278,6 +293,11 @@ export type CaptureDrainRead =
   | { readonly readable: true; readonly entry: CaptureDrainEntry | undefined }
   | { readonly readable: false };
 
+/** One recovery attempt's hold on a retained executor (review 9 #8). */
+export interface RecoveryTicket {
+  readonly token: string;
+}
+
 /** A held removal of an executor (decision 21): the token its `deleting` transition is owned by. */
 export interface DeletionTicket {
   readonly token: string;
@@ -300,14 +320,18 @@ export type DeletionAuthorization =
 /**
  * How an issued removal whose issuer's hold lapsed was settled (review 8 #7): `deleted` (the
  * runtime no longer has the executor), `reissue` (it still does, and the evidence the removal was
- * authorized on still stands: taken over by `ticket`, to be issued again), `released` (it still
- * does and the evidence changed since: given up, decide again on what is current), `held` (its
- * issuer, or another, holds it again), `none` (nothing issued is left), `unknown` (the record
- * could not be written or read: nothing is settled).
+ * authorized on still stands: taken over by `ticket`, to be issued again), `outstanding` (it
+ * still does, the evidence changed since, and the request may still act: it stays issued and
+ * exclusionary, and the executor is kept; review 9 #5), `released` (it still does, the evidence
+ * changed since, and the runtime's bound on a removal request has passed since it was issued:
+ * given up, decide again on what is current), `held` (its issuer, or another, holds it again),
+ * `none` (nothing issued is left), `unknown` (the record could not be written or read: nothing is
+ * settled).
  */
 export type IssuedDeletionSettlement =
   | { readonly kind: "deleted" }
   | { readonly kind: "reissue"; readonly ticket: DeletionTicket }
+  | { readonly kind: "outstanding" }
   | { readonly kind: "released" }
   | { readonly kind: "held" }
   | { readonly kind: "none" }
@@ -397,16 +421,28 @@ export interface CaptureDrainLedger {
   readonly issueDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<boolean>;
   /**
    * Settle an issued removal whose issuer's hold lapsed, from what the runtime says of the
-   * executor now (`gone` or `present`; review 8 #7). See `IssuedDeletionSettlement`.
+   * executor now (`gone` or `present`; review 8 #7). `fenceMs`: the runtime's bound on a removal
+   * request (`RuntimeAdapter.removalFenceMs`), past which one issued earlier can no longer act.
+   * See `IssuedDeletionSettlement`.
    */
   readonly reconcileIssuedDeletion: (
     runId: string,
     runtime: "gone" | "present",
+    fenceMs?: number,
   ) => Effect.Effect<IssuedDeletionSettlement>;
   /** The runtime removed the executor: `deleted` for good. Best-effort: a failed write is logged. */
   readonly completeDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
-  /** Give a held removal up (its runtime call failed or was not made). Best-effort. */
+  /**
+   * Give a held removal up: its runtime call was not made, or the runtime definitively refused it
+   * (`isRemovalRefusal`). Never for a call whose outcome is unknown. Best-effort.
+   */
   readonly releaseDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
+  /**
+   * The runtime call of the issued removal the ticket holds ended with an outcome nobody knows
+   * (review 9 #5): it stays issued and exclusionary, its hold ends now, and it is settled from
+   * the runtime (`reconcileIssuedDeletion`). Best-effort: otherwise its hold lapses on its own.
+   */
+  readonly lapseIssuedDeletion: (runId: string, ticket: DeletionTicket) => Effect.Effect<void>;
   /**
    * May recovery start the run's executor (decision 21)? `deleting`: a live removal holds it, or
    * one was issued (settled only from the runtime, review 8 #7); `deleted`: it was removed;
@@ -416,6 +452,19 @@ export interface CaptureDrainLedger {
   readonly admitRecovery: (
     runId: string,
   ) => Effect.Effect<"admitted" | "deleting" | "deleted" | "unknown">;
+  /**
+   * Take the recovery of the run's retained executor for one attempt (review 9 #8): one attempt
+   * per executor at a time, across workers and paths (the recovery sweep, the deadline sweep's
+   * urgent recovery), for `leaseMs` (longer than the attempt's own bound; taken over once it
+   * lapses). The ticket releases it (`releaseRecovery`). `undefined`: another attempt holds it,
+   * it is not retained, or the claim could not be made — nothing is started.
+   */
+  readonly claimRecovery: (
+    runId: string,
+    leaseMs: number,
+  ) => Effect.Effect<RecoveryTicket | undefined>;
+  /** The attempt ended: its claim is released. Best-effort: otherwise it lapses on its own. */
+  readonly releaseRecovery: (runId: string, ticket: RecoveryTicket) => Effect.Effect<void>;
   /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
    * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
@@ -485,6 +534,10 @@ export interface InMemoryCaptureDrainRow {
   >;
   /** When the status on record was recorded, in the store's own order. */
   recordedTick?: number;
+  /** The unsaved answers no later one covers, with when each was recorded (the store's tick). */
+  unsaved?: UnsavedObservation<CaptureFlushReport>[];
+  /** Who is recovering the retained executor, until when (`recovery_lease_*`, review 9 #8). */
+  recoveryLease?: { readonly token: string; readonly untilMs: number } | undefined;
   /** The executor's removal (decision 21), as `deletion_*` holds it. */
   deletion?:
     | {
@@ -492,6 +545,8 @@ export interface InMemoryCaptureDrainRow {
         readonly token: string;
         readonly evidenceVersion: number;
         readonly expiresAtMs: number;
+        /** When the runtime was last asked to remove it (review 9 #5). */
+        readonly issuedAtMs?: number;
       }
     | undefined;
 }
@@ -529,6 +584,9 @@ const bump = (row: InMemoryCaptureDrainRow) => {
 /** An in-memory row as a read answers it: its version and observations in flight included. */
 const entryOf = (row: InMemoryCaptureDrainRow): CaptureDrainEntry => ({
   ...row.entry,
+  ...(row.unsaved === undefined || row.unsaved.length === 0
+    ? {}
+    : { unsaved: row.unsaved.map((member) => member.status) }),
   evidenceVersion: row.entry.evidenceVersion ?? 0,
   observationsInFlight: row.fences?.size ?? 0,
   ...(row.deletion?.state === "deleting-issued" ? { removalIssued: true } : {}),
@@ -688,9 +746,21 @@ export const inMemoryCaptureDrainLedger = (
             : row.entry.last === undefined
               ? undefined
               : storedStatusRecord(row.entry.last);
+        const recordedTick = nextTick();
+        // Every unsaved answer no later one covers stays on record (review 9 #4).
+        row.unsaved = [
+          ...nextUnsavedObservations({
+            unsaved: row.unsaved ?? [],
+            stored,
+            storedRecordedAt: row.recordedTick ?? null,
+            incoming: status,
+            askedAt: openedTick ?? null,
+            recordedAt: recordedTick,
+          }),
+        ];
         if (statusSupersedes({ stored, incoming: storedStatusRecord(status), causallyAfter })) {
           row.entry = { ...row.entry, last: status, lastAtMs: atMs, lastUnreadable: false };
-          row.recordedTick = nextTick();
+          row.recordedTick = recordedTick;
         }
         if (row.deletion?.state === "deleting") {
           // Received evidence outranks a removal decided before it: voided.
@@ -754,10 +824,11 @@ export const inMemoryCaptureDrainLedger = (
           ...row.deletion,
           state: "deleting-issued",
           expiresAtMs: now() + DELETION_HOLD_MS,
+          issuedAtMs: now(),
         };
         return true;
       }),
-    reconcileIssuedDeletion: (runId, runtime) =>
+    reconcileIssuedDeletion: (runId, runtime, fenceMs) =>
       Effect.sync((): IssuedDeletionSettlement => {
         const row = store.rows.get(runId);
         const deletion = row?.deletion;
@@ -784,6 +855,14 @@ export const inMemoryCaptureDrainLedger = (
           row.deletion = { ...deletion, token, expiresAtMs: now() + DELETION_HOLD_MS };
           return { kind: "reissue", ticket: { token } };
         }
+        if (
+          fenceMs === undefined ||
+          deletion.issuedAtMs === undefined ||
+          deletion.issuedAtMs + fenceMs > now()
+        ) {
+          // The request already sent may still act (review 9 #5): it stays issued.
+          return { kind: "outstanding" };
+        }
         row.deletion = undefined;
         bump(row);
         return { kind: "released" };
@@ -806,6 +885,13 @@ export const inMemoryCaptureDrainLedger = (
           row.deletion = undefined;
         }
       }),
+    lapseIssuedDeletion: (runId, ticket) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row?.deletion?.state === "deleting-issued" && row.deletion.token === ticket.token) {
+          row.deletion = { ...row.deletion, expiresAtMs: now() };
+        }
+      }),
     admitRecovery: (runId) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
@@ -822,6 +908,27 @@ export const inMemoryCaptureDrainLedger = (
         row.deletion = undefined;
         bump(row);
         return "admitted" as const;
+      }),
+    claimRecovery: (runId, recoveryLeaseMs) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row === undefined || row.entry.retained === undefined) {
+          return undefined;
+        }
+        if (row.recoveryLease !== undefined && row.recoveryLease.untilMs > now()) {
+          return undefined;
+        }
+        inMemoryClaimSequence += 1;
+        const token = `recovery-${String(inMemoryClaimSequence)}`;
+        row.recoveryLease = { token, untilMs: now() + recoveryLeaseMs };
+        return { token };
+      }),
+    releaseRecovery: (runId, ticket) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        if (row?.recoveryLease?.token === ticket.token) {
+          row.recoveryLease = undefined;
+        }
       }),
     observe: (runId, observation) =>
       Effect.sync(() => {
@@ -918,9 +1025,26 @@ export const runIsCaptureSourced = <E, R>(input: {
 export const reportsComplete = (status: CaptureFlushReport | undefined): boolean =>
   status?.complete === true && status.incompleteReason === undefined;
 
-/** Whether Core itself read `complete: true` from the run's daemon (the drain's last status). */
+/**
+ * Whether Core itself read `complete: true` from the run's daemon (the drain's last status), and
+ * no unsaved answer on record is left that it does not cover (review 9 #4).
+ */
 export const observedComplete = (entry: CaptureDrainEntry | undefined): boolean =>
-  reportsComplete(entry?.last);
+  reportsComplete(entry?.last) && unsavedOnRecord(entry) === undefined;
+
+/**
+ * An unsaved answer on record that nothing recorded since covers (review 9 #4), as a line; the
+ * executor reads saved only when there is none. `undefined`: none.
+ */
+export const unsavedOnRecord = (entry: CaptureDrainEntry | undefined): string | undefined => {
+  if (entry?.unsavedUnreadable === true) {
+    return "an answer of the executor that says its work is not saved is on record and cannot be read";
+  }
+  const first = entry?.unsaved?.[0];
+  return first === undefined
+    ? undefined
+    : `an answer of the executor that no later one covers says its work is not saved (${describeCaptureStatus(first)})`;
+};
 
 /** Core's own latest observation of the run's daemon, as the preservation policy weighs it. */
 export const observedCaptureOf = (
@@ -930,18 +1054,22 @@ export const observedCaptureOf = (
   if (last === undefined && entry?.lastUnreadable === true) {
     return { readable: false };
   }
-  return last === undefined
-    ? undefined
-    : {
-        readable: true,
-        epoch: last.epoch,
-        ...(last.headN === undefined ? {} : { headN: last.headN }),
-        complete: reportsComplete(last),
-        ...(last.incompleteReason === undefined ? {} : { incompleteReason: last.incompleteReason }),
-        ...(entry?.lastAtMs === undefined ? {} : { atMs: entry.lastAtMs }),
-        ...(last.origin === undefined ? {} : { origin: last.origin }),
-      };
+  return last === undefined ? undefined : observedCaptureOfStatus(last, entry?.lastAtMs);
 };
+
+/** One status the daemon answered, as the preservation policy weighs it. */
+export const observedCaptureOfStatus = (
+  status: CaptureFlushReport,
+  atMs?: number,
+): ObservedCapture => ({
+  readable: true,
+  epoch: status.epoch,
+  ...(status.headN === undefined ? {} : { headN: status.headN }),
+  complete: reportsComplete(status),
+  ...(status.incompleteReason === undefined ? {} : { incompleteReason: status.incompleteReason }),
+  ...(atMs === undefined ? {} : { atMs }),
+  ...(status.origin === undefined ? {} : { origin: status.origin }),
+});
 
 /**
  * Whether the control plane's recorded attestation covers THIS executor, weighed at the moment
@@ -955,10 +1083,18 @@ export const attestedCompleteFor = (
   executor: ExecutorIdentity,
 ): boolean => {
   const attested = entry?.completionAttested;
-  return (
-    attested !== undefined &&
-    attestationCoversExecutor(attested, executor, observedCaptureOf(entry)).covers
-  );
+  if (attested === undefined || entry?.unsavedUnreadable === true) {
+    return false;
+  }
+  // The seal must cover Core's latest observation AND every unsaved answer no later one covers
+  // (review 9 #4): a failure no position orders against the seal is never erased by an answer
+  // that arrived after it.
+  return attestationCoversObservations(
+    attested,
+    executor,
+    observedCaptureOf(entry),
+    (entry?.unsaved ?? []).map((status) => observedCaptureOfStatus(status)),
+  ).covers;
 };
 
 /**
@@ -1030,6 +1166,12 @@ export const authorizedDeletion = (input: {
    * or `unknown`: such a removal is not settled here, and the executor is kept.
    */
   readonly runtime?: ExecutorRuntimeState | undefined;
+  /**
+   * The runtime's bound on a removal request (`RuntimeAdapter.removalFenceMs`): how such a removal
+   * whose evidence changed since is given up (review 9 #5). Absent: it never is while the runtime
+   * still has the executor.
+   */
+  readonly removalFenceMs?: number | undefined;
 }): Effect.Effect<AuthorizedDeletion> =>
   Effect.gen(function* () {
     const { ledger, runId } = input;
@@ -1039,7 +1181,12 @@ export const authorizedDeletion = (input: {
       if (ledger !== undefined && record.readable && record.entry?.removalIssued === true) {
         // The runtime was asked to remove it and nobody recorded how that went (review 8 #7):
         // nothing is observed, recovered or decided anew until the runtime says.
-        const settled = yield* settleIssuedRemoval(ledger, runId, input.runtime);
+        const settled = yield* settleIssuedRemoval(
+          ledger,
+          runId,
+          input.runtime,
+          input.removalFenceMs,
+        );
         if (settled.kind === "reissue") {
           return {
             decision: { delete: true, basis: "issued-before" },
@@ -1111,14 +1258,17 @@ export const authorizedDeletion = (input: {
 /**
  * Settle a removal the runtime was asked to make and whose outcome nobody recorded (review 8 #7),
  * from what the runtime says of the executor: gone ⇒ `deleted`; still there ⇒ issued again when
- * the evidence it was authorized on still stands (`reissue`), else given up and decided again
- * on what is current (loudly: the earlier request may still act on the runtime). `kept`: its
- * issuer still holds it, the runtime could not say, or the record could not be settled.
+ * the evidence it was authorized on still stands (`reissue`); still there with that evidence
+ * changed ⇒ kept, the removal still issued, until the runtime's bound on a removal request has
+ * passed since it was issued (review 9 #5: presence proves only that the request has not finished)
+ * — then given up and decided again on what is current. `kept`: its issuer still holds it, the
+ * request may still act, the runtime could not say, or the record could not be settled.
  */
 const settleIssuedRemoval = (
   ledger: CaptureDrainLedger,
   runId: string,
   runtime: ExecutorRuntimeState | undefined,
+  fenceMs: number | undefined,
 ): Effect.Effect<
   | { readonly kind: "reissue"; readonly ticket: DeletionTicket }
   | { readonly kind: "kept"; readonly reason: string }
@@ -1136,6 +1286,7 @@ const settleIssuedRemoval = (
     const settled = yield* ledger.reconcileIssuedDeletion(
       runId,
       runtime === "missing" ? "gone" : "present",
+      fenceMs,
     );
     switch (settled.kind) {
       case "deleted":
@@ -1148,9 +1299,18 @@ const settleIssuedRemoval = (
           `${prefix}: the removal of its executor issued earlier has no recorded outcome and the runtime still has it; the evidence it was authorized on still stands, so it is issued again.`,
         );
         return { kind: "reissue" as const, ticket: settled.ticket };
+      case "outstanding":
+        yield* Effect.logWarning(
+          `${prefix}: the removal of its executor issued earlier has no recorded outcome, the runtime still has it, and the evidence it was authorized on changed since; the earlier request may still act, so the removal stays issued and the executor is kept (nothing is observed or recovered) until the runtime no longer has it or the runtime's bound on that request has passed.`,
+        );
+        return {
+          kind: "kept" as const,
+          reason:
+            "a removal of this executor was issued and may still act on the runtime, and the evidence changed since it was authorized; it is kept until the outcome is known",
+        };
       case "released":
-        yield* Effect.logError(
-          `${prefix}: the removal of its executor issued earlier has no recorded outcome, the runtime still has it, and the evidence it was authorized on changed since; it is given up and decided again on what is current. The earlier request may still act on the runtime.`,
+        yield* Effect.logWarning(
+          `${prefix}: the removal of its executor issued earlier has no recorded outcome, the runtime still has it, and the runtime's bound on that request has passed, so it can no longer act; the evidence changed since it was authorized, so it is given up and decided again on what is current.`,
         );
         return { kind: "settled" as const };
       case "none":
@@ -1192,6 +1352,11 @@ export const removeUnderDeletion = <A, E, R>(input: {
   readonly runId: string;
   readonly ticket: DeletionTicket | undefined;
   readonly remove: Effect.Effect<A, E, R>;
+  /**
+   * Run right before the runtime call, once the removal was re-checked and issued: nothing can
+   * veto it any more (review 9 #9: the one signal that a removal is under way).
+   */
+  readonly onIssued?: Effect.Effect<void> | undefined;
 }): Effect.Effect<
   { readonly removed: true; readonly value: A } | { readonly removed: false },
   E,
@@ -1200,6 +1365,7 @@ export const removeUnderDeletion = <A, E, R>(input: {
   Effect.gen(function* () {
     const { ledger, runId, ticket } = input;
     if (ledger === undefined || ticket === undefined) {
+      yield* input.onIssued ?? Effect.void;
       const value = yield* input.remove;
       return { removed: true as const, value };
     }
@@ -1212,6 +1378,7 @@ export const removeUnderDeletion = <A, E, R>(input: {
       );
       return { removed: false as const };
     }
+    yield* input.onIssued ?? Effect.void;
     // Renewed for as long as the runtime call runs, through failed renewals (a database that is
     // briefly unreachable): a hold that lapsed meanwhile is live again once a renewal lands.
     const renew = ledger
@@ -1226,11 +1393,35 @@ export const removeUnderDeletion = <A, E, R>(input: {
       Effect.onExit((exit) =>
         Exit.isSuccess(exit)
           ? ledger.completeDeletion(runId, ticket)
-          : ledger.releaseDeletion(runId, ticket),
+          : removalFailed(ledger, runId, ticket, exit.cause),
       ),
     );
     return { removed: true as const, value };
   });
+
+/**
+ * A removal's runtime call failed (review 9 #5, decision 27). Only the runtime's definitive
+ * refusal (`isRemovalRefusal`: it answered and did not act, or nothing was sent) gives the
+ * removal up. Anything else — a transport error after the request may have gone out, a timeout,
+ * an interruption, a defect — is an outcome nobody knows: the provider may still act on it, so
+ * the removal stays issued and exclusionary (no observation, no recovery) and is settled from what
+ * the runtime says of the executor.
+ */
+const removalFailed = <E>(
+  ledger: CaptureDrainLedger,
+  runId: string,
+  ticket: DeletionTicket,
+  cause: Cause.Cause<E>,
+): Effect.Effect<void> => {
+  const error = Cause.findErrorOption(cause);
+  if (Option.isSome(error) && isRemovalRefusal(error.value)) {
+    return ledger.releaseDeletion(runId, ticket);
+  }
+  return Effect.logError(
+    `Capture drain · run ${runId}: the runtime call removing its executor failed with an outcome nobody knows (the request may have reached the runtime); the removal stays issued, nothing is observed or recovered, and it is settled from what the runtime says of the executor.`,
+    cause,
+  ).pipe(Effect.andThen(ledger.lapseIssuedDeletion(runId, ticket)));
+};
 
 /**
  * The whole owned removal of an executor (decision 21): decide and authorize on the evidence as
@@ -1893,7 +2084,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
             ? "a newer observation of the executor is on record that cannot be read"
             : newest?.last !== undefined && !reportsComplete(newest.last)
               ? `a newer observation of the executor says its work is not saved (${describeCaptureStatus(newest.last)})`
-              : undefined;
+              : unsavedOnRecord(newest);
       if (contradiction === undefined) {
         return outcome;
       }

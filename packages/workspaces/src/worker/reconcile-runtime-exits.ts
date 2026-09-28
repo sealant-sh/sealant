@@ -285,12 +285,18 @@ export const reconcileRuntimeExitsEffect = Effect.fn("reconcileRuntimeExits")(fu
         continue;
       }
       // A removal held for remains that end up not removed (the terminal write failed) is given
-      // up, so observations of the executor resume.
+      // up, so observations of the executor resume — unless it is one issued earlier and taken
+      // over (`issued-before`): that request may still act on the runtime, so it stays issued
+      // and is settled from the runtime (review 9 #5).
       const giveUpRemoval = (() => {
-        const ticket = decided.verdict === "record" ? decided.removal.ticket : undefined;
+        const removal = decided.verdict === "record" ? decided.removal : undefined;
+        const ticket = removal?.ticket;
         const ledger = options.captureDrain?.ledger;
-        return ticket === undefined || ledger === undefined
-          ? Effect.void
+        if (ticket === undefined || ledger === undefined) {
+          return Effect.void;
+        }
+        return removal?.basis === "issued-before"
+          ? ledger.lapseIssuedDeletion(instance.runId, ticket)
           : ledger.releaseDeletion(instance.runId, ticket);
       })();
       const verdict = decided.verdict;
@@ -498,6 +504,7 @@ const settleUnsettledExecutors = (
           ledger,
           runId,
           runtime: inspection.state,
+          removalFenceMs: adapter.removalFenceMs,
           decide: (record) =>
             decideExecutorDeletion({
               captureSourced: true,
@@ -616,6 +623,7 @@ const drainBeforeRecording = (
         ledger: drain.ledger,
         runId: instance.runId,
         runtime: inspection.state,
+        removalFenceMs: adapter.removalFenceMs,
         decide: (current) => {
           const evidence = recordedDeletionEvidence(current, executor);
           return decideExecutorDeletion({

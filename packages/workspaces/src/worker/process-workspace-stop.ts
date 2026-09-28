@@ -66,7 +66,8 @@ export interface WorkspaceStopCaptureDrain {
    * Told when the stop passes a point a caller may stop waiting at (review 8 #6): its drain
    * returned, or the runtime's removal — uninterruptible, and as long as the executor's own stop
    * grace — begins. The deadline sweep releases the FINAL permit it holds for this stop there, so
-   * a removal never holds up another executor's first FINAL.
+   * a removal never holds up another executor's first FINAL. `removing` is told only once the
+   * removal was re-checked and issued, after everything that could still veto it (review 9 #9).
    */
   readonly onPhase?: (phase: WorkspaceStopPhase) => Effect.Effect<void>;
 }
@@ -75,7 +76,10 @@ export interface WorkspaceStopCaptureDrain {
 export type WorkspaceStopPhase =
   /** The drain returned (its FINAL or status answered and recorded, or it gave up): its outcome. */
   | { readonly kind: "drain-ended"; readonly drain: CaptureDrainOutcome["kind"] }
-  /** The runtime's removal begins (a drain may or may not have run before it). */
+  /**
+   * The runtime was asked to remove the executor: told right after the removal was re-checked
+   * and issued (`removeUnderDeletion`), never before a step that could still veto it.
+   */
   | { readonly kind: "removing" };
 
 /**
@@ -281,7 +285,6 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     readonly ticket?: DeletionTicket | undefined;
   }) =>
     Effect.gen(function* () {
-      yield* options.captureDrain?.onPhase?.({ kind: "removing" }) ?? Effect.void;
       yield* runtimeInstances.markStopRequested({
         runId: options.runId,
         stopReason: options.stopReason,
@@ -290,6 +293,8 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
         ledger: options.captureDrain?.ledger,
         runId: options.runId,
         ticket: input.ticket,
+        // Told once nothing can veto the removal any more (review 9 #9).
+        onIssued: options.captureDrain?.onPhase?.({ kind: "removing" }) ?? Effect.void,
         remove: Effect.tryPromise({
           try: () =>
             input.adapter.stop({
@@ -420,6 +425,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
             ledger: drain?.ledger,
             runId: options.runId,
             runtime,
+            removalFenceMs: adapter.removalFenceMs,
             decide: (current) => {
               const evidence = recordedDeletionEvidence(current, executor);
               return decideExecutorDeletion({

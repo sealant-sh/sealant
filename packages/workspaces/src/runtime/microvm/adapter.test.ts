@@ -14,13 +14,19 @@ import type { SealantTarget } from "../../sealantd/runtime.js";
 import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
 import { LaunchRetainedError } from "../launch-retention.js";
-import type { CredentialFileInjection, PublishedImage } from "../runtime-adapter.js";
+import {
+  isRemovalRefusal,
+  type CredentialFileInjection,
+  type PublishedImage,
+} from "../runtime-adapter.js";
 import {
   buildRunInput,
   microvmDeadline,
   clientTokenForRun,
   endpointHost,
   microvmBootEnv,
+  MICROVM_STOP_READ_BOUND_MS,
+  MICROVM_TERMINATE_BOUND_MS,
   MicrovmRuntimeAdapter,
   supportForMicrovm,
 } from "./adapter.js";
@@ -190,6 +196,7 @@ interface RecordedRequest {
   readonly method: string | undefined;
   readonly headers: Record<string, string>;
   readonly body: unknown;
+  readonly signal?: AbortSignal | null | undefined;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -214,6 +221,7 @@ const fakeEndpoint = (
       method: init?.method,
       headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      signal: init?.signal,
     };
     const isHealth = request.url.endsWith(AGENT_HEALTH_ROUTE);
     const recorded = isHealth ? healthRequests : requests;
@@ -1044,6 +1052,19 @@ describe("MicrovmRuntimeAdapter.launch", () => {
   });
 });
 
+/** An AWS service exception as the SDK throws it: the service's own answer, with its status. */
+const serviceError = (status: number) =>
+  Object.assign(new Error(status === 409 ? "ConflictException" : "InternalFailure"), {
+    $metadata: { httpStatusCode: status },
+  });
+
+/** How a stop ended: removed, refused by the platform, or with an outcome nobody knows. */
+const stopOutcome = (adapter: MicrovmRuntimeAdapter) =>
+  adapter.stop({ resourceId: "microvm-1" }).then(
+    () => "stopped",
+    (error: unknown) => (isRemovalRefusal(error) ? "refused" : "unknown"),
+  );
+
 describe("MicrovmRuntimeAdapter.stop", () => {
   const launched = async () => {
     const api = new FakeMicrovmApi();
@@ -1092,6 +1113,52 @@ describe("MicrovmRuntimeAdapter.stop", () => {
     await adapter.launch(captureLaunch);
     await expect(adapter.stop({ resourceId: "microvm-1", fence: true })).rejects.toThrow(
       /still TERMINATING .* the fence is not confirmed/,
+    );
+  });
+
+  // Review 9 #5 (decision 27): only the platform's own refusal, or a failure before anything
+  // was sent, is definitive; a TerminateMicrovm that failed any other way may have been taken.
+  it("tells a refused termination from one whose outcome nobody knows (review 9 #5)", async () => {
+    const failing = (failure: { readonly get?: Error; readonly terminate?: Error }) => {
+      const api = new FakeMicrovmApi();
+      const signals: (AbortSignal | undefined)[] = [];
+      const adapter = new MicrovmRuntimeAdapter({
+        config,
+        api: {
+          ...api,
+          getMicrovm: (id, options) => {
+            signals.push(options?.signal);
+            return failure.get === undefined ? api.getMicrovm(id) : Promise.reject(failure.get);
+          },
+          terminateMicrovm: (id, options) => {
+            signals.push(options?.signal);
+            return failure.terminate === undefined
+              ? api.terminateMicrovm(id)
+              : Promise.reject(failure.terminate);
+          },
+        },
+        pollIntervalMs: 1,
+      });
+      return { adapter, signals };
+    };
+    // The service answered and did not act.
+    expect(await stopOutcome(failing({ terminate: serviceError(409) }).adapter)).toBe("refused");
+    // Nothing was sent: the read before it failed.
+    expect(await stopOutcome(failing({ get: new Error("socket hang up") }).adapter)).toBe(
+      "refused",
+    );
+    // A lost reply, a server fault, an abort: the platform may have taken it.
+    expect(await stopOutcome(failing({ terminate: new Error("socket hang up") }).adapter)).toBe(
+      "unknown",
+    );
+    expect(await stopOutcome(failing({ terminate: serviceError(500) }).adapter)).toBe("unknown");
+    // Every call of the stop is bounded (nothing of it is signed past the adapter's fence).
+    const bounded = failing({});
+    expect(await stopOutcome(bounded.adapter)).toBe("stopped");
+    expect(bounded.signals).toHaveLength(2);
+    expect(bounded.signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+    expect(bounded.adapter.removalFenceMs).toBeGreaterThanOrEqual(
+      MICROVM_STOP_READ_BOUND_MS + MICROVM_TERMINATE_BOUND_MS + 15 * 60_000,
     );
   });
 });
@@ -1375,6 +1442,9 @@ describe("MicrovmRuntimeAdapter.recover (review 3 #7)", () => {
       headers: expect.objectContaining({ authorization: "Bearer control-token" }),
       body: { version: 1, runId: "run-golden-4", secretEnvJson: JSON.stringify(token) },
     });
+    // Bounded (review 9 #8): an agent that never answers fails the attempt, never the sweep.
+    expect(recoverRequest?.signal).toBeInstanceOf(AbortSignal);
+    expect(endpoint.healthRequests.at(-1)?.signal).toBeInstanceOf(AbortSignal);
     // It waited for the recovered daemon to answer before the caller drains it.
     expect(control.healthTargets.length).toBe(launchHealthChecks + 1);
     expect(api.vms.get("microvm-1")?.state).toBe("RUNNING");

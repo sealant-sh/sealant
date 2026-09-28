@@ -140,13 +140,16 @@ export {
 } from "./repositories/workspace-create-reservations.js";
 
 export {
+  answerCovers,
   compareExecutorOrigins,
   executorOriginFromStored,
+  nextUnsavedObservations,
   statusSupersedes,
   storedStatusComplete,
   storedStatusOrigin,
   type ExecutorOrigin,
   type ExecutorOriginOrder,
+  type UnsavedObservation,
 } from "./capture-evidence-order.js";
 
 export {

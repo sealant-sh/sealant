@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DockerRuntimeAdapter } from "./docker-runtime-adapter.js";
 import { LaunchRetainedError } from "./launch-retention.js";
 import {
+  isRemovalRefusal,
   parseRuntimeAdapterLaunchInput,
   parseRuntimeAdapterSupportInput,
 } from "./runtime-adapter.js";
@@ -2118,6 +2119,45 @@ describe("DockerRuntimeAdapter", () => {
     await expect(adapter.stop({ resourceId: "container-id-123" })).rejects.toThrow(
       /Failed to remove workspace container/,
     );
+  });
+
+  // Review 9 #5 (decision 27): the daemon's own error answer with the container still there is a
+  // definitive refusal; a CLI that lost the daemon mid-request is an outcome nobody knows.
+  it("marks a removal the daemon answered with an error as refused, and a lost one as unknown (review 9 #5)", async () => {
+    const stopWith = async (rmError: Error) => {
+      const commandRunner = vi.fn<
+        (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+      >(async (_command, args) => {
+        if (args[0] === "rm") {
+          throw rmError;
+        }
+        if (args[0] === "inspect") {
+          return {
+            stdout: '{"Status":"exited","Running":false,"ExitCode":75,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const adapter = new DockerRuntimeAdapter({
+        commandRunner,
+        runtimeCatalogLoader: createRuntimeCatalogLoader(),
+      });
+      return adapter.stop({ resourceId: "container-id-123" }).then(
+        () => "stopped",
+        (error: unknown) => (isRemovalRefusal(error) ? "refused" : "unknown"),
+      );
+    };
+    expect(
+      await stopWith(
+        new Error(
+          "Command failed: docker rm -f -v container-id-123\nError response from daemon: cannot remove container: device or resource busy",
+        ),
+      ),
+    ).toBe("refused");
+    expect(
+      await stopWith(new Error("Command failed: docker rm -f -v container-id-123\nunexpected EOF")),
+    ).toBe("unknown");
   });
 });
 

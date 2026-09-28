@@ -17,7 +17,7 @@ import {
 import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
+import { removalRefused, type RuntimeAdapter } from "../runtime/runtime-adapter.js";
 import { SealantRuntime } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import {
@@ -1483,6 +1483,57 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(row?.deletion).toBeUndefined();
   });
 
+  // Review 9 #9 (decision 28): the stop tells its caller "removing" only once the removal was
+  // re-checked and issued, never before a step that could still veto it.
+  it("tells its caller the removal began only once it was issued (review 9 #9)", async () => {
+    const phasesOf = async (veto: boolean) => {
+      const ledger = await seededWithComplete();
+      const harness = makeHarness({
+        workspace: workspaceRow(),
+        instance: runtimeInstance({ sourceKind: "capture" }),
+        daemon: fakeCaptureDaemon(["unreachable"]).layer,
+      });
+      if (veto) {
+        harness.markStopRequested.mockImplementation(() =>
+          ledger.recordStatus("run_old", newerFailure(), Date.now()).pipe(Effect.asVoid),
+        );
+      }
+      const phases: string[] = [];
+      const stop = removedStop();
+      const outcome = await Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [
+            stubAdapter(stop, async () => ({ state: "exited" as const, exitCode: 75 })),
+          ],
+          captureDrain: {
+            ledger,
+            settings,
+            budgetMs: 1,
+            label: "review 9 #9",
+            onPhase: (phase) =>
+              Effect.sync(() => {
+                phases.push(
+                  phase.kind === "drain-ended" ? `drain-ended:${phase.drain}` : phase.kind,
+                );
+              }),
+          },
+          launchMaterialStager: stager,
+        }).pipe(Effect.provide(harness.layer)),
+      );
+      return { outcome, phases, stopped: stop.mock.calls.length };
+    };
+    const vetoed = await phasesOf(true);
+    expect(vetoed.outcome).toBe("kept");
+    expect(vetoed.stopped).toBe(0);
+    expect(vetoed.phases).not.toContain("removing");
+    const removed = await phasesOf(false);
+    expect(removed.outcome).toBe("stopped");
+    expect(removed.phases.at(-1)).toBe("removing");
+  });
+
   it("admits no observation while it removes the runtime, and none once it was removed", async () => {
     const ledger = await seededWithComplete();
     const harness = makeHarness({
@@ -1504,7 +1555,7 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(await Effect.runPromise(ledger.admitRecovery("run_old"))).toBe("deleted");
   });
 
-  it("gives the removal up when the runtime call fails, so observations resume", async () => {
+  it("gives the removal up when the runtime refused it, so observations resume", async () => {
     const ledger = await seededWithComplete();
     const harness = makeHarness({
       workspace: workspaceRow(),
@@ -1512,11 +1563,29 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
       daemon: fakeCaptureDaemon(["unreachable"]).layer,
     });
     const stop = vi.fn(async (): Promise<never> => {
-      throw new Error("docker rm failed");
+      throw removalRefused(new Error("docker rm failed: Error response from daemon"));
     });
     await expect(stopWith(ledger, harness, stop)).rejects.toThrow("docker rm failed");
     expect(ledger.store.rows.get("run_old")?.deletion).toBeUndefined();
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeDefined();
+  });
+
+  // Review 9 #5 (decision 27): a failure that is not the runtime's refusal (a lost reply) may
+  // have been acted on: the removal stays issued, and nothing is observed or recovered.
+  it("keeps the removal issued when the runtime call fails with an outcome nobody knows (review 9 #5)", async () => {
+    const ledger = await seededWithComplete();
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance({ sourceKind: "capture" }),
+      daemon: fakeCaptureDaemon(["unreachable"]).layer,
+    });
+    const stop = vi.fn(async (): Promise<never> => {
+      throw new Error("TerminateMicrovm: socket hang up");
+    });
+    await expect(stopWith(ledger, harness, stop)).rejects.toThrow("socket hang up");
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleting-issued");
+    expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeUndefined();
+    expect(await Effect.runPromise(ledger.admitRecovery("run_old"))).toBe("deleting");
   });
 });
 

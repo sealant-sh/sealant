@@ -82,15 +82,53 @@ export interface MicrovmAuthTokenInput {
   readonly port: number;
 }
 
+/**
+ * A bound on one API call: aborting it stops the SDK's retries and the request in flight, so no
+ * request of it is signed (or sent) after the signal fires (review 9 #5).
+ */
+export interface MicrovmCallOptions {
+  readonly signal?: AbortSignal | undefined;
+}
+
 export interface MicrovmApi {
   readonly runMicrovm: (input: MicrovmRunInput) => Promise<MicrovmDescription>;
   /** Undefined when the platform no longer knows the id (ResourceNotFoundException). */
-  readonly getMicrovm: (microvmId: string) => Promise<MicrovmDescription | undefined>;
-  /** Idempotent on the platform side; `not-found` only when the id is unknown outright. */
-  readonly terminateMicrovm: (microvmId: string) => Promise<"terminated" | "not-found">;
+  readonly getMicrovm: (
+    microvmId: string,
+    options?: MicrovmCallOptions,
+  ) => Promise<MicrovmDescription | undefined>;
+  /**
+   * Idempotent on the platform side; `not-found` only when the id is unknown outright. The API
+   * names no operation to ask about later and takes no condition or client token: a call that
+   * failed without the service's answer has an outcome only `getMicrovm` can tell afterwards
+   * (`TERMINATING`/`TERMINATED`: it was taken), and a request can act only while its SigV4
+   * signature is accepted (review 9 #5).
+   */
+  readonly terminateMicrovm: (
+    microvmId: string,
+    options?: MicrovmCallOptions,
+  ) => Promise<"terminated" | "not-found">;
   /** The `X-aws-proxy-auth` value for the given VM and port. */
   readonly createAuthToken: (input: MicrovmAuthTokenInput) => Promise<string>;
 }
+
+/**
+ * Whether a failed call carries the service's own answer refusing it: an AWS service exception
+ * with a 4xx status (a conflict with the VM's state, throttling, access denied, validation). The
+ * service answered and did not act (review 9 #5). A 5xx, a transport error, a timeout or an abort
+ * is not: the request may have been acted on.
+ */
+export const isServiceRefusal = (error: unknown): boolean => {
+  if (typeof error !== "object" || error === null || !("$metadata" in error)) {
+    return false;
+  }
+  const metadata = error.$metadata;
+  if (typeof metadata !== "object" || metadata === null || !("httpStatusCode" in metadata)) {
+    return false;
+  }
+  const status = metadata.httpStatusCode;
+  return typeof status === "number" && status >= 400 && status < 500;
+};
 
 const isResourceNotFound = (error: unknown): boolean =>
   typeof error === "object" &&
@@ -144,10 +182,13 @@ export const createLiveMicrovmApi = (options: LiveMicrovmApiOptions): MicrovmApi
       };
       return toDescription(await client.send(new RunMicrovmCommand(request)));
     },
-    getMicrovm: async (microvmId) => {
+    getMicrovm: async (microvmId, call) => {
       try {
         return toDescription(
-          await client.send(new GetMicrovmCommand({ microvmIdentifier: microvmId })),
+          await client.send(
+            new GetMicrovmCommand({ microvmIdentifier: microvmId }),
+            call?.signal === undefined ? {} : { abortSignal: call.signal },
+          ),
         );
       } catch (error) {
         if (isResourceNotFound(error)) {
@@ -156,9 +197,12 @@ export const createLiveMicrovmApi = (options: LiveMicrovmApiOptions): MicrovmApi
         throw error;
       }
     },
-    terminateMicrovm: async (microvmId) => {
+    terminateMicrovm: async (microvmId, call) => {
       try {
-        await client.send(new TerminateMicrovmCommand({ microvmIdentifier: microvmId }));
+        await client.send(
+          new TerminateMicrovmCommand({ microvmIdentifier: microvmId }),
+          call?.signal === undefined ? {} : { abortSignal: call.signal },
+        );
         return "terminated";
       } catch (error) {
         if (isResourceNotFound(error)) {
