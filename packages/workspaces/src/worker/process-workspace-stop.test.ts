@@ -22,6 +22,7 @@ import { SealantRuntime } from "../sealantd/runtime.js";
 import { captureStatus, fakeCaptureDaemon, savedStatus } from "./capture-daemon.fixture.js";
 import {
   EMPTY_CAPTURE_DRAIN_ENTRY,
+  InMemoryCaptureDrainStore,
   inMemoryCaptureDrainLedger,
   type CaptureDrainEntry,
   type CaptureDrainLedger,
@@ -512,6 +513,59 @@ describe("processWorkspaceStopEffect · drain before stop", () => {
     expect(daemon.calls.slice(0, 2)).toEqual(["flush", "status"]);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(harness.markStopped).toHaveBeenCalledWith({ runId: "run_old", stopReason: "expired" });
+  });
+
+  it("leaves a run to the stop in flight: the stranded reaper neither drains nor removes it (e2e 5)", async () => {
+    // e2e 5: the lifecycle stop's drain saw the final flush complete and was removing the
+    // container (`docker stop` waits the grace); the stranded reaper saw the workspace `stopped`
+    // and the runtime still up, drained it again, and retried the daemon — shut down by then —
+    // 12 times over 55 s after the container was gone.
+    const daemon = fakeCaptureDaemon([savedStatus(), "unreachable"]);
+    const harness = makeHarness({
+      workspace: workspaceRow({ status: "stopped" }),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const store = new InMemoryCaptureDrainStore();
+    const removalStarted = Promise.withResolvers<void>();
+    const removalDone = Promise.withResolvers<void>();
+    const lifecycleStop = vi.fn(async () => {
+      removalStarted.resolve();
+      await removalDone.promise;
+      return { adapter: "docker" as const, resourceId: "container-1", outcome: "stopped" as const };
+    });
+    const inspect = vi.fn(async () => ({ state: "running" as const }));
+    const stopWith = (label: string, stop: RuntimeAdapter["stop"]) =>
+      Effect.runPromise(
+        processWorkspaceStopEffect({
+          workspaceId: "ws_1",
+          runId: "run_old",
+          stopReason: "user",
+          runtimeAdapters: [stubAdapter(stop, inspect)],
+          captureDrain: {
+            ledger: inMemoryCaptureDrainLedger({ store }),
+            settings: { ...FAST, unreachableWindowMs: 60_000, pollIntervalMs: 5 },
+            budgetMs: 300,
+            label,
+          },
+        }).pipe(Effect.provide(harness.layer)),
+      );
+
+    const lifecycle = stopWith("lifecycle stop", lifecycleStop);
+    await removalStarted.promise;
+    const reaperStop = stopped();
+    const reaper = await stopWith("stranded reaper", reaperStop);
+
+    expect(reaper).toBe("busy");
+    expect(reaperStop).not.toHaveBeenCalled();
+    // Only the lifecycle stop's FINAL reached the daemon.
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+
+    removalDone.resolve();
+    expect(await lifecycle).toBe("stopped");
+    // Released: a later sweep may take the run again.
+    expect(store.rows.get("run_old")?.owner).toBeUndefined();
   });
 
   it("keeps a runtime whose daemon answers but whose queue stalled: no stop, no writes", async () => {

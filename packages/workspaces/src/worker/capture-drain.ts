@@ -29,7 +29,11 @@
  *    executor that EXITED keeps its disk, which holds whatever was not saved (sealantd exits 75
  *    after an incomplete final flush, and a plain `docker stop` or a lost reply looks the same):
  *    it is kept (`silent`), whatever this or any earlier drain saw, unless the preservation
- *    policy (`executor-preservation.ts`) finds evidence it may go.
+ *    policy (`executor-preservation.ts`) finds evidence it may go. The runtime is asked at the
+ *    first silence, not only when the window closes: an executor that ended is kept at once (a
+ *    retry cannot reach a daemon that is not running), and one that ended AFTER its daemon
+ *    reported the final flush complete is `drained` at once on that recorded completion (the
+ *    stop that followed it) — never retried, never reported gone.
  *  - **busy**: another worker holds the run's drain; this call does nothing.
  *
  * A daemon that reports a class's snaps failing (`snaps`) is saving none of that class's newest
@@ -105,7 +109,9 @@ export const DEFAULT_CAPTURE_DRAIN_SETTINGS: CaptureDrainSettings = {
   leaseMs: 3 * 60_000,
 };
 
-const DEFAULT_LEASE_MS = 3 * 60_000;
+/** How long a drain claim lasts without renewal when the settings name none. */
+export const DEFAULT_CAPTURE_DRAIN_LEASE_MS = 3 * 60_000;
+const DEFAULT_LEASE_MS = DEFAULT_CAPTURE_DRAIN_LEASE_MS;
 
 /** Managed processes get this long between SIGTERM and SIGKILL when a drain's FINAL runs. */
 export const DEFAULT_FINAL_FLUSH_GRACE_MS = 30_000;
@@ -702,6 +708,12 @@ export interface DrainCaptureInput {
    * unknown answer must be `running`.
    */
   readonly runtimeState: Effect.Effect<"running" | "exited" | "missing">;
+  /**
+   * A claim on the run's drain the caller already holds (`ledger.claim`): the drain works under
+   * it and leaves it held, so the caller keeps the run through what follows (the removal of the
+   * runtime) and releases it itself. Absent: the drain claims the run and releases it on return.
+   */
+  readonly claim?: CaptureDrainClaim;
 }
 
 const observationOf = (outcome: CaptureDrainOutcome): CaptureDrainObservation | undefined => {
@@ -738,7 +750,7 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
   input: DrainCaptureInput,
 ) {
   const { runId, ledger, settings, label } = input;
-  const claimed = yield* ledger.claim(runId);
+  const claimed = input.claim ?? (yield* ledger.claim(runId));
   if (claimed === undefined) {
     return { kind: "busy" } satisfies CaptureDrainOutcome;
   }
@@ -784,14 +796,41 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
         const unreachableSince = entry.unreachableSince ?? now;
         entry = { ...entry, unreachableSince };
         const unreachableForMs = now - unreachableSince;
+        // A silent daemon on an executor that already ENDED will not answer again: nothing is
+        // gained by waiting out the silent window, and every retry is a spurious drain of a
+        // runtime that is gone. Asked at once, not only when the window closes.
+        const endedNow = yield* input.runtimeState;
+        const last = entry.last;
+        if (endedNow !== "running" && last !== undefined && last.complete === true) {
+          // Its daemon reported the final flush complete, then the executor ended (the stop that
+          // followed it, or the daemon's own exit after the FINAL): that completion is the
+          // evidence, and nothing of the executor can add to it. The stop proceeds.
+          yield* Effect.logInfo(
+            `${prefix}: saved · the executor ${endedNow === "missing" ? "is gone" : "ended"} after its daemon reported the final flush complete · ${describeCaptureStatus(last)}`,
+          );
+          return yield* finish({ kind: "drained", status: last });
+        }
+        if (endedNow === "exited") {
+          // Ended without a final flush confirmed complete: its disk keeps the staged captures.
+          // Kept now (the caller records it retained, and recovery starts), not after the window.
+          const detail = `the executor ended without a final flush confirmed complete; its disk keeps the staged captures (${sample.detail})`;
+          if (!entry.silentLogged) {
+            entry = { ...entry, silentLogged: true };
+            yield* Effect.logError(
+              `${prefix}: not saved · executor exited · kept · ${detail}. The runtime is left in place; remove it only once its captures are recovered.${
+                last === undefined ? "" : ` Last status: ${describeCaptureStatus(last)}.`
+              }`,
+            );
+          }
+          return yield* finish({ kind: "silent", silentForMs: unreachableForMs, detail });
+        }
         if (unreachableForMs >= settings.unreachableWindowMs) {
           const seconds = String(Math.round(unreachableForMs / 1000));
-          const last =
+          const lastLine =
             entry.last === undefined ? "" : ` Last status: ${describeCaptureStatus(entry.last)}.`;
-          const runtimeState = yield* input.runtimeState;
-          if (runtimeState === "missing") {
+          if (endedNow === "missing") {
             yield* Effect.logWarning(
-              `${prefix}: sealantd silent for ${seconds} s (${sample.detail}) and the runtime reports nothing of the executor left; there is no disk to keep, the stop proceeds.${last}`,
+              `${prefix}: sealantd silent for ${seconds} s (${sample.detail}) and the runtime reports nothing of the executor left; there is no disk to keep, the stop proceeds.${lastLine}`,
             );
             return yield* finish({
               kind: "gone",
@@ -799,25 +838,10 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
               detail: sample.detail,
             });
           }
-          if (runtimeState === "exited") {
-            // The executor ended and its daemon is silent, never having confirmed a final flush
-            // complete: a daemon whose final flush is incomplete exits (75) and keeps its staging
-            // on the executor's disk — whether or not any drain reached it first (a plain
-            // `docker stop`, its own shutdown FINAL, a lost reply). That disk remains until the
-            // runtime is removed; removing it would destroy the only copy. Keep it.
-            const detail = `the executor ended without a final flush confirmed complete; its disk keeps the staged captures (${sample.detail})`;
-            if (!entry.silentLogged) {
-              entry = { ...entry, silentLogged: true };
-              yield* Effect.logError(
-                `${prefix}: not saved · executor exited · kept · ${detail}. The runtime is left in place; remove it only once its captures are recovered.${last}`,
-              );
-            }
-            return yield* finish({ kind: "silent", silentForMs: unreachableForMs, detail });
-          }
           if (!entry.silentLogged) {
             entry = { ...entry, silentLogged: true };
             yield* Effect.logError(
-              `${prefix}: not saved · daemon silent · kept · sealantd has not answered for ${seconds} s (${sample.detail}) while the runtime reports the executor running. The workspace is left running; every sweep asks again.${last}`,
+              `${prefix}: not saved · daemon silent · kept · sealantd has not answered for ${seconds} s (${sample.detail}) while the runtime reports the executor running. The workspace is left running; every sweep asks again.${lastLine}`,
             );
           }
           return yield* finish({
@@ -942,5 +966,5 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
       }
       yield* Effect.sleep(settings.pollIntervalMs);
     }
-  }).pipe(Effect.ensuring(ledger.release(runId, token)));
+  }).pipe(Effect.ensuring(input.claim === undefined ? ledger.release(runId, token) : Effect.void));
 });

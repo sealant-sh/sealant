@@ -1845,6 +1845,40 @@ describe("DockerRuntimeAdapter", () => {
     expect(result.outcome).toBe("not-found");
   });
 
+  it("waits for another removal of the same container instead of failing the stop (e2e 5)", async () => {
+    // e2e 5: the exit reconciler removed an ended container while the lifecycle stop removed it
+    // too; `docker rm` answered "removal ... already in progress" and the stop was recorded failed.
+    let inspections = 0;
+    const commandRunner = vi.fn<
+      (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>
+    >(async (_command, args) => {
+      if (args[0] === "rm") {
+        throw new Error(
+          "Command failed: docker rm -f -v container-id-123\nError response from daemon: removal of container container-id-123 is already in progress",
+        );
+      }
+      if (args[0] === "inspect") {
+        inspections += 1;
+        if (inspections <= 2) {
+          return {
+            stdout: '{"Status":"removing","Running":false,"ExitCode":0,"Error":""}\n',
+            stderr: "",
+          };
+        }
+        throw new Error("Error: No such object: container-id-123");
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const adapter = new DockerRuntimeAdapter({
+      commandRunner,
+      runtimeCatalogLoader: createRuntimeCatalogLoader(),
+    });
+
+    const result = await adapter.stop({ resourceId: "container-id-123", fence: true });
+
+    expect(result.outcome).toBe("not-found");
+  });
+
   it("surfaces a stop failure that is NOT a missing container (so callers never record a false stop)", async () => {
     const commandRunner = vi.fn<
       (command: string, args: Array<string>) => Promise<{ stdout: string; stderr: string }>

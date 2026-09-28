@@ -467,6 +467,24 @@ const isNoSuchContainerError = (error: unknown): boolean => {
   return /no such (container|object)/i.test(text);
 };
 
+/**
+ * `docker rm` refused because another removal of the same container is under way (a planned stop
+ * and the exit reconciler removing the same ended container): not a failure of the stop, which
+ * waits for that removal instead.
+ */
+const isRemovalInProgressError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr = "stderr" in error ? error.stderr : undefined;
+  const text = typeof stderr === "string" ? `${error.message}\n${stderr}` : error.message;
+  return /removal of container .* is already in progress/i.test(text);
+};
+
+/** How long a stop waits on another removal of the same container before it reports failure. */
+const CONCURRENT_REMOVAL_WAIT_MS = 30_000;
+const CONCURRENT_REMOVAL_POLL_MS = 250;
+
 const normalizeContainerToken = (value: string): string => {
   return value
     .toLowerCase()
@@ -1515,6 +1533,21 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return { outcome: "restarted" };
   }
 
+  /** Whether the container is gone within `timeoutMs` (another removal of it finishing). */
+  private async awaitContainerGone(containerId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        await this.inspectContainerState(containerId);
+      } catch (error) {
+        if (isNoSuchContainerError(error)) return true;
+        return false;
+      }
+      if (Date.now() >= deadline) return false;
+      await delay(CONCURRENT_REMOVAL_POLL_MS);
+    }
+  }
+
   /** `docker cp` sealantd's recovery marker into the (stopped) container's root. */
   private async writeRecoveryMarker(containerId: string): Promise<void> {
     const directory = await mkdtemp(joinPath(tmpdir(), "sealant-recovery-"));
@@ -1656,6 +1689,11 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         } catch (inspectError) {
           gone = isNoSuchContainerError(inspectError);
         }
+      }
+      if (!gone && isRemovalInProgressError(error)) {
+        // Another removal of this container is under way: wait for it rather than fail a stop
+        // that is completing (and record `stop-failed` for it).
+        gone = await this.awaitContainerGone(parsed.resourceId, CONCURRENT_REMOVAL_WAIT_MS);
       }
       if (!gone) {
         const message = error instanceof Error ? error.message : "Unknown docker rm error.";

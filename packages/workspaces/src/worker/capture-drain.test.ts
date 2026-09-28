@@ -389,6 +389,73 @@ describe("drainCaptureBeforeStop", () => {
     );
     expect(outcome.kind).toBe("drained");
   });
+
+  // e2e 5: the lifecycle stop's drain saw the final flush complete and went on to remove the
+  // runtime; the stranded reaper then drained the same run and retried the silent daemon 12
+  // times over 55 s after the container was gone (the silent window is 5 minutes).
+  const SLOW_SILENCE: CaptureDrainSettings = {
+    ...FAST,
+    pollIntervalMs: 5,
+    unreachableWindowMs: 60_000,
+  };
+
+  it("ends at once, saved, when the executor ended after its daemon reported the final flush complete", async () => {
+    const store = new InMemoryCaptureDrainStore();
+    const first = await drain(
+      fakeCaptureDaemon([savedStatus()]),
+      inMemoryCaptureDrainLedger({ store }),
+    );
+    expect(first.kind).toBe("drained");
+
+    for (const ended of ["missing", "exited"] as const) {
+      const daemon = fakeCaptureDaemon(["unreachable"]);
+      const outcome = await drain(
+        daemon,
+        inMemoryCaptureDrainLedger({ store }),
+        200,
+        SLOW_SILENCE,
+        ended,
+      );
+      expect(outcome).toMatchObject({ kind: "drained", status: { complete: true } });
+      expect(daemon.connect).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("keeps an executor that ended at the first silence, without waiting out the window", async () => {
+    const daemon = fakeCaptureDaemon(["unreachable"]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger(), 200, SLOW_SILENCE, "exited");
+    expect(outcome).toMatchObject({
+      kind: "silent",
+      detail: expect.stringMatching(/without a final flush confirmed complete/),
+    });
+    expect(daemon.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("works under a claim the caller holds and leaves it held", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const claim = await Effect.runPromise(ledger.claim("run_1"));
+    expect(claim).toBeDefined();
+    const outcome = await Effect.runPromise(
+      drainCaptureBeforeStop({
+        runId: "run_1",
+        target: TARGET,
+        ledger,
+        settings: FAST,
+        budgetMs: 1_000,
+        label: "test",
+        runtimeState: Effect.succeed("running"),
+        ...(claim === undefined ? {} : { claim }),
+      }).pipe(Effect.provide(fakeCaptureDaemon([savedStatus()]).layer)),
+    );
+    expect(outcome.kind).toBe("drained");
+    // Still the caller's: another drain of the run is refused until the caller releases it.
+    expect(
+      await drain(
+        fakeCaptureDaemon([savedStatus()]),
+        inMemoryCaptureDrainLedger({ store: ledger.store }),
+      ),
+    ).toEqual({ kind: "busy" });
+  });
 });
 
 describe("drain ownership across workers", () => {
