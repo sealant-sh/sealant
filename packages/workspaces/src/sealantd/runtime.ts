@@ -32,6 +32,7 @@ import {
 } from "@sealant/runtime-client";
 import {
   CaptureClass as WireCaptureClass,
+  CaptureFlushKind as WireCaptureFlushKind,
   SessionMode as WireSessionMode,
   type Capabilities,
   type CaptureReplanned,
@@ -370,10 +371,9 @@ export const snapFailureSummary = (
  * replans for good: the executor is never reused, and whatever must be read from it (credential
  * sync-back) is read before.
  *
- * The pinned wire (`@sealant/runtime-protocol` 0.18.2) carries NO flush arguments: the request is
- * sent as an empty message and the daemon runs its only flush, whatever `kind` says. The fields
- * travel once the pin moves to the release with `CaptureFlushArgs { kind = 1, deadline_ms = 2,
- * grace_ms = 3 }`.
+ * Sent as the wire's `CaptureFlushArgs { kind = 1, deadline_ms = 2, grace_ms = 3 }` (sealantd
+ * 0.19.0). A daemon before 0.19.0 reads the message as empty and runs its only flush, whatever
+ * `kind` says.
  */
 export interface CaptureFlushRequest {
   readonly kind: "final" | "suspend";
@@ -533,6 +533,17 @@ const optionalWireFields = (report: object): Pick<CaptureFlushReport, OptionalWi
     ...wireOverdue(wireField(report, "overdue")),
   };
 };
+
+/** The request as the wire's `CaptureFlushArgs`: kind, and deadline and grace when given. */
+const captureFlushArgs = (request: CaptureFlushRequest | undefined) => ({
+  kind: request?.kind === "final" ? WireCaptureFlushKind.FINAL : WireCaptureFlushKind.SUSPEND,
+  ...(request?.deadlineMs === undefined
+    ? {}
+    : { deadlineMs: BigInt(Math.max(0, Math.round(request.deadlineMs))) }),
+  ...(request?.graceMs === undefined
+    ? {}
+    : { graceMs: BigInt(Math.max(0, Math.round(request.graceMs))) }),
+});
 
 /**
  * Wire `overdue` (31): a capture step past its bound. Every field or none: a message that names
@@ -1352,14 +1363,15 @@ const makeSession = (client: SealantClient): SealantSession => ({
       "bindMount",
       Effect.tryPromise(() => client.bindMount(mountPath, subpath)),
     ),
-  // `_request` is not on the pinned wire (0.18.2 `capture_flush` is `Empty`); when the pin moves
-  // to the release with `CaptureFlushArgs`, this sends `{ kind, deadlineMs }` in `value`.
-  captureFlush: (_request) =>
+  captureFlush: (request) =>
     withSealantError(
       "captureFlush",
       Effect.tryPromise(async () => {
         // The typed client has no wrapper for this command yet; `request` is its generic seam.
-        const response = await client.request({ case: "captureFlush", value: {} });
+        const response = await client.request({
+          case: "captureFlush",
+          value: captureFlushArgs(request),
+        });
         const outcome = response.outcome?.outcome;
         if (outcome?.case === "error") {
           throw new SdkSealantError(outcome.value);

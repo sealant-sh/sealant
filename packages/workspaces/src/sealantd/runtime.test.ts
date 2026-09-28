@@ -21,6 +21,8 @@ import { fileURLToPath } from "node:url";
 import { StreamKind, RuntimeState } from "@sealant/runtime-client";
 import {
   CaptureClass,
+  CaptureClassSnapsSchema,
+  CaptureOverdueSchema,
   CaptureReplannedSchema,
   CaptureStatusReportSchema,
   create,
@@ -430,6 +432,12 @@ describe("captureFlushReportFromWire", () => {
       fenced: false,
       paused: false,
       refused: [],
+      // Plain proto3 scalars on the 0.19.0 wire: always carried, so always read.
+      complete: false,
+      pendingBulk: 0,
+      pendingBytes: 0,
+      repairing: false,
+      bulkBuilding: false,
     });
     expect(
       captureFlushReportFromWire(
@@ -496,8 +504,7 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
   });
 
   it("reads every field a newer daemon reports (sealantd 13-25 and the snap failure)", () => {
-    // What the typed message looks like once the pin moves: the pinned 0.18.2 type does not
-    // declare these, so they are read structurally.
+    // Every field a 0.19.0 daemon reports, as the typed message carries it.
     const newer = {
       ...base,
       pendingBulk: 1n,
@@ -514,18 +521,18 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       repairing: true,
       bulkBuilding: true,
       snaps: [
-        {
+        create(CaptureClassSnapsSchema, {
           class: CaptureClass.SMALL,
           snapsFailed: 12n,
           lastSnapError: "File name too long (os error 36): tree/aaaa…",
           snapFailingSinceUnixMs: 1_757_760_000_000n,
-        },
-        { class: CaptureClass.BULK, snapsFailed: 1n },
-        {
+        }),
+        create(CaptureClassSnapsSchema, { class: CaptureClass.BULK, snapsFailed: 1n }),
+        create(CaptureClassSnapsSchema, {
           class: CaptureClass.UNSPECIFIED,
           snapsFailed: 5n,
           lastSnapError: "unknown class",
-        },
+        }),
       ],
     };
     expect(captureFlushReportFromWire(newer)).toEqual({
@@ -572,12 +579,12 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
   // sealantd 31: a capture step past its bound, forwarded with every other field past the pin —
   // the origin stamp (27–30) included — by the one structural reader every path uses.
   it("reads a step past its bound beside the origin stamp and every other newer field", () => {
-    const overdue = {
+    const overdue = create(CaptureOverdueSchema, {
       step: "small snap › git cat-file --batch-check",
       startedUnixMs: 1_757_760_000_000n,
       runningMs: 95_000n,
       boundMs: 60_000n,
-    };
+    });
     const newest = {
       ...base,
       headN: 7n,
@@ -592,6 +599,8 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       overdue,
     };
     expect(captureFlushReportFromWire(newest)).toEqual({
+      repairing: false,
+      bulkBuilding: false,
       epoch: 2,
       worktreeId: "wt_1",
       headN: 7,
@@ -622,21 +631,18 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
         boundMs: 60_000,
       },
     });
-    // Nothing past its bound, or a report missing a figure: nothing overdue is reported.
+    // Nothing past its bound, or a report that names no step: nothing overdue is reported.
     expect("overdue" in captureFlushReportFromWire(base)).toBe(false);
-    const { boundMs: _boundMs, ...partial } = overdue;
-    const unbounded = { ...base, overdue: partial };
-    expect("overdue" in captureFlushReportFromWire(unbounded)).toBe(false);
-    const unnamed = { ...base, overdue: { ...overdue, step: "" } };
+    const unnamed = { ...base, overdue: create(CaptureOverdueSchema, { ...overdue, step: "" }) };
     expect("overdue" in captureFlushReportFromWire(unnamed)).toBe(false);
   });
 
   it("leaves every field the message does not carry absent, and empty text and lists absent", () => {
     const report = captureFlushReportFromWire(base);
+    // `complete`, `pendingBulk`, `pendingBytes`, `repairing` and `bulkBuilding` are plain proto3
+    // scalars on the 0.19.0 wire: a decoded message always carries them (a daemon before 0.19.0
+    // reads as `complete: false`, which is never taken as saved).
     for (const key of [
-      "complete",
-      "pendingBulk",
-      "pendingBytes",
       "incompleteReason",
       "unreadable",
       "carried",
@@ -645,8 +651,6 @@ describe("captureFlushReportFromWire past the pinned wire", () => {
       "registerRefusedN",
       "registerMissing",
       "registerRefusals",
-      "repairing",
-      "bulkBuilding",
       "snaps",
       "lastSnapError",
       "snapFailingSinceUnixMs",
