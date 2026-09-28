@@ -299,6 +299,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     const first = yield* authorizedDeletion({
       ledger,
       runId,
+      runtime: state,
       decide: (record) =>
         decideExecutorDeletion({
           captureSourced: true,
@@ -510,6 +511,7 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
       const drained = yield* authorizedDeletion({
         ledger,
         runId,
+        runtime: "running",
         decide: (record) => {
           const evidence = recordedDeletionEvidence(record, executor);
           return decideExecutorDeletion({

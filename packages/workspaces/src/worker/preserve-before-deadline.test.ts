@@ -21,7 +21,7 @@ import {
   type WorkspaceRuntimeInstance,
   type WorkspaceRuntimeInstanceRepoService,
 } from "@sealant/db";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeAdapter } from "../runtime/runtime-adapter.js";
@@ -702,6 +702,13 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
     readonly rows: readonly WorkspaceRuntimeInstance[];
     /** How long each FINAL round trip takes before it answers (virtual). */
     readonly flushTakesMs: number;
+    /**
+     * Each FINAL answers complete and removing the runtime takes this long (virtual); absent,
+     * every queue stays pending and nothing is removed.
+     */
+    readonly stopTakesMs?: number;
+    /** How long virtual time runs on after the sweep returned (a removal still in flight). */
+    readonly thenAdvanceMs?: number;
     readonly initiateConcurrency?: number;
     readonly schedules?: Array<{ runId: string; startsAtMs: number | undefined }>;
   }) => {
@@ -709,6 +716,9 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
     vi.setSystemTime(NOW);
     // Every FINAL each executor was sent, at the virtual instant it was sent.
     const finals = new Map<string, number[]>();
+    // Every runtime removed, at the virtual instant its removal finished.
+    const removed = new Map<string, number>();
+    const logs: string[] = [];
     const layer = Layer.mergeAll(
       Layer.succeed(WorkspaceRuntimeInstanceRepo, {
         listPreservationCandidates: () => Effect.succeed(input.rows),
@@ -746,10 +756,17 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
                 const socket = socketOf(target);
                 finals.set(socket, [...(finals.get(socket) ?? []), Date.now() - NOW]);
                 yield* Effect.sleep(input.flushTakesMs);
-                return captureStatus({ pending: 1, complete: false });
+                return input.stopTakesMs === undefined
+                  ? captureStatus({ pending: 1, complete: false })
+                  : savedStatus();
               }),
           } as unknown as SealantSession),
       } as unknown as SealantRuntimeService),
+      Logger.layer([
+        Logger.make(({ message }) => {
+          logs.push(Array.isArray(message) ? message.join(" ") : String(message));
+        }),
+      ]),
     );
     const adapter: RuntimeAdapter = {
       id: "docker",
@@ -758,8 +775,14 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
         throw new Error("unused");
       },
       inspect: async () => ({ state: "running" }),
-      stop: async () => {
-        throw new Error("a pending queue is never stopped");
+      stop: async (request) => {
+        const takesMs = input.stopTakesMs;
+        if (takesMs === undefined) {
+          throw new Error("a pending queue is never stopped");
+        }
+        await new Promise((resolve) => setTimeout(resolve, takesMs));
+        removed.set(request.resourceId, Date.now() - NOW);
+        return { adapter: "docker", resourceId: request.resourceId, outcome: "stopped" };
       },
     };
     try {
@@ -798,11 +821,44 @@ describe("every due runtime gets its first FINAL before its cap (review 7 #6)", 
         }
         await vi.advanceTimersByTimeAsync(1_000);
       }
-      return { finals, doneAtMs: result.doneAtMs, driven: result.driven };
+      for (let elapsed = 0; elapsed < (input.thenAdvanceMs ?? 0); elapsed += 1_000) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      return { finals, removed, logs, doneAtMs: result.doneAtMs, driven: result.driven };
     } finally {
       vi.useRealTimers();
     }
   };
+
+  // Review 8 #6: the FINAL permit was held through the whole stop, removal included. Executors
+  // that answered complete at once then held all 32 permits through a 16-minute removal (within
+  // Docker's capture stop grace): the 33rd never got its FINAL before its cap, the sweep (and so
+  // every later sweep) waited out the removals, and each complete executor was reported at the cap
+  // as one whose "final flush could not be sent" — not saved — though its complete answer had come.
+  it("releases a FINAL permit once the FINAL is answered, never holding it through a removal", async () => {
+    const rows = Array.from({ length: 33 }, (_, index) => vm(index, CAP_MS));
+    const { finals, removed, logs, doneAtMs, driven } = await sweepAtCap({
+      rows,
+      flushTakesMs: 0,
+      stopTakesMs: 16 * MIN,
+      thenAdvanceMs: 17 * MIN,
+    });
+    const firsts = [...finals.values()].map((sent) => sent[0] ?? Number.POSITIVE_INFINITY);
+    expect(firsts).toHaveLength(33);
+    expect(Math.max(...firsts)).toBeLessThan(1_000);
+    // The sweep ends with its budget; the removals go on without it.
+    expect(doneAtMs ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(2 * MIN + 1_000);
+    expect(driven).toBe(33);
+    // Every removal still finishes, once, after the sweep returned.
+    expect(removed.size).toBe(33);
+    expect(Math.min(...removed.values())).toBeGreaterThanOrEqual(16 * MIN);
+    // No complete executor is reported as one whose FINAL could not be sent.
+    expect(logs.filter((line) => line.includes("could not be sent"))).toEqual([]);
+    expect(logs.filter((line) => line.includes("not saved"))).toEqual([]);
+    expect(
+      logs.filter((line) => line.includes("answered complete") && line.includes("removal")),
+    ).toHaveLength(33);
+  }, 60_000);
 
   it("sends all 68 first FINALs at once when 68 runtimes reach their start together", async () => {
     const rows = Array.from({ length: 68 }, (_, index) => vm(index, CAP_MS));

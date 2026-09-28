@@ -1519,3 +1519,57 @@ describe("an ended executor's removal is an owned transition (review 7 #5)", () 
     expect(await Effect.runPromise(ledger.openObservation("run_old", 1_000))).toBeDefined();
   });
 });
+
+// Review 8 #7: a removal the runtime was asked to make whose issuer died (its hold lapsed, no
+// outcome recorded) stays exclusionary — no FINAL may be asked of the executor under it — and the
+// next stop settles it from the runtime before anything else: the executor is still there and the
+// evidence the removal was authorized on still stands, so the removal is issued again.
+describe("processWorkspaceStopEffect · an issued removal with no recorded outcome (review 8 #7)", () => {
+  it("issues it again on the evidence it was authorized on, without asking the daemon anything", async () => {
+    let clock = 0;
+    const ledger = inMemoryCaptureDrainLedger({ now: () => clock });
+    await Effect.runPromise(ledger.recordStatus("run_old", savedStatus({ headN: 7 }), clock));
+    const read = await Effect.runPromise(ledger.read("run_old"));
+    const authorized = await Effect.runPromise(
+      ledger.authorizeDeletion("run_old", read.readable ? (read.entry?.evidenceVersion ?? 0) : -1),
+    );
+    if (authorized.kind !== "authorized") {
+      throw new Error(authorized.kind);
+    }
+    expect(await Effect.runPromise(ledger.issueDeletion("run_old", authorized.ticket))).toBe(true);
+    // Its issuer died mid-call: the hold lapses with nothing recorded.
+    clock += 121_000;
+    const daemon = fakeCaptureDaemon([savedStatus({ headN: 9 })]);
+    const harness = makeHarness({
+      workspace: workspaceRow(),
+      instance: runtimeInstance(),
+      captureSourced: true,
+      daemon: daemon.layer,
+    });
+    const stop = removedStop();
+    const outcome = await Effect.runPromise(
+      processWorkspaceStopEffect({
+        workspaceId: "ws_1",
+        runId: "run_old",
+        stopReason: "expired",
+        runtimeAdapters: [stubAdapter(stop, async () => ({ state: "running" }))],
+        captureDrain: {
+          ledger,
+          settings: {
+            pollIntervalMs: 1,
+            stallWindowMs: 30,
+            unreachableWindowMs: 30,
+            requestTimeoutMs: 1_000,
+          },
+          budgetMs: 1_000,
+          label: "test reaper",
+        },
+      }).pipe(Effect.provide(harness.layer)),
+    );
+    expect(outcome).toBe("stopped");
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(daemon.calls).toEqual([]);
+    expect(ledger.store.rows.get("run_old")?.deletion?.state).toBe("deleted");
+    expect(ledger.store.rows.get("run_old")?.entry.last?.headN).toBe(7);
+  });
+});

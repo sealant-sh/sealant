@@ -40,6 +40,7 @@ import {
   type AuthorizedDeletion,
   type CaptureDrainClaim,
   type CaptureDrainLedger,
+  type CaptureDrainOutcome,
   type CaptureDrainRead,
   type CaptureDrainSettings,
   type DeletionTicket,
@@ -61,7 +62,21 @@ export interface WorkspaceStopCaptureDrain {
   readonly label: string;
   /** Its executor already answered a FINAL: the drain polls its status first (review 7 #6). */
   readonly opensWithStatus?: boolean;
+  /**
+   * Told when the stop passes a point a caller may stop waiting at (review 8 #6): its drain
+   * returned, or the runtime's removal — uninterruptible, and as long as the executor's own stop
+   * grace — begins. The deadline sweep releases the FINAL permit it holds for this stop there, so
+   * a removal never holds up another executor's first FINAL.
+   */
+  readonly onPhase?: (phase: WorkspaceStopPhase) => Effect.Effect<void>;
 }
+
+/** A point a stop passed that its caller may want to know of (`WorkspaceStopCaptureDrain.onPhase`). */
+export type WorkspaceStopPhase =
+  /** The drain returned (its FINAL or status answered and recorded, or it gave up): its outcome. */
+  | { readonly kind: "drain-ended"; readonly drain: CaptureDrainOutcome["kind"] }
+  /** The runtime's removal begins (a drain may or may not have run before it). */
+  | { readonly kind: "removing" };
 
 /**
  * What one stop call did. Only `stopped` tore the runtime down; the others left it running:
@@ -266,6 +281,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
     readonly ticket?: DeletionTicket | undefined;
   }) =>
     Effect.gen(function* () {
+      yield* options.captureDrain?.onPhase?.({ kind: "removing" }) ?? Effect.void;
       yield* runtimeInstances.markStopRequested({
         runId: options.runId,
         stopReason: options.stopReason,
@@ -403,6 +419,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           authorizedDeletion({
             ledger: drain?.ledger,
             runId: options.runId,
+            runtime,
             decide: (current) => {
               const evidence = recordedDeletionEvidence(current, executor);
               return decideExecutorDeletion({
@@ -513,6 +530,20 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           });
         }
 
+        // A removal the runtime was asked to make whose outcome nobody recorded (its issuer's hold
+        // lapsed) is settled before anything is asked of the daemon (review 8 #7): issued again on
+        // the evidence it was authorized on while that still stands, else given up — and only
+        // then is the executor drained like any other.
+        if (captureSourced && drain !== undefined && recorded?.removalIssued === true) {
+          const settled = yield* decideAndRemove("running", false);
+          if (settled.removed) {
+            return settled.outcome;
+          }
+          if (settled.heldElsewhere) {
+            return stopOutcome("busy");
+          }
+        }
+
         if (!captureSourced) {
           const running = yield* decideAndRemove("running", false);
           return running.removed ? running.outcome : stopOutcome("kept");
@@ -547,6 +578,7 @@ export const processWorkspaceStopEffect = Effect.fn("processWorkspaceStop")(func
           runtimeState: runtimeState(adapter, resourceId),
           ...(drain.opensWithStatus === true ? { opensWithStatus: true } : {}),
         });
+        yield* drain.onPhase?.({ kind: "drain-ended", drain: outcome.kind }) ?? Effect.void;
         if (!drainPermitsStop(outcome)) {
           if (outcome.kind === "silent") {
             // Silent while the executor ended mid-drain: it is kept with its disk; record it.

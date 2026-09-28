@@ -30,6 +30,8 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "closeObservation",
   "authorizeDeletion",
   "confirmDeletion",
+  "issueDeletion",
+  "reconcileIssuedDeletion",
   "completeDeletion",
   "releaseDeletion",
   "admitRecovery",
@@ -138,8 +140,9 @@ export interface WorkspaceCaptureDrainRepoService {
    *
    * Refused while the executor's removal is held (`deleting`, decision 21: the deleter decided
    * on the evidence as it stood, and nothing asked after that is admitted before the runtime is
-   * gone) and once it was removed (`deleted`): nothing is opened, nothing may be asked. A removal
-   * whose hold lapsed (its deleter died) is voided by the observation it admits.
+   * gone), once the runtime was asked to make it (`deleting-issued`, whatever its hold: review 8
+   * #7) and once it was removed (`deleted`): nothing is opened, nothing may be asked. A removal
+   * not yet issued whose hold lapsed (its deleter died) is voided by the observation it admits.
    */
   readonly openObservation: (input: {
     readonly runId: string;
@@ -166,8 +169,9 @@ export interface WorkspaceCaptureDrainRepoService {
    * `fence`: it is taken as read just now, after everything recorded before. `observedAt` is the
    * reader's clock, kept for display only. Bumps the evidence version whether or not it replaced
    * the stored status; answers whether it did. A removal still held (`deleting`) is voided: what
-   * Core received about the executor outranks a decision taken before it. Atomic under the row
-   * lock.
+   * Core received about the executor outranks a decision taken before it. One already issued
+   * (`deleting-issued`) cannot be revoked and stays; the bumped version keeps it from being issued
+   * again on the old evidence (`reconcileIssuedDeletion`). Atomic under the row lock.
    */
   readonly recordStatus: (input: {
     readonly runId: string;
@@ -185,7 +189,10 @@ export interface WorkspaceCaptureDrainRepoService {
    * recorded anyway voids the removal.
    *
    * `authorized`: held by `token`. `changed`: the evidence moved (or is unresolved); decide again
-   * on what is current. `held`: another deleter's removal is live. `deleted`: it was removed.
+   * on what is current. `held`: another deleter's removal is live — or was issued and its issuer
+   * still holds it. `unresolved`: a removal was issued and its issuer's hold lapsed; nobody knows
+   * whether the runtime carried it out until it is inspected (`reconcileIssuedDeletion`).
+   * `deleted`: it was removed.
    */
   readonly authorizeDeletion: (input: {
     readonly runId: string;
@@ -193,19 +200,53 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
     readonly leaseMs: number;
   }) => Effect.Effect<
-    "authorized" | "changed" | "held" | "deleted",
+    "authorized" | "changed" | "held" | "unresolved" | "deleted",
     WorkspaceCaptureDrainRepoError
   >;
   /**
-   * Right before the runtime call that removes the executor: the removal is still held by
-   * `token`, nothing voided it, and the evidence it was authorized on is still the current version
-   * with no observation in flight. Renews the hold for `leaseMs`. `false`: decide again.
+   * Renew the hold of the removal `token` holds, for `leaseMs`. Before it was issued: only while
+   * nothing voided it and the evidence it was authorized on is still the current version with no
+   * observation in flight. Once issued (`deleting-issued`): while `token` still holds it — the
+   * request is out, nothing voids it any more. `false`: not held (decide again, or it was taken
+   * over).
    */
   readonly confirmDeletion: (input: {
     readonly runId: string;
     readonly token: string;
     readonly leaseMs: number;
   }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
+  /**
+   * RIGHT BEFORE the runtime call that removes the executor (review 8 #7): the removal is still
+   * held by `token` and nothing voided it (as `confirmDeletion`), and it becomes
+   * `deleting-issued` in the same transaction — from then on it stays exclusionary until its
+   * issuer records the outcome or the runtime is inspected (`reconcileIssuedDeletion`), whatever
+   * becomes of its hold. A removal taken over as issued already (`reissue`) is issued again while
+   * `token` holds it. Renews the hold. `false`: nothing may be called — decide again.
+   */
+  readonly issueDeletion: (input: {
+    readonly runId: string;
+    readonly token: string;
+    readonly leaseMs: number;
+  }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
+  /**
+   * Settle an issued removal whose issuer's hold lapsed, from what the runtime says of the
+   * executor now (review 8 #7). `gone`: it was carried out — `deleted`. `present`: it failed or
+   * never reached the runtime. While the evidence it was authorized on is still the current version
+   * with no observation in flight, that authorization stands: it is taken over by `token` (fresh
+   * hold, still `deleting-issued`) and issued again (`reissue`). Otherwise the evidence changed
+   * since: the removal is given up (`released`, the evidence version bumped) and decided again on
+   * what is current. `held`: its issuer holds it again (or someone took it over); `none`: nothing
+   * issued is left to settle; `deleted` also when it was recorded removed meanwhile.
+   */
+  readonly reconcileIssuedDeletion: (input: {
+    readonly runId: string;
+    readonly runtime: "gone" | "present";
+    readonly token: string;
+    readonly leaseMs: number;
+  }) => Effect.Effect<
+    "deleted" | "reissue" | "released" | "held" | "none",
+    WorkspaceCaptureDrainRepoError
+  >;
   /**
    * The runtime removed the executor: the row is `deleted` for good (nothing is observed or
    * recovered again). Written whether or not `token` still held it — the removal happened —
@@ -221,9 +262,10 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly token: string;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
-   * May recovery start the run's executor? `deleting`: a live removal holds it; `deleted`: it was
-   * removed. A removal whose hold lapsed is voided (and the evidence version bumped, so its
-   * deleter decides again) and recovery is `admitted`.
+   * May recovery start the run's executor? `deleting`: a live removal holds it, or one was issued
+   * (`deleting-issued`, whatever its hold: only inspecting the runtime settles it); `deleted`: it
+   * was removed. A removal not yet issued whose hold lapsed is voided (and the evidence version
+   * bumped, so its deleter decides again) and recovery is `admitted`.
    */
   readonly admitRecovery: (input: {
     readonly runId: string;
@@ -317,6 +359,22 @@ const deletionColumns = {
   deletionEvidenceVersion: workspaceCaptureDrains.deletionEvidenceVersion,
   deletionLive: sql<boolean>`coalesce(${workspaceCaptureDrains.deletionExpiresAt} > now(), false)`,
 };
+
+/** The removal state, the evidence version and the fences (select under the row lock). */
+const lockedDeletionColumns = {
+  evidenceVersion: workspaceCaptureDrains.evidenceVersion,
+  observationFences: workspaceCaptureDrains.observationFences,
+  ...deletionColumns,
+};
+
+/** The evidence a removal was authorized on is still the current version, none in flight. */
+const deletionEvidenceCurrent = (current: {
+  readonly evidenceVersion: number;
+  readonly deletionEvidenceVersion: number | null;
+  readonly observationFences: Readonly<Record<string, unknown>>;
+}): boolean =>
+  current.deletionEvidenceVersion === current.evidenceVersion &&
+  Object.keys(current.observationFences).length === 0;
 
 const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
@@ -476,7 +534,12 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               if (current.deletionState === "deleted") {
                 return { refused: "deleted" as const };
               }
-              if (current.deletionState === "deleting" && current.deletionLive) {
+              // An issued removal is refused whatever its hold: the runtime may still carry it
+              // out, and nothing asked now could stop it (review 8 #7).
+              if (
+                current.deletionState === "deleting-issued" ||
+                (current.deletionState === "deleting" && current.deletionLive)
+              ) {
                 return { refused: "deleting" as const };
               }
               const fence = sql`jsonb_build_object(${input.token}::text, jsonb_build_object('openedAt', now(), 'expiresAt', now() + (${Math.max(
@@ -565,6 +628,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                   observationFences: remaining,
                   evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
                   // Received evidence outranks a removal decided before it: voided (decision 21).
+                  // One already issued cannot be: it stays until its outcome is known, and the
+                  // bumped version keeps it from being issued again on the old evidence.
                   ...(current.deletionState === "deleting" ? NO_DELETION : {}),
                   ...(replaces
                     ? {
@@ -600,6 +665,11 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               if (current.deletionState === "deleted") {
                 return "deleted" as const;
               }
+              if (current.deletionState === "deleting-issued") {
+                // Issued: never re-authorized over. Its issuer still holds it, or nobody knows
+                // whether the runtime carried it out until it is inspected (review 8 #7).
+                return current.deletionLive ? ("held" as const) : ("unresolved" as const);
+              }
               if (
                 current.deletionState === "deleting" &&
                 current.deletionLive &&
@@ -634,20 +704,16 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
           db.transaction((tx) =>
             Effect.gen(function* () {
               const [current] = yield* tx
-                .select({
-                  evidenceVersion: workspaceCaptureDrains.evidenceVersion,
-                  observationFences: workspaceCaptureDrains.observationFences,
-                  ...deletionColumns,
-                })
+                .select(lockedDeletionColumns)
                 .from(workspaceCaptureDrains)
                 .where(eq(workspaceCaptureDrains.runId, input.runId))
                 .for("update");
+              if (current === undefined || current.deletionToken !== input.token) {
+                return false;
+              }
               if (
-                current === undefined ||
-                current.deletionState !== "deleting" ||
-                current.deletionToken !== input.token ||
-                current.deletionEvidenceVersion !== current.evidenceVersion ||
-                Object.keys(current.observationFences).length > 0
+                current.deletionState !== "deleting-issued" &&
+                !(current.deletionState === "deleting" && deletionEvidenceCurrent(current))
               ) {
                 return false;
               }
@@ -656,6 +722,90 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .set({ deletionExpiresAt: leaseExpiry(input.leaseMs) })
                 .where(eq(workspaceCaptureDrains.runId, input.runId));
               return true;
+            }),
+          ),
+        ),
+
+      issueDeletion: (input) =>
+        withRepoError(
+          "issueDeletion",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [current] = yield* tx
+                .select(lockedDeletionColumns)
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, input.runId))
+                .for("update");
+              if (current === undefined || current.deletionToken !== input.token) {
+                return false;
+              }
+              if (
+                current.deletionState !== "deleting-issued" &&
+                !(current.deletionState === "deleting" && deletionEvidenceCurrent(current))
+              ) {
+                return false;
+              }
+              yield* tx
+                .update(workspaceCaptureDrains)
+                .set({
+                  deletionState: "deleting-issued",
+                  deletionExpiresAt: leaseExpiry(input.leaseMs),
+                })
+                .where(eq(workspaceCaptureDrains.runId, input.runId));
+              return true;
+            }),
+          ),
+        ),
+
+      reconcileIssuedDeletion: (input) =>
+        withRepoError(
+          "reconcileIssuedDeletion",
+          db.transaction((tx) =>
+            Effect.gen(function* () {
+              const [current] = yield* tx
+                .select(lockedDeletionColumns)
+                .from(workspaceCaptureDrains)
+                .where(eq(workspaceCaptureDrains.runId, input.runId))
+                .for("update");
+              if (current?.deletionState === "deleted") {
+                return "deleted" as const;
+              }
+              if (current === undefined || current.deletionState !== "deleting-issued") {
+                return "none" as const;
+              }
+              if (current.deletionLive) {
+                return "held" as const;
+              }
+              if (input.runtime === "gone") {
+                yield* tx
+                  .update(workspaceCaptureDrains)
+                  .set({
+                    deletionState: "deleted",
+                    deletionExpiresAt: null,
+                    evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                  })
+                  .where(eq(workspaceCaptureDrains.runId, input.runId));
+                return "deleted" as const;
+              }
+              if (deletionEvidenceCurrent(current)) {
+                // The evidence it was authorized on still stands: taken over, issued again.
+                yield* tx
+                  .update(workspaceCaptureDrains)
+                  .set({
+                    deletionToken: input.token,
+                    deletionExpiresAt: leaseExpiry(input.leaseMs),
+                  })
+                  .where(eq(workspaceCaptureDrains.runId, input.runId));
+                return "reissue" as const;
+              }
+              yield* tx
+                .update(workspaceCaptureDrains)
+                .set({
+                  ...NO_DELETION,
+                  evidenceVersion: sql`${workspaceCaptureDrains.evidenceVersion} + 1`,
+                })
+                .where(eq(workspaceCaptureDrains.runId, input.runId));
+              return "released" as const;
             }),
           ),
         ),
@@ -672,7 +822,8 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
                 .for("update");
               const held =
                 current !== undefined &&
-                current.deletionState === "deleting" &&
+                (current.deletionState === "deleting" ||
+                  current.deletionState === "deleting-issued") &&
                 current.deletionToken === input.token;
               yield* tx
                 .update(workspaceCaptureDrains)
@@ -697,7 +848,7 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
             .where(
               and(
                 eq(workspaceCaptureDrains.runId, input.runId),
-                eq(workspaceCaptureDrains.deletionState, "deleting"),
+                inArray(workspaceCaptureDrains.deletionState, ["deleting", "deleting-issued"]),
                 eq(workspaceCaptureDrains.deletionToken, input.token),
               ),
             )
@@ -720,10 +871,11 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               if (current.deletionState === "deleted") {
                 return "deleted" as const;
               }
-              if (current.deletionLive) {
+              if (current.deletionState === "deleting-issued" || current.deletionLive) {
                 return "deleting" as const;
               }
-              // Its deleter's hold lapsed: voided, and its deleter decides again.
+              // Its deleter's hold lapsed before it issued anything: voided, and its deleter
+              // decides again.
               yield* tx
                 .update(workspaceCaptureDrains)
                 .set({
