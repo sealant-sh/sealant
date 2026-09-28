@@ -22,6 +22,9 @@ import type { CredentialCipherService } from "@sealant/credentials";
  *     the platform's cap: its agent starts sealantd again in recovery mode on that disk, handed
  *     the kept capture token with the request, and it is drained the same way — the deadline
  *     sweep makes that recovery due before the cap.
+ *     While it waits, an ended executor has nothing running beside it: its runtime stops what it
+ *     no longer needs (`RuntimeAdapter.parkRetained`; Docker: its dockerd sidecar), never its
+ *     disk.
  *  3. **Cannot recover.** Kubernetes cannot restart an ended Pod, and its emptyDir lives only as
  *     long as the Pod object; a terminated MicroVM's disk is gone with it. Those are reported as
  *     such (`unsupported`, with what can still be done by hand) and stay retained — never
@@ -242,6 +245,30 @@ const recoverOne = (options: RecoverRetainedExecutorsOptions, row: WorkspaceCapt
     // 1. Evidence first: an attestation or a discard may have arrived since it was retained.
     const record = yield* ledger.read(runId);
     const state = yield* runtimeNow;
+
+    // An ended executor waits for its recovery with nothing running beside it: its runtime
+    // stops what it no longer needs (Docker: its dockerd sidecar), never its disk. The recovery
+    // boot runs no user code, so nothing it does needs them. Best-effort.
+    const park = adapter.parkRetained;
+    if (state === "exited" && park !== undefined) {
+      yield* Effect.tryPromise(() =>
+        park.call(adapter, { resourceId, ...(reference === null ? {} : { reference }) }),
+      ).pipe(
+        Effect.flatMap((parked) =>
+          parked.stopped.length === 0
+            ? Effect.void
+            : Effect.logInfo(
+                `${prefix}: the retained executor ended; stopped ${parked.stopped.join(", ")} beside it while it waits for its recovery (its disk is kept).`,
+              ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `${prefix}: stopping what runs beside the ended executor failed; the next attempt tries again.`,
+            cause,
+          ),
+        ),
+      );
+    }
     const decision = decideExecutorDeletion({
       captureSourced: true,
       runtime: state,

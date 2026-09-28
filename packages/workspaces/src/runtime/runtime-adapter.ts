@@ -347,6 +347,23 @@ export interface RuntimeAdapter {
    * `RuntimeAdapterRecoverResult`). Absent = the runtime cannot; the executor stays retained.
    */
   recover?(input: RuntimeAdapterRecoverInput): Promise<RuntimeAdapterRecoverResult>;
+  /**
+   * Optional: stop what a RETAINED executor that ENDED no longer needs while it waits for its
+   * recovery — never its disk. Docker: the workspace's Docker sidecar (`<name>-docker`, its own
+   * dockerd), which otherwise runs on for as long as the executor is kept. Idempotent; answers
+   * what it stopped (nothing, when there was nothing running beside the executor).
+   */
+  parkRetained?(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult>;
+}
+
+export interface RuntimeAdapterParkInput {
+  readonly resourceId: string;
+  readonly reference?: string;
+}
+
+export interface RuntimeAdapterParkResult {
+  /** What was stopped (e.g. the Docker sidecar's name); empty when nothing was running. */
+  readonly stopped: readonly string[];
 }
 
 const createSelectionError = (code: string, message: string): Error & { code: string } => {

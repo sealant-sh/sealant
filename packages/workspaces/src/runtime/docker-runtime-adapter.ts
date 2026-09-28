@@ -55,6 +55,8 @@ import {
   type RuntimeAdapterLaunchInput,
   type RuntimeAdapterLaunchResult,
   type RuntimeAdapterRecoverInput,
+  type RuntimeAdapterParkInput,
+  type RuntimeAdapterParkResult,
   type RuntimeAdapterRecoverResult,
   type RuntimeAdapterStopInput,
   type RuntimeAdapterStopResult,
@@ -1533,6 +1535,54 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
     return { outcome: "restarted" };
   }
 
+  /**
+   * Park a RETAINED container that ended: stop its Docker sidecar (`<name>-docker`), the
+   * workspace's own dockerd, which a kept executor otherwise leaves running for as long as it is
+   * retained (e2e 5: one still up after 28 minutes). Only while the workspace container itself is
+   * not running. The sidecar's image store is not kept for the recovery: a sidecar created with
+   * `--rm` goes with its anonymous volume, one without stays stopped. Nothing of the executor's
+   * own disk is touched, and the sidecar network stays (the container is attached to it; `docker
+   * start` needs it).
+   *
+   * The recovery does not need the sidecar: sealantd's recovery boot runs no user code (no
+   * lifecycle step, no harness, admission closed) and captures only the executor's own
+   * filesystem, so nothing in it reaches `DOCKER_HOST`. `recover` therefore starts the workspace
+   * container alone. A recovery that ever runs user code must start the sidecar first.
+   */
+  public async parkRetained(input: RuntimeAdapterParkInput): Promise<RuntimeAdapterParkResult> {
+    const container = await this.inspectContainerState(input.resourceId).catch(() => undefined);
+    if (container === undefined || container.running) {
+      // Gone (nothing to park beside it), unreadable, or running again (recovered): left alone.
+      return { stopped: [] };
+    }
+    const reference = input.reference ?? (await this.containerName(input.resourceId));
+    if (reference === undefined) {
+      return { stopped: [] };
+    }
+    const service = await this.inspectContainerByName(`${reference}-docker`);
+    if (service === undefined || !service.running) {
+      return { stopped: [] };
+    }
+    await this.commandRunner("docker", ["stop", "-t", "10", service.id]);
+    return { stopped: [`${reference}-docker`] };
+  }
+
+  /** The container's name (without Docker's leading `/`), or undefined when it cannot be read. */
+  private async containerName(containerId: string): Promise<string | undefined> {
+    try {
+      const result = await this.commandRunner("docker", [
+        "inspect",
+        "--format",
+        "{{.Name}}",
+        containerId,
+      ]);
+      const name = result.stdout.trim().replace(/^\//, "");
+      return name.length === 0 ? undefined : name;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Whether the container is gone within `timeoutMs` (another removal of it finishing). */
   private async awaitContainerGone(containerId: string, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
@@ -1641,12 +1691,21 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     // Snapshot sidecar identities before removing the workspace frees its deterministic name.
     // Failed or empty inspections preserve resources rather than falling back to deletion by name.
+    // The sidecar network is looked up even when the sidecar is gone: a retained executor's
+    // sidecar may have been parked (`parkRetained`) and removed with `--rm`, and its network
+    // would otherwise outlive the workspace. Docker refuses to remove a network still in use.
     const service =
       parsed.reference === undefined
         ? undefined
         : await this.inspectContainerByName(`${parsed.reference}-docker`);
+    // The network without a sidecar only once the sidecar's absence is proven (a failed or
+    // inconclusive inspection keeps both).
+    const sidecarAbsent =
+      service === undefined && parsed.reference !== undefined
+        ? await this.isContainerNameAbsent(`${parsed.reference}-docker`)
+        : false;
     const networkId =
-      service === undefined
+      parsed.reference === undefined || (service === undefined && !sidecarAbsent)
         ? undefined
         : await this.commandRunner("docker", [
             "network",
@@ -1707,6 +1766,8 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
 
     if (service !== undefined) {
       await this.removeDockerService({ containerId: service.id, networkId });
+    } else if (networkId !== undefined) {
+      await this.commandRunner("docker", ["network", "rm", networkId]).catch(() => undefined);
     }
     // Retain the control directory: a concurrent launch can reuse it immediately after removal.
 
