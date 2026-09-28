@@ -139,6 +139,14 @@ export const DEFAULT_RECOVERY_CREDENTIAL_RETRY: RecoveryCredentialRetry = {
   spacingMs: 1_000,
 };
 
+/** A capture launch refused because its recovery credential could not be kept. */
+const recoveryCredentialNotKept = (why: string) =>
+  toWorkspaceBuildJobProcessingError(
+    new Error(
+      `The capture workspace was not launched: its recovery credential could not be kept (${why}). A capture executor starts only once the credential that can recover it is stored; nothing ran.`,
+    ),
+  );
+
 /**
  * Store a capture launch's recovery credential — its capture token, sealed — beside its drain
  * record, or fail: a capture executor is admitted only once the credential that can recover it
@@ -152,24 +160,18 @@ const keepRecoveryCredential = (input: {
   readonly retry: RecoveryCredentialRetry;
 }) =>
   Effect.gen(function* () {
-    const refuse = (why: string) =>
-      toWorkspaceBuildJobProcessingError(
-        new Error(
-          `The capture workspace was not launched: its recovery credential could not be kept (${why}). A capture executor starts only once the credential that can recover it is stored; nothing ran.`,
-        ),
-      );
     const drains = yield* Effect.serviceOption(WorkspaceCaptureDrainRepo);
     if (input.runId === null) {
-      return yield* refuse("the launch names no run");
+      return yield* recoveryCredentialNotKept("the launch names no run");
     }
     if (input.captureToken === undefined) {
-      return yield* refuse("the launch carries no capture token");
+      return yield* recoveryCredentialNotKept("the launch carries no capture token");
     }
     if (input.cipher === undefined) {
-      return yield* refuse("no credentials key is configured to seal it");
+      return yield* recoveryCredentialNotKept("no credentials key is configured to seal it");
     }
     if (Option.isNone(drains)) {
-      return yield* refuse("this worker has no drain record to keep it with");
+      return yield* recoveryCredentialNotKept("this worker has no drain record to keep it with");
     }
     const runId = input.runId;
     const captureToken = input.captureToken;
@@ -187,7 +189,9 @@ const keepRecoveryCredential = (input: {
         schedule: Schedule.spaced(Math.max(0, input.retry.spacingMs)),
       }),
       Effect.mapError((cause) =>
-        refuse(`storing it failed: ${cause instanceof Error ? cause.message : String(cause)}`),
+        recoveryCredentialNotKept(
+          `storing it failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        ),
       ),
     );
   });
