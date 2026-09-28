@@ -17,6 +17,7 @@ const workspaceCaptureDrainRepoOperationSchema = Schema.Literals([
   "listByRunIds",
   "recordSchedule",
   "recordObservation",
+  "recordStatus",
   "requestDiscard",
   "attestCompletion",
   "markRetained",
@@ -119,6 +120,21 @@ export interface WorkspaceCaptureDrainRepoService {
     readonly detail: string | null;
   }) => Effect.Effect<void, WorkspaceCaptureDrainRepoError>;
   /**
+   * Record a capture status Core received from the run's executor outside a drain (the public
+   * flush and status routes relay the daemon's answer): the run's last status, read at
+   * `observedAt` (Core's clock). Every status Core receives is evidence about the executor's disk,
+   * whoever asked (review 5 #3): an incomplete answer revokes an older complete and an older seal.
+   * Ordered by `observedAt`: it replaces the stored status unless that one was read later, so a
+   * delayed older answer never overwrites a newer one and a complete never outlives a later
+   * incomplete. The lease is untouched. Answers whether it was written (`false`: a newer status is
+   * on record).
+   */
+  readonly recordStatus: (input: {
+    readonly runId: string;
+    readonly status: Readonly<Record<string, unknown>>;
+    readonly observedAt: Date;
+  }) => Effect.Effect<boolean, WorkspaceCaptureDrainRepoError>;
+  /**
    * Record the owner's request to discard the run's unsaved captures (the audit): the first
    * request's instant and requester stand. Returns the row.
    */
@@ -189,6 +205,35 @@ export class WorkspaceCaptureDrainRepo extends Context.Service<
 const leaseExpiry = (leaseMs: number) =>
   sql`now() + (${Math.max(0, Math.round(leaseMs))} * interval '1 millisecond')`;
 
+/**
+ * SQL: whether a status read at `at` is not older than the stored one and may replace it: nothing
+ * stored, or stored no later than `at`. A read older than what is on record never replaces it.
+ */
+const statusIsNewer = (at: Date) =>
+  sql`(${workspaceCaptureDrains.lastStatusAt} IS NULL OR ${workspaceCaptureDrains.lastStatusAt} <= ${at})`;
+
+/**
+ * A drain's progress may carry the status it read. That status is written only when it is newer
+ * than the one on record (`statusIsNewer`): a status another path received meanwhile — the public
+ * status route, another drain — is never rolled back by a slower write of an older read.
+ */
+const orderedStatusColumns = (progress: WorkspaceCaptureDrainProgress) => {
+  if (progress.lastStatus === undefined && progress.lastStatusAt === undefined) {
+    return {};
+  }
+  const at = progress.lastStatusAt ?? null;
+  const status = progress.lastStatus ?? null;
+  if (at === null) {
+    // A drain that holds no read of its own replaces nothing.
+    return {};
+  }
+  const newer = statusIsNewer(at);
+  return {
+    lastStatus: sql`CASE WHEN ${newer} THEN ${status === null ? null : JSON.stringify(status)}::jsonb ELSE ${workspaceCaptureDrains.lastStatus} END`,
+    lastStatusAt: sql`CASE WHEN ${newer} THEN ${at}::timestamptz ELSE ${workspaceCaptureDrains.lastStatusAt} END`,
+  };
+};
+
 const progressColumns = (progress: WorkspaceCaptureDrainProgress) => ({
   ...(progress.state === undefined ? {} : { state: progress.state }),
   ...(progress.detail === undefined ? {} : { detail: progress.detail }),
@@ -245,10 +290,12 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
         withRepoError(
           "recordProgress",
           Effect.gen(function* () {
+            const { lastStatus: _status, lastStatusAt: _statusAt, ...progress } = input.progress;
             const [row] = yield* db
               .update(workspaceCaptureDrains)
               .set({
-                ...progressColumns(input.progress),
+                ...progressColumns(progress),
+                ...orderedStatusColumns(input.progress),
                 leaseExpiresAt: leaseExpiry(input.leaseMs),
               })
               .where(
@@ -324,6 +371,24 @@ export const WorkspaceCaptureDrainRepoLive: Layer.Layer<
               .insert(workspaceCaptureDrains)
               .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
               .onConflictDoUpdate({ target: workspaceCaptureDrains.runId, set });
+          }),
+        ),
+
+      recordStatus: (input) =>
+        withRepoError(
+          "recordStatus",
+          Effect.gen(function* () {
+            const set = { lastStatus: input.status, lastStatusAt: input.observedAt };
+            const rows = yield* db
+              .insert(workspaceCaptureDrains)
+              .values({ runId: input.runId, ...set } satisfies NewWorkspaceCaptureDrain)
+              .onConflictDoUpdate({
+                target: workspaceCaptureDrains.runId,
+                set,
+                setWhere: statusIsNewer(input.observedAt),
+              })
+              .returning({ runId: workspaceCaptureDrains.runId });
+            return rows.length > 0;
           }),
         ),
 

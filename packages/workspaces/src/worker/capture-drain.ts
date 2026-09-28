@@ -277,6 +277,16 @@ export interface CaptureDrainLedger {
   /** The run's recorded progress, without claiming it. */
   readonly read: (runId: string) => Effect.Effect<CaptureDrainRead>;
   /**
+   * Record a capture status read from the run's executor outside a drain (a probe, a sampler), at
+   * `atMs`: every status Core receives is evidence about its disk (review 5 #3). Ordered by when
+   * it was read (`statusReplacesRecorded`); no claim needed. Best-effort: a failed write is logged.
+   */
+  readonly recordStatus: (
+    runId: string,
+    status: CaptureFlushReport,
+    atMs: number,
+  ) => Effect.Effect<void>;
+  /**
    * Record an observation outside a drain (what the stop that followed it did); no claim needed.
    * `stopped`, `discarded` and `gone` also end a retention. Best-effort: a failed write is logged.
    */
@@ -359,6 +369,37 @@ export const claimLeaseOwner = (owner: string, token: string): string => `${owne
  * An in-memory ledger with the database ledger's lease semantics (tests, single-process tools).
  * Ledgers built on one `store` behave like workers sharing one database.
  */
+/**
+ * Whether a status read at `atMs` replaces the one on record (read at `storedAtMs`): unless the
+ * recorded one was read later. The rule the database applies (`WorkspaceCaptureDrainRepo`
+ * `recordStatus` / `recordProgress`): a delayed older answer never overwrites a newer one, so a
+ * complete never outlives a later incomplete (review 5 #3).
+ */
+export const statusReplacesRecorded = (input: {
+  readonly storedAtMs: number | undefined;
+  readonly atMs: number | undefined;
+}): boolean =>
+  input.atMs !== undefined && (input.storedAtMs === undefined || input.atMs >= input.storedAtMs);
+
+/** `incoming`, keeping the recorded status where it is newer than the one `incoming` carries. */
+const withOrderedStatus = (
+  recorded: CaptureDrainEntry,
+  incoming: CaptureDrainEntry,
+): CaptureDrainEntry => {
+  const hasRecorded = recorded.last !== undefined || recorded.lastUnreadable === true;
+  const replaces =
+    !hasRecorded ||
+    statusReplacesRecorded({ storedAtMs: recorded.lastAtMs, atMs: incoming.lastAtMs });
+  return replaces
+    ? incoming
+    : {
+        ...incoming,
+        last: recorded.last,
+        lastAtMs: recorded.lastAtMs,
+        lastUnreadable: recorded.lastUnreadable,
+      };
+};
+
 export const inMemoryCaptureDrainLedger = (
   options: {
     readonly store?: InMemoryCaptureDrainStore;
@@ -404,7 +445,7 @@ export const inMemoryCaptureDrainLedger = (
         if (row === undefined || row.owner !== claimLeaseOwner(owner, token)) {
           return false;
         }
-        row.entry = entry;
+        row.entry = withOrderedStatus(row.entry, entry);
         row.observation = observation ?? row.observation;
         row.expiresAt = now() + leaseMs;
         return true;
@@ -419,6 +460,21 @@ export const inMemoryCaptureDrainLedger = (
       }),
     read: (runId) =>
       Effect.sync(() => ({ readable: true as const, entry: store.rows.get(runId)?.entry })),
+    recordStatus: (runId, status, atMs) =>
+      Effect.sync(() => {
+        const row = store.rows.get(runId);
+        const incoming = { last: status, lastAtMs: atMs, lastUnreadable: false };
+        if (row === undefined) {
+          store.rows.set(runId, {
+            entry: { ...EMPTY_CAPTURE_DRAIN_ENTRY, ...incoming },
+            observation: undefined,
+            owner: undefined,
+            expiresAt: undefined,
+          });
+        } else {
+          row.entry = withOrderedStatus(row.entry, { ...row.entry, ...incoming });
+        }
+      }),
     observe: (runId, observation) =>
       Effect.sync(() => {
         const row = store.rows.get(runId);
@@ -772,6 +828,21 @@ export const captureDaemonAnswers = (
     Effect.map((sample) => sample.kind !== "unreachable"),
   );
 
+/**
+ * One `capture.status` round trip, as it went: the status read, a refusal (the daemon answers),
+ * or unreachable. The exit reconciler's probe: it records the status as evidence and treats any
+ * answer as a live daemon.
+ */
+export const probeCaptureDaemon = (
+  target: SealantTarget,
+  timeoutMs: number,
+): Effect.Effect<
+  | { readonly kind: "status"; readonly status: CaptureFlushReport }
+  | { readonly kind: "refused" | "unreachable"; readonly detail: string },
+  never,
+  SealantRuntime
+> => sampleCapture(target, "status", timeoutMs);
+
 /** One `capture.status` round trip, for callers that only watch (the deadline sweep). */
 export const readCaptureStatus = (
   target: SealantTarget,
@@ -936,7 +1007,38 @@ export const drainCaptureBeforeStop = Effect.fn("drainCaptureBeforeStop")(functi
   const finish = (outcome: CaptureDrainOutcome) =>
     Effect.gen(function* () {
       yield* persist(outcome);
-      return lost ? ({ kind: "busy" } satisfies CaptureDrainOutcome) : outcome;
+      if (lost) {
+        return { kind: "busy" } satisfies CaptureDrainOutcome;
+      }
+      if (outcome.kind !== "drained") {
+        return outcome;
+      }
+      // Saved by this drain's reading — unless Core received a newer one from the same executor
+      // meanwhile (the public status or flush route, another path) that says its work is not
+      // saved: every observation of the executor counts, whoever asked (review 5 #3). The record
+      // keeps the newest reading, so it is read back before anything is removed on this one.
+      const recorded = yield* ledger.read(runId);
+      const newest = recorded.readable ? recorded.entry : undefined;
+      const contradiction = !recorded.readable
+        ? "its drain record could not be read back to confirm no newer observation contradicts it"
+        : newest?.lastUnreadable === true
+          ? "a newer observation of the executor is on record that cannot be read"
+          : newest?.last !== undefined && !reportsComplete(newest.last)
+            ? `a newer observation of the executor says its work is not saved (${describeCaptureStatus(newest.last)})`
+            : undefined;
+      if (contradiction === undefined) {
+        return outcome;
+      }
+      yield* Effect.logError(
+        `${prefix}: not saved · not confirmed · kept · this drain read the final flush complete, but ${contradiction}.`,
+      );
+      const kept: CaptureDrainOutcome = {
+        kind: "unconfirmed",
+        status: newest?.last ?? outcome.status,
+        detail: contradiction,
+      };
+      yield* persist(kept);
+      return lost ? ({ kind: "busy" } satisfies CaptureDrainOutcome) : kept;
     });
 
   return yield* Effect.gen(function* () {

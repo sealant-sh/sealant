@@ -548,6 +548,73 @@ describe("drainCaptureBeforeStop", () => {
   });
 });
 
+describe("drainCaptureBeforeStop · a newer observation of the executor (review 5 #3)", () => {
+  it("keeps an executor whose newer relayed status says not saved, though the drain read complete", async () => {
+    const base = inMemoryCaptureDrainLedger();
+    const notSaved = captureStatus({ complete: false, incompleteReason: "snapshot-failed" });
+    let injected = false;
+    // The public status route relays a newer answer while the drain is finishing: recorded
+    // against the run before the drain's own (older) reading is written.
+    const ledger: CaptureDrainLedger = {
+      ...base,
+      save: (runId, token, entry, observation) =>
+        Effect.suspend(() => {
+          const row = base.store.rows.get(runId);
+          if (!injected && row !== undefined && reportsComplete(entry.last)) {
+            injected = true;
+            row.entry = { ...row.entry, last: notSaved, lastAtMs: Date.now() + 60_000 };
+          }
+          return base.save(runId, token, entry, observation);
+        }),
+    };
+    const daemon = fakeCaptureDaemon([savedStatus()]);
+
+    const outcome = await drain(daemon, ledger);
+
+    expect(outcome).toMatchObject({ kind: "unconfirmed", status: notSaved });
+    expect(drainPermitsStop(outcome)).toBe(false);
+    // The record keeps the newer reading, and says the executor is kept.
+    const row = base.store.rows.get("run_1");
+    expect(row?.entry.last).toEqual(notSaved);
+    expect(row?.observation?.state).toBe("kept");
+  });
+
+  it("never lets a drain's older reading roll back a newer one on record", async () => {
+    const ledger = inMemoryCaptureDrainLedger();
+    const claimed = await Effect.runPromise(ledger.claim("run_2"));
+    const token = claimed?.token ?? "";
+    const notSaved = captureStatus({ complete: false, incompleteReason: "changed" });
+    const recorded = () => ledger.store.rows.get("run_2")?.entry;
+    const row = ledger.store.rows.get("run_2");
+    if (row !== undefined) {
+      row.entry = { ...row.entry, last: notSaved, lastAtMs: 2_000 };
+    }
+    const saveSaved = (lastAtMs: number) =>
+      Effect.runPromise(
+        ledger.save(
+          "run_2",
+          token,
+          {
+            lastProgressAt: undefined,
+            unreachableSince: undefined,
+            keptLogged: false,
+            silentLogged: false,
+            last: savedStatus(),
+            lastAtMs,
+          },
+          undefined,
+        ),
+      );
+
+    await saveSaved(1_000);
+    expect(recorded()?.last).toEqual(notSaved);
+    expect(recorded()?.lastAtMs).toBe(2_000);
+    // A reading made after it does replace it.
+    await saveSaved(3_000);
+    expect(reportsComplete(recorded()?.last)).toBe(true);
+  });
+});
+
 describe("drain ownership across workers", () => {
   it("refuses a second worker's drain of a run while the first worker drains it", async () => {
     // Two workers = two ledgers over one store (one database). While worker A's drain is in

@@ -197,6 +197,7 @@ export {
   type MarkWorkspaceBuildJobFailedInput,
   type MarkWorkspaceBuildJobRunningInput,
   type MarkWorkspaceBuildJobSucceededInput,
+  type WorkspaceBuildJobClaim,
   type PublishedWorkspaceImage,
   type WorkspaceBuildJobRepoError,
   type WorkspaceBuildJobRepoService,

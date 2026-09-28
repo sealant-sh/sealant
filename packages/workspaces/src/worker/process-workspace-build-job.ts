@@ -116,10 +116,85 @@ export interface ProcessWorkspaceBuildJobOptions {
    * host directories the Docker adapter bind-mounts; Kubernetes deployments inject their own.
    */
   readonly launchMaterialStager?: LaunchMaterialStager;
+  /**
+   * How a failed write of a capture launch's recovery credential is retried before the launch
+   * is refused. Default `DEFAULT_RECOVERY_CREDENTIAL_RETRY`.
+   */
+  readonly recoveryCredentialRetry?: RecoveryCredentialRetry;
 }
 
 /** How long a launch owns its row without renewal when the worker names nothing else. */
 export const DEFAULT_LAUNCH_LEASE_MS = 2 * 60_000;
+
+/** How a failed write of a capture launch's recovery credential is retried before launch. */
+export interface RecoveryCredentialRetry {
+  /** Further attempts after the first. */
+  readonly times: number;
+  /** The pause between attempts. */
+  readonly spacingMs: number;
+}
+
+export const DEFAULT_RECOVERY_CREDENTIAL_RETRY: RecoveryCredentialRetry = {
+  times: 5,
+  spacingMs: 1_000,
+};
+
+/** A capture launch refused because its recovery credential could not be kept. */
+const recoveryCredentialNotKept = (why: string) =>
+  toWorkspaceBuildJobProcessingError(
+    new Error(
+      `The capture workspace was not launched: its recovery credential could not be kept (${why}). A capture executor starts only once the credential that can recover it is stored; nothing ran.`,
+    ),
+  );
+
+/**
+ * Store a capture launch's recovery credential — its capture token, sealed — beside its drain
+ * record, or fail: a capture executor is admitted only once the credential that can recover it
+ * is durable (review 5 #4). Fails when there is no run, no token, no cipher or no drain
+ * repository to keep it with, or when the write still fails after the retries.
+ */
+const keepRecoveryCredential = (input: {
+  readonly runId: string | null;
+  readonly captureToken: string | undefined;
+  readonly cipher: CredentialCipherService | undefined;
+  readonly retry: RecoveryCredentialRetry;
+}) =>
+  Effect.gen(function* () {
+    const drains = yield* Effect.serviceOption(WorkspaceCaptureDrainRepo);
+    if (input.runId === null) {
+      return yield* recoveryCredentialNotKept("the launch names no run");
+    }
+    if (input.captureToken === undefined) {
+      return yield* recoveryCredentialNotKept("the launch carries no capture token");
+    }
+    if (input.cipher === undefined) {
+      return yield* recoveryCredentialNotKept("no credentials key is configured to seal it");
+    }
+    if (Option.isNone(drains)) {
+      return yield* recoveryCredentialNotKept("this worker has no drain record to keep it with");
+    }
+    const runId = input.runId;
+    const captureToken = input.captureToken;
+    const cipher = input.cipher;
+    yield* cipher.encrypt(JSON.stringify({ [CAPTURE_TOKEN_SECRET_ENV_NAME]: captureToken })).pipe(
+      Effect.flatMap((sealed) => drains.value.storeCaptureToken({ runId, sealed: sealed.sealed })),
+      Effect.tapError((cause) =>
+        Effect.logWarning(
+          `Launch of run ${runId}: keeping its sealed capture token for recovery failed; retrying before the launch.`,
+          cause,
+        ),
+      ),
+      Effect.retry({
+        times: Math.max(0, input.retry.times),
+        schedule: Schedule.spaced(Math.max(0, input.retry.spacingMs)),
+      }),
+      Effect.mapError((cause) =>
+        recoveryCredentialNotKept(
+          `storing it failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        ),
+      ),
+    );
+  });
 
 /** Options for the Effect-native pipeline: repositories come from context, not `db`. */
 export type ProcessWorkspaceBuildJobEffectOptions = Omit<ProcessWorkspaceBuildJobOptions, "db">;
@@ -457,6 +532,23 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       );
     });
 
+  // This worker's claim on the job. A build can outlive its claim lease, and another worker then
+  // claims the job and builds it again; success is committed only under this exact claim, so the
+  // run is launched by exactly one of them (review 5 #1: a second launch of a capture run adopts
+  // the first one's executor).
+  const claim = { workerId: options.workerId, attemptCount: job.attemptCount };
+  const markSucceeded = (fields: {
+    readonly builderId: string;
+    readonly resultPayload: WorkspaceBuild;
+    readonly publishedReference: string;
+    readonly publishedDigestReference: string;
+    readonly publishedDigest: string;
+  }) =>
+    jobs.markJobSucceeded({ id: job.id, claim, ...fields }).pipe(
+      Effect.mapError(toWorkspaceBuildJobProcessingError),
+      Effect.map((succeeded) => succeeded !== null),
+    );
+
   // Phase A: build the image, publish it, and mark the job succeeded.
   const buildAndPublish = Effect.gen(function* () {
     if (job.runId !== null) {
@@ -511,16 +603,16 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
           });
 
     if (reuse !== null) {
-      yield* jobs
-        .markJobSucceeded({
-          id: job.id,
-          builderId: reuse.builderId,
-          resultPayload: reuse.resultPayload,
-          publishedReference: reuse.publishedImage.reference,
-          publishedDigestReference: reuse.publishedImage.digestReference,
-          publishedDigest: reuse.publishedImage.digest,
-        })
-        .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+      const owned = yield* markSucceeded({
+        builderId: reuse.builderId,
+        resultPayload: reuse.resultPayload,
+        publishedReference: reuse.publishedImage.reference,
+        publishedDigestReference: reuse.publishedImage.digestReference,
+        publishedDigest: reuse.publishedImage.digest,
+      });
+      if (!owned) {
+        return null;
+      }
 
       yield* Effect.logInfo(
         `Workspace image plan unchanged (hash ${reuse.planHash}); skipped build and publish, reusing ${reuse.publishedImage.digestReference}.`,
@@ -548,23 +640,32 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
       catch: toWorkspaceBuildJobProcessingError,
     });
 
-    yield* jobs
-      .markJobSucceeded({
-        id: job.id,
-        builderId: compileResult.builder.id,
-        resultPayload: compileResult,
-        publishedReference: publishedImage.reference,
-        publishedDigestReference: publishedImage.digestReference,
-        publishedDigest: publishedImage.digest,
-      })
-      .pipe(Effect.mapError(toWorkspaceBuildJobProcessingError));
+    const owned = yield* markSucceeded({
+      builderId: compileResult.builder.id,
+      resultPayload: compileResult,
+      publishedReference: publishedImage.reference,
+      publishedDigestReference: publishedImage.digestReference,
+      publishedDigest: publishedImage.digest,
+    });
+    if (!owned) {
+      return null;
+    }
 
     return { publishedImage, spec, planned };
   });
 
-  const { publishedImage, spec, planned } = yield* buildAndPublish.pipe(
+  const built = yield* buildAndPublish.pipe(
     Effect.tapError((error) => failureCleanup(error, true)),
   );
+  if (built === null) {
+    // Another worker holds the job now (this claim's lease expired under the build): it builds and
+    // launches the run; this worker launches nothing and records nothing over it.
+    yield* Effect.logWarning(
+      `Workspace build job ${job.id} is no longer held by this worker's claim (${claim.workerId}, claim ${String(claim.attemptCount)}); its success was not recorded and the run is not launched from here.`,
+    );
+    return null;
+  }
+  const { publishedImage, spec, planned } = built;
 
   // Phase B: launch the runtime instance and record its state.
   const stager = options.launchMaterialStager ?? hostDirectoryLaunchMaterialStager;
@@ -588,6 +689,9 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
   const launchLeaseMs = Math.max(1_000, options.launchLeaseMs ?? DEFAULT_LAUNCH_LEASE_MS);
   // The executor's identity once the adapter reported it (`onStarted` / `onReady`).
   let startedIdentity: RuntimeLaunchIdentity | undefined;
+  // Nothing was launched because the recovery credential could not be stored: the sealed job
+  // secret is the only durable copy of it, so it is not cleared.
+  let keepSealedSecret = false;
   const preservationLeadMs = Math.max(
     0,
     options.preservationLeadMs ?? DEFAULT_CAPTURE_DEADLINE_SETTINGS.leadMs,
@@ -716,33 +820,26 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
         : yield* unsealSecretEnv(job.secretEnvSealed, options.credentialCipher);
 
     // A capture executor's boot reads its capture token once, from the secret env file removed
-    // once it is ready. Recovering a retained executor boots it again, so the token (only the
-    // token) is kept sealed beside its drain record before the launch. Best-effort: a launch
-    // whose token cannot be kept still launches, and its recovery reports it unrecoverable.
-    const captureToken = secretEnv?.[CAPTURE_TOKEN_SECRET_ENV_NAME];
-    if (
-      job.runId !== null &&
-      captureToken !== undefined &&
-      options.credentialCipher !== undefined
-    ) {
-      const runId = job.runId;
-      const cipher = options.credentialCipher;
-      const drains = yield* Effect.serviceOption(WorkspaceCaptureDrainRepo);
-      if (Option.isSome(drains)) {
-        yield* cipher
-          .encrypt(JSON.stringify({ [CAPTURE_TOKEN_SECRET_ENV_NAME]: captureToken }))
-          .pipe(
-            Effect.flatMap((sealed) =>
-              drains.value.storeCaptureToken({ runId, sealed: sealed.sealed }),
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning(
-                `Launch of run ${runId}: keeping its sealed capture token for recovery failed; a retained executor of this run cannot be recovered.`,
-                cause,
-              ),
-            ),
-          );
-      }
+    // once it is ready, and the sealed job row is cleared when this phase settles. Recovering a
+    // retained executor boots it again with that token — the one credential the recovery sweep
+    // has — so it is kept sealed beside its drain record BEFORE the launch, durably, or the
+    // executor is not launched at all (review 5 #4, decision 16): an executor whose recovery
+    // credential is not stored could produce work nothing can recover once its daemon ends. A
+    // failed write is retried here; one that still fails fails the launch before anything
+    // starts, and the sealed job secret is left in place (`keepSealedSecret`).
+    if (launchHoldsCaptures(spec)) {
+      yield* keepRecoveryCredential({
+        runId: job.runId,
+        captureToken: secretEnv?.[CAPTURE_TOKEN_SECRET_ENV_NAME],
+        cipher: options.credentialCipher,
+        retry: options.recoveryCredentialRetry ?? DEFAULT_RECOVERY_CREDENTIAL_RETRY,
+      }).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            keepSealedSecret = true;
+          }),
+        ),
+      );
     }
     const {
       dotfilesArchiveDir,
@@ -936,7 +1033,7 @@ export const processWorkspaceBuildJobEffect = Effect.fn("processWorkspaceBuildJo
     Effect.onExit((exit) =>
       Effect.all(
         [
-          job.secretEnvSealed === null || job.secretEnvSealed === undefined
+          job.secretEnvSealed === null || job.secretEnvSealed === undefined || keepSealedSecret
             ? Effect.void
             : jobs.clearSecretEnv(job.id).pipe(swallowingFailure("clear-secret-env update")),
           Effect.promise(() =>

@@ -170,7 +170,11 @@ export const runtimeAdapterStopResultSchema = z.strictObject({
  *   a guest service that failed while the executor itself survived (a MicroVM's guest Docker):
  *   reported, never a reason to end the executor — its daemon, and the work on it, are intact.
  * - `exited`: the executor ended. `exitCode` where the runtime reports one (a container), `detail`
- *   the runtime's reason text when it has one.
+ *   the runtime's reason text when it has one. `platformEnded` says what the platform itself
+ *   reports of the machine under it, where the two can differ (a MicroVM whose sealantd exited
+ *   while the VM runs on with its disk): `true` the platform ended the machine (its disk is gone
+ *   with it), `false` the machine is still up (only its daemon ended), absent the runtime does not
+ *   separate them. `platformState` is the platform's own word, for reports.
  * - `missing`: the runtime no longer knows the resource at all.
  */
 const runtimeAdapterRunningSchema = z.strictObject({
@@ -187,6 +191,8 @@ const runtimeAdapterEndedSchema = z.discriminatedUnion("state", [
     state: z.literal("exited"),
     exitCode: z.number().int().optional(),
     detail: z.string().trim().min(1).optional(),
+    platformEnded: z.boolean().optional(),
+    platformState: z.string().trim().min(1).optional(),
   }),
   z.strictObject({
     state: z.literal("missing"),

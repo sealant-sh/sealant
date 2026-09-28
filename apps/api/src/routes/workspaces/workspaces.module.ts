@@ -92,11 +92,13 @@ import {
   attestationCoversExecutor,
   captureFlushAnswer,
   observedCaptureFromStored,
+  storedCaptureStatus,
   bindRootMountPath,
   runtimeRestartsRetainedExecutors,
   UnknownWorkspacePackageError,
   unknownWorkspacePackageIds,
   SealantRuntime,
+  type CaptureFlushReport,
   type CaptureFlushRequest,
   type SealantError,
   type SealantSession,
@@ -2709,7 +2711,35 @@ export const flushWorkspaceCapture = (input: {
     { workspaceId: input.workspaceId, ownerUserId: input.payload.ownerUserId, verb: "flush" },
     // A FINAL's sweep closes the connection that carried it: its answer is read again over a new
     // one (and the FINAL asked again when the daemon is not at one), never the close reported.
-    (target) => captureFlushAnswer(target, captureFlushRequestOf(input.payload)),
+    (target, runId) =>
+      captureFlushAnswer(target, captureFlushRequestOf(input.payload)).pipe(
+        Effect.tap((report) => recordCaptureObservation(runId, report)),
+      ),
+  );
+
+/**
+ * Every capture status Core relays from an executor is evidence about its disk (review 5 #3,
+ * decision 14): it is recorded against the run's executor in the drain record before the answer
+ * is returned, so a newer `not saved` revokes an older complete observation and an older seal —
+ * at stop, at attestation and at every deletion — whoever asked. Ordered by when Core read it
+ * (`recordStatus`). A failed write is logged and the answer still returned: the caller holds
+ * the received answer either way, and withholding it would turn it into a lost one.
+ */
+const recordCaptureObservation = (runId: string, report: CaptureFlushReport) =>
+  Effect.gen(function* () {
+    const drains = yield* WorkspaceCaptureDrainRepo;
+    yield* drains.recordStatus({
+      runId,
+      status: storedCaptureStatus(report),
+      observedAt: new Date(),
+    });
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError(
+        `Capture observation of run ${runId} could not be recorded; the answer is returned, but Core's evidence for this executor does not include it.`,
+        cause,
+      ),
+    ),
   );
 
 /** The flush request → the daemon's: `suspend` unless the caller asked for `final`. */
@@ -2729,7 +2759,8 @@ export const getWorkspaceCaptureStatus = (input: {
 }) =>
   withCaptureDaemon(
     { workspaceId: input.workspaceId, ownerUserId: input.query.ownerUserId, verb: "read" },
-    (daemon) => daemon.captureStatus(),
+    (daemon, runId) =>
+      daemon.captureStatus().pipe(Effect.tap((report) => recordCaptureObservation(runId, report))),
   );
 
 /**
@@ -2751,26 +2782,29 @@ export const replanWorkspaceCapture = (input: {
  * capture-sourced and have a ready daemon; `use` then runs against that daemon inside one scoped
  * connection, and any runtime failure surfaces as a conflict naming the verb.
  */
-const withCaptureDaemon = <A>(
+const withCaptureDaemon = <A, R = never>(
   input: { readonly workspaceId: string; readonly ownerUserId: string; readonly verb: string },
-  use: (daemon: SealantSession) => Effect.Effect<A, SealantError>,
+  use: (daemon: SealantSession, runId: string) => Effect.Effect<A, SealantError, R>,
 ) =>
-  withCaptureTarget(input, (target) =>
+  withCaptureTarget(input, (target, runId) =>
     Effect.gen(function* () {
       const runtime = yield* SealantRuntime;
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const daemon = yield* runtime.connect(target);
-          return yield* use(daemon);
+          return yield* use(daemon, runId);
         }),
       );
     }),
   );
 
-/** `withCaptureDaemon`, handing over the daemon's address for callers that connect themselves. */
-const withCaptureTarget = <A>(
+/**
+ * `withCaptureDaemon`, handing over the daemon's address for callers that connect themselves,
+ * and the run whose executor that daemon is (its evidence is recorded against it).
+ */
+const withCaptureTarget = <A, R = never>(
   input: { readonly workspaceId: string; readonly ownerUserId: string; readonly verb: string },
-  use: (target: SealantTarget) => Effect.Effect<A, SealantError, SealantRuntime>,
+  use: (target: SealantTarget, runId: string) => Effect.Effect<A, SealantError, SealantRuntime | R>,
 ) => {
   return Effect.gen(function* () {
     const workspace = yield* requireOwnedWorkspace(input.workspaceId, input.ownerUserId);
@@ -2779,7 +2813,8 @@ const withCaptureTarget = <A>(
         message: `Workspace ${input.workspaceId} has no launched runtime to ${input.verb} yet; wait for it to become ready.`,
       });
     }
-    const spec = yield* loadRecordedSpec(workspace.id, workspace.latestRunId);
+    const runId = workspace.latestRunId;
+    const spec = yield* loadRecordedSpec(workspace.id, runId);
     if (spec.sources.workspace.kind !== "capture") {
       return yield* new WorkspaceBadRequestError({
         message: `Workspace ${input.workspaceId} is not capture-sourced; only a capture workspace (sealantd ADR-0015) has captures to ${input.verb}.`,
@@ -2793,7 +2828,7 @@ const withCaptureTarget = <A>(
         message: `Workspace ${input.workspaceId} has no ready runtime to ${input.verb}.`,
       });
     }
-    return yield* use(target).pipe(
+    return yield* use(target, runId).pipe(
       Effect.mapError(
         (error) =>
           new WorkspaceConflictError({

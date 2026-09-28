@@ -646,14 +646,18 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     );
     const microvmId = vm.microvmId;
     const release = this.#tokens.hold(microvmId);
-    // The agent starts sealantd only once it accepts the launch push. Until a push was sent, the
-    // guest positively ran no writer; from the first push on it may have (an accepted push whose
-    // answer was lost looks like a failure here), so a capture VM is retained from then on.
-    const push = { sent: false };
+    // RunMicrovm is idempotent on the run's client token: it answers with the SAME physical VM a
+    // redelivered (or concurrent) launch of this run already booted, and nothing it answers says
+    // whether this call created it. So from here the VM may already run sealantd and user code:
+    // a capture VM is retained on any failure (review 5 #1). Only the platform's own word that
+    // the VM ended (`TERMINATING`/`TERMINATED`, or unknown to it) lets the cleanup run: its disk
+    // is gone with it. There is no platform proof of a fresh VM that never took a push, so the
+    // pre-writer cleanup of the other adapters has no MicroVM counterpart.
+    const platform = { ended: false };
     let endpointUrlForIdentity: string | undefined;
     try {
       const deadline = this.#now() + config.readinessTimeoutMs;
-      const running = await this.#awaitRunning(microvmId, runId, deadline);
+      const running = await this.#awaitRunning(microvmId, runId, deadline, platform);
       const endpoint = running.endpoint ?? vm.endpoint;
       if (endpoint === undefined || endpoint.trim().length === 0) {
         throw createAdapterError(
@@ -663,7 +667,6 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       }
       const host = endpointHost(endpoint);
       endpointUrlForIdentity = `wss://${host}${AGENT_CONTROL_ROUTE}`;
-      push.sent = true;
       await reportStartedLaunch(hooks, {
         adapter: this.id,
         resourceId: microvmId,
@@ -671,7 +674,15 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         endpoint: endpointUrlForIdentity,
         deadline: microvmDeadline(running, vm, requestedAt, config.maxDurationSeconds),
       });
-      await this.#pushLaunchMaterial(host, microvmId, runId, launchSecret, request, deadline);
+      await this.#pushLaunchMaterial(
+        host,
+        microvmId,
+        runId,
+        launchSecret,
+        request,
+        deadline,
+        platform,
+      );
       const target = this.#controlTarget(host, microvmId);
       await this.#awaitHealthy(target, host, microvmId, runId, dockerService, deadline, [
         config.controlBearerToken,
@@ -707,18 +718,17 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       });
     } catch (error) {
       // The one preservation policy decides; a retained launch keeps the VM, and the endpoint
-      // tokens its drain dials with.
+      // tokens its drain dials with. The VM exists (RunMicrovm answered it), so the policy is
+      // always asked: `missing` only when the platform itself said it ended.
       return await failLaunch({
         blueprint: parsed.blueprint,
-        identity: push.sent
-          ? {
-              adapter: this.id,
-              resourceId: microvmId,
-              reference: microvmId,
-              ...(endpointUrlForIdentity === undefined ? {} : { endpoint: endpointUrlForIdentity }),
-            }
-          : undefined,
-        runtime: "running",
+        identity: {
+          adapter: this.id,
+          resourceId: microvmId,
+          reference: microvmId,
+          ...(endpointUrlForIdentity === undefined ? {} : { endpoint: endpointUrlForIdentity }),
+        },
+        runtime: platform.ended ? "missing" : "running",
         error,
         cleanup: async () => {
           await this.#api.terminateMicrovm(microvmId).catch(() => undefined);
@@ -851,7 +861,12 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     }
     if (isEnded(vm.state)) {
       // The platform reports no exit code for a VM; the state reason is what it knows.
-      return { state: "exited", detail: describeEnded(vm) };
+      return {
+        state: "exited",
+        detail: describeEnded(vm),
+        platformEnded: true,
+        platformState: vm.state,
+      };
     }
     let serviceFailure: string | undefined;
     if (vm.state === "RUNNING" && vm.endpoint !== undefined && vm.endpoint.trim().length > 0) {
@@ -861,10 +876,13 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       // up leaves the executor, its captures and every session on it intact: terminating the VM
       // for it would destroy unsaved work to punish a sidecar. It is reported, not acted on.
       if (failure !== undefined && failure.phase !== "docker") {
+        // The daemon ended; the VM (and its disk) did not.
         return {
           state: "exited",
           ...(failure.exitCode === undefined ? {} : { exitCode: failure.exitCode }),
           detail: failure.message,
+          platformEnded: false,
+          platformState: vm.state,
         };
       }
       serviceFailure = failure?.message;
@@ -948,10 +966,12 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     microvmId: string,
     runId: string,
     deadline: number,
+    platform: { ended: boolean },
   ): Promise<MicrovmDescription> {
     for (;;) {
       const vm = await this.#api.getMicrovm(microvmId);
       if (vm === undefined) {
+        platform.ended = true;
         throw createAdapterError(
           "adapter-unavailable",
           `MicroVM ${microvmId} for run ${runId} disappeared while starting.`,
@@ -961,6 +981,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
         return vm;
       }
       if (isEnded(vm.state)) {
+        platform.ended = true;
         throw createAdapterError(
           "adapter-unavailable",
           `MicroVM ${microvmId} for run ${runId} ended before it became ready: ${describeEnded(vm)}.`,
@@ -989,6 +1010,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     launchSecret: string,
     request: AgentLaunchRequest,
     deadline: number,
+    platform: { ended: boolean },
   ): Promise<void> {
     const body = JSON.stringify(request);
     let lastError: string | undefined;
@@ -1026,6 +1048,7 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
       }
       const vm = await this.#api.getMicrovm(microvmId);
       if (vm === undefined || isEnded(vm.state)) {
+        platform.ended = true;
         throw createAdapterError(
           "adapter-unavailable",
           `MicroVM ${microvmId} for run ${runId} ended before it accepted its launch material: ${vm === undefined ? "gone" : describeEnded(vm)}.`,
