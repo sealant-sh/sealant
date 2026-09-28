@@ -25,13 +25,18 @@ import { vi } from "vitest";
 import {
   SealantControlError,
   SealantRuntime,
+  SealantUnexpectedError,
   TransportError,
   type CaptureFlushReport,
   type CaptureFlushRequest,
   type SealantSession,
 } from "../sealantd/runtime.js";
 
-export type CaptureDaemonAnswer = CaptureFlushReport | "unreachable" | "refused";
+/**
+ * `closed`: the connection opens and the request goes out, then the connection closes before any
+ * answer (a FINAL's sweep killed the relay that carried it).
+ */
+export type CaptureDaemonAnswer = CaptureFlushReport | "unreachable" | "refused" | "closed";
 
 export const captureStatus = (overrides: Partial<CaptureFlushReport> = {}): CaptureFlushReport => ({
   epoch: 1,
@@ -59,6 +64,15 @@ const answerWith = (command: "flush" | "status", value: CaptureDaemonAnswer) => 
   }
   if (value === "unreachable") {
     return Effect.die("unreachable answers fail at connect");
+  }
+  if (value === "closed") {
+    return Effect.fail(
+      new SealantUnexpectedError({
+        operation: command === "flush" ? "captureFlush" : "captureStatus",
+        message: "connection closed",
+        cause: new Error("connection closed"),
+      }),
+    );
   }
   return Effect.succeed(value);
 };

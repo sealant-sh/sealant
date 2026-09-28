@@ -55,7 +55,7 @@
  * measures its stall window from the last time anything moved, and the last observation is what
  * the API reports while a stop is in progress.
  */
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Result } from "effect";
 import { z } from "zod";
 
 import {
@@ -69,6 +69,8 @@ import {
   SealantRuntime,
   type CaptureFlushReport,
   type CaptureFlushRequest,
+  type SealantError,
+  type SealantSession,
   type SealantTarget,
 } from "../sealantd/runtime.js";
 
@@ -721,14 +723,16 @@ const sampleCapture = (
   command: { readonly flush: CaptureFlushRequest } | "status",
   timeoutMs: number,
 ): Effect.Effect<Sample, never, SealantRuntime> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const runtime = yield* SealantRuntime;
-      const daemon = yield* runtime.connect(target);
-      return yield* command === "status"
-        ? daemon.captureStatus()
-        : daemon.captureFlush(command.flush);
-    }),
+  (command === "status"
+    ? Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* SealantRuntime;
+          const daemon = yield* runtime.connect(target);
+          return yield* daemon.captureStatus();
+        }),
+      )
+    : // A FINAL's sweep closes the connection that carried it: its answer is read again.
+      captureFlushAnswer(target, command.flush)
   ).pipe(
     Effect.timeout(timeoutMs),
     Effect.map((status): Sample => ({ kind: "status", status })),
@@ -774,6 +778,83 @@ export const readCaptureStatus = (
   sampleCapture(target, "status", timeoutMs).pipe(
     Effect.map((sample) => (sample.kind === "status" ? sample.status : undefined)),
   );
+
+/**
+ * Whether a status says a FINAL is still at work (sealantd `in-progress`): wait for it, do not ask
+ * again.
+ */
+const finalInProgress = (status: CaptureFlushReport): boolean =>
+  status.incompleteReason === "in-progress";
+
+/** How often, and how far apart, a FINAL whose answer was lost is re-read. */
+const LOST_FINAL_REREADS = 5;
+const LOST_FINAL_REREAD_DELAY_MS = 500;
+
+/**
+ * One `capture.flush`, as its answer should be read. A FINAL's own sweep stops every writer on the
+ * executor — the relay that carried the request included (Docker reaches the daemon through a
+ * `docker exec … socat` bridge, which the sweep kills) — so its connection often closes before the
+ * answer arrives (e2e 6: every stop logged `refused: connection closed`). A closed connection is
+ * a LOST answer, never the outcome: the status is read again over a new connection at once, and
+ * the FINAL asked again when the daemon is not already at one (a repeated FINAL answers what the
+ * first concluded; it stops nothing twice). Only when no answer can be read at all does the
+ * original error stand. A daemon's refusal (`SealantControlError`) is an answer and is returned as
+ * it is; a SUSPEND flush sweeps nothing and is asked once.
+ */
+export const captureFlushAnswer = (
+  target: SealantTarget,
+  request: CaptureFlushRequest,
+  options: { readonly rereads?: number; readonly rereadDelayMs?: number } = {},
+): Effect.Effect<CaptureFlushReport, SealantError, SealantRuntime> =>
+  Effect.gen(function* () {
+    const runtime = yield* SealantRuntime;
+    // Whether the last round trip reached the daemon at all: a connection that never opened says
+    // the daemon is not there (nothing is re-read); one that closed under the request says only
+    // that its answer was lost.
+    let reached = false;
+    const over = <A>(use: (daemon: SealantSession) => Effect.Effect<A, SealantError>) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          reached = false;
+          const daemon = yield* runtime.connect(target);
+          reached = true;
+          return yield* use(daemon);
+        }),
+      );
+    const first = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
+    if (
+      Result.isSuccess(first) ||
+      request.kind !== "final" ||
+      !reached ||
+      first.failure instanceof SealantControlError
+    ) {
+      return yield* fromResult(first);
+    }
+    const rereads = options.rereads ?? LOST_FINAL_REREADS;
+    const delayMs = options.rereadDelayMs ?? LOST_FINAL_REREAD_DELAY_MS;
+    for (let attempt = 0; attempt < rereads; attempt += 1) {
+      const status = yield* Effect.result(over((daemon) => daemon.captureStatus()));
+      if (Result.isSuccess(status)) {
+        if (reportsComplete(status.success) || finalInProgress(status.success)) {
+          return status.success;
+        }
+        const again = yield* Effect.result(over((daemon) => daemon.captureFlush(request)));
+        if (Result.isSuccess(again) || again.failure instanceof SealantControlError) {
+          return yield* fromResult(again);
+        }
+      } else if (status.failure instanceof SealantControlError) {
+        return yield* Effect.fail(status.failure);
+      } else if (!reached) {
+        // The daemon is not answering any more: nothing to re-read.
+        break;
+      }
+      yield* Effect.sleep(delayMs);
+    }
+    return yield* fromResult(first);
+  });
+
+const fromResult = <A, E>(result: Result.Result<A, E>): Effect.Effect<A, E> =>
+  Result.isSuccess(result) ? Effect.succeed(result.success) : Effect.fail(result.failure);
 
 export interface DrainCaptureInput {
   readonly runId: string;

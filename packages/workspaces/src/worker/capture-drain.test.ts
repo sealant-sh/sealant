@@ -83,6 +83,29 @@ describe("drainCaptureBeforeStop", () => {
     expect(daemon.flushRequests).toEqual([{ kind: "final", deadlineMs: 900, graceMs: 900 }]);
   });
 
+  it("reads the status again when a FINAL's connection closes under it, never taking the close as the outcome (e2e 6)", async () => {
+    // e2e 6: the FINAL's sweep killed Core's `docker exec … socat` bridge, so every stop logged
+    // `refused: connection closed` and retried a FINAL per poll. The daemon had answered complete.
+    const daemon = fakeCaptureDaemon(["closed", savedStatus()]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome.kind).toBe("drained");
+    expect(daemon.calls).toEqual(["flush", "status"]);
+
+    // Its status says the FINAL never got there (not-final): it is asked again, once.
+    const notFinal = captureStatus({ pending: 2, complete: false, incompleteReason: "not-final" });
+    const again = fakeCaptureDaemon(["closed", notFinal, savedStatus()]);
+    expect((await drain(again, inMemoryCaptureDrainLedger())).kind).toBe("drained");
+    expect(again.calls).toEqual(["flush", "status", "flush"]);
+  });
+
+  it("waits for a FINAL still at work after its connection closed, without asking again", async () => {
+    const working = captureStatus({ pending: 2, complete: false, incompleteReason: "in-progress" });
+    const daemon = fakeCaptureDaemon(["closed", working, savedStatus()]);
+    const outcome = await drain(daemon, inMemoryCaptureDrainLedger());
+    expect(outcome.kind).toBe("drained");
+    expect(daemon.calls).toEqual(["flush", "status", "status"]);
+  });
+
   it("sends the configured deadline and grace with the FINAL flush", async () => {
     const daemon = fakeCaptureDaemon([savedStatus()]);
     await drain(daemon, inMemoryCaptureDrainLedger(), 1_000, {
