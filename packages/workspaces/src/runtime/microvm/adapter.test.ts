@@ -5,12 +5,17 @@
  * the poll-based exit watch. No network, no AWS.
  */
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { LambdaMicrovmsClient } from "@aws-sdk/client-lambda-microvms";
+import { Effect, Exit } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SealantTarget } from "../../sealantd/runtime.js";
+import { savedStatus } from "../../worker/capture-daemon.fixture.js";
+import { inMemoryCaptureDrainLedger, removeUnderDeletion } from "../../worker/capture-drain.js";
 import { cases as goldenCases } from "../docker-runtime-adapter.golden-fixture.js";
 import type { ControlChannel } from "../kubernetes/adapter.js";
 import { LaunchRetainedError } from "../launch-retention.js";
@@ -45,6 +50,7 @@ import type {
   MicrovmRunInput,
   MicrovmState,
 } from "./api.js";
+import { createLiveMicrovmApi, isServiceRefusal } from "./api.js";
 import { microvmRuntimeConfigFromEnv, type MicrovmRuntimeConfig } from "./config.js";
 import { microvmImageReference } from "./image-reference.js";
 
@@ -1052,11 +1058,14 @@ describe("MicrovmRuntimeAdapter.launch", () => {
   });
 });
 
-/** An AWS service exception as the SDK throws it: the service's own answer, with its status. */
-const serviceError = (status: number) =>
-  Object.assign(new Error(status === 409 ? "ConflictException" : "InternalFailure"), {
-    $metadata: { httpStatusCode: status },
-  });
+/**
+ * An AWS service exception as the SDK throws it: the service's own answer, with its status and
+ * how many requests the call sent.
+ */
+const serviceError = (status: number, attempts = 1) => {
+  const name = status === 409 ? "ConflictException" : "InternalServerException";
+  return Object.assign(new Error(name), { name, $metadata: { httpStatusCode: status, attempts } });
+};
 
 /** How a stop ended: removed, refused by the platform, or with an outcome nobody knows. */
 const stopOutcome = (adapter: MicrovmRuntimeAdapter) =>
@@ -1152,6 +1161,9 @@ describe("MicrovmRuntimeAdapter.stop", () => {
       "unknown",
     );
     expect(await stopOutcome(failing({ terminate: serviceError(500) }).adapter)).toBe("unknown");
+    // A refusal the call met on a later request than its first proves nothing about the first
+    // (review 10 #3): unknown.
+    expect(await stopOutcome(failing({ terminate: serviceError(409, 2) }).adapter)).toBe("unknown");
     // Every call of the stop is bounded (nothing of it is signed past the adapter's fence).
     const bounded = failing({});
     expect(await stopOutcome(bounded.adapter)).toBe("stopped");
@@ -1524,5 +1536,136 @@ describe("MicrovmRuntimeAdapter.recover (review 3 #7)", () => {
     ).toEqual({
       outcome: "missing",
     });
+  });
+});
+
+/** A removal authorized on saved evidence, run through `removeUnderDeletion` with `stop`. */
+const removeWith = async (adapter: MicrovmRuntimeAdapter) => {
+  const ledger = inMemoryCaptureDrainLedger();
+  await Effect.runPromise(ledger.recordStatus("run-terminate", savedStatus({ headN: 7 }), 0));
+  const record = await Effect.runPromise(ledger.read("run-terminate"));
+  if (!record.readable) throw new Error("unreadable");
+  const auth = await Effect.runPromise(
+    ledger.authorizeDeletion("run-terminate", record.entry?.evidenceVersion ?? 0),
+  );
+  if (auth.kind !== "authorized") throw new Error(auth.kind);
+  const exit = await Effect.runPromise(
+    removeUnderDeletion({
+      ledger,
+      runId: "run-terminate",
+      ticket: auth.ticket,
+      remove: Effect.tryPromise({
+        try: () => adapter.stop({ resourceId: "microvm-1" }),
+        catch: (error) => error,
+      }),
+    }).pipe(Effect.exit),
+  );
+  return { ledger, exit };
+};
+
+/** A service exception answering `attempts` requests (default: the SDK left no count). */
+const refusalAnswer = (name: string, status: number, attempts?: number) =>
+  Object.assign(new Error(name), {
+    name,
+    $metadata: { httpStatusCode: status, ...(attempts === undefined ? {} : { attempts }) },
+  });
+
+describe("TerminateMicrovm through the live SDK client (review 10 #3)", () => {
+  /**
+   * A local Lambda MicroVMs endpoint: GET answers a running VM; each DELETE answers as `answer`
+   * says for its position — `lost` accepts it (the VM will be terminated) and drops the
+   * connection before any reply, a number answers that status as a ConflictException.
+   */
+  const endpoint = async (answers: readonly ("lost" | number)[]) => {
+    const deletes: ("lost" | number)[] = [];
+    let accepted = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "GET") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ microvmId: "microvm-1", state: "RUNNING" }));
+        return;
+      }
+      const answer = answers[deletes.length] ?? 409;
+      deletes.push(answer);
+      if (answer === "lost") {
+        accepted += 1;
+        request.socket.destroy();
+        return;
+      }
+      response.writeHead(answer, {
+        "content-type": "application/json",
+        "x-amzn-errortype": "ConflictException",
+      });
+      response.end(JSON.stringify({ message: "conflict" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("the local endpoint has no port");
+    }
+    // A client that retries, as a caller's own client may: the termination must not.
+    const client = new LambdaMicrovmsClient({
+      region: "eu-central-1",
+      endpoint: `http://127.0.0.1:${String(address.port)}`,
+      credentials: { accessKeyId: "test", secretAccessKey: "test" },
+      maxAttempts: 3,
+    });
+    const adapter = new MicrovmRuntimeAdapter({
+      config,
+      api: createLiveMicrovmApi({ region: "eu-central-1", client }),
+      pollIntervalMs: 1,
+    });
+    return {
+      adapter,
+      deletes,
+      accepted: () => accepted,
+      close: async () => {
+        client.destroy();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      },
+    };
+  };
+
+  it("sends one request per call: a lost reply is an outcome nobody knows, and the removal stays issued", async () => {
+    const local = await endpoint(["lost", 409]);
+    try {
+      const { ledger, exit } = await removeWith(local.adapter);
+      expect(Exit.isFailure(exit)).toBe(true);
+      // The request the endpoint accepted is the only one sent: no retry met a refusal.
+      expect(local.deletes).toEqual(["lost"]);
+      expect(local.accepted()).toBe(1);
+      // Its outcome is unknown: still issued and exclusionary — nothing observed or recovered.
+      expect(ledger.store.rows.get("run-terminate")?.deletion?.state).toBe("deleting-issued");
+      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate"))).toBe("deleting");
+      expect(await Effect.runPromise(ledger.openObservation("run-terminate", 1_000))).toBe(
+        undefined,
+      );
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("a refusal of the call's only request is definitive: the removal is given up", async () => {
+    const local = await endpoint([409]);
+    try {
+      const { ledger, exit } = await removeWith(local.adapter);
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(local.deletes).toEqual([409]);
+      expect(ledger.store.rows.get("run-terminate")?.deletion).toBeUndefined();
+      expect(await Effect.runPromise(ledger.admitRecovery("run-terminate"))).toBe("admitted");
+    } finally {
+      await local.close();
+    }
+  });
+
+  it("reads a 4xx as definitive only for the call's only request and a documented refusal", () => {
+    expect(isServiceRefusal(refusalAnswer("ConflictException", 409, 1))).toBe(true);
+    expect(isServiceRefusal(refusalAnswer("ThrottlingException", 429, 1))).toBe(true);
+    expect(isServiceRefusal(refusalAnswer("ConflictException", 409, 2))).toBe(false);
+    expect(isServiceRefusal(refusalAnswer("ConflictException", 409))).toBe(false);
+    expect(isServiceRefusal(refusalAnswer("SomethingElseException", 409, 1))).toBe(false);
+    expect(isServiceRefusal(refusalAnswer("InternalServerException", 500, 1))).toBe(false);
   });
 });

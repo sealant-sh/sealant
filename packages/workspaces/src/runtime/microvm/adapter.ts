@@ -777,8 +777,9 @@ export class MicrovmRuntimeAdapter implements RuntimeAdapter {
     const microvmId = parsed.resourceId;
     // Both calls are bounded, so nothing of this removal is signed (and can act) past
     // `removalFenceMs` of it being issued. A failure before TerminateMicrovm was sent, or the
-    // service's own refusal of it, is definitive (`removalRefused`); any other failure of it is
-    // an outcome nobody knows (review 9 #5).
+    // service's own refusal of its only request (it is sent once, never retried: review 10 #3),
+    // is definitive (`removalRefused`); any other failure of it is an outcome nobody knows
+    // (review 9 #5).
     let existing: MicrovmDescription | undefined;
     try {
       existing = await this.#api.getMicrovm(microvmId, {
