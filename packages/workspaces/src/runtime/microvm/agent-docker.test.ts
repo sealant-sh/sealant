@@ -26,6 +26,7 @@ const net = require("node:net");
 const socketPath = process.env.SEALANT_CONTROL_SOCKET;
 const records = process.env.FAKE_SEALANTD_RECORD;
 fs.appendFileSync(records, JSON.stringify({ argv: process.argv.slice(2), env: process.env, pid: process.pid }) + "\\n");
+if (process.env.FAKE_SEALANTD_EXIT75 === "1" && !process.argv.includes("--recovery")) process.exit(75);
 try { fs.unlinkSync(socketPath); } catch {}
 const server = net.createServer((socket) => socket.pipe(socket));
 server.listen(socketPath);
@@ -737,6 +738,46 @@ describe("microvm agent guest-local Docker", () => {
         () => false,
       ),
     ).toBe(true);
+  });
+
+  it("stops Docker and what it runs before a recovery boot, and passes sealantd what to spare (review 4 #4)", async () => {
+    // A recovery boot runs no user code: the workspace's containers are writers like any other
+    // left behind, and a dockerd left running would start them again.
+    const agent = await startAgent({ FAKE_SEALANTD_EXIT75: "1" });
+    expect(await runV2(agent)).toMatchObject({ status: 200 });
+    await writeFile(agent.readyFile, "ready");
+    expect(
+      await launchV2(agent, {
+        bootEnv: { SEALANT_WORKSPACE_SOURCE: "capture" },
+        secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_docker" }),
+      }),
+    ).toMatchObject({ status: 200 });
+    await waitFor(async () => (await health(agent)).body.daemonExit?.code === 75);
+    const dockerPid = Number(await readFile(agent.dockerdPid, "utf8"));
+    const descendantPid = Number(await readFile(agent.dockerdDescendantPid, "utf8"));
+    expect(processExists(dockerPid)).toBe(true);
+
+    const recovered = await call(agent, "POST", "/sealant/recover", {
+      bearer: "docker-control-token",
+      body: {
+        version: 1,
+        runId: "docker-run-1",
+        secretEnvJson: JSON.stringify({ SEALANT_CAPTURE_TOKEN: "mst_docker" }),
+      },
+    });
+    expect(recovered).toMatchObject({ status: 200, body: { outcome: "restarted" } });
+    await waitFor(async () => !processExists(dockerPid) && !processExists(descendantPid));
+    await waitFor(async () => (await readLines(agent.recordFile)).length === 2);
+    const boots = (await readLines(agent.recordFile)).map(
+      (line) => JSON.parse(line) as { argv: string[]; env: Record<string, string> },
+    );
+    expect(boots.map((boot) => boot.argv)).toEqual([["boot"], ["boot", "--recovery"]]);
+    // Both boots are told where the agent lists what the final sweep spares.
+    for (const boot of boots) {
+      expect(boot.env["SEALANT_SWEEP_EXEMPT_FILE"]).toBe(
+        path.join(agent.dir, "state", "sweep-exempt.json"),
+      );
+    }
   });
 
   it("stops Docker, sealantd and probe work on SIGTERM", async () => {

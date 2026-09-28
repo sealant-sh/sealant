@@ -4,7 +4,7 @@
  * stall) on PATH: lifecycle hooks, the launch push (auth, files, daemon env), health, the
  * WebSocket ↔ control-socket relay, and the bounded capture flush in the suspend/terminate hooks.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -63,6 +63,18 @@ if (process.env.FAKE_SEALANTD_FAIL === "1") {
   writer.unref();
   fs.writeSync(2, "Error: final capture incomplete; exiting with EX_TEMPFAIL\\n");
   process.exit(75);
+} else if (process.env.FAKE_SEALANTD_ORPHAN_DOCKER === "1" && !process.argv.includes("--recovery")) {
+  // Review 4 #4: a user writer escaped the daemon under the NAME of one of the agent's helpers
+  // (argv[0] \`docker\`), in a session of its own; the daemon then exits 75. On the VM the writer
+  // is re-parented to the agent (PID 1). It appends to <record>.orphan every 20 ms.
+  const writer = require("node:child_process").spawn(
+    process.execPath,
+    ["-e", "setInterval(() => require('node:fs').appendFileSync(process.argv[1], 'x'), 20)", record + ".orphan"],
+    { argv0: "docker", detached: true, stdio: "ignore" },
+  );
+  writer.unref();
+  fs.writeSync(2, "Error: final capture incomplete; exiting with EX_TEMPFAIL\\n");
+  process.exit(75);
 } else if (process.env.FAKE_SEALANTD_CRASH === "1") {
   // Dies once the control socket is up, leaving the socket file behind, while a process it
   // started still holds its output pipes open (so the agent never sees them close).
@@ -104,7 +116,26 @@ interface Agent {
   readonly output: () => string;
 }
 
-const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent> => {
+/**
+ * Whether this machine lets the agent run as PID 1 of its own PID namespace (an unprivileged user
+ * namespace), as it runs on a MicroVM: every orphan is then re-parented to it.
+ */
+const pid1Available = ((): boolean => {
+  try {
+    execFileSync("unshare", ["-Urpf", "--mount-proc", "--kill-child", "true"], {
+      stdio: "ignore",
+      timeout: 5_000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const startAgent = async (
+  extraEnv: Record<string, string> = {},
+  options: { readonly asPid1?: boolean } = {},
+): Promise<Agent> => {
   const dir = await mkdtemp(path.join(tmpdir(), "microvm-agent-"));
   const bin = path.join(dir, "bin");
   await mkdir(bin);
@@ -116,7 +147,11 @@ const startAgent = async (extraEnv: Record<string, string> = {}): Promise<Agent>
   const socketPath = path.join(dir, "control.sock");
   const recordFile = path.join(dir, "sealantd-record.json");
   const ctlLog = path.join(dir, "sealantctl.log");
-  const child = spawn(process.execPath, [AGENT], {
+  const command =
+    options.asPid1 === true
+      ? ["unshare", "-Urpf", "--mount-proc", "--kill-child", process.execPath, AGENT]
+      : [process.execPath, AGENT];
+  const child = spawn(command[0] ?? process.execPath, command.slice(1), {
     env: {
       ...process.env,
       PATH: `${bin}:${process.env["PATH"] ?? ""}`,
@@ -874,6 +909,90 @@ describe("microvm agent · recovery of a daemon that exited on a live VM (review
       await stopAgent(agent);
     }
   });
+
+  it.skipIf(!pid1Available)(
+    "kills an orphan writer that carries a helper's name, and spares only what the agent started (review 4 #4)",
+    async () => {
+      // Review 4 #4: the agent spared every child of PID 1 whose argv[0] was docker, dockerd or
+      // sealantctl, with its subtree; an orphan user writer named `docker` survived the recovery,
+      // wrote through the recovered daemon's final flush, and was lost with the VM.
+      const agent = await startAgent(
+        { FAKE_SEALANTD_ORPHAN_DOCKER: "1", FAKE_SEALANTCTL_SLEEP: "1" },
+        { asPid1: true },
+      );
+      try {
+        await hook(agent, "run", {
+          microvmId: "microvm-7",
+          runHookPayload: JSON.stringify({ version: 1, runId: "run-1", launchSecret }),
+        });
+        expect(
+          await call(agent, "POST", AGENT_LAUNCH_ROUTE, {
+            body: { ...launchRequest, flushTimeoutMs: 5_000 },
+            bearer: launchSecret,
+          }),
+        ).toMatchObject({ status: 200 });
+        await waitFor(async () => {
+          const health = await call(agent, "GET", AGENT_HEALTH_ROUTE, {
+            bearer: "control-token",
+          });
+          return (health.body as { daemonExit?: { code?: number } }).daemonExit?.code === 75;
+        });
+        const orphanFile = `${agent.recordFile}.orphan`;
+        const size = async () => (await stat(orphanFile).catch(() => ({ size: 0 }))).size;
+        await waitFor(async () => (await size()) > 0);
+
+        // A hook's flush the agent itself started is in flight while the recovery runs.
+        const inFlight = hook(agent, "suspend");
+        await waitFor(async () =>
+          (await readFile(agent.ctlLog, "utf8").catch(() => "")).includes("capture flush"),
+        );
+
+        const recovered = await call(agent, "POST", AGENT_RECOVER_ROUTE, {
+          body: recoverBody,
+          bearer: "control-token",
+        });
+        expect(recovered.status).toBe(200);
+        expect(agentRecoverResponseSchema.parse(recovered.body)).toEqual({ outcome: "restarted" });
+
+        // The orphan named `docker` was killed before the recovery boot: its file stops growing.
+        const after = await size();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(await size()).toBe(after);
+        // The agent's own sealantctl (and what it runs) was spared: its flush ran to its end.
+        const flushed = await inFlight;
+        expect(flushed.status).toBe(200);
+        expect(
+          (flushed.body as { flush: { durationMs: number } }).flush.durationMs,
+        ).toBeGreaterThanOrEqual(900);
+
+        // The recovery boot is told what to spare: the agent (PID 1 here) by pid and start
+        // time; no process is spared by its name.
+        await waitFor(async () => {
+          const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
+            argv: string[];
+          };
+          return record.argv.includes("--recovery");
+        });
+        const record = JSON.parse(await readFile(agent.recordFile, "utf8")) as {
+          env: Record<string, string>;
+        };
+        const exemptFile = record.env["SEALANT_SWEEP_EXEMPT_FILE"] ?? "";
+        expect(exemptFile).toBe(path.join(agent.stateDir, "sweep-exempt.json"));
+        const exempt = JSON.parse(await readFile(exemptFile, "utf8")) as {
+          version: number;
+          exempt: Array<{ pid: number; startTime: string; role: string }>;
+        };
+        expect(exempt.version).toBe(1);
+        expect(exempt.exempt).toContainEqual(
+          expect.objectContaining({ pid: 1, role: "agent", startTime: expect.any(String) }),
+        );
+        expect(exempt.exempt.map((entry) => entry.role)).not.toContain("sealantd");
+      } finally {
+        await stopAgent(agent);
+      }
+    },
+    20_000,
+  );
 
   it("refuses a recovery of a VM that was never launched", async () => {
     const agent = await startAgent();
