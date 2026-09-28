@@ -215,7 +215,11 @@ export interface WorkspaceCaptureDeletionRequest {
   readonly id: string;
   /** Microseconds since the epoch, the database's clock. */
   readonly issuedAt: number;
-  readonly outcome: "unknown" | "refused" | "done";
+  /**
+   * `unknown` until known; `refused` / `done` as the runtime answered; `fenced` when the runtime's
+   * bound on it passed with its outcome still unknown, so it can no longer act.
+   */
+  readonly outcome: "unknown" | "refused" | "done" | "fenced";
 }
 
 /**
